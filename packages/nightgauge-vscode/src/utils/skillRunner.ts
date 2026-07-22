@@ -2132,6 +2132,8 @@ function resolveBinaryDiscoveryEnv(): Record<string, string> {
   }
 }
 
+const loadedUnderVitest = process.env.VITEST === "true";
+
 /**
  * Emit a per-stage-run observability line to the extension-host console.
  *
@@ -2150,7 +2152,7 @@ function resolveBinaryDiscoveryEnv(): Record<string, string> {
  * (extension host, where `VITEST` is unset) logs exactly as before.
  */
 function logStageDiagnostic(message: string): void {
-  if (process.env.VITEST === "true") {
+  if (loadedUnderVitest || process.env.VITEST === "true") {
     return;
   }
   console.log(message);

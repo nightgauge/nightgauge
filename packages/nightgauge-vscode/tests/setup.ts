@@ -3,7 +3,7 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/schema";
 
 // Hermetic config tiers: resolver reads merge the machine tier
@@ -21,6 +21,10 @@ process.env.NIGHTGAUGE_CONFIG_HOME ??= path.join(os.tmpdir(), "nightgauge-tests-
 // gate suite-wide via the documented env escape hatch. A test that specifically
 // exercises the gate (the #4044 regression test) deletes this for its case.
 process.env.NIGHTGAUGE_SKIP_AUTH_PREFLIGHT = "1";
+
+afterEach(() => {
+  process.env.VITEST = "true";
+});
 
 // Create a shared mock ConfigBridge instance
 export const mockConfigBridgeInstance = {
