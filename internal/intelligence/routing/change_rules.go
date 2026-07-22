@@ -103,7 +103,9 @@ func MergeChangeRules(user []ChangeRule) []ChangeRule {
 		byName[r.Name] = r
 	}
 
-	merged := make([]ChangeRule, 0, len(defaults)+len(order))
+	// Avoid deriving an allocation size from two independently sized, user-
+	// controlled slices. append grows the result with overflow checks.
+	var merged []ChangeRule
 	emitted := make(map[string]bool, len(order))
 	for _, name := range order {
 		merged = append(merged, byName[name])
