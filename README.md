@@ -1,5 +1,7 @@
 # Nightgauge
 
+<!-- Public-launch fork rehearsal: this temporary change will not be merged. -->
+
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go 1.26](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](go.mod)
 
