@@ -115,6 +115,9 @@ export function removeUndefined<T extends object>(obj: T): T {
  */
 export function getConfigValue(config: IncrediConfig, path: string): unknown {
   const parts = path.split(".");
+  if (parts.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) {
+    throw new Error("Unsafe configuration path");
+  }
   let current: unknown = config;
 
   for (const part of parts) {

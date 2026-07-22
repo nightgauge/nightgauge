@@ -281,6 +281,12 @@ describe("RunTestsHandler", () => {
     expect(call.startsWith("npm test")).toBe(true);
   });
 
+  it("rejects shell metacharacters in test patterns", async () => {
+    const result = await handler.execute({ pattern: "tests; touch /tmp/pwned" }, CWD);
+    expect(result.success).toBe(false);
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
   it('appends " -- --coverage" when input.coverage=true', async () => {
     mockSuccess("");
     await handler.execute({ coverage: true }, CWD);

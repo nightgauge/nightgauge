@@ -1337,7 +1337,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         `WIP: budget-exceeded checkpoint for #${issueNumber} (${stage})\n\n` +
         `Auto-committed by pipeline budget-pause (Issue #1935).\n` +
         `This commit preserves work-in-progress that would otherwise be lost.`;
-      await execAsync(`git commit -m "${commitMsg.replace(/"/g, '\\"')}"`, {
+      await execFileAsync("git", ["commit", "-m", commitMsg], {
         cwd: workDir,
         timeout: 15_000,
       });

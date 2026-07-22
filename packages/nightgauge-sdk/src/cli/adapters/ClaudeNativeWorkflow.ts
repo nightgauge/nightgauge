@@ -65,7 +65,7 @@ export const DISABLE_WORKFLOWS_ENV = "CLAUDE_CODE_DISABLE_WORKFLOWS";
  */
 export function parseVersion(raw: string | undefined | null): number[] | null {
   if (!raw) return null;
-  const match = raw.trim().match(/(\d+)\.(\d+)(?:\.(\d+))?/);
+  const match = raw.trim().match(/^[^0-9]{0,16}(\d{1,9})\.(\d{1,9})(?:\.(\d{1,9}))?/);
   if (!match) return null;
   return [Number(match[1]), Number(match[2]), match[3] ? Number(match[3]) : 0];
 }

@@ -68,7 +68,7 @@ vi.mock("../../src/utils/gateMetricsWriter", () => ({
 // Without kCustom, promisify resolves with a string instead of { stdout, stderr }.
 // Use vi.hoisted() so the variable is initialized before vi.mock() hoisting.
 // @see MEMORY.md — EpicDashboard pattern
-const { mockExec } = vi.hoisted(() => {
+const { mockExec, mockExecFile } = vi.hoisted(() => {
   const kCustom = Symbol.for("nodejs.util.promisify.custom");
   const execMock = vi.fn();
   (execMock as any)[kCustom] = (cmd: string, opts: unknown) =>
@@ -78,10 +78,14 @@ const { mockExec } = vi.hoisted(() => {
         else resolve({ stdout, stderr });
       });
     });
-  return { mockExec: execMock };
+  const execFileMock = vi.fn();
+  (execFileMock as any)[kCustom] = () =>
+    Promise.resolve<{ stdout: string; stderr: string }>({ stdout: "", stderr: "" });
+  return { mockExec: execMock, mockExecFile: execFileMock };
 });
 vi.mock("node:child_process", () => ({
   exec: mockExec,
+  execFile: mockExecFile,
 }));
 
 // Mock SkillEffectivenessWriter

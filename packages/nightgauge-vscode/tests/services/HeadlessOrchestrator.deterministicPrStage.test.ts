@@ -280,10 +280,25 @@ function createMockStateService(runningStage: "pr-create" | "pr-merge"): Pipelin
   } as unknown as PipelineStateService;
 }
 
-async function drainTimers(iterations = 20) {
-  for (let i = 0; i < iterations; i++) {
+async function settleWithTimers<T>(promise: Promise<T>, iterations = 100): Promise<T> {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+
+  for (let i = 0; i < iterations && !settled; i++) {
     await vi.advanceTimersByTimeAsync(2_500);
   }
+
+  if (!settled) {
+    throw new Error(`Pipeline did not settle after ${iterations * 2_500}ms of simulated time`);
+  }
+  return promise;
 }
 
 /** Skill mock that always reports success (used only on the punt fallthrough). */
@@ -344,8 +359,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    const result = await runPromise;
+    const result = await settleWithTimers(runPromise);
 
     // The LLM skill was never spawned for pr-merge (the ~$0 win).
     const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
@@ -376,8 +390,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    const result = await runPromise;
+    const result = await settleWithTimers(runPromise);
 
     // Deterministic path was attempted, punted, and the LLM skill then ran.
     expect(prStageCalls.value.some((c) => c.verb === "merge")).toBe(true);
@@ -409,8 +422,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    const result = await runPromise;
+    const result = await settleWithTimers(runPromise);
 
     const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
     expect(skillStages).not.toContain("pr-merge");
@@ -430,8 +442,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    const result = await runPromise;
+    const result = await settleWithTimers(runPromise);
 
     // Neither pr-create nor pr-merge spawned the LLM skill (both deterministic).
     const skillStages = vi.mocked(runStageSkillHeadless).mock.calls.map((c) => c[0]);
@@ -460,8 +471,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    await runPromise;
+    await settleWithTimers(runPromise);
 
     expect(vi.mocked(state.notifyPipelineComplete)).toHaveBeenCalledTimes(1);
     const payload = vi.mocked(state.notifyPipelineComplete).mock.calls[0][0];
@@ -488,8 +498,7 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
     orchestrator.setWorktreeOverride(WORKTREE);
 
     const runPromise = orchestrator.runPipeline(300);
-    await drainTimers();
-    await runPromise;
+    await settleWithTimers(runPromise);
 
     expect(vi.mocked(state.notifyPipelineComplete)).toHaveBeenCalledTimes(1);
     const payload = vi.mocked(state.notifyPipelineComplete).mock.calls[0][0];

@@ -152,6 +152,9 @@ export class RecommendationApplier {
 
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
   const parts = path.split(".");
+  if (parts.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) {
+    throw new Error("Unsafe configuration path");
+  }
   let current: unknown = obj;
   for (const part of parts) {
     if (current === null || current === undefined || typeof current !== "object") {

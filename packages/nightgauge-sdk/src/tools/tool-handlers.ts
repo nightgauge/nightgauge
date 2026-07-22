@@ -127,7 +127,10 @@ export class RunTestsHandler implements ToolHandler {
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
     let command = typeof input.command === "string" ? input.command : "npm test";
     if (typeof input.pattern === "string") {
-      command += ` -- ${input.pattern}`;
+      if (!/^[A-Za-z0-9_./:@*?[\]-]{1,512}$/.test(input.pattern)) {
+        return { success: false, output: { error: "Invalid test pattern" } };
+      }
+      command += ` -- '${input.pattern}'`;
     }
     if (input.coverage === true) {
       command += " -- --coverage";
