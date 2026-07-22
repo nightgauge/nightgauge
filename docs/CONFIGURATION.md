@@ -6026,7 +6026,7 @@ knowledge:
 
 ## Platform Configuration
 
-Controls all communication with the acme-platform cloud API. The
+Controls all communication with the optional Nightgauge cloud API. The
 `platform.enabled` flag acts as a **master kill switch** — when set to `false`,
 all platform communication is disabled and the extension operates in fully
 offline mode. This is useful in air-gapped environments or during local
@@ -6038,7 +6038,7 @@ All settings live under the `platform:` key in `.nightgauge/config.yaml`:
 
 ```yaml
 platform:
-  enabled: true # Master kill switch (false = fully offline mode)
+  enabled: false # Opt in to cloud features; false = fully offline mode
   api_url: "https://api.nightgauge.dev" # Platform API base URL
   connection_timeout_ms: 30000 # Request timeout in milliseconds
   retry_policy:
@@ -6052,7 +6052,7 @@ platform:
 
 | Key                               | Type              | Default                        | Description                                                                        |
 | --------------------------------- | ----------------- | ------------------------------ | ---------------------------------------------------------------------------------- |
-| `enabled`                         | boolean           | `true`                         | Master kill switch. `false` disables all platform communication                    |
+| `enabled`                         | boolean           | `false`                        | Opt-in master switch. `false` disables config-derived platform communication       |
 | `api_url`                         | string (URL)      | `'https://api.nightgauge.dev'` | Platform API base URL. Override for dev/staging environments                       |
 | `connection_timeout_ms`           | integer (≥0)      | `30000`                        | Connection timeout in milliseconds. `0` disables timeout                           |
 | `retry_policy.attempts`           | integer (1–10)    | `3`                            | Number of retry attempts before giving up on a failed request                      |
@@ -6067,10 +6067,10 @@ platform:
 extension does **not** hold a platform client — it routes all platform calls
 through the Go binary via IPC.
 
-| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go binary** (`serve`)    | `api_url` and `license_key` (#333) — resolved with `--platform-url`/`--license-key` flag > `NIGHTGAUGE_PLATFORM_URL`/`NIGHTGAUGE_LICENSE_KEY` env > the merged config's `platform.*` precedence, then used to construct the platform client, remote-command poller, and the Action Center bridge (#330). `enabled`, `connection_timeout_ms`, and `retry_policy` are documented here but **not yet read by the Go binary** — only the TypeScript extension's schema validates them today. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                                                                                                                                                           |
+| Config Consumer            | What It Uses                                                                                                                                                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go binary** (`serve`)    | `enabled`, `api_url`, and `license_key` — explicit flags/environment variables opt in directly; config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
+| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                            |
 
 ### Behavior
 
@@ -6087,14 +6087,14 @@ through the Go binary via IPC.
 
 ### Environment Variables
 
-| Variable                                      | Default                      | Description                                 |
-| --------------------------------------------- | ---------------------------- | ------------------------------------------- |
-| `NIGHTGAUGE_PLATFORM_ENABLED`                 | `true`                       | Override `platform.enabled`                 |
-| `NIGHTGAUGE_PLATFORM_API_URL`                 | `https://api.nightgauge.dev` | Override `platform.api_url`                 |
-| `NIGHTGAUGE_PLATFORM_CONNECTION_TIMEOUT_MS`   | `30000`                      | Override `platform.connection_timeout_ms`   |
-| `NIGHTGAUGE_PLATFORM_RETRY_POLICY_ATTEMPTS`   | `3`                          | Override `platform.retry_policy.attempts`   |
-| `NIGHTGAUGE_PLATFORM_RETRY_POLICY_BACKOFF_MS` | `1000`                       | Override `platform.retry_policy.backoff_ms` |
-| `NIGHTGAUGE_PLATFORM_TELEMETRY_ENABLED`       | `false`                      | Override `platform.telemetry.enabled`       |
+| Variable                                      | Default                      | Description                                              |
+| --------------------------------------------- | ---------------------------- | -------------------------------------------------------- |
+| `NIGHTGAUGE_PLATFORM_ENABLED`                 | —                            | Not currently consumed; use `platform.enabled` in config |
+| `NIGHTGAUGE_PLATFORM_API_URL`                 | `https://api.nightgauge.dev` | Override `platform.api_url`                              |
+| `NIGHTGAUGE_PLATFORM_CONNECTION_TIMEOUT_MS`   | `30000`                      | Override `platform.connection_timeout_ms`                |
+| `NIGHTGAUGE_PLATFORM_RETRY_POLICY_ATTEMPTS`   | `3`                          | Override `platform.retry_policy.attempts`                |
+| `NIGHTGAUGE_PLATFORM_RETRY_POLICY_BACKOFF_MS` | `1000`                       | Override `platform.retry_policy.backoff_ms`              |
+| `NIGHTGAUGE_PLATFORM_TELEMETRY_ENABLED`       | `false`                      | Override `platform.telemetry.enabled`                    |
 
 ---
 

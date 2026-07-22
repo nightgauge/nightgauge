@@ -13,9 +13,13 @@ import (
 // see the doc comment on resolvePlatformConfig for why that makes the two
 // tiers indistinguishable at this layer.
 func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
-	cfgWithBoth := &config.Config{PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
-	cfgURLOnly := &config.Config{PlatformURL: "https://cfg.example.com"}
-	cfgLicenseOnly := &config.Config{LicenseKey: "lic_cfg"}
+	enabled := true
+	disabled := false
+	cfgWithBoth := &config.Config{PlatformEnabled: &enabled, PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
+	cfgURLOnly := &config.Config{PlatformEnabled: &enabled, PlatformURL: "https://cfg.example.com"}
+	cfgLicenseOnly := &config.Config{PlatformEnabled: &enabled, LicenseKey: "lic_cfg"}
+	cfgDisabled := &config.Config{PlatformEnabled: &disabled, PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
+	cfgOmitted := &config.Config{PlatformURL: "https://cfg.example.com", LicenseKey: "lic_cfg"}
 	cfgEmpty := &config.Config{}
 
 	tests := []struct {
@@ -30,6 +34,26 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 		wantSource     platformConfigSource
 		wantConfigured bool
 	}{
+		{
+			name:           "config explicitly disabled is ignored",
+			cfg:            cfgDisabled,
+			wantSource:     platformSourceAbsent,
+			wantConfigured: false,
+		},
+		{
+			name:           "omitted enabled defaults to local only",
+			cfg:            cfgOmitted,
+			wantSource:     platformSourceAbsent,
+			wantConfigured: false,
+		},
+		{
+			name:           "explicit flag remains an opt in over disabled config",
+			flagLicenseKey: "lic_flag",
+			cfg:            cfgDisabled,
+			wantLicense:    "lic_flag",
+			wantSource:     platformSourceFlagEnv,
+			wantConfigured: true,
+		},
 		{
 			name:           "flag/env wins over config when both set",
 			flagURL:        "https://flag.example.com",
@@ -126,9 +150,11 @@ func TestResolvePlatformConfig_PrecedenceTable(t *testing.T) {
 // non-empty for the remote-command poller and the Action Center bridge to
 // activate.
 func TestResolvePlatformConfig_ExtensionSpawnedDaemon(t *testing.T) {
+	enabled := true
 	cfg := &config.Config{
-		PlatformURL: "https://api.nightgauge.dev",
-		LicenseKey:  "lic_from_global_config",
+		PlatformEnabled: &enabled,
+		PlatformURL:     "https://api.nightgauge.dev",
+		LicenseKey:      "lic_from_global_config",
 	}
 
 	got := resolvePlatformConfig("", "", "", cfg)

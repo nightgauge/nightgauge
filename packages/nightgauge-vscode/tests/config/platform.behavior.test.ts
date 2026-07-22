@@ -149,9 +149,9 @@ describe("platform default values", () => {
     expect(defaults.platform).toBeDefined();
   });
 
-  it("platform.enabled defaults to true", () => {
+  it("platform.enabled defaults to false", () => {
     const defaults = getDefaultConfig();
-    expect(defaults.platform?.enabled).toBe(true);
+    expect(defaults.platform?.enabled).toBe(false);
   });
 
   it("platform.api_url defaults to production endpoint", () => {
@@ -179,9 +179,9 @@ describe("platform default values", () => {
     expect(defaults.platform?.retry_policy?.backoff_multiplier).toBe(2);
   });
 
-  it("platform.telemetry.enabled defaults to true", () => {
+  it("platform.telemetry.enabled defaults to false", () => {
     const defaults = getDefaultConfig();
-    expect(defaults.platform?.telemetry?.enabled).toBe(true);
+    expect(defaults.platform?.telemetry?.enabled).toBe(false);
   });
 
   it("platform.feature_flags defaults to empty object", () => {
@@ -191,7 +191,7 @@ describe("platform default values", () => {
 
   it("mergeWithDefaults({}) produces expected platform defaults", () => {
     const config = mergeWithDefaults({});
-    expect(config.platform?.enabled).toBe(true);
+    expect(config.platform?.enabled).toBe(false);
     expect(config.platform?.api_url).toBe("https://api.nightgauge.dev");
     expect(config.platform?.connection_timeout_ms).toBe(30000);
   });
@@ -208,7 +208,7 @@ describe("platform tier merging", () => {
     });
     expect(config.platform?.api_url).toBe("https://staging.api.nightgauge.dev");
     // Other defaults preserved
-    expect(config.platform?.enabled).toBe(true);
+    expect(config.platform?.enabled).toBe(false);
     expect(config.platform?.connection_timeout_ms).toBe(30000);
   });
 
@@ -297,9 +297,9 @@ describe("platform kill switch (enabled: false)", () => {
     expect(result.valid).toBe(true);
   });
 
-  it("platform.enabled defaults to true when omitted", () => {
+  it("platform.enabled defaults to false when omitted", () => {
     const config = mergeWithDefaults({});
-    expect(config.platform?.enabled).toBe(true);
+    expect(config.platform?.enabled).toBe(false);
   });
 
   it("platform.enabled: false is preserved after mergeWithDefaults", () => {

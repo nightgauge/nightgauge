@@ -14,8 +14,8 @@ work; use chat-only adapters for evaluation, judging, or summarization.
 
 | Priority                     | Recommended Adapter | Category       |
 | ---------------------------- | ------------------- | -------------- |
-| Best quality + full features | **Claude SDK**      | Cloud AI (SDK) |
-| No API key, just works       | **Claude Headless** | Cloud AI (CLI) |
+| Primary tested pipeline path | **Claude Headless** | Cloud AI (CLI) |
+| Direct SDK integration       | **Claude SDK**      | Cloud AI (SDK) |
 | OpenAI models                | **Codex**           | Cloud AI (CLI) |
 | Google agentic pipeline      | **Gemini CLI**      | Experimental   |
 | GitHub agentic pipeline      | **Copilot**         | Experimental   |
@@ -45,8 +45,9 @@ require an API key or subscription.
 
 ### Claude SDK
 
-The gold-standard adapter with full feature support: multi-turn conversations,
-session resume, streaming JSON, and native token tracking.
+An advanced direct-SDK adapter with multi-turn conversations, session resume,
+streaming JSON, and native token tracking. Claude Headless is the primary
+tested path for the VS Code extension and normal pipeline use.
 
 This is an opt-in integration for direct `@nightgauge/sdk` consumers. Install
 `@anthropic-ai/claude-agent-sdk` separately after reviewing Anthropic's license
@@ -439,8 +440,10 @@ gh auth status
 
 ## Local AI Adapters
 
-These adapters connect to locally-running model servers. No cloud dependency,
-no API costs, full data privacy. Quality depends on the model you choose.
+These adapters connect to locally running model servers and do not require a
+model-provider cloud API. Review Nightgauge platform, telemetry, forge, and
+notification settings separately before describing an entire run as offline or
+private. Quality depends on the model you choose.
 
 ### Ollama
 

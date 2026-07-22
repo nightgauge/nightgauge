@@ -96,12 +96,13 @@ security boundary.
 
 ### Mitigations in place
 
-- **Deterministic command gates** — before any shell command an agent issues
-  is executed, a PreToolUse hook parses the actual `git`/`gh` argv (not
-  substrings) and blocks destructive commands, credential exfiltration
-  patterns, privilege escalation, force pushes, and pushes to `main`. These
-  are pattern rules outside the model; a prompt cannot talk its way past
-  them. See [docs/SECURITY.md](docs/SECURITY.md).
+- **Claude command gates** — on the Claude plugin path, a PreToolUse hook parses
+  `git`/`gh` argv and blocks known destructive patterns, privilege escalation,
+  force pushes, and pushes to `main`. These hooks do not wrap every provider.
+  In particular, autonomous Codex execution may use
+  `--dangerously-bypass-approvals-and-sandbox`; run it only in an externally
+  isolated environment appropriate for the repository's trust level. See
+  [docs/SECURITY.md](docs/SECURITY.md).
 - **Hard stage gates** — build and test verification cannot be bypassed by
   the agent (`--auto-pass` does not skip build verification), and `pr-merge`
   requires CI green before merging.
@@ -121,9 +122,9 @@ security boundary.
   gate.
 - **Least privilege**: use a fine-grained GitHub token scoped to the target
   repository, not a broad classic PAT.
-- **The blocklist is not a sandbox.** Deterministic gates block known-bad
-  patterns; they cannot enumerate every harmful command. The agent runs as
-  your OS user. For hostile-input scenarios, run the pipeline inside a
-  container or VM.
+- **A blocklist is not a sandbox.** Provider-specific gates cannot enumerate
+  every harmful command and are absent on some paths. The agent runs with the
+  permissions of its process. For hostile-input scenarios, use a disposable
+  container or VM and a least-privilege forge credential.
 - Found a way around a gate? That is in scope — report it via the process
   above.

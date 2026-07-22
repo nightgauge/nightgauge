@@ -3695,7 +3695,7 @@ export async function initializeServices(
   // ── Platform connection status bar item (Issue #1461) ────────────────
 
   const platformConfig = ConfigBridge.getInstance().getPlatform();
-  const platformEnabled = platformConfig?.enabled ?? true;
+  const platformEnabled = platformConfig?.enabled ?? false;
 
   let oauthDeviceFlowService: OAuthDeviceFlowService | null = null;
   let gitHubAuthService: GitHubAuthService | null = null;

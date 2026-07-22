@@ -607,9 +607,10 @@ type Config struct {
 	GitHubAuth *GitHubAuthConfig `json:"githubAuth,omitempty" yaml:"github_auth,omitempty"`
 
 	// Platform settings
-	PlatformURL string `json:"platformUrl,omitempty"`
-	APIKey      string `json:"apiKey,omitempty"`
-	LicenseKey  string `json:"licenseKey,omitempty"`
+	PlatformEnabled *bool  `json:"platformEnabled,omitempty"`
+	PlatformURL     string `json:"platformUrl,omitempty"`
+	APIKey          string `json:"apiKey,omitempty"`
+	LicenseKey      string `json:"licenseKey,omitempty"`
 
 	// Binary settings
 	LogLevel string `json:"logLevel"`
@@ -1371,6 +1372,7 @@ type yamlConfigNested struct {
 		// `nightgauge serve` (spawned by the extension with no flags/env) never
 		// picked up a configured platform, leaving the Action Center bridge
 		// (#330) and the remote-command poller permanently dormant.
+		Enabled    *bool            `yaml:"enabled,omitempty"`
 		APIURL     string           `yaml:"api_url,omitempty"`
 		LicenseKey string           `yaml:"license_key,omitempty"`
 		Telemetry  *TelemetryConfig `yaml:"telemetry,omitempty"`
@@ -1577,6 +1579,7 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Sanitization = nested.Sanitization
 	cfg.FeedbackLoop = nested.FeedbackLoop
 	cfg.Telemetry = nested.Platform.Telemetry
+	cfg.PlatformEnabled = nested.Platform.Enabled
 	cfg.PlatformURL = nested.Platform.APIURL
 	cfg.LicenseKey = nested.Platform.LicenseKey
 	cfg.RemoteCommands = nested.RemoteCommands

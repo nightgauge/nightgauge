@@ -366,7 +366,7 @@ gh run list --workflow=release.yml --limit 1
 
 ```bash
 # Option 1: Point consumers back at the previous known-good release tag
-# (Homebrew: brew install nightgauge/tap/nightgauge@<prev>;
+# (Homebrew: reinstall a previous GitHub Release directly;
 #  binaries/VSIX: download the previous GitHub Release assets)
 
 # Option 2: Create a hotfix

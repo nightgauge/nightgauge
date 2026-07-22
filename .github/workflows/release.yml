@@ -3,7 +3,7 @@
 # Produces:
 #   - Multi-arch Go binaries via goreleaser (darwin-arm64, darwin-amd64, linux-amd64)
 #   - SHA256 checksums and manifest.json
-#   - Homebrew formula auto-bumped in nightgauge/homebrew-tap
+#   - Homebrew cask auto-bumped in nightgauge/homebrew-tap
 #   - Versioned .vsix (attached to the GitHub Release)
 #
 # Version is derived from the tag itself (not commit count).
@@ -103,7 +103,7 @@ jobs:
       # ---------------------------------------------------------------------
       # PREFLIGHT — validate every publish credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release and pushes the Homebrew
-      # formula long before the Marketplace step runs, so an invalid VSCE_PAT
+      # cask long before the Marketplace step runs, so an invalid VSCE_PAT
       # discovered late leaves a half-published release. Fail fast instead.
       # ---------------------------------------------------------------------
       - name: Preflight — publish credentials
@@ -136,7 +136,7 @@ jobs:
           if [ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
             echo "goreleaser_args=release --clean" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew formula push. Binaries and VSIXs still publish."
+            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
             echo "goreleaser_args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
           fi
 
@@ -288,7 +288,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
-      # manifest.json is derived from GoReleaser's own checksums.txt, so it can
+      - name: Add VSIX checksums
+        run: |
+          set -euo pipefail
+          for vsix in packages/nightgauge-vscode/*.vsix; do
+            sha256sum "$vsix" | sed 's#  packages/nightgauge-vscode/#  #'
+          done >> dist/checksums.txt
+          sort -k2,2 -o dist/checksums.txt dist/checksums.txt
+
+      # manifest.json is derived from the combined checksums.txt, so it can
       # only be built AFTER goreleaser runs — GoReleaser cannot attach it via
       # `extra_files` (the file does not exist yet) and v2 has no `after:` hook.
       # The SDK postinstall fetches this from the Release to SHA256-verify the
@@ -301,8 +309,9 @@ jobs:
           TAG="${{ steps.version.outputs.tag }}"
           python3 scripts/generate-manifest.py dist/ > dist/manifest.json
           test -s dist/manifest.json || { echo "ERROR: empty manifest.json"; exit 1; }
+          gh release upload "$TAG" dist/checksums.txt --clobber
           gh release upload "$TAG" dist/manifest.json --clobber
-          echo "Attached manifest.json"
+          echo "Attached combined checksums.txt and manifest.json"
 
       - name: Attach VSIXs to GitHub Release
         working-directory: packages/nightgauge-vscode

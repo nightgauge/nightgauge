@@ -541,7 +541,7 @@ other Go binary commands directly (Issue #1976).
 - Zero shell script dependencies (no bash, jq, gh CLI required)
 - Cross-repo epic execution without workspace pre-configuration
 - Pipeline survives extension restart without state loss
-- Single binary distribution: `brew install nightgauge`
+- Single binary distribution: `brew install --cask nightgauge/tap/nightgauge`
 - Extension startup < 1 second (vs current 3-5 seconds)
 - Pipeline overhead < 50% of current (process spawn reduction)
 

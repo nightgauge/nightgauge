@@ -27,11 +27,11 @@ Add to your `~/.claude/settings.json`:
 }
 ```
 
-Then install plugins via Claude Code:
+Then install the Nightgauge plugin via Claude Code. It includes the pipeline and
+utility commands, including smart setup and documentation maintenance:
 
 ```bash
-/plugins install smart-setup   # One-time AI-readiness setup
-/plugins install docs          # Ongoing documentation maintenance
+claude plugin install nightgauge@nightgauge-plugins
 ```
 
 #### Option 2: Direct Plugin Reference
@@ -73,7 +73,7 @@ Codex currently supports the core Nightgauge pipeline via adapter wrappers.
 
 Prerequisites:
 
-- Node.js 18+
+- Node.js 24+ (see the repository's `.nvmrc`)
 - `gh` authenticated (`gh auth status`)
 - Built Nightgauge SDK CLI output
 
@@ -109,7 +109,11 @@ curl -o .cursor/rules/nightgauge-standards.mdc https://raw.githubusercontent.com
 
 ## Usage
 
-### Unified Stage Workflow (All Tools)
+### Unified Stage Workflow
+
+The Claude and Codex columns are execution adapters. Copilot and Cursor entries
+below invoke portable Agent Skills; that portability does not imply the same
+live end-to-end provider verification as the Claude path.
 
 | Stage              | Claude Code                    | Codex CLI (Beta Adapter)                         | GitHub Copilot                                         | Cursor IDE                                             |
 | ------------------ | ------------------------------ | ------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
@@ -145,7 +149,7 @@ language:
 
 ### Update Docs Command (Claude Code)
 
-_Requires the `docs` plugin: `/plugins install docs`_
+_Included in `nightgauge@nightgauge-plugins`._
 
 Keep documentation in sync with your codebase:
 
