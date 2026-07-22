@@ -22,7 +22,7 @@ export type PlatformConnectionState = "connected" | "degraded" | "offline" | "di
 export interface PlatformStatusBarOptions {
   /** Platform API base URL (default: 'https://api.nightgauge.dev') */
   apiUrl?: string;
-  /** Whether platform communication is enabled (default: true) */
+  /** Whether platform communication is enabled (default: false) */
   enabled?: boolean;
   /** Health poll interval in milliseconds (default: 60_000) */
   pollIntervalMs?: number;
@@ -61,7 +61,7 @@ export class PlatformStatusBar implements vscode.Disposable {
 
   constructor(options: PlatformStatusBarOptions = {}) {
     this.apiUrl = options.apiUrl ?? DEFAULT_API_URL;
-    this.enabled = options.enabled ?? true;
+    this.enabled = options.enabled ?? false;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -107,7 +107,7 @@ export class PlatformStatusBar implements vscode.Disposable {
     this._stopPolling();
 
     this.apiUrl = options.apiUrl ?? this.apiUrl;
-    this.enabled = options.enabled ?? true;
+    this.enabled = options.enabled ?? false;
     this.pollIntervalMs = options.pollIntervalMs ?? this.pollIntervalMs;
     this.timeoutMs = options.timeoutMs ?? this.timeoutMs;
 

@@ -38,9 +38,10 @@ already use rather than replacing them:
 | **GitHub Projects v2 board** (+ `.nightgauge/config.yaml` pointing at it) | The autonomous scheduler and board-driven views — without a board you can still run single issues manually |
 | **Node.js ≥ 24** (pinned in `.nvmrc`)                                     | VSCode extension and SDK builds                                                                            |
 
-**Platform support:** macOS and Linux are supported and tested. Windows is
-not currently supported — the Go binary cross-compiles, but the pipeline is
-untested there; use WSL2.
+**Platform support:** macOS is the primary end-to-end tested platform. Packaged
+Linux amd64 CLI and VSIX binaries are tested on Debian and Alpine; live
+provider-driven Linux pipelines still have less coverage. Windows is not
+currently supported; use WSL2.
 
 ## Install from Source
 
@@ -57,16 +58,16 @@ details on each method.
 
 ## Quick Start
 
-### VSCode Extension (Recommended)
+### VSCode Extension (Recommended UI)
 
 The full Nightgauge experience with visual dashboard, project board
 integration, batch processing, and one-click pipeline execution.
 
-```bash
-# Build the extension locally, then use
-# Extensions → "…" → Install from VSIX:
-cd packages/nightgauge-vscode && npm run package
-```
+Before the first production release, use a target-specific VSIX from a reviewed
+GitHub Actions release-candidate run. After `v0.2.0`, download the VSIX matching
+your OS/architecture from the GitHub Release and install it with **Extensions →
+… → Install from VSIX**. Building locally or running `dev-install.sh` is for
+extension development and intentionally produces a non-release build.
 
 > Not yet on the VS Code Marketplace — a Marketplace listing is planned as its
 > own follow-up release.
@@ -140,7 +141,9 @@ Migration note:
 
 ### Codex CLI Beta Scope
 
-- All six pipeline stages are available via `scripts/run-stage.sh codex <stage> <issue>`
+- All six pipeline stage entry points are available via
+  `scripts/run-stage.sh codex <stage> <issue>`; Codex remains beta while the
+  complete live-provider matrix is expanded
 - Matching Codex slash commands are available via `.codex/commands/*.md`
 - Queue/project-sync and some plugin-level automations remain Claude-first
 - The Codex adapter depends on built SDK output:
@@ -148,8 +151,9 @@ Migration note:
 
 ### Adapter Switching Workflow (Claude <-> Codex)
 
-Both paths use the same stage contract and context artifacts, so teams can
-switch adapters mid-issue on the same branch.
+Both paths use the same stage contract and context artifacts. Mid-issue
+switching is a supported beta workflow; inspect the handoff files before
+continuing because it has less live coverage than a single-provider run.
 
 1. Run a stage in Claude or Codex.
 2. Confirm handoff files under `.nightgauge/pipeline/` and plans under
@@ -199,11 +203,11 @@ ui:
   core:
     adapter: copilot
 copilot:
-  model: "gpt-4o" # optional — uses CLI default if omitted
+  # model: "provider-model-id" # optional; omit to use the CLI default
 ```
 
-> **Cost model**: Copilot tracks premium requests (not per-token). Each stage
-> invocation consumes one premium request (~$0.04 estimated cost). See
+> **Cost model**: Copilot plans and premium-request multipliers change over
+> time. Check your current GitHub plan and the Copilot CLI's usage reporting. See
 > [docs/CONFIGURATION.md](docs/CONFIGURATION.md#copilot-adapter-environment-variables)
 > for all configuration options.
 
@@ -221,7 +225,7 @@ for configuration reference.
 summarization, or cost-free experimentation. Use an agentic adapter for pipeline
 execution.
 
-### Parity Status (February 10, 2026)
+### Adapter Scope (verified July 22, 2026)
 
 | Capability Group                                                          | Status    | Notes                                                             |
 | ------------------------------------------------------------------------- | --------- | ----------------------------------------------------------------- |

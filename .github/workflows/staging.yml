@@ -139,8 +139,16 @@ jobs:
           version: v2.17.0
           args: release --snapshot --clean
 
-      # Exercise the same manifest path the real release uses (derived from
-      # goreleaser's checksums.txt; the SDK postinstall SHA256-verifies against it).
+      - name: Add VSIX checksums
+        run: |
+          set -euo pipefail
+          for vsix in packages/nightgauge-vscode/*.vsix; do
+            sha256sum "$vsix" | sed 's#  packages/nightgauge-vscode/#  #'
+          done >> dist/checksums.txt
+          sort -k2,2 -o dist/checksums.txt dist/checksums.txt
+
+      # Exercise the same manifest path the real release uses. checksums.txt
+      # covers both GoReleaser outputs and the target-specific VSIX packages.
       - name: Generate manifest.json
         run: |
           set -euo pipefail

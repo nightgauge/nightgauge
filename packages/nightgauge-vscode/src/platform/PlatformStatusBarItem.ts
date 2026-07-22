@@ -158,7 +158,7 @@ export class PlatformStatusBarItem implements vscode.Disposable {
 
     this.apiUrl = config?.api_url ?? "https://api.nightgauge.dev";
 
-    const platformEnabled = config?.enabled ?? true;
+    const platformEnabled = config?.enabled ?? false;
 
     if (!platformEnabled) {
       this.displayState = "disabled";

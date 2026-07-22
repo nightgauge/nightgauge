@@ -3806,7 +3806,7 @@ export const DEFAULT_CONFIG: IncrediConfig = {
     max_concurrency: 0,
   },
   platform: {
-    enabled: true,
+    enabled: false,
     environment: "production" as const,
     api_url: "https://api.nightgauge.dev",
     connection_timeout_ms: 30000,
@@ -3816,7 +3816,7 @@ export const DEFAULT_CONFIG: IncrediConfig = {
       backoff_multiplier: 2,
     },
     telemetry: {
-      enabled: true,
+      enabled: false,
     },
     feature_flags: {},
   },

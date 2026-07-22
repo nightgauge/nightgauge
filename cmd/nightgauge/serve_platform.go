@@ -77,7 +77,11 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 
 	urlFromFlagEnv := r.URL != ""
 	licenseFromConfig, urlFromConfig := false, false
-	if cfg != nil {
+	// Explicit flags/environment variables remain an opt-in even when the file
+	// setting is absent or false. Config-file credentials are used only when
+	// platform.enabled is explicitly true; omitted is the local-only default.
+	configEnabled := cfg != nil && cfg.PlatformEnabled != nil && *cfg.PlatformEnabled
+	if configEnabled {
 		if r.URL == "" && cfg.PlatformURL != "" {
 			r.URL = cfg.PlatformURL
 			urlFromConfig = true

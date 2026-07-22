@@ -2448,7 +2448,7 @@ function getPlatformSectionHtml(
           "platform.enabled",
           "Platform Features",
           "Enable platform API communication. Set to off for fully offline mode.",
-          platform.enabled ?? true,
+          platform.enabled ?? false,
           disabled,
           g("platform.enabled"),
           showBadges,

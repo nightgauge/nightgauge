@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +68,18 @@ import (
 
 // version is set at build time via ldflags.
 var version = "dev"
+
+// effectiveVersion preserves the linker-injected release version and falls
+// back to Go module build metadata for `go install ...@version` builds.
+func effectiveVersion() string {
+	if version != "" && version != "dev" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
 
 // Action Center agent-registration bridge cadences (#341). The platform agent
 // TTL is 90s; heartbeat well inside it (matching the VSCode extension's 30s
@@ -4027,7 +4040,7 @@ func statusCmd() *cobra.Command {
 		Short: "Show pipeline status summary",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Println("Nightgauge CLI")
-			fmt.Printf("Version: %s\n", version)
+			fmt.Printf("Version: %s\n", effectiveVersion())
 			fmt.Println("Status: operational")
 
 			// Check GitHub token
@@ -4048,7 +4061,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("nightgauge %s\n", version)
+			fmt.Printf("nightgauge %s\n", effectiveVersion())
 		},
 	}
 }

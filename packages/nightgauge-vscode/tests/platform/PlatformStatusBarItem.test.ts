@@ -171,9 +171,9 @@ describe("PlatformStatusBarItem", () => {
       sbi.dispose();
     });
 
-    it('shows "Platform: Connected" when platform is enabled (default)', () => {
+    it('shows "Platform: Connected" when platform is enabled', () => {
       const { client } = createMockClient("connected");
-      const sbi = new PlatformStatusBarItem(client, undefined);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true });
       expect(sbi.getDisplayState()).toBe("connected");
       expect(currentMockItem.text).toContain("Platform: Connected");
       sbi.dispose();
@@ -181,7 +181,7 @@ describe("PlatformStatusBarItem", () => {
 
     it('shows "Platform: Offline" when initial state is disconnected', () => {
       const { client } = createMockClient("disconnected");
-      const sbi = new PlatformStatusBarItem(client, undefined);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true });
       expect(sbi.getDisplayState()).toBe("offline");
       expect(currentMockItem.text).toContain("Platform: Offline");
       sbi.dispose();
@@ -189,7 +189,7 @@ describe("PlatformStatusBarItem", () => {
 
     it("updates display state on connection state change", () => {
       const { client, emitter } = createMockClient("connected");
-      const sbi = new PlatformStatusBarItem(client, undefined);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true });
       expect(sbi.getDisplayState()).toBe("connected");
 
       emitter.fire("disconnected");
@@ -209,7 +209,7 @@ describe("PlatformStatusBarItem", () => {
 
     it("calls item.show() after construction", () => {
       const { client } = createMockClient("connected");
-      const sbi = new PlatformStatusBarItem(client, undefined);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true });
       expect(currentMockItem.show).toHaveBeenCalled();
       sbi.dispose();
     });
@@ -315,7 +315,7 @@ describe("PlatformStatusBarItem", () => {
     it('shows "Connected (signed out)" when connected and unauthenticated', () => {
       const { client } = createMockClient("connected");
       const { sessionManager, fireSession } = createMockSessionManager();
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager as any);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager as any);
 
       fireSession({
         previous: "unauthenticated",
@@ -336,7 +336,7 @@ describe("PlatformStatusBarItem", () => {
     it('shows "Signed In" when authenticated but no email', () => {
       const { client } = createMockClient("connected");
       const { sessionManager, fireSession } = createMockSessionManager();
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager as any);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager as any);
 
       fireSession({
         previous: "unauthenticated",
@@ -357,7 +357,7 @@ describe("PlatformStatusBarItem", () => {
     it("shows user email when authenticated with email", () => {
       const { client } = createMockClient("connected");
       const { sessionManager, fireSession } = createMockSessionManager();
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager as any);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager as any);
 
       fireSession({
         previous: "unauthenticated",
@@ -378,7 +378,7 @@ describe("PlatformStatusBarItem", () => {
     it("shows tier in parens after email", () => {
       const { client } = createMockClient("connected");
       const { sessionManager, fireSession } = createMockSessionManager();
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager as any);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager as any);
 
       fireSession({
         previous: "unauthenticated",
@@ -400,7 +400,7 @@ describe("PlatformStatusBarItem", () => {
     it("isAuthenticated() returns true when authenticated", () => {
       const { client } = createMockClient("connected");
       const { sessionManager, fireSession } = createMockSessionManager();
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager as any);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager as any);
 
       fireSession({
         previous: "unauthenticated",
@@ -454,7 +454,7 @@ describe("PlatformStatusBarItem", () => {
         onSessionChanged: sessionEmitter.event,
       } as never;
       const trialStore = { status: () => trialStatus } as never;
-      const sbi = new PlatformStatusBarItem(client, undefined, sessionManager, trialStore);
+      const sbi = new PlatformStatusBarItem(client, { enabled: true }, sessionManager, trialStore);
       sessionEmitter.fire({
         current: "authenticated",
         data: { userEmail: "dev@example.com", userTier: "pro" },

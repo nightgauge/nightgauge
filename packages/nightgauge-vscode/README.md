@@ -1,11 +1,11 @@
 # Nightgauge
 
-**The cockpit for the Nightgauge autonomous software factory, built into
-VS Code.** Nightgauge runs your backlog through a full production line —
-plan, build, validate, merge — and this extension is where you watch it
+**The cockpit for the Nightgauge issue-to-PR pipeline, built into VS Code.**
+Nightgauge guides work through planning, implementation, validation, and pull
+request stages, and this extension is where you watch it
 work: queue issues, approve plans, follow live pipeline state, and review
-the evidence behind every merge. A six-stage pipeline enforces
-documentation-first planning and deterministic quality gates at every step:
+the evidence behind each run. A six-stage pipeline combines
+documentation-first planning with deterministic checks at key boundaries:
 a plan you approve before any code is written, a hard build/test gate, and
 a manual test checklist before a PR is opened.
 
@@ -13,8 +13,8 @@ It is not a chatbot or an inline code-completion tool. It's a **pipeline
 orchestrator**: each stage runs as a fresh AI agent that receives a
 structured JSON handoff from the previous stage instead of the full
 conversation history, so context stays focused and any stage can be retried
-independently. Deterministic gates — compiled code, not an LLM opinion —
-check every stage's output. Nothing ships unmeasured.
+independently. Deterministic code verifies repository state and selected stage
+outputs; provider behavior and manual review remain part of the trust model.
 
 > **Screenshot pending.** A real screenshot/GIF of the sidebar and a
 > completed pipeline run hasn't been captured yet — see
@@ -23,8 +23,9 @@ check every stage's output. Nothing ships unmeasured.
 
 ## Quick Start
 
-1. **Install** — Until the first Marketplace release, build the extension from
-   source and use **Extensions → … → Install from VSIX**.
+1. **Install** — Before Marketplace publication, install the target-specific
+   VSIX from the GitHub Release. Release-candidate testers should use the VSIX
+   from the reviewed Actions run, not a local development build.
 2. **Sign in** — Run **Nightgauge: Sign In with GitHub** from the
    Command Palette to connect your GitHub account.
 3. **Initialize the repo** — Open the Nightgauge sidebar in a repository
@@ -42,11 +43,12 @@ check every stage's output. Nothing ships unmeasured.
 
 ### Installing
 
-Clone the public repository, run `npm install`, then run
-`npm run package -w nightgauge-vscode`. Install the generated VSIX through
-**Extensions → … → Install from VSIX**, then open the Nightgauge sidebar in a
-GitHub repository. Marketplace installation will be documented after the first
-listing is live.
+Download the VSIX matching your OS and architecture from the GitHub Release and
+install it through **Extensions → … → Install from VSIX**. For extension
+development, clone the repository and use `scripts/dev-install.sh`; that script
+builds the working tree with a timestamped development version and is not a
+release-validation path. Marketplace installation will be documented after the
+first listing is live.
 
 ## Features
 
