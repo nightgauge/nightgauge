@@ -148,7 +148,8 @@ export function upsertManagedBlock(existing: string | null, blockInner: string):
     // Replace in place, normalizing the boundaries so blank lines never
     // accumulate across regenerations (same normalization as stripManagedBlock).
     const before = existing.slice(0, beginIdx).replace(/\n+$/, "");
-    const after = existing.slice(endIdx + CODEX_MANAGED_END.length).replace(/^\n+/, "");
+    let after = existing.slice(endIdx + CODEX_MANAGED_END.length);
+    while (after.startsWith("\n")) after = after.slice(1);
     if (before === "" && after === "") return wrapped + "\n";
     if (before === "") return wrapped + "\n\n" + after;
     if (after === "") return before + "\n\n" + wrapped + "\n";
@@ -156,7 +157,7 @@ export function upsertManagedBlock(existing: string | null, blockInner: string):
   }
 
   // No managed block yet — append below the user's content.
-  return existing.replace(/\n+$/, "") + "\n\n" + wrapped + "\n";
+  return existing.trimEnd() + "\n\n" + wrapped + "\n";
 }
 
 /**

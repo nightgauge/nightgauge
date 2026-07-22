@@ -199,7 +199,7 @@ function checkGitignore(repoRoot: string, requiredPatterns: string[]): Array<{ m
   const missing: Array<{ missing: string }> = [];
 
   for (const required of requiredPatterns) {
-    const covered = lines.some((l) => l === required || l.includes(required.replace("*", "")));
+    const covered = lines.some((l) => l === required || l.includes(required.replaceAll("*", "")));
     if (!covered) missing.push({ missing: required });
   }
 

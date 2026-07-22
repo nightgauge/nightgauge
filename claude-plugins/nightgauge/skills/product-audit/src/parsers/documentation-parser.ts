@@ -119,9 +119,14 @@ export function parseDocumentationEndpoints(filePath: string): DocEndpoint[] {
  * Returns true when the path is found (exact match or prefix match).
  */
 export function endpointExistsInRoutes(path: string, knownRoutes: string[]): boolean {
-  const normalizedPath = path.replace(/\/+$/, "").toLowerCase();
+  const normalize = (value: string): string => {
+    let end = value.length;
+    while (end > 0 && value[end - 1] === "/") end--;
+    return value.slice(0, end).toLowerCase();
+  };
+  const normalizedPath = normalize(path);
   return knownRoutes.some((route) => {
-    const normalizedRoute = route.replace(/\/+$/, "").toLowerCase();
+    const normalizedRoute = normalize(route);
     return (
       normalizedRoute === normalizedPath ||
       normalizedRoute.startsWith(normalizedPath) ||

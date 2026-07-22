@@ -215,10 +215,11 @@ export function parseJudgeOutcome(text: string): JudgeOutcome {
   const trimmed = text.trim();
 
   // Preferred: a JSON object the judge prompt asked for.
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
+  const jsonStart = trimmed.indexOf("{");
+  const jsonEnd = trimmed.lastIndexOf("}");
+  if (jsonStart >= 0 && jsonEnd > jsonStart) {
     try {
-      const parsed = JSON.parse(jsonMatch[0]) as {
+      const parsed = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)) as {
         verdict?: unknown;
         confidence?: unknown;
         rationale?: unknown;

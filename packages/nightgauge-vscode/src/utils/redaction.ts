@@ -30,11 +30,6 @@ export function redactSecrets(input: string): string {
     /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g,
     "[REDACTED:PEM_BLOCK]"
   );
-  s = s.replace(
-    /-----BEGIN [A-Z0-9 ]+-----(?:\\n|[^-])*?-----END [A-Z0-9 ]+-----/g,
-    "[REDACTED:PEM_BLOCK]"
-  );
-
   // Token prefixes — capture up to a non-token boundary
   s = s.replace(/\b(ghp|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, "[REDACTED:GH_TOKEN]");
   s = s.replace(/\bglpat-[A-Za-z0-9_-]{16,}/g, "[REDACTED:GITLAB_TOKEN]");

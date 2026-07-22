@@ -20,6 +20,7 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/incrediConfig";
 import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
+import { redactSecrets } from "../utils/redaction";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1889,7 +1890,7 @@ export abstract class IpcClientBase implements vscode.Disposable {
   }
 
   protected log(message: string): void {
-    const line = `[${new Date().toISOString()}] ${message}`;
+    const line = `[${new Date().toISOString()}] ${redactSecrets(message)}`;
     if (!this.outputChannel) {
       try {
         this.outputChannel = vscode.window.createOutputChannel("Nightgauge Go Backend");

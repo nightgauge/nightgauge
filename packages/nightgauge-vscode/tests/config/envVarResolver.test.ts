@@ -292,6 +292,13 @@ describe("envVarResolver", () => {
   // ============================================================================
 
   describe("setNestedValue", () => {
+    it("rejects prototype-polluting paths", () => {
+      expect(() => setNestedValue({}, "__proto__.polluted", true)).toThrow(
+        "Unsafe configuration path"
+      );
+      expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+    });
+
     it("sets simple path", () => {
       const obj: Record<string, unknown> = {};
       setNestedValue(obj, "key", "value");
