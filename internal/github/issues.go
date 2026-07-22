@@ -102,11 +102,15 @@ func NewIssueService(client *Client) *IssueService {
 
 // GetIssue fetches a single issue with sub-issues and blocking relationships.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*types.Issue, error) {
+	graphQLNumber, err := checkedGraphQLInt("issue number", number)
+	if err != nil {
+		return nil, err
+	}
 	var q issueQuery
 	vars := map[string]interface{}{
 		"owner":  graphql.String(owner),
 		"name":   graphql.String(repo),
-		"number": graphql.Int(number),
+		"number": graphQLNumber,
 	}
 
 	if err := s.client.query(ctx, &q, vars); err != nil {
