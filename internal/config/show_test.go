@@ -186,6 +186,65 @@ func TestRender_NilConfig(t *testing.T) {
 	}
 }
 
+func TestRender_RedactsSecretsInEveryOutputMode(t *testing.T) {
+	const token = "github_pat_complete_representative_123456789"
+	const partial = "representative_123456789"
+	const apiKey = "provider-api-key-secret-987654321"
+	const license = "license-key-secret-246813579"
+	cfg := &Config{
+		GitHubAuth: &GitHubAuthConfig{
+			Token:  token,
+			Tokens: map[string]string{"nightgauge": token},
+		},
+		APIKey:     apiKey,
+		LicenseKey: license,
+	}
+
+	cases := []struct {
+		name string
+		key  string
+		json bool
+		raw  bool
+	}{
+		{name: "full yaml"},
+		{name: "full json", json: true},
+		{name: "github auth subtree", key: "github_auth"},
+		{name: "direct token", key: "github_auth.token"},
+		{name: "direct token raw", key: "github_auth.token", raw: true},
+		{name: "direct api key", key: "api_key", raw: true},
+		{name: "direct license json", key: "platform.license_key", json: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Render(cfg, tc.key, tc.json, tc.raw)
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			for _, forbidden := range []string{token, partial, apiKey, license} {
+				if strings.Contains(out, forbidden) {
+					t.Fatalf("output contains credential fragment %q: %s", forbidden, out)
+				}
+			}
+			if !strings.Contains(out, RedactedValue) {
+				t.Fatalf("output does not contain redaction marker: %s", out)
+			}
+		})
+	}
+}
+
+func TestRedactYAML_LeavesEnvironmentVariableReferencesVisible(t *testing.T) {
+	in := []byte("forges:\n  github:\n    token_env: GITHUB_TOKEN\ngitlab_inbound:\n  secret_env_var: NIGHTGAUGE_WEBHOOK_SECRET\n")
+	out, err := RedactYAMLBytes(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, envName := range []string{"GITHUB_TOKEN", "NIGHTGAUGE_WEBHOOK_SECRET"} {
+		if !strings.Contains(string(out), envName) {
+			t.Fatalf("environment variable reference %q was hidden: %s", envName, out)
+		}
+	}
+}
+
 // TestRender_RoundtripFromDisk_Nested validates that values written through the
 // real Load() path render correctly — guards against tag drift between the
 // disk schema (project.number) and the in-memory Config layout.

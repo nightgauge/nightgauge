@@ -142,7 +142,15 @@ func MigrateFile(path string, dryRun bool) (*MigrateResult, error) {
 
 	result.Changed = !bytes.Equal(origNorm, newNorm)
 	if result.Changed {
-		result.Diff = diffLines(string(origNorm), string(newNorm))
+		redactedOrig, redactOrigErr := RedactYAMLBytes(origNorm)
+		if redactOrigErr != nil {
+			return nil, fmt.Errorf("redact original migration preview: %w", redactOrigErr)
+		}
+		redactedNew, redactNewErr := RedactYAMLBytes(newNorm)
+		if redactNewErr != nil {
+			return nil, fmt.Errorf("redact migrated preview: %w", redactNewErr)
+		}
+		result.Diff = diffLines(string(redactedOrig), string(redactedNew))
 		log.Printf("migrated config %q from v1 to v2 (schema_version added, forges.github inserted)", path)
 	}
 
