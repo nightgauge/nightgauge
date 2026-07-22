@@ -167,6 +167,11 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
 
 function buildPartialConfig(path: string, value: unknown): Record<string, unknown> {
   const parts = path.split(".");
+  for (const part of parts) {
+    if (part === "__proto__" || part === "prototype" || part === "constructor") {
+      throw new Error("Unsafe configuration path");
+    }
+  }
   const result: Record<string, unknown> = {};
   let current = result;
 

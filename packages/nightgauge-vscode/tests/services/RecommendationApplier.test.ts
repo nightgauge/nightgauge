@@ -93,6 +93,16 @@ describe("RecommendationApplier", () => {
     });
   });
 
+  it.each(["__proto__.polluted", "constructor.prototype.polluted", "prototype.polluted"])(
+    "apply() rejects unsafe path %s without writing",
+    async (path) => {
+      const result = await applier.apply("unsafe", path, true);
+
+      expect(result).toEqual({ success: false, error: "Unsafe configuration path" });
+      expect(mockWrite).not.toHaveBeenCalled();
+    }
+  );
+
   it("revert() restores previous value within 30s window", async () => {
     // Arrange
     mockRead.mockResolvedValue({

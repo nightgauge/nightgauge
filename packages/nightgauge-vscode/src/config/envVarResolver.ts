@@ -294,8 +294,10 @@ export function parseObjectEnv(value: string): Record<string, unknown> | undefin
  */
 export function setNestedValue(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split(".");
-  if (parts.some((part) => ["__proto__", "prototype", "constructor"].includes(part))) {
-    throw new Error("Unsafe configuration path");
+  for (const part of parts) {
+    if (part === "__proto__" || part === "prototype" || part === "constructor") {
+      throw new Error("Unsafe configuration path");
+    }
   }
   let current = obj;
 
