@@ -139,6 +139,11 @@ export function getConfigValue(config: IncrediConfig, path: string): unknown {
  */
 export function setConfigValue(config: IncrediConfig, path: string, value: unknown): void {
   const parts = path.split(".");
+  for (const part of parts) {
+    if (part === "__proto__" || part === "prototype" || part === "constructor") {
+      throw new Error("Unsafe configuration path");
+    }
+  }
   let current: Record<string, unknown> = config as Record<string, unknown>;
 
   for (let i = 0; i < parts.length - 1; i++) {

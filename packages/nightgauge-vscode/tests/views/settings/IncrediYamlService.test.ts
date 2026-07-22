@@ -381,6 +381,15 @@ describe("IncrediYamlService", () => {
       setConfigValue(config, "sanitization.enabled", false);
       expect(config.sanitization?.enabled).toBe(false);
     });
+
+    it.each(["__proto__.polluted", "constructor.prototype.polluted", "prototype.polluted"])(
+      "should reject unsafe path %s",
+      (path) => {
+        const config: IncrediConfig = {};
+
+        expect(() => setConfigValue(config, path, true)).toThrow("Unsafe configuration path");
+      }
+    );
   });
 
   describe("DEFAULT_CONFIG", () => {
