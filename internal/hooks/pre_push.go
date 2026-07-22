@@ -150,11 +150,28 @@ func runMergedStateValidation(ctx context.Context, runner CmdRunner, workDir, ta
 		return
 	}
 
-	// Always clean up: checkout back to original and delete temp branch
+	// Always clean up: checkout back to original and delete temp branch. Never
+	// reuse ctx here: it may have been cancelled by the timeout/interruption
+	// that caused validation to return, which previously made every cleanup
+	// command fail immediately and left the repository on temp-pre-push-* with
+	// a merge in progress.
 	defer func() {
-		_, _ = runner.Run(ctx, workDir, "git", "merge", "--abort")
-		_, _ = runner.Run(ctx, workDir, "git", "checkout", originalBranch)
-		_, _ = runner.Run(ctx, workDir, "git", "branch", "-D", tempBranch)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = runner.Run(cleanupCtx, workDir, "git", "merge", "--abort")
+		if out, cleanupErr := runner.Run(cleanupCtx, workDir, "git", "checkout", originalBranch); cleanupErr != nil {
+			result.ValidationPhases["merged_state"] = "failed"
+			result.Decision = "block"
+			result.Reason = fmt.Sprintf("Failed to restore original branch %s after validation: %s",
+				originalBranch, truncateStr(strings.TrimSpace(string(out)), 500))
+			return // never delete the currently checked-out temp branch
+		}
+		if out, cleanupErr := runner.Run(cleanupCtx, workDir, "git", "branch", "-D", tempBranch); cleanupErr != nil {
+			result.ValidationPhases["merged_state"] = "failed"
+			result.Decision = "block"
+			result.Reason = fmt.Sprintf("Restored %s but failed to delete temporary branch %s: %s",
+				originalBranch, tempBranch, truncateStr(strings.TrimSpace(string(out)), 500))
+		}
 	}()
 
 	// Attempt merge with target

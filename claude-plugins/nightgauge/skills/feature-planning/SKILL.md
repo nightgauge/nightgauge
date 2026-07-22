@@ -23,6 +23,7 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+<!-- include: ../_shared/BATCH_MODE.md -->
 
 # Feature Planning
 
@@ -198,8 +199,9 @@ plan whose `approach` is `"verify-and-close"`, with empty `files_to_create` and
 AC. When `mostly-satisfied`, the plan-generation prompt MUST be passed
 `focus_acs` so it scopes to the unsatisfied / undetectable subset only.
 
-Phase 5 (Write Planning Context) embeds the report under
-`planning.ac_reconcile` so downstream stages can see the deterministic verdict.
+Phase 5 (Write Planning Context) embeds the report in the top-level
+`ac_reconcile` field of `planning-{N}.json` so downstream stages can see the
+deterministic verdict.
 
 ### Phase 2: Assess Complexity (Deterministic)
 
@@ -361,7 +363,7 @@ Minimal required skeleton:
 
 ```json
 {
-  "schema_version": "1.5",
+  "schema_version": "1.8",
   "issue_number": N,
   "plan_file": ".nightgauge/plans/{N}-*.md",
   "approach": "...",
@@ -374,6 +376,8 @@ Minimal required skeleton:
   "knowledge_path": null,
   "knowledge_entries": [],
   "cross_repo_knowledge": [],
+  "ac_reconcile": null,
+  "knowledge_read": null,
   "created_at": "2026-01-01T00:00:00Z"
 }
 ```

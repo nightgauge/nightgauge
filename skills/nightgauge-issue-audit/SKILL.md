@@ -142,7 +142,7 @@ FINDINGS=()  # populated as JSON-line strings throughout the run
 For each target `(owner/repo, number)`:
 
 ```bash
-ISSUE_JSON=$(nightgauge forge issue view "$NUM" --repo "$OWNER_REPO" --json state,labels,body,number,repository 2>/dev/null) || {
+ISSUE_JSON=$(nightgauge forge issue view "$NUM" --repo "$OWNER_REPO" --json 2>/dev/null) || {
   FINDINGS+=("$(jq -nc --arg r "$OWNER_REPO" --arg n "$NUM" '
     {phase:1,type:"MISSING_ISSUE",severity:"CRITICAL",
      issue:{repo:$r,number:($n|tonumber)},

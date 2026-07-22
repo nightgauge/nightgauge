@@ -173,6 +173,24 @@ func TestHasUncommittedWork(t *testing.T) {
 	}
 }
 
+func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
+	dir := t.TempDir()
+	gitInitRepo(t, dir)
+	managed := "<!-- BEGIN NIGHTGAUGE MANAGED STEERING -->\ngenerated\n<!-- END NIGHTGAUGE MANAGED STEERING -->\n"
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(managed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if hasUncommittedWork(dir) {
+		t.Fatal("pure generated steering should not trigger recovery")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# User edit\n\n"+managed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !hasUncommittedWork(dir) {
+		t.Fatal("user content outside managed steering must trigger recovery")
+	}
+}
+
 // TestRecoverUncommittedWork verifies the recovery commit is created with the
 // canonical message, and that the function errors gracefully on a bad path.
 func TestRecoverUncommittedWork(t *testing.T) {

@@ -205,7 +205,7 @@ fi
 # epic body lists every sub-issue as `#N` (the established pattern, cf.
 # nightgauge-retro). `forge issue view --json` exposes no sub-issue array
 # either, so body-parsing is the correct route.
-SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json body -q '.body' 2>/dev/null \
+SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json --jq '.body' 2>/dev/null \
   | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -un)
 if [ -z "$SUB_NUMBERS" ]; then
   echo "ERROR: no sub-issues found referenced in epic #$EPIC's body (#N links). Cannot draft release notes from an empty set."
@@ -219,7 +219,7 @@ user-facing "what's new" material lives:
 ```bash
 SUB_CONTENT=""
 for n in $SUB_NUMBERS; do
-  ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json title,body 2>/dev/null)
+  ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
   TITLE=$(echo "$ISSUE_JSON" | jq -r '.title')
   BODY=$(echo "$ISSUE_JSON" | jq -r '.body')
   SUB_CONTENT+=$'\n### '"$TITLE"$'\n'"$BODY"$'\n'
@@ -359,7 +359,7 @@ Fail with clear remediation when:
 ## Completion Checklist
 
 - [ ] Epic confirmed fully closed (`epic check-completion --json`, `.complete == true`)
-- [ ] Sub-issue titles + bodies fetched (`forge issue view --json title,body`)
+- [ ] Sub-issue titles + bodies fetched (`forge issue view --json`)
 - [ ] Version header resolved (from `pubspec.yaml` or `--version`)
 - [ ] iOS/macOS draft written to `fastlane/metadata/en-US/release_notes.txt` (≤4000 chars)
 - [ ] Android draft written to `fastlane/metadata/android/en-US/changelogs/default.txt`

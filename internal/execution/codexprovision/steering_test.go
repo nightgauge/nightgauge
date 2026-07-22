@@ -136,6 +136,16 @@ func TestStripManagedSteeringBlock_NoBlockReturnsUnchanged(t *testing.T) {
 	}
 }
 
+func TestIsOnlyManagedSteeringChange(t *testing.T) {
+	managed := steeringManagedBegin + "\ngenerated\n" + steeringManagedEnd + "\n"
+	if !IsOnlyManagedSteeringChange("# User guidance\n", "# User guidance\n\n"+managed) {
+		t.Fatal("generated managed block should not count as user-authored change")
+	}
+	if IsOnlyManagedSteeringChange("# User guidance\n", "# Changed guidance\n\n"+managed) {
+		t.Fatal("user-authored change outside managed block must be preserved")
+	}
+}
+
 // --- computeNextAgentsMd: end-to-end ---
 
 func TestComputeNextAgentsMd_Idempotent(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -387,8 +388,21 @@ func runShellCmd(workdir, cmdStr string) (string, int, error) {
 	if len(parts) == 0 {
 		return "", 0, nil
 	}
+	// GitHub Actions commonly prefixes commands with one or more environment
+	// assignments (for example `GOFLAGS=-p=2 go test ./...`). These are shell
+	// syntax, not executable names. Preserve their semantics without invoking a
+	// shell by moving validated leading assignments into exec.Cmd.Env.
+	var assignments []string
+	for len(parts) > 0 && isEnvironmentAssignment(parts[0]) {
+		assignments = append(assignments, parts[0])
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return "", 1, fmt.Errorf("CI command contains environment assignments but no executable: %q", cmdStr)
+	}
 	cmd := exec.Command(parts[0], parts[1:]...)
 	cmd.Dir = workdir
+	cmd.Env = append(os.Environ(), assignments...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -400,6 +414,13 @@ func runShellCmd(workdir, cmdStr string) (string, int, error) {
 		return buf.String(), 1, err
 	}
 	return buf.String(), 0, nil
+}
+
+var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func isEnvironmentAssignment(token string) bool {
+	name, _, ok := strings.Cut(token, "=")
+	return ok && environmentName.MatchString(name)
 }
 
 func fileExists(path string) bool {

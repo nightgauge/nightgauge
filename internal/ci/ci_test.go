@@ -296,6 +296,24 @@ func TestCheckParity_EmptyCommands(t *testing.T) {
 	}
 }
 
+func TestRunShellCmd_LeadingEnvironmentAssignments(t *testing.T) {
+	out, exitCode, err := runShellCmd(t.TempDir(),
+		`NIGHTGAUGE_CI_ASSIGNMENT=present NIGHTGAUGE_SECOND="two words" sh -c 'printf "%s|%s" "$NIGHTGAUGE_CI_ASSIGNMENT" "$NIGHTGAUGE_SECOND"'`)
+	if err != nil || exitCode != 0 {
+		t.Fatalf("runShellCmd() error = %v, exitCode = %d, output = %q", err, exitCode, out)
+	}
+	if out != "present|two words" {
+		t.Fatalf("output = %q, want %q", out, "present|two words")
+	}
+}
+
+func TestRunShellCmd_AssignmentWithoutExecutableFails(t *testing.T) {
+	_, exitCode, err := runShellCmd(t.TempDir(), "GOFLAGS=-p=2")
+	if err == nil || exitCode == 0 {
+		t.Fatalf("runShellCmd() error = %v, exitCode = %d; want a failure", err, exitCode)
+	}
+}
+
 func TestClassifyFailureType(t *testing.T) {
 	cases := []struct {
 		cmd  string

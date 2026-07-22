@@ -6692,7 +6692,10 @@ func gitBranchCreateCmd() *cobra.Command {
 					return err
 				}
 			default:
-				if err := svc.BranchCreate(branchName); err != nil {
+				// Always use the resolved base. In a detached pipeline worktree,
+				// BranchCreate would branch from the detached checkout even though
+				// DefaultBranch above successfully resolved origin's base branch.
+				if err := svc.BranchCreateFrom(branchName, baseBranch); err != nil {
 					return err
 				}
 			}
