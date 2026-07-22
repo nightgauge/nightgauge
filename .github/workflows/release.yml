@@ -296,11 +296,12 @@ jobs:
           done >> dist/checksums.txt
           sort -k2,2 -o dist/checksums.txt dist/checksums.txt
 
-      # manifest.json is derived from the combined checksums.txt, so it can
-      # only be built AFTER goreleaser runs — GoReleaser cannot attach it via
-      # `extra_files` (the file does not exist yet) and v2 has no `after:` hook.
-      # The SDK postinstall fetches this from the Release to SHA256-verify the
-      # binary it downloads, so a missing manifest silently breaks that path.
+      # manifest.json is derived from the combined checksums.txt after
+      # GoReleaser runs, but intentionally selects only CLI archives. The SDK
+      # postinstall fetches it to SHA256-verify downloaded binaries; VSIX
+      # integrity remains covered by checksums.txt. GoReleaser cannot attach a
+      # manifest that does not exist yet via `extra_files`, and v2 has no
+      # `after:` hook.
       - name: Generate + attach manifest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -311,7 +312,7 @@ jobs:
           test -s dist/manifest.json || { echo "ERROR: empty manifest.json"; exit 1; }
           gh release upload "$TAG" dist/checksums.txt --clobber
           gh release upload "$TAG" dist/manifest.json --clobber
-          echo "Attached combined checksums.txt and manifest.json"
+          echo "Attached combined checksums.txt and CLI archive manifest.json"
 
       - name: Attach VSIXs to GitHub Release
         working-directory: packages/nightgauge-vscode

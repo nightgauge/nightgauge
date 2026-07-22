@@ -148,7 +148,9 @@ jobs:
           sort -k2,2 -o dist/checksums.txt dist/checksums.txt
 
       # Exercise the same manifest path the real release uses. checksums.txt
-      # covers both GoReleaser outputs and the target-specific VSIX packages.
+      # covers both GoReleaser outputs and target-specific VSIX packages;
+      # manifest.json is intentionally limited to CLI archives consumed by the
+      # SDK postinstall downloader.
       - name: Generate manifest.json
         run: |
           set -euo pipefail
