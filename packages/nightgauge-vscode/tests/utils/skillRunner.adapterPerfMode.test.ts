@@ -208,7 +208,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.env = originalEnv;
+  process.env = {
+    ...originalEnv,
+    VITEST: "true",
+  };
+  vi.restoreAllMocks();
 });
 
 describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
@@ -258,6 +262,24 @@ describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
 
     // The configured fallback is used; the alias "haiku" is not leaked.
     expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.0-flash");
+  });
+
+  it("repeated dispatches quiesce operator diagnostics before Vitest teardown", () => {
+    vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+    vi.mocked(spawn).mockImplementation(() => createMockChildProcess());
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const iterations = 25;
+
+    for (let index = 0; index < iterations; index += 1) {
+      runStageSkillHeadless("feature-dev", 42, {});
+    }
+
+    expect(spawn).toHaveBeenCalledTimes(iterations);
+    for (const call of vi.mocked(spawn).mock.calls) {
+      const opts = call[2] as { env?: Record<string, string> };
+      expect(opts.env?.NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+    }
+    expect(consoleSpy).not.toHaveBeenCalled();
   });
 });
 

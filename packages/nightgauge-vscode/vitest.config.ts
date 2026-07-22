@@ -9,12 +9,6 @@ export default defineConfig({
     // runner load even when their assertions are healthy; retain a bounded
     // timeout while avoiding false failures and cascading shared-state errors.
     testTimeout: 15_000,
-    // The suite exercises worker-heavy orchestration code and emits expected
-    // diagnostics. Vitest's console interception forwards each line over its
-    // worker RPC; on slower hosted runners that queue can outlive environment
-    // teardown and fail an otherwise-green run with EnvironmentTeardownError.
-    // Write directly to stdout/stderr so no onUserConsoleLog RPC remains.
-    disableConsoleIntercept: true,
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/playwright/**", "tests/e2e-playwright/**"],
     setupFiles: ["tests/setup.ts"],
