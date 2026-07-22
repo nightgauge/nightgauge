@@ -1,9 +1,8 @@
 /**
- * Tests for switchAdapter command — Ollama option
+ * Tests for pipeline adapter choices — Ollama
  *
- * Verifies that Ollama appears in the QuickPick items, that selecting it writes
- * the correct adapter value to config, and that a non-blocking warning is shown
- * when no NIGHTGAUGE_OLLAMA_MODEL env var is set.
+ * Verifies that the chat-completion-only Ollama adapter is not offered for
+ * pipeline execution.
  *
  * @see Issue #2593 - Add Ollama and Gemini to VSCode adapter switcher
  * @see packages/nightgauge-vscode/src/commands/switchAdapter.ts
@@ -73,7 +72,6 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 }));
 
 import { registerSwitchAdapterCommand } from "../../src/commands/switchAdapter";
-import { getExecutionAdapter } from "../../src/utils/incrediConfig";
 
 describe("switchAdapter command — Ollama option", () => {
   const mockLogger = {
@@ -99,7 +97,7 @@ describe("switchAdapter command — Ollama option", () => {
     await callback();
   }
 
-  it("includes Ollama in the adapter QuickPick items", async () => {
+  it("excludes chat-only Ollama from pipeline adapter choices", async () => {
     quickPickResponses = [undefined];
 
     const disposable = registerSwitchAdapterCommand(
@@ -113,168 +111,7 @@ describe("switchAdapter command — Ollama option", () => {
     const ollamaItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "ollama"
     );
-    expect(ollamaItem).toBeDefined();
-    expect(ollamaItem!.label).toBe("Ollama");
-
-    disposable.dispose();
-  });
-
-  it('shows "Current adapter" description when ollama is already selected', async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("ollama");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const adapterItems = quickPickCalls[0].items;
-    const ollamaItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "ollama"
-    );
-    expect(ollamaItem!.description).toBe("Current adapter");
-
-    disposable.dispose();
-  });
-
-  it("shows Ollama description when another adapter is current", async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("claude");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const adapterItems = quickPickCalls[0].items;
-    const ollamaItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "ollama"
-    );
-    expect(ollamaItem!.description).toBe("Use Ollama local inference (HTTP to localhost:11434)");
-
-    disposable.dispose();
-  });
-
-  it("shows warning when selecting ollama and no model env var is set", async () => {
-    const ollamaAdapterItem = {
-      label: "Ollama",
-      description: "Use Ollama local inference (HTTP to localhost:11434)",
-      value: "ollama",
-    };
-    quickPickResponses = [ollamaAdapterItem as unknown as QuickPickItem];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const vscode = await import("vscode");
-    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-      expect.stringContaining("NIGHTGAUGE_OLLAMA_MODEL")
-    );
-
-    disposable.dispose();
-  });
-
-  it("suppresses warning when NIGHTGAUGE_OLLAMA_MODEL is set", async () => {
-    process.env.NIGHTGAUGE_OLLAMA_MODEL = "llama3.1";
-
-    const ollamaAdapterItem = {
-      label: "Ollama",
-      description: "Use Ollama local inference (HTTP to localhost:11434)",
-      value: "ollama",
-    };
-    quickPickResponses = [ollamaAdapterItem as unknown as QuickPickItem];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const vscode = await import("vscode");
-    expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
-
-    disposable.dispose();
-  });
-
-  it("mentions ollama pull in the warning message", async () => {
-    const ollamaAdapterItem = {
-      label: "Ollama",
-      description: "Use Ollama local inference (HTTP to localhost:11434)",
-      value: "ollama",
-    };
-    quickPickResponses = [ollamaAdapterItem as unknown as QuickPickItem];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const vscode = await import("vscode");
-    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-      expect.stringContaining("ollama pull")
-    );
-
-    disposable.dispose();
-  });
-
-  it("writes ollama adapter to config on selection", async () => {
-    const ollamaAdapterItem = {
-      label: "Ollama",
-      description: "Use Ollama local inference (HTTP to localhost:11434)",
-      value: "ollama",
-    };
-    quickPickResponses = [ollamaAdapterItem as unknown as QuickPickItem];
-    process.env.NIGHTGAUGE_OLLAMA_MODEL = "codellama";
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const { IncrediYamlService } = await import("../../src/views/settings/IncrediYamlService");
-    const mockInstance = vi.mocked(IncrediYamlService).mock.results[0].value as {
-      writeLocal: ReturnType<typeof vi.fn>;
-    };
-    expect(mockInstance.writeLocal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ui: expect.objectContaining({
-          core: expect.objectContaining({ adapter: "ollama" }),
-        }),
-      })
-    );
-
-    disposable.dispose();
-  });
-
-  it("calls ConfigBridge.reload() after selection", async () => {
-    const ollamaAdapterItem = {
-      label: "Ollama",
-      description: "Use Ollama local inference (HTTP to localhost:11434)",
-      value: "ollama",
-    };
-    quickPickResponses = [ollamaAdapterItem as unknown as QuickPickItem];
-    process.env.NIGHTGAUGE_OLLAMA_MODEL = "llama3.1";
-
-    const { ConfigBridge } = await import("../../src/services/ConfigBridge");
-    const reloadMock = vi.fn(() => Promise.resolve());
-    vi.mocked(ConfigBridge.getInstance).mockReturnValue({ reload: reloadMock } as ReturnType<
-      typeof ConfigBridge.getInstance
-    >);
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    expect(reloadMock).toHaveBeenCalled();
+    expect(ollamaItem).toBeUndefined();
 
     disposable.dispose();
   });

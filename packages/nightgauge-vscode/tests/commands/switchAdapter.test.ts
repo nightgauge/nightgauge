@@ -1,8 +1,8 @@
 /**
- * Tests for switchAdapter command — LM Studio option
+ * Tests for pipeline adapter choices
  *
- * Verifies that LM Studio appears in the QuickPick items and that
- * selecting it writes the correct adapter value to config.
+ * Verifies that chat-completion-only adapters are not offered for pipeline
+ * execution.
  *
  * @see Issue #2057 - Route pipeline stage execution through LM Studio
  * @see packages/nightgauge-vscode/src/commands/switchAdapter.ts
@@ -71,7 +71,6 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 }));
 
 import { registerSwitchAdapterCommand } from "../../src/commands/switchAdapter";
-import { getExecutionAdapter } from "../../src/utils/incrediConfig";
 
 describe("switchAdapter command", () => {
   const mockLogger = {
@@ -88,7 +87,7 @@ describe("switchAdapter command", () => {
     quickPickCallIndex = 0;
   });
 
-  it("includes LM Studio in the adapter QuickPick items", async () => {
+  it("excludes chat-only LM Studio from pipeline adapter choices", async () => {
     // User cancels after first pick (no selection)
     quickPickResponses = [undefined];
 
@@ -102,60 +101,12 @@ describe("switchAdapter command", () => {
     const callback = registerCall[1] as () => Promise<void>;
     await callback();
 
-    // Verify LM Studio is in the adapter options
     expect(quickPickCalls.length).toBeGreaterThanOrEqual(1);
     const adapterItems = quickPickCalls[0].items;
     const lmStudioItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "lm-studio"
     );
-    expect(lmStudioItem).toBeDefined();
-    expect(lmStudioItem!.label).toBe("LM Studio");
-
-    disposable.dispose();
-  });
-
-  it('shows "Current adapter" when lm-studio is already selected', async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("lm-studio");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    const vscode = await import("vscode");
-    const registerCall = vi.mocked(vscode.commands.registerCommand).mock.calls[0];
-    const callback = registerCall[1] as () => Promise<void>;
-    await callback();
-
-    const adapterItems = quickPickCalls[0].items;
-    const lmStudioItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "lm-studio"
-    );
-    expect(lmStudioItem!.description).toBe("Current adapter");
-
-    disposable.dispose();
-  });
-
-  it("shows LM Studio description when another adapter is current", async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("claude");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    const vscode = await import("vscode");
-    const registerCall = vi.mocked(vscode.commands.registerCommand).mock.calls[0];
-    const callback = registerCall[1] as () => Promise<void>;
-    await callback();
-
-    const adapterItems = quickPickCalls[0].items;
-    const lmStudioItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "lm-studio"
-    );
-    expect(lmStudioItem!.description).toBe(
-      "Use LM Studio local inference (HTTP to localhost:1234)"
-    );
+    expect(lmStudioItem).toBeUndefined();
 
     disposable.dispose();
   });

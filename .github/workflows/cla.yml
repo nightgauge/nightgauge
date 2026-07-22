@@ -32,3 +32,4 @@ jobs:
           CLA_SIGNATURES_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
           CLA_SIGNATURES_REPOSITORY: nightgauge/.cla-signatures
           CLA_SIGNATURES_PATH: signatures/version1/cla.json
+          CLA_CORPORATE_SIGNATURES_PATH: signatures/version1/corporate.json

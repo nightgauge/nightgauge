@@ -84,19 +84,16 @@ export const STAGE_ADAPTER_STAGES = [
  * an empty value representing "(Use global default)" — i.e. the resolver
  * falls through to `ui.core.adapter`.
  *
- * The seven adapter ids MUST stay in sync with `AdapterEnumSchema` in
- * `src/config/schema.ts` and the regex literal in
- * `src/utils/resolvers/adapterResolver.ts` near line 241.
+ * Only agentic adapters belong here. `AdapterEnumSchema` intentionally remains
+ * broader for backward-compatible parsing and non-pipeline eval/judge surfaces;
+ * Gemini SDK, LM Studio, and Ollama have no repository-changing tool loop.
  */
 export const STAGE_ADAPTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "", label: "(Use global default)" },
   { value: "claude", label: "Claude" },
-  { value: "codex", label: "Codex" },
-  { value: "gemini", label: "Gemini CLI" },
-  { value: "gemini-sdk", label: "Gemini SDK" },
-  { value: "lm-studio", label: "LM Studio" },
-  { value: "ollama", label: "Ollama" },
-  { value: "copilot", label: "GitHub Copilot CLI" },
+  { value: "codex", label: "Codex (Beta)" },
+  { value: "gemini", label: "Gemini CLI (Experimental)" },
+  { value: "copilot", label: "GitHub Copilot CLI (Experimental)" },
 ];
 
 /**

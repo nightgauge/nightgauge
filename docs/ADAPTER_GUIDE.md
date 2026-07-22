@@ -1,38 +1,40 @@
 # Adapter Selection Guide
 
-**Version:** 1.0
-**Date:** 2026-04-09
+**Version:** 1.1
+**Updated:** 2026-07-21
 **Issue:** #2599
 
 ---
 
 ## Which Adapter Should I Use?
 
-Nightgauge supports 8 AI execution adapters organized into three
-categories. Pick the one that matches your priorities:
+Nightgauge includes eight provider adapters, but only five have the agentic tool
+loop required for pipeline execution. Pick an agentic adapter for issue-to-PR
+work; use chat-only adapters for evaluation, judging, or summarization.
 
-| Priority                        | Recommended Adapter | Category       |
-| ------------------------------- | ------------------- | -------------- |
-| Best quality + full features    | **Claude SDK**      | Cloud AI (SDK) |
-| No API key, just works          | **Claude Headless** | Cloud AI (CLI) |
-| OpenAI models                   | **Codex**           | Cloud AI (CLI) |
-| Google models (SDK integration) | **Gemini SDK**      | Cloud AI (SDK) |
-| Google models (CLI)             | **Gemini CLI**      | Cloud AI (CLI) |
-| GitHub ecosystem                | **Copilot**         | Cloud AI (CLI) |
-| Privacy / offline (easy setup)  | **Ollama**          | Local AI       |
-| Privacy / offline (GUI)         | **LM Studio**       | Local AI       |
+| Priority                     | Recommended Adapter | Category       |
+| ---------------------------- | ------------------- | -------------- |
+| Best quality + full features | **Claude SDK**      | Cloud AI (SDK) |
+| No API key, just works       | **Claude Headless** | Cloud AI (CLI) |
+| OpenAI models                | **Codex**           | Cloud AI (CLI) |
+| Google agentic pipeline      | **Gemini CLI**      | Experimental   |
+| GitHub agentic pipeline      | **Copilot**         | Experimental   |
+| Google API evaluation        | **Gemini SDK**      | Chat-only      |
+| Privacy / offline evaluation | **Ollama**          | Chat-only      |
+| GUI-based local evaluation   | **LM Studio**       | Chat-only      |
 
 ### Decision Matrix
 
-| Factor             | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  | Ollama  | LM Studio |
-| ------------------ | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-----: | :-------: |
-| **Cost**           | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  |  Free   |   Free    |
-| **Privacy**        |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |  Local  |   Local   |
-| **Setup**          |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | Install |  Install  |
-| **Quality**        |  Highest   |      High       |    High    |    High    |    High    |   Good   | Varies  |  Varies   |
-| **Session Resume** |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |    ✗    |     ✗     |
-| **Token Tracking** |     ✓      |        ✗        |     ✗      |     ✓      |     ✓      |    ⚠️    |    ✓    |     ✓     |
-| **Offline**        |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |    ✓    |     ✓     |
+| Factor              | Claude SDK | Claude Headless |   Codex    | Gemini SDK | Gemini CLI | Copilot  | Ollama  | LM Studio |
+| ------------------- | :--------: | :-------------: | :--------: | :--------: | :--------: | :------: | :-----: | :-------: |
+| **Cost**            | Per-token  |  Subscription   | Per-token  | Per-token  | Per-token  | Per-req  |  Free   |   Free    |
+| **Privacy**         |   Cloud    |      Cloud      |   Cloud    |   Cloud    |   Cloud    |  Cloud   |  Local  |   Local   |
+| **Setup**           |  API key   |   OAuth login   | CLI login  |  API key   |  API key   | GH login | Install |  Install  |
+| **Quality**         |  Highest   |      High       |    High    |    High    |    High    |   Good   | Varies  |  Varies   |
+| **Session Resume**  |     ✓      |        ✗        | ✓ (opt-in) |     ✗      |     ✗      |    ✗     |    ✗    |     ✗     |
+| **Token Tracking**  |     ✓      |        ✗        |     ✓      |     ✓      |     ✓      |    ⚠️    |    ✓    |     ✓     |
+| **Offline**         |     ✗      |        ✗        |     ✗      |     ✗      |     ✗      |    ✗     |    ✓    |     ✓     |
+| **Pipeline stages** |     ✓      |        ✓        |  ✓ (beta)  |     ✗      |  ✓ (exp.)  | ✓ (exp.) |    ✗    |     ✗     |
 
 ---
 
@@ -98,6 +100,11 @@ test -n "${ANTHROPIC_API_KEY:-}" && echo "ANTHROPIC_API_KEY is set"
 
 Direct SDK integration with Google's Gemini models. Supports multi-turn
 conversations and native token tracking.
+
+> **Pipeline limitation:** this is a chat-completion adapter, not an agentic
+> coding loop. Nightgauge rejects it at pipeline dispatch. Use it for
+> evaluation, judging, and summarization, or select Gemini CLI for experimental
+> pipeline execution.
 
 **Prerequisites:**
 
@@ -366,7 +373,9 @@ gemini --version
 
 ### Copilot
 
-GitHub Copilot CLI adapter for teams already in the GitHub ecosystem.
+Experimental GitHub Copilot CLI adapter for teams already in the GitHub
+ecosystem. Its agentic contract is implemented, but the live six-stage provider
+matrix is still pending.
 
 **Prerequisites:**
 
@@ -434,6 +443,10 @@ These adapters connect to locally-running model servers. No cloud dependency,
 no API costs, full data privacy. Quality depends on the model you choose.
 
 ### Ollama
+
+> **Pipeline limitation:** Ollama is chat-completion-only. It is available for
+> evaluation, judging, and summarization, but cannot edit files or run pipeline
+> stages.
 
 Open-source local model runner. Best for quick setup with popular open models.
 
@@ -510,6 +523,10 @@ ollama list
 
 ### LM Studio
 
+> **Pipeline limitation:** LM Studio is chat-completion-only. It is available
+> for evaluation, judging, and summarization, but cannot edit files or run
+> pipeline stages.
+
 Desktop application with a GUI for managing and running local models. Best for
 users who prefer a visual interface for model management.
 
@@ -581,7 +598,8 @@ curl -s http://localhost:1234/v1/models
 
 1. Open Command Palette (`Cmd+Shift+P` / `Ctrl+Shift+P`)
 2. Search "Nightgauge: Select Adapter"
-3. Choose from the adapter list
+3. Choose an agentic adapter: Claude, Codex (beta), Gemini CLI
+   (experimental), or Copilot (experimental)
 
 ### Via Configuration File
 
@@ -589,13 +607,13 @@ curl -s http://localhost:1234/v1/models
 # .nightgauge/config.yaml
 ui:
   core:
-    adapter: claude # claude | codex | gemini | gemini-sdk | lm-studio | ollama | copilot
+    adapter: claude # claude | codex | gemini | copilot
 ```
 
 ### Via Environment Variable
 
 ```bash
-export NIGHTGAUGE_ADAPTER=ollama
+export NIGHTGAUGE_ADAPTER=codex
 ```
 
 ### Auto-Detection
@@ -614,9 +632,14 @@ This auto-detection sequence applies to the standalone SDK CLI. The VS Code
 extension always maps its Claude choice to Claude Headless so the Marketplace
 artifact never depends on or redistributes the optional Agent SDK.
 
+For pipeline execution, the agentic truth gate still applies after detection:
+Gemini SDK, Ollama, and LM Studio are rejected and must be replaced with an
+agentic adapter. Their auto-detection remains useful for evaluation, judging,
+and summarization surfaces.
+
 ### Mid-Pipeline Switching
 
-Both adapters use the same context file format, so you can switch adapters
+Agentic adapters use the same context file format, so you can switch adapters
 between pipeline stages on the same branch:
 
 ```bash
@@ -638,7 +661,7 @@ capabilities are available per adapter:
 
 | Feature                 | Claude SDK | Claude HL |   Codex   | Gemini SDK | Gemini CLI | Copilot | Ollama | LM Studio |
 | ----------------------- | :--------: | :-------: | :-------: | :--------: | :--------: | :-----: | :----: | :-------: |
-| All 6 pipeline stages   |     ✓      |     ✓     |     ✓     |     ✓      |     ✓      |    ✓    |   ✓    |     ✓     |
+| All 6 pipeline stages   |     ✓      |     ✓     |  ✓ beta   |     ✗      |   ✓ exp.   | ✓ exp.  |   ✗    |     ✗     |
 | Multi-turn conversation |     ✓      |     ✗     |     ✗     |     ✓      |     ✗      |    ✗    |   ✗    |     ✗     |
 | Session resume          |     ✓      |     ✗     |    ✓\*    |     ✗      |     ✗      |    ✗    |   ✗    |     ✗     |
 | Token usage tracking    |     ✓‡     |     ✗     |    ✓‡     |     ✓      |     ✓      |   ⚠️    |   ✓    |     ✓     |

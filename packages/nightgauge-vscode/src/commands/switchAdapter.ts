@@ -37,47 +37,24 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
         {
           label: "Codex",
           description:
-            current === "codex" ? "Current adapter" : "Use Codex adapter script execution path",
+            current === "codex" ? "Current adapter (beta)" : "Beta agentic pipeline adapter",
           value: "codex",
         },
         {
           label: "Gemini CLI",
           description:
             current === "gemini"
-              ? "Current adapter"
-              : "Use Google Gemini CLI binary execution path",
+              ? "Current adapter (experimental)"
+              : "Experimental agentic pipeline adapter",
           value: "gemini",
         },
         {
-          label: "Gemini SDK (Direct API)",
-          detail: "Requires GEMINI_API_KEY or GOOGLE_API_KEY environment variable",
-          description:
-            current === "gemini-sdk"
-              ? "Current adapter"
-              : "Use Google Gemini SDK with direct API access",
-          value: "gemini-sdk",
-        },
-        {
-          label: "LM Studio",
-          description:
-            current === "lm-studio"
-              ? "Current adapter"
-              : "Use LM Studio local inference (HTTP to localhost:1234)",
-          value: "lm-studio",
-        },
-        {
-          label: "Ollama",
-          description:
-            current === "ollama"
-              ? "Current adapter"
-              : "Use Ollama local inference (HTTP to localhost:11434)",
-          value: "ollama",
-        },
-        {
           label: "GitHub Copilot CLI",
-          detail: "Use GitHub Copilot subscription (copilot binary)",
+          detail: "Experimental; requires the Copilot CLI and subscription",
           description:
-            current === "copilot" ? "Current adapter" : "Use GitHub Copilot CLI execution path",
+            current === "copilot"
+              ? "Current adapter (experimental)"
+              : "Experimental agentic pipeline adapter",
           value: "copilot",
         },
       ],
@@ -104,18 +81,7 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
       }
     }
 
-    if (adapterSelection.value === "ollama") {
-      const hasModel = process.env.NIGHTGAUGE_OLLAMA_MODEL;
-      if (!hasModel) {
-        // Non-blocking warning — still proceed with save
-        vscode.window.showWarningMessage(
-          "Ollama: No model configured. Set NIGHTGAUGE_OLLAMA_MODEL to a model " +
-            "you have pulled (e.g., llama3.1, codellama). Run `ollama pull <model>` first."
-        );
-      }
-    }
-
-    if (adapterSelection.value === "gemini" || adapterSelection.value === "gemini-sdk") {
+    if (adapterSelection.value === "gemini") {
       const hasApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
       if (!hasApiKey) {
         // Non-blocking warning — still proceed with save

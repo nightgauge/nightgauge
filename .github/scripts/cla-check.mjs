@@ -47,6 +47,8 @@ const githubToken = process.env.GITHUB_TOKEN;
 const signaturesToken = process.env.CLA_SIGNATURES_TOKEN;
 const pull = await request(`/repos/${repository}/pulls/${pullNumber}`, githubToken);
 const login = pull.user.login;
+const userId = pull.user.id;
+if (!Number.isInteger(userId)) throw new Error("Pull request author is missing a numeric user id");
 const allowlist = new Set(
   (process.env.CLA_ALLOWLIST ?? "")
     .split(",")
@@ -57,39 +59,79 @@ const exempt = login.endsWith("[bot]") || allowlist.has(login.toLowerCase());
 
 const [signatureOwner, signatureRepo] = process.env.CLA_SIGNATURES_REPOSITORY.split("/");
 const signaturePath = process.env.CLA_SIGNATURES_PATH;
+const corporatePath =
+  process.env.CLA_CORPORATE_SIGNATURES_PATH ?? "signatures/version1/corporate.json";
+
+async function loadStoreFile(filePath, fallback) {
+  try {
+    const file = await request(
+      `/repos/${signatureOwner}/${signatureRepo}/contents/${filePath}`,
+      signaturesToken
+    );
+    const decoded = Buffer.from(file.content.replace(/\n/g, ""), "base64").toString("utf8");
+    return { value: JSON.parse(decoded), sha: file.sha };
+  } catch (error) {
+    if (fallback !== undefined && String(error).includes("GitHub API 404")) {
+      return { value: fallback, sha: null };
+    }
+    throw error;
+  }
+}
 
 async function loadSignatures() {
+  const { value, sha } = await loadStoreFile(signaturePath);
+  const entries = Array.isArray(value) ? value : value.signedContributors;
+  if (!Array.isArray(entries)) {
+    throw new Error("CLA signature store must contain signedContributors[]");
+  }
+  return { entries, sha, wrapped: !Array.isArray(value) };
+}
+
+async function loadCorporateSignatures() {
+  const { value } = await loadStoreFile(corporatePath, { entities: [] });
+  if (!Array.isArray(value.entities)) {
+    throw new Error("Corporate CLA signature store must contain entities[]");
+  }
+  return value.entities;
+}
+
+async function loadClaRevision() {
   const file = await request(
-    `/repos/${signatureOwner}/${signatureRepo}/contents/${signaturePath}`,
-    signaturesToken
+    `/repos/${repository}/contents/CLA/individual.md?ref=main`,
+    githubToken
   );
-  const decoded = Buffer.from(file.content.replace(/\n/g, ""), "base64").toString("utf8");
-  const entries = JSON.parse(decoded);
-  if (!Array.isArray(entries)) throw new Error("CLA signature store must be an array");
-  return { entries, sha: file.sha };
+  if (!file.sha) throw new Error("CLA document response is missing its commit SHA");
+  return file.sha;
 }
 
 async function recordSignature() {
-  const { entries, sha } = await loadSignatures();
-  if (!entries.some((entry) => entry.login?.toLowerCase() === login.toLowerCase())) {
+  const { entries, sha, wrapped } = await loadSignatures();
+  if (!entries.some((entry) => entry.id === userId)) {
+    const claCommitSha = await loadClaRevision();
     entries.push({
       login,
-      signedAt: new Date().toISOString(),
-      claVersion: "harmony-1.0-option-5",
-      pullRequest: `${repository}#${pullNumber}`,
+      id: userId,
+      pull_request: pullNumber,
+      agreement_comment_url: event.comment.html_url,
+      signed_at: new Date().toISOString(),
+      cla_document: "CLA/individual.md",
+      cla_version: "HA-CLA-I v1.0 (Option Five)",
+      cla_commit_sha: claCommitSha,
     });
-    entries.sort((a, b) => a.login.localeCompare(b.login));
+    entries.sort((a, b) => a.id - b.id);
+    const storedValue = wrapped ? { signedContributors: entries } : entries;
+    const update = {
+      message: `chore(cla): record ${login} agreement`,
+      content: Buffer.from(`${JSON.stringify(storedValue, null, 2)}\n`).toString("base64"),
+      branch: "main",
+    };
+    if (sha) update.sha = sha;
     await request(
       `/repos/${signatureOwner}/${signatureRepo}/contents/${signaturePath}`,
       signaturesToken,
       {
         method: "PUT",
-        body: JSON.stringify({
-          message: `chore(cla): record ${login} agreement`,
-          content: Buffer.from(`${JSON.stringify(entries, null, 2)}\n`).toString("base64"),
-          sha,
-          branch: "main",
-        }),
+        body: JSON.stringify(update),
       }
     );
   }
@@ -127,9 +169,23 @@ if (event.comment) {
   if (isAuthor && agreed) await recordSignature();
 }
 
-const { entries } = await loadSignatures();
+const [{ entries }, corporateEntities] = await Promise.all([
+  loadSignatures(),
+  loadCorporateSignatures(),
+]);
+const corporateSigned = corporateEntities.some(
+  (entity) =>
+    entity.authorized_ids?.includes(userId) ||
+    entity.authorized_logins?.some((value) => value.toLowerCase() === login.toLowerCase())
+);
 const signed =
-  exempt || entries.some((entry) => entry.login?.toLowerCase() === login.toLowerCase());
+  exempt ||
+  corporateSigned ||
+  entries.some(
+    (entry) =>
+      entry.id === userId ||
+      (entry.id == null && entry.login?.toLowerCase() === login.toLowerCase())
+  );
 if (signed) {
   await setStatus("success", exempt ? "CLA exemption verified" : "CLA signed");
 } else {

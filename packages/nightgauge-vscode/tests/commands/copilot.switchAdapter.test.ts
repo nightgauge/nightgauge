@@ -135,7 +135,7 @@ describe("switchAdapter command — GitHub Copilot CLI option", () => {
     const copilotItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "copilot"
     );
-    expect(copilotItem!.description).toBe("Current adapter");
+    expect(copilotItem!.description).toBe("Current adapter (experimental)");
 
     disposable.dispose();
   });
@@ -154,7 +154,7 @@ describe("switchAdapter command — GitHub Copilot CLI option", () => {
     const copilotItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "copilot"
     );
-    expect(copilotItem!.description).toBe("Use GitHub Copilot CLI execution path");
+    expect(copilotItem!.description).toBe("Experimental agentic pipeline adapter");
 
     disposable.dispose();
   });
@@ -173,7 +173,7 @@ describe("switchAdapter command — GitHub Copilot CLI option", () => {
       (item) => (item as unknown as { value: string }).value === "copilot"
     );
     expect((copilotItem as unknown as { detail: string }).detail).toBe(
-      "Use GitHub Copilot subscription (copilot binary)"
+      "Experimental; requires the Copilot CLI and subscription"
     );
 
     disposable.dispose();

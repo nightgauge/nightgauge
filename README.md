@@ -177,10 +177,13 @@ npm run -w @nightgauge/sdk build
 
 Then continue in Claude commands if needed and finish the pipeline.
 
-### GitHub Copilot CLI (SDK Adapter)
+### GitHub Copilot CLI (Experimental Adapter)
 
-Copilot is available as a first-class execution adapter via the VSCode extension
-and SDK. It routes pipeline stages through the `copilot` CLI subprocess.
+Copilot is available as an experimental agentic execution adapter via the VSCode
+extension and SDK. It routes pipeline stages through the `copilot` CLI
+subprocess, but it has not completed Nightgauge's live six-stage provider
+verification matrix. Keep a proven Claude or Codex adapter available as a
+fallback.
 
 **Prerequisites:**
 
@@ -206,16 +209,17 @@ copilot:
 
 ### LM Studio (Local Model Adapter)
 
-LM Studio is supported as a local-model adapter for offline and zero-cost
-inference. See
+LM Studio is supported as a chat-completion adapter for offline and zero-cost
+evaluation, judging, and summarization. It does not provide the agentic tool loop
+required to run pipeline stages or edit a repository. See
 [docs/MULTI_BACKEND_SETUP.md](docs/MULTI_BACKEND_SETUP.md#lm-studio-local-model)
 for setup instructions and
 [docs/CONFIGURATION.md](docs/CONFIGURATION.md#lm-studio-adapter-environment-variables)
 for configuration reference.
 
-**Use LM Studio when:** offline development, privacy-sensitive work, or
-cost-free experimentation. For production pipelines, hosted adapters (Claude
-Max, Bedrock, Vertex, Gemini) deliver better reliability and quality.
+**Use LM Studio when:** running offline evaluations, privacy-sensitive
+summarization, or cost-free experimentation. Use an agentic adapter for pipeline
+execution.
 
 ### Parity Status (February 10, 2026)
 
@@ -240,21 +244,32 @@ Skills work with any AI tool supporting the
 
 ## Adapters
 
-Nightgauge supports **8 AI execution adapters** across three categories:
+Nightgauge includes **8 provider adapters** across three categories. Five have
+agentic tool loops and can be selected for pipeline execution; three are
+chat-completion-only and are limited to evaluation, judging, and summarization.
 
-| Category           | Adapters                                    | Best For                           |
-| ------------------ | ------------------------------------------- | ---------------------------------- |
-| **Cloud AI (SDK)** | Claude SDK, Gemini SDK                      | Best quality, full feature support |
-| **Cloud AI (CLI)** | Claude Headless, Codex, Gemini CLI, Copilot | No API key / existing CLI auth     |
-| **Local AI**       | Ollama, LM Studio                           | Privacy, offline, zero cost        |
+| Adapter            | Pipeline role                                | Release confidence                    |
+| ------------------ | -------------------------------------------- | ------------------------------------- |
+| Claude Headless    | Agentic pipeline execution                   | Recommended; primary tested path      |
+| Claude SDK         | Agentic pipeline execution for SDK consumers | Advanced, optional integration        |
+| Codex CLI          | Agentic pipeline execution                   | **Beta**; strong automated coverage   |
+| Gemini CLI         | Agentic pipeline execution                   | **Experimental**; live matrix pending |
+| GitHub Copilot CLI | Agentic pipeline execution                   | **Experimental**; live matrix pending |
+| Gemini SDK         | Evaluation/judging/summarization only        | Chat-completion-only                  |
+| Ollama             | Evaluation/judging/summarization only        | Chat-completion-only                  |
+| LM Studio          | Evaluation/judging/summarization only        | Chat-completion-only                  |
 
 The VS Code extension uses the separately installed Claude CLI for its Claude
 adapter. It does not bundle Anthropic's Agent SDK. Direct Agent SDK mode is an
 optional integration for `@nightgauge/sdk` consumers who install that peer
 dependency themselves after reviewing Anthropic's terms.
 
-All adapters support the full 6-stage pipeline and produce compatible context
-files, so you can switch adapters between stages on the same branch.
+Agentic adapters implement the shared six-stage contract and compatible context
+files, so they can switch between stages on the same branch. Only Claude
+Headless is the primary dogfooded path today. Codex is beta; Gemini CLI and
+Copilot remain experimental until their live provider-matrix runs are recorded.
+Chat-completion-only adapters are rejected at pipeline dispatch because they
+cannot edit files, run shell commands, or call `gh`.
 
 **[Adapter Selection Guide](docs/ADAPTER_GUIDE.md)** — Which adapter to choose,
 setup instructions, env vars, and troubleshooting for each adapter.
