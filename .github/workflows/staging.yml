@@ -131,7 +131,7 @@ jobs:
         run: npm run notices
 
       # Snapshot mode: builds the CLI binaries + tarballs + checksums into dist/
-      # but publishes nothing and pushes no Homebrew formula.
+      # but publishes nothing and pushes no Homebrew cask.
       - name: GoReleaser (snapshot — build only, no publish)
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

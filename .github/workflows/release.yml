@@ -3,7 +3,7 @@
 # Produces:
 #   - Multi-arch Go binaries via goreleaser (darwin-arm64, darwin-amd64, linux-amd64)
 #   - SHA256 checksums and manifest.json
-#   - Homebrew formula auto-bumped in nightgauge/homebrew-tap
+#   - Homebrew cask auto-bumped in nightgauge/homebrew-tap
 #   - Versioned .vsix (attached to the GitHub Release)
 #
 # Version is derived from the tag itself (not commit count).
@@ -103,7 +103,7 @@ jobs:
       # ---------------------------------------------------------------------
       # PREFLIGHT — validate every publish credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release and pushes the Homebrew
-      # formula long before the Marketplace step runs, so an invalid VSCE_PAT
+      # cask long before the Marketplace step runs, so an invalid VSCE_PAT
       # discovered late leaves a half-published release. Fail fast instead.
       # ---------------------------------------------------------------------
       - name: Preflight — publish credentials
@@ -136,7 +136,7 @@ jobs:
           if [ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
             echo "goreleaser_args=release --clean" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew formula push. Binaries and VSIXs still publish."
+            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
             echo "goreleaser_args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
           fi
 

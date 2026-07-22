@@ -51,7 +51,7 @@ cd nightgauge
 go install ./cmd/nightgauge
 ```
 
-Signed release binaries, checksums, and the Homebrew formula will be available
+Signed release binaries, checksums, and the Homebrew cask will be available
 with the first public release. Until then, build from the reviewed source tree.
 See [docs/GO_BINARY.md](docs/GO_BINARY.md) for the full install matrix and
 details on each method.

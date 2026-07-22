@@ -559,7 +559,7 @@ member with the **same** `--project`.
    **project write** on the project's owner and **issues:write** on every member
    repo. For a shared org project this is one org-scoped fine-grained PAT.
 2. **Binary install.** The generated jobs install the CLI via the Homebrew tap
-   (`brew install nightgauge/tap/nightgauge`). Override the install step with
+   (`brew install --cask nightgauge/tap/nightgauge`). Override the install step with
    `--install-cmd` for non-brew runners. The default `runs-on` is `self-hosted`
    (`--runner` to change).
 3. **Built-in fallback (recommended).** Also enable the GitHub Projects built-in

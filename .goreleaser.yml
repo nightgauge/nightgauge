@@ -1,6 +1,6 @@
 # GoReleaser configuration for nightgauge binary distribution.
 # Builds multi-arch binaries, generates checksums, creates GitHub Releases,
-# and auto-bumps the Homebrew tap formula.
+# and auto-bumps the Homebrew tap cask.
 #
 # Usage:
 #   goreleaser release --clean          # production (triggered by release.yml)
@@ -67,7 +67,7 @@ sboms:
     documents:
       - "{{ .ArtifactName }}.spdx.sbom.json"
 
-brews:
+homebrew_casks:
   - repository:
       owner: nightgauge
       name: homebrew-tap
@@ -78,10 +78,16 @@ brews:
     # "SEE LICENSE IN LICENSE" placeholder. The project is Apache-2.0 (see
     # LICENSE + NOTICE).
     license: "Apache-2.0"
-    install: |
-      bin.install "nightgauge"
-    test: |
-      system "#{bin}/nightgauge", "version"
+    binaries:
+      - nightgauge
+    # Release binaries are not yet Apple-notarized. Clear only the quarantine
+    # attribute Homebrew applies to this reviewed GitHub Release artifact.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/nightgauge"]
+          end
     commit_author:
       name: nightgauge-bot
       email: bot@nightgauge.dev

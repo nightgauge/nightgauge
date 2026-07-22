@@ -10,7 +10,7 @@ Choose the installation method based on your context:
 
 | Context                  | Recommended Method | Command                                                                                                             |
 | ------------------------ | ------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| Solo developer (macOS)   | Homebrew           | `brew install nightgauge/tap/nightgauge`                                                                            |
+| Solo developer (macOS)   | Homebrew           | `brew install --cask nightgauge/tap/nightgauge`                                                                     |
 | Team / CI (macOS, Linux) | GitHub Releases    | Download the tarball + SHA256 checksum from the [latest release](https://github.com/nightgauge/nightgauge/releases) |
 | Go developer             | go install         | `go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest`                                                 |
 | VSCode Extension user    | Bundled in VSIX    | Automatic — installed via extension                                                                                 |
@@ -22,10 +22,10 @@ Windows is not currently supported — use WSL2.
 
 ```bash
 brew tap nightgauge/tap
-brew install nightgauge
+brew install --cask nightgauge/tap/nightgauge
 ```
 
-The Homebrew formula is auto-updated on each release via goreleaser. Supports
+The Homebrew cask is auto-updated on each release via GoReleaser. Supports
 both Apple Silicon (arm64) and Intel (amd64) Macs.
 
 ### go install
