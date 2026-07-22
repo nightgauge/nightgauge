@@ -9,6 +9,21 @@ describe("OutputWindowState", () => {
     state = new OutputWindowState();
   });
 
+  it("redacts text and details before retaining WebView state", () => {
+    const token = `ghp_${"a".repeat(24)}`;
+    const webhook = "https://discord.com/api/webhooks/123456/secret-value";
+    const entry = state.addEntry(`token=${token}`, "error", undefined, {
+      details: `notify ${webhook}`,
+    });
+
+    expect(entry.text).not.toContain(token);
+    expect(entry.details).not.toContain(webhook);
+    expect(state.getEntries()[0]).toEqual(entry);
+    const retained = JSON.stringify(state.getEntries());
+    expect(retained).not.toContain(token);
+    expect(retained).not.toContain("secret-value");
+  });
+
   describe("Tool Call Aggregation", () => {
     describe("addToolCall", () => {
       it("should increment count for a tool type", () => {
