@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Generate manifest.json from goreleaser checksums.txt.
+"""Generate the SDK CLI archive manifest from release checksums.txt.
 
-Reads checksums.txt (SHA256 per artifact) and emits a JSON manifest
-consumed by the SDK postinstall script for binary verification.
+Reads checksums.txt (SHA256 per artifact) and emits a tar.gz-only JSON
+manifest consumed by the SDK postinstall script for binary verification.
+Other release artifacts, including VSIX packages, remain covered directly by
+checksums.txt and are intentionally excluded from this SDK-specific manifest.
 
 Usage:
     python3 scripts/generate-manifest.py dist/
