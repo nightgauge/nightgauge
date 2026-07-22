@@ -214,11 +214,15 @@ func (s *RulesetService) pollForCopilotReview(ctx context.Context, owner, repo s
 
 // hasCopilotReviewed queries whether Copilot has submitted a review on the PR.
 func (s *RulesetService) hasCopilotReviewed(ctx context.Context, owner, repo string, prNumber int) (bool, error) {
+	graphQLNumber, err := checkedGraphQLInt("pull request number", prNumber)
+	if err != nil {
+		return false, err
+	}
 	var q prReviewsQuery
 	vars := map[string]interface{}{
 		"owner":  graphql.String(owner),
 		"name":   graphql.String(repo),
-		"number": graphql.Int(prNumber),
+		"number": graphQLNumber,
 	}
 	if err := s.client.query(ctx, &q, vars); err != nil {
 		return false, err

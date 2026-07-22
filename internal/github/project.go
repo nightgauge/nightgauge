@@ -57,9 +57,13 @@ func (p *ProjectService) ensureFields(ctx context.Context) error {
 		return nil
 	}
 
+	graphQLProjectNumber, err := checkedGraphQLInt("project number", p.projectNumber)
+	if err != nil {
+		return err
+	}
 	vars := map[string]interface{}{
 		"owner":         graphql.String(p.owner),
-		"projectNumber": graphql.Int(p.projectNumber),
+		"projectNumber": graphQLProjectNumber,
 	}
 
 	result, err := queryProjectFieldsFull(ctx, p.client, p.ownerType, vars)
@@ -628,11 +632,15 @@ func (p *ProjectService) findItemID(ctx context.Context, owner, repo string, iss
 
 	// Fast path: query the issue's projectItems connection directly.
 	// This is a single API call regardless of how many items are on the board.
+	graphQLIssueNumber, err := checkedGraphQLInt("issue number", issueNumber)
+	if err != nil {
+		return "", err
+	}
 	var q issueProjectItemsQuery
 	vars := map[string]interface{}{
 		"owner":  graphql.String(owner),
 		"name":   graphql.String(repo),
-		"number": graphql.Int(issueNumber),
+		"number": graphQLIssueNumber,
 	}
 
 	if err := p.client.query(ctx, &q, vars); err != nil {
@@ -948,9 +956,13 @@ type ResolvedProject struct {
 // Returns the first match found or an error if the project is not accessible
 // under either owner.
 func ResolveProject(ctx context.Context, client *Client, owner string, projectNumber int) (*ResolvedProject, error) {
+	graphQLProjectNumber, err := checkedGraphQLInt("project number", projectNumber)
+	if err != nil {
+		return nil, err
+	}
 	vars := map[string]interface{}{
 		"owner":         graphql.String(owner),
-		"projectNumber": graphql.Int(projectNumber),
+		"projectNumber": graphQLProjectNumber,
 	}
 
 	// Try org first (preferred — personal projects cannot be linked to org repos)
@@ -1039,11 +1051,15 @@ func sizeToEstimate(size types.Size, mapping map[string]float64) (float64, bool)
 // getItemEstimate reads the current Estimate field value for the given issue.
 // Returns 0 if the field is not set or not found.
 func (p *ProjectService) getItemEstimate(ctx context.Context, owner, repo string, issueNumber int) (float64, error) {
+	graphQLIssueNumber, err := checkedGraphQLInt("issue number", issueNumber)
+	if err != nil {
+		return 0, err
+	}
 	var q issueProjectItemWithFieldsQuery
 	vars := map[string]interface{}{
 		"owner":  graphql.String(owner),
 		"name":   graphql.String(repo),
-		"number": graphql.Int(issueNumber),
+		"number": graphQLIssueNumber,
 	}
 
 	if err := p.client.query(ctx, &q, vars); err != nil {
