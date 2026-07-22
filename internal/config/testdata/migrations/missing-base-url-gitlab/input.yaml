@@ -1,0 +1,6 @@
+project:
+  owner: nightgauge
+  number: 1
+forges:
+  corp-gitlab:
+    kind: gitlab

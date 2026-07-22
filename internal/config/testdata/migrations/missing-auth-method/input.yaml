@@ -1,0 +1,8 @@
+project:
+  owner: nightgauge
+  number: 1
+forges:
+  corp-gitlab:
+    kind: gitlab
+    base_url: https://gitlab.corp.com
+    auth_method: token

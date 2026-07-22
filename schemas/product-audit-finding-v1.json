@@ -1,0 +1,476 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nightgauge.dev/schemas/product-audit-finding-v1.json",
+  "title": "ProductAuditFinding",
+  "description": "Individual finding produced by a product audit dimension. Each finding has a stable ID for deduplication across audits.",
+  "type": "object",
+  "required": [
+    "id",
+    "severity",
+    "category",
+    "confidence",
+    "dimension",
+    "detail",
+    "auto_fixable",
+    "suggested_action",
+    "files",
+    "metadata"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable, deterministic finding ID. Format: {dimension}-{seq:03d}-{short-slug}. Same finding across audits produces the same ID for deduplication.",
+      "pattern": "^[a-z0-9_]+-[0-9]{3}-[a-z0-9-]+$",
+      "examples": [
+        "api-001-flutter-path-mismatch",
+        "lifecycle-023-stale-epic-130",
+        "security-005-hardcoded-key"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "description": "Finding severity level",
+      "enum": ["critical", "high", "medium", "low"]
+    },
+    "category": {
+      "type": "string",
+      "description": "Machine-readable finding category. Used for grouping, filtering, and auto-fix decisions.",
+      "examples": [
+        "PATH_MISMATCH",
+        "METHOD_MISMATCH",
+        "AUTH_MISMATCH",
+        "RESPONSE_SHAPE_MISMATCH",
+        "STALE_EPIC",
+        "BOARD_STATUS_DRIFT",
+        "ORPHANED_ISSUE",
+        "STALE_BLOCKER",
+        "STALE_OPENAPI_SPEC",
+        "DOC_ENDPOINT_DRIFT",
+        "MISSING_COVERAGE",
+        "CRITICAL_PATH_UNCOVERED",
+        "HARDCODED_SECRET",
+        "UNVALIDATED_INPUT",
+        "UNENCRYPTED_DATA",
+        "VULNERABLE_DEPENDENCY",
+        "OUTDATED_DEPENDENCY",
+        "DISABLED_WORKFLOW",
+        "CONTINUE_ON_ERROR",
+        "MISSING_COVERAGE_ENFORCE",
+        "MISSING_REQUIRED_CHECK",
+        "FEATURE_MISSING",
+        "FEATURE_PARTIAL"
+      ]
+    },
+    "confidence": {
+      "type": "integer",
+      "description": "Confidence score (0-100). Reflects certainty that this is a real finding and not a false positive.",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "repo": {
+      "type": ["string", "null"],
+      "description": "Repository where the finding was detected",
+      "enum": ["nightgauge", "acme-platform", "acme-dashboard", "acme-mobile", null]
+    },
+    "dimension": {
+      "type": ["string", "integer"],
+      "description": "Dimension index (1-8) or name that produced this finding"
+    },
+    "detail": {
+      "type": "string",
+      "description": "Human-readable description of the finding. Should be specific enough for a developer to act on without additional context."
+    },
+    "auto_fixable": {
+      "type": "boolean",
+      "description": "Whether the --fix flag can safely remediate this finding. Only true for STALE_EPIC, BOARD_STATUS_DRIFT, and STALE_BLOCKER categories."
+    },
+    "suggested_action": {
+      "type": "string",
+      "description": "Concise developer-facing remediation guidance"
+    },
+    "files": {
+      "type": "array",
+      "description": "Files relevant to this finding with location details",
+      "items": {
+        "$ref": "#/definitions/FileLocation"
+      }
+    },
+    "related_findings": {
+      "type": "array",
+      "description": "IDs of related findings that should be considered together (e.g., all Flutter path mismatches)",
+      "items": {
+        "type": "string"
+      }
+    },
+    "external_references": {
+      "type": "array",
+      "description": "Links to external resources (GitHub issues, CVEs, documentation)",
+      "items": {
+        "$ref": "#/definitions/ExternalReference"
+      }
+    },
+    "metadata": {
+      "$ref": "#/definitions/FindingMetadata"
+    }
+  },
+  "definitions": {
+    "FileLocation": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path from repo root"
+        },
+        "line": {
+          "type": ["integer", "null"],
+          "description": "Primary line number (1-indexed)",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": ["integer", "null"],
+          "description": "End of affected range (if multi-line)"
+        },
+        "lines_of_context": {
+          "type": "integer",
+          "description": "Number of context lines to include around primary line",
+          "default": 3
+        },
+        "code_snippet": {
+          "type": ["string", "null"],
+          "description": "Extracted code context (up to 500 chars)"
+        }
+      }
+    },
+    "ExternalReference": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["github_issue", "github_pr", "cve", "documentation", "url"]
+        },
+        "id": {
+          "type": ["string", "null"],
+          "description": "Issue/PR number or CVE ID"
+        },
+        "title": {
+          "type": ["string", "null"]
+        },
+        "url": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "FindingMetadata": {
+      "type": "object",
+      "required": ["detected_at"],
+      "additionalProperties": false,
+      "properties": {
+        "detected_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "detection_method": {
+          "type": "string",
+          "enum": [
+            "static_analysis",
+            "api_probe",
+            "coverage_parsing",
+            "graphql_query",
+            "pattern_match",
+            "npm_audit",
+            "workflow_parse",
+            "git_history"
+          ]
+        },
+        "manual_review_required": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, the finding requires human judgment before acting on it"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/definitions/ApiAlignmentFinding" },
+    { "$ref": "#/definitions/LifecycleFinding" },
+    { "$ref": "#/definitions/DocumentationFinding" },
+    { "$ref": "#/definitions/FeatureParityFinding" },
+    { "$ref": "#/definitions/TestCoverageFinding" },
+    { "$ref": "#/definitions/SecurityFinding" },
+    { "$ref": "#/definitions/DependencyFinding" },
+    { "$ref": "#/definitions/CiCdFinding" }
+  ],
+  "definitions_dimension": {
+    "ApiAlignmentFinding": {
+      "$id": "#/definitions/ApiAlignmentFinding",
+      "description": "Dimension 1: API Alignment — mismatch between client API calls and platform endpoints",
+      "properties": {
+        "client": {
+          "type": "string",
+          "description": "Client repository that contains the mismatched call",
+          "enum": ["flutter", "angular", "vscode"]
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "The API endpoint as called by the client (e.g., POST /v1/pipelines/{issue}/run)"
+        },
+        "expected": {
+          "type": ["string", "null"],
+          "description": "The correct platform endpoint (e.g., POST /v1/pipelines/trigger)"
+        },
+        "actual_or_called": {
+          "type": "string",
+          "description": "What the client is currently calling"
+        },
+        "mismatch_type": {
+          "type": "string",
+          "enum": ["PATH_MISMATCH", "METHOD_MISMATCH", "AUTH_MISMATCH", "RESPONSE_SHAPE_MISMATCH"]
+        }
+      },
+      "required": ["client", "endpoint", "actual_or_called", "mismatch_type"]
+    },
+    "LifecycleFinding": {
+      "$id": "#/definitions/LifecycleFinding",
+      "description": "Dimension 2: Epic Lifecycle — stale epics, board drift, orphaned issues",
+      "properties": {
+        "issue_number": {
+          "type": "integer"
+        },
+        "issue_title": {
+          "type": "string"
+        },
+        "issue_state": {
+          "type": "string",
+          "enum": ["open", "closed"]
+        },
+        "issue_type": {
+          "type": "string",
+          "enum": ["epic", "issue"]
+        },
+        "lifecycle_issue": {
+          "type": "string",
+          "enum": ["STALE_EPIC", "BOARD_STATUS_DRIFT", "ORPHANED_ISSUE", "STALE_BLOCKER"]
+        },
+        "board_status_current": {
+          "type": ["string", "null"]
+        },
+        "board_status_expected": {
+          "type": ["string", "null"]
+        },
+        "related_issues": {
+          "type": "array",
+          "items": { "type": "integer" }
+        }
+      },
+      "required": ["issue_number", "lifecycle_issue"]
+    },
+    "DocumentationFinding": {
+      "$id": "#/definitions/DocumentationFinding",
+      "description": "Dimension 3: Documentation Accuracy — drift between docs and reality",
+      "properties": {
+        "doc_type": {
+          "type": "string",
+          "enum": [
+            "ECOSYSTEM",
+            "ARCHITECTURE",
+            "CLAUDE",
+            "OPENAPI",
+            "README",
+            "CONFIGURATION",
+            "AGENTS"
+          ]
+        },
+        "doc_file": {
+          "type": "string",
+          "description": "Relative path to the documentation file"
+        },
+        "content_mismatch": {
+          "type": "string",
+          "description": "Specific description of what the doc says vs. what is true"
+        },
+        "truth_source": {
+          "type": "string",
+          "description": "Where the correct information can be found",
+          "enum": [
+            "platform_routes",
+            "github_api",
+            "package_json",
+            "git_history",
+            "source_code",
+            "openapi_spec"
+          ]
+        }
+      },
+      "required": ["doc_file", "content_mismatch", "truth_source"]
+    },
+    "FeatureParityFinding": {
+      "$id": "#/definitions/FeatureParityFinding",
+      "description": "Dimension 4: Feature Parity — feature missing or incomplete in one or more clients",
+      "properties": {
+        "feature": {
+          "type": "string",
+          "description": "Feature identifier from parity-config.json (e.g., auth.login)"
+        },
+        "feature_category": {
+          "type": "string",
+          "description": "Feature category (e.g., auth, pipelines, team, analytics)"
+        },
+        "coverage": {
+          "type": "object",
+          "description": "Coverage level per client",
+          "properties": {
+            "vscode": {
+              "type": "string",
+              "enum": ["FULL", "PARTIAL", "STUB", "MISSING", "N/A"]
+            },
+            "angular": {
+              "type": "string",
+              "enum": ["FULL", "PARTIAL", "STUB", "MISSING", "N/A"]
+            },
+            "flutter": {
+              "type": "string",
+              "enum": ["FULL", "PARTIAL", "STUB", "MISSING", "N/A"]
+            },
+            "platform": {
+              "type": "string",
+              "enum": ["FULL", "PARTIAL", "STUB", "MISSING", "N/A"]
+            }
+          }
+        },
+        "parity_score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Weighted parity score for this feature across all required clients"
+        },
+        "priority_rationale": {
+          "type": "string"
+        }
+      },
+      "required": ["feature", "coverage", "parity_score"]
+    },
+    "TestCoverageFinding": {
+      "$id": "#/definitions/TestCoverageFinding",
+      "description": "Dimension 5: Test Coverage — files or modules below coverage threshold",
+      "properties": {
+        "file_or_module": {
+          "type": "string",
+          "description": "Relative path to file or module with coverage gap"
+        },
+        "coverage_percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "coverage_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "untested_paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Logical paths (functions/branches) with no test coverage"
+        },
+        "critical_path_coverage": {
+          "type": "string",
+          "enum": ["YES", "NO", "PARTIAL", "UNKNOWN"]
+        },
+        "test_file_exists": {
+          "type": "boolean"
+        }
+      },
+      "required": ["file_or_module", "coverage_percent", "coverage_threshold"]
+    },
+    "SecurityFinding": {
+      "$id": "#/definitions/SecurityFinding",
+      "description": "Dimension 6: Security — vulnerabilities, hardcoded secrets, unsafe patterns",
+      "properties": {
+        "security_category": {
+          "type": "string",
+          "enum": [
+            "HARDCODED_SECRET",
+            "UNVALIDATED_INPUT",
+            "UNENCRYPTED_DATA",
+            "SQL_INJECTION",
+            "XSS_RISK",
+            "INSECURE_DEPENDENCY",
+            "EXPOSED_INTERNAL_ERROR",
+            "SENSITIVE_DATA_LOG"
+          ]
+        },
+        "cve_reference": {
+          "type": ["string", "null"],
+          "description": "CVE ID if applicable",
+          "pattern": "^CVE-[0-9]{4}-[0-9]+$"
+        },
+        "affected_code": {
+          "type": ["string", "null"],
+          "description": "Snippet of the affected code (secrets redacted)"
+        }
+      },
+      "required": ["security_category"]
+    },
+    "DependencyFinding": {
+      "$id": "#/definitions/DependencyFinding",
+      "description": "Dimension 7: Dependencies — outdated or vulnerable packages",
+      "properties": {
+        "package_or_dependency": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "current_version": {
+          "type": "string"
+        },
+        "latest_version": {
+          "type": ["string", "null"]
+        },
+        "is_vulnerability": {
+          "type": "boolean"
+        },
+        "cve_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ecosystem": {
+          "type": "string",
+          "enum": ["npm", "dart", "go", "pip", "gem"],
+          "description": "Package ecosystem"
+        }
+      },
+      "required": ["package_or_dependency", "current_version", "is_vulnerability"]
+    },
+    "CiCdFinding": {
+      "$id": "#/definitions/CiCdFinding",
+      "description": "Dimension 8: CI/CD — workflow integrity issues",
+      "properties": {
+        "workflow_file": {
+          "type": "string",
+          "description": "Relative path to the workflow file"
+        },
+        "workflow_name": {
+          "type": ["string", "null"],
+          "description": "Display name of the workflow"
+        },
+        "ci_issue": {
+          "type": "string",
+          "enum": [
+            "DISABLED_WORKFLOW",
+            "CONTINUE_ON_ERROR",
+            "MISSING_COVERAGE_ENFORCE",
+            "MISSING_REQUIRED_CHECK",
+            "OUTDATED_ACTION",
+            "NO_BRANCH_PROTECTION",
+            "SECRETS_IN_WORKFLOW"
+          ]
+        }
+      },
+      "required": ["workflow_file", "ci_issue"]
+    }
+  }
+}

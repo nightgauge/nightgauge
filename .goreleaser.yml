@@ -1,0 +1,99 @@
+# GoReleaser configuration for nightgauge binary distribution.
+# Builds multi-arch binaries, generates checksums, creates GitHub Releases,
+# and auto-bumps the Homebrew tap formula.
+#
+# Usage:
+#   goreleaser release --clean          # production (triggered by release.yml)
+#   goreleaser release --snapshot --clean  # local dry-run (no publish)
+
+# Required by GoReleaser v2: a config without this is parsed as "version: 0" and
+# rejected outright ("only version: 2 configuration files are supported"). This
+# is a hard failure of the whole release, so keep it at the top.
+version: 2
+
+project_name: nightgauge
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: linux
+        goarch: arm64
+    main: ./cmd/nightgauge
+    binary: nightgauge
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  # `format` (singular) is deprecated in GoReleaser v2; `formats` is the
+  # replacement and takes a list.
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Ship the license and attribution files inside every binary archive.
+    # Specifying `files` REPLACES GoReleaser's default globs, so list the
+    # license, the Apache NOTICE, and the build-time-generated dependency
+    # attribution explicitly. THIRD_PARTY_NOTICES is produced by
+    # `scripts/generate-third-party-notices.mjs` (run before goreleaser in the
+    # release/staging workflows) — it MUST exist at repo root or the archive
+    # step fails with "no files matched".
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Software Bill of Materials — one SPDX-JSON SBOM per release archive, generated
+# with syft. GoReleaser uploads each *.spdx.sbom.json to the GitHub Release
+# alongside the archive, and the release workflow's attest-build-provenance step
+# covers them. syft must be on PATH: the release/staging workflows install it via
+# a SHA-pinned anchore/sbom-action/download-syft step before goreleaser runs.
+sboms:
+  - id: archive-sbom
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.spdx.sbom.json"
+
+brews:
+  - repository:
+      owner: nightgauge
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/nightgauge/nightgauge
+    description: AI-powered Issue-to-PR pipeline CLI
+    # SPDX identifier — Homebrew's audit rejects the free-text
+    # "SEE LICENSE IN LICENSE" placeholder. The project is Apache-2.0 (see
+    # LICENSE + NOTICE).
+    license: "Apache-2.0"
+    install: |
+      bin.install "nightgauge"
+    test: |
+      system "#{bin}/nightgauge", "version"
+    commit_author:
+      name: nightgauge-bot
+      email: bot@nightgauge.dev
+
+release:
+  github:
+    owner: nightgauge
+    name: nightgauge
+
+# NOTE: manifest.json (consumed by the SDK postinstall for SHA256 verification)
+# is derived from GoReleaser's own checksums.txt, so GoReleaser cannot attach it
+# via `extra_files` — the file does not exist when the release pipe runs. There
+# is also no top-level `after:` key in GoReleaser v2 (it is a hard parse error).
+# The release workflow therefore generates the manifest AFTER goreleaser and
+# uploads it to the release with `gh release upload`.

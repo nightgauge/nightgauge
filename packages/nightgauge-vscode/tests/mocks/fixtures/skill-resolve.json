@@ -1,0 +1,10 @@
+{
+  "resolution": {
+    "skillId": "feature-planning",
+    "variantId": "variant-fp-001",
+    "model": "claude-sonnet-4-6",
+    "resolvedContent": "# Feature Planning\n\nYou are a feature planning agent...",
+    "version": "1.8.0"
+  },
+  "resolvedAt": "2026-03-11T00:00:00.000Z"
+}

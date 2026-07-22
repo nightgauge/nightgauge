@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "pr-merge uses a two-path model: the deterministic gh-pr-merge path runs first (records execution_path), with an LLM fallback only if the deterministic path cannot complete.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "pr-merge uses a two-path model: the deterministic gh-pr-merge path runs first (records execution_path), with an LLM fallback only if the deterministic path cannot complete.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "pr-merge uses a two-path model: the deterministic gh-pr-merge path runs first (records execution_path), with an LLM fallback only if the deterministic path cannot complete.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "platform-801-fixture",
+  "private": true,
+  "scripts": {
+    "build": "echo build",
+    "lint": "echo lint",
+    "test": "echo test"
+  }
+}

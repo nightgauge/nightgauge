@@ -1,0 +1,29 @@
+# Allowlist for scripts/lint-skills/no-direct-gh.sh and
+# `nightgauge preflight skill-no-direct-gh`.
+#
+# One skill directory per line (relative to skills/, no trailing slash).
+# Lines starting with # are comments. Blank lines are ignored.
+#
+# Skills listed here are EXEMPTED from the no-direct-gh gate. The
+# allowlist exists ONLY to track the un-migrated tail (≤4 gh calls each)
+# from the Wave 4 forge migration (#3363, ADR-008). Each entry MUST
+# eventually be migrated and removed from this file.
+#
+# Tracking: filed as the "remaining ≤4-gh-call skills" follow-up under
+# epic #3349 (linked from #3363's PR description).
+#
+# CONTRACT: Adding a new entry to this allowlist requires PR review
+# justification. The default for any new skill is to use the
+# `nightgauge forge` abstraction.
+
+# --- Wave-4 follow-up tail (≤4 gh calls each, tracked under #3349) ---
+nightgauge-feature-validate
+nightgauge-assess-epic
+nightgauge-docs-watch
+nightgauge-feature-planning
+nightgauge-spike-materialize
+nightgauge-backlog-preflight
+nightgauge-backlog-groom
+nightgauge-continuous-improvement
+nightgauge-product-audit
+nightgauge-issue-create

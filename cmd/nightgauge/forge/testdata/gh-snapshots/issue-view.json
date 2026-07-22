@@ -1,0 +1,15 @@
+{
+  "number": 1,
+  "title": "Sample issue",
+  "body": "Body text.",
+  "state": "OPEN",
+  "labels": [{ "name": "type:bug" }],
+  "assignees": [{ "login": "alice" }],
+  "url": "https://github.com/cli/cli/issues/1",
+  "author": { "login": "alice" },
+  "milestone": null,
+  "createdAt": null,
+  "updatedAt": null,
+  "closedAt": null,
+  "comments": []
+}

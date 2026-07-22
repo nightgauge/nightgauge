@@ -1,0 +1,10 @@
+{
+  "$schema": "https://claude.ai/schemas/settings.json",
+  "description": "Nightgauge Claude Code team settings - add to ~/.claude/settings.json or org config",
+
+  "plugins": ["https://github.com/nightgauge/nightgauge/tree/main/claude-plugins/nightgauge"],
+
+  "extraKnownMarketplaces": ["https://github.com/nightgauge/nightgauge"],
+
+  "autoInstallPlugins": ["nightgauge"]
+}

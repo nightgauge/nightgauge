@@ -1,0 +1,13 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getHealthTabHtml > snapshot: overall HTML structure for null data 1`] = `
+"
+      <div class="health-tab">
+        <div class="health-empty-state">
+          <div class="health-empty-icon">🏥</div>
+          <p class="health-empty-title">Health data unavailable — connect to Nightgauge platform</p>
+          <p class="health-empty-hint">Platform health analysis provides 7-dimension pipeline scoring with findings and recommendations.</p>
+          <button class="action-btn" id="healthRefreshBtn">Refresh</button>
+        </div>
+      </div>"
+`;

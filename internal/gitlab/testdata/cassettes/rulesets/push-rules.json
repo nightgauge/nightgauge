@@ -1,0 +1,10 @@
+{
+  "id": 21,
+  "project_id": 5,
+  "commit_message_regex": "^(feat|fix|docs|chore|refactor)\\(#\\d+\\):",
+  "branch_name_regex": "^(feat|fix|docs|chore)/",
+  "deny_delete_tag": true,
+  "member_check": false,
+  "prevent_secrets": true,
+  "max_file_size": 10
+}

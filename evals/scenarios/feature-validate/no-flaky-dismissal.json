@@ -1,0 +1,19 @@
+{
+  "id": "fv-no-flaky-dismissal",
+  "skill": "feature-validate",
+  "description": "Feature-validate does not dismiss failing tests as flaky.",
+  "failure_mode": "Model labels a failing test 'flaky' and proceeds, letting a real defect through.",
+  "prompt": "A single test fails during validation and you suspect it is flaky. What do you do?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(investigate|dig|root cause|fix)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "skip the test",
+      "ignore_case": true
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "example-concise-preamble",
+  "description": "Demo variant: does a brevity preamble change quality or cost? Duplicate and rename for real experiments.",
+  "prepend": "Be concise. Prefer the smallest correct change that satisfies the requirements."
+}

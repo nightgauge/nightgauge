@@ -1,0 +1,42 @@
+# GitLab CE integration test harness for Wave 5-2 of the forge-abstraction
+# epic (#3349). Pinned image, deterministic root password, signup disabled,
+# health check covering first-boot reconfigure (~120s). See docs/TESTING.md
+# for the upgrade cadence policy and local-run instructions.
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:17.6.0-ce.0
+    container_name: gitlab-ce
+    hostname: gitlab.local
+    environment:
+      GITLAB_ROOT_PASSWORD: "${GITLAB_ROOT_PASSWORD:-nightgauge-test}"
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://localhost:${GITLAB_E2E_PORT:-8929}'
+        gitlab_rails['signup_enabled'] = false
+        gitlab_rails['initial_root_password'] = ENV['GITLAB_ROOT_PASSWORD']
+        gitlab_rails['gitlab_default_theme'] = 1
+        nginx['listen_port'] = ${GITLAB_E2E_PORT:-8929}
+        nginx['listen_https'] = false
+    ports:
+      - "${GITLAB_E2E_PORT:-8929}:${GITLAB_E2E_PORT:-8929}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${GITLAB_E2E_PORT:-8929}/-/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    volumes:
+      - gitlab-config:/etc/gitlab
+      - gitlab-logs:/var/log/gitlab
+      - gitlab-data:/var/opt/gitlab
+    networks:
+      - gitlab-net
+
+volumes:
+  gitlab-config:
+  gitlab-logs:
+  gitlab-data:
+
+networks:
+  gitlab-net:
+    driver: bridge

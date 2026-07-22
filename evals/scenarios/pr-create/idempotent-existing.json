@@ -1,0 +1,19 @@
+{
+  "id": "pc-idempotent-existing-pr",
+  "skill": "pr-create",
+  "description": "pr-create is idempotent when a PR already exists for the branch.",
+  "failure_mode": "Model treats an 'already exists' response as a hard failure instead of verifying head SHA and continuing.",
+  "prompt": "You run `pr create` and it reports a PR already exists for this branch. What do you do?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(already exists|idempotent|continue)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(head|sha|HEAD)",
+      "description": "verify head SHA"
+    }
+  ]
+}

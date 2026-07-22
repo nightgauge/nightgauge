@@ -1,0 +1,29 @@
+{
+  "data": {
+    "repository": {
+      "issues": {
+        "pageInfo": { "hasNextPage": false },
+        "nodes": [
+          {
+            "id": "I_1",
+            "number": 1,
+            "title": "First",
+            "state": "OPEN",
+            "url": "u1",
+            "labels": { "nodes": [{ "name": "bug" }] },
+            "milestone": { "title": "" }
+          },
+          {
+            "id": "I_2",
+            "number": 2,
+            "title": "Second",
+            "state": "OPEN",
+            "url": "u2",
+            "labels": { "nodes": [] },
+            "milestone": { "title": "" }
+          }
+        ]
+      }
+    }
+  }
+}

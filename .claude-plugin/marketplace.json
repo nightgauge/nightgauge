@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "nightgauge-plugins",
+  "description": "Official Nightgauge plugin for Claude Code - AI-ready development tools",
+  "owner": {
+    "name": "nightgauge",
+    "email": "opensource@nightgauge.dev"
+  },
+  "plugins": [
+    {
+      "name": "nightgauge",
+      "description": "AI-augmented SDLC. Each capability is a /nightgauge:<name> skill: the full issue-to-PR pipeline (issue-create, issue-pickup, feature-planning, feature-dev, feature-validate, pr-create, pr-merge), plus repository onboarding (smart-setup), documentation (update-docs, doc-gen, docs-write), and utilities (backlog-groom, project-sync, pipeline-audit, pipeline-health, pipeline-triage, pr-preflight, retro, queue, and more).",
+      "version": "1.20.0",
+      "author": {
+        "name": "nightgauge",
+        "email": "opensource@nightgauge.dev"
+      },
+      "source": "./claude-plugins/nightgauge",
+      "category": "development",
+      "homepage": "https://github.com/nightgauge/nightgauge"
+    }
+  ]
+}

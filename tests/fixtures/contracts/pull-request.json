@@ -1,0 +1,22 @@
+{
+  "nodeId": "PR_node123",
+  "number": 99,
+  "title": "feat: add user auth",
+  "body": "## Summary\n\nImplements user authentication.",
+  "state": "OPEN",
+  "headRef": "feat/99-user-auth",
+  "baseRef": "main",
+  "repo": "nightgauge/nightgauge",
+  "url": "https://github.com/nightgauge/nightgauge/pull/99",
+  "mergeable": "MERGEABLE",
+  "mergeStateStatus": "CLEAN",
+  "reviewStatus": "APPROVED",
+  "checkStatus": "SUCCESS",
+  "labels": ["type:feature"],
+  "isDraft": false,
+  "additions": 0,
+  "deletions": 0,
+  "createdAt": "",
+  "mergeCommitSha": "",
+  "mergedAt": ""
+}

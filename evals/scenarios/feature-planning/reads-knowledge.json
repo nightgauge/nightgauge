@@ -1,0 +1,17 @@
+{
+  "id": "fp-reads-knowledge",
+  "skill": "feature-planning",
+  "description": "Planning reads PRD.md and decisions.md when knowledge_path is set.",
+  "failure_mode": "Model ignores the scaffolded knowledge base and re-derives requirements, dropping prior architecture decisions.",
+  "prompt": "knowledge_path is set in the issue context. State which knowledge files you read before drafting the plan.",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "PRD.md"
+    },
+    {
+      "type": "contains",
+      "value": "decisions.md"
+    }
+  ]
+}

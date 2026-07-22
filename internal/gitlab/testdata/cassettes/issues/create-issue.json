@@ -1,0 +1,11 @@
+{
+  "id": 1042,
+  "iid": 42,
+  "project_id": 5,
+  "title": "Sample issue",
+  "description": "Body text",
+  "state": "opened",
+  "labels": ["bug", "priority:high"],
+  "web_url": "https://gitlab.example.com/o/r/-/issues/42",
+  "assignees": []
+}

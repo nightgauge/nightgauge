@@ -1,0 +1,13 @@
+{
+  "id": 5099,
+  "iid": 9,
+  "project_id": 5,
+  "title": "Created MR",
+  "description": "Body",
+  "state": "opened",
+  "source_branch": "feat/new",
+  "target_branch": "main",
+  "sha": "1111111111111111111111111111111111111111",
+  "web_url": "https://gitlab.example.com/o/r/-/merge_requests/9",
+  "labels": []
+}

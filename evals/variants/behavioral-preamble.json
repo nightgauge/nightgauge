@@ -1,0 +1,5 @@
+{
+  "name": "behavioral-preamble",
+  "description": "Spike #77: does a behavioral preamble derived from Anthropic's published Fable 5 guidance measurably move the composite score on non-Fable tiers? Priors: ~zero delta expected on Claude adapters (the Claude Code harness already injects this guidance verbatim); a large delta means suspect the experiment before believing the finding. Distinct from the autonomy-contract variant, which is separately justified.",
+  "prepend": "When you have enough information to act, act — do not re-derive established facts or survey options you will not pursue. If you are weighing a choice, give a recommendation, not an exhaustive survey. Lead with the outcome: state what you did or found first, with supporting detail after. Before finishing, verify your work against the stated requirements, and report outcomes faithfully — if a build or test fails, say so with the output rather than smoothing it over; when something is done and verified, state it plainly without hedging."
+}

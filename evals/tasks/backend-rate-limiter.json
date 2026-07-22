@@ -1,0 +1,33 @@
+{
+  "id": "backend-rate-limiter",
+  "title": "Token-bucket rate limiter middleware",
+  "job_class": "backend-logic",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "hard",
+  "instruction": "Implement a token-bucket rate limiter as Express-style middleware: configurable capacity and refill rate per key (default key = client IP), returning HTTP 429 with a Retry-After header when exhausted. Refill must be time-based (not per-request). Include unit tests for allow, deny, and refill-over-time behavior using a fake clock.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/backend-rate-limiter/setup.sh" },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "typecheck", "command": "npm run typecheck", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "correctness",
+        "weight": 0.5,
+        "guidance": "Is refill time-based and are allow/deny/429/Retry-After correct?"
+      },
+      {
+        "dimension": "code_quality",
+        "weight": 0.3,
+        "guidance": "Is the bucket state encapsulated and free of race-prone shortcuts?"
+      },
+      {
+        "dimension": "performance",
+        "weight": 0.2,
+        "guidance": "Is per-request work O(1) with no unbounded memory growth?"
+      }
+    ]
+  }
+}

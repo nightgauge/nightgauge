@@ -1,0 +1,48 @@
+{
+  "id": "PVI_item123",
+  "nodeId": "I_node456",
+  "number": 42,
+  "title": "Add photo upload feature",
+  "state": "OPEN",
+  "status": "Ready",
+  "priority": "P1",
+  "size": "M",
+  "pipelineStage": "feature-dev",
+  "labels": ["type:feature", "priority:high"],
+  "repo": "nightgauge/nightgauge",
+  "url": "https://github.com/nightgauge/nightgauge/issues/42",
+  "createdAt": "2025-01-15T10:30:00Z",
+  "updatedAt": "2025-01-16T14:45:00Z",
+  "isPR": false,
+  "isEpic": false,
+  "parentIssueNumber": 10,
+  "parentIssueTitle": "Epic: Photo Management",
+  "subIssues": [
+    {
+      "nodeId": "I_sub789",
+      "number": 43,
+      "title": "Implement upload API",
+      "state": "OPEN",
+      "repo": "nightgauge/nightgauge",
+      "labels": ["size:M"]
+    }
+  ],
+  "blockedBy": [
+    {
+      "nodeId": "I_block101",
+      "number": 40,
+      "title": "Setup storage backend",
+      "state": "CLOSED",
+      "repo": "nightgauge/nightgauge"
+    }
+  ],
+  "blocking": [
+    {
+      "nodeId": "I_block202",
+      "number": 44,
+      "title": "Add photo gallery view",
+      "state": "OPEN",
+      "repo": "nightgauge/nightgauge"
+    }
+  ]
+}

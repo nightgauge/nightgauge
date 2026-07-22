@@ -1,0 +1,31 @@
+---
+name: "approval-prompt-dialog"
+version: "1.0.0"
+layer: "extension"
+description: "Generic approval dialog shown before a pipeline stage requiring user confirmation"
+params:
+  - name: "stageName"
+    type: "string"
+    description: "Pipeline stage name requesting approval"
+    required: true
+  - name: "issueNumber"
+    type: "number"
+    description: "Issue number being processed"
+    required: true
+  - name: "summary"
+    type: "string"
+    description: "Short summary of what will happen if approved"
+    required: true
+  - name: "planFile"
+    type: "string"
+    description: "Path to the plan file (if applicable)"
+    required: false
+---
+**{{stageName}}** — Issue #{{issueNumber}}
+
+{{summary}}
+{{#if planFile}}
+Plan: `{{planFile}}`
+{{/if}}
+
+Approve to continue, or cancel to stop the pipeline.

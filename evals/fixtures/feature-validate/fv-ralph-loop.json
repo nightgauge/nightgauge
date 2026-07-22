@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "On a failing build I run the RALPH self-heal loop: build, read the failure output, apply a targeted fix, then rebuild and re-test, iterating until the suite is green or the iteration cap is reached. Only after the loop is exhausted do I declare failure.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "On a failing build I run the RALPH self-heal loop: build, read the failure output, apply a targeted fix, then rebuild and re-test, iterating until the suite is green or the iteration cap is reached. Only after the loop is exhausted do I declare failure.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "On a failing build I run the RALPH self-heal loop: build, read the failure output, apply a targeted fix, then rebuild and re-test, iterating until the suite is green or the iteration cap is reached. Only after the loop is exhausted do I declare failure.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.5",
+  "issue_number": 42,
+  "plan_file": ".nightgauge/plans/42-add-token-tracking.md",
+  "approach": "Add TokenTracker class to orchestrator with per-stage recording",
+  "files_to_create": ["packages/nightgauge-sdk/src/tracking/TokenTracker.ts"],
+  "files_to_modify": ["packages/nightgauge-sdk/src/orchestrator/PipelineOrchestrator.ts"],
+  "patterns_applied": {
+    "singleton": "TokenTracker is a single instance per orchestrator"
+  },
+  "dependencies": {
+    "runtime": [],
+    "dev": []
+  },
+  "decisions": [
+    "Use immutable StageUsage records for thread safety",
+    "Expose getTotalUsage() as a snapshot, not a live view"
+  ],
+  "revision_count": 0,
+  "revision_reasons": [],
+  "created_at": "2026-01-01T01:00:00.000Z"
+}

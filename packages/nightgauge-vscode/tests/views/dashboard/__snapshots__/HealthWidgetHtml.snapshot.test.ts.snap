@@ -1,0 +1,241 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > collapsed state 1`] = `
+"
+    <div class="health-widget collapsed" id="healthWidget">
+      <div class="health-widget-header" id="healthWidgetHeader">
+        <span class="toggle-icon">▶</span>
+        <h2>Pipeline Health</h2>
+        <span class="health-badge health-fair">
+          ● FAIR
+        </span>
+        <span class="health-score-inline">60</span>
+      </div>
+      <div class="health-widget-body">
+        
+    <div class="health-summary-card">
+      <div class="health-score-large health-fair">
+        60
+      </div>
+      <div class="health-component-breakdown">
+        
+      </div>
+    </div>
+  
+        
+        
+        
+        
+        
+        
+        <div class="health-updated">Last updated: 2026-01-01T00:00:00Z</div>
+      </div>
+    </div>
+  "
+`;
+
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > empty state — isEmpty true 1`] = `
+"
+    <div class="health-widget" id="healthWidget">
+      <div class="health-widget-header">
+        <h2>Pipeline Health</h2>
+      </div>
+      <div class="health-widget-body health-empty-state">
+        <div class="empty-icon">📊</div>
+        <p>Run your first pipeline to see health metrics</p>
+        <p class="empty-hint">Health scores, trends, and recommendations will appear here after pipeline runs complete.</p>
+      </div>
+    </div>
+  "
+`;
+
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > healthy state — score 82, good status, with components 1`] = `
+"
+    <div class="health-widget " id="healthWidget">
+      <div class="health-widget-header" id="healthWidgetHeader">
+        <span class="toggle-icon">▼</span>
+        <h2>Pipeline Health</h2>
+        <span class="health-badge health-good">
+          ● GOOD
+        </span>
+        <span class="health-score-inline">82</span>
+      </div>
+      <div class="health-widget-body">
+        
+    <div class="health-summary-card">
+      <div class="health-score-large health-good">
+        82
+      </div>
+      <div class="health-component-breakdown">
+        
+      <div class="health-component-row">
+        <span class="component-label">Success Rate</span>
+        <div class="component-bar-container">
+          <div class="component-bar health-good"
+               style="width: 90%">
+          </div>
+        </div>
+        <span class="component-score">90</span>
+        <span class="component-trend">↑</span>
+      </div>
+    
+      <div class="health-component-row">
+        <span class="component-label">Token Efficiency</span>
+        <div class="component-bar-container">
+          <div class="component-bar health-good"
+               style="width: 78%">
+          </div>
+        </div>
+        <span class="component-score">78</span>
+        <span class="component-trend">→</span>
+      </div>
+    
+      </div>
+    </div>
+  
+        
+    <div class="health-sparklines-section">
+      <h3>Recent Activity <span class="health-sparklines-window">(Last 5 Runs)</span></h3>
+      <div class="sparklines-grid">
+        
+      <div class="sparkline-card">
+        <div class="sparkline-header">
+          <span class="sparkline-label">Cost per Run</span>
+          <span class="sparkline-trend trend-stable">
+            →
+          </span>
+        </div>
+        <div class="sparkline-value">$0.1280</div>
+        <div class="sparkline-subtitle">avg of 5 runs</div>
+      </div>
+    
+      </div>
+    </div>
+  
+        
+        
+        
+        
+        
+        <div class="health-updated">Last updated: 2026-01-01T12:00:00Z</div>
+      </div>
+    </div>
+  "
+`;
+
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > with alerts — warning and critical 1`] = `
+"
+    <div class="health-widget " id="healthWidget">
+      <div class="health-widget-header" id="healthWidgetHeader">
+        <span class="toggle-icon">▼</span>
+        <h2>Pipeline Health</h2>
+        <span class="health-badge health-poor">
+          ● POOR
+        </span>
+        <span class="health-score-inline">45</span>
+      </div>
+      <div class="health-widget-body">
+        
+    <div class="health-summary-card">
+      <div class="health-score-large health-poor">
+        45
+      </div>
+      <div class="health-component-breakdown">
+        
+      </div>
+    </div>
+  
+        
+        
+        
+        
+    <div class="health-alerts-panel">
+      <h3>Active Alerts (2)</h3>
+      
+      <div class="alert-item alert-critical">
+        <span class="alert-icon">✖</span>
+        <div class="alert-content">
+          <span class="alert-stage">feature-dev</span>
+          <span class="alert-message">Implementation failures above threshold</span>
+        </div>
+      </div>
+    
+      <div class="alert-item alert-warning">
+        <span class="alert-icon">⚠</span>
+        <div class="alert-content">
+          <span class="alert-stage">pr-create</span>
+          <span class="alert-message">Cost increased significantly in last 3 runs</span>
+        </div>
+      </div>
+    
+      
+    </div>
+  
+        
+        
+        <div class="health-updated">Last updated: 2026-01-01T00:00:00Z</div>
+      </div>
+    </div>
+  "
+`;
+
+exports[`getHealthWidgetHtml snapshots (Issue #1242) > with recommendations including actionable config-patch 1`] = `
+"
+    <div class="health-widget " id="healthWidget">
+      <div class="health-widget-header" id="healthWidgetHeader">
+        <span class="toggle-icon">▼</span>
+        <h2>Pipeline Health</h2>
+        <span class="health-badge health-good">
+          ● GOOD
+        </span>
+        <span class="health-score-inline">75</span>
+      </div>
+      <div class="health-widget-body">
+        
+    <div class="health-summary-card">
+      <div class="health-score-large health-good">
+        75
+      </div>
+      <div class="health-component-breakdown">
+        
+      </div>
+    </div>
+  
+        
+        
+        
+        
+        
+    <div class="health-recommendations">
+      <h3>Recommendations</h3>
+      
+      <div class="recommendation-card">
+        <div class="recommendation-header">
+          <span class="recommendation-title">Cap context size</span>
+          <span class="recommendation-savings">~$0.25</span>
+        </div>
+        <p class="recommendation-desc">Reduce oversized context to lower token usage</p>
+        
+          <div class="recommendation-actions">
+            <button class="recommendation-apply-btn"
+              data-action="apply-recommendation" data-category="oversized-context" data-config-path="pipeline.max_turns" data-value="5">Cap context at 5000 tokens</button>
+          </div>
+      </div>
+    
+      <div class="recommendation-card">
+        <div class="recommendation-header">
+          <span class="recommendation-title">Review tool calls</span>
+          <span class="recommendation-savings">~$0.08</span>
+        </div>
+        <p class="recommendation-desc">Check tool call patterns for inefficiency</p>
+        
+      </div>
+    
+    </div>
+  
+        
+        <div class="health-updated">Last updated: 2026-01-01T00:00:00Z</div>
+      </div>
+    </div>
+  "
+`;

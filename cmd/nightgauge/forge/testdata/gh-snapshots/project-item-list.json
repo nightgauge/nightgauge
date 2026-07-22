@@ -1,0 +1,15 @@
+[
+  {
+    "number": 10,
+    "title": "First item",
+    "state": "OPEN",
+    "status": "Ready",
+    "priority": "P1",
+    "size": "M",
+    "labels": ["type:feature"],
+    "repo": "nightgauge/nightgauge",
+    "url": "https://github.com/nightgauge/nightgauge/issues/10",
+    "isPR": false,
+    "isEpic": false
+  }
+]

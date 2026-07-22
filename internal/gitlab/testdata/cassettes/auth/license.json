@@ -1,0 +1,8 @@
+{
+  "id": 1,
+  "plan": "premium",
+  "active_users": 25,
+  "user_limit": 100,
+  "starts_at": "2026-01-01",
+  "expires_at": "2027-01-01"
+}

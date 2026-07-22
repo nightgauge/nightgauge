@@ -1,0 +1,19 @@
+{
+  "id": "pm-deterministic-path",
+  "skill": "pr-merge",
+  "description": "pr-merge prefers the deterministic Go binary merge path with an LLM fallback.",
+  "failure_mode": "Model jumps straight to improvising git merge commands instead of the deterministic gh-pr-merge path.",
+  "prompt": "Describe the two-path execution model pr-merge uses to merge a PR.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(deterministic)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(fallback|llm|two-path)",
+      "flags": "i"
+    }
+  ]
+}

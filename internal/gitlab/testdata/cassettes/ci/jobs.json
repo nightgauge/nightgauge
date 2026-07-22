@@ -1,0 +1,26 @@
+[
+  {
+    "id": 501,
+    "name": "lint",
+    "stage": "test",
+    "status": "success",
+    "allow_failure": false,
+    "web_url": "https://gitlab.example.com/o/r/-/jobs/501"
+  },
+  {
+    "id": 502,
+    "name": "unit",
+    "stage": "test",
+    "status": "success",
+    "allow_failure": false,
+    "web_url": "https://gitlab.example.com/o/r/-/jobs/502"
+  },
+  {
+    "id": 503,
+    "name": "deploy",
+    "stage": "deploy",
+    "status": "manual",
+    "allow_failure": true,
+    "web_url": "https://gitlab.example.com/o/r/-/jobs/503"
+  }
+]

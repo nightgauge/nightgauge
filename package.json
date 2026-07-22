@@ -1,0 +1,58 @@
+{
+  "name": "nightgauge",
+  "private": true,
+  "description": "Nightgauge — an AI-powered Issue-to-PR pipeline (VS Code extension, Go CLI, and SDK)",
+  "overrides": {
+    "@anthropic-ai/claude-agent-sdk": {
+      "@anthropic-ai/sdk": "^0.111.0"
+    },
+    "@anthropic-ai/sdk": "^0.111.0",
+    "brace-expansion": "^1.1.13",
+    "esbuild": "^0.28.1",
+    "ip-address": "^10.2.0",
+    "protobufjs": "^7.5.8",
+    "undici": "^7.28.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "notices": "node scripts/generate-third-party-notices.mjs",
+    "build": "node scripts/generate-third-party-notices.mjs && npm run build --workspaces",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "npm run clean --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "prepare": "husky",
+    "setup-hooks": "bash scripts/setup-git-hooks.sh",
+    "backfill-model": "tsx scripts/backfill-complexity-model.ts",
+    "backfill-model:dry-run": "tsx scripts/backfill-complexity-model.ts --dry-run",
+    "estimate-epic": "tsx scripts/estimate-epic.ts",
+    "generate:ipc": "make generate-ipc-client",
+    "mock-server": "npm run mock-server -w nightgauge-vscode"
+  },
+  "author": {
+    "name": "nightgauge"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nightgauge/nightgauge"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@google/genai": "^2.12.0",
+    "@typescript-eslint/eslint-plugin": "^8.64.0",
+    "@typescript-eslint/parser": "^8.64.0",
+    "eslint": "^10.7.0",
+    "eslint-config-prettier": "^10.1.8",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.1.0",
+    "prettier": "^3.9.5"
+  }
+}

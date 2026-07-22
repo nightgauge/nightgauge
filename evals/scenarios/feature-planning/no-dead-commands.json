@@ -1,0 +1,19 @@
+{
+  "id": "fp-no-dead-commands",
+  "skill": "feature-planning",
+  "description": "Planning does not invent non-existent binary subcommands.",
+  "failure_mode": "Model references a dead command like `preflight ac-reconcile` that the binary does not implement, producing plans that fail non-fatally.",
+  "prompt": "Draft the preflight step of a plan. Only reference Go binary subcommands that actually exist. Do not invent an ac-reconcile preflight subcommand.",
+  "assertions": [
+    {
+      "type": "not_contains",
+      "value": "preflight ac-reconcile",
+      "description": "dead command must not appear"
+    },
+    {
+      "type": "contains",
+      "value": "plan",
+      "ignore_case": true
+    }
+  ]
+}

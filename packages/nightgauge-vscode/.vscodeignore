@@ -1,0 +1,34 @@
+# Source files (only need compiled dist/)
+src/**
+*.ts
+tsconfig.json
+
+# Development files
+.gitignore
+.eslintrc*
+*.map
+
+# Test files & artifacts
+**/*.test.js
+**/*.test.ts
+tests/**
+coverage/**
+test-results/**
+playwright.config.ts
+vitest.config.ts
+
+# Documentation (keep README for marketplace)
+CHANGELOG.md
+
+# Node modules from sibling packages
+../pattern-mining-sdk/**
+**/node_modules/**
+
+# Stale Go binary — BinaryResolver loads the binary from dist/bin/ (bundled by
+# dev-install.sh). A root-level bin/ is dead weight that ships ~15MB and misleads
+# binary-path triage (#3781). Never package it.
+bin/**
+
+# Other
+.vscode/**
+.vscode-test/**

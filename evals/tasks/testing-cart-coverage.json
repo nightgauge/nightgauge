@@ -1,0 +1,27 @@
+{
+  "id": "testing-cart-coverage",
+  "title": "Add unit tests for an untested shopping-cart module",
+  "job_class": "testing",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "easy",
+  "instruction": "The cart.ts module (addItem, removeItem, applyDiscount, total) has no tests. Write a thorough unit-test suite covering happy paths and edge cases: removing a missing item, quantity <= 0, stacking discounts, and empty-cart total. Do not modify cart.ts unless you find a genuine bug, in which case fix it and note it.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/testing-cart-coverage/setup.sh" },
+  "checks": [
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 },
+    { "name": "coverage", "command": "npm run coverage", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "completeness",
+        "weight": 0.6,
+        "guidance": "Are happy paths AND the listed edge cases all covered?"
+      },
+      {
+        "dimension": "correctness",
+        "weight": 0.4,
+        "guidance": "Do the assertions actually verify behavior (not just call it)?"
+      }
+    ]
+  }
+}

@@ -1,0 +1,155 @@
+# Security patterns for Dimension 6 — Hardcoded secrets and unsafe code detection
+# Confidence: 0-100 (higher = more certain this is a real finding)
+
+secret_patterns:
+  - id: stripe_live_key
+    pattern: "sk_live_[A-Za-z0-9]{20,}"
+    confidence: 98
+    description: "Stripe live secret key"
+    severity: critical
+    false_positive_hints:
+      - "test"
+      - "example"
+      - "placeholder"
+
+  - id: stripe_publishable_key
+    pattern: "pk_live_[A-Za-z0-9]{20,}"
+    confidence: 95
+    description: "Stripe live publishable key"
+    severity: high
+
+  - id: nightgauge_live_key
+    pattern: "ib_live_[A-Za-z0-9]{20,}"
+    confidence: 98
+    description: "Nightgauge live API key"
+    severity: critical
+
+  - id: aws_access_key
+    pattern: "AKIA[0-9A-Z]{16}"
+    confidence: 95
+    description: "AWS access key ID"
+    severity: critical
+
+  - id: aws_secret_key
+    pattern: 'aws_secret_access_key\s*[=:]\s*[A-Za-z0-9/+]{40}'
+    confidence: 90
+    description: "AWS secret access key"
+    severity: critical
+
+  - id: github_token
+    pattern: "gh[ps]_[A-Za-z0-9]{36,}"
+    confidence: 97
+    description: "GitHub personal access token or server token"
+    severity: critical
+
+  - id: github_oauth
+    pattern: "gho_[A-Za-z0-9]{36,}"
+    confidence: 97
+    description: "GitHub OAuth token"
+    severity: critical
+
+  - id: generic_api_key
+    pattern: '(?i)(api[_-]?key|apikey|api_secret)\s*[=:]\s*["\x27]?[A-Za-z0-9_\-]{20,}["\x27]?'
+    confidence: 70
+    description: "Generic API key assignment"
+    severity: high
+    false_positive_hints:
+      - "YOUR_API_KEY"
+      - "your-api-key"
+      - "placeholder"
+      - "example"
+      - "REPLACE"
+      - "xxxx"
+      - "process.env"
+      - "config."
+      - "env."
+
+  - id: private_key_header
+    pattern: "-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"
+    confidence: 99
+    description: "Private key material in source"
+    severity: critical
+
+  - id: bearer_token_hardcoded
+    pattern: '(?i)Bearer\s+[A-Za-z0-9_\-\.]{30,}'
+    confidence: 65
+    description: "Potentially hardcoded Bearer token"
+    severity: medium
+    false_positive_hints:
+      - "Bearer ${"
+      - "Bearer `"
+      - 'Bearer "'
+      - "process.env"
+
+  - id: password_assignment
+    pattern: '(?i)(password|passwd|pwd)\s*[=:]\s*["\x27][^"\x27\s]{8,}["\x27]'
+    confidence: 75
+    description: "Hardcoded password string"
+    severity: high
+    false_positive_hints:
+      - "YOUR_PASSWORD"
+      - "password123"
+      - "changeme"
+      - "placeholder"
+      - "example"
+
+xss_patterns:
+  - id: inner_html_assignment
+    pattern: '\.innerHTML\s*='
+    confidence: 80
+    description: "Direct innerHTML assignment (potential XSS)"
+    severity: high
+    false_positive_hints:
+      - "// safe:"
+      - "sanitize"
+
+  - id: dangerous_set_inner_html
+    pattern: "dangerouslySetInnerHTML"
+    confidence: 75
+    description: "React dangerouslySetInnerHTML usage"
+    severity: medium
+
+  - id: document_write
+    pattern: 'document\.write\s*\('
+    confidence: 85
+    description: "document.write() call (potential XSS)"
+    severity: high
+
+  - id: eval_usage
+    pattern: '\beval\s*\('
+    confidence: 70
+    description: "eval() usage"
+    severity: medium
+    false_positive_hints:
+      - "// safe"
+
+gitignore_required_patterns:
+  - ".env"
+  - ".env.*"
+  - "*.pem"
+  - "*.key"
+  - "credentials*"
+  - "secrets*"
+  - ".secrets"
+
+auth_redaction_patterns:
+  - "redact"
+  - "sanitize"
+  - "mask"
+  - "obfuscate"
+
+file_exclusions:
+  # Never scan these files/paths for secrets (too many false positives)
+  - "*.test.ts"
+  - "*.spec.ts"
+  - "*.test.js"
+  - "*.spec.js"
+  - "*.md"
+  - "node_modules/"
+  - "dist/"
+  - ".git/"
+  - "*.lock"
+  - "package-lock.json"
+  - "yarn.lock"
+  - "*.yaml" # Skip YAML (this file itself, workflow files)
+  - "*.json" # JSON files often have example keys in schemas

@@ -1,0 +1,32 @@
+[
+  {
+    "kind": "validation",
+    "code": "MISSING_REQUIRED_FIELD",
+    "message": "key is required",
+    "statusCode": 400
+  },
+  {
+    "kind": "auth",
+    "code": "TOKEN_EXPIRED",
+    "message": "Access token expired",
+    "statusCode": 401
+  },
+  {
+    "kind": "license",
+    "code": "LICENSE_EXPIRED",
+    "message": "License has expired",
+    "statusCode": 402
+  },
+  {
+    "kind": "rateLimit",
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Rate limit exceeded",
+    "statusCode": 429
+  },
+  {
+    "kind": "server",
+    "code": "INTERNAL_ERROR",
+    "message": "Internal server error",
+    "statusCode": 500
+  }
+]

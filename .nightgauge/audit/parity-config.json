@@ -1,0 +1,253 @@
+{
+  "$schema": "https://nightgauge.dev/schemas/parity-config-v1.json",
+  "schema_version": "1.0",
+  "description": "Feature parity matrix for Nightgauge product family. Defines which features each client must implement and how to detect their presence.",
+  "clients": ["vscode", "angular", "flutter", "platform"],
+  "coverage_levels": {
+    "FULL": {
+      "meaning": "Service + UI component + Tests present",
+      "score": 100
+    },
+    "PARTIAL": {
+      "meaning": "Service and UI implemented, but no automated tests",
+      "score": 70
+    },
+    "STUB": {
+      "meaning": "Code exists but implementation is incomplete or placeholder",
+      "score": 30
+    },
+    "MISSING": {
+      "meaning": "Feature not implemented in this client",
+      "score": 0
+    },
+    "N/A": {
+      "meaning": "Feature not applicable to this client (e.g., platform-only features)",
+      "score": 100
+    }
+  },
+  "parity_threshold": 85,
+  "features": [
+    {
+      "id": "auth.github_login",
+      "name": "GitHub OAuth Login",
+      "description": "User can authenticate via GitHub OAuth flow",
+      "category": "auth",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": ["githubLogin", "signIn", "authenticate", "AuthService"],
+        "angular": ["githubLogin", "OAuthService", "auth.service.ts"],
+        "flutter": [
+          "githubLogin",
+          "signIn",
+          "AuthService",
+          "auth_service.dart"
+        ],
+        "platform": ["POST /v1/auth/web/github", "POST /v1/auth/device-code"]
+      },
+      "implementation_guide": "src/app/core/api/auth.service.ts",
+      "test_guide": "src/app/core/api/auth.service.spec.ts"
+    },
+    {
+      "id": "auth.token_refresh",
+      "name": "JWT Token Refresh",
+      "description": "Client automatically refreshes expired JWT tokens",
+      "category": "auth",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": ["refreshToken", "tokenRefresh", "refresh"],
+        "angular": ["refreshToken", "intercept", "HttpInterceptor"],
+        "flutter": ["refreshToken", "dio_refresh", "Interceptor"],
+        "platform": ["POST /v1/auth/token/refresh", "POST /v1/auth/refresh"]
+      },
+      "implementation_guide": "packages/nightgauge-sdk/src/auth/",
+      "test_guide": "packages/nightgauge-sdk/src/auth/__tests__/"
+    },
+    {
+      "id": "auth.logout",
+      "name": "Sign Out",
+      "description": "User can sign out and clear local auth state",
+      "category": "auth",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": ["signOut", "logout", "clearAuth"],
+        "angular": ["signOut", "logout"],
+        "flutter": ["signOut", "logout"],
+        "platform": ["POST /v1/auth/logout", "POST /v1/auth/signout"]
+      },
+      "implementation_guide": "src/app/core/auth/logout.component.ts",
+      "test_guide": "src/app/core/auth/logout.component.spec.ts"
+    },
+    {
+      "id": "pipelines.trigger",
+      "name": "Trigger Pipeline Run",
+      "description": "User or system can trigger a new pipeline run for an issue",
+      "category": "pipelines",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": [
+          "triggerPipeline",
+          "runPipeline",
+          "startPipeline",
+          "POST /v1/pipelines/trigger"
+        ],
+        "angular": ["triggerPipeline", "runPipeline", "pipeline.trigger"],
+        "flutter": [
+          "triggerPipeline",
+          "runPipeline",
+          "POST /v1/pipelines/trigger"
+        ],
+        "platform": ["POST /v1/pipelines/trigger"]
+      },
+      "implementation_guide": "packages/nightgauge-vscode/src/services/PipelineService.ts",
+      "test_guide": "packages/nightgauge-vscode/tests/services/PipelineService.test.ts"
+    },
+    {
+      "id": "pipelines.async",
+      "name": "Asynchronous Pipeline Execution",
+      "description": "Pipeline runs asynchronously with real-time progress updates",
+      "category": "pipelines",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": [
+          "streamEvents",
+          "EventSource",
+          "pipeline-events",
+          "GET /v1/pipelines/events/stream"
+        ],
+        "angular": ["EventSource", "streamEvents", "pipeline-events"],
+        "flutter": ["StreamController", "EventSource", "pipeline-events"],
+        "platform": ["GET /v1/pipelines/events/stream"]
+      },
+      "implementation_guide": "packages/nightgauge-sdk/src/pipeline/",
+      "test_guide": "packages/nightgauge-sdk/src/pipeline/__tests__/"
+    },
+    {
+      "id": "pipelines.history",
+      "name": "Pipeline Run History",
+      "description": "User can view a list of past pipeline runs with status and duration",
+      "category": "pipelines",
+      "required_in": ["vscode", "angular", "flutter"],
+      "optional_in": [],
+      "detection_hints": {
+        "vscode": ["pipelineRuns", "runHistory", "GET /v1/pipeline-runs"],
+        "angular": ["pipelineRuns", "runHistory", "PipelineRunsComponent"],
+        "flutter": ["pipelineRuns", "runHistory", "GET /v1/pipeline-runs"],
+        "platform": ["GET /v1/pipeline-runs", "GET /v1/pipeline-runs/stats"]
+      },
+      "implementation_guide": "src/app/pipelines/pipeline-history/",
+      "test_guide": "src/app/pipelines/pipeline-history/*.spec.ts"
+    },
+    {
+      "id": "board.view_epics",
+      "name": "View Epics on Project Board",
+      "description": "User can view all epics and their sub-issues with current status",
+      "category": "board",
+      "required_in": ["vscode", "angular"],
+      "optional_in": ["flutter"],
+      "detection_hints": {
+        "vscode": [
+          "EpicDashboard",
+          "ProjectBoardService",
+          "epic",
+          "GET /v1/github/epics"
+        ],
+        "angular": ["EpicListComponent", "EpicService", "GET /v1/github/epics"],
+        "flutter": ["EpicScreen", "EpicService"],
+        "platform": ["GET /v1/github/epics", "GET /v1/github/board/items"]
+      },
+      "implementation_guide": "packages/nightgauge-vscode/src/views/",
+      "test_guide": "packages/nightgauge-vscode/tests/views/"
+    },
+    {
+      "id": "queue.manage",
+      "name": "Pipeline Queue Management",
+      "description": "User can add, remove, and reorder issues in the pipeline queue",
+      "category": "queue",
+      "required_in": ["vscode", "angular"],
+      "optional_in": ["flutter"],
+      "detection_hints": {
+        "vscode": ["QueueService", "addToQueue", "GET /v1/queue"],
+        "angular": ["QueueService", "QueueComponent", "GET /v1/queue"],
+        "flutter": ["QueueService", "GET /v1/queue"],
+        "platform": [
+          "GET /v1/queue",
+          "POST /v1/queue/add",
+          "DELETE /v1/queue/:id",
+          "POST /v1/queue/reorder"
+        ]
+      },
+      "implementation_guide": "packages/nightgauge-vscode/src/services/QueueService.ts",
+      "test_guide": "packages/nightgauge-vscode/tests/services/QueueService.test.ts"
+    },
+    {
+      "id": "team.view_members",
+      "name": "View Team Members",
+      "description": "User can view team members and their roles",
+      "category": "team",
+      "required_in": ["angular"],
+      "optional_in": ["vscode", "flutter"],
+      "detection_hints": {
+        "vscode": ["TeamService", "teamMembers"],
+        "angular": [
+          "TeamService",
+          "MemberListComponent",
+          "GET /v1/team/members"
+        ],
+        "flutter": ["TeamService", "MemberScreen"],
+        "platform": ["GET /v1/team/members", "GET /v1/team/:id/members"]
+      },
+      "implementation_guide": "src/app/team/",
+      "test_guide": "src/app/team/*.spec.ts"
+    },
+    {
+      "id": "analytics.dashboard",
+      "name": "Analytics Dashboard",
+      "description": "User can view pipeline analytics including cost, health, and trends",
+      "category": "analytics",
+      "required_in": ["angular"],
+      "optional_in": ["vscode", "flutter"],
+      "detection_hints": {
+        "vscode": ["analytics", "AnalyticsService", "GET /v1/analytics"],
+        "angular": [
+          "AnalyticsDashboardComponent",
+          "AnalyticsService",
+          "GET /v1/analytics/dashboard"
+        ],
+        "flutter": ["AnalyticsScreen"],
+        "platform": [
+          "GET /v1/analytics/health",
+          "GET /v1/analytics/trends",
+          "GET /v1/analytics/cost",
+          "GET /v1/analytics/dashboard"
+        ]
+      },
+      "implementation_guide": "src/app/analytics/",
+      "test_guide": "src/app/analytics/*.spec.ts"
+    },
+    {
+      "id": "billing.subscription",
+      "name": "Billing & Subscription Management",
+      "description": "User can view and manage their subscription tier",
+      "category": "billing",
+      "required_in": ["angular"],
+      "optional_in": ["vscode"],
+      "detection_hints": {
+        "vscode": ["subscription", "licenseInfo", "SubscriptionBadge"],
+        "angular": [
+          "BillingComponent",
+          "SubscriptionService",
+          "GET /v1/billing/subscription"
+        ],
+        "flutter": [],
+        "platform": ["GET /v1/billing/subscription", "GET /v1/billing/invoices"]
+      },
+      "implementation_guide": "src/app/billing/",
+      "test_guide": "src/app/billing/*.spec.ts"
+    }
+  ]
+}

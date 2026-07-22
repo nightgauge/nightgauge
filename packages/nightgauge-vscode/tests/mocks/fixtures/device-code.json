@@ -1,0 +1,8 @@
+{
+  "device_code": "dc_mock_3a4b5c6d7e8f",
+  "user_code": "INCR-1234",
+  "verification_uri": "https://nightgauge.dev/activate",
+  "verification_uri_complete": "https://nightgauge.dev/activate?user_code=INCR-1234",
+  "expires_in": 899,
+  "interval": 5
+}

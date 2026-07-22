@@ -1,0 +1,15 @@
+{
+  "id": 5042,
+  "iid": 7,
+  "project_id": 5,
+  "title": "Sample MR",
+  "description": "MR body",
+  "state": "opened",
+  "source_branch": "feat/foo",
+  "target_branch": "main",
+  "sha": "abcdef0123456789abcdef0123456789abcdef01",
+  "web_url": "https://gitlab.example.com/o/r/-/merge_requests/7",
+  "labels": ["needs-review"],
+  "draft": false,
+  "merge_status": "can_be_merged"
+}

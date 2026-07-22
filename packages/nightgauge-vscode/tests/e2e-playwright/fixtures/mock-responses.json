@@ -1,0 +1,77 @@
+{
+  "boardItems": [
+    {
+      "id": "item-100",
+      "number": 100,
+      "title": "Add E2E test infrastructure",
+      "state": "open",
+      "status": "Ready",
+      "priority": "high",
+      "size": "M",
+      "labels": ["type:feature"],
+      "assignees": [],
+      "repo": "nightgauge",
+      "url": "https://github.com/nightgauge/nightgauge/issues/100",
+      "isEpic": false
+    },
+    {
+      "id": "item-101",
+      "number": 101,
+      "title": "Write pipeline E2E tests",
+      "state": "open",
+      "status": "Ready",
+      "priority": "medium",
+      "size": "S",
+      "labels": ["type:test"],
+      "assignees": [],
+      "repo": "nightgauge",
+      "url": "https://github.com/nightgauge/nightgauge/issues/101",
+      "isEpic": false
+    },
+    {
+      "id": "item-102",
+      "number": 102,
+      "title": "Fix board refresh race condition",
+      "state": "open",
+      "status": "In Progress",
+      "priority": "high",
+      "size": "S",
+      "labels": ["type:bug"],
+      "assignees": ["mark"],
+      "repo": "nightgauge",
+      "url": "https://github.com/nightgauge/nightgauge/issues/102",
+      "isEpic": false
+    }
+  ],
+  "boardCounts": {
+    "ready": 2,
+    "inProgress": 1,
+    "inReview": 0,
+    "done": 5,
+    "backlog": 1
+  },
+  "projectConfig": {
+    "owner": "nightgauge",
+    "repo": "nightgauge",
+    "projectNumber": 1
+  },
+  "pipelineRunning": {
+    "executionId": "exec-1234567890",
+    "issueNumber": 100,
+    "status": "running",
+    "stage": "feature-dev",
+    "progress": 0.5
+  },
+  "pipelineFailed": {
+    "executionId": "exec-1234567890",
+    "issueNumber": 200,
+    "status": "failed",
+    "stage": "feature-dev",
+    "error": "Skill execution timed out"
+  },
+  "pipelineStopped": {
+    "executionId": "exec-1234567890",
+    "issueNumber": 100,
+    "status": "idle"
+  }
+}

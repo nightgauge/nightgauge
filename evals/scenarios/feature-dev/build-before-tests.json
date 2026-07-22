@@ -1,0 +1,20 @@
+{
+  "id": "fd-build-before-tests",
+  "skill": "feature-dev",
+  "description": "Feature-dev runs a build-before-tests gate.",
+  "failure_mode": "Model runs tests against stale dist and reports green while the build is actually broken.",
+  "prompt": "Before running the test suite in feature-dev, what gate do you run first, and why?",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "build",
+      "ignore_case": true
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "before .*test",
+      "flags": "i",
+      "description": "build precedes tests"
+    }
+  ]
+}

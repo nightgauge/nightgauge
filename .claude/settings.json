@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": ["Bash(__NEW_LINE_2d5d70ec07396d52__ echo \"\")"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/protect-files.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); [ -n \"$f\" ] || exit 0; case \"$f\" in \"$CLAUDE_PROJECT_DIR\"/*) p=\"$CLAUDE_PROJECT_DIR/node_modules/.bin/prettier\"; [ -x \"$p\" ] && \"$p\" --write \"$f\" 2>/dev/null;; esac; exit 0"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/reinject-pipeline-context.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

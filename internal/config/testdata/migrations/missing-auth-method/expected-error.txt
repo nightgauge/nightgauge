@@ -1,0 +1,1 @@
+auth_method=token requires token_env

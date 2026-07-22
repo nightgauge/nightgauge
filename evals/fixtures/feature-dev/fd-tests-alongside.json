@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Write unit tests alongside the implementation (test-alongside), not after — each new service module gets its *.test.ts in the same change.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Write unit tests alongside the implementation (test-alongside), not after — each new service module gets its *.test.ts in the same change.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Write unit tests alongside the implementation (test-alongside), not after — each new service module gets its *.test.ts in the same change.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,7 @@
+project:
+  owner: nightgauge
+  number: 1
+github_auth:
+  tokens:
+    nightgauge: env:GITHUB_TOKEN_NIGHTGAUGE
+    Acme-Community: env:GITHUB_TOKEN_ACME

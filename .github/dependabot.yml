@@ -1,0 +1,62 @@
+# Dependabot — Go modules, npm, and GitHub Actions weekly updates.
+# Public repo: npm resolves from the public registry (no private registry / token).
+# Review routing is handled by CODEOWNERS + branch protection (the `reviewers`
+# key is deprecated).
+#
+# Version updates are temporarily paused for the public-release cutover. Keeping
+# the configuration in place while setting each limit to zero prevents
+# Dependabot from creating irreversible PR metadata in the clean staging repo.
+# Re-enable updates in a normal post-launch PR by restoring the limits to 5.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+      - go
+    groups:
+      go-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: npm
+    # Root workspace plus the two standalone skill lockfiles that are outside the
+    # npm workspace graph and were otherwise un-scanned (#131).
+    directories:
+      - "/"
+      - "/skills/nightgauge-product-audit"
+      - "/claude-plugins/nightgauge/skills/product-audit"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+      - npm
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Chicago
+    labels:
+      - dependencies
+      - github-actions
+    open-pull-requests-limit: 0

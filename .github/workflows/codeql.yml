@@ -1,0 +1,55 @@
+name: CodeQL
+
+# Static analysis for Go and TypeScript. CodeQL is free for public repositories
+# and self-activates on the visibility flip — no edit needed at launch (#137).
+# Runs on an isolated GitHub-hosted image: this is fork-facing once public.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 08:17 UTC — an off-peak, non-round minute to avoid the
+    # top-of-hour scheduling stampede.
+    - cron: "17 8 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Gate on visibility. Code scanning requires GitHub Code Security, which a
+    # PRIVATE repo does not have without an Advanced Security licence — the
+    # upload step hard-fails with "Code Security must be enabled for this
+    # repository to use code scanning", turning CI red for no benefit. CodeQL is
+    # FREE for public repos, so this job stays skipped while the repo is private
+    # and self-activates the moment it is made public. No edit needed at the flip
+    # (#137).
+    if: github.event.repository.visibility == 'public'
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          category: "/language:${{ matrix.language }}"

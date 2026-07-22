@@ -1,0 +1,165 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getCostCapWarningTableHtml > snapshot — mixed rows 1`] = `
+"
+    <details class="collapsible-section cost-cap-warning-panel" open>
+      <summary class="section-toggle">
+        <span class="toggle-icon">▼</span>
+        <h4>Cost Cap Tightness</h4>
+      </summary>
+      <div class="section-content">
+        <p class="caption">Stages whose configured cap is below <strong>historical median × 1.2</strong>. A tight cap may kill the stage mid-run. Rows with insufficient history (&lt;3 runs) show "—". <strong>Warn At</strong> fires a non-blocking toast; <strong>Ceiling</strong> kills and auto-retries in 30 min (Issue #3508).</p>
+        <table class="cost-stage-table cost-cap-warning-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Cap</th>
+              <th>Median</th>
+              <th>Threshold</th>
+              <th>Warn At</th>
+              <th>Ceiling</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-stage="feature-dev" data-is-tight="true" class="cost-cap-tight">
+        <td>Feature Development</td>
+        <td>$5.00</td>
+        <td>$20.00</td>
+        <td>$24.00</td>
+        <td>$18.00</td>
+        <td>$75.00</td>
+        <td><span class="badge badge-warning">⚠ Too tight</span></td>
+      </tr><tr data-stage="pr-create" data-is-tight="false" class="">
+        <td>PR Creation</td>
+        <td>$30.00</td>
+        <td>$20.00</td>
+        <td>$24.00</td>
+        <td>$18.00</td>
+        <td>$90.00</td>
+        <td><span class="badge badge-ok">✓ OK</span></td>
+      </tr><tr data-stage="issue-pickup" data-is-tight="false" class="">
+        <td>Issue Pickup</td>
+        <td>$1.00</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td><span class="badge badge-ok">✓ OK</span></td>
+      </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>"
+`;
+
+exports[`getCostCapWarningTableHtml > snapshot — no history row (dash values) 1`] = `
+"
+    <details class="collapsible-section cost-cap-warning-panel" open>
+      <summary class="section-toggle">
+        <span class="toggle-icon">▼</span>
+        <h4>Cost Cap Tightness</h4>
+      </summary>
+      <div class="section-content">
+        <p class="caption">Stages whose configured cap is below <strong>historical median × 1.2</strong>. A tight cap may kill the stage mid-run. Rows with insufficient history (&lt;3 runs) show "—". <strong>Warn At</strong> fires a non-blocking toast; <strong>Ceiling</strong> kills and auto-retries in 30 min (Issue #3508).</p>
+        <table class="cost-stage-table cost-cap-warning-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Cap</th>
+              <th>Median</th>
+              <th>Threshold</th>
+              <th>Warn At</th>
+              <th>Ceiling</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-stage="issue-pickup" data-is-tight="false" class="">
+        <td>Issue Pickup</td>
+        <td>$1.00</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td>—</td>
+        <td><span class="badge badge-ok">✓ OK</span></td>
+      </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>"
+`;
+
+exports[`getCostCapWarningTableHtml > snapshot — ok row 1`] = `
+"
+    <details class="collapsible-section cost-cap-warning-panel" open>
+      <summary class="section-toggle">
+        <span class="toggle-icon">▼</span>
+        <h4>Cost Cap Tightness</h4>
+      </summary>
+      <div class="section-content">
+        <p class="caption">Stages whose configured cap is below <strong>historical median × 1.2</strong>. A tight cap may kill the stage mid-run. Rows with insufficient history (&lt;3 runs) show "—". <strong>Warn At</strong> fires a non-blocking toast; <strong>Ceiling</strong> kills and auto-retries in 30 min (Issue #3508).</p>
+        <table class="cost-stage-table cost-cap-warning-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Cap</th>
+              <th>Median</th>
+              <th>Threshold</th>
+              <th>Warn At</th>
+              <th>Ceiling</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-stage="pr-create" data-is-tight="false" class="">
+        <td>PR Creation</td>
+        <td>$30.00</td>
+        <td>$20.00</td>
+        <td>$24.00</td>
+        <td>$18.00</td>
+        <td>$90.00</td>
+        <td><span class="badge badge-ok">✓ OK</span></td>
+      </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>"
+`;
+
+exports[`getCostCapWarningTableHtml > snapshot — tight cap row 1`] = `
+"
+    <details class="collapsible-section cost-cap-warning-panel" open>
+      <summary class="section-toggle">
+        <span class="toggle-icon">▼</span>
+        <h4>Cost Cap Tightness</h4>
+      </summary>
+      <div class="section-content">
+        <p class="caption">Stages whose configured cap is below <strong>historical median × 1.2</strong>. A tight cap may kill the stage mid-run. Rows with insufficient history (&lt;3 runs) show "—". <strong>Warn At</strong> fires a non-blocking toast; <strong>Ceiling</strong> kills and auto-retries in 30 min (Issue #3508).</p>
+        <table class="cost-stage-table cost-cap-warning-table">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th>Cap</th>
+              <th>Median</th>
+              <th>Threshold</th>
+              <th>Warn At</th>
+              <th>Ceiling</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr data-stage="feature-dev" data-is-tight="true" class="cost-cap-tight">
+        <td>Feature Development</td>
+        <td>$5.00</td>
+        <td>$20.00</td>
+        <td>$24.00</td>
+        <td>$18.00</td>
+        <td>$75.00</td>
+        <td><span class="badge badge-warning">⚠ Too tight</span></td>
+      </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>"
+`;

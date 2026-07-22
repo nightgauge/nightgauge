@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "The flow's status is failed, not passed. A new console error at step 3 is a hard failure just like a wrong element — it doesn't matter that the visual assertion held. In strict mode this sets validation_status to failed with errorCategory verify-ui-gate-failed, so no PR is created.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "id": 1042,
+  "iid": 42,
+  "project_id": 5,
+  "title": "Sample item",
+  "description": "Body",
+  "state": "opened",
+  "labels": ["Status::Ready", "Priority::P0", "Size::M"],
+  "web_url": "https://gitlab.example.com/o/r/-/issues/42",
+  "assignees": [],
+  "weight": 5
+}

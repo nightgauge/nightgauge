@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Validation passed, so feature-validate now commits the changes and pushes the feature branch — this is the single point where validated code reaches the remote.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Validation passed, so feature-validate now commits the changes and pushes the feature branch — this is the single point where validated code reaches the remote.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Validation passed, so feature-validate now commits the changes and pushes the feature branch — this is the single point where validated code reaches the remote.",
+    "exit_code": 0
+  }
+}

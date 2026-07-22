@@ -1,0 +1,33 @@
+{
+  "id": "backend-lru-cache-ttl",
+  "title": "O(1) LRU cache with per-entry TTL",
+  "job_class": "backend-logic",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "hard",
+  "instruction": "Implement the LruCache<K, V> class in src/lruCache.ts (a stub throws today). Requirements: capacity-bounded with least-recently-used eviction; get/set/has/delete must be O(1) (no array scans); a get or set counts as a use and moves the entry to most-recently-used; per-entry TTL (ttlMs) measured from insertion using the injected now() clock, so expired entries are treated as absent by get/has and are not counted in size. Do not change the public API or weaken the tests. A comprehensive failing test suite specifies the exact behavior.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/backend-lru-cache-ttl/setup.sh" },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "typecheck", "command": "npm run typecheck", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "correctness",
+        "weight": 0.5,
+        "guidance": "Is LRU eviction order correct, is TTL measured from insertion via the injected clock, and do expired entries read as absent?"
+      },
+      {
+        "dimension": "performance",
+        "weight": 0.3,
+        "guidance": "Are get/set/has/delete genuinely O(1) (linked structure + map), with no per-operation array scans or unbounded growth?"
+      },
+      {
+        "dimension": "code_quality",
+        "weight": 0.2,
+        "guidance": "Is the cache state well-encapsulated, typed, and free of race-prone or duplicated logic?"
+      }
+    ]
+  }
+}

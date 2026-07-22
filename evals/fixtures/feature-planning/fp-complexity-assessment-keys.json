@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "{\n  \"complexity_assessment\": {\n    \"size_label\": \"L\",\n    \"type_label\": \"feature\",\n    \"computed_score\": 5,\n    \"documentation_scope\": \"extended\"\n  }\n}",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "{\n  \"complexity_assessment\": {\n    \"size_label\": \"L\",\n    \"type_label\": \"feature\",\n    \"computed_score\": 5,\n    \"documentation_scope\": \"extended\"\n  }\n}",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "{\n  \"complexity_assessment\": {\n    \"size_label\": \"L\",\n    \"type_label\": \"feature\",\n    \"computed_score\": 5,\n    \"documentation_scope\": \"extended\"\n  }\n}",
+    "exit_code": 0
+  }
+}

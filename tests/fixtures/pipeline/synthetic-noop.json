@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.3",
+  "issue_number": 9999,
+  "repository": "nightgauge/nightgauge",
+  "title": "chore: synthetic regression probe — README single-line edit",
+  "type": "chore",
+  "branch": "feat/9999-synthetic-regression-probe",
+  "base_branch": "main",
+  "native_parent": null,
+  "requirements": {
+    "summary": "Synthetic fixture: append one line to README.md. Used by the synthetic-regression CI job to verify no skill-no-op outcome occurs.",
+    "user_story": "",
+    "acceptance_criteria": [
+      "README.md has exactly one new line appended.",
+      "StageGate.Verify() passes for all stages.",
+      "Outcome type is not skill-no-op.",
+      "Total cost is under $0.50.",
+      "No stop-hook-error notifications in transcript."
+    ],
+    "technical_notes": [
+      "This is a synthetic fixture — issue #9999 does not exist on GitHub.",
+      "The CI job boots the Go scheduler in test/dry-run mode and feeds this fixture directly.",
+      "Never use this fixture as input to a real pipeline run."
+    ]
+  },
+  "labels": [
+    "type:chore",
+    "priority:low",
+    "size:XS"
+  ],
+  "milestone": "",
+  "routing": {
+    "change_type": "docs",
+    "task_type": "chore",
+    "complexity_score": 1,
+    "suggested_route": "standard",
+    "skip_stages": [],
+    "rationale": "Minimal chore — single-line doc edit. Used as a regression probe."
+  }
+}

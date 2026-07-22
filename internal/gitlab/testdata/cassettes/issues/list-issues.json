@@ -1,0 +1,24 @@
+[
+  {
+    "id": 1042,
+    "iid": 42,
+    "project_id": 5,
+    "title": "First issue",
+    "description": "Body 1",
+    "state": "opened",
+    "labels": ["bug"],
+    "web_url": "https://gitlab.example.com/o/r/-/issues/42",
+    "assignees": []
+  },
+  {
+    "id": 1043,
+    "iid": 43,
+    "project_id": 5,
+    "title": "Second issue",
+    "description": "Body 2",
+    "state": "opened",
+    "labels": ["enhancement"],
+    "web_url": "https://gitlab.example.com/o/r/-/issues/43",
+    "assignees": []
+  }
+]

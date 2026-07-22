@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "I build the PR description in a temp file, then pass it inline: `pr create --title \"...\" --body \"$(cat /tmp/pr-body.md)\"`. The body is read from disk at call time and handed to the binary through the supported flag.",
+    "exit_code": 0
+  }
+}

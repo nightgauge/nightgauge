@@ -1,0 +1,37 @@
+# Canonical per-key tier classification for nightgauge config audit.
+# Source of truth: docs/SETTINGS_ARCHITECTURE.md
+# DO NOT edit manually — update docs/SETTINGS_ARCHITECTURE.md and re-extract here.
+# Kept in sync manually; a future CI linter will enforce the sync.
+keys:
+  # Team tier — committed, shared via .nightgauge/config.yaml
+  owner: team
+  owner_type: team
+  repo: team
+  project: team
+  pr.merge_strategy: team
+  pr.epic_merge_strategy: team
+  pr.delete_branch: team
+  pr.auto_fix_ci: team
+  pr.auto_fix_max_attempts: team
+  pr.ci_check_timeout: team
+  pr.draft_by_default: team
+  pr.auto_merge: team
+  pr.auto_merge_epic: team
+  pr.reviewers: team
+  branch: team
+  issue: team
+  pipeline.budget_preset: team
+  pipeline.worktree_base: team
+  knowledge: team
+  pipeline: team
+  autonomous.scan_interval: team
+  # Machine tier — per-developer, stored in ~/.nightgauge/config.yaml, never committed
+  github_user: machine
+  github_auth: machine
+  notifications.discord.enabled: machine
+  notifications.discord.webhook_url: machine
+  lm_studio: machine
+  autonomous.enabled_repos: machine
+  autonomous.repositories.*: machine
+  # Runtime tier — VSCode memento (not in YAML files; enforcement pending #3313 Phase 3)
+  pipeline.max_concurrent: runtime

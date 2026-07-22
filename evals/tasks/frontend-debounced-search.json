@@ -1,0 +1,36 @@
+{
+  "id": "frontend-debounced-search",
+  "title": "Debounced async search with stale-response cancellation",
+  "job_class": "ui-creation",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "hard",
+  "instruction": "Implement the DebouncedSearch<T> controller in src/debouncedSearch.ts (a stub throws today). It debounces setQuery(query) by debounceMs before calling the injected fetcher, coalescing rapid calls into a single fetch of the latest query. It must be race-safe: if a newer query supersedes an in-flight request, the stale response is discarded (never applied to state). It exposes loading/error/results via the onChange callback, clears immediately without fetching on an empty query, surfaces fetch errors as error state (message), and dispose() cancels any pending timer and in-flight request. Do not change the public API or weaken the tests. A comprehensive failing test suite (fake timers + controllable promises) specifies the exact behavior.",
+  "fixture": {
+    "kind": "scaffold-script",
+    "ref": "evals/fixtures/frontend-debounced-search/setup.sh"
+  },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "typecheck", "command": "npm run typecheck", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "correctness",
+        "weight": 0.4,
+        "guidance": "Does it debounce correctly, discard stale responses under a newer query, and manage loading/error/empty states as specified?"
+      },
+      {
+        "dimension": "code_quality",
+        "weight": 0.35,
+        "guidance": "Is the state machine clean and leak-free (timers cleared, requests aborted on dispose), with no race-prone shortcuts?"
+      },
+      {
+        "dimension": "clarity",
+        "weight": 0.25,
+        "guidance": "Is the control flow readable and are the request-generation / cancellation semantics obvious?"
+      }
+    ]
+  }
+}

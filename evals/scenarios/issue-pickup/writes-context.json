@@ -1,0 +1,23 @@
+{
+  "id": "ip-writes-issue-context",
+  "skill": "issue-pickup",
+  "description": "Issue pickup writes the issue-{N}.json context file for the next stage.",
+  "failure_mode": "Model ends the stage without writing the issue context file, starving feature-planning of its input contract.",
+  "prompt": "Describe the output context file issue-pickup must write before completing, including its path pattern and that it carries the issue number and knowledge_path.",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "issue-",
+      "description": "context filename prefix"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "issue-\\{?N?\\d*\\}?\\.json",
+      "description": "context json filename"
+    },
+    {
+      "type": "contains",
+      "value": "knowledge_path"
+    }
+  ]
+}

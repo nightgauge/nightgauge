@@ -1,0 +1,30 @@
+{
+  "id": "refactor-extract-service",
+  "title": "Extract business logic from a fat controller into a service",
+  "job_class": "refactor",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "medium",
+  "instruction": "userController.ts mixes HTTP handling with validation, persistence, and email logic in one 200-line handler. Extract the non-HTTP logic into a UserService with focused methods, leaving the controller as a thin adapter. Behavior and the existing passing tests must not change; add tests for the new service.",
+  "fixture": {
+    "kind": "scaffold-script",
+    "ref": "evals/fixtures/refactor-extract-service/setup.sh"
+  },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "code_quality",
+        "weight": 0.5,
+        "guidance": "Is the logic cleanly separated with a thin controller and cohesive service?"
+      },
+      {
+        "dimension": "correctness",
+        "weight": 0.5,
+        "guidance": "Do existing tests still pass unchanged and is behavior identical?"
+      }
+    ]
+  }
+}

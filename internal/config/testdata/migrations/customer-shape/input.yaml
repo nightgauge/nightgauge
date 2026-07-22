@@ -1,0 +1,13 @@
+project:
+  owner: Acme
+  number: 5
+  repo: api-service
+autonomous:
+  max_concurrent: 3
+  repositories:
+    api-service:
+      default_branch: main
+knowledge:
+  enabled: true
+pipeline:
+  max_concurrent: 2

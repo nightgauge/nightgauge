@@ -1,0 +1,20 @@
+{
+  "number": 99,
+  "title": "Add forge subcommand",
+  "body": "PR description.",
+  "state": "OPEN",
+  "isDraft": false,
+  "headRefName": "feat/forge",
+  "baseRefName": "main",
+  "url": "https://github.com/cli/cli/pull/99",
+  "mergeable": "MERGEABLE",
+  "author": { "login": "alice" },
+  "labels": [{ "name": "type:feature" }],
+  "additions": 100,
+  "deletions": 5,
+  "createdAt": null,
+  "updatedAt": null,
+  "closedAt": null,
+  "mergedAt": null,
+  "comments": []
+}

@@ -1,0 +1,117 @@
+schema_version: "1"
+categories:
+  build-failure:
+    display_name: "Build Failure"
+    description: "Compilation, bundling, or build tool failures"
+    patterns:
+      - "error TS\\d+"
+      - "Build failed"
+      - "\\[ERROR\\].*Could not resolve"
+      - "SyntaxError"
+      - "compile.*error"
+    auto_fixable: true
+    typical_root_causes:
+      - "Type errors from code changes"
+      - "Missing imports after refactoring"
+      - "Dependency version conflicts"
+
+  test-failure:
+    display_name: "Test Failure"
+    description: "Unit, integration, or E2E test assertion failures"
+    patterns:
+      - "FAIL\\s+.*\\.test\\."
+      - "expect\\(.*\\)\\.to"
+      - "AssertionError"
+      - "FAILED\\s+tests/"
+      - "--- FAIL:"
+    auto_fixable: true
+    typical_root_causes:
+      - "Implementation changed but tests not updated"
+      - "Flaky async test timing"
+      - "Mock/stub misconfiguration"
+
+  lint-format-failure:
+    display_name: "Lint/Format Failure"
+    description: "Code style, linting, or formatting check failures"
+    patterns:
+      - "eslint"
+      - "prettier"
+      - "lint.*error"
+      - "formatting"
+    auto_fixable: true
+    typical_root_causes:
+      - "Missing auto-format on save"
+      - "New lint rules added"
+
+  environment-failure:
+    display_name: "Environment/Config Failure"
+    description: "Dependency resolution, permissions, or configuration errors"
+    patterns:
+      - "Module not found"
+      - "Cannot find module"
+      - "ENOENT|EACCES|EPERM"
+      - "npm ERR!"
+      - "Permission denied"
+      - "ERESOLVE"
+    auto_fixable: false
+    typical_root_causes:
+      - "Missing npm install after dependency change"
+      - "Node version mismatch"
+      - "File permission issues"
+
+  timeout-transient:
+    display_name: "Timeout/Transient Failure"
+    description: "Network timeouts, rate limits, or infrastructure flakiness"
+    patterns:
+      - "timeout"
+      - "ETIMEDOUT"
+      - "rate limit"
+      - "503|502|504"
+      - "network error"
+    auto_fixable: false
+    typical_root_causes:
+      - "GitHub API rate limiting"
+      - "Network instability"
+      - "CI runner resource exhaustion"
+
+  context-exhaustion:
+    display_name: "Context Exhaustion"
+    description: "AI context window exceeded or token budget blown"
+    patterns:
+      - "context.*exhaust"
+      - "token.*limit"
+      - "maximum.*context"
+      - "compaction"
+    auto_fixable: false
+    typical_root_causes:
+      - "Issue complexity exceeded size estimate"
+      - "Too many files modified in single stage"
+      - "Verbose error output consuming context"
+
+  stage-cost-cap-exceeded:
+    display_name: "Stage Cost Cap Exceeded"
+    description: "Stage was forcibly terminated because its accumulated USD cost crossed the configured per-stage cap (pipeline.stage_cost_caps)"
+    patterns:
+      - "\\[cost-cap-exceeded\\]"
+      - "stage_cost_caps"
+      - "cost cap exceeded"
+    auto_fixable: false
+    typical_root_causes:
+      - "Runaway stage exceeded the configured USD ceiling (cap likely working as intended)"
+      - "Cap set too low for the issue size — raise pipeline.stage_cost_caps.<stage> or unset to disable"
+      - "Model-routing escalation pushed the stage into a more expensive model than the cap accommodates"
+
+  issue-too-large:
+    display_name: "Issue Too Large"
+    description: "Issue scope exceeds pipeline size thresholds — decomposition required"
+    patterns:
+      - "issue.*too large"
+      - "size gate.*rejected"
+      - "scope exceeds threshold"
+      - "decomposition required"
+      - "oversized.*scope"
+    auto_fixable: false
+    typical_root_causes:
+      - "Issue title references a LOC count that exceeds the configured threshold"
+      - "size:L or size:XL label without the minimum number of sub-issues"
+      - "Issue should be broken into smaller, independently-deliverable sub-issues"

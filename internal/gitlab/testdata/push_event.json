@@ -1,0 +1,17 @@
+{
+  "object_kind": "push",
+  "ref": "refs/heads/main",
+  "commits": [
+    {
+      "id": "abc123def456",
+      "message": "Fix: resolve widget rendering bug",
+      "timestamp": "2024-01-15T10:00:00Z",
+      "url": "https://gitlab.example.com/mygroup/my-project/-/commit/abc123def456"
+    }
+  ],
+  "project": {
+    "id": 1234,
+    "name": "my-project",
+    "web_url": "https://gitlab.example.com/mygroup/my-project"
+  }
+}

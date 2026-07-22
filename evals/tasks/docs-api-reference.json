@@ -1,0 +1,35 @@
+{
+  "id": "docs-api-reference",
+  "title": "Write API reference docs for an existing REST module",
+  "job_class": "docs",
+  "target_stages": ["feature-planning", "feature-dev"],
+  "difficulty": "easy",
+  "instruction": "The tasks REST router (GET/POST/PATCH/DELETE /tasks) has no documentation. Write docs/api/tasks.md documenting each endpoint: method, path, params, request/response shapes, status codes, and a curl example. Derive everything from the actual router code; do not invent endpoints.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/docs-api-reference/setup.sh" },
+  "checks": [
+    {
+      "name": "links",
+      "command": "npx --yes markdown-link-check docs/api/tasks.md",
+      "expect_exit_code": 0
+    }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "completeness",
+        "weight": 0.5,
+        "guidance": "Are all four endpoints and their params/responses/status codes documented?"
+      },
+      {
+        "dimension": "correctness",
+        "weight": 0.3,
+        "guidance": "Does the doc match the real router (no invented endpoints)?"
+      },
+      {
+        "dimension": "clarity",
+        "weight": 0.2,
+        "guidance": "Is it well-structured with a working curl example?"
+      }
+    ]
+  }
+}

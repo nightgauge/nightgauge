@@ -1,0 +1,4 @@
+project:
+  owner: nightgauge # org login
+  number: 1 # project board number
+  repo: nightgauge

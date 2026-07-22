@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "With knowledge_path set, read knowledge_path/PRD.md and knowledge_path/decisions.md first to build on accumulated requirements and recorded ADRs before drafting the plan.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "With knowledge_path set, read knowledge_path/PRD.md and knowledge_path/decisions.md first to build on accumulated requirements and recorded ADRs before drafting the plan.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "With knowledge_path set, read knowledge_path/PRD.md and knowledge_path/decisions.md first to build on accumulated requirements and recorded ADRs before drafting the plan.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "id": 99,
+    "iid": 12,
+    "status": "success",
+    "ref": "main",
+    "sha": "abcdef0123456789abcdef0123456789abcdef01",
+    "web_url": "https://gitlab.example.com/o/r/-/pipelines/99",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:05:00Z"
+  }
+]

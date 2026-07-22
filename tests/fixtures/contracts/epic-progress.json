@@ -1,0 +1,14 @@
+{
+  "epicNodeId": "I_epic001",
+  "number": 100,
+  "title": "Epic: User Authentication",
+  "repo": "nightgauge/nightgauge",
+  "subIssues": [
+    {"nodeId": "I_sub001", "number": 101, "title": "Login page", "state": "CLOSED", "repo": "nightgauge/nightgauge"},
+    {"nodeId": "I_sub002", "number": 102, "title": "Registration page", "state": "OPEN", "repo": "nightgauge/nightgauge"}
+  ],
+  "total": 2,
+  "closed": 1,
+  "open": 1,
+  "percentComplete": 50
+}

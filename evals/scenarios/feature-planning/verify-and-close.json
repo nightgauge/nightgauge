@@ -1,0 +1,18 @@
+{
+  "id": "fp-verify-and-close-shape",
+  "skill": "feature-planning",
+  "description": "Planning produces a verify-and-close approach shape when ACs are already satisfied.",
+  "failure_mode": "Model emits a free-form approach string instead of the structured verify-and-close route that the #708 short-circuit consumes.",
+  "prompt": "All acceptance criteria for the issue appear already satisfied by existing code. Produce the planning approach field. Use the verify-and-close route shape.",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "verify-and-close",
+      "description": "exact route token"
+    },
+    {
+      "type": "json_path_exists",
+      "path": "approach"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{"type":"init","timestamp":"2026-02-20T22:00:00.000Z","session_id":"gemini-sess-def456","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"2026-02-20T22:00:01.000Z","role":"user","content":"Implement photo upload feature for issue #42"}
+{"type":"message","timestamp":"2026-02-20T22:00:02.000Z","role":"assistant","content":"I'll implement the photo upload feature.","delta":true}
+{"type":"tool_use","timestamp":"2026-02-20T22:00:03.000Z","tool_name":"Bash","tool_id":"bash-001","parameters":{"command":"npm test"}}
+{"type":"tool_result","timestamp":"2026-02-20T22:00:08.000Z","tool_id":"bash-001","status":"error","error":{"type":"COMMAND_FAILED","message":"Tests failed with exit code 1"}}
+{"type":"error","timestamp":"2026-02-20T22:00:09.000Z","severity":"error","message":"Tool execution failed: npm test returned non-zero exit code"}
+{"type":"message","timestamp":"2026-02-20T22:00:10.000Z","role":"assistant","content":"Execution halted at feature-dev due to failing tests. Cannot continue without passing test suite."}
+{"type":"result","timestamp":"2026-02-20T22:00:11.000Z","status":"error","error":{"type":"StageFailure","message":"Stage failed due to test failures"},"stats":{"total_tokens":900,"input_tokens":500,"output_tokens":400,"cached":0,"input":500,"duration_ms":11000,"tool_calls":2}}

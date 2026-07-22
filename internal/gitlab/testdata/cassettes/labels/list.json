@@ -1,0 +1,5 @@
+[
+  { "id": 1, "name": "bug", "color": "#ff0000", "description": "Defect" },
+  { "id": 2, "name": "enhancement", "color": "#00ff00", "description": "New feature" },
+  { "id": 3, "name": "Status::Ready", "color": "#0000ff", "description": "Scoped status label" }
+]

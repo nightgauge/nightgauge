@@ -1,0 +1,20 @@
+{
+  "id": "fd-no-commit",
+  "skill": "feature-dev",
+  "description": "Feature-dev does not commit or push; that happens in feature-validate.",
+  "failure_mode": "Model commits and pushes from feature-dev, sending unvalidated code to the remote before RALPH fixes (regresses #1608).",
+  "prompt": "After implementation is complete in feature-dev, do you commit and push the code? Explain.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(no|not|don't|do not)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(feature-validate|validate)",
+      "flags": "i",
+      "description": "commit deferred to validate"
+    }
+  ]
+}

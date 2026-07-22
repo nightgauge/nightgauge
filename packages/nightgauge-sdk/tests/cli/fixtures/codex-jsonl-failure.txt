@@ -1,0 +1,4 @@
+{"type":"item.completed","item":{"id":"item_001","type":"command_execution","command":"npm test","status":"failed"}}
+{"type":"item.completed","item":{"id":"item_002","type":"agent_message","text":"Tests failed with 3 errors in PhotoService.test.ts."}}
+{"type":"item.completed","item":{"id":"item_003","type":"agent_message","text":"Execution halted at feature-dev due to failing tests. Cannot continue without passing test suite."}}
+{"type":"turn.completed"}

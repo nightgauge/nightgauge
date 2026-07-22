@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+*.generated.ts
+# Transient git worktrees created by parallel agents and the autonomous pipeline
+.claude/worktrees/
+.worktrees/
+.nightgauge/
+api/generated/
+skills/*/dist/
+packages/*/dist/
+coverage/
+*.vsix
+*.lock
+package-lock.json
+# Test fixtures that may contain intentionally malformed content
+tests/fixtures/
+# Embedded templates emitted byte-for-byte by `nightgauge setup scaffold-tooling`
+internal/setup/templates/
+# Markdown files with template syntax (Handlebars, etc.)
+claude-plugins/docs/
+# Handlebars templates
+*.handlebars
+*.hbs
+
+# Generated test snapshots — never prettier-formatted
+**/__snapshots__/

@@ -1,0 +1,7 @@
+project:
+  owner: nightgauge
+  number: 1
+forges:
+  myforge:
+    kind: bitbucket
+    base_url: https://bitbucket.org

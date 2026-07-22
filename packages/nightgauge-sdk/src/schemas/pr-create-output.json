@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PrCreateOutput",
+  "description": "Output from the pr-create pipeline stage",
+  "type": "object",
+  "properties": {
+    "pr_number": { "type": "integer" },
+    "pr_url": { "type": "string", "format": "uri" },
+    "title": { "type": "string" },
+    "summary": { "type": "string" },
+    "base_branch": { "type": "string" },
+    "head_branch": { "type": "string" },
+    "linked_issues": { "type": "array", "items": { "type": "integer" } },
+    "reviewers_requested": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["pr_number", "pr_url", "title", "summary", "head_branch"]
+}

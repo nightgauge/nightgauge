@@ -1,0 +1,42 @@
+project:
+  number: 1
+  owner: nightgauge
+  builtin_workflows:
+    auto_add_to_project: true
+    auto_add_sub_issues: true
+    item_added_to_project: true
+    item_closed_to_done: true
+    pr_merged_to_done: true
+    auto_close_issue: true
+    auto_archive_days: 14
+    pr_linked_to_issue: true
+pr:
+  admin_merge: false
+  merge_strategy: squash
+  epic_merge_strategy: merge
+  delete_branch: true
+  auto_fix_ci: true
+  auto_fix_max_attempts: 3
+  ci_check_timeout: 600
+pipeline:
+  budget_preset: generous
+  max_concurrent: 3
+  worktree_base: .worktrees
+model_routing:
+  effort_auto: true
+human_in_the_loop:
+  auto_accept_stages: true
+  auto_accept_permissions: true
+  trusted_stages:
+    - issue-pickup
+    - feature-planning
+    - feature-dev
+    - feature-validate
+    - pr-create
+    - pr-merge
+batch:
+  max_issues: 20
+  concurrency: 2
+notifications:
+  discord:
+    enabled: true

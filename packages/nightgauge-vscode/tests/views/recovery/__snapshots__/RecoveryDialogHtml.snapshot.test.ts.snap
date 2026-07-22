@@ -1,0 +1,947 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`getRecoveryDialogHtml — snapshot per error kind > renders CONTEXT_SCHEMA_ERROR with no producer 1`] = `
+"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <title>Recovery Required — Issue #42 • Feature Development</title>
+  <style>
+    
+    :root {
+      --spacing-xs: 4px;
+      --spacing-sm: 8px;
+      --spacing-md: 16px;
+      --spacing-lg: 24px;
+      --spacing-xl: 32px;
+      --border-radius: 4px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      line-height: 1.5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .recovery-dialog {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: var(--spacing-md);
+    }
+
+    .dialog-header {
+      padding-bottom: var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      margin-bottom: var(--spacing-md);
+    }
+
+    .dialog-header h1 {
+      font-size: 1.3em;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+    }
+
+    .dialog-header h1 .codicon {
+      color: var(--vscode-editorWarning-foreground, var(--vscode-symbolIcon-fieldForeground));
+    }
+
+    .subtitle {
+      margin-top: var(--spacing-sm);
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.9em;
+    }
+
+    .dialog-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--spacing-md);
+    }
+
+    .error-block,
+    .state-block {
+      padding: var(--spacing-md);
+      background: var(--vscode-editorWidget-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: var(--border-radius);
+    }
+
+    .error-block h2,
+    .state-block h2 {
+      font-size: 0.85em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--vscode-textCodeBlock-background);
+      padding: var(--spacing-sm);
+      border-radius: var(--border-radius);
+    }
+
+    .state-fields {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: var(--spacing-xs) var(--spacing-md);
+      font-size: 0.9em;
+    }
+
+    .state-fields dt {
+      color: var(--vscode-descriptionForeground);
+      font-weight: 500;
+    }
+
+    .state-fields dd {
+      color: var(--vscode-foreground);
+    }
+
+    .state-fields .muted {
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+
+    .actions {
+      display: flex;
+      gap: var(--spacing-sm);
+      padding-top: var(--spacing-md);
+      margin-top: var(--spacing-md);
+      border-top: 1px solid var(--vscode-panel-border);
+      flex-wrap: wrap;
+    }
+
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-sm) var(--spacing-md);
+      border: none;
+      border-radius: var(--border-radius);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+
+    .action-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .action-button:focus {
+      outline: 2px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+
+    .action-button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+
+    .action-button.primary:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    .action-button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    .action-button.secondary:hover:not(:disabled) {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .action-button.danger {
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+    }
+
+    .action-button.danger.confirming {
+      background: var(--vscode-errorForeground, #ff5555);
+      color: var(--vscode-button-foreground);
+    }
+
+    .codicon::before {
+      font-family: codicon;
+      font-size: 14px;
+    }
+
+    .codicon-warning::before { content: "\\ea6c"; }
+    .codicon-debug-continue::before { content: "\\eacf"; }
+    .codicon-play::before { content: "\\eb2c"; }
+    .codicon-debug-restart::before { content: "\\ead4"; }
+    .codicon-trash::before { content: "\\ea81"; }
+    .codicon-folder-opened::before { content: "\\eaf7"; }
+    .codicon-close::before { content: "\\ea76"; }
+    .codicon-circle-outline::before { content: "\\eabc"; }
+
+    @media (max-width: 600px) {
+      .actions { flex-direction: column; }
+      .action-button { width: 100%; justify-content: center; }
+    }
+  
+  </style>
+</head>
+<body>
+  <div class="recovery-dialog">
+    <header class="dialog-header">
+      <h1>
+        <span class="codicon codicon-warning"></span>
+        Recovery Required — Issue #42 • Feature Development
+      </h1>
+      <p class="subtitle">Choose how to recover from this failure.</p>
+    </header>
+
+    <main class="dialog-body">
+      <section class="error-block">
+        <h2>What happened</h2>
+        <pre class="error-detail">schema validation failed: foo.bar must be a string</pre>
+      </section>
+      <section class="state-block">
+        <h2>Pipeline state</h2>
+        <dl class="state-fields">
+          <dt>Run state</dt><dd>aborted</dd>
+          <dt>Triggering stage</dt><dd>Feature Development</dd>
+          <dt>Producing stage</dt><dd><em class="muted">unknown</em></dd>
+          <dt>Error kind</dt><dd>CONTEXT_SCHEMA_ERROR</dd>
+        </dl>
+      </section>
+    </main>
+
+    <footer class="actions">
+      <button class="action-button secondary" data-action="restart-from-beginning" data-destructive="false">
+        <span class="codicon codicon-debug-restart"></span>
+        <span class="action-label">Restart from beginning</span>
+      </button>
+      <button class="action-button danger" data-action="discard-run" data-destructive="true">
+        <span class="codicon codicon-trash"></span>
+        <span class="action-label">Discard run</span>
+      </button>
+      <button class="action-button secondary" data-action="open-run-state-directory" data-destructive="false">
+        <span class="codicon codicon-folder-opened"></span>
+        <span class="action-label">Open run-state directory</span>
+      </button>
+      <button class="action-button secondary" data-action="cancel" data-destructive="false">
+        <span class="codicon codicon-close"></span>
+        <span class="action-label">Cancel</span>
+      </button>
+    </footer>
+  </div>
+
+  <script nonce="NONCE">
+    
+    (function() {
+      const vscode = acquireVsCodeApi();
+      let pendingConfirm = null;
+      let pendingResetTimer = null;
+
+      function send(action) {
+        vscode.postMessage({ type: 'action', action: action, confirmed: true });
+        document.querySelectorAll('.action-button').forEach(b => b.setAttribute('disabled', 'true'));
+      }
+
+      function clearPending() {
+        if (pendingConfirm) {
+          const button = document.querySelector('[data-action="' + pendingConfirm + '"]');
+          if (button) {
+            const labelEl = button.querySelector('.action-label');
+            if (labelEl) labelEl.textContent = button.getAttribute('data-original-label') || labelEl.textContent;
+            button.classList.remove('confirming');
+          }
+          pendingConfirm = null;
+        }
+        if (pendingResetTimer) {
+          clearTimeout(pendingResetTimer);
+          pendingResetTimer = null;
+        }
+      }
+
+      document.querySelectorAll('.action-button').forEach(button => {
+        const labelEl = button.querySelector('.action-label');
+        if (labelEl) button.setAttribute('data-original-label', labelEl.textContent);
+
+        button.addEventListener('click', () => {
+          const action = button.getAttribute('data-action');
+          const destructive = button.getAttribute('data-destructive') === 'true';
+          if (!action) return;
+
+          if (destructive && pendingConfirm !== action) {
+            clearPending();
+            pendingConfirm = action;
+            const labelEl2 = button.querySelector('.action-label');
+            if (labelEl2) labelEl2.textContent = 'Click again to confirm';
+            button.classList.add('confirming');
+            pendingResetTimer = setTimeout(clearPending, 5000);
+            return;
+          }
+
+          clearPending();
+          send(action);
+        });
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          clearPending();
+          send('cancel');
+        }
+      });
+    })();
+  
+  </script>
+</body>
+</html>"
+`;
+
+exports[`getRecoveryDialogHtml — snapshot per error kind > renders MISSING_INPUT_FILE with full action set 1`] = `
+"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <title>Recovery Required — Issue #42 • Feature Development</title>
+  <style>
+    
+    :root {
+      --spacing-xs: 4px;
+      --spacing-sm: 8px;
+      --spacing-md: 16px;
+      --spacing-lg: 24px;
+      --spacing-xl: 32px;
+      --border-radius: 4px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      line-height: 1.5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .recovery-dialog {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: var(--spacing-md);
+    }
+
+    .dialog-header {
+      padding-bottom: var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      margin-bottom: var(--spacing-md);
+    }
+
+    .dialog-header h1 {
+      font-size: 1.3em;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+    }
+
+    .dialog-header h1 .codicon {
+      color: var(--vscode-editorWarning-foreground, var(--vscode-symbolIcon-fieldForeground));
+    }
+
+    .subtitle {
+      margin-top: var(--spacing-sm);
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.9em;
+    }
+
+    .dialog-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--spacing-md);
+    }
+
+    .error-block,
+    .state-block {
+      padding: var(--spacing-md);
+      background: var(--vscode-editorWidget-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: var(--border-radius);
+    }
+
+    .error-block h2,
+    .state-block h2 {
+      font-size: 0.85em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--vscode-textCodeBlock-background);
+      padding: var(--spacing-sm);
+      border-radius: var(--border-radius);
+    }
+
+    .state-fields {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: var(--spacing-xs) var(--spacing-md);
+      font-size: 0.9em;
+    }
+
+    .state-fields dt {
+      color: var(--vscode-descriptionForeground);
+      font-weight: 500;
+    }
+
+    .state-fields dd {
+      color: var(--vscode-foreground);
+    }
+
+    .state-fields .muted {
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+
+    .actions {
+      display: flex;
+      gap: var(--spacing-sm);
+      padding-top: var(--spacing-md);
+      margin-top: var(--spacing-md);
+      border-top: 1px solid var(--vscode-panel-border);
+      flex-wrap: wrap;
+    }
+
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-sm) var(--spacing-md);
+      border: none;
+      border-radius: var(--border-radius);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+
+    .action-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .action-button:focus {
+      outline: 2px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+
+    .action-button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+
+    .action-button.primary:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    .action-button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    .action-button.secondary:hover:not(:disabled) {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .action-button.danger {
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+    }
+
+    .action-button.danger.confirming {
+      background: var(--vscode-errorForeground, #ff5555);
+      color: var(--vscode-button-foreground);
+    }
+
+    .codicon::before {
+      font-family: codicon;
+      font-size: 14px;
+    }
+
+    .codicon-warning::before { content: "\\ea6c"; }
+    .codicon-debug-continue::before { content: "\\eacf"; }
+    .codicon-play::before { content: "\\eb2c"; }
+    .codicon-debug-restart::before { content: "\\ead4"; }
+    .codicon-trash::before { content: "\\ea81"; }
+    .codicon-folder-opened::before { content: "\\eaf7"; }
+    .codicon-close::before { content: "\\ea76"; }
+    .codicon-circle-outline::before { content: "\\eabc"; }
+
+    @media (max-width: 600px) {
+      .actions { flex-direction: column; }
+      .action-button { width: 100%; justify-content: center; }
+    }
+  
+  </style>
+</head>
+<body>
+  <div class="recovery-dialog">
+    <header class="dialog-header">
+      <h1>
+        <span class="codicon codicon-warning"></span>
+        Recovery Required — Issue #42 • Feature Development
+      </h1>
+      <p class="subtitle">Producer: <strong>Feature Planning</strong>. Choose how to recover from this failure.</p>
+    </header>
+
+    <main class="dialog-body">
+      <section class="error-block">
+        <h2>What happened</h2>
+        <pre class="error-detail">Cannot start feature-dev: required input file .nightgauge/pipeline/planning-42.json is missing.</pre>
+      </section>
+      <section class="state-block">
+        <h2>Pipeline state</h2>
+        <dl class="state-fields">
+          <dt>Run state</dt><dd>paused</dd>
+          <dt>Triggering stage</dt><dd>Feature Development</dd>
+          <dt>Producing stage</dt><dd>Feature Planning</dd>
+          <dt>Error kind</dt><dd>MISSING_INPUT_FILE</dd>
+        </dl>
+      </section>
+    </main>
+
+    <footer class="actions">
+      <button class="action-button primary" data-action="resume-from-paused-stage" data-destructive="false">
+        <span class="codicon codicon-debug-continue"></span>
+        <span class="action-label">Resume from paused stage</span>
+      </button>
+      <button class="action-button primary" data-action="run-producing-stage" data-destructive="false">
+        <span class="codicon codicon-play"></span>
+        <span class="action-label">Run producing stage now</span>
+      </button>
+      <button class="action-button danger" data-action="restart-from-beginning" data-destructive="true">
+        <span class="codicon codicon-debug-restart"></span>
+        <span class="action-label">Restart from beginning</span>
+      </button>
+      <button class="action-button danger" data-action="discard-run" data-destructive="true">
+        <span class="codicon codicon-trash"></span>
+        <span class="action-label">Discard run</span>
+      </button>
+      <button class="action-button secondary" data-action="open-run-state-directory" data-destructive="false">
+        <span class="codicon codicon-folder-opened"></span>
+        <span class="action-label">Open run-state directory</span>
+      </button>
+      <button class="action-button secondary" data-action="cancel" data-destructive="false">
+        <span class="codicon codicon-close"></span>
+        <span class="action-label">Cancel</span>
+      </button>
+    </footer>
+  </div>
+
+  <script nonce="NONCE">
+    
+    (function() {
+      const vscode = acquireVsCodeApi();
+      let pendingConfirm = null;
+      let pendingResetTimer = null;
+
+      function send(action) {
+        vscode.postMessage({ type: 'action', action: action, confirmed: true });
+        document.querySelectorAll('.action-button').forEach(b => b.setAttribute('disabled', 'true'));
+      }
+
+      function clearPending() {
+        if (pendingConfirm) {
+          const button = document.querySelector('[data-action="' + pendingConfirm + '"]');
+          if (button) {
+            const labelEl = button.querySelector('.action-label');
+            if (labelEl) labelEl.textContent = button.getAttribute('data-original-label') || labelEl.textContent;
+            button.classList.remove('confirming');
+          }
+          pendingConfirm = null;
+        }
+        if (pendingResetTimer) {
+          clearTimeout(pendingResetTimer);
+          pendingResetTimer = null;
+        }
+      }
+
+      document.querySelectorAll('.action-button').forEach(button => {
+        const labelEl = button.querySelector('.action-label');
+        if (labelEl) button.setAttribute('data-original-label', labelEl.textContent);
+
+        button.addEventListener('click', () => {
+          const action = button.getAttribute('data-action');
+          const destructive = button.getAttribute('data-destructive') === 'true';
+          if (!action) return;
+
+          if (destructive && pendingConfirm !== action) {
+            clearPending();
+            pendingConfirm = action;
+            const labelEl2 = button.querySelector('.action-label');
+            if (labelEl2) labelEl2.textContent = 'Click again to confirm';
+            button.classList.add('confirming');
+            pendingResetTimer = setTimeout(clearPending, 5000);
+            return;
+          }
+
+          clearPending();
+          send(action);
+        });
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          clearPending();
+          send('cancel');
+        }
+      });
+    })();
+  
+  </script>
+</body>
+</html>"
+`;
+
+exports[`getRecoveryDialogHtml — snapshot per error kind > renders RUN_STATE_MISSING with minimal action set 1`] = `
+"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src test-csp 'unsafe-inline'; script-src 'nonce-NONCE';">
+  <title>Recovery Required — Issue #42 • Feature Development</title>
+  <style>
+    
+    :root {
+      --spacing-xs: 4px;
+      --spacing-sm: 8px;
+      --spacing-md: 16px;
+      --spacing-lg: 24px;
+      --spacing-xl: 32px;
+      --border-radius: 4px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      line-height: 1.5;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .recovery-dialog {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: var(--spacing-md);
+    }
+
+    .dialog-header {
+      padding-bottom: var(--spacing-md);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      margin-bottom: var(--spacing-md);
+    }
+
+    .dialog-header h1 {
+      font-size: 1.3em;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+    }
+
+    .dialog-header h1 .codicon {
+      color: var(--vscode-editorWarning-foreground, var(--vscode-symbolIcon-fieldForeground));
+    }
+
+    .subtitle {
+      margin-top: var(--spacing-sm);
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.9em;
+    }
+
+    .dialog-body {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--spacing-md);
+    }
+
+    .error-block,
+    .state-block {
+      padding: var(--spacing-md);
+      background: var(--vscode-editorWidget-background);
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: var(--border-radius);
+    }
+
+    .error-block h2,
+    .state-block h2 {
+      font-size: 0.85em;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: var(--spacing-sm);
+    }
+
+    .error-detail {
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.85em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--vscode-textCodeBlock-background);
+      padding: var(--spacing-sm);
+      border-radius: var(--border-radius);
+    }
+
+    .state-fields {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: var(--spacing-xs) var(--spacing-md);
+      font-size: 0.9em;
+    }
+
+    .state-fields dt {
+      color: var(--vscode-descriptionForeground);
+      font-weight: 500;
+    }
+
+    .state-fields dd {
+      color: var(--vscode-foreground);
+    }
+
+    .state-fields .muted {
+      color: var(--vscode-descriptionForeground);
+      font-style: italic;
+    }
+
+    .actions {
+      display: flex;
+      gap: var(--spacing-sm);
+      padding-top: var(--spacing-md);
+      margin-top: var(--spacing-md);
+      border-top: 1px solid var(--vscode-panel-border);
+      flex-wrap: wrap;
+    }
+
+    .action-button {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--spacing-sm);
+      padding: var(--spacing-sm) var(--spacing-md);
+      border: none;
+      border-radius: var(--border-radius);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size);
+      cursor: pointer;
+    }
+
+    .action-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .action-button:focus {
+      outline: 2px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+
+    .action-button.primary {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+    }
+
+    .action-button.primary:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    .action-button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    .action-button.secondary:hover:not(:disabled) {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .action-button.danger {
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground);
+      border: 1px solid var(--vscode-inputValidation-errorBorder);
+    }
+
+    .action-button.danger.confirming {
+      background: var(--vscode-errorForeground, #ff5555);
+      color: var(--vscode-button-foreground);
+    }
+
+    .codicon::before {
+      font-family: codicon;
+      font-size: 14px;
+    }
+
+    .codicon-warning::before { content: "\\ea6c"; }
+    .codicon-debug-continue::before { content: "\\eacf"; }
+    .codicon-play::before { content: "\\eb2c"; }
+    .codicon-debug-restart::before { content: "\\ead4"; }
+    .codicon-trash::before { content: "\\ea81"; }
+    .codicon-folder-opened::before { content: "\\eaf7"; }
+    .codicon-close::before { content: "\\ea76"; }
+    .codicon-circle-outline::before { content: "\\eabc"; }
+
+    @media (max-width: 600px) {
+      .actions { flex-direction: column; }
+      .action-button { width: 100%; justify-content: center; }
+    }
+  
+  </style>
+</head>
+<body>
+  <div class="recovery-dialog">
+    <header class="dialog-header">
+      <h1>
+        <span class="codicon codicon-warning"></span>
+        Recovery Required — Issue #42 • Feature Development
+      </h1>
+      <p class="subtitle">Choose how to recover from this failure.</p>
+    </header>
+
+    <main class="dialog-body">
+      <section class="error-block">
+        <h2>What happened</h2>
+        <pre class="error-detail">No run-state.json found for issue #42.</pre>
+      </section>
+      <section class="state-block">
+        <h2>Pipeline state</h2>
+        <dl class="state-fields">
+          <dt>Run state</dt><dd>none</dd>
+          <dt>Triggering stage</dt><dd>Feature Development</dd>
+          <dt>Producing stage</dt><dd><em class="muted">unknown</em></dd>
+          <dt>Error kind</dt><dd>RUN_STATE_MISSING</dd>
+        </dl>
+      </section>
+    </main>
+
+    <footer class="actions">
+      <button class="action-button secondary" data-action="restart-from-beginning" data-destructive="false">
+        <span class="codicon codicon-debug-restart"></span>
+        <span class="action-label">Restart from beginning</span>
+      </button>
+      <button class="action-button secondary" data-action="open-run-state-directory" data-destructive="false">
+        <span class="codicon codicon-folder-opened"></span>
+        <span class="action-label">Open run-state directory</span>
+      </button>
+      <button class="action-button secondary" data-action="cancel" data-destructive="false">
+        <span class="codicon codicon-close"></span>
+        <span class="action-label">Cancel</span>
+      </button>
+    </footer>
+  </div>
+
+  <script nonce="NONCE">
+    
+    (function() {
+      const vscode = acquireVsCodeApi();
+      let pendingConfirm = null;
+      let pendingResetTimer = null;
+
+      function send(action) {
+        vscode.postMessage({ type: 'action', action: action, confirmed: true });
+        document.querySelectorAll('.action-button').forEach(b => b.setAttribute('disabled', 'true'));
+      }
+
+      function clearPending() {
+        if (pendingConfirm) {
+          const button = document.querySelector('[data-action="' + pendingConfirm + '"]');
+          if (button) {
+            const labelEl = button.querySelector('.action-label');
+            if (labelEl) labelEl.textContent = button.getAttribute('data-original-label') || labelEl.textContent;
+            button.classList.remove('confirming');
+          }
+          pendingConfirm = null;
+        }
+        if (pendingResetTimer) {
+          clearTimeout(pendingResetTimer);
+          pendingResetTimer = null;
+        }
+      }
+
+      document.querySelectorAll('.action-button').forEach(button => {
+        const labelEl = button.querySelector('.action-label');
+        if (labelEl) button.setAttribute('data-original-label', labelEl.textContent);
+
+        button.addEventListener('click', () => {
+          const action = button.getAttribute('data-action');
+          const destructive = button.getAttribute('data-destructive') === 'true';
+          if (!action) return;
+
+          if (destructive && pendingConfirm !== action) {
+            clearPending();
+            pendingConfirm = action;
+            const labelEl2 = button.querySelector('.action-label');
+            if (labelEl2) labelEl2.textContent = 'Click again to confirm';
+            button.classList.add('confirming');
+            pendingResetTimer = setTimeout(clearPending, 5000);
+            return;
+          }
+
+          clearPending();
+          send(action);
+        });
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          clearPending();
+          send('cancel');
+        }
+      });
+    })();
+  
+  </script>
+</body>
+</html>"
+`;

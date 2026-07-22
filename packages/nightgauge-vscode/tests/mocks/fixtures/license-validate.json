@@ -1,0 +1,82 @@
+{
+  "pro": {
+    "valid": true,
+    "status": "active",
+    "tier": "pro",
+    "expiresAt": "2027-01-01T00:00:00.000Z",
+    "expiresSoon": false,
+    "machineBound": true,
+    "machineCount": 1,
+    "features": {
+      "batchProcessing": true,
+      "concurrentPipelines": 3,
+      "pipelineRunsPerDay": 100,
+      "pipelineRunsPerMonth": null,
+      "skillResolveRatePerMin": 60
+    }
+  },
+  "community": {
+    "valid": true,
+    "status": "active",
+    "tier": "community",
+    "expiresAt": null,
+    "expiresSoon": false,
+    "machineBound": false,
+    "machineCount": 0,
+    "features": {
+      "batchProcessing": false,
+      "concurrentPipelines": 1,
+      "pipelineRunsPerDay": 5,
+      "pipelineRunsPerMonth": 50,
+      "skillResolveRatePerMin": 10
+    }
+  },
+  "enterprise": {
+    "valid": true,
+    "status": "active",
+    "tier": "enterprise",
+    "expiresAt": "2027-06-01T00:00:00.000Z",
+    "expiresSoon": false,
+    "machineBound": false,
+    "machineCount": 25,
+    "features": {
+      "batchProcessing": true,
+      "concurrentPipelines": 10,
+      "pipelineRunsPerDay": null,
+      "pipelineRunsPerMonth": null,
+      "skillResolveRatePerMin": 120
+    }
+  },
+  "expired": {
+    "valid": false,
+    "status": "expired",
+    "tier": "pro",
+    "expiresAt": "2025-01-01T00:00:00.000Z",
+    "expiresSoon": false,
+    "machineBound": true,
+    "machineCount": 1,
+    "features": {
+      "batchProcessing": false,
+      "concurrentPipelines": 1,
+      "pipelineRunsPerDay": 0,
+      "pipelineRunsPerMonth": 0,
+      "skillResolveRatePerMin": 0
+    }
+  },
+  "revoked": {
+    "valid": false,
+    "status": "revoked",
+    "tier": "pro",
+    "expiresAt": null,
+    "expiresSoon": false,
+    "machineBound": false,
+    "machineCount": 0,
+    "features": {
+      "batchProcessing": false,
+      "concurrentPipelines": 0,
+      "pipelineRunsPerDay": 0,
+      "pipelineRunsPerMonth": 0,
+      "skillResolveRatePerMin": 0
+    }
+  }
+}

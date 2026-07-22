@@ -1,0 +1,64 @@
+---
+description: Nightgauge coding standards and AI assistant guidelines
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Nightgauge Development Standards
+
+## Philosophy
+
+- **Document what IS** — Current practices, patterns, and conventions
+- **Note what SHOULD BE** — Flag deviations from best practices
+- **Leave room for WHY** — Ask when context is unclear
+
+## Code Standards
+
+### General Principles
+
+- Write self-documenting code with clear naming
+- Keep functions focused and small
+- Prefer composition over inheritance
+- Use dependency injection for testability
+
+### Naming Conventions
+
+- **Classes/Types**: PascalCase
+- **Functions/Methods**: camelCase
+- **Constants**: SCREAMING_SNAKE_CASE
+- **Files**: kebab-case or match class name
+
+### Error Handling
+
+- Always handle errors explicitly
+- Provide meaningful error messages
+- Log errors with sufficient context
+- Never swallow exceptions silently
+
+## Security Requirements
+
+- Never hardcode credentials or secrets
+- Validate all user input at boundaries
+- Use parameterized queries (no string concatenation for SQL)
+- Follow OWASP guidelines
+
+## Testing
+
+- Write tests for new functionality
+- Follow existing test patterns
+- Test edge cases and error conditions
+- Aim for meaningful coverage
+
+## Documentation References
+
+When working on this project, reference:
+
+- `docs/ARCHITECTURE.md` for system design
+- `docs/CODE_STANDARDS.md` for detailed standards
+- `docs/GETTING_STARTED.md` for setup
+- `AGENTS.md` for AI-specific instructions
+
+## Getting More Context
+
+If documentation doesn't exist, suggest using:
+[AI_SMART_SETUP.md](https://github.com/nightgauge/nightgauge/blob/main/AI_SMART_SETUP.md)

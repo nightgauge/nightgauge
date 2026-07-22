@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Nightgauge">
+  <!--
+    Activity-bar glyph: the Nightgauge dial, needle in the go zone.
+    VS Code themes this icon, so it stays MONOCHROME. Geometry matches the
+    full mark (240-degree sweep, needle at 12deg) but graduations are dropped
+    and the needle is a stroke - a filled taper reads as a smudge at 24px.
+  -->
+  <g stroke="#c5c5c5" fill="none" stroke-linecap="round">
+    <path d="M 5.33 17.25 A 7.7 7.7 0 1 1 18.67 17.25" stroke-width="2.2"/>
+    <path d="M 12 13.4 L 17.48 12.24" stroke-width="2.3"/>
+  </g>
+  <circle cx="12" cy="13.4" r="2" fill="#c5c5c5"/>
+</svg>

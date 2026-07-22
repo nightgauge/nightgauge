@@ -1,0 +1,32 @@
+{
+  "id": "ui-pricing-card",
+  "title": "Responsive three-tier pricing card component",
+  "job_class": "ui-creation",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "medium",
+  "instruction": "Build a reusable PricingCards component that renders three tiers (Free, Pro, Enterprise) from a data array. It must be responsive (stack on mobile, row on desktop), highlight the Pro tier, and expose an onSelect(tier) callback. Add unit tests covering rendering of all three tiers and the onSelect callback.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/ui-pricing-card/setup.sh" },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "ux_quality",
+        "weight": 0.5,
+        "guidance": "Is the layout polished, responsive, and is the Pro tier clearly emphasized?"
+      },
+      {
+        "dimension": "correctness",
+        "weight": 0.3,
+        "guidance": "Do all three tiers render and does onSelect fire with the right tier?"
+      },
+      {
+        "dimension": "code_quality",
+        "weight": 0.2,
+        "guidance": "Is the component idiomatic, typed, and free of duplication?"
+      }
+    ]
+  }
+}

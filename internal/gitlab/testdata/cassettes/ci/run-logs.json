@@ -1,0 +1,8 @@
+{
+  "id": 501,
+  "status": "failed",
+  "stage": "test",
+  "name": "lint",
+  "allow_failure": false,
+  "web_url": "https://gitlab.example.com/o/r/-/jobs/501"
+}

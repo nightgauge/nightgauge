@@ -1,0 +1,11 @@
+schema_version: "2"
+project:
+  owner: nightgauge
+  number: 1
+forges:
+  corp-gitlab:
+    kind: gitlab
+    base_url: https://gitlab.example.com
+    graphql_url: https://gitlab.example.com/api/graphql
+    auth_method: token
+    token_env: GITLAB_TOKEN

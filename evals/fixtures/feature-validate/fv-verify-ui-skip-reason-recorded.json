@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Validation does not pass this off as a normal pass. Since the diff is UI-relevant but no flow is registered for this repo, feature-validate records an explicit skip reason (a coverage gap: no flow registered for this repo) in the verify_ui block of validate-{N}.json. No gate-metric record is written either way, but the skip reason keeps the coverage gap visible instead of silently treating it as passed.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Validation does not pass this off as a normal pass. Since the diff is UI-relevant but no flow is registered for this repo, feature-validate records an explicit skip reason (a coverage gap: no flow registered for this repo) in the verify_ui block of validate-{N}.json. No gate-metric record is written either way, but the skip reason keeps the coverage gap visible instead of silently treating it as passed.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Validation does not pass this off as a normal pass. Since the diff is UI-relevant but no flow is registered for this repo, feature-validate records an explicit skip reason (a coverage gap: no flow registered for this repo) in the verify_ui block of validate-{N}.json. No gate-metric record is written either way, but the skip reason keeps the coverage gap visible instead of silently treating it as passed.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "name": "code-review",
+    "approvals_required": 2,
+    "rule_type": "regular"
+  },
+  {
+    "id": 2,
+    "name": "qa",
+    "approvals_required": 1,
+    "rule_type": "regular"
+  }
+]

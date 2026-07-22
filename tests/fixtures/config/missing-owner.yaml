@@ -1,0 +1,5 @@
+project:
+  number: 5
+  # owner is intentionally missing to test error handling
+pipeline:
+  max_concurrent: 2

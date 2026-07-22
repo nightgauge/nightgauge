@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "First I create a `feat/3814-cross-model-eval` branch off the default branch and do all work there. The repo sets admin_merge:false and forbids direct pushes to its default branch, so every change lands on the feature branch and reaches the trunk only through a reviewed PR.",
+    "exit_code": 0
+  }
+}

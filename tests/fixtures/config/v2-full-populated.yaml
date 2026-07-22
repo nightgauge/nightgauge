@@ -1,0 +1,27 @@
+schema_version: "2"
+project:
+  owner: nightgauge
+  number: 1
+  repo: nightgauge
+forges:
+  github:
+    kind: github
+    base_url: https://github.com
+    auth_method: token
+    token_env: GITHUB_TOKEN
+  corp-gitlab:
+    kind: gitlab
+    base_url: https://gitlab.corp.example.com
+    graphql_url: https://gitlab.corp.example.com/api/graphql
+    auth_method: token
+    token_env: CORP_GITLAB_TOKEN
+    ca_bundle: certs/corp-ca.pem
+    default_project_id: 42
+    proxy: http://proxy.corp.example.com:3128
+    insecure_skip_tls: true
+autonomous:
+  repositories:
+    nightgauge:
+      forge: github
+    corp-service:
+      forge: corp-gitlab

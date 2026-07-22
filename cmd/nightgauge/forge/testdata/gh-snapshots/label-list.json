@@ -1,0 +1,4 @@
+[
+  { "id": "L_1", "name": "type:bug", "description": "A defect", "color": "ff0000" },
+  { "id": "L_2", "name": "type:feature", "description": "A new feature", "color": "00ff00" }
+]

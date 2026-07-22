@@ -1,0 +1,35 @@
+npx lint-staged
+
+# Validate generated files are in sync before commit
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "🔍 Pre-commit: Validating generated files..."
+
+# 1. Check IPC client
+echo "  ⚡ Checking IPC client..."
+make generate-ipc-client
+if ! git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts > /dev/null 2>&1; then
+  echo "  ❌ ERROR: IpcClient.generated.ts is out of sync"
+  echo "     Run: make generate-ipc-client"
+  echo "     Then: git add packages/nightgauge-vscode/src/services/IpcClient.generated.ts"
+  exit 1
+fi
+
+# 2. Guard the vendored platform API types (generated upstream; no local generator)
+echo "  📝 Checking vendored platform API types..."
+if ! git diff --cached --quiet -- api/generated/ts/platform-api.ts; then
+  echo "  ⚠️  api/generated/ts/platform-api.ts is generated and vendored —"
+  echo "     hand edits will be overwritten by the next vendored update."
+fi
+
+# 3. Check VSCode package contributions
+echo "  🎨 Checking VSCode package contributions..."
+if ! npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check; then
+  echo "  ❌ ERROR: package.json contributions are out of sync"
+  echo "     Run: npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts"
+  echo "     Then: git add packages/nightgauge-vscode/package.json"
+  exit 1
+fi
+
+echo "  ✅ All generated files are in sync!"

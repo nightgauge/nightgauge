@@ -1,0 +1,20 @@
+{
+  "id": "fd-tests-alongside",
+  "skill": "feature-dev",
+  "description": "Feature-dev writes tests alongside implementation, not after.",
+  "failure_mode": "Model defers all tests to a later stage, leaving feature-dev output untested and the dev context includes_e2e unset.",
+  "prompt": "You are implementing a new SDK service. State when you write its unit tests relative to the implementation.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(alongside|as you implement|same)",
+      "flags": "i",
+      "description": "test-alongside discipline"
+    },
+    {
+      "type": "contains",
+      "value": "test",
+      "ignore_case": true
+    }
+  ]
+}

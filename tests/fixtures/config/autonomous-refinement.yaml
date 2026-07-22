@@ -1,0 +1,17 @@
+owner: nightgauge
+project:
+  number: 1
+autonomous:
+  scan_interval: "30s"
+  max_concurrent: 3
+  budget_ceiling: 0
+  pickup_backlog: false
+  auto_actionable: false
+  refinement_enabled: true
+  refinement_interval: "60s"
+  refinement_max_concurrent: 1
+  safety_rails:
+    circuit_breaker_max: 3
+    rate_limit_per_hour: 20
+    epic_checkpoint: false
+    health_gate_min: 0

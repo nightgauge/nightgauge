@@ -1,0 +1,17 @@
+{
+  "number": 99,
+  "state": "success",
+  "total": 5,
+  "completed": 5,
+  "successful": 5,
+  "failed": 0,
+  "pending": 0,
+  "isTerminal": true,
+  "elapsedSecs": 120,
+  "requiredPassed": true,
+  "requiredCheckNames": ["build", "test"],
+  "checks": [
+    { "name": "build", "status": "completed", "conclusion": "success", "required": true },
+    { "name": "test", "status": "completed", "conclusion": "success", "required": true }
+  ]
+}

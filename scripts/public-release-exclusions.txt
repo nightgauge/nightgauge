@@ -1,0 +1,11 @@
+# Runtime evidence/state that must not enter the certified public root commit.
+.nightgauge/baselines/**
+.nightgauge/logs/**
+.nightgauge/model-evals/evidence/**
+.nightgauge/pipeline/**
+.nightgauge/plans/**
+.nightgauge/release-watch/**
+.nightgauge/skill-evals/**
+
+# Obsolete transform overlays retained only until this release-tooling change lands.
+scripts/public-release-templates/**

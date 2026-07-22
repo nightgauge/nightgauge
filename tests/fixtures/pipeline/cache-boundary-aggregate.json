@@ -1,0 +1,50 @@
+{
+  "v": 2,
+  "date_from": "2026-01-01",
+  "date_to": "2026-01-07",
+  "runs_analyzed": 10,
+  "stage_metrics": {
+    "issue-pickup": {
+      "token_stats": {
+        "input": { "count": 0, "mean": 0 },
+        "cache_read": { "count": 0, "mean": 0 },
+        "cache_creation": { "count": 0, "mean": 0 }
+      }
+    },
+    "feature-planning": {
+      "token_stats": {
+        "input": { "count": 10, "mean": 1000 },
+        "cache_read": { "count": 10, "mean": 20000 },
+        "cache_creation": { "count": 10, "mean": 9000 }
+      }
+    },
+    "feature-dev": {
+      "token_stats": {
+        "input": { "count": 10, "mean": 1000 },
+        "cache_read": { "count": 10, "mean": 98000 },
+        "cache_creation": { "count": 10, "mean": 1000 }
+      }
+    },
+    "feature-validate": {
+      "token_stats": {
+        "input": { "count": 10, "mean": 1000 },
+        "cache_read": { "count": 10, "mean": 97000 },
+        "cache_creation": { "count": 10, "mean": 2000 }
+      }
+    },
+    "pr-create": {
+      "token_stats": {
+        "input": { "count": 10, "mean": 1000 },
+        "cache_read": { "count": 10, "mean": 15000 },
+        "cache_creation": { "count": 10, "mean": 9000 }
+      }
+    },
+    "pr-merge": {
+      "token_stats": {
+        "input": { "count": 10, "mean": 1000 },
+        "cache_read": { "count": 10, "mean": 96000 },
+        "cache_creation": { "count": 10, "mean": 3000 }
+      }
+    }
+  }
+}

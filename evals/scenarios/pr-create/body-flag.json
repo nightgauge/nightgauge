@@ -1,0 +1,19 @@
+{
+  "id": "pc-body-flag",
+  "skill": "pr-create",
+  "description": "pr-create uses --body (with $(cat file)), not the unsupported --body-file.",
+  "failure_mode": "The Go binary `pr create` has no --body-file flag; using it aborts PR creation.",
+  "prompt": "You are creating a PR with the Go binary and have the body in a temp file. Which flag do you pass the body with?",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "--body",
+      "description": "uses --body"
+    },
+    {
+      "type": "not_contains",
+      "value": "--body-file",
+      "description": "the unsupported flag must not appear"
+    }
+  ]
+}

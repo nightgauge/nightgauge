@@ -1,0 +1,23 @@
+{
+  "id": "pm-trust-mergestatestatus",
+  "skill": "pr-merge",
+  "description": "pr-merge trusts mergeStateStatus=CLEAN and does not improvise review-request workarounds.",
+  "failure_mode": "ruleset-precheck --auto-satisfy is broken on copilot_code_review and emits a false blocker; model invents review-request workarounds.",
+  "prompt": "ruleset-precheck reports a copilot_code_review blocker, but `gh pr view --json mergeStateStatus` shows CLEAN. Do you merge?",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "CLEAN"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(merge)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "requestReviews",
+      "description": "no improvised review-request workaround"
+    }
+  ]
+}

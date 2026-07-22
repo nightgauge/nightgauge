@@ -1,0 +1,361 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/nightgauge/nightgauge/blob/main/.nightgauge/config.schema.json",
+  "title": "Nightgauge Configuration",
+  "description": "Schema for .nightgauge/config.yaml — the Nightgauge pipeline configuration file.",
+  "type": "object",
+  "properties": {
+    "owner": {
+      "type": "string",
+      "description": "GitHub organization or user that owns the repository."
+    },
+    "repo": {
+      "type": "string",
+      "description": "GitHub repository name."
+    },
+    "project": {
+      "type": "object",
+      "description": "GitHub Project board configuration.",
+      "properties": {
+        "number": { "type": "integer", "description": "Project board number." },
+        "id": {
+          "type": "string",
+          "description": "Project board node ID (PVT_...)."
+        },
+        "fields": {
+          "type": "object",
+          "description": "Project board field IDs and option IDs.",
+          "properties": {
+            "status": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "options": {
+                  "type": "object",
+                  "properties": {
+                    "backlog": { "type": "string" },
+                    "ready": { "type": "string" },
+                    "in-progress": { "type": "string" },
+                    "in-review": { "type": "string" },
+                    "done": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "priority": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "options": {
+                  "type": "object",
+                  "properties": {
+                    "p0": { "type": "string" },
+                    "p1": { "type": "string" },
+                    "p2": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "size": {
+              "type": "object",
+              "properties": {
+                "id": { "type": "string" },
+                "options": {
+                  "type": "object",
+                  "properties": {
+                    "xs": { "type": "string" },
+                    "s": { "type": "string" },
+                    "m": { "type": "string" },
+                    "l": { "type": "string" },
+                    "xl": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "builtin_workflows": {
+          "type": "object",
+          "description": "GitHub Projects built-in workflow automations.",
+          "properties": {
+            "auto_add_to_project": { "type": "boolean" },
+            "auto_add_sub_issues": { "type": "boolean" },
+            "item_added_to_project": { "type": "boolean" },
+            "item_closed_to_done": { "type": "boolean" },
+            "pr_merged_to_done": { "type": "boolean" },
+            "auto_close_issue": { "type": "boolean" },
+            "auto_archive_days": { "type": "integer" },
+            "pr_linked_to_issue": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "pr": {
+      "type": "object",
+      "description": "Pull request merge configuration.",
+      "properties": {
+        "admin_merge": {
+          "type": "boolean",
+          "description": "Use --admin flag on merge (requires admin permissions). Set false to respect branch protection."
+        },
+        "merge_strategy": {
+          "type": "string",
+          "enum": ["squash", "merge", "rebase"]
+        },
+        "epic_merge_strategy": {
+          "type": "string",
+          "enum": ["squash", "merge", "rebase"]
+        },
+        "delete_branch": { "type": "boolean" },
+        "auto_fix_ci": { "type": "boolean" },
+        "auto_fix_max_attempts": { "type": "integer" },
+        "ci_check_timeout": {
+          "type": "integer",
+          "description": "CI check timeout in seconds."
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "description": "Pipeline execution configuration.",
+      "properties": {
+        "budget_preset": {
+          "type": "string",
+          "enum": ["conservative", "balanced", "generous", "unlimited"]
+        },
+        "max_concurrent": {
+          "type": "integer",
+          "description": "Maximum concurrent pipeline runs. Single source of truth for both drag-to-pipeline and autonomous-mode dispatch. The legacy autonomous.max_concurrent key is deprecated and only honored as a fallback when this is unset.",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "worktree_base": {
+          "type": "string",
+          "description": "Base directory for git worktrees."
+        },
+        "context_schema_repair": {
+          "type": "object",
+          "description": "Context schema self-correction: re-invoke stages when context file fails Zod validation. Appends error-fix instructions to the original SKILL.md prompt. Each repair attempt consumes tokens (~same cost as a stage run). Issue #2552.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable context schema repair. When true, stages are re-invoked with Zod error details if their context file fails validation."
+            },
+            "max_attempts": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 0,
+              "maximum": 5,
+              "description": "Maximum repair attempts per stage per pipeline run. Range: 0-5."
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "model_routing": {
+      "type": "object",
+      "description": "AI model routing configuration. Automatic complexity routing caps at Opus; the premium Fable tier (claude-fable-5, ~2x Opus cost) is never auto-selected and is reachable only via an explicit minimum_model of 'fable', the 'frontier' performance mode, or a per-run model override.",
+      "properties": {
+        "mode": { "type": "string", "enum": ["automatic", "manual", "hybrid"] },
+        "effort_auto": { "type": "boolean" },
+        "minimum_model": {
+          "type": "object",
+          "description": "Minimum model per pipeline stage (tiers: haiku < sonnet < opus < fable). Setting a stage floor of 'fable' opts that stage into the premium frontier tier.",
+          "additionalProperties": { "type": "string", "enum": ["haiku", "sonnet", "opus", "fable"] }
+        },
+        "confidence_threshold": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "orchestration": {
+      "type": "object",
+      "description": "Multi-agent orchestration knobs (epic #3899). Off by default — the WorkflowEngine is opt-in while the epic lands. Budget/agent/concurrency caps use 0 as the 'uncapped / use provider ceiling' sentinel.",
+      "properties": {
+        "disabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable the orchestration engine entirely. The CLAUDE_CODE_DISABLE_WORKFLOWS environment variable forces this on regardless of config."
+        },
+        "prefer_native_offload": {
+          "type": "object",
+          "description": "Per-stage preference for an adapter's native runWorkflow() offload over the portable SdkFanoutRunner floor when the adapter declares native-workflow. pr-create/pr-merge are single-agent and never fanned out.",
+          "properties": {
+            "issue-pickup": { "type": "boolean" },
+            "feature-planning": { "type": "boolean" },
+            "feature-dev": { "type": "boolean" },
+            "feature-validate": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        },
+        "max_usd": {
+          "type": "number",
+          "minimum": 0,
+          "default": 0,
+          "description": "Total USD budget cap for a single orchestrated run. 0 = uncapped."
+        },
+        "max_agents": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Max agents spawned over a whole run. 0 = use the provider safety ceiling; > 0 can only lower it."
+        },
+        "max_concurrency": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Max agents running at once. 0 = use the provider safety ceiling; > 0 can only lower it."
+        }
+      },
+      "additionalProperties": false
+    },
+    "human_in_the_loop": {
+      "type": "object",
+      "description": "Human approval gate configuration.",
+      "properties": {
+        "auto_accept_stages": { "type": "boolean" },
+        "auto_accept_permissions": { "type": "boolean" },
+        "trusted_stages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Stages that run without approval prompts."
+        }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "description": "Knowledge base configuration.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "auto_scaffold": { "type": "boolean" }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "description": "Audit trail configuration.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "features_config": {
+          "type": "string",
+          "description": "Path to audit features config YAML."
+        },
+        "repos": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Repositories to include in audit scope."
+        }
+      }
+    },
+    "self_assessment": {
+      "type": "object",
+      "description": "Skill self-assessment configuration.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "action_mode": {
+          "type": "string",
+          "enum": ["display", "create_issues", "auto_patch"]
+        },
+        "issue_threshold": {
+          "type": "integer",
+          "description": "Minimum friction occurrences before creating an issue."
+        },
+        "severity_threshold": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        },
+        "retention_days": {
+          "type": "integer",
+          "description": "Delete assessment records older than this many days."
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Notification channel configuration.",
+      "properties": {
+        "discord": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "autonomous_discovery": {
+      "type": "object",
+      "description": "Autonomous self-improvement discovery configuration. Controls scheduled release-watch and continuous-improvement runs.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch for autonomous discovery. Set false to disable all scheduled runs."
+        },
+        "kill_switch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Kill switch: when true, monitoring continues but no GitHub issues are created. Use to pause issue creation without disabling infrastructure."
+        },
+        "score_threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 70,
+          "description": "Minimum relevance score (0-100) to auto-create a GitHub issue. Changes below this threshold go to the backlog instead."
+        },
+        "auto_created_label": {
+          "type": "string",
+          "default": "type:chore,area:release-watch",
+          "description": "Comma-separated labels applied to auto-created issues."
+        }
+      },
+      "additionalProperties": false
+    },
+    "discovery_budget": {
+      "type": "object",
+      "description": "Token budget for scheduled discovery runs (separate from main pipeline budget).",
+      "properties": {
+        "release_watch_max_tokens": {
+          "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }],
+          "description": "Maximum tokens per release-watch assessment run. null = no limit."
+        },
+        "continuous_improvement_max_tokens": {
+          "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }],
+          "description": "Maximum tokens per continuous-improvement run. null = no limit."
+        }
+      },
+      "additionalProperties": false
+    },
+    "scheduled_tasks": {
+      "type": "object",
+      "description": "Scheduled task definitions (informational). Execution is driven by GitHub Actions workflows.",
+      "properties": {
+        "release_watch": {
+          "type": "object",
+          "description": "Release-watch daily detection and assessment task.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "schedule": {
+              "type": "string",
+              "description": "Cron schedule string (for documentation purposes)."
+            },
+            "description": { "type": "string" }
+          }
+        },
+        "continuous_improvement": {
+          "type": "object",
+          "description": "Weekly continuous-improvement review task.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "schedule": {
+              "type": "string",
+              "description": "Cron schedule string (for documentation purposes)."
+            },
+            "description": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

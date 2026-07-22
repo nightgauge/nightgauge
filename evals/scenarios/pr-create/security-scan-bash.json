@@ -1,0 +1,19 @@
+{
+  "id": "pc-security-scan-bash",
+  "skill": "pr-create",
+  "description": "pr-create builds the security-scan file list under bash, not zsh mapfile.",
+  "failure_mode": "Under zsh, `mapfile -d ''` yields an empty list, so the security scan silently scans 0 files and reports a FALSE PASS.",
+  "prompt": "In pr-create Phase 2.5 you build a NUL-delimited list of changed files for the security scan. The default shell may be zsh. How do you build the list reliably?",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "bash",
+      "ignore_case": true
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(heredoc|explicit bash|run .* in bash)",
+      "flags": "i"
+    }
+  ]
+}

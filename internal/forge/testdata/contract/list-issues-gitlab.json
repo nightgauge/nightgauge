@@ -1,0 +1,24 @@
+[
+  {
+    "id": 1001,
+    "iid": 1,
+    "title": "First",
+    "description": "",
+    "state": "opened",
+    "labels": ["bug"],
+    "web_url": "https://gl/r/-/issues/1",
+    "assignees": [],
+    "milestone": null
+  },
+  {
+    "id": 1002,
+    "iid": 2,
+    "title": "Second",
+    "description": "",
+    "state": "opened",
+    "labels": [],
+    "web_url": "https://gl/r/-/issues/2",
+    "assignees": [],
+    "milestone": null
+  }
+]

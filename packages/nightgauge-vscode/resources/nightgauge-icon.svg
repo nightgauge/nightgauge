@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="t d">
+  <title id="t">Nightgauge</title>
+  <desc id="d">A machined gauge dial at night, needle resting in the glowing go zone.</desc>
+  <defs><radialGradient id="bg-night" cx="50%" cy="34%" r="90%">
+      <stop offset="0%" stop-color="#2B2F63"/>
+      <stop offset="48%" stop-color="#161C3B"/>
+      <stop offset="100%" stop-color="#0A0E1C"/>
+    </radialGradient></defs>
+  <rect width="256" height="256" rx="58" fill="url(#bg-night)"/>
+  <rect x="1" y="1" width="254" height="254" rx="57" fill="none" stroke="#AFC2FF" stroke-opacity="0.08" stroke-width="2"/>
+  <circle cx="40" cy="42" r="1.5" fill="#C9D6F2" opacity="0.5"/>
+  <circle cx="70" cy="24" r="1" fill="#C9D6F2" opacity="0.32"/>
+  <circle cx="104" cy="32" r="1.2" fill="#C9D6F2" opacity="0.22"/>
+  <circle cx="166" cy="22" r="1.1" fill="#C9D6F2" opacity="0.35"/>
+  <circle cx="224" cy="66" r="1.1" fill="#C9D6F2" opacity="0.28"/>
+  <circle cx="30" cy="96" r="1.1" fill="#C9D6F2" opacity="0.26"/>
+  <circle cx="226" cy="118" r="1" fill="#C9D6F2" opacity="0.2"/>
+  <path d="M 196 32.5 Q 197.21 36.79 201.5 38 Q 197.21 39.21 196 43.5 Q 194.79 39.21 190.5 38 Q 194.79 36.79 196 32.5 Z" fill="#DCE6FA" opacity="0.75"/>
+  
+  <defs>
+    <linearGradient id="ng-track" x1="0" y1="1" x2="0.9" y2="0">
+      <stop offset="0%" stop-color="#3E3A78"/>
+      <stop offset="55%" stop-color="#37509F"/>
+      <stop offset="100%" stop-color="#2F5C93"/>
+    </linearGradient>
+    <radialGradient id="ng-hub" cx="38%" cy="32%" r="75%">
+      <stop offset="0%" stop-color="#FFC978"/>
+      <stop offset="60%" stop-color="#F4AD42"/>
+      <stop offset="100%" stop-color="#D98A1C"/>
+    </radialGradient>
+    <filter id="ng-goGlow" filterUnits="userSpaceOnUse"
+            x="-32" y="-14" width="320" height="320">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+    <filter id="ng-soft" filterUnits="userSpaceOnUse"
+            x="-12" y="6" width="280" height="280">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+    <radialGradient id="ng-face" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2B2F63" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#2B2F63" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#2B2F63" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- dial face: a faint disc that seats the instrument -->
+  <circle cx="128" cy="146" r="70" fill="url(#ng-face)"/>
+
+  <!-- recess shadow: the track sits IN the face, not on it -->
+  <path d="M 58.72 186 A 80 80 0 1 1 197.28 186" fill="none" stroke="#04060D" stroke-width="18"
+        stroke-linecap="round" opacity="0.55" filter="url(#ng-soft)"
+        transform="translate(0 2.5)"/>
+
+  <!-- track: the unmeasured span -->
+  <path d="M 58.72 186 A 80 80 0 1 1 197.28 186" fill="none" stroke="url(#ng-track)" stroke-width="15" stroke-linecap="round"/>
+
+  <!-- go zone: lit, not painted -->
+  <path d="M 197.28 106 A 80 80 0 0 1 197.28 186" fill="none" stroke="#3DDC97" stroke-width="15" stroke-linecap="round"
+        opacity="0.65" filter="url(#ng-goGlow)"/>
+  <path d="M 197.28 106 A 80 80 0 0 1 197.28 186" fill="none" stroke="#3DDC97" stroke-width="15" stroke-linecap="round"/>
+  <path d="M 199.9 110.93 A 80 80 0 0 1 199.9 181.07" fill="none" stroke="#8CF5C6" stroke-width="4.6" stroke-linecap="round" opacity="0.9"/>
+
+  <g>
+    <line x1="75.17" y1="176.5" x2="66.08" y2="181.75" stroke="#9FB2CC" stroke-width="5" stroke-linecap="round" opacity="0.95"/>
+    <line x1="75.17" y1="115.5" x2="66.08" y2="110.25" stroke="#9FB2CC" stroke-width="5" stroke-linecap="round" opacity="0.95"/>
+    <line x1="128" y1="85" x2="128" y2="74.5" stroke="#9FB2CC" stroke-width="5" stroke-linecap="round" opacity="0.95"/>
+    <line x1="180.83" y1="115.5" x2="189.92" y2="110.25" stroke="#9FB2CC" stroke-width="5" stroke-linecap="round" opacity="0.95"/>
+    <line x1="63.99" y1="157.29" x2="57.59" y2="158.42" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+    <line x1="63.99" y1="134.71" x2="57.59" y2="133.58" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+    <line x1="86.22" y1="96.21" x2="82.04" y2="91.23" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+    <line x1="105.77" y1="84.92" x2="103.55" y2="78.81" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+    <line x1="150.23" y1="84.92" x2="152.45" y2="78.81" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+    <line x1="169.78" y1="96.21" x2="173.96" y2="91.23" stroke="#9FB2CC" stroke-width="3.2" stroke-linecap="round" opacity="0.5"/>
+  </g>
+
+  <!-- needle: faceted, machined -->
+  <path d="M 123.25,152.53 L 195.49 131.65 L 121.01,141.97 Z" fill="#000" opacity="0.35" filter="url(#ng-soft)" transform="translate(1 3)"/>
+  <path d="M 123.25,152.53 L 195.49 131.65 L 122.13,147.25 Z" fill="#FFCF80"/>
+  <path d="M 122.13,147.25 L 195.49 131.65 L 121.01,141.97 Z" fill="#E19222"/>
+
+  <!-- hub: collar, inset, pin -->
+  <circle cx="128" cy="146" r="15" fill="#04060D" opacity="0.5" filter="url(#ng-soft)" transform="translate(0 2)"/>
+  <circle cx="128" cy="146" r="14" fill="url(#ng-hub)"/>
+  <circle cx="128" cy="146" r="8.6" fill="#101830"/>
+  <circle cx="128" cy="146" r="8.6" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="1"/>
+  <circle cx="128" cy="146" r="3" fill="#F4AD42"/>
+  <path d="M 126.18 135.66 A 10.5 10.5 0 0 1 117.66 144.18" fill="none" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="2.2" stroke-linecap="round"/>
+
+</svg>

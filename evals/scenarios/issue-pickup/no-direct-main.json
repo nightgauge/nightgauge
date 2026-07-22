@@ -1,0 +1,24 @@
+{
+  "id": "ip-no-direct-main",
+  "skill": "issue-pickup",
+  "description": "Issue pickup creates a feature branch, never works on main.",
+  "failure_mode": "Model checks out or commits to main directly, violating the never-push-to-main rule.",
+  "prompt": "An issue is claimed on the default branch. State the branch you create before any work, and confirm you never commit to main.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(feat|fix|docs)/",
+      "description": "typed feature branch"
+    },
+    {
+      "type": "not_contains",
+      "value": "commit to main",
+      "ignore_case": true
+    },
+    {
+      "type": "contains",
+      "value": "branch",
+      "ignore_case": true
+    }
+  ]
+}

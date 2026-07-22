@@ -1,0 +1,2012 @@
+{
+  "name": "nightgauge-vscode",
+  "displayName": "Nightgauge",
+  "description": "The cockpit for the Nightgauge autonomous software factory — queue your backlog, watch the pipeline run dark, review evidence for every merge.",
+  "version": "0.1.0",
+  "publisher": "nightgauge",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nightgauge/nightgauge"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "icon": "resources/nightgauge-icon.png",
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "nightgauge",
+    "sdlc",
+    "pipeline",
+    "claude",
+    "automation"
+  ],
+  "homepage": "https://nightgauge.dev",
+  "galleryBanner": {
+    "color": "#0A0E1C",
+    "theme": "dark"
+  },
+  "activationEvents": [
+    "workspaceContains:.nightgauge/pipeline",
+    "workspaceContains:.nightgauge/plans"
+  ],
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nightgauge-pipeline",
+          "title": "Nightgauge",
+          "icon": "resources/nightgauge-activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "nightgauge-pipeline": [
+        {
+          "id": "nightgauge.pipelineView",
+          "name": "Pipeline",
+          "icon": "$(rocket)",
+          "contextualTitle": "Nightgauge Pipeline"
+        },
+        {
+          "id": "nightgauge.workflowView",
+          "name": "Workflow",
+          "icon": "$(circuit-board)",
+          "contextualTitle": "Live Workflow Tree",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "nightgauge.repositoriesView",
+          "name": "Repositories",
+          "icon": "$(repo)",
+          "contextualTitle": "Workspace Repositories"
+        },
+        {
+          "id": "nightgauge.queryResults",
+          "name": "Query Results",
+          "icon": "$(search)",
+          "contextualTitle": "Query Results",
+          "when": "nightgauge.hasQueryResults"
+        },
+        {
+          "id": "nightgauge.knowledgeView",
+          "name": "Knowledge",
+          "icon": "$(book)",
+          "contextualTitle": "Nightgauge Knowledge Base",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "nightgauge.activeIssueKnowledgeView",
+          "name": "Active Issue Knowledge",
+          "icon": "$(book)",
+          "contextualTitle": "Active Issue Knowledge",
+          "visibility": "collapsed"
+        },
+        {
+          "id": "nightgauge.attentionView",
+          "name": "Attention",
+          "icon": "$(bell-dot)",
+          "contextualTitle": "Nightgauge Action Center"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "nightgauge.pipelineView",
+        "contents": "Welcome to Nightgauge.\n\nThis repository isn't set up for Nightgauge yet. Run the quick setup steps below to get started — nothing is written to your repo until you opt in.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)\n[$(info) Learn More](command:nightgauge.quickstartLearnMore)\n\nInitialize creates .nightgauge/config.yaml, standard labels, and links your GitHub Project board. AI-Ready adds AGENTS.md, CLAUDE.md, and focused docs for agent use.",
+        "when": "!nightgauge.repoInitialized"
+      },
+      {
+        "view": "nightgauge.pipelineView",
+        "contents": "No active pipeline.\nDrag an issue or epic from Ready Items to start.",
+        "when": "nightgauge.repoInitialized && !nightgauge.pipelineRunning"
+      },
+      {
+        "view": "nightgauge.repositoriesView",
+        "contents": "This repository isn't set up for Nightgauge yet.\n\n[$(rocket) Initialize Repository](command:nightgauge.quickstartRepoInit)\n[$(book) Make Repo AI-Ready](command:nightgauge.quickstartSmartSetup)",
+        "when": "!nightgauge.repoInitialized"
+      },
+      {
+        "view": "nightgauge.queryResults",
+        "contents": "Run a query to see results.\n[Query Project Items](command:nightgauge.queryProjectItems)",
+        "when": "!nightgauge.hasQueryResults"
+      },
+      {
+        "view": "nightgauge.knowledgeView",
+        "contents": "No knowledge entries yet.\nRun the pipeline or create entries manually."
+      },
+      {
+        "view": "nightgauge.attentionView",
+        "contents": "$(check) All clear\nNo decisions pending. The fleet is steering itself.",
+        "when": "!nightgauge.attentionHasRequests"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nightgauge.quickstartRepoInit",
+        "title": "Nightgauge: Initialize Repository (Quickstart)",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.quickstartSmartSetup",
+        "title": "Nightgauge: Make Repo AI-Ready (Quickstart)",
+        "icon": "$(book)"
+      },
+      {
+        "command": "nightgauge.quickstartLearnMore",
+        "title": "Nightgauge: Quickstart Docs"
+      },
+      {
+        "command": "nightgauge.showGettingStarted",
+        "title": "Nightgauge: Show Getting Started",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.refreshRepoInitializedContext",
+        "title": "Nightgauge: Refresh Initialization Status"
+      },
+      {
+        "command": "nightgauge.runStage",
+        "title": "Nightgauge: Run Stage...",
+        "icon": "$(play)"
+      },
+      {
+        "command": "nightgauge.runInteractiveStage",
+        "title": "Nightgauge: Run Interactive Stage...",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "nightgauge.showDashboard",
+        "title": "Nightgauge: Show Dashboard",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "nightgauge.rescrubDashboardHistory",
+        "title": "Nightgauge: Rescrub Dashboard History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "nightgauge.exportTelemetry",
+        "title": "Nightgauge: Export Telemetry Analytics",
+        "icon": "$(export)"
+      },
+      {
+        "command": "nightgauge.stopPipeline",
+        "title": "Nightgauge: Stop Pipeline",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "nightgauge.stopBatchAfterCurrent",
+        "title": "Nightgauge: Stop After Current Issue",
+        "icon": "$(debug-step-out)"
+      },
+      {
+        "command": "nightgauge.pausePipeline",
+        "title": "Nightgauge: Pause Pipeline",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "nightgauge.resumePipeline",
+        "title": "Nightgauge: Resume Pipeline",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "nightgauge.refreshPipeline",
+        "title": "Nightgauge: Refresh Pipeline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.viewContext",
+        "title": "View Context File",
+        "icon": "$(json)"
+      },
+      {
+        "command": "nightgauge.retryStage",
+        "title": "Retry Stage",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "nightgauge.retryFromPhase",
+        "title": "Retry from This Phase",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "nightgauge.refreshProjectBoard",
+        "title": "Nightgauge: Refresh Project Board",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.pickupIssue",
+        "title": "Nightgauge: Pick Up Issue",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "nightgauge.selectPerformanceMode",
+        "title": "Nightgauge: Select Performance Mode",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "nightgauge.viewIssueOnGitHub",
+        "title": "View on GitHub",
+        "icon": "$(github)"
+      },
+      {
+        "command": "nightgauge.showOutputWindow",
+        "title": "Nightgauge: Show Output Window",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "nightgauge-pipeline.showSlotOutput",
+        "title": "Show Output",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "nightgauge.clearOutputWindow",
+        "title": "Nightgauge: Clear Output Window",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.copyOutputToClipboard",
+        "title": "Nightgauge: Copy Output to Clipboard",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "nightgauge.cleanupSessionLogs",
+        "title": "Nightgauge: Clean Up Session Logs",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "nightgauge.setupPlugins",
+        "title": "Nightgauge: Setup Claude Code Plugins",
+        "icon": "$(extensions)"
+      },
+      {
+        "command": "nightgauge.setupCodex",
+        "title": "Nightgauge: Setup Codex Commands",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "nightgauge.resetPipeline",
+        "title": "Nightgauge: Reset Pipeline",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.abortPipeline",
+        "title": "Nightgauge: Abort Pipeline",
+        "icon": "$(error)"
+      },
+      {
+        "command": "nightgauge.resetSession",
+        "title": "Nightgauge: Reset Session Metrics",
+        "icon": "$(history)"
+      },
+      {
+        "command": "nightgauge.selectTargetBranch",
+        "title": "Nightgauge: Select Target Branch",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "nightgauge.showSettings",
+        "title": "Nightgauge: Open Settings",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nightgauge.editTeamConfig",
+        "title": "Nightgauge: Edit Team Config",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "nightgauge.switchAdapter",
+        "title": "Nightgauge: Switch Execution Adapter",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "nightgauge.disableAutoAccept",
+        "title": "Nightgauge: Disable Auto-Accept",
+        "icon": "$(shield)"
+      },
+      {
+        "command": "nightgauge.sortProjectBoard",
+        "title": "Nightgauge: Sort Project Board",
+        "icon": "$(sort-precedence)"
+      },
+      {
+        "command": "nightgauge.filterProjectBoard",
+        "title": "Nightgauge: Filter Project Board",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "nightgauge.searchProjectBoard",
+        "title": "Nightgauge: Search Project Board",
+        "icon": "$(search)"
+      },
+      {
+        "command": "nightgauge.clearSearchProjectBoard",
+        "title": "Nightgauge: Clear Search",
+        "icon": "$(close)"
+      },
+      {
+        "command": "nightgauge.sortRepositoriesView",
+        "title": "Sort Status Group",
+        "icon": "$(sort-precedence)"
+      },
+      {
+        "command": "nightgauge.filterRepositoriesView",
+        "title": "Filter Status Group",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "nightgauge.repo.toggleSequential",
+        "title": "Toggle Sequential Mode",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nightgauge.repo.setMaxConcurrent",
+        "title": "Set Max Concurrent Pipelines…",
+        "icon": "$(symbol-number)"
+      },
+      {
+        "command": "nightgauge.searchRepositoriesView",
+        "title": "Search Status Group",
+        "icon": "$(search)"
+      },
+      {
+        "command": "nightgauge.projectBoard.expandAll",
+        "title": "Nightgauge: Expand All Epic Groups",
+        "icon": "$(expand-all)"
+      },
+      {
+        "command": "nightgauge.projectBoard.collapseAll",
+        "title": "Nightgauge: Collapse All Epic Groups",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "nightgauge.selectAll",
+        "title": "Nightgauge: Select All Issues",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "nightgauge.runEpicBatch",
+        "title": "Nightgauge: Run All Issues in Epic",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "nightgauge.addEpicToPipeline",
+        "title": "Nightgauge: Add Epic to Pipeline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nightgauge.stopQueueAfterCurrent",
+        "title": "Nightgauge: Stop After Current Issue",
+        "icon": "$(debug-step-out)"
+      },
+      {
+        "command": "nightgauge.startPipelineForIssue",
+        "title": "Nightgauge: Start Pipeline for Issue",
+        "icon": "$(play)"
+      },
+      {
+        "command": "nightgauge.runPipelineWithModel",
+        "title": "Nightgauge: Run Pipeline with Model...",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.removeFromQueue",
+        "title": "Nightgauge: Remove from Queue",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "nightgauge.clearQueue",
+        "title": "Nightgauge: Clear Queue",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.resumeQueue",
+        "title": "Nightgauge: Resume Queue",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "nightgauge.configureDiscordNotifications",
+        "title": "Nightgauge: Configure Discord Notifications",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "nightgauge.configureMattermostNotifications",
+        "title": "Nightgauge: Configure Mattermost Notifications",
+        "icon": "$(bell)"
+      },
+      {
+        "command": "nightgauge.configureMattermostWorkspace",
+        "title": "Nightgauge: Configure Mattermost Workspace",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nightgauge.telemetrySettings",
+        "title": "Nightgauge: Telemetry Settings",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "nightgauge.openTelemetrySettingsPanel",
+        "title": "Nightgauge: Open Telemetry Settings Panel",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "nightgauge.clearCompletedIssues",
+        "title": "Nightgauge: Clear Completed Issues",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.clearFailedIssues",
+        "title": "Nightgauge: Clear Failed Issues",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.clearPipelineHistory",
+        "title": "Nightgauge: Clear Pipeline History",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nightgauge.retryFailedIssue",
+        "title": "Nightgauge: Retry Failed Issue",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "nightgauge.viewQueuedIssue",
+        "title": "Nightgauge: View Queued Issue on GitHub",
+        "icon": "$(github)"
+      },
+      {
+        "command": "nightgauge.moveQueueItemUp",
+        "title": "Nightgauge: Move Queue Item Up",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "nightgauge.moveQueueItemDown",
+        "title": "Nightgauge: Move Queue Item Down",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "nightgauge.removeQueueItem",
+        "title": "Nightgauge: Remove from Queue",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "nightgauge.retryQueueItem",
+        "title": "Nightgauge: Retry Failed Queue Item",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.addIssueToPipeline",
+        "title": "Nightgauge: Add Issue to Pipeline",
+        "icon": "$(add)"
+      },
+      {
+        "command": "nightgauge.removeIssueFromPipeline",
+        "title": "Nightgauge: Remove Issue from Pipeline",
+        "icon": "$(remove)"
+      },
+      {
+        "command": "nightgauge.focusPipelineView",
+        "title": "Nightgauge: Focus Pipeline View"
+      },
+      {
+        "command": "nightgauge.focusProjectBoardView",
+        "title": "Nightgauge: Focus Project Board View"
+      },
+      {
+        "command": "nightgauge.openRepoInGitHub",
+        "title": "Nightgauge: Open Repository in GitHub",
+        "icon": "$(github)"
+      },
+      {
+        "command": "nightgauge.refreshRepositories",
+        "title": "Nightgauge: Refresh Repositories",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.refreshRepository",
+        "title": "Nightgauge: Refresh Repository",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.debugDumpAutonomousState",
+        "title": "Nightgauge: [Debug] Dump Autonomous State"
+      },
+      {
+        "command": "nightgauge.queryProjectItems",
+        "title": "Nightgauge: Query Project Items",
+        "icon": "$(search)"
+      },
+      {
+        "command": "nightgauge.saveQuery",
+        "title": "Nightgauge: Save Query",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "nightgauge.loadSavedQuery",
+        "title": "Nightgauge: Load Saved Query",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "nightgauge.deleteSavedQuery",
+        "title": "Nightgauge: Delete Saved Query",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "nightgauge.manageSavedQueries",
+        "title": "Nightgauge: Manage Saved Queries",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "nightgauge.clearQuery",
+        "title": "Nightgauge: Clear Query",
+        "icon": "$(close)"
+      },
+      {
+        "command": "nightgauge.refreshQueryResults",
+        "title": "Nightgauge: Refresh Query Results",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.checkEpicCompletion",
+        "title": "Nightgauge: Check Epic Completion",
+        "icon": "$(tasklist)"
+      },
+      {
+        "command": "nightgauge.adapterDoctor",
+        "title": "Nightgauge: Adapter Doctor",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "nightgauge.runPipelineHealth",
+        "title": "Nightgauge: Run Pipeline Health Check",
+        "icon": "$(heart-filled)"
+      },
+      {
+        "command": "nightgauge.recalibrateHealth",
+        "title": "Nightgauge: Recalibrate Health Score Baseline",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.showBrownfieldDashboard",
+        "title": "Nightgauge: Show Brownfield Dashboard",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "nightgauge.openKnowledgeValueDashboard",
+        "title": "Nightgauge: Open Knowledge Value Dashboard",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "nightgauge.resetUsageCounter",
+        "title": "Nightgauge: Reset Usage Counter",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.searchKnowledge",
+        "title": "Nightgauge: Search Knowledge",
+        "icon": "$(search)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
+        "command": "nightgauge.copyWikiLink",
+        "title": "Nightgauge: Copy Wiki-Link",
+        "icon": "$(link)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
+        "command": "nightgauge.knowledge.newEntry",
+        "title": "Nightgauge: New Knowledge Entry",
+        "icon": "$(new-file)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
+        "command": "nightgauge.knowledge.scaffoldForIssue",
+        "title": "Nightgauge: Scaffold Knowledge for Issue",
+        "icon": "$(add)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
+        "command": "nightgauge.knowledge.newADR",
+        "title": "Nightgauge: New ADR",
+        "icon": "$(law)",
+        "category": "Nightgauge Knowledge"
+      },
+      {
+        "command": "nightgauge.signIn",
+        "title": "Nightgauge: Sign In",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "nightgauge.signOut",
+        "title": "Nightgauge: Sign Out",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "nightgauge.signInWithGitHub",
+        "title": "Nightgauge: Sign In with GitHub",
+        "icon": "$(mark-github)"
+      },
+      {
+        "command": "nightgauge.manageSubscription",
+        "title": "Nightgauge: Manage Subscription",
+        "icon": "$(credit-card)"
+      },
+      {
+        "command": "nightgauge.activateLicense",
+        "title": "Nightgauge: Activate License",
+        "icon": "$(key)"
+      },
+      {
+        "command": "nightgauge.startTrial",
+        "title": "Nightgauge: Start Free Trial",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.openUpgradeUrl",
+        "title": "Nightgauge: Upgrade to Pro",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.openManageSubscription",
+        "title": "Nightgauge: Manage Subscription",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "nightgauge.openSubscriptionUrl",
+        "title": "Nightgauge: Open Subscription URL",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "nightgauge.showMachineBinding",
+        "title": "Nightgauge: Show Machine Binding",
+        "icon": "$(vm)"
+      },
+      {
+        "command": "nightgauge.stopSlot",
+        "title": "Nightgauge: Stop Issue Pipeline",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "nightgauge.stopEpic",
+        "title": "Nightgauge: Stop Epic",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "nightgauge.showPipelineQuickActions",
+        "title": "Nightgauge: Pipeline Controls"
+      },
+      {
+        "command": "nightgauge.setConcurrentSlots",
+        "title": "Set Concurrent Slots",
+        "category": "Nightgauge",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "nightgauge.autonomousRun",
+        "title": "Autonomous: Run",
+        "category": "Nightgauge",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nightgauge.autonomousDryRun",
+        "title": "Autonomous: Dry Run (Preview)",
+        "category": "Nightgauge",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "nightgauge.autonomousPause",
+        "title": "Autonomous: Pause",
+        "category": "Nightgauge",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "nightgauge.autonomousResume",
+        "title": "Autonomous: Resume",
+        "category": "Nightgauge",
+        "icon": "$(debug-continue)"
+      },
+      {
+        "command": "nightgauge.autonomousStop",
+        "title": "Autonomous: Stop",
+        "category": "Nightgauge",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "nightgauge.autonomousStatus",
+        "title": "Autonomous: Status",
+        "category": "Nightgauge",
+        "icon": "$(info)"
+      },
+      {
+        "command": "nightgauge.autonomousSelectRepos",
+        "title": "Autonomous: Select Repos",
+        "category": "Nightgauge",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "nightgauge.autonomousClearQuotaCooldown",
+        "title": "Autonomous: Clear Quota Cooldown",
+        "category": "Nightgauge",
+        "icon": "$(watch)"
+      },
+      {
+        "command": "nightgauge.repositoriesToggleAutoRefresh",
+        "title": "Repositories: Pause Auto-Refresh",
+        "category": "Nightgauge",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "nightgauge.repositoriesToggleAutoRefresh.resume",
+        "title": "Repositories: Resume Auto-Refresh",
+        "category": "Nightgauge",
+        "icon": "$(sync-ignored)"
+      },
+      {
+        "command": "nightgauge.repositories.includeAll",
+        "title": "Repositories: Include All Repos in Autonomous Scan",
+        "category": "Nightgauge",
+        "icon": "$(check-all)"
+      },
+      {
+        "command": "nightgauge.repositories.excludeAll",
+        "title": "Repositories: Exclude All Repos from Autonomous Scan",
+        "category": "Nightgauge",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "nightgauge.attentionRefresh",
+        "title": "Nightgauge: Refresh Action Center",
+        "category": "Nightgauge",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "nightgauge.attentionResolve",
+        "title": "Nightgauge: Resolve Decision",
+        "icon": "$(check)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "nightgauge.signIn",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.signOut",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.signInWithGitHub",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.manageSubscription",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.activateLicense",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.startTrial",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.openUpgradeUrl",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.openManageSubscription",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.openSubscriptionUrl",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.showMachineBinding",
+          "when": "nightgauge.cloudEnabled"
+        },
+        {
+          "command": "nightgauge.editTeamConfig",
+          "when": "nightgauge.cloudEnabled"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "nightgauge.autonomousRun",
+          "when": "view =~ /^nightgauge\\.pipeline/ && !nightgauge.autonomousRunning && !nightgauge.autonomousResumable && !nightgauge.pipelineRunning",
+          "group": "navigation@0"
+        },
+        {
+          "command": "nightgauge.autonomousResume",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.autonomousResumable && !nightgauge.pipelineRunning",
+          "group": "navigation@0"
+        },
+        {
+          "command": "nightgauge.autonomousPause",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.autonomousRunning",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.autonomousStop",
+          "when": "view =~ /^nightgauge\\.pipeline/ && (nightgauge.autonomousRunning || nightgauge.autonomousResumable)",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.pickupIssue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && !nightgauge.pipelineRunning && !nightgauge.autonomousRunning && !nightgauge.autonomousResumable",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.stopPipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.pipelineRunning",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.stopEpic",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.hasRunningEpics",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.stopBatchAfterCurrent",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.concurrentSlotsActive && !nightgauge.stopAfterCurrentBatch",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.stopQueueAfterCurrent",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.pipelineRunning && !nightgauge.concurrentSlotsActive && nightgauge.queueHasActiveItems && !nightgauge.stopAfterCurrentQueue",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.pausePipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.pipelineRunning && !nightgauge.pipelinePaused",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.resumePipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.pipelinePaused",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.refreshPipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@3"
+        },
+        {
+          "command": "nightgauge.showDashboard",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@4"
+        },
+        {
+          "command": "nightgauge.showOutputWindow",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@5"
+        },
+        {
+          "command": "nightgauge.resetPipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@6"
+        },
+        {
+          "command": "nightgauge.abortPipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/ && nightgauge.pipelineRunning",
+          "group": "navigation@6"
+        },
+        {
+          "command": "nightgauge.showSettings",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@7"
+        },
+        {
+          "command": "nightgauge.setConcurrentSlots",
+          "when": "view =~ /^nightgauge\\.pipeline/",
+          "group": "navigation@8"
+        },
+        {
+          "command": "nightgauge.refreshRepositories",
+          "when": "view == nightgauge.repositoriesView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.repositoriesToggleAutoRefresh",
+          "when": "view == nightgauge.repositoriesView && nightgauge.repositoriesAutoRefresh",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.repositoriesToggleAutoRefresh.resume",
+          "when": "view == nightgauge.repositoriesView && !nightgauge.repositoriesAutoRefresh",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.repositories.includeAll",
+          "when": "view == nightgauge.repositoriesView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "nightgauge.repositories.excludeAll",
+          "when": "view == nightgauge.repositoriesView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "nightgauge.searchKnowledge",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.knowledge.newEntry",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nightgauge.knowledge.scaffoldForIssue",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "nightgauge.attentionRefresh",
+          "when": "view == nightgauge.attentionView",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nightgauge.refreshRepository",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.attentionResolve",
+          "when": "view == nightgauge.attentionView && viewItem == attention.request",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.runStage",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == stage-pending",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.runStage",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == stage-bookend-pending",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.retryStage",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == stage-failed",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.retryStage",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == stage-running && !nightgauge.pipelineRunning",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.retryFromPhase",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == phase-failed",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.viewContext",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^stage-(complete|failed|skipped|deferred|bookend-complete|bookend-failed)/",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge.moveQueueItemUp",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.moveQueueItemDown",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge.removeFromQueue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready|completed|failed)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "nightgauge.removeIssueFromPipeline",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\./",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.viewQueuedIssue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\./",
+          "group": "inline@4"
+        },
+        {
+          "command": "nightgauge.retryQueueItem",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == queuedIssue.failed",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.clearQueue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == queueSection",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.resumeQueue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == queueSection",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge.clearCompletedIssues",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == completed-section",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.clearFailedIssues",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == failed-section",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.retryFailedIssue",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == failed-issue",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.openRepoInGitHub",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge.repo.setMaxConcurrent",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
+          "group": "inline@3"
+        },
+        {
+          "command": "nightgauge.repo.toggleSequential",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
+          "group": "2_autonomous@1"
+        },
+        {
+          "command": "nightgauge.repo.setMaxConcurrent",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^repository/",
+          "group": "2_autonomous@2"
+        },
+        {
+          "command": "nightgauge.sortRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.filterRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge.searchRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "inline@3"
+        },
+        {
+          "command": "nightgauge.sortRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "1_sort@1"
+        },
+        {
+          "command": "nightgauge.filterRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "1_sort@2"
+        },
+        {
+          "command": "nightgauge.searchRepositoriesView",
+          "when": "view == nightgauge.repositoriesView && viewItem =~ /^issueSummary-(ready|inProgress|backlog)/",
+          "group": "1_sort@3"
+        },
+        {
+          "command": "nightgauge.stopSlot",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem == concurrentSlot.running",
+          "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.stopEpic",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^concurrentSlot\\.running/ && nightgauge.hasRunningEpics",
+          "group": "inline@2"
+        },
+        {
+          "command": "nightgauge-pipeline.showSlotOutput",
+          "when": "view =~ /^nightgauge\\.pipeline/ && viewItem =~ /^concurrentSlot\\./",
+          "group": "inline@3"
+        },
+        {
+          "command": "nightgauge.knowledge.newEntry",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "1_knowledge@1"
+        },
+        {
+          "command": "nightgauge.knowledge.scaffoldForIssue",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "1_knowledge@2"
+        },
+        {
+          "command": "nightgauge.knowledge.newADR",
+          "when": "view == nightgauge.knowledgeView",
+          "group": "1_knowledge@3"
+        },
+        {
+          "command": "nightgauge.copyWikiLink",
+          "when": "view == nightgauge.knowledgeView && viewItem == knowledgeFile",
+          "group": "1_knowledge@4"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "nightgauge.searchKnowledge",
+        "key": "ctrl+shift+k",
+        "mac": "cmd+shift+k"
+      },
+      {
+        "command": "nightgauge.showOutputWindow",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o"
+      },
+      {
+        "command": "nightgauge.clearOutputWindow",
+        "key": "ctrl+alt+shift+o",
+        "mac": "cmd+alt+shift+o"
+      },
+      {
+        "command": "nightgauge.showSettings",
+        "key": "ctrl+,",
+        "mac": "cmd+,",
+        "when": "activeViewlet == workbench.view.extension.nightgauge-pipeline"
+      },
+      {
+        "command": "nightgauge.clearPipelineHistory",
+        "key": "ctrl+shift+x",
+        "mac": "cmd+shift+x"
+      },
+      {
+        "command": "nightgauge.removeIssueFromPipeline",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\./"
+      },
+      {
+        "command": "nightgauge.moveQueueItemUp",
+        "key": "ctrl+shift+up",
+        "mac": "cmd+shift+up",
+        "when": "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/"
+      },
+      {
+        "command": "nightgauge.moveQueueItemDown",
+        "key": "ctrl+shift+down",
+        "mac": "cmd+shift+down",
+        "when": "focusedView =~ /^nightgauge\\.pipeline/ && viewItem =~ /^queuedIssue\\.(pending|ready)$/"
+      },
+      {
+        "command": "nightgauge.focusPipelineView",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      },
+      {
+        "command": "nightgauge.focusProjectBoardView",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b"
+      }
+    ],
+    "configuration": {
+      "title": "Nightgauge",
+      "properties": {
+        "nightgauge.cloud.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable cloud features (hosted dashboard, team management, remote pipeline control, accounts, billing). Off by default while cloud is in development — the entire local pipeline runs free without it. Turning this on reveals the account, subscription, and team command surface.",
+          "order": 1
+        },
+        "nightgauge.dashboardUrl": {
+          "type": "string",
+          "default": "https://dashboard.nightgauge.dev",
+          "description": "Base URL for the Nightgauge web dashboard. Deep-link commands append route paths to this value.",
+          "order": 5
+        },
+        "nightgauge.authProvider": {
+          "type": "string",
+          "enum": [
+            "max",
+            "bedrock",
+            "vertex"
+          ],
+          "default": "max",
+          "description": "Authentication provider for Claude API"
+        },
+        "nightgauge.defaultModel": {
+          "type": "string",
+          "enum": [
+            "haiku",
+            "sonnet",
+            "opus",
+            "fable"
+          ],
+          "enumDescriptions": [
+            "Haiku — fastest, cheapest; lightweight tasks",
+            "Sonnet — balanced speed and capability (default)",
+            "Opus — most capable; recommended for hard work",
+            "Fable 5 — premium frontier tier, ~2× Opus cost. Applies to EVERY stage; use deliberately or prefer the 'frontier' performance mode which limits Fable to reasoning stages."
+          ],
+          "default": "sonnet",
+          "description": "Default model for pipeline stages. Automatic routing never selects Fable; setting it here forces Fable on every stage."
+        },
+        "nightgauge.contextPath": {
+          "type": "string",
+          "default": ".nightgauge/pipeline",
+          "description": "Path to pipeline context files relative to git root"
+        },
+        "nightgauge.plansPath": {
+          "type": "string",
+          "default": ".nightgauge/plans",
+          "description": "Path to plan files relative to git root"
+        },
+        "nightgauge.core.adapter": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "gemini",
+            "gemini-sdk",
+            "lm-studio",
+            "ollama",
+            "copilot"
+          ],
+          "enumDescriptions": [
+            "Claude Code CLI (default)",
+            "OpenAI Codex CLI (interactive TUI + headless)",
+            "Gemini CLI wrapper",
+            "Gemini SDK (direct API, requires API key)",
+            "LM Studio (local models via HTTP)",
+            "Ollama (local models via HTTP)",
+            "GitHub Copilot CLI"
+          ],
+          "default": "claude",
+          "description": "Execution adapter for pipeline stages"
+        },
+        "nightgauge.gemini.authMethod": {
+          "type": "string",
+          "enum": [
+            "api-key",
+            "google-login",
+            "vertex-ai"
+          ],
+          "enumDescriptions": [
+            "GEMINI_API_KEY environment variable or SecretStorage (default)",
+            "Google account login (via Gemini CLI)",
+            "Vertex AI service account authentication"
+          ],
+          "default": "api-key",
+          "description": "Authentication method for Gemini adapters"
+        },
+        "nightgauge.gemini.model": {
+          "type": "string",
+          "enum": [
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash"
+          ],
+          "enumDescriptions": [
+            "Gemini 2.5 Pro — most capable, best for complex tasks",
+            "Gemini 2.5 Flash — fast and efficient (default)",
+            "Gemini 2.0 Flash — previous generation, fastest"
+          ],
+          "default": "gemini-2.5-flash",
+          "description": "Default Gemini model for pipeline stages"
+        },
+        "nightgauge.gemini.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Gemini API key (stored securely via SecretStorage). Leave empty to use GEMINI_API_KEY env var."
+        },
+        "nightgauge.readyItems.autoRefresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically refresh ready issues list"
+        },
+        "nightgauge.readyItems.refreshInterval": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "description": "Auto-refresh interval in seconds (minimum 60)"
+        },
+        "nightgauge.readyItems.sortBy": {
+          "type": "string",
+          "enum": [
+            "smart",
+            "board",
+            "priority",
+            "number",
+            "size",
+            "dependencies"
+          ],
+          "enumDescriptions": [
+            "Smart composite sort: Priority → Unblocked → Size → Age (Recommended)",
+            "Preserve GitHub Project board order",
+            "Sort by priority (P0 → P1 → P2)",
+            "Sort by issue number",
+            "Sort by t-shirt size (XS → XL)",
+            "Sort by dependency chain (unblocked first)"
+          ],
+          "default": "smart",
+          "description": "Sort ready issues by this field"
+        },
+        "nightgauge.readyItems.sortDirection": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "enumDescriptions": [
+            "Ascending (P0 first, lowest number first, XS first)",
+            "Descending (P2 first, highest number first, XL first)"
+          ],
+          "default": "asc",
+          "description": "Sort direction for project board issues"
+        },
+        "nightgauge.readyItems.filters.priority": {
+          "type": "string",
+          "enum": [
+            "all",
+            "P0",
+            "P1",
+            "P2"
+          ],
+          "enumDescriptions": [
+            "Show all priorities",
+            "P0 (Critical) - Urgent issues requiring immediate attention",
+            "P1 (High) - Important issues to address soon",
+            "P2 (Medium/Low) - Issues to address when time permits"
+          ],
+          "default": "all",
+          "description": "Filter project board issues by priority level"
+        },
+        "nightgauge.readyItems.filters.size": {
+          "type": "string",
+          "enum": [
+            "all",
+            "XS",
+            "S",
+            "M",
+            "L",
+            "XL"
+          ],
+          "enumDescriptions": [
+            "Show all sizes",
+            "XS (Extra Small) - Quick fixes, typos",
+            "S (Small) - Simple changes, few hours",
+            "M (Medium) - Moderate changes, 1-2 days",
+            "L (Large) - Significant changes, several days",
+            "XL (Extra Large) - Major feature, week or more"
+          ],
+          "default": "all",
+          "description": "Filter project board issues by size estimate"
+        },
+        "nightgauge.readyItems.filters.component": {
+          "type": "string",
+          "default": "all",
+          "description": "Filter project board issues by component label (e.g., 'nightgauge', 'smart-setup')"
+        },
+        "nightgauge.readyItems.filters.hideBlocked": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide blocked issues from project board views (only show actionable work)"
+        },
+        "nightgauge.readyItems.searchText": {
+          "type": "string",
+          "default": "",
+          "description": "Search text to filter issues by title or number (e.g., 'authentication' or '#144')"
+        },
+        "nightgauge.readyItems.showDependencies": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show dependency indicators (blocked by/blocks) and expandable dependency tree"
+        },
+        "nightgauge.outputWindow.autoOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open output window when pipeline starts"
+        },
+        "nightgauge.outputWindow.autoScroll": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scroll to latest output"
+        },
+        "nightgauge.outputWindow.verboseLevel": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "normal",
+            "verbose",
+            "debug"
+          ],
+          "enumDescriptions": [
+            "Show only errors and warnings",
+            "Show standard output including info messages",
+            "Show verbose output including tool calls",
+            "Show all output including debug messages"
+          ],
+          "default": "normal",
+          "description": "Amount of detail shown in output window"
+        },
+        "nightgauge.outputWindow.showTokenUsage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show real-time token usage and cost estimation"
+        },
+        "nightgauge.outputWindow.wordWrap": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable word wrap for long lines in output window"
+        },
+        "nightgauge.dashboard.timeSavings.issuePickup": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Estimated manual minutes for issue pickup stage"
+        },
+        "nightgauge.dashboard.timeSavings.featurePlanning": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 480,
+          "description": "Estimated manual minutes for feature planning stage"
+        },
+        "nightgauge.dashboard.timeSavings.featureDev": {
+          "type": "number",
+          "default": 120,
+          "minimum": 1,
+          "maximum": 2400,
+          "description": "Estimated manual minutes for feature development stage"
+        },
+        "nightgauge.dashboard.timeSavings.prCreate": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Estimated manual minutes for PR creation stage"
+        },
+        "nightgauge.dashboard.timeSavings.prMerge": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Estimated manual minutes for PR merge stage"
+        },
+        "nightgauge.dashboard.health.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the pipeline health dashboard widget"
+        },
+        "nightgauge.dashboard.health.collapsed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Default collapse state for the health widget"
+        },
+        "nightgauge.dashboard.health.weights.tokenEfficiencyTrend": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for token efficiency trend in health score (auto-normalized)"
+        },
+        "nightgauge.dashboard.health.weights.successRate": {
+          "type": "number",
+          "default": 0.25,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for success rate in health score (auto-normalized)"
+        },
+        "nightgauge.dashboard.health.weights.costTrend": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for cost trend in health score (auto-normalized)"
+        },
+        "nightgauge.dashboard.health.weights.cacheHitRate": {
+          "type": "number",
+          "default": 0.15,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for cache hit rate in health score (auto-normalized)"
+        },
+        "nightgauge.dashboard.health.weights.predictionAccuracy": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for prediction accuracy in health score (auto-normalized)"
+        },
+        "nightgauge.dashboard.health.weights.failureRate": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Weight for failure rate in health score (auto-normalized)"
+        },
+        "nightgauge.plugins.autoPrompt": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically prompt to install Claude plugins and Codex commands on startup"
+        },
+        "nightgauge.plugins.marketplaceUrl": {
+          "type": "string",
+          "default": "https://github.com/nightgauge/nightgauge.git",
+          "description": "Git URL for the Nightgauge plugin marketplace"
+        },
+        "nightgauge.notifications.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable all Nightgauge notifications"
+        },
+        "nightgauge.notifications.sounds.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Play sounds for pipeline events"
+        },
+        "nightgauge.notifications.sounds.alert": {
+          "type": "string",
+          "default": "Glass",
+          "enum": [
+            "Glass",
+            "Ping",
+            "Blow",
+            "Bottle",
+            "Frog",
+            "Funk",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Gentle glass sound (default)",
+            "Subtle ping",
+            "Soft blow sound",
+            "Bottle pop",
+            "Frog croak",
+            "Funky alert",
+            "No sound"
+          ],
+          "description": "Sound for user input needed (set 'none' to disable)"
+        },
+        "nightgauge.notifications.sounds.success": {
+          "type": "string",
+          "default": "Hero",
+          "enum": [
+            "Hero",
+            "Purr",
+            "Pop",
+            "Submarine",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Triumphant hero sound (default)",
+            "Soft purr",
+            "Pop sound",
+            "Submarine ping",
+            "No sound"
+          ],
+          "description": "Sound for pipeline completion (set 'none' to disable)"
+        },
+        "nightgauge.notifications.sounds.error": {
+          "type": "string",
+          "default": "Basso",
+          "enum": [
+            "Basso",
+            "Sosumi",
+            "Morse",
+            "Tink",
+            "none"
+          ],
+          "enumDescriptions": [
+            "Deep bass sound (default)",
+            "Distinctive sosumi",
+            "Morse code beep",
+            "Light tink",
+            "No sound"
+          ],
+          "description": "Sound for pipeline errors (set 'none' to disable)"
+        },
+        "nightgauge.notifications.sounds.volume": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Volume for notification sounds (0.0-1.0)"
+        },
+        "nightgauge.notifications.banner.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show VS Code notification banners"
+        },
+        "nightgauge.notifications.dockBounce.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Bounce Dock icon when attention needed (macOS only)"
+        },
+        "nightgauge.notifications.respectDoNotDisturb": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Suppress sounds/notifications when system Do Not Disturb is enabled (macOS only)"
+        },
+        "nightgauge.pipeline.defaultMode": {
+          "type": "string",
+          "enum": [
+            "headless",
+            "interactive"
+          ],
+          "enumDescriptions": [
+            "Automated execution with token tracking (recommended for batch/multi-stage)",
+            "Conversational mode with open stdin for follow-up messages (single-stage only)"
+          ],
+          "default": "headless",
+          "description": "Default execution mode for pipeline stages"
+        },
+        "nightgauge.pipeline.autoContinue": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run the next pipeline stage when one completes"
+        },
+        "nightgauge.pipeline.autoContinueDelay": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Delay in milliseconds before auto-continuing to the next stage"
+        },
+        "nightgauge.orchestration.disabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable the multi-agent orchestration engine (epic #3899). Off by default while the engine is opt-in. The CLAUDE_CODE_DISABLE_WORKFLOWS environment variable forces this on regardless of setting."
+        },
+        "nightgauge.orchestration.preferNativeOffload": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "markdownDescription": "Per-stage preference for an adapter's native `runWorkflow()` offload over the portable SdkFanoutRunner floor, when the resolved adapter declares `native-workflow`. Keys are pipeline stages (`issue-pickup`, `feature-planning`, `feature-dev`, `feature-validate`); `pr-create`/`pr-merge` are single-agent and never fanned out. A missing stage means \"use the portable floor\"."
+        },
+        "nightgauge.orchestration.maxUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Total USD budget cap for a single orchestrated run. Set to 0 for uncapped (default)."
+        },
+        "nightgauge.orchestration.maxAgents": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum agents spawned over a whole orchestrated run. Set to 0 to use the provider safety ceiling (default). When > 0 it can only lower the ceiling, never raise it."
+        },
+        "nightgauge.orchestration.maxConcurrency": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum agents running at once in an orchestrated run. Set to 0 to use the provider safety ceiling (default). When > 0 it can only lower the ceiling, never raise it."
+        },
+        "nightgauge.projectBoard.groupByEpic": {
+          "type": "boolean",
+          "default": true,
+          "description": "Group issues under their parent epic in project board views"
+        },
+        "nightgauge.projectBoard.defaultEpicCollapsed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Default collapse state for epic groups (false = expanded, true = collapsed)"
+        },
+        "nightgauge.batch.maxIssues": {
+          "type": "number",
+          "default": 50,
+          "minimum": 0,
+          "description": "Maximum number of issues to process in a batch. Set to 0 for no limit (default: 50)"
+        },
+        "nightgauge.batch.pauseBetweenIssues": {
+          "type": "boolean",
+          "default": false,
+          "description": "Pause and prompt for user approval between each issue in batch"
+        },
+        "nightgauge.batch.concurrency": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 1,
+          "description": "Concurrent issue processing (currently only 1 is supported - parallel execution coming in future release)"
+        },
+        "nightgauge.batch.stopOnError": {
+          "type": "boolean",
+          "default": true,
+          "description": "Stop batch execution immediately when any issue fails"
+        },
+        "nightgauge.batch.retryFailedIssues": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically retry failed issues in batch execution"
+        },
+        "nightgauge.batch.maxRetries": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Maximum retry attempts for failed issues (requires retryFailedIssues enabled)"
+        },
+        "nightgauge.batch.showSummary": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show detailed summary when batch completes"
+        },
+        "nightgauge.batch.notifyOnComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notification when entire batch completes"
+        },
+        "nightgauge.batch.notifyOnEachIssue": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show notification after each issue completes (can cause notification fatigue for large batches)"
+        },
+        "nightgauge.batch.showProgressEstimate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show estimated time remaining based on average issue completion time"
+        },
+        "nightgauge.batch.tokenBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum total tokens to consume in batch (0 = unlimited). Batch stops when limit reached."
+        },
+        "nightgauge.batch.costBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum total cost in USD for batch (0 = unlimited). Batch stops when limit reached."
+        },
+        "nightgauge.batch.timeBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum total time in minutes for batch (0 = unlimited). Batch stops when limit reached."
+        },
+        "nightgauge.batch.saveHistory": {
+          "type": "boolean",
+          "default": true,
+          "description": "Save batch execution history to workspace storage"
+        },
+        "nightgauge.batch.historyLimit": {
+          "type": "number",
+          "default": 50,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of batch runs to keep in history (rolling window)"
+        },
+        "nightgauge.sidebar.hideEmptySections": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide sidebar sections that have no items"
+        },
+        "nightgauge.audit.legacyEndpoint": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use the deprecated /api/v1/audit/events alias instead of the canonical /v1/audit-log endpoint. Temporary rollback switch — will be removed when the alias is sunset (2027-05-08)."
+        },
+        "nightgauge.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Send anonymous usage data to help improve Nightgauge. Opt-in only — no data is sent until you enable this. See docs/TELEMETRY_PRIVACY.md for what is collected.",
+          "markdownDescription": "Send anonymous usage data to help improve Nightgauge. **Opt-in only** — no data is sent until you enable this. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is collected."
+        },
+        "nightgauge.telemetry.streams": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pipeline-run",
+              "health",
+              "recommendation",
+              "trace"
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "pipeline-run",
+            "health",
+            "recommendation",
+            "trace"
+          ],
+          "description": "Telemetry streams that may send data when telemetry is enabled."
+        },
+        "nightgauge.telemetry.uploadIntervalMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "default": 15,
+          "description": "How often (in minutes) the telemetry queue flushes when telemetry is enabled."
+        },
+        "nightgauge.warnings.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable warnings when dragging issues that are already in progress or under review"
+        },
+        "nightgauge.warnings.warnOnInProgress": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when dragging In Progress issues (requires warnings.enabled)"
+        },
+        "nightgauge.warnings.warnOnInReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when dragging In Review issues (requires warnings.enabled)"
+        },
+        "nightgauge.agentTeams.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable agent teams for parallel pipeline execution (requires Claude Code CLI)"
+        },
+        "nightgauge.agentTeams.maxTeammates": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Maximum number of parallel teammate sessions"
+        },
+        "nightgauge.agentTeams.teammateModel": {
+          "type": "string",
+          "enum": [
+            "sonnet",
+            "opus",
+            "haiku"
+          ],
+          "enumDescriptions": [
+            "Claude Sonnet — balanced speed and quality (default)",
+            "Claude Opus — highest quality, slower",
+            "Claude Haiku — fastest, lower quality"
+          ],
+          "default": "sonnet",
+          "description": "Model for teammate agents"
+        },
+        "nightgauge.agentTeams.displayMode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "in-process",
+            "tmux"
+          ],
+          "enumDescriptions": [
+            "Automatically select display mode (default)",
+            "Run teammates in-process (no tmux required)",
+            "Run teammates in tmux panes (requires tmux)"
+          ],
+          "default": "auto",
+          "description": "Display mode for teammate sessions"
+        },
+        "nightgauge.agentTeams.planApproval": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require lead agent approval of teammate plans"
+        },
+        "nightgauge.agentTeams.delegateMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Restrict lead agent to coordination only"
+        },
+        "nightgauge.agentTeams.tokenBudgetSplit": {
+          "type": "string",
+          "enum": [
+            "proportional",
+            "equal",
+            "manual"
+          ],
+          "enumDescriptions": [
+            "Split budget proportional to task complexity (default)",
+            "Split budget equally across teammates",
+            "Manually set per-teammate budgets"
+          ],
+          "default": "proportional",
+          "description": "How to divide token budget across teammates"
+        },
+        "nightgauge.agentTeams.fileOwnership": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable file ownership hints in sub-issues"
+        },
+        "nightgauge.limits.monthlyBudgetUsd": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Monthly API cost budget in USD. Set to 0 to disable usage tracking and alerts."
+        },
+        "nightgauge.limits.warningThresholdPct": {
+          "type": "number",
+          "default": 80,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Percentage of monthly budget at which a warning notification fires."
+        },
+        "nightgauge.limits.criticalThresholdPct": {
+          "type": "number",
+          "default": 90,
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Percentage of monthly budget at which a critical alert fires."
+        },
+        "nightgauge.limits.pollingIntervalSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "description": "How often (in seconds) to check usage against the budget threshold."
+        },
+        "nightgauge.backend.useGoBinary": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use Go binary for project board data (falls back to TypeScript if unavailable)"
+        },
+        "nightgauge.backend.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to nightgauge Go binary. Leave empty to search PATH."
+        },
+        "nightgauge.backend.timeoutSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 300,
+          "description": "Timeout in seconds for Go backend operations"
+        },
+        "nightgauge.git.autoCleanupBranches": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically delete local branches whose remote tracking branch was removed after PR merge. Runs on extension startup."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "generate:contributions": "tsx scripts/generate-package-contributions.ts",
+    "build": "npm run generate:contributions && npm run build:types && npm run build:bundle && npm run build:notices && npm run build:assets",
+    "build:types": "tsc --emitDeclarationOnly",
+    "prebuild:bundle": "bash scripts/check-sdk-freshness.sh",
+    "build:bundle": "esbuild src/extension.ts --bundle --outfile=dist/extension.cjs --external:vscode --external:@anthropic-ai/claude-agent-sdk --format=cjs --platform=node --sourcemap --legal-comments=eof",
+    "build:notices": "node ../../scripts/embed-third-party-notices.mjs",
+    "build:assets": "mkdir -p dist && cp ../nightgauge-sdk/src/analysis/failure-taxonomy.yaml dist/failure-taxonomy.yaml && cp ../nightgauge-sdk/src/eval/model-registry.json dist/model-registry.json && bash scripts/bundle-marketplace.sh",
+    "watch": "npm run build:bundle -- --watch",
+    "package": "npm run build && vsce package --no-dependencies",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:run": "vitest run",
+    "test:playwright": "playwright test",
+    "test:e2e": "tsx scripts/generate-dashboard-html.ts && playwright test",
+    "test:e2e:debug": "tsx scripts/generate-dashboard-html.ts && playwright test --headed --workers=1",
+    "mock-server": "tsx src/mocks/start-server.ts"
+  },
+  "dependencies": {
+    "@nightgauge/sdk": "*",
+    "date-fns": "^4.4.0",
+    "marked": "^18.0.6",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.0.10",
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^26.1.1",
+    "@types/vscode": "^1.85.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
+    "hono": "^4.12.31",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.2"
+  },
+  "author": {
+    "name": "nightgauge"
+  },
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/nightgauge/nightgauge/issues"
+  }
+}

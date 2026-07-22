@@ -1,0 +1,12 @@
+# blank_issues_enabled: false — every issue must go through a template so it
+# carries exactly one `type:*` label, which the Nightgauge pipeline requires
+# (see CLAUDE.md). Blank issues produce unlabeled work the pipeline can't route.
+# Flip to true if template friction outweighs that.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/nightgauge/nightgauge/security/advisories/new
+    about: Do not file security issues publicly — use private vulnerability reporting (see SECURITY.md).
+  - name: Questions & Discussions
+    url: https://github.com/nightgauge/nightgauge/discussions
+    about: Ask questions or start a discussion about the Nightgauge pipeline.

@@ -1,0 +1,9 @@
+{
+  "_comment": "Config for the markdown-link-check CI gate (docs link-checker, #135). Scope is root *.md + docs/**. External http(s) URLs are intentionally NOT checked: the repository is private, so every canonical github.com/nightgauge/* URL 404s to an unauthenticated checker (revisit when the repo goes public, #63). Image assets are skipped: this gate validates cross-document reference integrity, not binary asset presence, and some operator-runbook screenshots are committed in follow-up PRs (see docs/images/*/README.md). Pure in-page #anchors are not resolved as files.",
+  "ignorePatterns": [
+    { "pattern": "^https?://" },
+    { "pattern": "^mailto:" },
+    { "pattern": "^#" },
+    { "pattern": "\\.(png|jpe?g|gif|svg|webp)$" }
+  ]
+}

@@ -1,0 +1,62 @@
+name: publication-boundary
+
+# Blocks private-class content from entering the tree.
+#
+# This repository is PRIVATE today. The guard exists so that flipping it to
+# public stays a one-click decision rather than becoming a project again.
+#
+# It replaces two controls that both failed:
+#
+#   1. A written rule in nightgauge-internal/CLAUDE.md — "NEVER copy content
+#      from this repo into nightgauge/nightgauge". It was violated once.
+#   2. A line in .git/info/exclude — local-only, unversioned, and absent from
+#      every fresh clone. It protected exactly one machine.
+#
+# A rule that depends on someone remembering it is not a control. This one is
+# mechanical, and it FAILS CLOSED: an unclassified path is rejected, and a guard
+# that cannot run is a failure, never a skip. A guard that passes when it cannot
+# tell is worse than no guard, because it manufactures confidence.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  boundary:
+    name: publication boundary (allowlist, fail-closed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install the guard's pinned parser dependency
+        # Install explicitly because hosted runner images do not promise PyYAML.
+        #
+        # Note this check can only ever make the job MORE likely to fail. It
+        # never converts a failure into a pass, which is the property that
+        # matters for a fail-closed guard.
+        run: |
+          set -euo pipefail
+          python3 --version
+          python3 -m pip install --disable-pip-version-check PyYAML==6.0.3
+          python3 -c 'import yaml; assert yaml.__version__ == "6.0.3"'
+
+      - name: Enforce the publication boundary
+        # Fails the build on:
+        #   - any tracked path with no `allow` rule  (the fail-closed core)
+        #   - any path matching a `deny` rule
+        #   - forbidden content outside its allow_paths
+        #   - a non-empty needs_decision bucket
+        #   - the guard itself being unable to run (missing/malformed manifest)
+        run: python3 scripts/publication-boundary-check.py
+
+      - name: Prove the guard still fails closed
+        # A guard that has never rejected anything has not been tested. This
+        # corrupts, deletes and empties the manifest, opens a decision, and
+        # plants both a denied file and an unclassified file — asserting the
+        # guard rejects all six. If someone "fixes" a red build by weakening the
+        # guard, this step goes red too.
+        run: bash scripts/test-publication-boundary.sh

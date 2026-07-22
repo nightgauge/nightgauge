@@ -1,0 +1,496 @@
+# Publication Boundary — classification manifest for nightgauge/nightgauge
+#
+# This file is the SINGLE SOURCE OF TRUTH for what may exist in this repository's
+# tree. `scripts/publication-boundary-check.sh` consumes it; the CI guard
+# (.github/workflows/publication-boundary.yml) runs that script on every pull
+# request and blocks the merge on failure.
+#
+# This repository is maintained as a public-safe tree. The point of this
+# manifest is to make publication review continuous rather than a one-time
+# cleanup; nothing in this file changes repository visibility.
+#
+# ─── FAIL-CLOSED CONTRACT ────────────────────────────────────────────────────
+# A tracked path that matches NO `allow` rule is REJECTED. It is not ignored and
+# it is not warned about — it fails the build. Adding a new top-level area is
+# therefore a deliberate act: you must classify it here first.
+#
+# A denylist only catches anticipated names. The allowlist fails safely when a
+# new path has not received an explicit publication classification.
+#
+# ─── CLASSES ─────────────────────────────────────────────────────────────────
+#   PUBLIC          safe to publish as-is
+#   PRIVATE         must never be tracked in this repo (deny → build fails)
+#   NEEDS-DECISION  unresolved; also fails the build, on purpose. This bucket is
+#                   a work-list, not a parking lot. It must be empty to close #117.
+#
+version: 1
+
+# Any tracked path matching none of these is REJECTED (fail-closed).
+allow:
+  # ─── Go source: the deterministic layer ───────────────────────────────────
+  - path: "cmd/**"
+    class: PUBLIC
+    rationale: "Go CLI entrypoints. Apache-2.0 product source."
+  - path: "internal/**"
+    class: PUBLIC
+    rationale: >-
+      Go implementation packages and synthetic test/knowledge fixtures. The Go
+      name `internal` is a language visibility boundary, not permission to store
+      company-internal material. Private planning and product positioning are
+      prohibited here.
+  - path: "pkg/**"
+    class: PUBLIC
+    rationale: "Exported Go packages."
+  - path: "api/**"
+    class: PUBLIC
+    rationale: "Vendored generated platform types. No credentials; no private schema."
+
+  # ─── TypeScript: extension, SDK ───────────────────────────────────────────
+  - path: "packages/**"
+    class: PUBLIC
+    rationale: >-
+      VS Code extension and SDK source, tests, and public client documentation.
+      Private hosted-service implementation documents are denied below.
+
+  # ─── Portable pipeline definitions ────────────────────────────────────────
+  - path: "skills/**"
+    class: PUBLIC
+    rationale: "Portable skill definitions. Intended to be read by users."
+  - path: "claude-plugins/**"
+    class: PUBLIC
+    rationale: "Thin CLI wrappers over the Go binary."
+  - path: ".claude-plugin/**"
+    class: PUBLIC
+    rationale: "Plugin marketplace manifest."
+  - path: "standards/**"
+    class: PUBLIC
+    rationale: "Universal coding and security standards. Reader-facing."
+
+  # ─── Documentation ────────────────────────────────────────────────────────
+  # NOTE: docs/strategy/** is explicitly DENIED below. Adding it back here
+  # would silently re-open the leak this manifest exists to close.
+  - path: "docs/**"
+    class: PUBLIC
+    rationale: >-
+      Reader-facing documentation governed by docs/DOCUMENTATION_IA.md. Raw
+      company spike, epic, analysis, and unreviewed ADR artifacts are denied
+      below even though repository-local artifacts remain a product feature.
+
+  # ─── Build, test, config, CI ──────────────────────────────────────────────
+  - path: "scripts/**"
+    class: PUBLIC
+    rationale: "Build and CI helper scripts."
+  - path: "tests/**"
+    class: PUBLIC
+    rationale: "Integration tests."
+  - path: "evals/**"
+    class: PUBLIC
+    rationale: "Skill/model evaluation harness and fixtures. Synthetic tasks only."
+  - path: "configs/**"
+    class: PUBLIC
+    rationale: "Shipped default configuration."
+  - path: "schemas/**"
+    class: PUBLIC
+    rationale: "JSON schemas."
+  - path: "poc/**"
+    class: PUBLIC
+    rationale: "Proof-of-concept code. Carries no private data."
+  - path: ".github/**"
+    class: PUBLIC
+    rationale: "CI workflows, issue templates, and this manifest."
+  - path: ".husky/**"
+    class: PUBLIC
+    rationale: "Git hooks."
+  - path: ".claude/**"
+    class: PUBLIC
+    rationale: "Agent rules scoped to this repo. Instructions, not secrets."
+  - path: ".codex/**"
+    class: PUBLIC
+    rationale: "Codex adapter configuration."
+
+  # ─── Pipeline working directory ───────────────────────────────────────────
+  # .nightgauge/ is mostly generated exhaust. Its own .nightgauge/.gitignore is
+  # VERSIONED (unlike .git/info/exclude) and already excludes telemetry,
+  # knowledge bases, plans, logs and health reports. Only the deliberately
+  # tracked, reviewed subset is allowed here — anything else fails closed.
+  - path: ".nightgauge/.gitignore"
+    class: PUBLIC
+    rationale: "The versioned exclusion rules for generated pipeline exhaust."
+  - path: ".nightgauge/config.yaml"
+    class: PUBLIC
+    rationale: "Repository-wide pipeline configuration. Contains no tokens."
+  - path: ".nightgauge/config.schema.json"
+    class: PUBLIC
+  - path: ".nightgauge/pattern-mining-config.yaml"
+    class: PUBLIC
+  - path: ".nightgauge/audit/**"
+    class: PUBLIC
+    rationale: "Feature-parity audit templates and config."
+  - path: ".nightgauge/baselines/**"
+    class: PUBLIC
+    rationale: >-
+      Performance baselines (e.g. prompt-cache hit rates). Operational metrics
+      about our own pipeline; no customer or commercial data.
+  - path: ".nightgauge/release-watch/**"
+    class: PUBLIC
+    rationale: "Upstream release-tracking state for Claude/Codex/Gemini CLIs."
+  - path: ".nightgauge/skill-evals/baseline.jsonl"
+    class: PUBLIC
+    rationale: "Tracked reference baseline for skill evaluation."
+  - path: ".nightgauge/model-evals/evidence/**"
+    class: PUBLIC
+    rationale: >-
+      Live model-eval records cited as evidence by a spike or ADR (e.g. #77's
+      behavioral-preamble adoption). Scored outcomes only — task_id, model_id,
+      tokens, cost, gate results — over the synthetic evals/tasks/ corpus. No
+      prompts, generated code, diffs, paths, or customer data; same class as
+      .nightgauge/baselines/**, and the aggregate figures are already published
+      in docs/spikes/. Transient and mock runs stay untracked via
+      .nightgauge/.gitignore.
+  - path: ".nightgauge/skill-smoke/**"
+    class: PUBLIC
+    rationale: "Skill smoke-test scripts."
+  - path: ".nightgauge/**/.gitkeep"
+    class: PUBLIC
+    rationale: "Directory-structure placeholders."
+
+  # ─── Root files ───────────────────────────────────────────────────────────
+  - path: "LICENSE"
+    class: PUBLIC
+    rationale: "Apache-2.0. Settled — do not propose BSL/ELv2/AGPL (#117)."
+  - path: "NOTICE"
+    class: PUBLIC
+    rationale: >-
+      Reads "Edibu, LLC" — the correct legal entity name, settled in #109.
+      The org login EdibuLLC is an IDENTIFIER, not a legal-name assertion.
+      Do not "fix" this.
+  - path: "THIRD_PARTY_NOTICES"
+    class: PUBLIC
+    rationale: >-
+      Deterministically generated attribution and license text for the actual
+      shipped production dependency graph.
+  - path: "TRADEMARK.md"
+    class: PUBLIC
+    rationale: "Trademark policy. See NOTICE — same settled entity name (#109)."
+  - path: "README.md"
+    class: PUBLIC
+  - path: "CHANGELOG.md"
+    class: PUBLIC
+  - path: "CONTRIBUTING.md"
+    class: PUBLIC
+  - path: "CODE_OF_CONDUCT.md"
+    class: PUBLIC
+  - path: "SECURITY.md"
+    class: PUBLIC
+  - path: "SUPPORT.md"
+    class: PUBLIC
+  - path: "VISION.md"
+    class: PUBLIC
+    rationale: "Concise public project principles and open-source boundary only."
+  - path: "GOVERNANCE.md"
+    class: PUBLIC
+    rationale: "Decision model, maintainer path, succession, and project boundary."
+  - path: "MAINTAINERS.md"
+    class: PUBLIC
+    rationale: >-
+      Steward (Edibu, LLC) + GitHub team roles only. Deliberately names no
+      personal handle — the roster IS team membership, which keeps this file
+      clear of forbidden_tokens (#133).
+  - path: "RELEASE_RUNBOOK.md"
+    class: PUBLIC
+    rationale: >-
+      Ordered public-launch + release procedure (#137). Contains only public gh
+      commands and verification steps — no secrets, no private identifiers.
+  - path: "CLA/**"
+    class: PUBLIC
+    rationale: >-
+      Harmony contributor agreements (HA-CLA-I/E, Option Five) and the operator
+      guide. Contributors must be able to read these before signing. Signatures
+      are stored in a SEPARATE private repo, never here (#132).
+  - path: "CLAUDE.md"
+    class: PUBLIC
+    rationale: "Agent instructions for this repo. Intended to ship."
+  - path: "AGENTS.md"
+    class: PUBLIC
+  - path: "Makefile"
+    class: PUBLIC
+  - path: "go.mod"
+    class: PUBLIC
+  - path: "go.sum"
+    class: PUBLIC
+  - path: "package.json"
+    class: PUBLIC
+  - path: "package-lock.json"
+    class: PUBLIC
+  - path: "pnpm-workspace.yaml"
+    class: PUBLIC
+  - path: "eslint.config.js"
+    class: PUBLIC
+  - path: ".goreleaser.yml"
+    class: PUBLIC
+  - path: ".editorconfig"
+    class: PUBLIC
+  - path: ".gitattributes"
+    class: PUBLIC
+  - path: ".gitignore"
+    class: PUBLIC
+  - path: ".nvmrc"
+    class: PUBLIC
+  - path: ".npmrc"
+    class: PUBLIC
+    rationale: "No registry auth — this repo depends on no private packages."
+  - path: ".npmauditrc.json"
+    class: PUBLIC
+  - path: ".lintstagedrc.json"
+    class: PUBLIC
+  - path: ".markdown-link-check.json"
+    class: PUBLIC
+  - path: ".prettierrc.json"
+    class: PUBLIC
+  - path: ".prettierignore"
+    class: PUBLIC
+  - path: ".mcp.json"
+    class: PUBLIC
+    rationale: "MCP server declarations. Verified to carry no tokens."
+  - path: ".gitleaksignore"
+    class: PUBLIC
+    rationale: >-
+      Credential-scanner allowlist (#121). Per-finding FINGERPRINTS
+      (commit:file:rule:line), never plaintext secrets — a fingerprint is a
+      location, not a value. Publishing it reveals only which test fixtures
+      exist, which the tests already reveal.
+
+# ─── PRIVATE: must never be tracked. Denied even if an allow rule matches. ───
+deny:
+  - path: "docs/spikes/**"
+    class: PRIVATE
+    except:
+      - "docs/spikes/README.md"
+    rationale: >-
+      Company research artifacts require an explicit publication decision.
+      The public README documents the product contract without publishing the
+      Nightgauge company's historical spike corpus.
+  - path: "docs/epics/**"
+    class: PRIVATE
+    except:
+      - "docs/epics/README.md"
+    rationale: >-
+      Company execution summaries and delivery metrics are private by default.
+  - path: "docs/analysis/**"
+    class: PRIVATE
+    rationale: "Raw company engineering analysis is private by default."
+  - path: "docs/decisions/**"
+    class: PRIVATE
+    except:
+      - "docs/decisions/README.md"
+      - "docs/decisions/002-codex-output-schema-evaluation.md"
+      - "docs/decisions/003-codex-adapter-feature-parity.md"
+      - "docs/decisions/004-adaptive-stall-recovery.md"
+      - "docs/decisions/006-forge-abstraction.md"
+      - "docs/decisions/007-slash-command-skill-invocation-contract.md"
+      - "docs/decisions/008-skill-forge-cli.md"
+      - "docs/decisions/009-workspace-schema-migration.md"
+      - "docs/decisions/010-progressive-disclosure.md"
+      - "docs/decisions/011-model-eval-system.md"
+    rationale: >-
+      ADRs are private until individually reviewed and excepted. The exceptions
+      describe shipped open-source implementation decisions.
+  - path: "docs/EPIC_ESTIMATES.md"
+    class: PRIVATE
+    rationale: "Internal planning and execution estimates."
+  - path: "docs/MULTI_BACKEND_RESEARCH.md"
+    class: PRIVATE
+    rationale: "Raw vendor and cost research."
+  - path: "docs/COMPUTER_USE_ASSESSMENT.md"
+    class: PRIVATE
+    rationale: "Internal adoption and operating-cost assessment."
+  - path: "docs/GO_1_27_MIGRATION_PLAN.md"
+    class: PRIVATE
+    rationale: "Internal migration plan; shipped migration notes may be public."
+  - path: "docs/SPIKE_DECISIONS.md"
+    class: PRIVATE
+  - path: "docs/SPIKE_FINDINGS_*.md"
+    class: PRIVATE
+  - path: "docs/skills-anti-pattern-sweep.md"
+    class: PRIVATE
+    rationale: "Internal audit artifact."
+  - path: "packages/**/docs/CLOUD_ORCHESTRATOR.md"
+    class: PRIVATE
+    rationale: "Private hosted-service implementation architecture."
+  - path: "**/.claude/agent-memory/**"
+    class: PRIVATE
+    rationale: "Ephemeral agent memory is not a distributable product asset."
+  - path: "skills/nightgauge-release-watch/assessments/*.md"
+    class: PRIVATE
+    except:
+      - "skills/nightgauge-release-watch/assessments/README.md"
+      - "skills/nightgauge-release-watch/assessments/TEMPLATE.md"
+    rationale: "Company adoption assessments and roadmap recommendations are private by default."
+  - path: "claude-plugins/nightgauge/skills/release-watch/assessments/*.md"
+    class: PRIVATE
+    except:
+      - "claude-plugins/nightgauge/skills/release-watch/assessments/README.md"
+      - "claude-plugins/nightgauge/skills/release-watch/assessments/TEMPLATE.md"
+    rationale: "Mirrored company adoption assessments are private by default."
+  - path: "docs/strategy/**"
+    class: PRIVATE
+    rationale: >-
+      Company strategy, positioning, brand planning, and commercial material
+      belong in nightgauge-internal.
+  - path: ".branch-context"
+    class: PRIVATE
+    rationale: >-
+      Transient pipeline exhaust. Was tracked by accident and pinned a stale
+      base branch (epic/1941-github-copilot-cli-adapter) referencing an
+      incredibuilders-era issue that does not exist in this repo. Removed in #119
+      and now gitignored.
+  - path: ".nightgauge/planning-summary-*.txt"
+    class: PRIVATE
+    rationale: >-
+      Feature-planning stage handoff exhaust, tracked by accident. Referenced
+      incredibuilders-era issue #2486. Generated per-run; never belongs in git.
+  - path: ".nightgauge/knowledge/**"
+    class: PRIVATE
+    rationale: "Per-issue knowledge bases. Local pipeline data (already gitignored)."
+  - path: ".nightgauge/pipeline/**"
+    class: PRIVATE
+    rationale: >-
+      Pipeline telemetry, run history and assessments. Verified 2026-07-14 to
+      contain portfolio identifiers (see forbidden_tokens) in untracked local
+      files — exactly the content that must never be committed. Already excluded
+      by the versioned .nightgauge/.gitignore; denied here as defence in depth.
+    except:
+      - ".nightgauge/pipeline/.gitkeep"
+      - ".nightgauge/pipeline/history/.gitkeep"
+
+# ─── Content rules: fail on these patterns regardless of path ────────────────
+# Path classification alone cannot catch a private string pasted into a public
+# file. These are the leak classes we have actually observed.
+forbidden_content:
+  - id: private-repository-issue-reference
+    pattern: "nightgauge(?:/nightgauge)?-(?:platform|dashboard|flutter)#[0-9]+"
+    rationale: >-
+      Public source may describe integration contracts, but it must never link
+      private repository issue numbers. Those references disclose internal
+      planning and become misleading when the public backlog is recreated.
+    allow_paths:
+      - ".github/publication-boundary.yaml"
+      - "scripts/test-publication-boundary.sh"
+
+  - id: former-brand
+    pattern: "[Ii]ncredibuilders"
+    rationale: >-
+      The former product name and the archived private historical record
+      (EdibuLLC/incredibuilders, 4,222 issues). That repository is preserved and
+      untouched, but its name must not enter this repo's public lineage. Cleaned
+      from 69 files in #119 — they were mostly CHANGELOG link footers pointing at
+      github.com/incredibuilders/incredibuilders, a repository that does not exist.
+
+      SCOPE: this rule governs the TREE, not history. The former name still
+      survives in the *file paths* of old commits (packages/incredibuilders-*);
+      those are removed once, at go-public, by the clean-slate history reset in
+      RELEASE_RUNBOOK.md (§3) — not by this content rule, which only scans the
+      working tree. The name is a former product brand, not a secret.
+    allow_paths:
+      - ".github/publication-boundary.yaml"
+      - "scripts/publication-boundary-check.py"
+      - "docs/DOCUMENTATION_IA.md"
+      # The credential allowlist pins findings by fingerprint
+      # (commit:file:rule:line). For historical blobs the `file` component IS a
+      # pre-rebrand path, so those strings are structurally unavoidable — they
+      # are coordinates into history, not content we chose to write.
+      - ".gitleaksignore"
+      # The go-public runbook must name the former brand to explain what the
+      # history reset removes, and its verification step greps for it.
+      - "RELEASE_RUNBOOK.md"
+
+  - id: private-repo-links
+    pattern: "github\\.com/EdibuLLC/incredibuilders"
+    rationale: >-
+      Direct links into the archived PRIVATE repository. These 404 for any reader
+      without access and advertise the private lineage.
+      NOTE: github.com/EdibuLLC/* is otherwise FINE — the org login is an
+      identifier, not a legal-name assertion, and is settled (#109). Only the
+      incredibuilders repo is off-limits.
+    allow_paths:
+      - ".github/publication-boundary.yaml"
+      - "scripts/publication-boundary-check.py"
+
+  # ── Commercial economics ────────────────────────────────────────────────────
+  # These rules are intentionally narrow so public provider pricing and generic
+  # cost-tracking documentation remain possible while company unit economics do
+  # not enter the public tree.
+  - id: cost-of-goods
+    pattern: "\\bCOGS\\b"
+    rationale: >-
+      Cost of goods sold is company unit economics. Pricing and economics
+      planning belongs in nightgauge-internal.
+    allow_paths:
+      # Files that DEFINE or TEST the rule must name the token they forbid — the
+      # same reason the manifest exempts itself.
+      - ".github/publication-boundary.yaml"
+      - "docs/DOCUMENTATION_IA.md"
+      - "CLAUDE.md"
+      - "scripts/test-publication-boundary.sh"
+
+  - id: per-minute-pricing
+    # Matches "$0.02–0.07/min", "$0.18–0.46/min", "$0.0065/min" (hyphen or en-dash
+    # ranges, optional second "$"). Does NOT match "$1/$5 per MTok" or "$100M
+    # Series C" (no "/min"). Model/token list prices and funding figures are
+    # public; our per-minute voice cost is margin structure and is not.
+    pattern: '\$\d+(\.\d+)?(\s*[-–]\s*\$?\d+(\.\d+)?)?\s*/\s*min'
+    rationale: >-
+      Composed per-minute service cost can disclose company unit economics and
+      belongs in nightgauge-internal.
+    allow_paths:
+      - ".github/publication-boundary.yaml"
+      - "docs/DOCUMENTATION_IA.md"
+      - "scripts/test-publication-boundary.sh"
+
+# ─── Forbidden tokens, stored as HASHES ─────────────────────────────────────
+# The portfolio identifiers (unrelated private projects) cannot be listed here
+# in plaintext, because a denylist has to name the thing it forbids — and this
+# manifest is itself published. Naming them would leak exactly what the rule
+# exists to protect. That is not hypothetical: the first version of this file
+# did precisely that, and the issue/PR audit (#120) caught it.
+#
+# So they are stored as salted SHA-256 of the lowercased token. The checker
+# tokenizes each file on [A-Za-z0-9_.-]+, hashes each token, and compares.
+# Enforcement is identical and fail-closed; disclosure is zero. All five
+# identifiers are single tokens under that pattern, so nothing splits.
+#
+# The plaintext list lives in nightgauge-internal (strategy/). If you need to
+# know what these are, you have access to that repo — and if you do not, you do
+# not need to know.
+#
+# Verified 2026-07-14: ZERO occurrences in tracked files and ZERO in all 56
+# commits. The rebrand (#35) already removed them. This rule prevents their
+# return; it is not cleaning up an existing mess.
+forbidden_tokens:
+  salt: "nightgauge-publication-boundary-v1"
+  # The salt is public and is not a secret. It only defeats a trivial
+  # rainbow-table lookup of a short, guessable token like a username.
+  algorithm: "sha256(salt + token.lower())"
+  allow_paths:
+    - "scripts/test-publication-boundary.sh"
+  hashes:
+    - e11e7aacbef930c661269e6db3ef6db746a6be1ebe29cce05aa3774536fb76ec
+    - 0ff976a40da51077e50ad34a7363f7b9cfd86e5a12bb49b24c0b9ea2713c9e68
+    - fa62e03c6d0946570579cc66d46e04cd94f956c01f058de42a72f4a82d117060
+    - 9fca3e460dda0144f2f92c1a647acf94e0d5e4ecfbdfde85cdfb8280574ffca2
+    - 98719ef88334fbd5e627adec217ce65d84a9f136478d06d97c4b116ae0ba54cc
+    # Private companion-repository identifiers and the retired dogfood Project
+    # identifiers. Plaintext provenance is retained only in nightgauge-internal.
+    - aade25025ffb3a36dabece86c90cc9b44ab0838ada9c06ed1c8b9e39dac6eb95
+    - 581a1605412ee89a1bc3205338a55053527051f2a6f6f955bef265d1d40ba97d
+    - 0b77e820cfdf4c3735785ca93054804e5dd3dab6d1ca4f518dfdab03530cffeb
+    - 3a3c7b1858cee079d0fa3c32473e6bd00c95b4269a110058de4561038b979e34
+    - ea82e2341655ca59c0fe76481877ac1b5e02f86fa2d4d704d5231ed756e7af46
+    - e1b36a0840d7aa3ccce99755676daca3b6eaa4c1b02d00782995b917014a2f63
+    - 704b6142f4045f0395b5eb66799975f692e5490457fea4edebe97388b07a41ba
+    - cdcaa946b75a291c527a410276ce0e9a881f8a5437fb142a1f4ab0ce6bd9a084
+
+# ─── NEEDS-DECISION ──────────────────────────────────────────────────────────
+# Must be EMPTY to close #117. Any entry here fails the build. This is a
+# work-list with an owner and a proposed class, not a parking lot.
+needs_decision: []

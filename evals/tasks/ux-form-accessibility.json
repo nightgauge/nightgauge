@@ -1,0 +1,27 @@
+{
+  "id": "ux-form-accessibility",
+  "title": "Make the signup form accessible and mobile-friendly",
+  "job_class": "ux-styling",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "medium",
+  "instruction": "The existing SignupForm has unlabeled inputs, poor focus states, and overflows on small screens. Add associated <label>s and aria attributes, visible focus styles, inline validation messages wired via aria-describedby, and make the layout usable at 360px width. Do not change the form fields or submission logic.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/ux-form-accessibility/setup.sh" },
+  "checks": [
+    { "name": "build", "command": "npm run build", "expect_exit_code": 0 },
+    { "name": "test", "command": "npm test", "expect_exit_code": 0 }
+  ],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "ux_quality",
+        "weight": 0.6,
+        "guidance": "Are labels, focus states, and small-screen layout genuinely improved and accessible?"
+      },
+      {
+        "dimension": "correctness",
+        "weight": 0.4,
+        "guidance": "Are the original fields and submit behavior preserved?"
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "autonomy-contract",
+  "description": "Measures the #74 autonomy-contract preamble (skills/_shared/AUTONOMY_CONTRACT.md): does telling the model the run is autonomous and banning promise-ending turns change quality, cost, or completion? Shipped on reasoning strength; this variant is the required confirmation.",
+  "prepend": "This run is autonomous. No human is watching, and nobody can answer a question mid-task. Proceed without asking for any reversible action that follows from the task. Never end a turn on a promise: before ending your turn, check your last paragraph — if it is a plan, a question, a list of next steps, or a promise about work not yet done, do that work now with tool calls instead of describing it. End the turn only when the task's output contract is satisfied or you are genuinely blocked, and report a genuine block as an explicit failure, never as an open question."
+}

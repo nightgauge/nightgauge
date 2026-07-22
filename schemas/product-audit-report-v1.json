@@ -1,0 +1,300 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://nightgauge.dev/schemas/product-audit-report-v1.json",
+  "title": "ProductAuditReport",
+  "description": "Top-level product audit report produced by /nightgauge:product-audit",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "timestamp",
+    "run_id",
+    "workspace_root",
+    "overall_score",
+    "dimensions",
+    "critical_findings",
+    "execution_metadata"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version for forward compatibility",
+      "enum": ["1.0"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when the audit completed"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Unique identifier for this audit run (e.g., audit-20260323-143000)",
+      "pattern": "^audit-[0-9]{8}-[0-9]{6}$"
+    },
+    "workspace_root": {
+      "type": "string",
+      "description": "Absolute path to the workspace root directory"
+    },
+    "overall_score": {
+      "type": "integer",
+      "description": "Weighted overall score from 0 to 100",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "overall_score_trend": {
+      "$ref": "#/definitions/ScoreTrend"
+    },
+    "dimensions": {
+      "type": "array",
+      "description": "Per-dimension scores and findings",
+      "minItems": 0,
+      "maxItems": 20,
+      "items": {
+        "$ref": "#/definitions/DimensionResult"
+      }
+    },
+    "critical_findings": {
+      "type": "array",
+      "description": "Cross-dimension summary of critical-severity findings",
+      "items": {
+        "$ref": "#/definitions/CriticalFindingSummary"
+      }
+    },
+    "trend_analysis": {
+      "$ref": "#/definitions/TrendAnalysis"
+    },
+    "execution_metadata": {
+      "$ref": "#/definitions/ExecutionMetadata"
+    }
+  },
+  "definitions": {
+    "ScoreTrend": {
+      "type": "object",
+      "description": "Score trend relative to the previous audit",
+      "required": ["direction"],
+      "additionalProperties": false,
+      "properties": {
+        "previous_score": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "delta": {
+          "type": ["integer", "null"],
+          "description": "Score change (positive = improving, negative = degrading)"
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["improving", "degrading", "stable", "first_run"]
+        },
+        "days_since_last_audit": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "DimensionResult": {
+      "type": "object",
+      "description": "Result for a single audit dimension",
+      "required": [
+        "name",
+        "index",
+        "score",
+        "weight",
+        "finding_count",
+        "critical_count",
+        "high_count",
+        "medium_count",
+        "low_count",
+        "findings",
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "api_alignment",
+            "lifecycle",
+            "documentation",
+            "feature_parity",
+            "test_coverage",
+            "security",
+            "dependencies",
+            "ci_cd"
+          ]
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "finding_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "critical_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "high_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "medium_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "low_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "product-audit-finding-v1.json"
+          }
+        },
+        "status": {
+          "type": "string",
+          "description": "Execution status of this dimension",
+          "enum": ["completed", "skipped", "timeout", "error"]
+        },
+        "skip_reason": {
+          "type": ["string", "null"],
+          "description": "Reason if status is skipped or error"
+        },
+        "duration_seconds": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "CriticalFindingSummary": {
+      "type": "object",
+      "description": "Summary entry for a critical finding in the cross-dimension rollup",
+      "required": ["id", "dimension", "severity", "summary"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "dimension": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["critical", "high"]
+        },
+        "summary": {
+          "type": "string",
+          "description": "One-line human-readable description"
+        }
+      }
+    },
+    "TrendAnalysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audits_in_history": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "score_history": {
+          "type": "array",
+          "description": "Overall scores from oldest to most recent (including current)",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          }
+        },
+        "improving_dimensions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "degrading_dimensions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "stable_dimensions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "recommendations": {
+          "type": "array",
+          "description": "Prioritized improvement recommendations based on trend data",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ExecutionMetadata": {
+      "type": "object",
+      "required": ["mode", "dimensions_run", "duration_seconds", "repos_scanned"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "description": "Audit mode used",
+          "enum": ["full", "quick", "dimensions_subset"]
+        },
+        "dimensions_run": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "dimensions_skipped": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "repos_scanned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repos_available": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "repos_missing": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "issues_created": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "issues_auto_fixed": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "skip_reasons": {
+          "type": "object",
+          "description": "Map of dimension name → reason skipped",
+          "additionalProperties": { "type": "string" }
+        },
+        "cli_flags": {
+          "type": "object",
+          "description": "Flags active during this run",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

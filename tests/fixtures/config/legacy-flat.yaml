@@ -1,0 +1,5 @@
+# Legacy flat YAML config format (pre-nested structure)
+owner: TestOrg
+project: 42
+defaultRepo: my-repo
+logLevel: debug

@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "IssuePickupOutput",
+  "description": "Output from the issue-pickup pipeline stage",
+  "type": "object",
+  "properties": {
+    "issue_number": { "type": "integer", "description": "GitHub issue number" },
+    "title": { "type": "string", "description": "Issue title" },
+    "issue_type": {
+      "type": "string",
+      "enum": ["feature", "bug", "chore", "docs", "refactor", "test"],
+      "description": "Issue classification"
+    },
+    "requirements": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Extracted requirements"
+    },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Acceptance criteria checklist items"
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Issue labels"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "description": "Dependent issue numbers"
+    },
+    "branch_name": {
+      "type": "string",
+      "description": "Created feature branch name"
+    },
+    "estimated_size": {
+      "type": "string",
+      "enum": ["XS", "S", "M", "L", "XL"],
+      "description": "Estimated effort"
+    }
+  },
+  "required": [
+    "issue_number",
+    "title",
+    "issue_type",
+    "requirements",
+    "acceptance_criteria",
+    "labels",
+    "branch_name"
+  ]
+}

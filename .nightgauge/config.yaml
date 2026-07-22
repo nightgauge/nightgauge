@@ -1,0 +1,83 @@
+# Safe public-core dogfood defaults.
+#
+# This file deliberately has no GitHub Project number or node IDs. Configure a
+# project locally before using board-backed commands. Autonomous execution and
+# issue discovery are disabled by default so cloning the repository never
+# authorizes work or mutates the Nightgauge organization.
+owner: nightgauge
+owner_type: org
+repo: nightgauge
+project:
+  owner: nightgauge
+  repo: nightgauge
+
+pr:
+  admin_merge: false
+  merge_strategy: squash
+  delete_branch: true
+  auto_fix_ci: true
+  auto_fix_max_attempts: 3
+  ci_check_timeout: 600
+
+pipeline:
+  budget_preset: conservative
+  worktree_base: .worktrees
+  context_schema_repair:
+    enabled: false
+    max_attempts: 1
+
+model_routing:
+  mode: automatic
+  effort_auto: true
+  confidence_threshold: 0.7
+
+human_in_the_loop:
+  auto_accept_stages: false
+  auto_accept_permissions: false
+  auto_mode: false
+
+knowledge:
+  enabled: true
+  auto_scaffold: true
+  workspace_scoped: false
+  telemetry:
+    enabled: false
+
+audit:
+  enabled: true
+  features_config: .nightgauge/audit/features.yaml
+  repos:
+    - nightgauge
+  batchSize: 50
+  flushIntervalMs: 30000
+  offlineQueuePath: .nightgauge/audit-queue.json
+
+autonomous:
+  dry_run: true
+  enabled_repos:
+    - nightgauge/nightgauge
+  pickup_backlog: false
+  auto_actionable: false
+  refinement_enabled: false
+
+automations:
+  enabled: false
+  dry_run: true
+  log_file: .nightgauge/logs/automation.log
+  triggers: []
+
+autonomous_discovery:
+  enabled: false
+  kill_switch: true
+
+scheduled_tasks:
+  release_watch:
+    enabled: false
+  docs_watch:
+    enabled: false
+  continuous_improvement:
+    enabled: false
+
+ui:
+  core:
+    adapter: claude

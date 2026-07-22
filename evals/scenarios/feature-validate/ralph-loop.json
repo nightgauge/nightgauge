@@ -1,0 +1,19 @@
+{
+  "id": "fv-ralph-loop",
+  "skill": "feature-validate",
+  "description": "Feature-validate runs the RALPH self-healing loop on build/test failures.",
+  "failure_mode": "Model gives up on the first failing build instead of running the correction loop.",
+  "prompt": "A build fails during feature-validate. Describe the self-healing loop you run before declaring failure.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(ralph|loop|retry|self-heal)",
+      "flags": "i"
+    },
+    {
+      "type": "contains",
+      "value": "fix",
+      "ignore_case": true
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "period": {
+    "start": "2026-02-11T00:00:00.000Z",
+    "end": "2026-03-11T00:00:00.000Z",
+    "type": "month"
+  },
+  "quota": {
+    "runsUsedToday": 7,
+    "runsLimit": 100,
+    "quotaPercent": 7,
+    "nextReset": "2026-03-12T00:00:00.000Z"
+  },
+  "usage": {
+    "tokenUsageThisPeriod": 1250000,
+    "pipelineRunsThisPeriod": 63
+  },
+  "team": {
+    "activeMemberCount": 1
+  },
+  "recentRuns": [
+    {
+      "id": "run-20260311-001",
+      "recordedAt": "2026-03-11T13:42:45.000Z",
+      "quantity": 1,
+      "metadata": { "issueNumber": 1462, "stage": "feature-dev" }
+    },
+    {
+      "id": "run-20260310-042",
+      "recordedAt": "2026-03-10T09:15:00.000Z",
+      "quantity": 1,
+      "metadata": null
+    }
+  ],
+  "alertBanner": null
+}

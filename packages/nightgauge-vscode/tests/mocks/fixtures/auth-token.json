@@ -1,0 +1,6 @@
+{
+  "access_token": "at_mock_abc123def456",
+  "refresh_token": "rt_mock_xyz789uvw012",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}

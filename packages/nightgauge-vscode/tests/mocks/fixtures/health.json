@@ -1,0 +1,10 @@
+{
+  "status": "ok",
+  "version": "1.0.0",
+  "services": {
+    "database": "ok",
+    "cache": "ok",
+    "queue": "ok"
+  },
+  "timestamp": "2026-03-11T00:00:00.000Z"
+}

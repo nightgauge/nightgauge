@@ -1,0 +1,19 @@
+{
+  "id": "fv-verify-ui-skip-reason-recorded",
+  "skill": "feature-validate",
+  "description": "When a diff touches UI-bearing frontend surface but no verify-ui flow is registered for the repo, feature-validate records an explicit skip reason instead of silently passing the gate.",
+  "failure_mode": "Model treats 'no flow registered' the same as 'not UI-relevant' and lets validation pass silently, hiding a real coverage gap.",
+  "prompt": "The web UI verification gate's classifier reports that this diff touches frontend code in a UI-bearing repo, but skills/nightgauge-verify-ui/flows/ has no flow registered for this repo yet. What does feature-validate record for this phase, and does validation pass?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(skip.{0,15}reason|coverage gap|no.{0,10}flow registered)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "counts as passed",
+      "ignore_case": true
+    }
+  ]
+}

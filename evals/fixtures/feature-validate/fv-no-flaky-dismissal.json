@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Do not dismiss it as flaky. Investigate and fix the root cause — teardown races and pre-existing issues count as real failures that must be resolved before merge.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Do not dismiss it as flaky. Investigate and fix the root cause — teardown races and pre-existing issues count as real failures that must be resolved before merge.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Do not dismiss it as flaky. Investigate and fix the root cause — teardown races and pre-existing issues count as real failures that must be resolved before merge.",
+    "exit_code": 0
+  }
+}

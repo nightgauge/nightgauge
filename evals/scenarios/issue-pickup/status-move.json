@@ -1,0 +1,24 @@
+{
+  "id": "ip-status-move-inprogress",
+  "skill": "issue-pickup",
+  "description": "Issue pickup moves the board status to In Progress via the Go binary.",
+  "failure_mode": "Model improvises a gh GraphQL mutation instead of calling `project sync-status`/`project move-status`, drifting from the deterministic board-sync contract.",
+  "prompt": "An issue has been claimed. State the single command you run to move its project board status to In Progress. Use the deterministic Go binary, not raw GraphQL.",
+  "assertions": [
+    {
+      "type": "contains",
+      "value": "project",
+      "description": "uses project subcommand"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(sync-status|move-status)",
+      "description": "deterministic status command"
+    },
+    {
+      "type": "not_contains",
+      "value": "addProjectV2ItemById",
+      "description": "no improvised GraphQL"
+    }
+  ]
+}

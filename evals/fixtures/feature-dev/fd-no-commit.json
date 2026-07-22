@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "No. feature-dev does not commit or push. Code is committed and pushed by feature-validate after validation passes, so only validated code (including RALPH fixes) reaches the remote (#1608).",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "No. feature-dev does not commit or push. Code is committed and pushed by feature-validate after validation passes, so only validated code (including RALPH fixes) reaches the remote (#1608).",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "No. feature-dev does not commit or push. Code is committed and pushed by feature-validate after validation passes, so only validated code (including RALPH fixes) reaches the remote (#1608).",
+    "exit_code": 0
+  }
+}

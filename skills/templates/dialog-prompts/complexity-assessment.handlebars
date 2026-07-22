@@ -1,0 +1,31 @@
+---
+name: "complexity-assessment-dialog"
+version: "1.0.0"
+layer: "extension"
+description: "Dialog prompt asking the user to confirm or override complexity assessment"
+params:
+  - name: "issueNumber"
+    type: "number"
+    description: "Issue number being assessed"
+    required: true
+  - name: "issueTitle"
+    type: "string"
+    description: "Issue title for display"
+    required: false
+  - name: "assessedComplexity"
+    type: "string"
+    description: "AI-assessed complexity: XS, S, M, L, XL"
+    required: true
+  - name: "rationale"
+    type: "string"
+    description: "Brief rationale for the complexity assessment"
+    required: false
+---
+Issue #{{issueNumber}}{{#if issueTitle}}: {{issueTitle}}{{/if}}
+
+Assessed complexity: **{{assessedComplexity}}**
+{{#if rationale}}
+Rationale: {{rationale}}
+{{/if}}
+
+Confirm or override the complexity assessment to proceed with pipeline execution.

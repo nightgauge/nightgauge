@@ -1,0 +1,16 @@
+{
+  "valid": true,
+  "status": "active",
+  "tier": "pro",
+  "expiresAt": "2027-03-11T00:00:00.000Z",
+  "expiresSoon": false,
+  "machineBound": true,
+  "machineCount": 1,
+  "features": {
+    "batchProcessing": true,
+    "concurrentPipelines": 3,
+    "pipelineRunsPerDay": 100,
+    "pipelineRunsPerMonth": null,
+    "skillResolveRatePerMin": 60
+  }
+}

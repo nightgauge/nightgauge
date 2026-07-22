@@ -1,0 +1,51 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`MattermostService.format — snapshot parity > attachment snapshot matches for issue-pickup running 1`] = `
+{
+  "color": "#5865f2",
+  "fallback": "Pipeline #42: Running…",
+  "fields": [
+    {
+      "short": true,
+      "title": "Mode",
+      "value": "Elevated  ·  up to Opus",
+    },
+  ],
+  "text": "**Test issue**
+\`my-repo\` · \`fix/test\`
+
+:arrows_counterclockwise:  **Issue Pickup**  — 10s
+:hourglass_flowing_sand:  **Feature Planning**
+:hourglass_flowing_sand:  **Feature Dev**
+:hourglass_flowing_sand:  **Feature Validate**
+:hourglass_flowing_sand:  **PR Create**
+:hourglass_flowing_sand:  **PR Merge**",
+  "title": "Pipeline #42 — Running…",
+  "title_link": undefined,
+}
+`;
+
+exports[`MattermostService.format — snapshot parity > attachment snapshot matches for pr-merge productive 1`] = `
+{
+  "color": "#57f287",
+  "fallback": "Pipeline #42: Complete ✓",
+  "fields": [
+    {
+      "short": true,
+      "title": "Mode",
+      "value": "Elevated  ·  up to Opus",
+    },
+  ],
+  "text": "**Test issue**
+\`my-repo\` · \`fix/test\`
+
+:white_check_mark:  **Issue Pickup**  — 30s
+:white_check_mark:  **Feature Planning**  — 45s
+:white_check_mark:  **Feature Dev**  — 2m 0s
+:white_check_mark:  **Feature Validate**  — 1m 0s
+:white_check_mark:  **PR Create**  — 15s
+:white_check_mark:  **PR Merge**  — 10s",
+  "title": "Pipeline #42 — Complete ✓",
+  "title_link": "https://github.com/example/repo/pull/99",
+}
+`;

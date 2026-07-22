@@ -1,0 +1,24 @@
+{
+  "id": "bugfix-date-off-by-one",
+  "title": "Fix an off-by-one in the date-range utility",
+  "job_class": "bugfix",
+  "target_stages": ["feature-dev", "feature-validate"],
+  "difficulty": "easy",
+  "instruction": "daysBetween(start, end) is returning one day too few for ranges that span a month boundary, and a failing test reproduces it. Find the root cause, fix it without breaking the passing cases, and keep the fix minimal. Explain the cause in the commit message.",
+  "fixture": { "kind": "scaffold-script", "ref": "evals/fixtures/bugfix-date-off-by-one/setup.sh" },
+  "checks": [{ "name": "test", "command": "npm test", "expect_exit_code": 0 }],
+  "rubric": {
+    "criteria": [
+      {
+        "dimension": "correctness",
+        "weight": 0.7,
+        "guidance": "Is the root cause fixed (not the test weakened) and do all cases pass?"
+      },
+      {
+        "dimension": "clarity",
+        "weight": 0.3,
+        "guidance": "Is the fix minimal and the cause clearly explained?"
+      }
+    ]
+  }
+}

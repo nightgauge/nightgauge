@@ -1,0 +1,44 @@
+{
+  "nodeId": "I_node456",
+  "number": 42,
+  "title": "Add photo upload feature",
+  "body": "## Summary\nImplement photo upload with drag-and-drop support.",
+  "state": "OPEN",
+  "stateReason": "REOPENED",
+  "labels": ["type:feature", "priority:high"],
+  "repo": "nightgauge/nightgauge",
+  "url": "https://github.com/nightgauge/nightgauge/issues/42",
+  "assignees": ["octocat"],
+  "isEpic": true,
+  "milestone": "Sprint 1",
+  "parentIssueId": "I_parent100",
+  "parentIssueNumber": 40,
+  "subIssues": [
+    {
+      "nodeId": "I_sub789",
+      "number": 43,
+      "title": "Implement upload API",
+      "state": "OPEN",
+      "repo": "nightgauge/nightgauge",
+      "labels": ["size:M"]
+    }
+  ],
+  "blockedBy": [
+    {
+      "nodeId": "I_block101",
+      "number": 40,
+      "title": "Setup storage backend",
+      "state": "CLOSED",
+      "repo": "nightgauge/nightgauge"
+    }
+  ],
+  "blocking": [
+    {
+      "nodeId": "I_block202",
+      "number": 44,
+      "title": "Add photo gallery view",
+      "state": "OPEN",
+      "repo": "nightgauge/nightgauge"
+    }
+  ]
+}

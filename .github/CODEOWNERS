@@ -1,0 +1,4 @@
+# Code owners — review routing for Nightgauge.
+# Every pull request requests review from the maintainers team. The main-branch
+# ruleset separately requires code-owner approval before merge.
+* @Nightgauge/maintainers

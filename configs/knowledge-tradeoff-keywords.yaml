@@ -1,0 +1,20 @@
+# Tradeoff keywords for knowledge validation.
+# Plans containing at least 2 distinct keywords from this list trigger the
+# decisions.md population gate (when knowledge.require_decisions: true).
+#
+# Word boundary matching is applied for single-word keywords, preventing
+# false positives from substrings (e.g. "chose" matches but "choose" does not).
+# Multi-word and hyphenated phrases use plain substring matching.
+#
+# Edit this file to tune sensitivity without recompiling the binary.
+keywords:
+  - tradeoff
+  - trade-off
+  - chose
+  - rejected
+  - considered
+  - alternative
+  - instead of
+  - in favor of
+  - decided against
+  - opted for

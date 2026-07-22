@@ -1,0 +1,23 @@
+{
+  "rows": [
+    {
+      "eventType": "pipeline_run",
+      "total": 42,
+      "periodStart": "2026-03-01T00:00:00.000Z",
+      "periodEnd": "2026-03-31T23:59:59.000Z"
+    },
+    {
+      "eventType": "token_usage",
+      "total": 150000,
+      "periodStart": "2026-03-01T00:00:00.000Z",
+      "periodEnd": "2026-03-31T23:59:59.000Z"
+    }
+  ],
+  "limits": {
+    "batchProcessing": true,
+    "concurrentPipelines": 3,
+    "pipelineRunsPerDay": 100,
+    "pipelineRunsPerMonth": null,
+    "skillResolveRatePerMin": 60
+  }
+}

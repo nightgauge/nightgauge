@@ -1,0 +1,9 @@
+schema_version: "2"
+project:
+  owner: nightgauge # org login
+  number: 1 # project board number
+  repo: nightgauge
+forges:
+  github:
+    kind: github
+    base_url: https://github.com

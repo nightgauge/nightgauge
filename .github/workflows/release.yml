@@ -1,0 +1,361 @@
+# Release — Build & Publish (Production)
+# Triggered by semver tags (v*.*.*) WITHOUT pre-release suffixes.
+# Produces:
+#   - Multi-arch Go binaries via goreleaser (darwin-arm64, darwin-amd64, linux-amd64)
+#   - SHA256 checksums and manifest.json
+#   - Homebrew formula auto-bumped in nightgauge/homebrew-tap
+#   - Versioned .vsix (attached to the GitHub Release)
+#
+# Version is derived from the tag itself (not commit count).
+# The Go binary and VSIX share the same version string.
+#
+# Promotion flow:
+#   1. RC tag (v0.2.0-rc.1) → staging.yml builds & validates (no publish)
+#   2. Release tag (v0.2.0)  → this workflow builds & publishes
+#
+# Prerequisites:
+#   - HOMEBREW_TAP_GITHUB_TOKEN secret in the `production` environment
+#     (PAT with contents:write on nightgauge/homebrew-tap)
+#   - nightgauge/homebrew-tap repository must exist
+#
+# VS Code Marketplace publish (#4155): publishing requires BOTH the VSCE_PAT
+# secret AND the MARKETPLACE_PUBLISH repository variable set to "true".
+# The double gate exists because a Marketplace publish is public and permanent
+# even while this repo is private — the Marketplace launch is its own
+# deliberately-timed event (Gate 2), not a side effect of tagging a release.
+# The .vsix is attached to the GitHub Release either way.
+
+name: Release
+
+on:
+  push:
+    tags:
+      # Match semver tags WITHOUT pre-release suffix (e.g., v0.2.0, v1.0.0)
+      # This pattern excludes -rc.*, -beta.*, -alpha.* tags
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+
+    permissions:
+      contents: write # create releases
+      id-token: write # artifact attestations (OIDC)
+      attestations: write # artifact attestations
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # GoReleaser needs full history + tags: a shallow clone makes it warn
+          # ("running against a shallow clone") and breaks previous-tag detection
+          # and changelog generation.
+          fetch-depth: 0
+
+      - name: Ensure full working tree
+        run: |
+          git sparse-checkout disable 2>/dev/null || true
+          git checkout -- . 2>/dev/null || true
+
+      - name: Setup Node 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Clear stale npx cache (arm64/x64 esbuild mismatch)
+        run: rm -rf ~/.npm/_npx
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          # Strip leading 'v' from tag to get version
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          # Guard: reject pre-release tags that somehow matched
+          if [[ "$VERSION" == *-* ]]; then
+            echo "ERROR: Pre-release tag '$TAG' should not trigger production release."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Production release: $TAG (version $VERSION)"
+
+      # ---------------------------------------------------------------------
+      # PREFLIGHT — validate every publish credential BEFORE anything is
+      # published. GoReleaser creates the GitHub Release and pushes the Homebrew
+      # formula long before the Marketplace step runs, so an invalid VSCE_PAT
+      # discovered late leaves a half-published release. Fail fast instead.
+      # ---------------------------------------------------------------------
+      - name: Preflight — publish credentials
+        id: preflight
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          MARKETPLACE_PUBLISH: ${{ vars.MARKETPLACE_PUBLISH }}
+        run: |
+          set -euo pipefail
+          PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
+
+          if [ "${MARKETPLACE_PUBLISH:-}" != "true" ]; then
+            echo "::notice::MARKETPLACE_PUBLISH repository variable is not 'true' — Marketplace publish will be skipped. The Marketplace launch (Gate 2) is an explicit opt-in: set the repo variable MARKETPLACE_PUBLISH=true when ready to publish."
+            echo "vsce=false" >> "$GITHUB_OUTPUT"
+          elif [ -n "${VSCE_PAT:-}" ]; then
+            echo "VSCE_PAT present — verifying against publisher '$PUBLISHER'…"
+            if ! npx --yes @vscode/vsce@3.9.1 verify-pat "$PUBLISHER"; then
+              echo "::error::VSCE_PAT is set but is NOT valid for Marketplace publisher '$PUBLISHER'. Create the publisher at https://marketplace.visualstudio.com/manage and use an Azure DevOps PAT with Marketplace:Manage scope (All accessible organizations) — or remove the VSCE_PAT secret to skip Marketplace publishing. Failing now, before anything is published."
+              exit 1
+            fi
+            echo "vsce=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::VSCE_PAT not set — Marketplace publish will be skipped."
+            echo "vsce=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Homebrew degrades gracefully: without a tap token, skip that pipe
+          # rather than fail the release after the GitHub Release already exists.
+          if [ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+            echo "goreleaser_args=release --clean" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew formula push. Binaries and VSIXs still publish."
+            echo "goreleaser_args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Cross-compile every target binary up front so each platform-specific
+      # .vsix can bundle the matching one. The extension loads its Go binary from
+      # the bundled dist/bin/ (no runtime download), so a single universal .vsix
+      # would ship one arch and break on the others. `make build-all` emits
+      # bin/nightgauge-{darwin-arm64,darwin-amd64,linux-amd64}.
+      - name: Build all Go binaries (per-target VSIX bundling)
+        run: make build-all VERSION=${{ steps.version.outputs.version }}
+
+      # Build EVERY workspace before testing, not just the SDK. The VSCode suite
+      # has an integration test (tests/integration/failureTaxonomyPackaging.test.ts)
+      # asserting `dist/failure-taxonomy.yaml` exists — a file only the extension's
+      # own `build:assets` step produces. Building the SDK alone left it absent, so
+      # `Run tests` could never pass here. ci.yml does not hit this because its
+      # VSCode job runs the root `npm run build` before testing.
+      - name: Build all workspaces (SDK + extension assets)
+        run: npm run build
+
+      - name: Run tests
+        run: npm run test -- --run
+
+      - name: Inject release version
+        working-directory: packages/nightgauge-vscode
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      # Split the canonical `npm run package` (build + vsce package) so we can
+      # stamp `dist/build-info.json` AFTER the build pipeline writes into
+      # `dist/` but BEFORE `vsce package` freezes it. Pre-#3650 the stamp ran
+      # earlier and any future `dist/` rewrite (rm -rf in clean step, new
+      # asset path) could silently omit it from the .vsix and leave
+      # ExtensionStalenessService stuck in `state: "unknown"` on the
+      # installed extension. Issue #3650 (Part B).
+      - name: Build extension (pre-package)
+        working-directory: packages/nightgauge-vscode
+        run: npm run build
+
+      # Issue #3300 / #3650: stamp build provenance so ExtensionStalenessService
+      # can detect when the running extension is behind workspace HEAD and
+      # refuse autonomous dispatch on critical-path drift. Stamping happens
+      # AFTER `npm run build` so dist/ already exists in its final shape, and
+      # the helper script asserts the file is parseable JSON before we
+      # continue — a missing stamp is a hard fail, not a silent skip.
+      - name: Stamp build provenance
+        run: |
+          DIST=packages/nightgauge-vscode/dist
+          BUILD_SHA=$(git rev-parse HEAD)
+          BUILD_BRANCH=${{ github.ref_name }}
+          COMMIT_TIMESTAMP=$(git log -1 --format=%cI HEAD)
+          BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          cat > "$DIST/build-info.json" <<EOF_BUILD_INFO
+          {
+            "commitSha": "$BUILD_SHA",
+            "branch": "$BUILD_BRANCH",
+            "commitTimestamp": "$COMMIT_TIMESTAMP",
+            "buildTimestamp": "$BUILD_TIMESTAMP",
+            "schemaVersion": "1"
+          }
+          EOF_BUILD_INFO
+          echo "Stamped: $BUILD_SHA ($BUILD_BRANCH @ $COMMIT_TIMESTAMP)"
+          bash packages/nightgauge-vscode/scripts/check-build-info.sh \
+            "$DIST/build-info.json"
+
+      # Package one .vsix PER VS Code target, each bundling the matching binary
+      # swapped into dist/bin/. `vsce package --target <t>` names the file
+      # nightgauge-vscode-<version>-<t>.vsix; the Marketplace serves the
+      # correct one per user automatically. A single universal .vsix would ship
+      # one arch and fail to launch the backend on every other platform.
+      - name: Package per-target VSIXs
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          # vsce target -> Makefile binary suffix (GOOS-GOARCH)
+          declare -A BIN=(
+            [darwin-arm64]=darwin-arm64
+            [darwin-x64]=darwin-amd64
+            [linux-x64]=linux-amd64
+          )
+          mkdir -p dist/bin
+          for T in darwin-arm64 darwin-x64 linux-x64; do
+            SRC="../../bin/nightgauge-${BIN[$T]}"
+            [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
+            cp "$SRC" dist/bin/nightgauge
+            chmod +x dist/bin/nightgauge
+            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T"
+          done
+          echo "Packaged:"; ls -1 *.vsix
+
+      # Defense-in-depth: every .vsix must carry the build-info stamp AND a
+      # bundled binary before GoReleaser hands them to consumers.
+      - name: Verify VSIX contents
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          COUNT=0
+          for VSIX in *.vsix; do
+            COUNT=$((COUNT + 1))
+            unzip -l "$VSIX" | grep -q 'extension/dist/build-info.json' \
+              || { echo "ERROR: $VSIX missing build-info.json (ExtensionStalenessService would report 'unknown')"; exit 1; }
+            unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
+              || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
+            echo "OK: $VSIX"
+          done
+          [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }
+
+      # `Inject release version` runs `npm version`, which rewrites the extension's
+      # package.json AND the root package-lock.json. GoReleaser's `validate` pipe
+      # then refuses to release ("git is in a dirty state"). The version is already
+      # baked into the packaged .vsix files by this point, so restoring those two
+      # tracked files is safe and keeps validate's tag/dirty guarantees intact.
+      # Build outputs (bin/, dist/, *.vsix) are gitignored, hence --untracked-files=no.
+      - name: Restore working tree for GoReleaser
+        run: |
+          set -euo pipefail
+          git checkout -- package-lock.json packages/nightgauge-vscode/package.json
+          DIRTY="$(git status --porcelain --untracked-files=no)"
+          if [ -n "$DIRTY" ]; then
+            echo "::error::Working tree still dirty before GoReleaser — it refuses to release. Modified:"
+            printf '%s\n' "$DIRTY"
+            exit 1
+          fi
+          echo "Working tree clean; GoReleaser validate will pass."
+
+      # syft powers the `sboms:` block in .goreleaser.yml (one SPDX SBOM per
+      # archive). GitHub-hosted runners do not ship syft, so install it — pinned
+      # to a SHA — before goreleaser runs, or the SBOM pipe fails.
+      - name: Install syft (SBOM generator)
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      # THIRD_PARTY_NOTICES is listed in .goreleaser.yml archives.files, so it
+      # must exist at repo root before goreleaser archives. `npm run build` above
+      # already generated it; regenerate defensively (idempotent) in case build
+      # ordering changes. It is gitignored, so it never dirties the tree.
+      - name: Ensure THIRD_PARTY_NOTICES for archives
+        run: npm run notices
+
+      # args come from the preflight: `--skip=homebrew` is appended when no tap
+      # token is configured, so a missing token degrades gracefully instead of
+      # failing after the GitHub Release has already been created.
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.17.0
+          args: ${{ steps.preflight.outputs.goreleaser_args }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      # manifest.json is derived from GoReleaser's own checksums.txt, so it can
+      # only be built AFTER goreleaser runs — GoReleaser cannot attach it via
+      # `extra_files` (the file does not exist yet) and v2 has no `after:` hook.
+      # The SDK postinstall fetches this from the Release to SHA256-verify the
+      # binary it downloads, so a missing manifest silently breaks that path.
+      - name: Generate + attach manifest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          python3 scripts/generate-manifest.py dist/ > dist/manifest.json
+          test -s dist/manifest.json || { echo "ERROR: empty manifest.json"; exit 1; }
+          gh release upload "$TAG" dist/manifest.json --clobber
+          echo "Attached manifest.json"
+
+      - name: Attach VSIXs to GitHub Release
+        working-directory: packages/nightgauge-vscode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          gh release upload "$TAG" *.vsix --clobber
+          echo "Attached: $(ls -1 *.vsix | tr '\n' ' ')"
+
+      # Supply-chain provenance: signed build attestations for every consumer-
+      # facing artifact, verifiable with `gh attestation verify <file> --repo
+      # <owner>/<repo>`. GitHub only supports attestations on public repos for
+      # this plan, so the steps self-skip while the repo is private (a private
+      # rehearsal release must not fail on them).
+      - name: Attest binary archives + manifest + SBOMs
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/manifest.json
+            dist/*.spdx.sbom.json
+
+      - name: Attest VSIXs
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: packages/nightgauge-vscode/*.vsix
+
+      # --- VS Code Marketplace ---
+      # Whether to publish was decided (and the PAT VERIFIED against the
+      # publisher) in the Preflight step, before anything was published. The
+      # `secrets` context cannot be used in a step-level `if:` — GitHub rejects
+      # the whole workflow at load time — so we gate on the preflight's output.
+      # Do NOT inline `secrets.VSCE_PAT` back into an `if:`.
+      - name: Publish per-target VSIXs to VS Code Marketplace
+        if: ${{ steps.preflight.outputs.vsce == 'true' }}
+        working-directory: packages/nightgauge-vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          # Each .vsix carries its targetPlatform in the manifest, so vsce
+          # publishes it for the right platform without re-specifying --target.
+          for VSIX in *.vsix; do
+            echo "Publishing $VSIX"
+            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX"
+          done
+
+      - name: Marketplace publish skipped
+        if: ${{ steps.preflight.outputs.vsce != 'true' }}
+        run: |
+          echo "::notice::Skipped VS Code Marketplace publish — requires BOTH the VSCE_PAT secret and the MARKETPLACE_PUBLISH=true repository variable (tracked in #4155). The .vsix is already attached to this GitHub Release; satisfy both gates and re-run this workflow (or vsce publish manually) to publish it."

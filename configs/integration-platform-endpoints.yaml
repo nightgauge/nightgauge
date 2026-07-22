@@ -1,0 +1,67 @@
+# Default platform endpoint manifest for `nightgauge integration probe-platform`.
+#
+# Mirrors the endpoint list in skills/nightgauge-integration-audit/SKILL.md
+# Phase 2 (lines 64–108). The canonical, human-visible copy lives at
+# configs/integration-platform-endpoints.yaml. This file is the embedded copy
+# that ships in the binary so the verb works with no working-directory
+# dependency. See ADR-001 in
+# .nightgauge/knowledge/features/3090-integration-probe-platform/decisions.md.
+#
+# Schema:
+#   version: integer schema version (current: 1)
+#   groups: map of group label → list of {method, path, auth_mode?}
+# auth_mode is optional; the global --auth-mode flag is used if not set per entry.
+
+version: 1
+groups:
+  AUTH:
+    - { method: GET, path: /v1/auth/me }
+    - { method: POST, path: /v1/auth/web/github }
+    - { method: POST, path: /v1/auth/web/callback }
+    - { method: POST, path: /v1/auth/logout }
+    - { method: POST, path: /v1/auth/refresh }
+    - { method: POST, path: /v1/auth/signout }
+    - { method: POST, path: /v1/auth/token/refresh }
+    - { method: POST, path: /v1/auth/device-code }
+    - { method: POST, path: /v1/auth/device-token }
+    - { method: POST, path: /v1/auth/github }
+  PIPELINES:
+    - { method: GET, path: /v1/pipeline-runs }
+    - { method: GET, path: /v1/pipeline-runs/stats }
+    - { method: GET, path: /v1/pipeline-runs/:id }
+    - { method: GET, path: /v1/pipelines/commands/:id }
+    - { method: GET, path: /v1/pipelines/events/stream }
+    - { method: GET, path: /v1/sessions }
+    - { method: POST, path: /v1/pipelines/trigger }
+    - { method: GET, path: /v1/pipelines/slots }
+  QUEUE:
+    - { method: GET, path: /v1/queue }
+    - { method: POST, path: /v1/queue/add }
+    - { method: DELETE, path: /v1/queue/:id }
+    - { method: POST, path: /v1/queue/reorder }
+  GITHUB:
+    - { method: GET, path: /v1/github/issues }
+    - { method: GET, path: /v1/github/prs }
+    - { method: GET, path: /v1/github/epics }
+    - { method: GET, path: /v1/github/board/items }
+  TEAM:
+    - { method: GET, path: /v1/team/members }
+    - { method: GET, path: /v1/team/:id/members }
+  ANALYTICS:
+    - { method: GET, path: /v1/analytics/health }
+    - { method: GET, path: /v1/analytics/trends }
+    - { method: GET, path: /v1/analytics/cost }
+    - { method: GET, path: /v1/analytics/dashboard }
+  ADMIN:
+    - { method: GET, path: /v1/billing/subscription }
+    - { method: GET, path: /v1/billing/invoices }
+    - { method: GET, path: /v1/webhooks }
+    - { method: GET, path: /v1/api-keys }
+    - { method: GET, path: /v1/audit-log }
+    - { method: GET, path: /v1/events }
+    - { method: GET, path: /v1/users/me/notification-preferences }
+  HEALTH:
+    - { method: GET, path: /health, auth_mode: none }
+    - { method: GET, path: /v1/health, auth_mode: none }
+    - { method: GET, path: /ready, auth_mode: none }
+    - { method: GET, path: /v1/health/report, auth_mode: none }

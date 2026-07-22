@@ -1,0 +1,8 @@
+project:
+  owner: nightgauge
+  number: 1
+  repo: nightgauge
+forges:
+  github:
+    kind: github
+    base_url: https://github.com

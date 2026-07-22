@@ -1,0 +1,7 @@
+project:
+  owner: nightgauge
+  number: 1
+autonomous:
+  repositories:
+    my-repo:
+      forge: nonexistent

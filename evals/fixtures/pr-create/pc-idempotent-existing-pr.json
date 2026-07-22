@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "pr-create is idempotent: if `pr create` says a PR already exists, verify the open PR's head SHA equals HEAD and continue — do not treat it as a failure.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "pr-create is idempotent: if `pr create` says a PR already exists, verify the open PR's head SHA equals HEAD and continue — do not treat it as a failure.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "pr-create is idempotent: if `pr create` says a PR already exists, verify the open PR's head SHA equals HEAD and continue — do not treat it as a failure.",
+    "exit_code": 0
+  }
+}

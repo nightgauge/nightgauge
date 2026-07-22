@@ -1,0 +1,26 @@
+[
+  {
+    "id": 5042,
+    "iid": 7,
+    "project_id": 5,
+    "title": "First MR",
+    "state": "opened",
+    "source_branch": "feat/foo",
+    "target_branch": "main",
+    "sha": "abcdef0123456789abcdef0123456789abcdef01",
+    "web_url": "https://gitlab.example.com/o/r/-/merge_requests/7",
+    "labels": []
+  },
+  {
+    "id": 5043,
+    "iid": 8,
+    "project_id": 5,
+    "title": "Second MR",
+    "state": "opened",
+    "source_branch": "feat/bar",
+    "target_branch": "main",
+    "sha": "fedcba9876543210fedcba9876543210fedcba98",
+    "web_url": "https://gitlab.example.com/o/r/-/merge_requests/8",
+    "labels": []
+  }
+]

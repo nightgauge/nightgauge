@@ -1,0 +1,12 @@
+schema_version: "2"
+project:
+  owner: nightgauge
+  number: 1
+forges:
+  github:
+    kind: github
+    base_url: https://github.com
+autonomous:
+  repositories:
+    some-repo:
+      forge: nonexistent-forge

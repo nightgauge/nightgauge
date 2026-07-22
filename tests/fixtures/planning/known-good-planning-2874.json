@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.5",
+  "issue_number": 2874,
+  "plan_file": ".nightgauge/plans/2874-fix-pattern-mining-serialization.md",
+  "approach": "Two-layer fix: schema normalizers in helpers.ts for pattern_classifications and flexEnum for documentation_scope; FeaturePlanningStage execute() override with targeted repair pass on ContextValidationError.",
+  "files_to_create": [
+    "tests/fixtures/planning/known-good-planning-2874.json"
+  ],
+  "files_to_modify": [
+    "packages/nightgauge-sdk/src/context/schemas/helpers.ts",
+    "packages/nightgauge-sdk/src/context/schemas/planning.ts",
+    "packages/nightgauge-sdk/src/stages/FeaturePlanningStage.ts",
+    "skills/nightgauge-feature-planning/SKILL.md",
+    "packages/nightgauge-sdk/src/__tests__/context/schemas/contextSchemas.test.ts"
+  ],
+  "complexity_assessment": {
+    "size_label": "M",
+    "type_label": "bug",
+    "priority_label": "medium",
+    "computed_score": 3,
+    "documentation_scope": "targeted",
+    "rationale": "Schema normalizers follow well-established patterns already in helpers.ts.",
+    "estimated_token_savings": 2000
+  },
+  "pattern_mining_results": {
+    "patterns_found": [
+      {
+        "pattern_type": "idiom",
+        "category": "Zod",
+        "pattern": "z.preprocess() + normalizeDiscoveredPattern for field-alias normalization on LLM-produced objects",
+        "evidence": [
+          "packages/nightgauge-sdk/src/context/schemas/helpers.ts:99",
+          "packages/nightgauge-sdk/src/context/schemas/pattern-mining.ts:53"
+        ],
+        "frequency": 2,
+        "example_implementations": [
+          "normalizeDiscoveredPattern",
+          "DiscoveredPatternSchema"
+        ]
+      },
+      {
+        "pattern_type": "structural",
+        "category": "Zod",
+        "pattern": "flexEnum() for deterministic enum normalization on AI agent output",
+        "evidence": [
+          "packages/nightgauge-sdk/src/context/schemas/helpers.ts:49",
+          "packages/nightgauge-sdk/src/context/schemas/validate.ts:133"
+        ],
+        "frequency": 3,
+        "example_implementations": [
+          "ChangeTypeSchema",
+          "RoutingPathSchema"
+        ]
+      }
+    ],
+    "similar_issues": [],
+    "pattern_classifications": {
+      "naming_conventions": 0,
+      "structural_patterns": 2,
+      "interface_patterns": 0,
+      "idioms": 2
+    },
+    "search_queries_used": [
+      "normalizeDiscoveredPattern",
+      "flexEnum",
+      "z.preprocess",
+      "ContextValidationError"
+    ],
+    "coverage_ratio": 0.85,
+    "token_cost_estimate": 8500,
+    "recommendations": [
+      "Add normalizePatternClassifications preprocess to helpers.ts following the normalizeDiscoveredPattern pattern",
+      "Use flexEnum for documentation_scope in planning.ts"
+    ]
+  },
+  "decisions": [],
+  "revision_count": 0,
+  "revision_reasons": [],
+  "knowledge_path": null,
+  "knowledge_entries": [],
+  "cross_repo_knowledge": [],
+  "created_at": "2026-04-20T00:14:09.358Z"
+}

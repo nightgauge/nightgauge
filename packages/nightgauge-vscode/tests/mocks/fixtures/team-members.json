@@ -1,0 +1,22 @@
+{
+  "members": [
+    {
+      "memberId": "member-001",
+      "accountId": "account-001",
+      "role": "owner",
+      "joinedAt": "2025-01-15T10:00:00.000Z"
+    },
+    {
+      "memberId": "member-002",
+      "accountId": "account-002",
+      "role": "admin",
+      "joinedAt": "2025-03-20T14:30:00.000Z"
+    },
+    {
+      "memberId": "member-003",
+      "accountId": "account-003",
+      "role": "developer",
+      "joinedAt": "2025-06-01T09:00:00.000Z"
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+out/
+bin/
+!internal/build/
+
+# Generated at build time by scripts/generate-third-party-notices.mjs.
+# Shipped inside the VSIX, npm tarball and GoReleaser archives, but never
+# committed — it is a pure function of the installed dependency tree.
+/THIRD_PARTY_NOTICES
+packages/nightgauge-sdk/THIRD_PARTY_NOTICES
+packages/nightgauge-vscode/THIRD_PARTY_NOTICES
+
+# Go compiled binary
+/nightgauge
+/seed
+
+# Git worktrees for concurrent pipeline execution (Issue #1621)
+.worktrees/
+# Autonomous/batch pipelines create worktrees under .nightgauge/worktrees/ —
+# these are runtime checkouts that `git worktree list` tracks administratively
+# in .git/worktrees/, not files that belong in the main repo index.
+.nightgauge/worktrees/
+# Agent-tool worktrees (Claude Code subagents launched with isolation:worktree
+# create checkouts here). Same rationale as above — administrative entries
+# tracked by `git worktree list`, not files that belong in the index.
+.claude/worktrees/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# Secrets (never commit)
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# Personal / non-source documents (keep out of the repo)
+*.docx
+*.doc
+*.pdf
+*.bak
+~$*
+
+# AI Smart Setup answer logs (may contain sensitive project info)
+AI_SMART_SETUP_ANSWER_LOG.md
+answer-log-*.md
+.ai-smart-setup/
+
+# Claude Code local settings (user-specific)
+.claude/settings.local.json
+
+# Claude agent working memory (subagent research files, not source-controlled)
+.claude/agent-memory/
+
+# Autonomous scheduler runtime state (changes every scan cycle)
+.nightgauge/autonomous/state.json
+
+# Nightgauge pipeline files
+# Transient artifacts are managed by .nightgauge/.gitignore (nested).
+# Only repo-level overrides belong here.
+
+# Nested .nightgauge directories (should never exist in packages/)
+packages/**/.nightgauge/
+
+# Pipeline debug logs (may be large)
+nightgauge-output-*.json
+
+# Generated AI context files
+GEMINI.md
+
+# Generated reports (audit, telemetry, analysis)
+reports/
+
+# Test artifacts (codex smoke tests, etc.)
+artifacts/
+test-results/
+.playwright-mcp/
+pipeline.png
+
+# Social media drafts (personal content, not product code)
+docs/social-media/
+.nightgauge/performance-mode.yaml
+
+# Knowledge recall cache (auto-generated BM25 index; do not commit)
+.nightgauge/knowledge/.recall-cache/
+
+# ─── Publication boundary (see .github/publication-boundary.yaml) ────────────
+# These paths are PRIVATE-class: they must never be tracked in this repository.
+#
+# This replaces a line in .git/info/exclude, which is local-only, unversioned,
+# and absent from every fresh clone — so it protected exactly one machine. These
+# rules are versioned and therefore protect everyone. They are the first line of
+# defence; the fail-closed CI guard is the second, and catches a `git add -f`
+# that defeats this file.
+#
+# Internal strategy, positioning, brand and commercial content lives in the
+# nightgauge-internal repository. See docs/DOCUMENTATION_IA.md for what docs/
+# may contain.
+docs/strategy/
+
+# Transient pipeline exhaust that was previously tracked by accident.
+.branch-context
+.nightgauge/planning-summary-*.txt

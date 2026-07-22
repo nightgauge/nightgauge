@@ -1,0 +1,23 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "id": "PR_NODE_7",
+        "number": 7,
+        "title": "Add feature",
+        "body": "PR body",
+        "state": "OPEN",
+        "headRefName": "feat/x",
+        "baseRefName": "main",
+        "url": "https://github.com/o/r/pull/7",
+        "mergeable": "MERGEABLE",
+        "isDraft": true,
+        "reviewDecision": "APPROVED",
+        "additions": 10,
+        "deletions": 5,
+        "labels": { "nodes": [{ "name": "enhancement" }] },
+        "commits": { "nodes": [] }
+      }
+    }
+  }
+}

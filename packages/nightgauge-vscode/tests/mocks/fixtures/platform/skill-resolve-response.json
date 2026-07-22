@@ -1,0 +1,10 @@
+{
+  "resolution": {
+    "skillId": "feature-dev",
+    "variantId": "variant-sonnet-4-6",
+    "model": "claude-sonnet-4-6",
+    "resolvedContent": "# Feature Development\n\nImplement features following approved plans and documented standards.",
+    "version": "1.15.0"
+  },
+  "resolvedAt": "2026-03-11T13:00:00.000Z"
+}

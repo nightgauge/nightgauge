@@ -1,0 +1,19 @@
+{
+  "id": "fv-verify-ui-console-error-blocks",
+  "skill": "feature-validate",
+  "description": "The web UI verification gate treats a new browser console error as a hard failure, even when every visual assertion passed.",
+  "failure_mode": "Model reports the verify-ui flow as passed because the visible UI state matched, ignoring a new JS exception or failed resource load in the console.",
+  "prompt": "During the web UI verification gate (Phase 2.45), a verify-ui flow's step 3 passes its visual assertion (the expected element is present), but the browser console shows a new error that was not there before step 3. The mode is strict. What is the flow's status and what happens to feature-validate?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(fail|hard failure|not.{0,10}passed)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "visual assertion passed so it's fine",
+      "ignore_case": true
+    }
+  ]
+}

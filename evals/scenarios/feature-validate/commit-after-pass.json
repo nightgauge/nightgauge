@@ -1,0 +1,19 @@
+{
+  "id": "fv-commit-after-pass",
+  "skill": "feature-validate",
+  "description": "Feature-validate commits and pushes only after validation passes.",
+  "failure_mode": "Model pushes before validation succeeds, or skips the push entirely after a green run.",
+  "prompt": "Validation has just passed in feature-validate. State the next git actions you take.",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(commit)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(push)",
+      "flags": "i"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "id": 4007,
+  "iid": 7,
+  "project_id": 5,
+  "title": "Add feature",
+  "description": "PR body",
+  "state": "opened",
+  "source_branch": "feat/x",
+  "target_branch": "main",
+  "web_url": "https://gitlab.example.com/o/r/-/merge_requests/7",
+  "labels": ["enhancement"],
+  "draft": true,
+  "work_in_progress": false,
+  "merge_status": "can_be_merged",
+  "squash": true,
+  "allow_force_push": false,
+  "approvals_before_merge": null,
+  "assignees": []
+}

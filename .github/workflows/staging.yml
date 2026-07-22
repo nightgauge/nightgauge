@@ -1,0 +1,167 @@
+# Staging — RC dry-run. Validates the FULL release build WITHOUT publishing.
+#
+# Triggered by pre-release semver tags (vX.Y.Z-rc.N). Produces the real
+# artifacts — one platform-specific .vsix per target plus the GoReleaser CLI
+# binaries/tarballs — as downloadable Actions artifacts, so every public install
+# path can be verified BEFORE a real release. Publishes NOTHING: no Marketplace,
+# no Homebrew push, no GitHub Release. Promote a green RC to a real release by
+# tagging the same commit vX.Y.Z (→ release.yml).
+name: Staging (RC dry-run)
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+
+permissions:
+  contents: read
+
+env:
+  TZ: UTC
+
+concurrency:
+  group: staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    name: Build all artifacts (no publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@nightgauge.dev"
+          git config --global user.name "Nightgauge CI"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "RC dry-run: $TAG"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build all Go binaries (per-target VSIX bundling)
+        run: make build-all VERSION=${{ steps.version.outputs.version }}
+
+      - name: Build SDK + extension
+        run: npm run build
+
+      - name: Inject RC version
+        working-directory: packages/nightgauge-vscode
+        run: npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Stamp build provenance
+        run: |
+          DIST=packages/nightgauge-vscode/dist
+          cat > "$DIST/build-info.json" <<EOF
+          {
+            "commitSha": "$(git rev-parse HEAD)",
+            "branch": "${{ github.ref_name }}",
+            "commitTimestamp": "$(git log -1 --format=%cI HEAD)",
+            "buildTimestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "schemaVersion": "1"
+          }
+          EOF
+          bash packages/nightgauge-vscode/scripts/check-build-info.sh "$DIST/build-info.json"
+
+      # One .vsix per VS Code target, each bundling the matching binary. Mirrors
+      # release.yml so the RC validates exactly what a real release produces.
+      - name: Package per-target VSIXs
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          declare -A BIN=(
+            [darwin-arm64]=darwin-arm64
+            [darwin-x64]=darwin-amd64
+            [linux-x64]=linux-amd64
+          )
+          mkdir -p dist/bin
+          for T in darwin-arm64 darwin-x64 linux-x64; do
+            SRC="../../bin/nightgauge-${BIN[$T]}"
+            [[ -f "$SRC" ]] || { echo "ERROR: missing $SRC (did 'make build-all' run?)"; exit 1; }
+            cp "$SRC" dist/bin/nightgauge
+            chmod +x dist/bin/nightgauge
+            npx @vscode/vsce@3.9.1 package --no-dependencies --target "$T"
+          done
+          echo "Packaged:"; ls -1 *.vsix
+
+      - name: Verify VSIX contents
+        working-directory: packages/nightgauge-vscode
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          COUNT=0
+          for VSIX in *.vsix; do
+            COUNT=$((COUNT + 1))
+            unzip -l "$VSIX" | grep -q 'extension/dist/build-info.json' \
+              || { echo "ERROR: $VSIX missing build-info.json"; exit 1; }
+            unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
+              || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
+            echo "OK: $VSIX"
+          done
+          [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 VSIXs, found $COUNT"; exit 1; }
+
+      # syft powers the `sboms:` block in .goreleaser.yml. The RC dry-run must
+      # exercise the exact same SBOM path as the real release, so install syft
+      # (SHA-pinned) here too.
+      - name: Install syft (SBOM generator)
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      # THIRD_PARTY_NOTICES is listed in .goreleaser.yml archives.files; ensure it
+      # exists at repo root before the snapshot archive step (idempotent).
+      - name: Ensure THIRD_PARTY_NOTICES for archives
+        run: npm run notices
+
+      # Snapshot mode: builds the CLI binaries + tarballs + checksums into dist/
+      # but publishes nothing and pushes no Homebrew formula.
+      - name: GoReleaser (snapshot — build only, no publish)
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: v2.17.0
+          args: release --snapshot --clean
+
+      # Exercise the same manifest path the real release uses (derived from
+      # goreleaser's checksums.txt; the SDK postinstall SHA256-verifies against it).
+      - name: Generate manifest.json
+        run: |
+          set -euo pipefail
+          python3 scripts/generate-manifest.py dist/ > dist/manifest.json
+          test -s dist/manifest.json || { echo "ERROR: empty manifest.json"; exit 1; }
+          echo "manifest.json:"; head -c 400 dist/manifest.json; echo
+
+      - name: Upload RC artifacts for manual verification
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rc-artifacts-${{ steps.version.outputs.tag }}
+          path: |
+            packages/nightgauge-vscode/*.vsix
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/manifest.json
+            dist/*.spdx.sbom.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        run: |
+          echo "### RC dry-run ${{ steps.version.outputs.tag }} — no publish" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download **rc-artifacts-${{ steps.version.outputs.tag }}** from this run to install/test each platform's .vsix and the CLI tarballs." >> "$GITHUB_STEP_SUMMARY"

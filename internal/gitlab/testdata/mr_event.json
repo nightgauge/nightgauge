@@ -1,0 +1,14 @@
+{
+  "object_kind": "merge_request",
+  "object_attributes": {
+    "iid": 7,
+    "state": "opened",
+    "action": "open",
+    "created_at": "2024-01-15T10:00:00Z"
+  },
+  "project": {
+    "id": 1234,
+    "name": "my-project",
+    "web_url": "https://gitlab.example.com/mygroup/my-project"
+  }
+}

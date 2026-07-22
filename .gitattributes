@@ -1,0 +1,12 @@
+# Normalize line endings
+* text=auto
+
+# Generated files — collapse in PR diffs
+api/generated/**                linguist-generated=true
+packages/nightgauge-vscode/src/services/IpcClient.generated.ts linguist-generated=true
+
+# Lock file — collapse in PR diffs
+package-lock.json               linguist-generated=true -diff
+
+# Binary
+*.vsix                          binary

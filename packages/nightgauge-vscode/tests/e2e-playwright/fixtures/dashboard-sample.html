@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Nightgauge Dashboard (Sample Fixture)</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 0;
+        padding: 16px;
+        background: #1e1e1e;
+        color: #d4d4d4;
+      }
+      .error-banner {
+        background: #c0392b;
+        color: white;
+        padding: 8px 12px;
+        border-radius: 4px;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .board-item {
+        padding: 8px;
+        border: 1px solid #3c3c3c;
+        border-radius: 4px;
+        margin: 4px 0;
+      }
+      .lock-icon {
+        color: #e67e22;
+      }
+      .epic-header {
+        font-weight: bold;
+        color: #9b59b6;
+      }
+      button {
+        cursor: pointer;
+        padding: 4px 10px;
+        border-radius: 4px;
+        border: 1px solid #555;
+        background: #2d2d2d;
+        color: #d4d4d4;
+      }
+      button:hover {
+        background: #3c3c3c;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="dashboard" data-test-id="dashboard">
+      <div id="pipeline-status" data-test-id="pipeline-status" data-status="idle" class="idle">
+        <span id="pipeline-stage" data-test-id="pipeline-stage"></span>
+        <span id="pipeline-progress" data-test-id="pipeline-progress"></span>
+        <button id="runPipelineBtn" data-test-id="run-pipeline-btn" data-issue="100">
+          Run Pipeline
+        </button>
+        <button id="stopPipelineBtn" data-test-id="stop-pipeline-btn" style="display: none">
+          Stop Pipeline
+        </button>
+        <button id="retryStageBtn" data-test-id="retry-stage-btn" style="display: none">
+          Retry Stage
+        </button>
+      </div>
+
+      <button id="refreshBoardBtn" data-test-id="refresh-board-btn">Refresh Project Board</button>
+
+      <div id="boardItemsList" data-test-id="board-items-list">
+        <div class="board-item" data-issue="100" data-status="Ready" data-test-id="board-item-100">
+          <span class="issue-number">#100</span>
+          <span class="issue-title">Add E2E test infrastructure</span>
+        </div>
+        <div class="board-item" data-issue="101" data-status="Ready" data-test-id="board-item-101">
+          <span class="issue-number">#101</span>
+          <span class="issue-title">Write pipeline E2E tests</span>
+        </div>
+      </div>
+
+      <div id="boardItemCount" data-test-id="board-item-count">2</div>
+
+      <div id="rateLimit" data-test-id="rate-limit-warning" style="display: none">
+        Rate limited. Retry in <span id="rateLimitCountdown">60</span>s
+      </div>
+    </div>
+
+    <script>
+      // Sample fixture script — wires buttons to __ipcMock when available.
+      // This file is used as a stable fallback when generate-dashboard-html.ts
+      // output is not available. Tests that need specific behavior should use
+      // makeDashboardHtml() from test-data.ts instead.
+      (function () {
+        var ipc = window.__ipcMock;
+        if (!ipc) return;
+
+        var vscodeApi = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+        function postMsg(msg) {
+          if (vscodeApi) vscodeApi.postMessage(msg);
+          if (!window.__dashboardMessages) window.__dashboardMessages = [];
+          window.__dashboardMessages.push(msg);
+        }
+
+        document.getElementById("runPipelineBtn").addEventListener("click", function () {
+          postMsg({ type: "runPipeline", issueNumber: 100 });
+          ipc
+            .pipelineStatus("nightgauge", 1, "100")
+            .then(function (s) {
+              document.getElementById("pipeline-status").setAttribute("data-status", "running");
+              document.getElementById("pipeline-status").className = "running";
+              document.getElementById("stopPipelineBtn").style.display = "";
+              document.getElementById("runPipelineBtn").style.display = "none";
+            })
+            .catch(function (e) {
+              showError(e.message);
+            });
+        });
+
+        document.getElementById("stopPipelineBtn").addEventListener("click", function () {
+          postMsg({ type: "stopPipeline" });
+          ipc.pipelineStop("exec-123").then(function () {
+            document.getElementById("pipeline-status").setAttribute("data-status", "idle");
+            document.getElementById("pipeline-status").className = "idle";
+            document.getElementById("stopPipelineBtn").style.display = "none";
+            document.getElementById("runPipelineBtn").style.display = "";
+          });
+        });
+
+        document.getElementById("refreshBoardBtn").addEventListener("click", function () {
+          postMsg({ type: "refreshBoard" });
+          ipc
+            .boardList("nightgauge", 1)
+            .then(function (items) {
+              var list = document.getElementById("boardItemsList");
+              var countEl = document.getElementById("boardItemCount");
+              list.innerHTML = items
+                .map(function (item) {
+                  return (
+                    '<div class="board-item" data-issue="' +
+                    item.number +
+                    '" data-status="' +
+                    item.status +
+                    '" data-test-id="board-item-' +
+                    item.number +
+                    '">' +
+                    (item.blockedBy && item.blockedBy.length > 0
+                      ? '<span class="lock-icon" data-test-id="lock-icon">\uD83D\uDD12</span>'
+                      : "") +
+                    '<span class="issue-number">#' +
+                    item.number +
+                    "</span>" +
+                    '<span class="issue-title">' +
+                    item.title +
+                    "</span>" +
+                    (item.isEpic
+                      ? '<div class="epic-header" data-test-id="epic-header-' +
+                        item.number +
+                        '">' +
+                        item.title +
+                        "</div>"
+                      : "") +
+                    "</div>"
+                  );
+                })
+                .join("");
+              if (countEl) countEl.textContent = String(items.length);
+            })
+            .catch(function (e) {
+              showError(e.message);
+            });
+        });
+
+        function showError(message) {
+          var banner = document.createElement("div");
+          banner.className = "error-banner";
+          banner.setAttribute("data-test-id", "error-banner");
+          banner.setAttribute("role", "alert");
+          banner.textContent = message;
+          var btn = document.createElement("button");
+          btn.setAttribute("data-test-id", "retry-btn");
+          btn.textContent = "Retry";
+          btn.addEventListener("click", function () {
+            banner.remove();
+          });
+          banner.appendChild(btn);
+          document.getElementById("dashboard").prepend(banner);
+        }
+      })();
+    </script>
+  </body>
+</html>

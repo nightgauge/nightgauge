@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "Run `nightgauge project sync-status <N> in-progress` (alias of project move-status) — the deterministic Go binary owns board sync. Do not hand-write addProjectV2 GraphQL mutations.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "Run `nightgauge project sync-status <N> in-progress` (alias of project move-status) — the deterministic Go binary owns board sync. Do not hand-write addProjectV2 GraphQL mutations.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "Run `nightgauge project sync-status <N> in-progress` (alias of project move-status) — the deterministic Go binary owns board sync. Do not hand-write addProjectV2 GraphQL mutations.",
+    "exit_code": 0
+  }
+}

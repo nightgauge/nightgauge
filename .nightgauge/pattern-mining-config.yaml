@@ -1,0 +1,29 @@
+# Pattern Mining Configuration
+# All fields are optional — defaults are used when omitted.
+# See docs/PATTERN_MINING.md for documentation.
+
+pattern_mining:
+  # Enable/disable pattern mining during feature-planning
+  enabled: true
+
+  # Maximum number of search results to process per keyword
+  max_results_per_keyword: 50
+
+  # Minimum number of evidence files required for pattern credibility
+  min_evidence_count: 2
+
+  # Paths excluded from pattern mining searches
+  excluded_paths:
+    - node_modules/
+    - dist/
+    - .git/
+    - coverage/
+    - .nightgauge/pipeline/
+
+  # Custom keyword-to-search-pattern overrides (empty by default)
+  # Example:
+  #   keyword_overrides:
+  #     billing:
+  #       file_patterns: ["*Billing*.ts", "*Payment*.ts"]
+  #       content_patterns: ["stripe", "invoice"]
+  keyword_overrides: {}

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://nightgauge.dev/schemas/shared-dependencies-v1.json",
+  "description": "Shared dependencies tracked across all Nightgauge repos for version alignment",
+  "updated_at": "2026-03-23",
+  "ecosystems": {
+    "npm": {
+      "deps": [
+        {
+          "name": "typescript",
+          "expected_major": 5,
+          "rationale": "TypeScript 5.x required for decorators and latest type improvements",
+          "repos": ["nightgauge", "acme-platform", "acme-dashboard"]
+        },
+        {
+          "name": "vitest",
+          "expected_major": 2,
+          "rationale": "Vitest 2.x for consistent test runner across SDK and VSCode extension",
+          "repos": ["nightgauge"]
+        },
+        {
+          "name": "zod",
+          "expected_major": 3,
+          "rationale": "Zod 3.x for runtime schema validation",
+          "repos": ["nightgauge", "acme-platform"]
+        },
+        {
+          "name": "@anthropic-ai/sdk",
+          "expected_major": 0,
+          "rationale": "Anthropic SDK for Claude API access — track minor version for breaking changes",
+          "repos": ["nightgauge", "acme-platform"]
+        },
+        {
+          "name": "eslint",
+          "expected_major": 9,
+          "rationale": "ESLint 9.x flat config format",
+          "repos": ["nightgauge", "acme-platform", "acme-dashboard"]
+        },
+        {
+          "name": "js-yaml",
+          "expected_major": 4,
+          "rationale": "js-yaml 4.x for YAML parsing",
+          "repos": ["nightgauge"]
+        },
+        {
+          "name": "@types/node",
+          "expected_major": 20,
+          "rationale": "Node.js 20+ types for LTS compatibility",
+          "repos": ["nightgauge", "acme-platform"]
+        }
+      ]
+    },
+    "dart": {
+      "deps": []
+    },
+    "go": {
+      "deps": []
+    }
+  }
+}

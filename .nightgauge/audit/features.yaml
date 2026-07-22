@@ -1,0 +1,201 @@
+# Canonical feature definitions for the Feature Parity Matrix (Dimension 4)
+# Each feature defines grep patterns per client to detect implementation evidence.
+# Patterns are case-sensitive string literals (no regex anchors required).
+#
+# Rating logic:
+#   FULL    — ≥1 code pattern match AND ≥1 test_pattern match
+#   PARTIAL — ≥1 code pattern match, no test match (or no test_patterns defined)
+#   STUB    — exactly 1 code match, no test match
+#   MISSING — no code pattern matches
+#
+# Maintenance: Update patterns when feature implementations change.
+# Add test_patterns once tests are written.
+
+features:
+  - name: "Epic Dashboard"
+    vscode:
+      patterns:
+        - "class EpicDashboard"
+        - "getAllCrossRepoProgress"
+      test_patterns:
+        - "EpicDashboard"
+    angular:
+      patterns:
+        - "EpicDashboardComponent"
+        - "epicService.getAllEpics"
+    flutter:
+      patterns:
+        - "EpicListScreen"
+        - "epicController.fetch"
+
+  - name: "Pipeline Execution"
+    vscode:
+      patterns:
+        - "HeadlessOrchestrator"
+        - "runPipeline"
+      test_patterns:
+        - "HeadlessOrchestrator"
+    angular:
+      patterns:
+        - "PipelineService"
+        - "runPipeline"
+    flutter:
+      patterns:
+        - "PipelineScreen"
+        - "pipelineController"
+
+  - name: "Queue Management"
+    vscode:
+      patterns:
+        - "QueueManager"
+        - "enqueueIssue"
+      test_patterns:
+        - "QueueManager"
+    angular:
+      patterns:
+        - "QueueComponent"
+        - "queueService"
+    flutter:
+      patterns:
+        - "QueueScreen"
+        - "queueController"
+
+  - name: "Authentication — Device Flow"
+    vscode:
+      patterns:
+        - "DeviceFlowAuth"
+        - "authenticateWithGitHub"
+      test_patterns:
+        - "DeviceFlowAuth"
+    angular:
+      patterns:
+        - "AuthService"
+        - "deviceFlowLogin"
+    flutter:
+      patterns:
+        - "AuthScreen"
+        - "deviceFlow"
+
+  - name: "License Validation"
+    vscode:
+      patterns:
+        - "LicenseService"
+        - "validateLicenseKey"
+      test_patterns:
+        - "LicenseService"
+    angular:
+      patterns:
+        - "LicenseComponent"
+        - "licenseService.validate"
+    flutter:
+      patterns:
+        - "LicenseScreen"
+        - "licenseController"
+
+  - name: "Project Board View"
+    vscode:
+      patterns:
+        - "ProjectBoardService"
+        - "fetchProjectBoardItems"
+      test_patterns:
+        - "ProjectBoardService"
+    angular:
+      patterns:
+        - "ProjectBoardComponent"
+        - "projectBoardService"
+    flutter:
+      patterns:
+        - "ProjectBoardScreen"
+        - "projectBoardController"
+
+  - name: "Health Monitoring"
+    vscode:
+      patterns:
+        - "HealthMonitor"
+        - "detectStall"
+      test_patterns:
+        - "HealthMonitor"
+    angular:
+      patterns:
+        - "HealthDashboardComponent"
+        - "healthService"
+    flutter:
+      patterns:
+        - "HealthScreen"
+        - "healthController"
+
+  - name: "Issue Pickup"
+    vscode:
+      patterns:
+        - "issue-pickup"
+        - "claimIssue"
+      test_patterns:
+        - "issue-pickup"
+    angular:
+      patterns:
+        - "IssuePickupComponent"
+        - "issueService.claim"
+    flutter:
+      patterns:
+        - "IssuePickupScreen"
+        - "issueController.claim"
+
+  - name: "Multi-Repo Workspace"
+    vscode:
+      patterns:
+        - "WorkspaceRouter"
+        - "RepositoryContextLoader"
+      test_patterns:
+        - "WorkspaceRouter"
+    angular:
+      patterns:
+        - "WorkspaceService"
+        - "repoSelector"
+    flutter:
+      patterns:
+        - "WorkspaceScreen"
+        - "workspaceController"
+
+  - name: "Pipeline Analytics"
+    vscode:
+      patterns:
+        - "ContextManager"
+        - "recordOutcome"
+      test_patterns:
+        - "ContextManager"
+    angular:
+      patterns:
+        - "AnalyticsComponent"
+        - "analyticsService"
+    flutter:
+      patterns:
+        - "AnalyticsScreen"
+        - "analyticsController"
+
+  - name: "Skill Serving"
+    vscode:
+      patterns:
+        - "SkillLoader"
+        - "resolveSkill"
+    angular:
+      patterns:
+        - "SkillLibraryComponent"
+        - "skillService"
+    flutter:
+      patterns:
+        - "SkillsScreen"
+        - "skillController"
+
+  - name: "Team Management"
+    vscode:
+      patterns:
+        - "TeamService"
+        - "inviteTeamMember"
+    angular:
+      patterns:
+        - "TeamManagementComponent"
+        - "teamService.invite"
+    flutter:
+      patterns:
+        - "TeamScreen"
+        - "teamController"

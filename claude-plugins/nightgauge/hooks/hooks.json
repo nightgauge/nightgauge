@@ -1,0 +1,136 @@
+{
+  "$schema": "https://anthropic.com/claude-code/hooks.schema.json",
+  "description": "Nightgauge Pipeline Hooks - Enforceable quality gates and workflow automation",
+  "version": "1.0.0",
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/notify.sh",
+            "timeout": 10,
+            "statusMessage": "Sending notification...",
+            "async": true
+          }
+        ]
+      }
+    ],
+
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/format-on-save.sh",
+            "timeout": 30,
+            "statusMessage": "Auto-formatting...",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/version-check.sh",
+            "timeout": 10,
+            "statusMessage": "Checking version consistency...",
+            "async": false
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/test-quality.sh",
+            "timeout": 5,
+            "statusMessage": "Checking test quality...",
+            "async": false
+          }
+        ]
+      }
+    ],
+
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/workflow-gate.sh",
+            "timeout": 10,
+            "statusMessage": "Validating workflow..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/careful-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking careful-mode guardrail..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/stage-gate.sh",
+            "timeout": 5,
+            "statusMessage": "Checking pipeline-stage guardrail..."
+          }
+        ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/prompt-sanitize.sh",
+            "timeout": 5,
+            "statusMessage": "Checking input sanitization..."
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/skill-usage-log.sh",
+            "timeout": 5,
+            "statusMessage": "Recording skill usage...",
+            "async": true
+          }
+        ]
+      }
+    ],
+
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/stop-verification.sh",
+            "statusMessage": "Verifying task completion...",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+
+    "SessionStart": [
+      {
+        "matcher": "resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PLUGIN_ROOT/hooks/inject-context.sh",
+            "timeout": 10,
+            "statusMessage": "Restoring Nightgauge context..."
+          }
+        ]
+      }
+    ]
+  }
+}

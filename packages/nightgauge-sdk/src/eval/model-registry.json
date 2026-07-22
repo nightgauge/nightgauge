@@ -1,0 +1,320 @@
+{
+  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) \u2014 the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, and Issue #56.",
+  "version": "2",
+  "models": [
+    {
+      "id": "claude-opus-4-8",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Opus 4.8",
+      "concrete_version": "claude-opus-4-8",
+      "rates": {
+        "input": 5.0,
+        "output": 25.0,
+        "cache_read": 0.5,
+        "cache_creation": 6.25
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000
+    },
+    {
+      "id": "claude-sonnet-5",
+      "provider": "anthropic",
+      "tiers": ["sonnet"],
+      "display_name": "Sonnet 5",
+      "concrete_version": "claude-sonnet-5",
+      "rates": {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_creation": 3.75
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "tiers": ["haiku"],
+      "display_name": "Haiku 4.5",
+      "concrete_version": "claude-haiku-4-5-20251001",
+      "rates": {
+        "input": 1.0,
+        "output": 5.0,
+        "cache_read": 0.1,
+        "cache_creation": 1.25
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000
+    },
+    {
+      "id": "claude-fable-5",
+      "provider": "anthropic",
+      "tiers": ["fable"],
+      "display_name": "Fable 5",
+      "concrete_version": "claude-fable-5",
+      "rates": {
+        "input": 10.0,
+        "output": 50.0,
+        "cache_read": 1.0,
+        "cache_creation": 12.5
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "tiers": ["sonnet"],
+      "display_name": "Sonnet 4.6",
+      "concrete_version": "claude-sonnet-4-6",
+      "rates": {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_creation": 3.75
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000,
+      "deprecated": true
+    },
+    {
+      "id": "claude-opus-4-7",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Opus 4.7",
+      "concrete_version": "claude-opus-4-7",
+      "rates": {
+        "input": 5.0,
+        "output": 25.0,
+        "cache_read": 0.5,
+        "cache_creation": 6.25
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000,
+      "deprecated": true
+    },
+    {
+      "id": "claude-opus-4-6",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Opus 4.6",
+      "concrete_version": "claude-opus-4-6",
+      "rates": {
+        "input": 5.0,
+        "output": 25.0,
+        "cache_read": 0.5,
+        "cache_creation": 6.25
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000,
+      "deprecated": true
+    },
+    {
+      "id": "gpt-5.5",
+      "provider": "openai",
+      "tiers": ["opus", "fable"],
+      "display_name": "GPT-5.5",
+      "concrete_version": "gpt-5.5",
+      "rates": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000,
+      "recommended": true
+    },
+    {
+      "id": "gpt-5.4",
+      "provider": "openai",
+      "tiers": ["sonnet"],
+      "display_name": "GPT-5.4",
+      "concrete_version": "gpt-5.4",
+      "rates": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000
+    },
+    {
+      "id": "gpt-5.4-mini",
+      "provider": "openai",
+      "tiers": ["haiku"],
+      "display_name": "GPT-5.4 mini",
+      "concrete_version": "gpt-5.4-mini",
+      "rates": {
+        "input": 0.25,
+        "output": 2.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "provider": "openai",
+      "display_name": "GPT-5.3 Codex Spark (research preview)",
+      "concrete_version": "gpt-5.3-codex-spark",
+      "rates": {
+        "input": 0.0,
+        "output": 0.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000,
+      "research_preview": true
+    },
+    {
+      "id": "gpt-5.2",
+      "provider": "openai",
+      "display_name": "GPT-5.2",
+      "concrete_version": "gpt-5.2",
+      "rates": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000,
+      "deprecated": true,
+      "replacement": "gpt-5.4"
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "provider": "openai",
+      "display_name": "GPT-5.3 Codex",
+      "concrete_version": "gpt-5.3-codex",
+      "rates": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000,
+      "deprecated": true,
+      "replacement": "gpt-5.5"
+    },
+    {
+      "id": "gpt-5.1-codex-mini",
+      "provider": "openai",
+      "display_name": "GPT-5.1 Codex mini",
+      "concrete_version": "gpt-5.1-codex-mini",
+      "rates": {
+        "input": 0.25,
+        "output": 2.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 400000,
+      "deprecated": true,
+      "replacement": "gpt-5.4-mini"
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "provider": "google",
+      "tiers": ["opus", "fable"],
+      "display_name": "Gemini 2.5 Pro",
+      "concrete_version": "gemini-2.5-pro",
+      "rates": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1048576,
+      "recommended": true
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "provider": "google",
+      "tiers": ["haiku", "sonnet"],
+      "display_name": "Gemini 2.5 Flash",
+      "concrete_version": "gemini-2.5-flash",
+      "rates": {
+        "input": 0.3,
+        "output": 2.5
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1048576
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "provider": "google",
+      "display_name": "Gemini 2.0 Flash",
+      "concrete_version": "gemini-2.0-flash",
+      "rates": {
+        "input": 0.1,
+        "output": 0.4
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1048576
+    },
+    {
+      "id": "gpt-4o-mini",
+      "provider": "copilot",
+      "tiers": ["haiku"],
+      "display_name": "GPT-4o mini (Copilot)",
+      "concrete_version": "gpt-4o-mini",
+      "rates": {
+        "input": 0.0,
+        "output": 0.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 128000
+    },
+    {
+      "id": "gpt-4o",
+      "provider": "copilot",
+      "tiers": ["sonnet"],
+      "display_name": "GPT-4o (Copilot)",
+      "concrete_version": "gpt-4o",
+      "rates": {
+        "input": 0.0,
+        "output": 0.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 128000
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "provider": "copilot",
+      "tiers": ["opus", "fable"],
+      "display_name": "Claude Sonnet 4.5 (Copilot)",
+      "concrete_version": "claude-sonnet-4.5",
+      "rates": {
+        "input": 0.0,
+        "output": 0.0
+      },
+      "supported_efforts": ["low", "medium", "high"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 200000
+    },
+    {
+      "id": "vendor-x-pro",
+      "provider": "other",
+      "display_name": "Vendor X Pro (provider-neutral placeholder)",
+      "concrete_version": "vendor-x-pro-2026",
+      "rates": {
+        "input": 2.0,
+        "output": 8.0
+      },
+      "supported_efforts": ["medium", "high"],
+      "supported_reasoning": ["none", "high"],
+      "context_window": 128000
+    }
+  ]
+}

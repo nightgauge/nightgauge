@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "I merge with `gh pr merge --squash` once `mergeStateStatus` is CLEAN. The repo sets admin_merge:false, so I never pass an override flag — a clean mergeable state is required and sufficient.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "I merge with `gh pr merge --squash` once `mergeStateStatus` is CLEAN. The repo sets admin_merge:false, so I never pass an override flag — a clean mergeable state is required and sufficient.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "I merge with `gh pr merge --squash` once `mergeStateStatus` is CLEAN. The repo sets admin_merge:false, so I never pass an override flag — a clean mergeable state is required and sufficient.",
+    "exit_code": 0
+  }
+}

@@ -1,0 +1,17 @@
+# Wizard screenshots for docs/SELF_HOSTED_GITLAB_SETUP.md
+
+Place ≤500 KB PNG/JPG captures here, one per wizard step. Filenames referenced
+by the doc:
+
+- `01-instance-id.png` — Step 1/6 (Instance ID)
+- `02-forge-url.png` — Step 2/6 (Forge URL)
+- `03-forge-kind.png` — Step 3/6 (Forge Kind)
+- `04-auth-method.png` — Step 4/6 (Auth Method)
+- `05-credential.png` — Step 5/6 (PAT / Deploy Token / OAuth2)
+- `06-ca-bundle.png` — Step 6/6 (CA Bundle)
+- `07-connection-test.png` — Connection-test progress / result toast
+
+If you are running this guide for the first time, capture the seven frames
+above against a `gitlab/gitlab-ce:17.6.0-ce.0` instance and open a follow-up
+PR. The doc renders with broken-image placeholders until the captures land,
+but every other link and command remains valid.

@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PrMergeOutput",
+  "description": "Output from the pr-merge pipeline stage",
+  "type": "object",
+  "properties": {
+    "merged": { "type": "boolean" },
+    "merge_sha": { "type": "string" },
+    "merge_method": { "type": "string", "enum": ["squash", "merge", "rebase"] },
+    "pr_number": { "type": "integer" },
+    "branch_cleaned": {
+      "type": "boolean",
+      "description": "Feature branch deleted"
+    },
+    "issue_closed": {
+      "type": "boolean",
+      "description": "Linked issue auto-closed"
+    }
+  },
+  "required": ["merged", "pr_number"]
+}

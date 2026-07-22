@@ -1,0 +1,19 @@
+{
+  "id": "pm-no-admin-flag",
+  "skill": "pr-merge",
+  "description": "pr-merge does not use the --admin flag (admin_merge:false in this repo).",
+  "failure_mode": "Model passes --admin to `gh pr merge`, which the repo config forbids.",
+  "prompt": "You are merging a PR into main. The repo sets admin_merge:false. Which gh pr merge flags do you use?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(--squash|squash)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "--admin",
+      "description": "admin flag forbidden"
+    }
+  ]
+}

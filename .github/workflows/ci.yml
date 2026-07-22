@@ -1,0 +1,157 @@
+# CI — build and test on isolated GitHub-hosted runners.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Pin the timezone so wall-clock-formatting snapshot tests are deterministic
+# regardless of runner locale.
+env:
+  TZ: UTC
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Configure git identity (tests create local repos)
+        # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
+        run: |
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.email "ci@nightgauge.dev"
+          git config --global user.name "Nightgauge CI"
+          git config --global init.defaultBranch main
+          echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./... -count=1
+
+  # The Node suite (~15.5k tests) is split into two parallel jobs so it fits the
+  # window on 2-core runners. `npm ci` needs no registry auth: the tree vendors
+  # its generated platform types and depends on no private packages.
+  sdk:
+    name: SDK build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Configure git identity
+        # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
+        run: |
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.email "ci@nightgauge.dev"
+          git config --global user.name "Nightgauge CI"
+          git config --global init.defaultBranch main
+          echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test (SDK)
+        run: npm run -w @nightgauge/sdk test
+
+  vscode:
+    name: VSCode build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Configure git identity (tests create local repos)
+        # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
+        run: |
+          export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
+          git config --global user.email "ci@nightgauge.dev"
+          git config --global user.name "Nightgauge CI"
+          git config --global init.defaultBranch main
+          echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test (VSCode)
+        run: npm run -w nightgauge-vscode test
+      - name: Generated VSCode contributions in sync
+        run: npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
+      - name: "@types/vscode <= engines.vscode (vsce packaging invariant)"
+        run: node packages/nightgauge-vscode/scripts/check-engine-types.mjs
+
+  # Security & license gates. Runs on every PR, including forks — a fork cannot
+  # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release
+  # without this job going red.
+  security:
+    name: Security & license gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Go vulnerability scan (govulncheck)
+        # Fails on any stdlib/dependency vulnerability reachable from the code.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: Go dependency-license gate (go-licenses)
+        # Blocks proprietary (forbidden) and GPL/AGPL-family (restricted)
+        # licenses. Reciprocal (MPL-2.0, file-level copyleft) is allowed — it is
+        # compatible with Apache-2.0 redistribution and present transitively via
+        # go-git (filepath-securejoin). modernc.org/mathutil is BSD-3-Clause but
+        # its LICENSE file defeats go-licenses' detector, so it is ignored.
+        run: |
+          go install github.com/google/go-licenses@v1.6.0
+          "$(go env GOPATH)/bin/go-licenses" check ./cmd/nightgauge \
+            --disallowed_types=forbidden,restricted \
+            --ignore modernc.org/mathutil
+      - name: npm vulnerability gate
+        run: node scripts/npm-audit-check.js
+      - name: npm dependency-license gate (publishable packages)
+        # Scans the two packages that actually ship (SDK, VSCode extension);
+        # fails on any copyleft/proprietary production license.
+        run: |
+          DENY='GPL-1.0;GPL-2.0;GPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0;AGPL-1.0;AGPL-3.0;SSPL-1.0;CC-BY-NC-4.0;UNLICENSED'
+          npx license-checker --production --start packages/nightgauge-sdk --failOn "$DENY"
+          npx license-checker --production --start packages/nightgauge-vscode --failOn "$DENY"
+      - name: License-header guard (source + build output)
+        run: bash scripts/check-license-headers.sh

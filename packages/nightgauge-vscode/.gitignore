@@ -1,0 +1,6 @@
+# Build outputs
+dist/
+*.vsix
+
+# Dependencies
+node_modules/

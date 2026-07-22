@@ -1,0 +1,12 @@
+{
+  "id": "fp-complexity-assessment-keys",
+  "skill": "feature-planning",
+  "description": "Planning context emits the exact complexity_assessment keys downstream expects.",
+  "failure_mode": "Model abbreviates required keys (e.g. emits `naming` instead of `naming_conventions`), breaking the standards-loading contract in feature-dev.",
+  "prompt": "Produce the complexity_assessment block of a feature-planning context JSON for an L-size feature. Include the size_label, type_label, computed_score, and documentation_scope keys exactly as the schema requires.",
+  "assertions": [
+    { "type": "contains", "value": "size_label", "description": "exact key, not `size`" },
+    { "type": "contains", "value": "documentation_scope", "description": "exact key, not `docs`" },
+    { "type": "json_path_exists", "path": "complexity_assessment.computed_score" }
+  ]
+}
