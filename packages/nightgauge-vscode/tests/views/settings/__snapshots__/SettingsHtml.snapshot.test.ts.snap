@@ -1798,7 +1798,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                id="platform.enabled"
                class="toggle-input"
                data-path="platform.enabled"
-               checked
+               
                disabled>
         <label for="platform.enabled" class="toggle-switch"></label>
       </div>
@@ -5966,7 +5966,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                id="platform.enabled"
                class="toggle-input"
                data-path="platform.enabled"
-               checked
+               
                >
         <label for="platform.enabled" class="toggle-switch"></label>
       </div>
@@ -10132,7 +10132,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                id="platform.enabled"
                class="toggle-input"
                data-path="platform.enabled"
-               checked
+               
                >
         <label for="platform.enabled" class="toggle-switch"></label>
       </div>
@@ -14314,7 +14314,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                id="platform.enabled"
                class="toggle-input"
                data-path="platform.enabled"
-               checked
+               
                disabled>
         <label for="platform.enabled" class="toggle-switch"></label>
       </div>
@@ -18482,7 +18482,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                id="platform.enabled"
                class="toggle-input"
                data-path="platform.enabled"
-               checked
+               
                >
         <label for="platform.enabled" class="toggle-switch"></label>
       </div>
