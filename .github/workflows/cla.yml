@@ -11,7 +11,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write # PR comments require this on cross-repository contributions
   statuses: write
 
 jobs:
