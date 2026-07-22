@@ -135,9 +135,6 @@ import { KnowledgeDocumentLinkProvider } from "../views/KnowledgeDocumentLinkPro
 import { RemoteCommandStatusBarItem } from "../platform/RemoteCommandStatusBarItem";
 import { RemoteCommandStatusService } from "../services/RemoteCommandStatusService";
 import { PipelineConnectivityStatusItem } from "../views/PipelineConnectivityStatusItem";
-import { ExtensionStalenessService } from "../services/ExtensionStalenessService";
-import { ExtensionStalenessStatusItem } from "../views/ExtensionStalenessStatusItem";
-import { registerRefreshExtensionCommand } from "../commands/refreshExtension";
 import { getRepoIdentity } from "../utils/configPathResolver";
 
 import {
@@ -4005,28 +4002,6 @@ export async function initializeServices(
   // offline. Click → quick pick for cancel-vs-wait.
   const pipelineConnectivityStatusItem = new PipelineConnectivityStatusItem();
   context.subscriptions.push(pipelineConnectivityStatusItem);
-
-  // Extension staleness detection (Issue #3300). Compares the build-time
-  // commit SHA stamped into dist/build-info.json against workspace HEAD;
-  // surfaces a status bar item and refuses autonomous dispatch when stale on
-  // critical pipeline paths. The check runs at activation and every 5 min.
-  const extensionDistDir = path.join(context.extensionPath, "dist");
-  const stalenessWorkspaceRoot =
-    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionPath;
-  const stalenessService = new ExtensionStalenessService(
-    extensionDistDir,
-    stalenessWorkspaceRoot,
-    logger
-  );
-  context.subscriptions.push(stalenessService);
-  void stalenessService.start();
-  const stalenessStatusItem = new ExtensionStalenessStatusItem(stalenessService);
-  context.subscriptions.push(stalenessStatusItem);
-  context.subscriptions.push(registerRefreshExtensionCommand(stalenessWorkspaceRoot));
-
-  // Staleness is surfaced via ExtensionStalenessStatusItem (status bar) only.
-  // No dispatch gate — a stale build should never silently block pipeline work.
-  // See issue #3532.
 
   // Initialize remote command status indicator (Issue #2170)
   const remoteStatusBarItem = new RemoteCommandStatusBarItem();
