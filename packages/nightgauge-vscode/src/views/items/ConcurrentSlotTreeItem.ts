@@ -102,7 +102,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     slotIndex: number,
     issueNumber: number,
     title: string,
-    stateService: PipelineStateService,
+    private readonly stateService: PipelineStateService,
     epicNumber?: number,
     onChange?: () => void
   ) {
@@ -201,6 +201,11 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
       this.onChange?.();
     });
     this.disposables.push(tokenDisposable);
+  }
+
+  /** Identity-safe ownership check used by out-of-process reconciliation. */
+  usesStateService(stateService: PipelineStateService): boolean {
+    return this.stateService === stateService;
   }
 
   /**

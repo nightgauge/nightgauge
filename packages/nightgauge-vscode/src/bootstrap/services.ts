@@ -127,6 +127,10 @@ import { registerShowPlatformStatusCommand } from "../commands/showPlatformStatu
 import { registerShowMachineBindingCommand } from "../commands/showMachineBinding";
 import { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import { StaleSlotRecoveryService } from "../services/StaleSlotRecoveryService";
+import {
+  CliPipelineReconciliationService,
+  type RegisteredPipelineRoot,
+} from "../services/CliPipelineReconciliationService";
 import { SlotOutputManager } from "../views/SlotOutputManager";
 import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/incrediConfig";
 import { hasCustomStageOverrides } from "../utils/customStageModels";
@@ -1820,6 +1824,83 @@ export async function initializeServices(
     logger.info("Worktree pipeline mode enabled", {
       maxConcurrent: concurrentConfig.maxConcurrent,
       worktreeBase: concurrentConfig.worktreeBase,
+    });
+
+    // Direct `nightgauge run` processes do not pass through this extension's
+    // IPC server. Reconcile their atomic runtime snapshots from registered
+    // roots so terminal/agent/automation launches remain visible (#27).
+    let cliRoots: RegisteredPipelineRoot[] = [];
+    const cliStateServices = new Map<
+      string,
+      { issueNumber: number; service: PipelineStateService }
+    >();
+    let nextCliSlotIndex = concurrentConfig.maxConcurrent;
+    const refreshCliRoots = async (): Promise<void> => {
+      if (!workspaceManager) return;
+      const roots: RegisteredPipelineRoot[] = [];
+      for (const repo of workspaceManager.getAllRepositories()) {
+        await repo.loadConfig();
+        const github = repo.github;
+        if (github?.owner && github.repo) {
+          roots.push({ path: repo.path, repo: `${github.owner}/${github.repo}` });
+        }
+      }
+      cliRoots = roots;
+    };
+    const cliReconciler = new CliPipelineReconciliationService(() => cliRoots, {
+      onDiscovered: (run) => {
+        // An IPC-managed slot with the same issue is already authoritative.
+        if (treeProvider.getConcurrentSlot(run.snapshot.issueNumber)) return;
+        const stateService = PipelineStateService.createForWorktree(
+          run.root,
+          run.snapshot.issueNumber
+        );
+        stateService.applyRuntimeSnapshot(run.snapshot);
+        cliStateServices.set(run.key, {
+          issueNumber: run.snapshot.issueNumber,
+          service: stateService,
+        });
+        treeProvider.addConcurrentSlot(
+          nextCliSlotIndex++,
+          run.snapshot.issueNumber,
+          run.snapshot.title || `Issue #${run.snapshot.issueNumber}`,
+          stateService
+        );
+        logger.info("Discovered direct CLI pipeline", {
+          repo: run.snapshot.repo,
+          issueNumber: run.snapshot.issueNumber,
+          runId: run.snapshot.runId,
+        });
+      },
+      onUpdated: (run) => {
+        cliStateServices.get(run.key)?.service.applyRuntimeSnapshot(run.snapshot);
+      },
+      onSettled: (run) => {
+        const tracked = cliStateServices.get(run.key);
+        if (!tracked) return;
+        treeProvider.removeConcurrentSlotIfOwned(tracked.issueNumber, tracked.service);
+        tracked.service.dispose();
+        cliStateServices.delete(run.key);
+        logger.info("Direct CLI pipeline settled", {
+          repo: run.snapshot.repo,
+          issueNumber: run.snapshot.issueNumber,
+          runId: run.snapshot.runId,
+        });
+      },
+    });
+    const disposeCliWorkspaceListener = workspaceManager?.onWorkspaceChanged(() => {
+      void refreshCliRoots().then(() => cliReconciler.scan());
+    });
+    void workspaceInitPromise?.then(async () => {
+      await refreshCliRoots();
+      cliReconciler.start();
+    });
+    context.subscriptions.push(cliReconciler, {
+      dispose: () => {
+        disposeCliWorkspaceListener?.dispose();
+        for (const tracked of cliStateServices.values()) tracked.service.dispose();
+        cliStateServices.clear();
+      },
     });
 
     // Recover stale concurrent slots from previous session (Issue #1643)

@@ -384,7 +384,7 @@ export interface StageTransitionResult {
  * Shape of the RuntimeState object sent by the Go binary via pipeline.stateChanged IPC events.
  * This is NOT the same as PipelineState — it uses Go naming conventions and is converted on receipt.
  */
-interface GoRuntimeState {
+export interface GoRuntimeState {
   completedStages?: Array<{ stage: string; startedAt?: string; duration?: number }>;
   skippedStages?: string[];
   stageErrors?: Record<string, string>;
@@ -578,6 +578,87 @@ export class PipelineStateService implements vscode.Disposable {
 
   async getState(): Promise<PipelineState | null> {
     return this._lastState;
+  }
+
+  /**
+   * Apply an authoritative runtime snapshot discovered on disk.
+   *
+   * Used only by the direct-CLI reconciliation fallback. Normal extension
+   * runs continue to use IPC. The per-worktree service is issue-filtered, so
+   * a snapshot can never overwrite a sibling slot.
+   */
+  applyRuntimeSnapshot(goState: GoRuntimeState): void {
+    const issueNumber = goState.issueNumber ?? this.issueNumber;
+    if (!issueNumber || (this.issueNumber !== null && issueNumber !== this.issueNumber)) return;
+
+    const stages: PipelineState["stages"] = {};
+    for (const completed of goState.completedStages ?? []) {
+      stages[completed.stage] = {
+        status: "complete",
+        started_at: completed.startedAt,
+        startTime: completed.startedAt ? new Date(completed.startedAt).getTime() : undefined,
+      };
+    }
+    for (const skipped of goState.skippedStages ?? []) {
+      stages[skipped] = { status: "skipped" };
+    }
+    for (const [stage, error] of Object.entries(goState.stageErrors ?? {})) {
+      stages[stage] = { status: "failed", error };
+    }
+    if (goState.stage && !stages[goState.stage]) {
+      stages[goState.stage] = {
+        status: "running",
+        started_at: goState.stageStart,
+        startTime: goState.stageStart ? new Date(goState.stageStart).getTime() : Date.now(),
+      };
+    }
+    for (const phase of goState.phaseHistory ?? []) {
+      const stage = stages[phase.stage] ?? { status: "running" as const };
+      stage.phases = stage.phases ?? [];
+      stage.phases.push({
+        name: phase.name,
+        index: phase.index,
+        total: phase.total,
+        status: phase.status as StagePhase["status"],
+        started_at: phase.startedAt,
+        completed_at: phase.completedAt,
+      });
+      stage.total_phases = phase.total;
+      if (phase.status === "running") stage.current_phase = phase.name;
+      stages[phase.stage] = stage;
+    }
+
+    this._lastState = {
+      issue_number: issueNumber,
+      title: goState.title || this._lastState?.title || `Issue #${issueNumber}`,
+      branch: goState.branch || this._lastState?.branch || "",
+      stages,
+      started_at: goState.startedAt || this._lastState?.started_at || new Date().toISOString(),
+      tokens: {
+        input: goState.inputTokens ?? 0,
+        output: goState.outputTokens ?? 0,
+        total_input: goState.inputTokens ?? 0,
+        total_output: goState.outputTokens ?? 0,
+        total_cache_read: goState.cacheReadTokens ?? 0,
+        total_cache_creation: goState.cacheCreationTokens ?? 0,
+        estimated_cost_usd: goState.totalCostUsd ?? 0,
+      },
+      execution_mode: "headless",
+      paused: goState.paused,
+      retry_count: goState.retryCount,
+      escalation_history: goState.escalationHistory,
+      ralph_iterations: goState.ralphIterations,
+      gate_results: goState.gateResults,
+      pr_url: goState.prUrl,
+      current_stage: goState.stage,
+      current_stage_position: goState.stage
+        ? PIPELINE_STAGE_ORDER.indexOf(goState.stage)
+        : undefined,
+      current_stage_label: goState.stage
+        ? (STAGE_LABELS[goState.stage] ?? goState.stage)
+        : undefined,
+    };
+    this._onStateChanged.fire(this._lastState);
   }
 
   getStatePath(): string {
