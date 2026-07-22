@@ -23,6 +23,10 @@ import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 
+// Keep an unmocked event-loop yield. Fake timers advance pipeline delays, while
+// this lets mocked I/O promise chains make progress under a loaded CI runner.
+const realSetImmediate = setImmediate;
+
 // Skip the live-adapter auth preflight (no CLI auth in the test env).
 vi.mock("../../src/utils/incrediConfig", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/incrediConfig")>()),
@@ -293,6 +297,7 @@ async function settleWithTimers<T>(promise: Promise<T>, iterations = 100): Promi
 
   for (let i = 0; i < iterations && !settled; i++) {
     await vi.advanceTimersByTimeAsync(2_500);
+    await new Promise<void>((resolve) => realSetImmediate(resolve));
   }
 
   if (!settled) {
