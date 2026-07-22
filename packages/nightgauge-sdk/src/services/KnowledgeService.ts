@@ -179,8 +179,7 @@ export class KnowledgeService {
     if (!hasExtractableContent) {
       // Check if the issue body itself has meaningful content (>50 chars of
       // non-whitespace text, excluding markdown headings and HTML comments).
-      const strippedBody = issueBody
-        .replace(/<!--[\s\S]*?-->/g, "")
+      const strippedBody = KnowledgeService.removeHtmlComments(issueBody)
         .replace(/^#+\s.*$/gm, "")
         .replace(/\s+/g, " ")
         .trim();
@@ -620,9 +619,8 @@ export class KnowledgeService {
    * @internal — implementation detail; use `isSubstantive()` for public access
    */
   static contentIsSubstantive(content: string): boolean {
-    const stripped = content
+    const stripped = KnowledgeService.removeHtmlComments(content)
       // Remove HTML comments (including TODO placeholders)
-      .replace(/<!--[\s\S]*?-->/g, "")
       // Remove markdown headings
       .replace(/^#+\s.*$/gm, "")
       // Remove ALL markdown table rows (header, separator, and data rows)
@@ -1059,12 +1057,29 @@ status: draft
    * trailing hyphen left by truncation (matches the Go binary).
    */
   generateSlug(title: string): string {
-    return title
+    const slug = title
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 50)
-      .replace(/-+$/, "");
+      .replace(/^-+/g, "")
+      .slice(0, 50);
+    let end = slug.length;
+    while (end > 0 && slug[end - 1] === "-") end--;
+    return slug.slice(0, end);
+  }
+
+  /** Remove complete HTML comments in linear time, preserving unmatched markers. */
+  private static removeHtmlComments(content: string): string {
+    let result = "";
+    let cursor = 0;
+    while (cursor < content.length) {
+      const start = content.indexOf("<!--", cursor);
+      if (start < 0) return result + content.slice(cursor);
+      result += content.slice(cursor, start);
+      const end = content.indexOf("-->", start + 4);
+      if (end < 0) return result + content.slice(start);
+      cursor = end + 3;
+    }
+    return result;
   }
 
   /**

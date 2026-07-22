@@ -58,7 +58,11 @@ vi.mock("child_process", () => ({
   execFile: vi.fn((...args: any[]) => {
     // promisify calls execFile(file, args, opts?, cb) — find the callback
     const cb = args.find((a: any) => typeof a === "function");
-    cb?.(null, { stdout: "", stderr: "" });
+    const command = [args[0], ...(Array.isArray(args[1]) ? args[1] : [])].join(" ");
+    const handler = _execMockHandler ?? (async () => ({ stdout: "", stderr: "" }));
+    handler(command)
+      .then((r) => cb?.(null, r))
+      .catch((e) => cb?.(e));
   }),
 }));
 

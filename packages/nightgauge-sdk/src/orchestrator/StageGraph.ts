@@ -139,9 +139,10 @@ function extractListField(frontmatter: string, key: string): string[] {
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
 
-    const itemMatch = line.match(/^(\s*)-\s+(.+?)\s*$/);
-    if (itemMatch && itemMatch[1].length > baseIndent) {
-      items.push(stripQuotes(itemMatch[2]));
+    const leadingLength = line.length - line.trimStart().length;
+    const itemText = line.trim().startsWith("-") ? line.trim().slice(1).trim() : "";
+    if (itemText && leadingLength > baseIndent) {
+      items.push(stripQuotes(itemText));
       continue;
     }
 

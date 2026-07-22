@@ -9,7 +9,7 @@ import type { AcceptanceCriterion } from "./types.js";
  * The text capture is bounded to 4096 chars as a defensive measure
  * against pathological input.
  */
-const CHECKBOX_RE = /^[ \t]*[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096}?)[ \t]*$/gm;
+const CHECKBOX_RE = /^[-*][ \t]+\[([ xX])\][ \t]+(.{1,4096})$/;
 
 /**
  * Extract Markdown acceptance-criterion checkboxes from an issue body.
@@ -27,10 +27,10 @@ export function parseAcceptanceCriteria(body: string): AcceptanceCriterion[] {
   }
 
   const out: AcceptanceCriterion[] = [];
-  CHECKBOX_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
   let index = 0;
-  while ((match = CHECKBOX_RE.exec(body)) !== null) {
+  for (const rawLine of body.split(/\r?\n/)) {
+    const match = CHECKBOX_RE.exec(rawLine.trim());
+    if (!match) continue;
     const stateChar = match[1];
     const text = match[2].trim();
     if (text.length === 0) continue;

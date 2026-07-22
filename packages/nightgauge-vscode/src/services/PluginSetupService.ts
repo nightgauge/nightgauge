@@ -10,12 +10,13 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import { ConfigBridge } from "./ConfigBridge";
 import { type UIPluginsConfig, DEFAULT_CONFIG } from "../config/schema";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Plugin config interface for internal use
@@ -295,7 +296,7 @@ export class PluginSetupService implements vscode.Disposable {
             cancellable: false,
           },
           async () => {
-            await execAsync(`claude plugin marketplace add "${marketplaceSource}"`);
+            await execFileAsync("claude", ["plugin", "marketplace", "add", marketplaceSource]);
           }
         );
 

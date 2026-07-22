@@ -19,7 +19,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { exec } from "node:child_process";
+import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   ModelPerformanceAnalyzer,
@@ -35,6 +35,8 @@ import {
   type WorkflowEvent,
   type WorkflowCalibrationSignal,
 } from "@nightgauge/sdk";
+
+const execFileAsync = promisify(execFile);
 
 /** Per-stage retry statistics */
 export interface StageRetryStats {
@@ -921,8 +923,22 @@ export class PostPipelineAnalyzer {
       ].join("\n");
 
       try {
-        await execAsync(
-          `gh issue create --title "${title.replace(/"/g, '\\"')}" --body "${body.replace(/"/g, '\\"')}" --label skill-drift --label "type:fix" --label "size:S"`,
+        await execFileAsync(
+          "gh",
+          [
+            "issue",
+            "create",
+            "--title",
+            title,
+            "--body",
+            body,
+            "--label",
+            "skill-drift",
+            "--label",
+            "type:fix",
+            "--label",
+            "size:S",
+          ],
           { cwd: workspaceRoot, maxBuffer: 512 * 1024 }
         );
         created++;

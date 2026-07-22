@@ -7,12 +7,13 @@
  * @see Issue #310 - Add actual work time feedback loop
  */
 
-import { exec } from "child_process";
+import { exec, execFile } from "child_process";
 import * as fs from "fs/promises";
 import * as yaml from "js-yaml";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Size label from GitHub issues
@@ -188,8 +189,9 @@ export class EpicEstimator {
 
       const filledQuery = query.replace("{owner}", owner).replace("{repo}", repo);
 
-      const { stdout: result } = await execAsync(
-        `gh api graphql -F epicNumber=${epicNumber} -f query='${filledQuery}'`,
+      const { stdout: result } = await execFileAsync(
+        "gh",
+        ["api", "graphql", "-F", `epicNumber=${epicNumber}`, "-f", `query=${filledQuery}`],
         { cwd: this.workspaceRoot }
       );
 

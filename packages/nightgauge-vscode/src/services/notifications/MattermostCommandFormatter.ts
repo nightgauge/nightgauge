@@ -200,5 +200,5 @@ function truncate(text: string, max: number): string {
 
 function escapeCell(text: string): string {
   // Pipes break Mattermost markdown tables; newlines collapse layout.
-  return text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }

@@ -414,7 +414,8 @@ export function upsertManagedMcpBlock(existing: string | null, blockInner: strin
   const region = locateManagedRegion(existing);
   if (region) {
     const before = existing.slice(0, region.start).replace(/\n+$/, "");
-    const after = existing.slice(region.endExclusive).replace(/^\n+/, "");
+    let after = existing.slice(region.endExclusive);
+    while (after.startsWith("\n")) after = after.slice(1);
     if (before === "" && after === "") return wrapped + "\n";
     if (before === "") return wrapped + "\n\n" + after;
     if (after === "") return before + "\n\n" + wrapped + "\n";
@@ -422,7 +423,7 @@ export function upsertManagedMcpBlock(existing: string | null, blockInner: strin
   }
 
   // No block yet — append below the user's content.
-  return existing.replace(/\n+$/, "") + "\n\n" + wrapped + "\n";
+  return existing.trimEnd() + "\n\n" + wrapped + "\n";
 }
 
 /**

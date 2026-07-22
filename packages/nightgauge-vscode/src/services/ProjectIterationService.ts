@@ -555,9 +555,18 @@ export class ProjectIterationService {
     `;
 
     try {
-      const escapedQuery = query.replace(/\n/g, " ").replace(/'/g, "\\'");
-      const result = await this.ghExec(
-        `gh api graphql -f query='${escapedQuery}' -f projectId='${projectGlobalId}' -f fieldName='${fieldName}'`,
+      const result = await execFileAsync(
+        "gh",
+        [
+          "api",
+          "graphql",
+          "-f",
+          `query=${query}`,
+          "-f",
+          `projectId=${projectGlobalId}`,
+          "-f",
+          `fieldName=${fieldName}`,
+        ],
         { cwd: this.workspaceRoot }
       );
 
@@ -670,13 +679,9 @@ export class ProjectIterationService {
     `;
 
     try {
-      const escapedQuery = query.replace(/\n/g, " ").replace(/'/g, "\\'");
-      const cursorArg = cursor ? `-f cursor='${cursor}'` : "";
-
-      const result = await this.ghExec(
-        `gh api graphql -f query='${escapedQuery}' -f projectId='${projectGlobalId}' ${cursorArg}`,
-        { cwd: this.workspaceRoot }
-      );
+      const args = ["api", "graphql", "-f", `query=${query}`, "-f", `projectId=${projectGlobalId}`];
+      if (cursor) args.push("-f", `cursor=${cursor}`);
+      const result = await execFileAsync("gh", args, { cwd: this.workspaceRoot });
 
       const data = JSON.parse(result.stdout);
       const items = data.data?.node?.items;
