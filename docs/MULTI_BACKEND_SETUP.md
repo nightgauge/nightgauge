@@ -5,16 +5,17 @@ Cloud Vertex as alternative backends for Nightgauge.
 
 ## Overview
 
-Nightgauge supports multiple AI backends for pipeline execution:
+Nightgauge supports multiple AI backends. The table distinguishes agentic
+pipeline backends from chat-completion-only evaluation backends:
 
 | Backend     | Flag         | Use Case                            | Pricing           |
 | ----------- | ------------ | ----------------------------------- | ----------------- |
 | Claude Max  | (default)    | Direct Anthropic API access         | Anthropic rates   |
 | AWS Bedrock | `--bedrock`  | Enterprise AWS integration          | AWS Bedrock rates |
 | GCP Vertex  | `--vertex`   | Enterprise Google Cloud integration | GCP Vertex rates  |
-| Gemini CLI  | `gemini`     | Google Gemini via CLI               | Google AI rates   |
-| Gemini SDK  | `gemini-sdk` | Google Gemini via API key           | Google AI rates   |
-| LM Studio   | `lm-studio`  | Local model inference               | Free (local)      |
+| Gemini CLI  | `gemini`     | Experimental agentic pipeline       | Google AI rates   |
+| Gemini SDK  | `gemini-sdk` | Chat-only evaluation via API key    | Google AI rates   |
+| LM Studio   | `lm-studio`  | Chat-only local evaluation          | Free (local)      |
 
 **When to use alternative backends:**
 
@@ -304,6 +305,9 @@ export NIGHTGAUGE_GEMINI_MODEL=gemini-2.5-flash   # Override model
 
 Uses the `@google/genai` SDK with an API key — no CLI installation required.
 
+> **Scope:** Chat-completion-only. Use this adapter for evaluation, judging, or
+> summarization. Pipeline stages require the agentic Gemini CLI adapter.
+
 #### Step 1: Get API Key
 
 1. Go to [Google AI Studio](https://aistudio.google.com/)
@@ -362,6 +366,10 @@ project context (analogous to `CLAUDE.md`). See
 LM Studio runs models locally on your machine using an OpenAI-compatible REST
 API. No API key or internet connection is required after models are downloaded.
 
+LM Studio is chat-completion-only: Nightgauge supports it for evaluation,
+judging, and summarization, not pipeline execution. It cannot edit files, run
+shell commands, or call `gh`.
+
 ### When to use LM Studio
 
 **Recommended when:**
@@ -375,9 +383,8 @@ API. No API key or internet connection is required after models are downloaded.
 
 - You need reliable tool calling (model-dependent, disabled by default)
 - You require performance parity with hosted Claude/Gemini models
-- You are running the full six-stage pipeline at production quality — hosted
-  adapters (Claude Max, Bedrock, Vertex) deliver better planning and
-  implementation depth
+- You need to run any pipeline stage — LM Studio does not provide Nightgauge's
+  required agentic tool loop
 - Token context limits matter — local models often have smaller context windows
   than hosted providers
 
@@ -450,13 +457,13 @@ inference capabilities:
 - Large pipeline stages (feature-dev, feature-planning) involve long prompts and
   can take 10–30 minutes per stage on CPU-only machines
 
-**Tool calling:**
+**Model-level tool calling:**
 
 - Disabled by default (`tool_calling: false`)
 - Tool calling is model-dependent — not all models that claim OpenAI
   compatibility implement function calling reliably
-- When enabled (`tool_calling: true`), results vary widely by model; test
-  thoroughly before relying on tool use in production pipelines
+- When enabled (`tool_calling: true`), results vary widely by model. This does
+  not turn LM Studio into a Nightgauge pipeline adapter.
 
 **Token accounting:**
 

@@ -1251,19 +1251,13 @@
             "claude",
             "codex",
             "gemini",
-            "gemini-sdk",
-            "lm-studio",
-            "ollama",
             "copilot"
           ],
           "enumDescriptions": [
             "Claude Code CLI (default)",
-            "OpenAI Codex CLI (interactive TUI + headless)",
-            "Gemini CLI wrapper",
-            "Gemini SDK (direct API, requires API key)",
-            "LM Studio (local models via HTTP)",
-            "Ollama (local models via HTTP)",
-            "GitHub Copilot CLI"
+            "OpenAI Codex CLI (beta agentic adapter)",
+            "Gemini CLI (experimental agentic adapter)",
+            "GitHub Copilot CLI (experimental agentic adapter)"
           ],
           "default": "claude",
           "description": "Execution adapter for pipeline stages"

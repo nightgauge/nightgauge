@@ -61,7 +61,7 @@ Claude, Copilot, and Cursor.
 - `node` (v18+)
 - `git`
 - `gh` (GitHub CLI)
-- `codex` (Codex CLI 0.98.0+)
+- `codex` (Codex CLI 0.111.0+)
 
 ### Required Environment
 
@@ -175,9 +175,11 @@ Claude on the same branch.
 
 ## Codex CLI Version Compatibility
 
-Verified against Codex CLI 0.98.0 through 0.111. The adapter and shell
-entrypoint include preflight version checks that warn (but do not block) when
-an older version is detected.
+The minimum known compatible version is Codex CLI 0.111.0. The adapter and
+shell entrypoint warn (but do not block) when an older version is detected.
+Newer CLI releases are covered by automated command-contract tests; Codex
+remains a beta adapter until a representative issue has completed the recorded
+live six-stage provider matrix.
 
 ### Auth Commands
 
@@ -187,14 +189,15 @@ Only `codex login status` is valid for auth checking in Codex CLI 0.98+:
 - `codex auth status` — **Invalid** (no `auth` subcommand exists)
 - `codex login --status` — **Invalid** (`--status` is not a recognized flag)
 
-The above was confirmed valid through Codex CLI 0.111. No behavioral changes to
-the auth subcommand were observed in this version range.
+This is the auth command used by the current adapter.
 
 ### Sandbox Modes
 
-The `--full-auto` flag defaults to `--sandbox workspace-write`. Pipeline stages
-override with `--sandbox danger-full-access` because they need git ref updates
-and context file writes outside the workspace sandbox. This is intentional.
+Pipeline stages derive sandbox flags from the skill's `allowed-tools`. Read-only
+skills use `--sandbox read-only`; edit-only skills use
+`--sandbox workspace-write`; stages requiring shell, network, task, or MCP tools
+use `--dangerously-bypass-approvals-and-sandbox`. Autonomous execution always
+uses a non-interactive approval policy.
 
 Available sandbox modes: `danger-full-access`, `workspace-write`, `read-only`.
 
@@ -206,29 +209,31 @@ Codex CLI `--json` produces JSONL events with these types:
 - `item.completed` with `item.type: "command_execution"` — shell command results
 - `turn.completed` — end of turn marker
 
-JSONL output does **not** include token count or cost data. Nightgauge
-tracks token usage separately via SDK-level instrumentation.
+Current Codex JSONL includes token usage on `turn.completed.usage`. Nightgauge
+parses `input_tokens`, `cached_input_tokens`, and `output_tokens`. The CLI does
+not provide provider USD cost; Nightgauge derives cost from model pricing and
+observed tokens.
 
 ### Adapter Capabilities
 
-| Capability            | Status | Notes                                                                                 |
-| --------------------- | ------ | ------------------------------------------------------------------------------------- |
-| `interactive`         | false  | Codex exec runs headless                                                              |
-| `sessionResume`       | false  | `exec resume` exists but not yet integrated                                           |
-| `streamJson`          | true   | `--json` produces JSONL event stream                                                  |
-| `nativeTokenTracking` | false  | JSONL output does not include token/cost                                              |
-| `fastMode`            | defer  | Model-tier selection via `--model` flag; per-stage routing deferred — see spike #1665 |
+| Capability            | Status | Notes                                                               |
+| --------------------- | ------ | ------------------------------------------------------------------- |
+| `interactive`         | false  | Codex exec runs headless                                            |
+| `sessionResume`       | true   | Opt-in `exec resume`; set `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`    |
+| `streamJson`          | true   | `--json` produces JSONL event stream                                |
+| `nativeTokenTracking` | true   | Parses token usage from `turn.completed.usage`; USD cost is derived |
+| `fastMode`            | defer  | Model tiers are routed through the canonical Codex model registry   |
 
 ### Investigated But Not Adopted
 
 The following CLI patterns were evaluated during the beta and GA maturation
 cycle but were not adopted in the current adapter implementation:
 
-| Pattern                                    | Decision      | Reason                                                                                            |
-| ------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------- |
-| `codex exec --prompt-file <path>`          | Not adopted   | Early Go adapter prototype used this; replaced by `exec` + JSONL stream in the TypeScript adapter |
-| `codex exec resume` for session continuity | Not adopted   | Subcommand exists; integration not completed during maturation cycle                              |
-| Streaming token counts from JSONL          | Not available | Codex CLI does not emit token/cost data in JSONL events                                           |
+| Pattern                           | Decision      | Reason                                                                                            |
+| --------------------------------- | ------------- | ------------------------------------------------------------------------------------------------- |
+| `codex exec --prompt-file <path>` | Not adopted   | Early Go adapter prototype used this; replaced by `exec` + JSONL stream in the TypeScript adapter |
+| Per-tool allowlist flags          | Not available | Nightgauge maps `allowed-tools` to sandbox and approval policy instead                            |
+| Native provider USD cost          | Not available | Nightgauge derives cost from observed tokens and its model pricing table                          |
 
 ## Current Parity Status (March 2026 — Post-GA Adoption)
 

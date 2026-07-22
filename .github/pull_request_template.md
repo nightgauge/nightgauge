@@ -29,4 +29,4 @@
 ## Contributor License Agreement
 
 - [ ] I have read and agree to the [Contributor License Agreement](https://github.com/nightgauge/nightgauge/blob/main/CLA/individual.md)
-      (the CLA Assistant bot will confirm this on your first PR).
+      (the `cla` check confirms this on your first PR).

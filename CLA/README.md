@@ -59,14 +59,16 @@ going public.
 ## How agreeing works (for contributors)
 
 You don't sign a file or fill in a form. On your **first pull request**, the CLA
-gate posts a comment with a short agreement phrase. Reply with the exact
-phrase and your agreement is recorded against your GitHub account for all future
-contributions — the `cla` status check then turns green. Contributing on behalf
-of a company uses [`corporate.md`](corporate.md).
-
-The exact phrase is:
+bot posts a comment asking you to agree. Reply on the pull request with a
+comment containing exactly:
 
 > I have read the CLA Document and I hereby sign the CLA
+
+Your agreement is recorded against your GitHub account (login and immutable
+numeric user id) for all future contributions, and the `cla` status check
+re-runs and turns green. If you have already signed and the check is still red,
+comment `recheck`. Contributing on behalf of a company uses
+[`corporate.md`](corporate.md) — see the corporate flow below.
 
 ## Submitting work you do not fully own
 
@@ -81,27 +83,92 @@ example, code copied from another project, or work your employer owns):
   employer's written permission/waiver before contributing.
 - If you're unsure, open an issue and ask before submitting.
 
+## Corporate flow (contributing for an employer)
+
+The entity signature is recorded **out-of-band**: an authorized representative
+of the company completes [`corporate.md`](corporate.md) (including the
+signatory and authorized-contributor addendum) and sends it to the maintainer,
+who records the entity — and the GitHub accounts authorized to contribute on
+its behalf — in the private signature store. Any pull request whose author is
+mapped to a signed entity then passes the `cla` check without commenting the
+individual phrase. To add or remove authorized contributors, the company sends
+an updated list.
+
 ## Operator setup (one-time, maintainer)
 
-The first-party [`.github/workflows/cla.yml`](../.github/workflows/cla.yml)
-workflow records agreements without executing code from contributor forks.
-Before the check can pass, a maintainer must:
+The gate is the first-party workflow
+[`.github/workflows/cla.yml`](../.github/workflows/cla.yml) — no third-party
+actions; it talks to the GitHub API directly (#164). It needs two things it
+cannot create itself. **Until both exist, the check logs a loud "CLA gate NOT
+ENFORCED" warning and passes (fail-soft) so development is never blocked; the
+moment both exist it enforces (fail-closed) with no workflow edit.**
 
-1. **Create a private signatures repository** you control — e.g.
-   `nightgauge/.cla-signatures`. Signatures are stored **there**, not in this
-   source tree, so contributor identities never become part of the public
-   codebase. (The workflow's `remote-organization-name` /
-   `remote-repository-name` point at it.)
-2. **Create a token** that can write to that signatures repo — a fine-grained PAT
-   scoped to only `nightgauge/.cla-signatures` with **Contents: read and write**
-   is preferred over a classic `repo`-scoped PAT. Store it as the repository (or
-   org) secret **`CLA_SIGNATURES_TOKEN`**.
-3. **Cut a test PR** from a second account (or ask an outside collaborator) and
-   confirm the `cla` status appears and gates merge.
+1. **Create the private signature store repo** `nightgauge/.cla-signatures`.
+   Signatures are stored **there**, not in this source tree, so contributor
+   identities never become part of the public codebase. Seed it with:
 
-Bots are allow-listed in the workflow and do not sign. The sole maintainer's own
-PRs are covered by the maintainer's owner authority; branch protection still
-enforces the configured review policy.
+   `README.md`:
+
+   ```markdown
+   # nightgauge CLA signatures
+
+   Private signature store for the nightgauge Contributor License Agreement
+   (see CLA/ in nightgauge/nightgauge). `signatures/version1/cla.json` is
+   written by the CLA workflow via the CLA_SIGNATURES_TOKEN fine-grained PAT —
+   do not edit it by hand except to correct an entry.
+   `signatures/version1/corporate.json` is maintained by hand from out-of-band
+   corporate agreements (CLA/corporate.md). This repo stays PRIVATE: it maps
+   GitHub identities to legal agreements.
+   ```
+
+   `signatures/version1/cla.json` (the workflow appends entries; each entry
+   records login, immutable numeric user id, PR number, agreement-comment URL,
+   UTC timestamp, and the CLA document version + commit SHA agreed to):
+
+   ```json
+   { "signedContributors": [] }
+   ```
+
+   `signatures/version1/corporate.json` (maintained by hand; `authorized_ids`
+   is authoritative, `authorized_logins` is a convenience fallback):
+
+   ```json
+   {
+     "entities": [
+       {
+         "name": "Example Corp",
+         "cla_document": "CLA/corporate.md",
+         "cla_version": "HA-CLA-E v1.0 (Option Five)",
+         "signed_at": "2026-01-01T00:00:00Z",
+         "signatory": "Jane Doe, CTO",
+         "agreement_ref": "where the signed agreement is archived",
+         "authorized_ids": [123456],
+         "authorized_logins": ["example-employee"]
+       }
+     ]
+   }
+   ```
+
+2. **Mint a fine-grained PAT** that can write to the store repo: resource owner
+   **nightgauge**, repository access limited to **only**
+   `nightgauge/.cla-signatures`, repository permission **Contents: read and
+   write** (Metadata: read is implied). No other repos, no other permissions.
+   (Org settings must allow fine-grained PATs.) Store it as the
+   `nightgauge/nightgauge` Actions secret **`CLA_SIGNATURES_TOKEN`**, e.g.
+   `gh secret set CLA_SIGNATURES_TOKEN --repo nightgauge/nightgauge`. When the
+   token expires or is rotated, update the secret — an invalid token fails the
+   check closed with a pointer here.
+3. **After the public flip, cut a test PR** from a second account (or ask an
+   outside collaborator) and verify end-to-end: the `cla` check fails and the
+   bot comments; commenting the agreement phrase commits a signature to
+   `nightgauge/.cla-signatures` and the check re-runs green; a second PR from
+   the same account passes with no new comment. The check-run name is exactly
+   **`cla`** (the job id) — the name the branch ruleset requires (#137).
+
+Bots are allow-listed in the workflow and do not sign. The sole maintainer signs
+once like anyone else (the flow is idempotent) or merges under the ruleset's
+owner bypass; branch protection handles the solo-maintainer self-review case
+(#137).
 
 Adopt exactly one instrument. This repository uses the CLA; there is deliberately
 no parallel DCO.

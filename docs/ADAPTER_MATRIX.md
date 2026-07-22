@@ -1,7 +1,7 @@
 # Adapter Capability Matrix
 
-**Version:** 1.0
-**Date:** 2026-04-09
+**Version:** 1.1
+**Updated:** 2026-07-21
 **Issue:** #2595
 **Author:** nightgauge
 
@@ -18,6 +18,27 @@ The audit methodology followed the pattern established by
 [Decision #003 (Codex adapter parity)](decisions/003-codex-adapter-feature-parity.md):
 read source, verify claims against implementation, document gaps with specific evidence,
 and assign an adoption decision to each gap.
+
+### Pipeline eligibility and release status
+
+Capability flags such as streaming and token tracking do not imply that an
+adapter can run a coding pipeline. Pipeline dispatch requires an agentic tool
+loop capable of editing files, running commands, and calling `gh`.
+
+| Adapter         | Agentic pipeline eligible | Release status                                  |
+| --------------- | :-----------------------: | ----------------------------------------------- |
+| claude-headless |             ✓             | Recommended; primary tested path                |
+| claude-sdk      |             ✓             | Advanced optional SDK integration               |
+| codex           |             ✓             | **Beta**; live six-stage matrix pending         |
+| gemini          |             ✓             | **Experimental**; live six-stage matrix pending |
+| copilot         |             ✓             | **Experimental**; live six-stage matrix pending |
+| gemini-sdk      |             ✗             | Chat-completion-only                            |
+| ollama          |             ✗             | Chat-completion-only                            |
+| lm-studio       |             ✗             | Chat-completion-only                            |
+
+The runtime's `isAgenticAdapter()` check is authoritative. Chat-only adapters
+remain supported for evaluation, judging, and summarization but are rejected at
+pipeline dispatch.
 
 ---
 
@@ -62,7 +83,7 @@ The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC 
 | gemini-sdk      |         ✓         |         ✓          | Stream-JSON flag in Go (uses `--output-format stream-json`)                             |
 | lm-studio       |         ✗         |         ✓          | Not in Go registry                                                                      |
 | ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                        |
-| copilot         |         ✗         |         ✓          | Not in Go registry                                                                      |
+| copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                           |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
@@ -269,6 +290,10 @@ The parser extracts `stats.input_tokens`, `stats.output_tokens`, `stats.cached` 
 
 **File:** `packages/nightgauge-sdk/src/cli/adapters/GeminiSdkAdapter.ts`
 
+**Pipeline role:** Chat-completion-only. Despite its conversational and token
+capabilities, it has no coding-agent tool loop and is rejected at pipeline
+dispatch.
+
 | Property               | Value                                                                   |
 | ---------------------- | ----------------------------------------------------------------------- |
 | CLI command            | `gemini` (declared but not used — imports `@google/genai` SDK directly) |
@@ -306,6 +331,9 @@ real validation (key presence check) deferred to `createQueryFunction()`.
 
 **File:** `packages/nightgauge-sdk/src/cli/adapters/LmStudioAdapter.ts`
 
+**Pipeline role:** Chat-completion-only; supported for evaluation, judging, and
+summarization, not repository-changing pipeline stages.
+
 | Property               | Value                                                          |
 | ---------------------- | -------------------------------------------------------------- |
 | CLI command            | `lm-studio` (declared but not used — uses fetch API)           |
@@ -330,7 +358,7 @@ reported. Server connectivity errors surface at request time.
 
 **LM Studio-specific error messages:**
 
-- Model not loaded: `LM Studio model '${model}' is not loaded. Load the model in LM Studio before running the pipeline.`
+- Model not loaded: `LM Studio model '${model}' is not loaded. Load the model before retrying.`
 - Connection refused: `LM Studio server returned HTTP ${status}: ${statusText}`
 
 **Environment variables:**
@@ -347,6 +375,9 @@ reported. Server connectivity errors surface at request time.
 ### 7. ollama
 
 **File:** `packages/nightgauge-sdk/src/cli/adapters/OllamaAdapter.ts`
+
+**Pipeline role:** Chat-completion-only; supported for evaluation, judging, and
+summarization, not repository-changing pipeline stages.
 
 | Property               | Value                                                       |
 | ---------------------- | ----------------------------------------------------------- |
@@ -394,6 +425,9 @@ This is architecturally elegant but creates a dependency: Go Ollama path require
 
 **File:** `packages/nightgauge-sdk/src/cli/adapters/CopilotCliAdapter.ts`
 
+**Release status:** Experimental. The agentic pipeline contract exists, but a
+live representative six-stage run has not yet been recorded.
+
 | Property               | Value                                                                                      |
 | ---------------------- | ------------------------------------------------------------------------------------------ |
 | CLI command            | `copilot`                                                                                  |
@@ -431,7 +465,9 @@ Error messages from `validateCLIAuth`: `copilot CLI is not authenticated. Run 'g
 Falls back to zero tokens if no pattern matches. **This is not guaranteed token extraction** — it
 depends on Copilot CLI actually emitting one of these patterns.
 
-**Not in Go binary registry.** Only TypeScript SDK path supports Copilot.
+**Go support:** `CopilotAdapter` is registered in the Go execution layer and its
+plain-text stats stream is parsed there. Live entitlement-backed verification
+is still pending.
 
 ---
 
@@ -600,27 +636,26 @@ how `GeminiSdkAdapter.createQueryFunction()` already does it.
 
 ---
 
-### Gap #7: Go Registry Missing lm-studio and copilot
+### Gap #7: Go Registry Missing lm-studio
 
 | Attribute           | Value                                                       |
 | ------------------- | ----------------------------------------------------------- |
-| Adapters            | `lm-studio`, `copilot`                                      |
+| Adapter             | `lm-studio`                                                 |
 | Go Registry         | Not registered in `internal/execution/adapters/registry.go` |
-| TypeScript Registry | Fully registered in `AdapterRegistry.ts`                    |
-| Severity            | MEDIUM                                                      |
+| TypeScript Registry | Registered in `AdapterRegistry.ts`                          |
+| Severity            | LOW                                                         |
 | Decision            | **DEFER**                                                   |
 
-**Evidence:** `NewRegistry()` in `registry.go` registers 6 adapters: `claude-headless`, `claude-sdk`,
-`codex`, `gemini`, `gemini-sdk`, `ollama`. Neither `lm-studio` nor `copilot` is present.
+**Evidence:** `NewRegistry()` includes Copilot but not LM Studio.
 
-**Impact:** Users cannot select `lm-studio` or `copilot` adapters when running the pipeline via the
-Go binary CLI (`nightgauge run --adapter lm-studio`). Only the VSCode extension / TypeScript path
-supports these adapters.
+**Impact:** LM Studio evaluation is available only through the TypeScript SDK
+path. This does not block pipeline execution because LM Studio is
+chat-completion-only in both layers.
 
 **Rationale for DEFER:**
 
-- LM Studio: Go adapter would need to implement an HTTP bridge (similar to Ollama's Claude-bridge approach)
-- Copilot: Requires `copilot` CLI binary handling in Go + output parsing
+- LM Studio would need a Go HTTP bridge if Go-native eval/judge support becomes
+  desirable.
 
 ---
 
@@ -631,7 +666,7 @@ supports these adapters.
 | HIGH     | #2589 | Sync Go Codex Adapter with TypeScript Adapter                          | codex                  | Session resume, ephemeral, sandbox                                             |
 | MEDIUM   | —     | Verify Copilot CLI token output format                                 | copilot                | [Gap #2](#gap-2-copilot-nativetokentracking-claim)                             |
 | MEDIUM   | —     | Upgrade claude-headless TypeScript to stream-json                      | claude-headless        | [Gap #4](#gap-4-claude-headless-streamjson-and-token-tracking)                 |
-| MEDIUM   | —     | Add lm-studio and copilot to Go binary registry                        | lm-studio, copilot     | [Gap #7](#gap-7-go-registry-missing-lm-studio-and-copilot)                     |
+| LOW      | —     | Add LM Studio to the Go registry for eval/judge use                    | lm-studio              | [Gap #7](#gap-7-go-registry-missing-lm-studio)                                 |
 | LOW      | —     | Add version check to claude-headless validateAuth                      | claude-headless        | [Gap #5](#gap-5-missing-minimum-version-in-claude-headless)                    |
 | LOW      | —     | Add early API key validation to claude-sdk and gemini-sdk validateAuth | claude-sdk, gemini-sdk | [Gap #6](#gap-6-claude-sdk-and-gemini-sdk-validateauth-deferred-to-query-time) |
 | LOW      | —     | Clarify streamJson definition in ICliAdapter.ts for HTTP adapters      | lm-studio, ollama      | [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics)             |

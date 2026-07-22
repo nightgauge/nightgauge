@@ -4505,14 +4505,14 @@ extension and are managed through VSCode settings or the ConfigBridge service.
 
 Core VSCode extension settings for authentication and paths.
 
-| Option           | Type   | Default                  | Description                                                              |
-| ---------------- | ------ | ------------------------ | ------------------------------------------------------------------------ |
-| `adapter`        | enum   | `"claude"`               | Execution adapter: claude, codex, gemini, gemini-sdk, lm-studio, copilot |
-| `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                            |
-| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku                                       |
-| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku (#626)                   |
-| `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                     |
-| `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                         |
+| Option           | Type   | Default                  | Description                                                                                   |
+| ---------------- | ------ | ------------------------ | --------------------------------------------------------------------------------------------- |
+| `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental) |
+| `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                 |
+| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku                                                            |
+| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku (#626)                                        |
+| `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                          |
+| `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                              |
 
 > **Backend Setup**: For detailed setup instructions including IAM policies,
 > service accounts, and credential configuration for Bedrock, Vertex, and
@@ -4672,6 +4672,10 @@ variables are available:
 | `nightgauge.gemini.apiKey`     | string | _(none)_             | API key (stored securely)                  |
 
 #### LM Studio Adapter Environment Variables
+
+LM Studio is chat-completion-only. These settings apply to evaluation, judging,
+and summarization; pipeline dispatch rejects this adapter because it cannot edit
+files or run tools.
 
 When using the `lm-studio` adapter, the following environment variables are
 available:

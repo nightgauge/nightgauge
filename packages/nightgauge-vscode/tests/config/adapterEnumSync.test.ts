@@ -1,9 +1,7 @@
 /**
  * Guard against adapter-enum drift between the single source of truth
- * (AdapterEnumSchema) and the surfaces that must mirror it: the VSCode setting
- * `nightgauge.core.adapter` enum in package.json and the per-stage matrix
- * dropdown (STAGE_ADAPTER_OPTIONS). Before #4030 the settings enum was missing
- * lm-studio / ollama / copilot, so Codex et al. were unselectable in the UI.
+ * (AdapterEnumSchema) and runtime parsing. Pipeline UI surfaces intentionally
+ * expose only the subset with agentic tool loops.
  *
  * @see Issue #4030 - settings adapter-enum drift
  */
@@ -16,6 +14,7 @@ import { STAGE_ADAPTER_OPTIONS, STAGE_MODEL_OPTIONS } from "../../src/views/sett
 import { VALID_ADAPTERS } from "../../src/utils/resolvers/modelResolver";
 
 const CANONICAL = [...AdapterEnumSchema.options].sort();
+const AGENTIC_PIPELINE_ADAPTERS = ["claude", "codex", "copilot", "gemini"].sort();
 
 function readCoreAdapterEnum(): { enum: string[]; enumDescriptions: string[] } {
   const pkgPath = resolve(__dirname, "../../package.json");
@@ -30,9 +29,9 @@ function readCoreAdapterEnum(): { enum: string[]; enumDescriptions: string[] } {
 }
 
 describe("adapter enum sync (#4030)", () => {
-  it("package.json nightgauge.core.adapter enum == AdapterEnumSchema", () => {
+  it("package.json nightgauge.core.adapter enum exposes only agentic adapters", () => {
     const { enum: pkgEnum } = readCoreAdapterEnum();
-    expect([...pkgEnum].sort()).toEqual(CANONICAL);
+    expect([...pkgEnum].sort()).toEqual(AGENTIC_PIPELINE_ADAPTERS);
   });
 
   it("package.json provides one enumDescription per adapter (no count drift)", () => {
@@ -40,11 +39,11 @@ describe("adapter enum sync (#4030)", () => {
     expect(enumDescriptions).toHaveLength(pkgEnum.length);
   });
 
-  it("the per-stage matrix dropdown (minus the empty default) == AdapterEnumSchema", () => {
+  it("the per-stage matrix dropdown exposes only agentic adapters", () => {
     const matrixAdapters = STAGE_ADAPTER_OPTIONS.map((o) => o.value)
       .filter((v) => v !== "")
       .sort();
-    expect(matrixAdapters).toEqual(CANONICAL);
+    expect(matrixAdapters).toEqual(AGENTIC_PIPELINE_ADAPTERS);
   });
 
   it("runtime VALID_ADAPTERS == AdapterEnumSchema (no silent-drop drift, #4030)", () => {

@@ -12,8 +12,8 @@ end.
 > promises to **also** always keep your contribution available under the
 > project's open-source license (Apache-2.0). So the project can adopt a
 > different or commercial license in the future, but your contribution can never
-> be taken _out_ of the open-source version. You don't sign a form — the CLA
-> Assistant bot records your agreement on your first pull request.
+> be taken _out_ of the open-source version. You don't sign a form — the
+> project's CLA bot records your agreement on your first pull request.
 
 Thank you for your interest in contributing to Nightgauge. This Agreement is
 between You and **Edibu, LLC** ("We" or "Us"), the steward of the Nightgauge
@@ -187,7 +187,7 @@ maximum extent possible under law.
 ## How to agree
 
 You do not sign or send this document. When You open Your first pull request,
-the CLA Assistant bot comments with a short agreement phrase; replying with that
+the CLA bot comments with a short agreement phrase; replying with that
 phrase records Your acceptance of this Agreement against Your GitHub account for
 all present and future Contributions, and constitutes Your electronic signature.
 See [`CLA/README.md`](README.md). Contributing on behalf of an employer? Use
@@ -201,4 +201,4 @@ contributors), which is licensed under a
 [Creative Commons Attribution 3.0 Unported License](https://creativecommons.org/licenses/by/3.0/).
 Adaptation: Section 2.3 fixed to Option Five; "We/Us" identified as Edibu, LLC
 (steward of Nightgauge); Media license and governing law completed; submission
-instructions point to the project's CLA Assistant flow._
+instructions point to the project's CLA comment flow._

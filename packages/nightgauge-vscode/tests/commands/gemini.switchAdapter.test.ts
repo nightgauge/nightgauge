@@ -75,7 +75,7 @@ vi.mock("../../src/services/ConfigBridge", () => ({
 import { registerSwitchAdapterCommand } from "../../src/commands/switchAdapter";
 import { getExecutionAdapter } from "../../src/utils/incrediConfig";
 
-describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
+describe("switchAdapter command — Gemini CLI option", () => {
   const mockLogger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -120,7 +120,7 @@ describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
     disposable.dispose();
   });
 
-  it("includes Gemini SDK in the adapter QuickPick items", async () => {
+  it("excludes chat-only Gemini SDK from pipeline adapter choices", async () => {
     quickPickResponses = [undefined];
 
     const disposable = registerSwitchAdapterCommand(
@@ -133,8 +133,7 @@ describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
     const geminiSdkItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "gemini-sdk"
     );
-    expect(geminiSdkItem).toBeDefined();
-    expect(geminiSdkItem!.label).toBe("Gemini SDK (Direct API)");
+    expect(geminiSdkItem).toBeUndefined();
 
     disposable.dispose();
   });
@@ -153,26 +152,7 @@ describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
     const geminiItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "gemini"
     );
-    expect(geminiItem!.description).toBe("Current adapter");
-
-    disposable.dispose();
-  });
-
-  it('shows "Current adapter" description when gemini-sdk is already selected', async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("gemini-sdk");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const adapterItems = quickPickCalls[0].items;
-    const geminiSdkItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "gemini-sdk"
-    );
-    expect(geminiSdkItem!.description).toBe("Current adapter");
+    expect(geminiItem!.description).toBe("Current adapter (experimental)");
 
     disposable.dispose();
   });
@@ -191,46 +171,7 @@ describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
     const geminiItem = adapterItems.find(
       (item) => (item as unknown as { value: string }).value === "gemini"
     );
-    expect(geminiItem!.description).toBe("Use Google Gemini CLI binary execution path");
-
-    disposable.dispose();
-  });
-
-  it("shows Gemini SDK description when another adapter is current", async () => {
-    vi.mocked(getExecutionAdapter).mockReturnValue("claude");
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const adapterItems = quickPickCalls[0].items;
-    const geminiSdkItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "gemini-sdk"
-    );
-    expect(geminiSdkItem!.description).toBe("Use Google Gemini SDK with direct API access");
-
-    disposable.dispose();
-  });
-
-  it("shows Gemini SDK detail text about API key requirement", async () => {
-    quickPickResponses = [undefined];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const adapterItems = quickPickCalls[0].items;
-    const geminiSdkItem = adapterItems.find(
-      (item) => (item as unknown as { value: string }).value === "gemini-sdk"
-    );
-    expect((geminiSdkItem as unknown as { detail: string }).detail).toBe(
-      "Requires GEMINI_API_KEY or GOOGLE_API_KEY environment variable"
-    );
+    expect(geminiItem!.description).toBe("Experimental agentic pipeline adapter");
 
     disposable.dispose();
   });
@@ -242,29 +183,6 @@ describe("switchAdapter command — Gemini CLI and Gemini SDK options", () => {
       value: "gemini",
     };
     quickPickResponses = [geminiAdapterItem as unknown as QuickPickItem];
-
-    const disposable = registerSwitchAdapterCommand(
-      mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
-    );
-
-    await invokeCommand();
-
-    const vscode = await import("vscode");
-    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-      expect.stringContaining("GEMINI_API_KEY")
-    );
-
-    disposable.dispose();
-  });
-
-  it("shows auth warning when selecting gemini-sdk and no API key env vars are set", async () => {
-    const geminiSdkAdapterItem = {
-      label: "Gemini SDK (Direct API)",
-      detail: "Requires GEMINI_API_KEY or GOOGLE_API_KEY environment variable",
-      description: "Use Google Gemini SDK with direct API access",
-      value: "gemini-sdk",
-    };
-    quickPickResponses = [geminiSdkAdapterItem as unknown as QuickPickItem];
 
     const disposable = registerSwitchAdapterCommand(
       mockLogger as unknown as Parameters<typeof registerSwitchAdapterCommand>[0]
