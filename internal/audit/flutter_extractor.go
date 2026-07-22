@@ -11,8 +11,6 @@ import (
 var (
 	// flutterDioRe matches _dio.get/post/put/delete/patch('url') in Dart
 	flutterDioRe = regexp.MustCompile(`_dio\.(get|post|put|delete|patch)\(\s*['"]([^'"]+)['"]`)
-	// flutterGitHubRe detects direct api.github.com calls
-	flutterGitHubRe = regexp.MustCompile(`https?://api\.github\.com|api\.github\.com`)
 	// flutterAuthRe detects auth header patterns in Dart
 	flutterAuthRe = regexp.MustCompile(`(?i)Authorization|Bearer|getAuthHeaders?|authToken|accessToken`)
 	// flutterApiKeyRe detects API key patterns in Dart
@@ -141,12 +139,18 @@ func parseGitHubCallsFile(path string) []Finding {
 		lineNum++
 		line := scanner.Text()
 
-		if !flutterGitHubRe.MatchString(line) {
+		urlMatch := ""
+		for _, candidate := range []string{"https://api.github.com", "http://api.github.com", "api.github.com"} {
+			if strings.Contains(line, candidate) {
+				urlMatch = candidate
+				break
+			}
+		}
+		if urlMatch == "" {
 			continue
 		}
 
 		// Extract the URL fragment for detail
-		urlMatch := flutterGitHubRe.FindString(line)
 		ln := lineNum
 		findings = append(findings, Finding{
 			Category:         "DIRECT_GITHUB_CALL",

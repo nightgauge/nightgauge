@@ -44,11 +44,15 @@ func (s *PRService) GetPRMergeInfo(ctx context.Context, owner, repo string, numb
 
 // GetPR fetches a single pull request with review and check status.
 func (s *PRService) GetPR(ctx context.Context, owner, repo string, number int) (*types.PullRequest, error) {
+	graphQLNumber, err := checkedGraphQLInt("pull request number", number)
+	if err != nil {
+		return nil, err
+	}
 	var q pullRequestQuery
 	vars := map[string]interface{}{
 		"owner":  graphql.String(owner),
 		"name":   graphql.String(repo),
-		"number": graphql.Int(number),
+		"number": graphQLNumber,
 	}
 
 	if err := s.client.query(ctx, &q, vars); err != nil {
