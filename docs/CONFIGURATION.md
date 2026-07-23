@@ -139,6 +139,16 @@ For example:
 - `branch.base` -> `NIGHTGAUGE_BRANCH_BASE`
 - `pipeline.ci_timeout` -> `NIGHTGAUGE_PIPELINE_CI_TIMEOUT`
 
+Supported dynamic and compatibility families that cannot be inferred from a
+single static path are:
+
+- `NIGHTGAUGE_BATCH_MAX_ISSUES` — maximum issues selected for one batch.
+- `NIGHTGAUGE_PIPELINE_RETRY_MAX_AUTO_ATTEMPTS` — canonical retry limit
+  override (`NIGHTGAUGE_RETRY_MAX_AUTO_ATTEMPTS` remains a compatibility alias).
+- `NIGHTGAUGE_PIPELINE_OUTPUT_TOKEN_LIMIT_<STAGE>` — per-stage output ceiling;
+  replace `<STAGE>` with the uppercase stage name and convert hyphens to
+  underscores, for example `..._FEATURE_DEV`.
+
 > **Scope note.** The TypeScript layer resolves env overrides generically for
 > every key registered in `envVarResolver.ts` (`KNOWN_CONFIG_PATHS`). The Go
 > binary supports env overrides for a specific set of keys read at
@@ -4476,9 +4486,12 @@ export NIGHTGAUGE_EPIC_SUMMARY_SUMMARY_DIR=docs/epics
 
 ## UI Configuration (VSCode-Specific)
 
-UI settings control the VSCode extension's visual behavior and are **not
-portable** to config.yaml files. These settings only apply when using the VSCode
-extension and are managed through VSCode settings or the ConfigBridge service.
+UI settings control the VSCode extension's visual behavior. Current `ui.*`
+settings are stored through the tiered YAML Settings panel and are portable
+between extension installations when placed in project configuration. A small
+set of legacy `nightgauge.*` VS Code contributions remains in settings.json;
+those entries are compatibility surfaces and are identified explicitly in
+their descriptions.
 
 > **Note**: UI settings are separate from behavior settings. Behavior settings
 > (like `pr.merge_strategy`) affect pipeline execution and are portable across
@@ -4490,7 +4503,7 @@ extension and are managed through VSCode settings or the ConfigBridge service.
 | Category     | Examples                                        | Portability | Storage                   |
 | ------------ | ----------------------------------------------- | ----------- | ------------------------- |
 | **Behavior** | `pr.merge_strategy`, `pipeline.auto_fix`        | CLI + SDK   | `.nightgauge/config.yaml` |
-| **UI**       | `ui.notifications.sounds`, `ui.output_window.*` | VSCode only | VSCode settings           |
+| **UI**       | `ui.notifications.sounds`, `ui.output_window.*` | VSCode only | tiered YAML (`ui.*`)      |
 
 **Guidelines:**
 

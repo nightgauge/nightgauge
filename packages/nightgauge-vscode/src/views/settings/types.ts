@@ -165,7 +165,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     title: "Platform",
     icon: "key",
     description: "License key, API connection, and platform feature settings",
-    docLink: "docs/CONFIGURATION.md#platform",
+    docLink: "docs/CONFIGURATION.md#platform-configuration",
   },
   {
     id: "project",
@@ -179,7 +179,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     title: "Pull Request",
     icon: "git-pull-request",
     description: "PR creation and merge defaults",
-    docLink: "docs/CONFIGURATION.md#pull-request",
+    docLink: "docs/CONFIGURATION.md#pr",
   },
   {
     id: "branch",
@@ -242,7 +242,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     title: "Human-in-the-Loop",
     icon: "zap",
     description: "Auto-accept pipeline prompts and permissions",
-    docLink: "docs/CONFIGURATION.md#human-in-the-loop",
+    docLink: "docs/CONFIGURATION.md#human_in_the_loop",
   },
   {
     id: "ralph_loop",
@@ -270,7 +270,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
     title: "Forge Instances",
     icon: "server",
     description: "Manage GitLab and GitHub forge connections",
-    docLink: "docs/CONFIGURATION.md#forges",
+    docLink: "docs/CONFIGURATION.md#forge-configuration-schema_version-2",
   },
 ];
 
