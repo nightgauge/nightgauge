@@ -1166,9 +1166,9 @@ export NIGHTGAUGE_BRANCH_PROTECTED=main,develop
 
 Issue creation and assignment settings.
 
-| Option           | Type     | Default     | Description                                            |
-| ---------------- | -------- | ----------- | ------------------------------------------------------ |
-| `default_status` | string   | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
+| Option           | Type   | Default     | Description                                            |
+| ---------------- | ------ | ----------- | ------------------------------------------------------ |
+| `default_status` | string | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
 
 **Example:**
 
