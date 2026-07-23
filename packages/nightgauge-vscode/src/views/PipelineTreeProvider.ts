@@ -1109,6 +1109,14 @@ export class PipelineTreeProvider
     }
   }
 
+  /** Remove a slot only when it is still owned by the expected state relay. */
+  removeConcurrentSlotIfOwned(issueNumber: number, stateService: PipelineStateService): void {
+    const slot = this.concurrentSlots.get(issueNumber);
+    if (slot?.usesStateService(stateService)) {
+      this.removeConcurrentSlot(issueNumber);
+    }
+  }
+
   /**
    * Remove all concurrent slots (safety net for onAllComplete).
    */

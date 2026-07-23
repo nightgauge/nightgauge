@@ -835,6 +835,15 @@ nightgauge cost --complexity <1-10>
 nightgauge cost by-class [--days N] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
 ```
 
+When the Nightgauge VS Code extension is open, a pipeline started directly with
+`nightgauge run` appears in the Pipeline tree for any locally registered
+repository. IPC events remain the primary update path for extension-started
+runs. For terminal-started runs, the extension reconciles the repository's
+atomic `.nightgauge/pipeline/current-run.json` and `runtime-<issue>.json`
+snapshots. It only accepts snapshots whose repository identity matches the
+registered root and whose owning process is alive; stale and unregistered
+runtime files are ignored.
+
 #### `cost by-class`
 
 Reads the recorded pipeline run history and reports cost (p50/p95/mean) and
