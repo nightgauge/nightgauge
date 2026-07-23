@@ -1292,11 +1292,6 @@
           "default": "gemini-2.5-flash",
           "description": "Default Gemini model for pipeline stages"
         },
-        "nightgauge.gemini.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Gemini API key (stored securely via SecretStorage). Leave empty to use GEMINI_API_KEY env var."
-        },
         "nightgauge.readyItems.autoRefresh": {
           "type": "boolean",
           "default": false,
