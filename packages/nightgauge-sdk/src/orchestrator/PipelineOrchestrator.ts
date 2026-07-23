@@ -249,7 +249,12 @@ export class PipelineOrchestrator {
 
     // Seeded with a placeholder emitter (issue 0); each run / standalone stage
     // swaps in a fresh emitter so node ids and `seq` are scoped to that run.
-    this.emitter = new PipelineRunEmitter(this.events, 0);
+    this.emitter = new PipelineRunEmitter(
+      this.events,
+      0,
+      "sdk-fanout",
+      this.config.adapter ?? "claude"
+    );
     this.executor = new StageExecutor(this.usage, this.emitter, queryFn);
   }
 
@@ -258,7 +263,12 @@ export class PipelineOrchestrator {
    * executor. Returns the emitter so the caller can drive run-level lifecycle.
    */
   private newEmitter(issueNumber: number): PipelineRunEmitter {
-    this.emitter = new PipelineRunEmitter(this.events, issueNumber);
+    this.emitter = new PipelineRunEmitter(
+      this.events,
+      issueNumber,
+      "sdk-fanout",
+      this.config.adapter ?? "claude"
+    );
     this.executor.setEmitter(this.emitter);
     return this.emitter;
   }

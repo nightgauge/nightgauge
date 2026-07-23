@@ -67,6 +67,18 @@ function resultQueryFn(
 }
 
 describe("StageExecutor emit path — per-agent usage + terminalKind (#3914)", () => {
+  it("attributes single-agent workflow events to the configured provider", () => {
+    const bus = new EventBus();
+    const providers: string[] = [];
+    bus.on("agent", (node) => providers.push(node.provider));
+
+    const emitter = new PipelineRunEmitter(bus, ISSUE, "sdk-fanout", "codex");
+    emitter.stageStarted(STAGE);
+    emitter.stageCompleted(STAGE);
+
+    expect(providers).toEqual(["codex", "codex"]);
+  });
+
   it("a completed stage agent node carries NON-ZERO usage matching the tracker", async () => {
     const { bus, events } = captureBus();
     const tracker = new TokenTracker();

@@ -313,6 +313,8 @@ export interface LoadedStageSkill {
   skillContent: string;
   /** The logical (repo-relative) skill path used for prompts/diagnostics. */
   logicalSkillPath: string;
+  /** Absolute or resolved directory containing the selected SKILL.md. */
+  skillDirectory: string;
 }
 
 /**
@@ -371,7 +373,26 @@ export async function loadStageSkill(
   }
 
   const skillContent = await readFile(skillPath, "utf-8");
-  return { skillContent, logicalSkillPath };
+  return { skillContent, logicalSkillPath, skillDirectory: path.dirname(skillPath) };
+}
+
+/**
+ * Rewrite the selected skill's own progressive-disclosure paths for consumer
+ * repositories, which do not contain Nightgauge's source-tree `skills/`.
+ */
+export function rewriteStageSkillPaths(
+  content: string,
+  stage: PipelineStage,
+  skillDirectory: string
+): string {
+  const directory = skillDirectory.replace(/[/\\]+$/, "");
+  const sharedDirectory = path.join(path.dirname(directory), "_shared");
+  let rewritten = content.split("skills/_shared/").join(`${sharedDirectory}${path.sep}`);
+  const ownNames = new Set([path.basename(directory), `nightgauge-${stage}`, stage]);
+  for (const name of ownNames) {
+    rewritten = rewritten.split(`skills/${name}/`).join(`${directory}${path.sep}`);
+  }
+  return rewritten;
 }
 
 /**
@@ -382,7 +403,11 @@ export async function buildStagePrompt(
   issueNumber: number,
   skillsBasePath: string = "skills"
 ): Promise<string> {
-  const { skillContent, logicalSkillPath } = await loadStageSkill(stage, skillsBasePath);
+  const { skillContent, logicalSkillPath, skillDirectory } = await loadStageSkill(
+    stage,
+    skillsBasePath
+  );
+  const resolvedSkillContent = rewriteStageSkillPaths(skillContent, stage, skillDirectory);
   const invocationLines: string[] = [
     "Execution mode: non-interactive headless stage execution.",
     `Equivalent slash command arguments: $ARGUMENTS="${issueNumber}".`,
@@ -403,7 +428,10 @@ export async function buildStagePrompt(
   // stable span. Skills self-derive the issue number from the branch name, so
   // leading with the body strips no required context — the trailer retains it
   // for redundancy.
-  return `${skillContent}
+  return `Skill directory: ${skillDirectory}
+Supporting files under _includes/ and the sibling _shared/ directory are at the absolute paths below. Do not scan the filesystem for them.
+
+${resolvedSkillContent}
 
 ---
 
