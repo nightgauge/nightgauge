@@ -398,8 +398,7 @@ export class ProjectBoardTreeProvider
         before.showDependencies !== this.showDependencies ||
         before.groupByEpic !== this.groupByEpic ||
         before.defaultEpicCollapsed !== this.defaultEpicCollapsed;
-      const identityChanged =
-        (await this.projectBoardService.reloadConfigIfChanged?.()) ?? false;
+      const identityChanged = (await this.projectBoardService.reloadConfigIfChanged?.()) ?? false;
       if (changed || identityChanged) {
         this.refresh();
       }
