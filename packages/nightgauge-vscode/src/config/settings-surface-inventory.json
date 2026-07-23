@@ -1,0 +1,232 @@
+{
+  "schema_version": "1",
+  "canonical_schema": "src/config/schema.ts#IncrediConfigSchema",
+  "generated_contributions": "package.json#contributes.configuration.properties",
+  "custom_settings": "src/views/settings/SettingsHtml.ts",
+  "custom_control_mapping": "rendered [data-path] attributes -> canonical schema paths",
+  "vscode_namespaces": [
+    {
+      "setting": "nightgauge.cloud.*",
+      "schema_path": "platform.enabled",
+      "runtime_consumer": "src/bootstrap/services.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.dashboardUrl",
+      "classification": "derived",
+      "runtime_consumer": "src/views/dashboard/Dashboard.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.authProvider",
+      "schema_path": "ui.core.auth_provider",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.defaultModel",
+      "schema_path": "ui.core.default_model",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.contextPath",
+      "schema_path": "ui.core.context_path",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.plansPath",
+      "schema_path": "ui.core.plans_path",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.core.*",
+      "schema_path": "ui.core",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.gemini.*",
+      "schema_path": "ui.core.gemini",
+      "runtime_consumer": "src/config/coreSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.readyItems.*",
+      "schema_path": "ui.ready_items",
+      "runtime_consumer": "src/config/readyItemsSettings.ts",
+      "storage": "runtime"
+    },
+    {
+      "setting": "nightgauge.outputWindow.*",
+      "schema_path": "ui.output_window",
+      "runtime_consumer": "src/config/outputWindowSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.dashboard.*",
+      "schema_path": "ui.dashboard",
+      "runtime_consumer": "src/views/dashboard/DashboardState.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.plugins.*",
+      "schema_path": "ui.plugins",
+      "runtime_consumer": "src/services/PluginSetupService.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.notifications.*",
+      "schema_path": "ui.notifications",
+      "runtime_consumer": "src/config/notificationSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.pipeline.*",
+      "schema_path": "ui.pipeline",
+      "runtime_consumer": "src/config/pipelineUISettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.orchestration.*",
+      "schema_path": "orchestration",
+      "runtime_consumer": "src/config/configMergeEngine.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.projectBoard.*",
+      "schema_path": "ui.project_board",
+      "runtime_consumer": "src/config/projectBoardSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.batch.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/NotificationService.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.sidebar.*",
+      "schema_path": "ui.sidebar",
+      "runtime_consumer": "src/config/sidebarSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.audit.*",
+      "schema_path": "audit",
+      "classification": "deprecated",
+      "runtime_consumer": "src/services/AuditLogService.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.telemetry.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/TelemetryConsentService.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.warnings.*",
+      "schema_path": "ui.warnings",
+      "runtime_consumer": "src/config/warningSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.agentTeams.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/HeadlessOrchestrator.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.limits.*",
+      "schema_path": "ui.limits",
+      "runtime_consumer": "src/config/limitsSettings.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.backend.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/BinaryResolver.ts",
+      "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.git.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/extension.ts",
+      "storage": "vscode"
+    }
+  ],
+  "custom_sections": [
+    { "section": "core", "schema_path": "ui.core" },
+    { "section": "platform", "schema_path": "platform" },
+    { "section": "project", "schema_path": "project" },
+    { "section": "pull_request", "schema_path": "pull_request" },
+    { "section": "branch", "schema_path": "branch" },
+    { "section": "issue", "schema_path": "issue" },
+    { "section": "pipeline", "schema_path": "pipeline" },
+    { "section": "routing", "schema_path": "routing" },
+    { "section": "enforcement", "schema_path": "enforcement" },
+    { "section": "commands", "schema_path": "commands" },
+    { "section": "validation", "schema_path": "validation" },
+    { "section": "sanitization", "schema_path": "sanitization" },
+    { "section": "human_in_the_loop", "schema_path": "human_in_the_loop" },
+    { "section": "ralph_loop", "schema_path": "ralph_loop" },
+    { "section": "automations", "schema_path": "automations" },
+    { "section": "autonomous", "schema_path": "autonomous" },
+    { "section": "forges", "schema_path": "forges" }
+  ],
+  "intentional_omissions": [
+    {
+      "schema_path": "platform.license_key",
+      "classification": "secret",
+      "surface": "custom-settings",
+      "storage": "secret-storage",
+      "boundary_test": "SettingsPanel machine and secret routing"
+    },
+    {
+      "schema_path": "notifiers",
+      "field": "webhook_secret_key",
+      "classification": "secret",
+      "surface": "non-gui",
+      "storage": "secret-storage"
+    },
+    {
+      "schema_path": "owner_type",
+      "classification": "derived",
+      "surface": "non-gui",
+      "storage": "team"
+    },
+    {
+      "schema_path": "branch.suggestions",
+      "classification": "deprecated",
+      "surface": "non-gui",
+      "storage": "team"
+    },
+    {
+      "schema_path": "pipeline.stage_cost_caps.*",
+      "classification": "non-gui",
+      "surface": "non-gui",
+      "storage": "team"
+    }
+  ],
+  "critical_boundaries": [
+    {
+      "id": "repository-project-routing",
+      "schema_paths": ["projects", "project.number"],
+      "storage": ["team", "local"],
+      "runtime_consumer": "src/services/RepositoryProjectSettingsService.ts",
+      "boundary_tests": [
+        "tests/services/RepositoryProjectSettingsService.test.ts",
+        "tests/views/settings/SettingsHtml.projects.test.ts"
+      ]
+    },
+    {
+      "id": "secure-credentials",
+      "schema_paths": ["platform.license_key", "notifiers"],
+      "storage": ["secret-storage"],
+      "runtime_consumer": "src/services/SecretStorageService.ts",
+      "boundary_tests": ["tests/views/settings/LicenseKeyMachineTier.test.ts"]
+    }
+  ]
+}
