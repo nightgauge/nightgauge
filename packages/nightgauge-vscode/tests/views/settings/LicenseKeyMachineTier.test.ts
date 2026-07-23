@@ -163,7 +163,7 @@ function newPanel(): PanelInternals {
   return new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as unknown as PanelInternals;
 }
 
-describe("#3997 — license key machine-tier persistence", () => {
+describe("#30 — license key SecretStorage persistence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReadProject.mockResolvedValue({ config: {} });
@@ -180,7 +180,7 @@ describe("#3997 — license key machine-tier persistence", () => {
     expect(globalTab?.editable).toBe(true);
   });
 
-  it("persists a typed license key to the machine YAML (writeGlobal) from project view", async () => {
+  it("persists a typed license key only to SecretStorage from project view", async () => {
     const panel = newPanel();
     panel.tierState = { currentTier: "merged", defaultEditTier: "project" };
 
@@ -188,14 +188,7 @@ describe("#3997 — license key machine-tier persistence", () => {
     panel.handleChange("platform.license_key", "ib_live_NEWKEY");
     await panel.handleSave();
 
-    // The new value must reach the machine YAML, not be dropped.
-    expect(mockWriteGlobal).toHaveBeenCalledTimes(1);
-    const machineArg = mockWriteGlobal.mock.calls[0][0] as {
-      platform?: { license_key?: string };
-    };
-    expect(machineArg.platform?.license_key).toBe("ib_live_NEWKEY");
-
-    // It is also mirrored to SecretStorage so runtime readers stay in sync.
+    expect(mockWriteGlobal).not.toHaveBeenCalled();
     expect(mockSetSecret).toHaveBeenCalledWith("nightgauge.platform.licenseKey", "ib_live_NEWKEY");
 
     // It must NOT be written to the project (committed) config.
@@ -205,19 +198,23 @@ describe("#3997 — license key machine-tier persistence", () => {
     expect(projectArg?.platform?.license_key).toBeUndefined();
   });
 
-  it("writes to the machine YAML when saving on the Global tab", async () => {
+  it("strips the key from machine YAML when saving on the Global tab", async () => {
     const panel = newPanel();
     panel.tierState = { currentTier: "global", defaultEditTier: "project" };
 
     panel.handleChange("platform.license_key", "ib_live_GLOBALEDIT");
     await panel.handleSave();
 
-    // Global save goes straight to writeGlobal with the typed value present.
+    // Global save still writes non-secret machine settings, but not the key.
     expect(mockWriteGlobal).toHaveBeenCalled();
     const arg = mockWriteGlobal.mock.calls[0][0] as {
       platform?: { license_key?: string };
     };
-    expect(arg.platform?.license_key).toBe("ib_live_GLOBALEDIT");
+    expect(arg.platform?.license_key).toBeUndefined();
+    expect(mockSetSecret).toHaveBeenCalledWith(
+      "nightgauge.platform.licenseKey",
+      "ib_live_GLOBALEDIT"
+    );
 
     // The project/local writers are not used for a global save.
     expect(mockWrite).not.toHaveBeenCalled();

@@ -108,6 +108,7 @@ import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
 import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
 import { GitHubAuthService } from "../services/GitHubAuthService";
@@ -417,26 +418,7 @@ export async function initializeServices(
     // The historical contribution was an ordinary plaintext settings.json
     // value despite claiming SecretStorage. Migrate it once, then erase every
     // configuration scope before loading the key for child processes.
-    const geminiConfig = vscode.workspace.getConfiguration("nightgauge");
-    const legacyGemini = geminiConfig.inspect<string>("gemini.apiKey");
-    const legacyGeminiValue =
-      legacyGemini?.workspaceFolderValue ??
-      legacyGemini?.workspaceValue ??
-      legacyGemini?.globalValue;
-    if (legacyGeminiValue) {
-      await secretService.setApiKey("gemini", legacyGeminiValue);
-    }
-    for (const target of [
-      vscode.ConfigurationTarget.WorkspaceFolder,
-      vscode.ConfigurationTarget.Workspace,
-      vscode.ConfigurationTarget.Global,
-    ]) {
-      try {
-        await geminiConfig.update("gemini.apiKey", undefined, target);
-      } catch {
-        // A scope can be unavailable when no folder/workspace is open.
-      }
-    }
+    await migrateLegacyGeminiApiKey(secretService);
     secretService.getApiKey("gemini").then((key) => {
       if (key && !process.env.GEMINI_API_KEY) {
         process.env.GEMINI_API_KEY = key;
