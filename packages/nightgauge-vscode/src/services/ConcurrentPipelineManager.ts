@@ -1359,7 +1359,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (preserveWorktree) {
       this.logger.info("Preserving worktree — context files kept for resume on re-queue", {
         issueNumber: slot.issueNumber,
-        worktreePath: slot.worktreeManager.getWorktreePath(slot.issueNumber),
+        // Logging must never interrupt failure recovery. Some injected/test
+        // managers implement only the cleanup surface.
+        worktreePath: slot.worktreeManager.getWorktreePath?.(slot.issueNumber),
       });
       this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
     } else {
