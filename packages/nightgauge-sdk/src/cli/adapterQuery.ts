@@ -212,24 +212,31 @@ export function summarizeCodexJsonOutput(output: string): CodexJsonSummary {
   }
 
   const failurePattern =
-    /\b(execution halted|halted at|cannot continue|stopping here|stage aborted|pipeline .*halted)\b/i;
+    /\b(execution halted|halted at|cannot continue|stopping here|stage aborted|pipeline .*halted|will retry (?:this )?later)\b/i;
   const hasMessageFailure = failurePattern.test(lastAgentMessage);
   const hasRecoverySignal =
     hasContextWriteSignal ||
     hasIssuePickupCompleteSignal ||
     /context file written/i.test(lastAgentMessage);
-  const hasCriticalCommandFailure = criticalFailures.length > 0 && !hasRecoverySignal;
+  // A failed exploratory command is not the stage outcome. Codex commonly
+  // corrects quoting/query mistakes and then completes the requested work.
+  // When it emits a final agent message, that message plus deterministic stage
+  // postconditions are authoritative. Command failures remain a fallback for
+  // abrupt runs that never produce a final message. See #164 live-run incident.
+  const hasCriticalCommandFailure =
+    criticalFailures.length > 0 && !hasRecoverySignal && lastAgentMessage.length === 0;
   const hasGitHubConnectivityFailure = githubConnectivityFailures.length > 0;
   const hasExplicitFailure = hasMessageFailure || hasCriticalCommandFailure;
-  const failureReason = hasMessageFailure
-    ? lastAgentMessage
-    : hasCriticalCommandFailure
-      ? hasGitHubConnectivityFailure
-        ? `GitHub API connectivity failure (api.github.com) detected. This stage requires GitHub access. Failed command(s): ${githubConnectivityFailures
-            .slice(-2)
-            .join(" | ")}`
-        : `Critical command failures detected: ${criticalFailures.slice(-3).join(" | ")}`
-      : undefined;
+  const failureReason =
+    hasGitHubConnectivityFailure && (hasMessageFailure || hasCriticalCommandFailure)
+      ? `GitHub API connectivity failure (api.github.com) detected. This stage requires GitHub access. Failed command(s): ${githubConnectivityFailures
+          .slice(-2)
+          .join(" | ")}`
+      : hasMessageFailure
+        ? lastAgentMessage
+        : hasCriticalCommandFailure
+          ? `Critical command failures detected: ${criticalFailures.slice(-3).join(" | ")}`
+          : undefined;
 
   const displayText =
     lastAgentMessage ||

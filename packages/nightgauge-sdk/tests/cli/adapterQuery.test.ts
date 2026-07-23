@@ -209,6 +209,34 @@ describe("summarizeCodexJsonOutput", () => {
     expect(summary.displayText).toContain("Issue pickup complete");
   });
 
+  it("does not fail a completed stage because an exploratory gh command failed", () => {
+    const output = [
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_explore",
+          type: "command_execution",
+          command: "gh issue view 164 --json body,state,url | jq -r '.body.url'",
+          status: "failed",
+          aggregated_output: 'jq: error: Cannot index array with string "url"',
+        },
+      }),
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item_done",
+          type: "agent_message",
+          text: "Documentation truth pass completed. Six files updated and validated.",
+        },
+      }),
+      JSON.stringify({ type: "turn.completed" }),
+    ].join("\n");
+
+    const summary = summarizeCodexJsonOutput(output);
+    expect(summary.hasExplicitFailure).toBe(false);
+    expect(summary.displayText).toContain("truth pass completed");
+  });
+
   it("does not mark failed nested stage-wrapper command as explicit failure", () => {
     const output = [
       JSON.stringify({
