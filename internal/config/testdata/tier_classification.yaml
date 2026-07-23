@@ -28,6 +28,7 @@ keys:
   # Machine tier — per-developer, stored in ~/.nightgauge/config.yaml, never committed
   github_user: machine
   github_auth: machine
+  platform: machine
   notifications.discord.enabled: machine
   notifications.discord.webhook_url: machine
   lm_studio: machine

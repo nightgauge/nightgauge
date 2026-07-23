@@ -36,6 +36,7 @@ var MachineTierKeys = []string{
 	"notifications.discord.enabled",
 	"lm_studio",
 	"autonomous.enabled_repos",
+	"platform",
 	// autonomous.repositories.* — every entry in the map counts; handled
 	// specially in warnMachineKeysInProjectYAML.
 	//
@@ -169,6 +170,16 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	hasProject := projectErr == nil
 	hasLocal := localErr == nil
 
+	// Platform credentials and preferences are machine-owned. Never allow a
+	// repository-controlled file (including local checkout overrides) to shadow
+	// the machine identity used by the backend.
+	if hasProject {
+		projectData = removeTopLevelYAMLKey(projectData, "platform")
+	}
+	if hasLocal {
+		localData = removeTopLevelYAMLKey(localData, "platform")
+	}
+
 	// No tier present at all — return defaults.
 	if !hasMachine && !hasProject && !hasLocal {
 		return DefaultConfig(), nil
@@ -192,6 +203,31 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 		return nil, fmt.Errorf("serialize merged config: %w", err)
 	}
 	return parseYAML(mergedBytes)
+}
+
+func removeTopLevelYAMLKey(data []byte, key string) []byte {
+	if len(data) == 0 {
+		return data
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return data
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return data
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == key {
+			root.Content = append(root.Content[:i], root.Content[i+2:]...)
+			out, err := yaml.Marshal(&doc)
+			if err == nil {
+				return out
+			}
+			return data
+		}
+	}
+	return data
 }
 
 // mergeYAMLDocuments deep-merges up to three YAML documents in tier order

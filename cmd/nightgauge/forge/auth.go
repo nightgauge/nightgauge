@@ -319,7 +319,7 @@ func authLoginCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:          "login",
-		Short:        "Write a token to the project config",
+		Short:        "Store a token in OS credential storage",
 		Long:         longAuthLogin,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -338,15 +338,19 @@ func authLoginCmd() *cobra.Command {
 			if t == "" {
 				return emitError(cmd, fmt.Errorf("token is empty"))
 			}
-			path, err := writeTokenToConfig(t)
+			if err := storeTokenInKeyring(t); err != nil {
+				return emitError(cmd, fmt.Errorf("store token in OS credential storage: %w", err))
+			}
+			paths, err := scrubPlaintextCredentials()
 			if err != nil {
-				return emitError(cmd, fmt.Errorf("write token to config: %w", err))
+				return emitError(cmd, fmt.Errorf("scrub plaintext configuration: %w", err))
 			}
 			return renderForCmd(cmd, map[string]any{
 				"v":           1,
 				"loggedIn":    true,
 				"masked":      MaskToken(t),
-				"configFile":  path,
+				"storage":     "os-keyring",
+				"scrubbed":    paths,
 				"warning":     "",
 				"warningHint": "Run 'nightgauge forge auth status' to validate scopes.",
 			})
@@ -360,19 +364,22 @@ func authLoginCmd() *cobra.Command {
 func authLogoutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "logout",
-		Short:        "Clear the token from the project config",
+		Short:        "Clear the token from OS credential storage",
 		Long:         longAuthLogout,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, cleared, err := clearTokenFromConfig()
+			if err := removeTokenFromKeyring(); err != nil {
+				return emitError(cmd, fmt.Errorf("clear OS credential storage: %w", err))
+			}
+			paths, err := scrubPlaintextCredentials()
 			if err != nil {
-				return emitError(cmd, fmt.Errorf("clear token: %w", err))
+				return emitError(cmd, fmt.Errorf("scrub plaintext configuration: %w", err))
 			}
 			return renderForCmd(cmd, map[string]any{
-				"v":          1,
-				"loggedOut":  true,
-				"cleared":    cleared,
-				"configFile": path,
+				"v":         1,
+				"loggedOut": true,
+				"cleared":   true,
+				"scrubbed":  paths,
 			})
 		},
 	}
@@ -382,7 +389,7 @@ func authLogoutCmd() *cobra.Command {
 func authRefreshCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "refresh",
-		Short:        "Re-read the token from gh CLI and rewrite the config",
+		Short:        "Refresh the token in OS credential storage",
 		Long:         longAuthRefresh,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -394,19 +401,173 @@ func authRefreshCmd() *cobra.Command {
 			if t == "" {
 				return emitError(cmd, fmt.Errorf("gh CLI returned an empty token — run 'gh auth login' first"))
 			}
-			path, err := writeTokenToConfig(t)
+			if err := storeTokenInKeyring(t); err != nil {
+				return emitError(cmd, fmt.Errorf("refresh OS credential storage: %w", err))
+			}
+			paths, err := scrubPlaintextCredentials()
 			if err != nil {
-				return emitError(cmd, fmt.Errorf("write refreshed token: %w", err))
+				return emitError(cmd, fmt.Errorf("scrub plaintext configuration: %w", err))
 			}
 			return renderForCmd(cmd, map[string]any{
-				"v":          1,
-				"refreshed":  true,
-				"masked":     MaskToken(t),
-				"configFile": path,
+				"v":         1,
+				"refreshed": true,
+				"masked":    MaskToken(t),
+				"storage":   "os-keyring",
+				"scrubbed":  paths,
 			})
 		},
 	}
 	return cmd
+}
+
+var storeTokenInKeyring = func(token string) error {
+	cmd := exec.Command("gh", "auth", "login", "--hostname", "github.com", "--with-token")
+	cmd.Stdin = strings.NewReader(token + "\n")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("gh auth login failed")
+	}
+	return nil
+}
+
+var removeTokenFromKeyring = func() error {
+	cmd := exec.Command("gh", "auth", "logout", "--hostname", "github.com")
+	if err := cmd.Run(); err != nil {
+		// Logout is intentionally idempotent: an absent keyring entry is already safe.
+		return nil
+	}
+	return nil
+}
+
+// scrubPlaintextCredentials atomically removes literal credentials from every
+// YAML tier reachable by the CLI. Environment references are configuration,
+// not credentials, and are preserved.
+var scrubPlaintextCredentials = func() ([]string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{
+		filepath.Join(wd, ".nightgauge", "config.yaml"),
+		filepath.Join(wd, ".nightgauge", "config.local.yaml"),
+	}
+	if machinePath, pathErr := config.MachineConfigPath(); pathErr == nil {
+		paths = append(paths, machinePath)
+	}
+	var changed []string
+	for _, path := range paths {
+		ok, scrubErr := scrubCredentialFile(path)
+		if scrubErr != nil {
+			return changed, scrubErr
+		}
+		if ok {
+			changed = append(changed, path)
+		}
+	}
+	return changed, nil
+}
+
+func scrubCredentialFile(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	root := &doc
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	changed := deleteLiteralAt(root, []string{"github_auth", "token"})
+	changed = deleteLiteralMapValues(root, []string{"github_auth", "tokens"}) || changed
+	if !changed {
+		return false, nil
+	}
+	out, err := yaml.Marshal(&doc)
+	if err != nil {
+		return false, err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-scrub-*")
+	if err != nil {
+		return false, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if _, err := tmp.Write(out); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return false, err
+	}
+	if err := tmp.Close(); err != nil {
+		return false, err
+	}
+	return true, os.Rename(tmpPath, path)
+}
+
+func deleteLiteralAt(root *yaml.Node, path []string) bool {
+	parent := yamlMappingAt(root, path[:len(path)-1])
+	if parent == nil {
+		return false
+	}
+	for i := 0; i+1 < len(parent.Content); i += 2 {
+		if parent.Content[i].Value != path[len(path)-1] {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(parent.Content[i+1].Value), "env:") {
+			return false
+		}
+		parent.Content = append(parent.Content[:i], parent.Content[i+2:]...)
+		return true
+	}
+	return false
+}
+
+func deleteLiteralMapValues(root *yaml.Node, path []string) bool {
+	n := yamlMappingAt(root, path)
+	if n == nil {
+		return false
+	}
+	changed := false
+	for i := len(n.Content) - 2; i >= 0; i -= 2 {
+		if !strings.HasPrefix(strings.TrimSpace(n.Content[i+1].Value), "env:") {
+			n.Content = append(n.Content[:i], n.Content[i+2:]...)
+			changed = true
+		}
+	}
+	return changed
+}
+
+func yamlMappingAt(root *yaml.Node, path []string) *yaml.Node {
+	cur := root
+	for _, segment := range path {
+		if cur == nil || cur.Kind != yaml.MappingNode {
+			return nil
+		}
+		var next *yaml.Node
+		for i := 0; i+1 < len(cur.Content); i += 2 {
+			if cur.Content[i].Value == segment {
+				next = cur.Content[i+1]
+				break
+			}
+		}
+		cur = next
+	}
+	if cur != nil && cur.Kind == yaml.MappingNode {
+		return cur
+	}
+	return nil
 }
 
 // --- helpers (overridable in tests) ---
