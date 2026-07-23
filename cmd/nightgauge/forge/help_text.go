@@ -237,25 +237,24 @@ GitLab equivalent: glab auth status. Tokens are masked to
 output.
 `
 
-const longAuthLogin = `Write a token to the project config.
+const longAuthLogin = `Store a token in the system GitHub CLI keyring.
 
 GitLab equivalent: glab auth login --token. Use --from-stdin to pass
 the token via standard input (preferred — keeps tokens out of shell
-history). The token is validated against the forge before being
-written; insufficient scopes emit a warning but still write the value.
+history). Literal credentials in Nightgauge YAML are scrubbed after the
+keyring write succeeds.
 `
 
-const longAuthLogout = `Clear the token from the project config.
+const longAuthLogout = `Clear the token from the system GitHub CLI keyring.
 
 GitLab equivalent: glab auth logout. Idempotent — safe to run when no
 token is stored.
 `
 
-const longAuthRefresh = `Re-read the token from the system gh / glab CLI and rewrite the config.
+const longAuthRefresh = `Re-read and refresh the token in the system GitHub CLI keyring.
 
 GitLab equivalent: glab auth refresh. Useful after rotating a PAT in
-gh's keychain — the new value is copied into the project config so
-non-gh callers (e.g. automation that does not source gh) pick it up.
+gh's keychain. Plaintext credential remnants are scrubbed from Nightgauge YAML.
 `
 
 const longAuthWhoami = `Print the login of the currently authenticated actor.
