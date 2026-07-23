@@ -29,6 +29,10 @@ keys:
   github_user: machine
   github_auth: machine
   platform: machine
+  ui.core.adapter: machine
+  ui.core.default_model: machine
+  ui.core.fallback_model: machine
+  ui.core.auth_provider: machine
   notifications.discord.enabled: machine
   notifications.discord.webhook_url: machine
   lm_studio: machine

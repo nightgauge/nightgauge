@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -214,6 +215,62 @@ func TestMigrateDryRun(t *testing.T) {
 	}
 	if !bytes.Equal(inputBytes, got) {
 		t.Errorf("dry-run modified the file:\noriginal:\n%s\nafter dry-run:\n%s", inputBytes, got)
+	}
+}
+
+func TestMigratePreviewRedactsSecretsButPreservesOnDiskValues(t *testing.T) {
+	const token = "github_pat_complete_representative_123456789"
+	const apiKey = "provider-api-key-secret-987654321"
+	const license = "license-key-secret-246813579"
+	input := []byte(`owner: nightgauge
+github_auth:
+  token: ` + token + `
+  tokens:
+    nightgauge: ` + token + `
+gemini:
+  api_key: ` + apiKey + `
+platform:
+  license_key: ` + license + `
+forges:
+  custom:
+    kind: github
+    base_url: https://github.com
+    token_env: GITHUB_TOKEN
+`)
+
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dryRun=%v", dryRun), func(t *testing.T) {
+			tmp := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(tmp, input, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result, err := MigrateFile(tmp, dryRun)
+			if err != nil {
+				t.Fatalf("MigrateFile: %v", err)
+			}
+			for _, forbidden := range []string{token, "representative_123456789", apiKey, license} {
+				if strings.Contains(result.Diff, forbidden) {
+					t.Fatalf("preview contains credential fragment %q:\n%s", forbidden, result.Diff)
+				}
+			}
+			if !strings.Contains(result.Diff, RedactedValue) {
+				t.Fatalf("preview does not contain redaction marker:\n%s", result.Diff)
+			}
+			if !strings.Contains(result.Diff, "GITHUB_TOKEN") {
+				t.Fatalf("preview should retain environment variable name:\n%s", result.Diff)
+			}
+			if !dryRun {
+				persisted, readErr := os.ReadFile(tmp)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				for _, expected := range []string{token, apiKey, license} {
+					if !strings.Contains(string(persisted), expected) {
+						t.Fatalf("on-disk migration changed secret %q", expected)
+					}
+				}
+			}
+		})
 	}
 }
 

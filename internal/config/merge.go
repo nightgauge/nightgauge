@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -33,9 +34,14 @@ var errConfigNotFound = errors.New("config file not found")
 // in the project YAML's mapping nodes.
 var MachineTierKeys = []string{
 	"github_user",
+	"github_auth",
 	"notifications.discord.enabled",
 	"lm_studio",
 	"autonomous.enabled_repos",
+	"ui.core.adapter",
+	"ui.core.default_model",
+	"ui.core.fallback_model",
+	"ui.core.auth_provider",
 	"platform",
 	// autonomous.repositories.* — every entry in the map counts; handled
 	// specially in warnMachineKeysInProjectYAML.
@@ -50,6 +56,7 @@ var MachineTierKeys = []string{
 // machineConfigPathFn lets tests override the resolved machine-tier
 // path. Production code uses defaultMachineConfigPath.
 var machineConfigPathFn = defaultMachineConfigPath
+var machineGOOSFn = func() string { return runtime.GOOS }
 
 func defaultMachineConfigPath() (string, error) {
 	// Env-override parity with the TS globalConfigResolver
@@ -68,7 +75,18 @@ func defaultMachineConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".nightgauge", "config.yaml"), nil
+	switch machineGOOSFn() {
+	case "linux":
+		return filepath.Join(home, ".config", "nightgauge", "config.yaml"), nil
+	case "windows":
+		base := os.Getenv("APPDATA")
+		if base == "" {
+			base = filepath.Join(home, "AppData", "Roaming")
+		}
+		return filepath.Join(base, "nightgauge", "config.yaml"), nil
+	default:
+		return filepath.Join(home, ".nightgauge", "config.yaml"), nil
+	}
 }
 
 // MachineConfigPath returns the absolute path of the machine-tier config
@@ -101,11 +119,32 @@ func readMachineConfigBytes() ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// Linux used ~/.nightgauge before the XDG path was standardized.
+			// Read that location only as a compatibility fallback when the
+			// canonical path is absent; all new writes target the canonical path.
+			if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
+				if legacyData, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+					log.Printf("WARN config: using legacy machine config %s; move it to %s", legacy, path)
+					return legacyData, nil
+				}
+			}
 			return nil, errConfigNotFound
 		}
 		return nil, fmt.Errorf("read machine config %q: %w", path, err)
 	}
 	return data, nil
+}
+
+func legacyMachineConfigPath() string {
+	if os.Getenv("NIGHTGAUGE_CONFIG_HOME") != "" || os.Getenv("XDG_CONFIG_HOME") != "" ||
+		machineGOOSFn() != "linux" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".nightgauge", "config.yaml")
 }
 
 // readProjectConfigBytes returns the raw bytes of the project-tier YAML

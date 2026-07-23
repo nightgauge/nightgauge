@@ -205,10 +205,9 @@ physically present:
 The global configuration file provides user-specific defaults that apply across
 all repositories. This is useful for:
 
-- Setting preferred merge strategy once instead of per-repo
-- Configuring notification preferences
-- Defining default reviewers
-- Setting human-in-the-loop preferences
+- Selecting this developer's provider and model
+- Configuring private authentication references and notification delivery
+- Choosing repositories enabled for autonomous work on this machine
 
 ### Global Config Location
 
@@ -225,21 +224,18 @@ The global config path is determined by platform and environment:
 ### Creating a Global Config
 
 ```bash
-# macOS/Linux
+# macOS (Linux uses ~/.config/nightgauge instead)
 mkdir -p ~/.nightgauge
 cat > ~/.nightgauge/config.yaml << 'EOF'
 # Global Nightgauge Configuration
-# These settings apply to all repositories
+# Personal, machine-owned settings only. Never commit this file.
 
-pr:
-  merge_strategy: squash
-  delete_branch: true
-  reviewers:
-    - alice
-
-human_in_the_loop:
-  auto_accept_stages: false
-  auto_accept_permissions: false
+ui:
+  core:
+    adapter: codex
+autonomous:
+  enabled_repos:
+    - owner/repository
 EOF
 ```
 
@@ -247,13 +243,13 @@ EOF
 
 Some settings make more sense at the global level, others at the project level:
 
-| Setting               | Best At | Reason                                    |
-| --------------------- | ------- | ----------------------------------------- |
-| `pr.merge_strategy`   | Global  | Personal preference                       |
-| `pr.reviewers`        | Project | Team-specific                             |
-| `project.number`      | Project | Repo-specific project board               |
-| `branch.base`         | Project | Repo-specific (main vs master vs develop) |
-| `human_in_the_loop.*` | Global  | Personal trust level                      |
+| Setting               | Best At | Reason                                      |
+| --------------------- | ------- | ------------------------------------------- |
+| `pr.merge_strategy`   | Project | Team merge policy                           |
+| `pr.reviewers`        | Project | Team-specific                               |
+| `project.number`      | Project | Repo-specific project board                 |
+| `branch.base`         | Project | Repo-specific (main vs master vs develop)   |
+| `human_in_the_loop.*` | Project | Team trust posture (local override allowed) |
 
 ### Viewing Effective Configuration
 
@@ -346,7 +342,7 @@ Use `/nightgauge-config-show` to see which values come from local config:
 ### Precedence with Local Config
 
 Local config (tier 4) overrides both project (tier 3) and global (tier 2), but
-is overridden by environment variables (tier 5) and CLI flags (tier 6):
+is overridden by runtime state (tier 5), environment variables (tier 6), and CLI flags (tier 7):
 
 ```
 Global: pr.delete_branch = true

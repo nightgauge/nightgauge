@@ -133,21 +133,20 @@ func Render(cfg *Config, key string, asJSON bool, raw bool) (string, error) {
 		return "", fmt.Errorf("marshal config to yaml: %w", err)
 	}
 
-	if key == "" {
-		if raw {
-			return "", ErrRawNotScalar
-		}
-		if asJSON {
-			return yamlToJSON(yamlBytes)
-		}
-		return string(yamlBytes), nil
-	}
-
 	var doc yaml.Node
 	if err := yaml.Unmarshal(yamlBytes, &doc); err != nil {
 		return "", fmt.Errorf("parse re-rendered yaml: %w", err)
 	}
+	RedactYAML(&doc)
 
+	// Render full output from the same redacted tree used by key/subtree/raw
+	// requests so no output mode can bypass the central secret boundary.
+	if key == "" {
+		if raw {
+			return "", ErrRawNotScalar
+		}
+		return renderNode(docRoot(&doc), asJSON)
+	}
 	root := docRoot(&doc)
 	if root == nil {
 		return "", fmt.Errorf("%w: %s", ErrKeyNotFound, key)
