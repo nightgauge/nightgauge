@@ -1583,6 +1583,28 @@ function commandExists(command: string): boolean {
   return false;
 }
 
+/**
+ * Resolve the SDK stage CLI independently of the target repository.
+ *
+ * Marketplace installs use the CLI bundled in the VSIX. Source-repository
+ * development keeps a fallback to the built SDK dist so extension debugging
+ * does not require packaging first.
+ */
+export function resolveSdkCliPath(workspaceRoot?: string): string | null {
+  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+  const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
+  const candidates = [
+    bundleRoot ? path.join(bundleRoot, "dist", "sdk-cli.cjs") : undefined,
+    workspaceRoot
+      ? path.join(workspaceRoot, "packages", "nightgauge-sdk", "dist", "cli", "index.js")
+      : undefined,
+  ];
+  return (
+    candidates.find((candidate): candidate is string => !!candidate && fs.existsSync(candidate)) ??
+    null
+  );
+}
+
 export function validateAdapterPrerequisites(
   adapter: ExecutionAdapter,
   workspaceRoot: string,
@@ -1686,9 +1708,8 @@ export function validateAdapterPrerequisites(
       );
     }
 
-    const stageRunnerPath = path.join(workspaceRoot, "scripts", "run-stage.sh");
-    if (!fs.existsSync(stageRunnerPath)) {
-      return `Unified stage runner not found at ${stageRunnerPath}.`;
+    if (!resolveSdkCliPath(workspaceRoot)) {
+      return "Packaged Nightgauge SDK CLI not found. Reinstall the Nightgauge extension.";
     }
 
     for (const requiredTool of ["node", "git", "gh"]) {
@@ -1704,21 +1725,6 @@ export function validateAdapterPrerequisites(
       return (
         "Copilot adapter selected, but `copilot` CLI is not available in PATH. " +
         "Install the GitHub Copilot Coding Agent CLI or switch to a different adapter."
-      );
-    }
-
-    const cliEntry = path.join(
-      workspaceRoot,
-      "packages",
-      "nightgauge-sdk",
-      "dist",
-      "cli",
-      "index.js"
-    );
-    if (!fs.existsSync(cliEntry)) {
-      return (
-        `Copilot adapter requires built Nightgauge SDK CLI at ${cliEntry}. ` +
-        "Run: npm run -w @nightgauge/sdk build"
       );
     }
 
@@ -1740,9 +1746,8 @@ export function validateAdapterPrerequisites(
     return null;
   }
 
-  const stageRunnerPath = path.join(workspaceRoot, "scripts", "run-stage.sh");
-  if (!fs.existsSync(stageRunnerPath)) {
-    return `Unified stage runner not found at ${stageRunnerPath}.`;
+  if (!resolveSdkCliPath(workspaceRoot)) {
+    return "Packaged Nightgauge SDK CLI not found. Reinstall the Nightgauge extension.";
   }
 
   for (const requiredTool of ["node", "git", "gh"]) {
@@ -1752,21 +1757,6 @@ export function validateAdapterPrerequisites(
         `Install it or switch adapter to Claude.`
       );
     }
-  }
-
-  const cliEntry = path.join(
-    workspaceRoot,
-    "packages",
-    "nightgauge-sdk",
-    "dist",
-    "cli",
-    "index.js"
-  );
-  if (!fs.existsSync(cliEntry)) {
-    return (
-      `Codex adapter requires built Nightgauge SDK CLI at ${cliEntry}. ` +
-      "Run: npm run -w @nightgauge/sdk build"
-    );
   }
 
   return null;
@@ -2370,7 +2360,8 @@ export function runStageSkillHeadless(
       prereqError,
       (candidate) => validateAdapterPrerequisites(candidate, workspaceRoot, "headless"),
       workspaceRoot,
-      stage
+      stage,
+      initialDecision.source === "auto-router" || initialDecision.source === "default"
     );
     // Append every fallback candidate the walker tried (skip element 0 — it
     // is the failed primary, already in chainUsed).
@@ -2647,8 +2638,22 @@ export function runStageSkillHeadless(
         kill: () => {},
       };
     }
-    cmd = path.join(workspaceRoot, "scripts", "run-stage.sh");
-    args = [adapter, stage, String(issueNumber)];
+    const sdkCliPath = resolveSdkCliPath(workspaceRoot);
+    if (!sdkCliPath) {
+      const error = new Error(
+        `[stage:adapter-unavailable] adapter=${adapter} reason=Packaged Nightgauge SDK CLI not found`
+      );
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+      };
+    }
+    cmd = "node";
+    args = [sdkCliPath, "stage", stage, String(issueNumber)];
   }
   if (adapter === "codex" && modelOverride) {
     callbacks?.onStderr?.(

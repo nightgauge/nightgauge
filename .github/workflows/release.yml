@@ -240,6 +240,8 @@ jobs:
               || { echo "ERROR: $VSIX missing build-info.json (ExtensionStalenessService would report 'unknown')"; exit 1; }
             unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
               || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
+            unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
+              || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
             echo "OK: $VSIX"
           done
           [[ "$COUNT" -eq 3 ]] || { echo "ERROR: expected 3 per-target VSIXs, found $COUNT"; exit 1; }

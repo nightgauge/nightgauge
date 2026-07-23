@@ -15,6 +15,7 @@ import { spawn } from "child_process";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
+import * as vscode from "vscode";
 
 // Mock vscode module
 vi.mock("vscode", () => ({
@@ -161,6 +162,7 @@ import {
   classifyError,
   extractStreamJsonError,
   resolveTokenForSubprocess,
+  resolveSdkCliPath,
 } from "../../src/utils/skillRunner";
 import type { PipelineStage } from "@nightgauge/sdk";
 import {
@@ -177,6 +179,22 @@ import {
   getGitHubAuthTokens,
   getGitHubUser,
 } from "../../src/utils/incrediConfig";
+
+describe("skillRunner - Packaged SDK CLI", () => {
+  it("resolves the VSIX-bundled CLI when the target repo has no Nightgauge source tree", () => {
+    vi.mocked(vscode.extensions.getExtension).mockReturnValue({
+      extensionPath: "/extensions/nightgauge.nightgauge-vscode-0.1.0",
+    } as vscode.Extension<unknown>);
+    vi.mocked(fs.existsSync).mockImplementation(
+      (candidate) =>
+        String(candidate) === "/extensions/nightgauge.nightgauge-vscode-0.1.0/dist/sdk-cli.cjs"
+    );
+
+    expect(resolveSdkCliPath("/external/consumer-repo")).toBe(
+      "/extensions/nightgauge.nightgauge-vscode-0.1.0/dist/sdk-cli.cjs"
+    );
+  });
+});
 
 describe("skillRunner - Stage Navigation", () => {
   describe("getNextStage", () => {
@@ -1377,10 +1395,10 @@ describe("skillRunner - Token Usage", () => {
     process.env.NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV = "codex";
     runStageSkillHeadless("feature-dev", 42, {});
 
-    // The codex adapter routes via scripts/run-stage.sh; spawn cmd ends in run-stage.sh
+    // Packaged adapters route through the SDK CLI bundled with the extension.
     const spawnCall = vi.mocked(spawn).mock.calls[0];
-    expect(String(spawnCall[0])).toContain("run-stage.sh");
-    expect(spawnCall[1]).toEqual(expect.arrayContaining(["codex", "feature-dev", "42"]));
+    expect(spawnCall[0]).toBe("node");
+    expect(spawnCall[1]).toEqual(expect.arrayContaining(["stage", "feature-dev", "42"]));
 
     delete process.env.NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV;
   });

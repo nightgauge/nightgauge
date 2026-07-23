@@ -342,7 +342,7 @@ export function getExecutionAdapter(workspaceRoot?: string): ExecutionAdapter {
 
   // 2. ConfigBridge (available after extension activation, includes local overrides)
   try {
-    const { ConfigBridge } = require("../services/ConfigBridge");
+    const { ConfigBridge } = require("../../services/ConfigBridge");
     const bridge = ConfigBridge.getInstance();
     const adapter = bridge?.getUI()?.core?.adapter;
     if (adapter && VALID_ADAPTERS.includes(adapter)) {

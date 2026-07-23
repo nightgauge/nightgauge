@@ -610,7 +610,8 @@ export function readDisableFallbackFromYaml(workspaceRoot?: string): boolean {
  */
 export function getEffectiveFallbackChain(
   stage: PipelineStage,
-  workspaceRoot?: string
+  workspaceRoot?: string,
+  allowBuiltInDefault = true
 ): ExecutionAdapter[] {
   if (readDisableFallbackFromYaml(workspaceRoot)) {
     return [];
@@ -633,7 +634,7 @@ export function getEffectiveFallbackChain(
     return [];
   }
 
-  return [...DEFAULT_ADAPTER_FALLBACK_CHAIN];
+  return allowBuiltInDefault ? [...DEFAULT_ADAPTER_FALLBACK_CHAIN] : [];
 }
 
 /**
@@ -704,13 +705,14 @@ export function walkAdapterFallback(
   primaryError: string,
   validate: (adapter: ExecutionAdapter) => string | null,
   workspaceRoot?: string,
-  stage?: PipelineStage
+  stage?: PipelineStage,
+  allowBuiltInDefault = true
 ): AdapterFallbackWalkResult {
   // Without a stage we cannot consult the per-stage override path; fall
   // through to the global chain only. Existing #3223 callers that did not
   // pass a stage stay on the global path with no behavior change.
   const chain = stage
-    ? getEffectiveFallbackChain(stage, workspaceRoot)
+    ? getEffectiveFallbackChain(stage, workspaceRoot, allowBuiltInDefault)
     : readAdapterFallbackChainFromYaml(workspaceRoot);
 
   const hopsAttempted: ExecutionAdapter[] = [failedAdapter];
