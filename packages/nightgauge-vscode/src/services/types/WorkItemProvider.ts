@@ -97,6 +97,8 @@ export interface WorkItem {
  * any breaking changes (tracked in parent epic #2428).
  */
 export interface IWorkItemProvider {
+  /** Reload repository/project identity after an effective config change. */
+  reloadConfigIfChanged?(): Promise<boolean>;
   /** Fetch work items for a given board status */
   getIssuesByStatus(
     status: string,

@@ -776,9 +776,17 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, fmt.Errorf("load config: %w", err)
 		}
+		projects := make([]ConfigProjectEntry, 0, len(cfg.Projects))
+		for _, project := range cfg.Projects {
+			projects = append(projects, ConfigProjectEntry{
+				Name: project.Name, Number: project.Number,
+				SyncFilter: project.SyncFilter, Default: project.Default,
+			})
+		}
 		return &ConfigGetProjectResult{
 			Owner:         cfg.Owner,
 			ProjectNumber: cfg.ProjectNumber,
+			Projects:      projects,
 			DefaultRepo:   cfg.DefaultRepo,
 			OwnerType:     cfg.OwnerType,
 		}, nil

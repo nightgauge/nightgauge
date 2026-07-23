@@ -597,10 +597,11 @@ type ModelRoutingConfig struct {
 
 type Config struct {
 	// GitHub settings
-	Owner         string `json:"owner"`
-	OwnerType     string `json:"ownerType"` // "org" (default) or "user"
-	ProjectNumber int    `json:"projectNumber"`
-	DefaultRepo   string `json:"defaultRepo"`
+	Owner         string         `json:"owner"`
+	OwnerType     string         `json:"ownerType"` // "org" (default) or "user"
+	ProjectNumber int            `json:"projectNumber"`
+	Projects      []ProjectEntry `json:"projects,omitempty" yaml:"projects,omitempty"`
+	DefaultRepo   string         `json:"defaultRepo"`
 
 	// GitHub user identity (per-repo mapping for multi-account workspaces)
 	GitHubUser string            `json:"githubUser,omitempty" yaml:"github_user,omitempty"`
@@ -707,6 +708,15 @@ type Config struct {
 	// per-user authorization of inbound slash commands. Uses mattermost_user_id
 	// (stable identifier) rather than user_name (which can change).
 	Users []UserMappingEntry `json:"users,omitempty" yaml:"users,omitempty"`
+}
+
+// ProjectEntry is one selectable GitHub Projects V2 board. When Projects is
+// non-empty it is authoritative over the legacy single ProjectNumber field.
+type ProjectEntry struct {
+	Name       string `json:"name" yaml:"name"`
+	Number     int    `json:"number" yaml:"number"`
+	SyncFilter string `json:"syncFilter,omitempty" yaml:"sync_filter,omitempty"`
+	Default    bool   `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 // UserMappingEntry maps a Mattermost user ID to a GitHub and/or GitLab identity.
@@ -1361,6 +1371,7 @@ type yamlConfigNested struct {
 		Repo           string             `yaml:"repo"`
 		SizeToEstimate map[string]float64 `yaml:"size_to_estimate,omitempty"`
 	} `yaml:"project"`
+	Projects     []ProjectEntry      `yaml:"projects,omitempty"`
 	LogLevel     string              `yaml:"logLevel"`
 	Sanitization *SanitizationConfig `yaml:"sanitization,omitempty"`
 	FeedbackLoop *FeedbackLoopConfig `yaml:"feedback_loop,omitempty"`
@@ -1406,6 +1417,7 @@ type yamlConfigFlat struct {
 	GitHubAuth       *GitHubAuthConfig            `yaml:"github_auth,omitempty"`
 	Project          int                          `yaml:"project"` // legacy: project as bare integer
 	ProjectNumber    int                          `yaml:"projectNumber"`
+	Projects         []ProjectEntry               `yaml:"projects,omitempty"`
 	DefaultRepo      string                       `yaml:"defaultRepo"`
 	LogLevel         string                       `yaml:"logLevel"`
 	Sanitization     *SanitizationConfig          `yaml:"sanitization,omitempty"`
@@ -1570,6 +1582,10 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.Owner = owner
 	cfg.OwnerType = normalizeOwnerType(ownerType)
 	cfg.ProjectNumber = nested.Project.Number
+	cfg.Projects = nested.Projects
+	if err := applyProjectEntries(cfg); err != nil {
+		return nil, err
+	}
 	cfg.DefaultRepo = repo
 	if nested.LogLevel != "" {
 		cfg.LogLevel = nested.LogLevel
@@ -1603,6 +1619,45 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	return cfg, nil
 }
 
+func applyProjectEntries(cfg *Config) error {
+	if len(cfg.Projects) == 0 {
+		return nil
+	}
+	seenNames := make(map[string]struct{}, len(cfg.Projects))
+	seenNumbers := make(map[int]struct{}, len(cfg.Projects))
+	defaultIndex := -1
+	for i, project := range cfg.Projects {
+		name := strings.TrimSpace(project.Name)
+		if name == "" {
+			return fmt.Errorf("config.yaml: projects[%d].name is required", i)
+		}
+		if project.Number <= 0 {
+			return fmt.Errorf("config.yaml: projects[%d].number must be positive", i)
+		}
+		if _, exists := seenNames[name]; exists {
+			return fmt.Errorf("config.yaml: duplicate project name %q", name)
+		}
+		if _, exists := seenNumbers[project.Number]; exists {
+			return fmt.Errorf("config.yaml: duplicate project number %d", project.Number)
+		}
+		seenNames[name] = struct{}{}
+		seenNumbers[project.Number] = struct{}{}
+		cfg.Projects[i].Name = name
+		if project.Default {
+			if defaultIndex >= 0 {
+				return fmt.Errorf("config.yaml: projects may contain only one default")
+			}
+			defaultIndex = i
+		}
+	}
+	if defaultIndex < 0 {
+		defaultIndex = 0
+		cfg.Projects[0].Default = true
+	}
+	cfg.ProjectNumber = cfg.Projects[defaultIndex].Number
+	return nil
+}
+
 // parseYAMLFlat handles the legacy flat format (bare owner / project as integer).
 func parseYAMLFlat(data []byte) (*Config, error) {
 	var flat yamlConfigFlat
@@ -1634,6 +1689,10 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 		cfg.ProjectNumber = flat.Project
 	} else {
 		cfg.ProjectNumber = flat.ProjectNumber
+	}
+	cfg.Projects = flat.Projects
+	if err := applyProjectEntries(cfg); err != nil {
+		return nil, err
 	}
 	cfg.OwnerType = normalizeOwnerType(flat.OwnerType)
 	cfg.GitHubUser = flat.GitHubUser

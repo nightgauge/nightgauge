@@ -140,10 +140,18 @@ type ConfigGetProjectParams struct {
 
 // ConfigGetProjectResult is the result for config.getProjectConfig.
 type ConfigGetProjectResult struct {
-	Owner         string `json:"owner"`
-	ProjectNumber int    `json:"projectNumber"`
-	DefaultRepo   string `json:"defaultRepo,omitempty"`
-	OwnerType     string `json:"ownerType,omitempty"` // "org" (default) or "user"
+	Owner         string               `json:"owner"`
+	ProjectNumber int                  `json:"projectNumber"`
+	Projects      []ConfigProjectEntry `json:"projects,omitempty"`
+	DefaultRepo   string               `json:"defaultRepo,omitempty"`
+	OwnerType     string               `json:"ownerType,omitempty"` // "org" (default) or "user"
+}
+
+type ConfigProjectEntry struct {
+	Name       string `json:"name"`
+	Number     int    `json:"number"`
+	SyncFilter string `json:"syncFilter,omitempty"`
+	Default    bool   `json:"default,omitempty"`
 }
 
 // ConfigGetHealthThresholdsParams are parameters for config.getHealthThresholds.

@@ -97,6 +97,12 @@ export interface CheckAuthorizationResult {
 export interface ConfigGetProjectResult {
   owner: string;
   projectNumber: number;
+  projects?: Array<{
+    name: string;
+    number: number;
+    syncFilter?: string;
+    default?: boolean;
+  }>;
   defaultRepo?: string;
   ownerType?: string;
 }

@@ -364,7 +364,7 @@ export class ProjectBoardTreeProvider
   private watchSettings(): void {
     const configBridge = ConfigBridge.getInstance();
 
-    const disposable = configBridge.onConfigChanged(() => {
+    const disposable = configBridge.onConfigChanged(async () => {
       // Snapshot the values this provider actually depends on so we can
       // detect whether the incoming event affects us at all. Without this
       // the provider used to clear its cache and re-fetch on every config
@@ -398,7 +398,8 @@ export class ProjectBoardTreeProvider
         before.showDependencies !== this.showDependencies ||
         before.groupByEpic !== this.groupByEpic ||
         before.defaultEpicCollapsed !== this.defaultEpicCollapsed;
-      if (changed) {
+      const identityChanged = (await this.projectBoardService.reloadConfigIfChanged?.()) ?? false;
+      if (changed || identityChanged) {
         this.refresh();
       }
     });

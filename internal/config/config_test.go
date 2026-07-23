@@ -1419,3 +1419,61 @@ func TestResolveGitHubUserForOwner_NilSafe(t *testing.T) {
 		t.Errorf("nil config = %q, want \"\"", got)
 	}
 }
+
+func TestParseYAMLProjectsTakesPrecedence(t *testing.T) {
+	cfg, err := parseYAML([]byte(`owner: nightgauge
+repo: nightgauge
+project:
+  number: 8
+projects:
+  - name: Community
+    number: 8
+  - name: Maintainers
+    number: 12
+    default: true
+    sync_filter: security
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProjectNumber != 12 {
+		t.Fatalf("ProjectNumber = %d, want 12", cfg.ProjectNumber)
+	}
+	if len(cfg.Projects) != 2 || !cfg.Projects[1].Default || cfg.Projects[1].SyncFilter != "security" {
+		t.Fatalf("unexpected projects: %#v", cfg.Projects)
+	}
+}
+
+func TestParseYAMLProjectsDefaultsFirstEntry(t *testing.T) {
+	cfg, err := parseYAML([]byte(`owner: nightgauge
+projects:
+  - name: Community
+    number: 8
+  - name: Maintainers
+    number: 12
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ProjectNumber != 8 || !cfg.Projects[0].Default {
+		t.Fatalf("unexpected default: number=%d projects=%#v", cfg.ProjectNumber, cfg.Projects)
+	}
+}
+
+func TestParseYAMLProjectsRejectsAmbiguity(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"duplicate name", "owner: nightgauge\nprojects:\n  - {name: Same, number: 8}\n  - {name: Same, number: 9}\n"},
+		{"duplicate number", "owner: nightgauge\nprojects:\n  - {name: One, number: 8}\n  - {name: Two, number: 8}\n"},
+		{"multiple defaults", "owner: nightgauge\nprojects:\n  - {name: One, number: 8, default: true}\n  - {name: Two, number: 9, default: true}\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseYAML([]byte(tt.yaml)); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
