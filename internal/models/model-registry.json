@@ -118,9 +118,51 @@
       "deprecated": true
     },
     {
-      "id": "gpt-5.5",
+      "id": "gpt-5.6-sol",
       "provider": "openai",
       "tiers": ["opus", "fable"],
+      "display_name": "GPT-5.6 Sol",
+      "concrete_version": "gpt-5.6-sol",
+      "rates": {
+        "input": 5.0,
+        "output": 30.0
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1050000,
+      "recommended": true
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "provider": "openai",
+      "tiers": ["sonnet"],
+      "display_name": "GPT-5.6 Terra",
+      "concrete_version": "gpt-5.6-terra",
+      "rates": {
+        "input": 2.5,
+        "output": 15.0
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1050000
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "provider": "openai",
+      "tiers": ["haiku"],
+      "display_name": "GPT-5.6 Luna",
+      "concrete_version": "gpt-5.6-luna",
+      "rates": {
+        "input": 1.0,
+        "output": 6.0
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1050000
+    },
+    {
+      "id": "gpt-5.5",
+      "provider": "openai",
       "display_name": "GPT-5.5",
       "concrete_version": "gpt-5.5",
       "rates": {
@@ -129,13 +171,11 @@
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 400000,
-      "recommended": true
+      "context_window": 400000
     },
     {
       "id": "gpt-5.4",
       "provider": "openai",
-      "tiers": ["sonnet"],
       "display_name": "GPT-5.4",
       "concrete_version": "gpt-5.4",
       "rates": {
@@ -149,7 +189,6 @@
     {
       "id": "gpt-5.4-mini",
       "provider": "openai",
-      "tiers": ["haiku"],
       "display_name": "GPT-5.4 mini",
       "concrete_version": "gpt-5.4-mini",
       "rates": {

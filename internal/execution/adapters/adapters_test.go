@@ -125,13 +125,13 @@ func TestCodexAdapter(t *testing.T) {
 func TestResolveCodexModel(t *testing.T) {
 	// Mirrors the canonical SDK codexModelRegistry tier→model map (#4018,#4019).
 	cases := map[string]string{
-		"haiku":             "gpt-5.4-mini",
-		"sonnet":            "gpt-5.4",
-		"opus":              "gpt-5.5",
-		"fable":             "gpt-5.5",
-		"claude-sonnet-4-6": "gpt-5.4", // scheduler escalation id
-		"claude-opus-4-8":   "gpt-5.5",
-		"claude-haiku-4-5":  "gpt-5.4-mini",
+		"haiku":             "gpt-5.6-luna",
+		"sonnet":            "gpt-5.6-terra",
+		"opus":              "gpt-5.6-sol",
+		"fable":             "gpt-5.6-sol",
+		"claude-sonnet-4-6": "gpt-5.6-terra", // scheduler escalation id
+		"claude-opus-4-8":   "gpt-5.6-sol",
+		"claude-haiku-4-5":  "gpt-5.6-luna",
 		"gpt-5.3-codex":     "gpt-5.5",      // deprecated → replacement
 		"gpt-5.2":           "gpt-5.4",      // deprecated → replacement
 		"gpt-5.5":           "gpt-5.5",      // concrete id passes through
@@ -252,8 +252,8 @@ func TestCodexAdapterSandboxFromAllowedTools(t *testing.T) {
 func TestCodexAdapterResolvesTierModel(t *testing.T) {
 	adapter := NewCodexAdapter()
 	_, args, _ := adapter.BuildCommand(RunOptions{Stage: "feature-dev", Model: "sonnet"})
-	if !containsArg(args, "--model") || !containsArg(args, "gpt-5.4") {
-		t.Errorf("expected tier 'sonnet' to resolve to --model gpt-5.4 in %v", args)
+	if !containsArg(args, "--model") || !containsArg(args, "gpt-5.6-terra") {
+		t.Errorf("expected tier 'sonnet' to resolve to --model gpt-5.6-terra in %v", args)
 	}
 	if containsArg(args, "sonnet") {
 		t.Errorf("raw tier 'sonnet' must not reach codex --model in %v", args)

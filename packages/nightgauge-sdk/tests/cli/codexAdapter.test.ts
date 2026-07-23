@@ -129,10 +129,10 @@ describe("CodexAdapter", () => {
 
   describe("model routing", () => {
     it("translates Claude-style tiers to current (non-deprecated) Codex models", () => {
-      expect(resolveCodexModelAlias("haiku")).toBe("gpt-5.4-mini");
-      expect(resolveCodexModelAlias("sonnet")).toBe("gpt-5.4");
-      expect(resolveCodexModelAlias("opus")).toBe("gpt-5.5");
-      expect(resolveCodexModelAlias("fable")).toBe("gpt-5.5");
+      expect(resolveCodexModelAlias("haiku")).toBe("gpt-5.6-luna");
+      expect(resolveCodexModelAlias("sonnet")).toBe("gpt-5.6-terra");
+      expect(resolveCodexModelAlias("opus")).toBe("gpt-5.6-sol");
+      expect(resolveCodexModelAlias("fable")).toBe("gpt-5.6-sol");
       expect(resolveCodexModelAlias("gpt-5.4-mini")).toBe("gpt-5.4-mini");
     });
 

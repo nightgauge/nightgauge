@@ -73,7 +73,6 @@ const SECRET_KEY_PATHS = new Set<string>(["platform.license_key"]);
  * @see Issue #3997 — license key persisted to the machine tier (not committed)
  */
 export const MACHINE_TIER_KEY_PATHS = new Set<string>([
-  "ui.core.adapter",
   "ui.core.default_model",
   "ui.core.fallback_model",
   "ui.core.auth_provider",
@@ -432,6 +431,10 @@ export class SettingsPanel implements vscode.Disposable {
         tierAuditEntries: this.tierAuditEntries,
         driftBannerDismissed: this.driftBannerDismissed,
         repositoryProjects: this.repositoryProjectState,
+        currentTier: this.tierState.currentTier,
+        adapterConfiguredInTier: getConfigValue(configForView, "ui.core.adapter") !== undefined,
+        inheritedGlobalAdapter: this.globalConfig.ui?.core?.adapter ?? "claude",
+        effectiveAdapter: this.currentConfig.ui?.core?.adapter ?? "claude",
       }
     );
   }
@@ -650,6 +653,16 @@ export class SettingsPanel implements vscode.Disposable {
       (path.startsWith("pipeline.stage_adapters.") || path.startsWith("pipeline.stage_models.")) &&
       (coerced === "" || coerced === undefined)
     ) {
+      this.removeConfigValue(config, path);
+      this.removeConfigValue(this.currentConfig, path);
+      this.hasUnsavedChanges = true;
+      return;
+    }
+
+    // An empty project/local adapter is the explicit "Use Global" sentinel.
+    // Delete the tier leaf so normal global inheritance remains visible and
+    // future global changes flow through without duplicating values.
+    if (path === "ui.core.adapter" && (coerced === "" || coerced === undefined)) {
       this.removeConfigValue(config, path);
       this.removeConfigValue(this.currentConfig, path);
       this.hasUnsavedChanges = true;
@@ -942,31 +955,38 @@ export class SettingsPanel implements vscode.Disposable {
       return;
     }
 
+    const viewTier = this.tierState.currentTier;
+    const tier: EditableTier = viewTier === "project" || viewTier === "global" ? viewTier : "local";
+    const tierLabel = tier === "global" ? "Global" : tier === "project" ? "Project" : "Local";
+
+    if (viewTier === "default" || viewTier === "env") {
+      vscode.window.showInformationMessage(`${tierLabel} settings are read-only.`);
+      return;
+    }
+
     const confirm = await vscode.window.showWarningMessage(
-      "Reset all settings to defaults? This will clear both project and local configs.",
+      `Reset ${tierLabel} settings? Only the ${tierLabel} tier will be cleared; other tiers are unchanged.`,
       { modal: true },
-      "Reset"
+      `Reset ${tierLabel}`
     );
 
-    if (confirm === "Reset") {
-      // Keep project number, reset everything else in project config
-      const projectNumber = this.projectConfig.project?.number;
-      this.projectConfig = {
-        project: {
-          number: projectNumber,
-        },
-      };
-      // Clear local config entirely
-      this.localConfig = {};
-
-      // Save both
-      await Promise.all([
-        this.yamlService.write(this.projectConfig, "project"),
-        this.yamlService.writeLocal(this.localConfig),
-      ]);
+    if (confirm === `Reset ${tierLabel}`) {
+      if (tier === "project") {
+        this.projectConfig = {};
+        await this.yamlService.write(this.projectConfig, "project");
+      } else if (tier === "global") {
+        this.globalConfig = {};
+        await this.yamlService.writeGlobal(this.globalConfig);
+      } else {
+        this.localConfig = {};
+        await this.yamlService.writeLocal(this.localConfig);
+      }
 
       await this.loadAllTiers();
       this.updatePanel();
+      vscode.window.showInformationMessage(
+        `${tierLabel} settings reset. Other configuration tiers were unchanged.`
+      );
     }
   }
 

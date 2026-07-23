@@ -62,10 +62,10 @@ describe("registry tier bands per adapter (Issue #3214, #56)", () => {
         ])
       );
     expect(snapshot("codex")).toEqual({
-      haiku: "gpt-5.4-mini",
-      sonnet: "gpt-5.4",
-      opus: "gpt-5.5",
-      fable: "gpt-5.5",
+      haiku: "gpt-5.6-luna",
+      sonnet: "gpt-5.6-terra",
+      opus: "gpt-5.6-sol",
+      fable: "gpt-5.6-sol",
     });
     expect(snapshot("gemini")).toEqual({
       haiku: "gemini-2.5-flash",
@@ -114,7 +114,7 @@ describe("getModeStageAdapterModel (Issue #3214, #19)", () => {
 
   it("maximum maps every stage to the opus-tier adapter id (codex/gemini/copilot)", () => {
     expect(getModeStageAdapterModel("maximum", "feature-dev", "codex")).toEqual({
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       mismatch: false,
     });
     expect(getModeStageAdapterModel("maximum", "feature-dev", "gemini")).toEqual({

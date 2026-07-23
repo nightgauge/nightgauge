@@ -229,8 +229,8 @@ describe("AutoProviderRouter — model adapter remap", () => {
     const result = router.selectForStage("feature-dev", ctx);
     expect(result).not.toBeNull();
     expect(result!.adapter).toBe("codex");
-    // L complexity dev → opus tier → gpt-5.5 on Codex
-    expect(result!.model).toBe("gpt-5.5");
+    // L complexity dev → opus tier → current frontier model on Codex
+    expect(result!.model).toBe("gpt-5.6-sol");
   });
 
   it("remaps tier alias to a Gemini-native model when Gemini is picked", () => {

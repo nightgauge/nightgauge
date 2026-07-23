@@ -32,6 +32,8 @@ describe("SettingsHtml core section", () => {
     expect(html).toContain('data-path="ui.core.auth_provider"');
     expect(html).toContain('data-path="ui.core.default_model"');
     expect(html).toContain('data-path="ui.core.codex.model"');
+    expect(html).toContain('data-path="ui.core.codex.reasoning_effort"');
+    expect(html).toContain('<option value="max"');
     expect(html).toContain('<option value="gpt-5.5"');
     expect(html).toContain('<option value="gpt-5.4"');
     expect(html).toContain('<option value="gpt-5.4-mini"');
@@ -104,5 +106,33 @@ describe("SettingsHtml core section", () => {
     expect(html).toContain('data-path="ui.core.codex.cli_args"');
     expect(html).toContain('data-path="ui.core.codex.resume_enabled"');
     expect(html).toContain('id="core-non-claude-note" class="section-note" style="display:none;"');
+  });
+
+  it("renders an unset project adapter as Use Global with the inherited adapter", () => {
+    const tierState = {
+      currentTier: "project" as const,
+      defaultEditTier: "local" as const,
+      hasGlobalConfig: true,
+      hasLocalConfig: false,
+      hasProjectConfig: true,
+      activeEnvVars: [],
+    };
+    const html = getSettingsHtml({ cspSource: "test-csp" } as any, {}, new Set(), {}, tierState, {
+      currentTier: "project",
+      adapterConfiguredInTier: false,
+      inheritedGlobalAdapter: "codex",
+      effectiveAdapter: "codex",
+    });
+
+    expect(html).toContain('<option value="" selected>Use Global (codex)</option>');
+    expect(html).toContain('data-inherited-value="codex"');
+    expect(html).toContain("Reset Project");
+    expect(html).not.toContain("Reset all settings to defaults");
+  });
+
+  it("labels merged reset as Local and leaves other tiers untouched by contract", () => {
+    const html = getSettingsHtml({ cspSource: "test-csp" } as any, getDefaultConfig());
+    expect(html).toContain("Reset Local");
+    expect(html).toContain('title="Reset Local settings only"');
   });
 });

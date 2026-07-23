@@ -374,11 +374,13 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.NIGHTGAUGE_CODEX_MODEL;
+    delete process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT;
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     delete process.env.NIGHTGAUGE_CODEX_MODEL;
+    delete process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT;
   });
 
   it("C1: injects --model <value> when NIGHTGAUGE_CODEX_MODEL is set", async () => {
@@ -408,6 +410,29 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
     const adapter = new CodexAdapter();
     await expect(adapter.createQueryFunction({ stage: "feature-dev" })).rejects.toThrow(
       /not valid for the Codex adapter/
+    );
+  });
+
+  it("passes the configured reasoning effort to Codex", async () => {
+    vi.stubEnv("NIGHTGAUGE_CODEX_MODEL", "gpt-5.6-sol");
+    vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "max");
+    vi.stubEnv("NIGHTGAUGE_CODEX_RESUME_ENABLED", "");
+    mockSpawnReturning(makeSuccessStdout());
+
+    const queryFn = await new CodexAdapter().createQueryFunction({ stage: "feature-dev" });
+    for await (const _ of queryFn({ prompt: "test", options: {} })) {
+      /* consume */
+    }
+
+    const args = lastSpawnArgs();
+    const configIdx = args.indexOf("-c");
+    expect(args[configIdx + 1]).toBe("model_reasoning_effort=max");
+  });
+
+  it("rejects an invalid reasoning effort before spawning Codex", async () => {
+    vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "ultra");
+    await expect(new CodexAdapter().createQueryFunction({ stage: "feature-dev" })).rejects.toThrow(
+      /Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT/
     );
   });
 

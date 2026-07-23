@@ -182,7 +182,7 @@ describe("finalizeStageRows (#4031)", () => {
     const codexStage = stages.find((s) => s.stage === "feature-dev")!;
     const claudeStage = stages.find((s) => s.stage === "pr-merge")!;
     expect(codexStage.status).toBe("ok");
-    expect(codexStage.codexModel).toBe("gpt-5.5"); // opus → gpt-5.5
+    expect(codexStage.codexModel).toBe("gpt-5.6-sol");
     expect(claudeStage.status).toBe("error");
     expect(claudeStage.codexModel).toBeUndefined();
   });
@@ -339,8 +339,8 @@ describe("buildAdapterDoctorReport (#4031)", () => {
     });
     const dev = report.stages.find((s) => s.stage === "feature-dev")!;
     const merge = report.stages.find((s) => s.stage === "pr-merge")!;
-    expect(dev.codexModel).toBe("gpt-5.5"); // opus
-    expect(merge.codexModel).toBe("gpt-5.4"); // sonnet
+    expect(dev.codexModel).toBe("gpt-5.6-sol");
+    expect(merge.codexModel).toBe("gpt-5.6-terra");
     expect(dev.codexModel).not.toBe(merge.codexModel); // not cached once per adapter
   });
 

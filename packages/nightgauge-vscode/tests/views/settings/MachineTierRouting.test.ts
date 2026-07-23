@@ -92,7 +92,6 @@ vi.mock("vscode", () => ({
 
 describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
   const MACHINE_TIER_KEY_PATHS = new Set<string>([
-    "ui.core.adapter",
     "ui.core.default_model",
     "ui.core.fallback_model",
     "ui.core.auth_provider",
@@ -136,7 +135,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
   });
 
   describe("key partitioning", () => {
-    it("strips ui.core.adapter from project config and captures it", () => {
+    it("preserves ui.core.adapter as a project/local override", () => {
       const config: IncrediConfig = {
         ui: { core: { adapter: "gemini" } },
         project: { number: 42 },
@@ -144,8 +143,8 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
       const captured = partitionMachineTierKeys(config);
 
-      expect(captured.get("ui.core.adapter")).toBe("gemini");
-      expect(getConfigValue(config, "ui.core.adapter")).toBeUndefined();
+      expect(captured.has("ui.core.adapter")).toBe(false);
+      expect(getConfigValue(config, "ui.core.adapter")).toBe("gemini");
       expect(config.project?.number).toBe(42); // non-machine keys preserved
     });
 
@@ -163,14 +162,13 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
       const captured = partitionMachineTierKeys(config);
 
-      expect(captured.size).toBe(4);
-      expect(captured.get("ui.core.adapter")).toBe("claude");
+      expect(captured.size).toBe(3);
       expect(captured.get("ui.core.default_model")).toBe("claude-opus-4-7");
       expect(captured.get("ui.core.fallback_model")).toBe("claude-sonnet-4-6");
       expect(captured.get("ui.core.auth_provider")).toBe("claude-ai");
 
       // All stripped from config
-      expect(getConfigValue(config, "ui.core.adapter")).toBeUndefined();
+      expect(getConfigValue(config, "ui.core.adapter")).toBe("claude");
       expect(getConfigValue(config, "ui.core.default_model")).toBeUndefined();
     });
 
@@ -218,14 +216,11 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
   describe("machine config reconstruction", () => {
     it("builds a nested config object from captured dotted paths", () => {
-      const captured = new Map<string, unknown>([
-        ["ui.core.adapter", "gemini"],
-        ["ui.core.default_model", "gemini-2.5-pro"],
-      ]);
+      const captured = new Map<string, unknown>([["ui.core.default_model", "gemini-2.5-pro"]]);
 
       const machineConfig = buildMachineConfig(captured);
 
-      expect((machineConfig as IncrediConfig).ui?.core?.adapter).toBe("gemini");
+      expect((machineConfig as IncrediConfig).ui?.core?.adapter).toBeUndefined();
       expect((machineConfig as IncrediConfig).ui?.core?.default_model).toBe("gemini-2.5-pro");
     });
 
@@ -244,13 +239,13 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
   describe("MACHINE_TIER_KEY_PATHS constant", () => {
     it("contains the required personal-preference keys", () => {
-      expect(MACHINE_TIER_KEY_PATHS.has("ui.core.adapter")).toBe(true);
       expect(MACHINE_TIER_KEY_PATHS.has("ui.core.default_model")).toBe(true);
       expect(MACHINE_TIER_KEY_PATHS.has("ui.core.fallback_model")).toBe(true);
       expect(MACHINE_TIER_KEY_PATHS.has("ui.core.auth_provider")).toBe(true);
     });
 
     it("does not include project-team keys", () => {
+      expect(MACHINE_TIER_KEY_PATHS.has("ui.core.adapter")).toBe(false);
       expect(MACHINE_TIER_KEY_PATHS.has("project.number")).toBe(false);
       expect(MACHINE_TIER_KEY_PATHS.has("project.owner")).toBe(false);
       expect(MACHINE_TIER_KEY_PATHS.has("pipeline.auto_fix")).toBe(false);

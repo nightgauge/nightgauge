@@ -12,10 +12,10 @@ import { validateModelForAdapter, AdapterError } from "@nightgauge/sdk";
  */
 describe("model↔provider preflight at the extension boundary (#4021)", () => {
   it("resolves Codex tiers — including the fable regression — to concrete ids", () => {
-    expect(validateModelForAdapter("codex", "haiku").model).toBe("gpt-5.4-mini");
-    expect(validateModelForAdapter("codex", "opus").model).toBe("gpt-5.5");
+    expect(validateModelForAdapter("codex", "haiku").model).toBe("gpt-5.6-luna");
+    expect(validateModelForAdapter("codex", "opus").model).toBe("gpt-5.6-sol");
     // fable previously leaked the literal string to the Codex CLI (#4018/#4019).
-    expect(validateModelForAdapter("codex", "fable").model).toBe("gpt-5.5");
+    expect(validateModelForAdapter("codex", "fable").model).toBe("gpt-5.6-sol");
   });
 
   it("never returns a raw tier keyword for a closed adapter (no --model leak)", () => {

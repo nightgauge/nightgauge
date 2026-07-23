@@ -7,8 +7,8 @@
  * Asserts:
  * - Env override beats router (precedence preserved)
  * - `pipeline.stage_adapters.<stage>` config beats router (precedence preserved)
- * - Router is invoked with the right context when neither override applies
- * - When router abstains, fall-through to global / default works
+ * - Explicit global/project/local adapter selection beats the router
+ * - Router is invoked only when no adapter override applies
  * - When `pipeline.auto_router.enabled: false`, router is never invoked
  * - Returned decision carries `source: "auto-router"` and `rationale` populated
  */
@@ -146,7 +146,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     expect(stub.selectForStage).toHaveBeenCalledTimes(1);
   });
 
-  it("falls through to global-config when router abstains and global is configured", () => {
+  it("explicit global-config beats router without consulting it", () => {
     fs.writeFileSync(
       path.join(tmpRoot, ".nightgauge", "config.yaml"),
       `ui:
@@ -154,7 +154,12 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     adapter: gemini
 `
     );
-    const stub = makeStubRouter(null);
+    const stub = makeStubRouter({
+      adapter: "codex",
+      model: "gpt-5.4",
+      rationale: "must not win",
+      confidence: 0.99,
+    });
     const options: AutoRouterOptions = {
       enumerateAvailableAdapters: () => ["claude", "codex"],
       complexity: "M",
@@ -163,6 +168,7 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     const decision = resolveStageAdapter("feature-dev", tmpRoot, process.env, options);
     expect(decision.source).toBe("global-config");
     expect(decision.adapter).toBe("gemini");
+    expect(stub.selectForStage).not.toHaveBeenCalled();
   });
 
   it("does not invoke router when pipeline.auto_router.enabled is false", () => {

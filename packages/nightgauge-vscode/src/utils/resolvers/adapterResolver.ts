@@ -8,13 +8,9 @@
  * Precedence (highest → lowest):
  *   1. `NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_<STAGE>` env var → `"env"`
  *   2. `pipeline.stage_adapters.<stage>` from raw YAML       → `"stage-config"`
- *   3. Global `ui.core.adapter` (env / ConfigBridge / file)  → `"global-config"`
- *   4. Hardcoded default (`claude`)                          → `"default"`
- *
- * The `"auto-router"` source is reserved for the AutoProviderRouter integration
- * landing in Epic C / C4 — it is in the enum so downstream history/UI code does
- * not need a schema migration when the router lands. It is never returned at
- * runtime today.
+ *   3. Effective explicit `ui.core.adapter` selection         → `"global-config"`
+ *   4. AutoProviderRouter when no adapter was selected        → `"auto-router"`
+ *   5. Hardcoded default (`claude`)                           → `"default"`
  *
  * This resolver is pure: it does NOT validate adapter auth (B3 / #3222 owns
  * that) and is NOT yet wired into `skillRunner.ts` (B4 / #3223 will do that).
@@ -61,8 +57,8 @@ import { readEffectiveConfigTextSync } from "../mergedConfigReader";
  * - `"env"`           — `NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_<STAGE>` set.
  * - `"stage-config"`  — `pipeline.stage_adapters.<stage>` set in YAML.
  * - `"global-config"` — `ui.core.adapter` configured (env / bridge / file).
- * - `"auto-router"`   — Reserved for AutoProviderRouter (Epic C / C4); never
- *                       returned at runtime today.
+ * - `"auto-router"`   — AutoProviderRouter selected an authenticated adapter
+ *                       because no explicit adapter selection was configured.
  * - `"fallback"`      — Resolved adapter failed prereq validation, and a
  *                       candidate from `pipeline.adapter_fallback_chain` was
  *                       substituted. Issue #3223.
@@ -177,11 +173,17 @@ export function resolveStageAdapter(
     return { adapter: stageAdapter, source: "stage-config" };
   }
 
-  // Step 2.5 — AutoProviderRouter (Issue #3230). Consults the SDK router
-  // when enabled in config; abstain (null) signals fall-through to the
-  // global step. Caller-supplied options control auth-validated adapter
-  // enumeration and complexity inference; when omitted, the resolver
-  // skips the router silently to preserve sync behaviour for unit tests.
+  // Step 3 — an explicitly configured effective adapter is authoritative.
+  // ConfigBridge source attribution distinguishes an actual global/project/
+  // local selection from the built-in Claude default. A user selecting Codex
+  // once must not be silently rerouted to another authenticated provider.
+  const configured = getGlobalAdapterWithSource(workspaceRoot);
+  if (configured.configured) {
+    return { adapter: configured.adapter, source: "global-config" };
+  }
+
+  // Step 3.5 — AutoProviderRouter (Issue #3230). Automatic selection is a
+  // fallback for users who have not explicitly selected an adapter.
   if (autoRouterOptions) {
     const routerDecision = tryAutoRouter(stage, workspaceRoot, autoRouterOptions);
     if (routerDecision) {
@@ -192,12 +194,6 @@ export function resolveStageAdapter(
         routerModel: routerDecision.model,
       };
     }
-  }
-
-  // Step 3 — ui.core.adapter (global) with configured-vs-default split
-  const global = getGlobalAdapterWithSource(workspaceRoot);
-  if (global.configured) {
-    return { adapter: global.adapter, source: "global-config" };
   }
 
   // Step 4 — hardcoded default
@@ -241,7 +237,11 @@ export function getGlobalAdapterWithSource(workspaceRoot?: string): {
     const bridge = ConfigBridge.getInstance?.();
     const adapter = bridge?.getUI?.()?.core?.adapter;
     if (adapter && VALID_ADAPTERS.includes(adapter)) {
-      return { adapter: adapter as ExecutionAdapter, configured: true };
+      const source = bridge?.getSource?.("ui.core.adapter");
+      return {
+        adapter: adapter as ExecutionAdapter,
+        configured: source !== undefined && source !== "default",
+      };
     }
   } catch {
     // ConfigBridge not yet initialized (early startup) — fall through to file.

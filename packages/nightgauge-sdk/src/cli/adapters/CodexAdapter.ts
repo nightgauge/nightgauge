@@ -26,6 +26,7 @@ export { resolveCodexModelAlias } from "./codexModelRegistry.js";
 const ADAPTER_NAME = "Codex";
 const CODEX_DOCS_URL = "https://developers.openai.com/codex";
 const CODEX_INSTALL_CMD = "npm install -g @openai/codex";
+const CODEX_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * Pipeline stages that do not benefit from persistent session state.
@@ -185,6 +186,16 @@ export class CodexAdapter implements ICliAdapter {
     const codexModel = resolveAndValidateModel("codex", process.env.NIGHTGAUGE_CODEX_MODEL);
     if (codexModel) {
       args.push("--model", codexModel);
+    }
+    const reasoningEffort = process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT?.trim();
+    if (reasoningEffort) {
+      if (!CODEX_REASONING_EFFORTS.has(reasoningEffort)) {
+        throw new Error(
+          `Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT '${reasoningEffort}'. ` +
+            `Expected one of: ${[...CODEX_REASONING_EFFORTS].join(", ")}.`
+        );
+      }
+      args.push("-c", `model_reasoning_effort=${reasoningEffort}`);
     }
 
     return createCliQueryFn({ command, args, adapter: this.name });

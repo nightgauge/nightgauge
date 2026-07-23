@@ -220,8 +220,8 @@ export interface ExtensionServices {
   telemetryStore: TelemetryStore | null;
   offlineManager: OfflineManager | null;
   tokenStorage: TokenStorage | null;
-  oauthDeviceFlowService: OAuthDeviceFlowService | null;
-  gitHubAuthService: GitHubAuthService | null;
+  oauthDeviceFlowService: OAuthDeviceFlowService;
+  gitHubAuthService: GitHubAuthService;
   tokenRefreshManager: TokenRefreshManager | null;
   sessionManager: SessionManager | null;
   machineFingerprint: MachineFingerprint | null;
@@ -3783,11 +3783,19 @@ export async function initializeServices(
   const platformConfig = ConfigBridge.getInstance().getPlatform();
   const platformEnabled = platformConfig?.enabled ?? false;
 
-  let oauthDeviceFlowService: OAuthDeviceFlowService | null = null;
-  let gitHubAuthService: GitHubAuthService | null = null;
-
   // IPC client for platform services — replaces direct HTTP calls (#2090)
   const ipcClient = IpcClient.getInstance();
+
+  // Account commands are contributed in every window, including empty windows.
+  // Their backing services must therefore exist independently of the
+  // platform.enabled background-communication switch. Explicitly invoking
+  // sign-in is a user-authorized platform action; platform.enabled continues
+  // to gate telemetry, session restoration, heartbeats, and other automatic
+  // communication below.
+  const oauthDeviceFlowService = new OAuthDeviceFlowService(ipcClient, logger);
+  const gitHubAuthService = new GitHubAuthService(ipcClient, logger);
+  context.subscriptions.push(oauthDeviceFlowService, gitHubAuthService);
+  container.register("gitHubAuthService", gitHubAuthService);
 
   // Register pipeline services in container (Issue #2772)
   container.register("ipcClient", ipcClient);
@@ -3957,17 +3965,6 @@ export async function initializeServices(
   if (platformEnabled) {
     // Initialize TelemetryService submission singleton (#1480, #3327).
     TelemetryService.initialize(ipcClient, configBridge, telemetryConsentService, logger);
-
-    // Initialize OAuth Device Flow service (Issue #1464 — via IPC, #2090)
-    oauthDeviceFlowService = new OAuthDeviceFlowService(ipcClient, logger);
-    context.subscriptions.push(oauthDeviceFlowService);
-
-    // Initialize GitHub Auth service (Issue #1467 — via IPC, #2090)
-    gitHubAuthService = new GitHubAuthService(ipcClient, logger);
-    context.subscriptions.push(gitHubAuthService);
-
-    // Register in DI container (Issue #2771)
-    container.register("gitHubAuthService", gitHubAuthService);
   }
 
   // Initialize Token Refresh Manager (Issue #1466). Declared earlier so agent
