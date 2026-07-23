@@ -18,8 +18,11 @@ const githubAPIBase = "https://api.github.com"
 // scopes); the struct fields are the lowest common denominator.
 type TokenScopeInfo = forgetypes.TokenScopeInfo
 
-// requiredScopes are the GitHub OAuth scopes needed for pipeline operations.
-var requiredScopes = []string{"repo", "project", "read:org"}
+// requiredScopes are the classic GitHub OAuth scopes needed for repository and
+// project pipeline operations. read:org is advisory: it improves discovery of
+// private organisation memberships, but must not block an otherwise
+// capability-valid repository/project token.
+var requiredScopes = []string{"repo", "project"}
 
 // Whoami returns the authenticated actor as a forge-agnostic Actor.
 // Mirrors `gh api user --jq .login`. The implementation reuses the same
