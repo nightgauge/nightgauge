@@ -430,14 +430,14 @@ describe("LiveCellExecutor — adapter parameterization (#107)", () => {
     ]);
     const { exec } = scriptedExec({ checkCodes: [0] });
     // adapter:"codex" forces the openai provider, so the bare "sonnet" tier
-    // resolves to the openai model serving that band (gpt-5.4), not a Claude model.
+    // resolves to the OpenAI model serving that band, not a Claude model.
     const exe = new LiveCellExecutor({ spawn, exec, adapter: "codex" });
 
     const result = await exe.execute(task(), CELL({ model_id: "sonnet" }), WORKSPACE);
 
     expect(calls[0].command).toBe("codex");
-    expect(calls[0].args).toEqual(expect.arrayContaining(["--model", "gpt-5.4"]));
-    expect(result.model_version_label).toBe("GPT-5.4");
+    expect(calls[0].args).toEqual(expect.arrayContaining(["--model", "gpt-5.6-terra"]));
+    expect(result.model_version_label).toBe("GPT-5.6 Terra");
   });
 
   it("uses codex's own failure signal for a task with no checks", async () => {

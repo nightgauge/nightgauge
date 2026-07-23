@@ -32,15 +32,25 @@ describe("CodexModelCatalogService", () => {
   it("returns visible, registry-valid models ordered by priority", () => {
     const codexHome = createCodexHome({
       models: [
+        { slug: "gpt-5.6-luna", visibility: "list", priority: 3 },
+        { slug: "gpt-5.6-terra", visibility: "list", priority: 2 },
+        { slug: "gpt-5.6-sol", visibility: "list", priority: 1 },
         { slug: "gpt-5.4-mini", visibility: "list", priority: 4 },
         { slug: "codex-auto-review", visibility: "hide", priority: 1 },
-        { slug: "gpt-5.4", visibility: "list", priority: 2 },
-        { slug: "gpt-5.5", visibility: "list", priority: 1 },
+        { slug: "gpt-5.4", visibility: "list", priority: 6 },
+        { slug: "gpt-5.5", visibility: "list", priority: 5 },
       ],
     });
 
     const service = new CodexModelCatalogService(codexHome);
-    expect(service.listModels()).toEqual(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]);
+    expect(service.listModels()).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4-mini",
+      "gpt-5.5",
+      "gpt-5.4",
+    ]);
   });
 
   it("filters deprecated/invalid cached slugs through the registry", () => {

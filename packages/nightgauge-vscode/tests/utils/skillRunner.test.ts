@@ -101,6 +101,7 @@ vi.mock("../../src/utils/incrediConfig", async () => {
     getStageModel: vi.fn(() => undefined),
     getStageEffort: vi.fn(() => undefined),
     getCodexModel: vi.fn(() => "gpt-5.4"),
+    getCodexReasoningEffort: vi.fn(() => "medium"),
     resolveCodexPipelineModel: vi.fn((model?: string) => {
       if (!model || model === "sonnet") return "gpt-5.4";
       if (model === "haiku") return "gpt-5.4-mini";
@@ -2555,6 +2556,7 @@ allowed-tools: Read Write Edit Bash
       const options = spawnCall[2] as { env: Record<string, string> };
 
       expect(options.env.NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.5");
+      expect(options.env.NIGHTGAUGE_CODEX_REASONING_EFFORT).toBe("medium");
     } finally {
       if (previousAdapter === undefined) {
         delete process.env.NIGHTGAUGE_UI_CORE_ADAPTER;

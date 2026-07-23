@@ -66,6 +66,19 @@ describe("CodexModelSchema", () => {
   });
 });
 
+describe("Codex reasoning effort", () => {
+  it.each(["none", "low", "medium", "high", "xhigh", "max"])(
+    "accepts %s",
+    (reasoning_effort) => {
+      expect(CodexConfigSchema.safeParse({ reasoning_effort }).success).toBe(true);
+    }
+  );
+
+  it("rejects unsupported effort values", () => {
+    expect(CodexConfigSchema.safeParse({ reasoning_effort: "ultra" }).success).toBe(false);
+  });
+});
+
 // ============================================================================
 // CodexConfigSchema
 // ============================================================================
@@ -186,8 +199,9 @@ describe("DEFAULT_CONFIG codex defaults", () => {
     expect(DEFAULT_CONFIG.ui?.core?.codex).toBeDefined();
   });
 
-  it("defaults model to gpt-5.4", () => {
-    expect(DEFAULT_CONFIG.ui?.core?.codex?.model).toBe("gpt-5.4");
+  it("defaults to the current balanced Codex model and medium effort", () => {
+    expect(DEFAULT_CONFIG.ui?.core?.codex?.model).toBe("gpt-5.6-terra");
+    expect(DEFAULT_CONFIG.ui?.core?.codex?.reasoning_effort).toBe("medium");
   });
 
   it("default model tracks the canonical CODEX_DEFAULT_BASE_MODEL", () => {

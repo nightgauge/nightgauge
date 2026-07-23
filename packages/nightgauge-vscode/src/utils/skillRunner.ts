@@ -119,6 +119,7 @@ import {
   getGeminiAuthMethod,
   resolveCodexPipelineModel,
   getCodexModel,
+  getCodexReasoningEffort,
   getCodexCliCommand,
   getCodexCliArgs,
   getCodexResumeEnabled,
@@ -2733,12 +2734,19 @@ export function runStageSkillHeadless(
         : undefined;
     const codexModel = heavyCodexOverride ?? modelDecision.model;
     codexEnv.NIGHTGAUGE_CODEX_MODEL = codexModel;
+    const codexEffort = modelDecision.effort ?? getCodexReasoningEffort(workspaceRoot);
+    if (codexEffort) {
+      codexEnv.NIGHTGAUGE_CODEX_REASONING_EFFORT = codexEffort;
+    }
     const sourceSuffix = modelOverride
       ? " (run override)"
       : heavyCodexOverride
         ? " (performance-mode override)"
         : "";
     callbacks?.onStderr?.(`[skillRunner] Codex model: ${codexModel}${sourceSuffix}\n`);
+    callbacks?.onStderr?.(
+      `[skillRunner] Codex reasoning effort: ${codexEffort ?? "(provider default)"}\n`
+    );
 
     const codexCliCommand = getCodexCliCommand(workspaceRoot);
     codexEnv.NIGHTGAUGE_CODEX_CLI_COMMAND = codexCliCommand;

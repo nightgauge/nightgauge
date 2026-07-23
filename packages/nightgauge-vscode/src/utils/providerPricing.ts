@@ -119,6 +119,29 @@ const PRICING_TABLE: Partial<Record<ExecutionAdapter, Record<string, PricingEntr
     },
   },
   codex: {
+    // Source: https://developers.openai.com/api/docs/models
+    // last_verified: 2026-07-23
+    "gpt-5.6-sol": {
+      input_per_mtok: 5.0,
+      output_per_mtok: 30.0,
+      tier: "paid",
+      last_verified: "2026-07-23",
+      source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    },
+    "gpt-5.6-terra": {
+      input_per_mtok: 2.5,
+      output_per_mtok: 15.0,
+      tier: "paid",
+      last_verified: "2026-07-23",
+      source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+    },
+    "gpt-5.6-luna": {
+      input_per_mtok: 1.0,
+      output_per_mtok: 6.0,
+      tier: "paid",
+      last_verified: "2026-07-23",
+      source_url: "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+    },
     // Source: https://openai.com/api/pricing/
     // last_verified: 2026-05-07
     "gpt-5.5": {

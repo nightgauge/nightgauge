@@ -80,10 +80,10 @@ describe("model registry — resolution", () => {
   });
 
   it("resolves provider tier bands, including multi-band models (#56)", () => {
-    expect(getModelDescriptor("haiku", "openai")?.id).toBe("gpt-5.4-mini");
-    expect(getModelDescriptor("sonnet", "openai")?.id).toBe("gpt-5.4");
-    expect(getModelDescriptor("opus", "openai")?.id).toBe("gpt-5.5");
-    expect(getModelDescriptor("fable", "openai")?.id).toBe("gpt-5.5");
+    expect(getModelDescriptor("haiku", "openai")?.id).toBe("gpt-5.6-luna");
+    expect(getModelDescriptor("sonnet", "openai")?.id).toBe("gpt-5.6-terra");
+    expect(getModelDescriptor("opus", "openai")?.id).toBe("gpt-5.6-sol");
+    expect(getModelDescriptor("fable", "openai")?.id).toBe("gpt-5.6-sol");
     expect(getModelDescriptor("haiku", "google")?.id).toBe("gemini-2.5-flash");
     expect(getModelDescriptor("sonnet", "google")?.id).toBe("gemini-2.5-flash");
     expect(getModelDescriptor("opus", "google")?.id).toBe("gemini-2.5-pro");
@@ -117,7 +117,7 @@ describe("model registry — adapter resolution (#56)", () => {
   });
 
   it("resolves tiers per adapter through the registry", () => {
-    expect(resolveModelForAdapter("codex", "sonnet")?.id).toBe("gpt-5.4");
+    expect(resolveModelForAdapter("codex", "sonnet")?.id).toBe("gpt-5.6-terra");
     expect(resolveModelForAdapter("gemini", "fable")?.id).toBe("gemini-2.5-pro");
     expect(resolveModelForAdapter("gemini-sdk", "haiku")?.id).toBe("gemini-2.5-flash");
     expect(resolveModelForAdapter("copilot", "haiku")?.id).toBe("gpt-4o-mini");

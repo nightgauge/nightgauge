@@ -71,6 +71,8 @@ export {
   getGeminiAuthMethod,
   type CodexModel,
   getCodexModel,
+  type CodexReasoningEffort,
+  getCodexReasoningEffort,
   resolveCodexPipelineModel,
   getCodexCliCommand,
   getCodexCliArgs,

@@ -15,11 +15,11 @@ import type { IncrediAdapter } from "../../../cli/adapters/ICliAdapter.js";
  */
 describe("validateModelForAdapter — Codex (closed)", () => {
   it("resolves every tier to a concrete current Codex model", () => {
-    expect(validateModelForAdapter("codex", "haiku").model).toBe("gpt-5.4-mini");
-    expect(validateModelForAdapter("codex", "sonnet").model).toBe("gpt-5.4");
-    expect(validateModelForAdapter("codex", "opus").model).toBe("gpt-5.5");
+    expect(validateModelForAdapter("codex", "haiku").model).toBe("gpt-5.6-luna");
+    expect(validateModelForAdapter("codex", "sonnet").model).toBe("gpt-5.6-terra");
+    expect(validateModelForAdapter("codex", "opus").model).toBe("gpt-5.6-sol");
     // fable is the regression case from #4018/#4019 — must resolve, not leak.
-    expect(validateModelForAdapter("codex", "fable").model).toBe("gpt-5.5");
+    expect(validateModelForAdapter("codex", "fable").model).toBe("gpt-5.6-sol");
   });
 
   it("flags tier inputs via resolvedFromTier", () => {
@@ -33,9 +33,9 @@ describe("validateModelForAdapter — Codex (closed)", () => {
   });
 
   it("resolves Claude escalation ids by prefix (parity with the Go adapter)", () => {
-    expect(validateModelForAdapter("codex", "claude-sonnet-4-6").model).toBe("gpt-5.4");
-    expect(validateModelForAdapter("codex", "claude-opus-4-8").model).toBe("gpt-5.5");
-    expect(validateModelForAdapter("codex", "claude-haiku-4-5").model).toBe("gpt-5.4-mini");
+    expect(validateModelForAdapter("codex", "claude-sonnet-4-6").model).toBe("gpt-5.6-terra");
+    expect(validateModelForAdapter("codex", "claude-opus-4-8").model).toBe("gpt-5.6-sol");
+    expect(validateModelForAdapter("codex", "claude-haiku-4-5").model).toBe("gpt-5.6-luna");
   });
 
   it("remaps a deprecated id to its replacement and accepts it", () => {
@@ -129,7 +129,7 @@ describe("validateModelForAdapter — empty input", () => {
 
 describe("resolveAndValidateModel", () => {
   it("returns the resolved id or undefined when there is no override", () => {
-    expect(resolveAndValidateModel("codex", "opus")).toBe("gpt-5.5");
+    expect(resolveAndValidateModel("codex", "opus")).toBe("gpt-5.6-sol");
     expect(resolveAndValidateModel("codex", undefined)).toBeUndefined();
     expect(resolveAndValidateModel("codex", "")).toBeUndefined();
   });

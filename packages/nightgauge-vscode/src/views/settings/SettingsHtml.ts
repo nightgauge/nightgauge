@@ -1365,6 +1365,24 @@ function getCoreSectionHtml(
           showBadges,
           options
         )}
+        ${getSelectHtml(
+          "ui.core.codex.reasoning_effort",
+          "Reasoning Effort",
+          "Default Codex reasoning budget. Pipeline mode and per-stage effort overrides take precedence.",
+          codex.reasoning_effort ?? "medium",
+          [
+            { value: "none", label: "None (lowest latency)" },
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium (provider default)" },
+            { value: "high", label: "High" },
+            { value: "xhigh", label: "Extra High" },
+            { value: "max", label: "Max (highest budget)" },
+          ],
+          disabled,
+          g("ui.core.codex.reasoning_effort"),
+          showBadges,
+          options
+        )}
         ${getTextInputHtml(
           "ui.core.codex.cli_command",
           "CLI Command",
@@ -1990,7 +2008,11 @@ function getRoutingSectionHtml(
   const thresholds = mr.complexity_thresholds ?? {};
   const g = (path: string) => getSourceForPath(path, sources);
   const activeModel: DefaultModel = (config.ui?.core?.default_model as DefaultModel) ?? "sonnet";
-  const effortSupported = modelSupportsEffort(activeModel);
+  const executionAdapter = options?.effectiveAdapter ?? config.ui?.core?.adapter ?? "claude";
+  const effortSupported =
+    executionAdapter === "codex" ||
+    (executionAdapter === "claude" && modelSupportsEffort(activeModel));
+  const effortProviderLabel = executionAdapter === "codex" ? "Codex" : "Claude";
 
   return `
     <div class="section-content">
@@ -2015,18 +2037,20 @@ function getRoutingSectionHtml(
           effortSupported
             ? getSelectHtml(
                 "model_routing.default_effort",
-                "Default Effort",
-                `Default Claude effort level applied to all stages for the active model (${activeModel}). Overridden by per-stage stage_efforts entries. Silently ignored for models that do not support --effort.`,
+                "Pipeline Stage Effort",
+                `Default ${effortProviderLabel} effort override applied to pipeline stages. Per-stage stage_efforts entries take precedence; leave unset to use provider/model defaults.`,
                 mr.default_effort ?? "",
                 [
-                  { value: "", label: "None (use stage defaults)" },
+                  { value: "", label: "Use provider/model defaults" },
                   { value: "low", label: "Low" },
                   { value: "medium", label: "Medium" },
                   { value: "high", label: "High" },
+                  { value: "xhigh", label: "Extra High" },
                 ],
                 disabled,
                 g("model_routing.default_effort"),
-                showBadges
+                showBadges,
+                options
               )
             : ""
         }

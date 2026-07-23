@@ -22,10 +22,10 @@ describe("codexModelRegistry", () => {
   describe("CODEX_TIER_MODEL_MAP", () => {
     it("maps tiers to the verified current model ids", () => {
       expect(CODEX_TIER_MODEL_MAP).toEqual({
-        haiku: "gpt-5.4-mini",
-        sonnet: "gpt-5.4",
-        opus: "gpt-5.5",
-        fable: "gpt-5.5",
+        haiku: "gpt-5.6-luna",
+        sonnet: "gpt-5.6-terra",
+        opus: "gpt-5.6-sol",
+        fable: "gpt-5.6-sol",
       });
     });
 
@@ -39,10 +39,10 @@ describe("codexModelRegistry", () => {
 
   describe("resolveCodexModelAlias", () => {
     it("resolves each tier alias to the mapped id", () => {
-      expect(resolveCodexModelAlias("haiku")).toBe("gpt-5.4-mini");
-      expect(resolveCodexModelAlias("sonnet")).toBe("gpt-5.4");
-      expect(resolveCodexModelAlias("opus")).toBe("gpt-5.5");
-      expect(resolveCodexModelAlias("fable")).toBe("gpt-5.5");
+      expect(resolveCodexModelAlias("haiku")).toBe("gpt-5.6-luna");
+      expect(resolveCodexModelAlias("sonnet")).toBe("gpt-5.6-terra");
+      expect(resolveCodexModelAlias("opus")).toBe("gpt-5.6-sol");
+      expect(resolveCodexModelAlias("fable")).toBe("gpt-5.6-sol");
     });
 
     it("returns undefined for undefined input", () => {
@@ -56,16 +56,16 @@ describe("codexModelRegistry", () => {
     });
 
     it("trims whitespace before resolving a tier", () => {
-      expect(resolveCodexModelAlias("  opus  ")).toBe("gpt-5.5");
+      expect(resolveCodexModelAlias("  opus  ")).toBe("gpt-5.6-sol");
     });
 
     it("maps Claude escalation ids by prefix, mirroring the Go adapter (#4021)", () => {
       // Must match resolveCodexModel in internal/execution/adapters/codex.go.
-      expect(resolveCodexModelAlias("claude-haiku-4-5")).toBe("gpt-5.4-mini");
-      expect(resolveCodexModelAlias("claude-sonnet-4-6")).toBe("gpt-5.4");
-      expect(resolveCodexModelAlias("claude-opus-4-8")).toBe("gpt-5.5");
+      expect(resolveCodexModelAlias("claude-haiku-4-5")).toBe("gpt-5.6-luna");
+      expect(resolveCodexModelAlias("claude-sonnet-4-6")).toBe("gpt-5.6-terra");
+      expect(resolveCodexModelAlias("claude-opus-4-8")).toBe("gpt-5.6-sol");
       // Prefix match is intentional (escalation ids are internally generated).
-      expect(resolveCodexModelAlias("claude-sonnet-4-6-bad")).toBe("gpt-5.4");
+      expect(resolveCodexModelAlias("claude-sonnet-4-6-bad")).toBe("gpt-5.6-terra");
     });
 
     it("never returns a deprecated id for a tier alias (regression: opus→gpt-5.3-codex)", () => {
@@ -114,7 +114,9 @@ describe("codexModelRegistry", () => {
   describe("listCodexModels", () => {
     it("excludes deprecated and research-preview by default, recommended first", () => {
       const list = listCodexModels();
-      expect(list[0]).toBe("gpt-5.5");
+      expect(list[0]).toBe("gpt-5.6-sol");
+      expect(list).toContain("gpt-5.6-terra");
+      expect(list).toContain("gpt-5.6-luna");
       expect(list).toContain("gpt-5.4");
       expect(list).toContain("gpt-5.4-mini");
       expect(list).not.toContain("gpt-5.3-codex");

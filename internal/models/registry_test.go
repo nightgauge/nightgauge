@@ -82,10 +82,10 @@ func TestResolveProviderTierBands(t *testing.T) {
 	cases := []struct {
 		provider, tier, wantID string
 	}{
-		{"openai", "haiku", "gpt-5.4-mini"},
-		{"openai", "sonnet", "gpt-5.4"},
-		{"openai", "opus", "gpt-5.5"},
-		{"openai", "fable", "gpt-5.5"}, // no fable-equivalent → strongest model
+		{"openai", "haiku", "gpt-5.6-luna"},
+		{"openai", "sonnet", "gpt-5.6-terra"},
+		{"openai", "opus", "gpt-5.6-sol"},
+		{"openai", "fable", "gpt-5.6-sol"},
 		{"google", "haiku", "gemini-2.5-flash"},
 		{"google", "sonnet", "gemini-2.5-flash"},
 		{"google", "opus", "gemini-2.5-pro"},

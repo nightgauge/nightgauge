@@ -1785,6 +1785,8 @@ export type CodexModel = z.infer<typeof CodexModelSchema>;
  */
 export const CodexConfigSchema = z.object({
   model: CodexModelSchema.optional(),
+  /** Default Codex reasoning budget. Stage/mode effort overrides take precedence. */
+  reasoning_effort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]).optional(),
   /** CLI binary to execute. Default: `codex` */
   cli_command: z.string().trim().min(1).optional(),
   /** Optional extra CLI args appended before model injection. */
@@ -3680,6 +3682,7 @@ export const DEFAULT_CONFIG: IncrediConfig = {
       },
       codex: {
         model: CODEX_DEFAULT_BASE_MODEL,
+        reasoning_effort: "medium",
         cli_command: "codex",
         resume_enabled: false,
       },

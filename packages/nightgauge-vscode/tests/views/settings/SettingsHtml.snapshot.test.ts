@@ -22,7 +22,8 @@ const mockWebview = { cspSource: "test-csp" } as any;
 function normalize(html: string): string {
   return html
     .replace(/nonce-[A-Za-z0-9]{32}/g, "nonce-NONCE")
-    .replace(/nonce="[A-Za-z0-9]{32}"/g, 'nonce="NONCE"');
+    .replace(/nonce="[A-Za-z0-9]{32}"/g, 'nonce="NONCE"')
+    .replace(/[ \t]+$/gm, "");
 }
 
 // ---------------------------------------------------------------------------

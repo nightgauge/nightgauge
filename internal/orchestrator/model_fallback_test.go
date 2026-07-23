@@ -315,22 +315,21 @@ func TestScheduler_IpcModelFallback(t *testing.T) {
 func TestRetryEngine_EvaluateDowngrade_CodexWalksProviderLadder(t *testing.T) {
 	r := NewRetryEngine(DefaultRetryConfig())
 
-	// gpt-5.5 serves opus+fable for openai; the next distinct model below is
-	// the sonnet-band gpt-5.4 — the ladder never "falls" to gpt-5.5 itself.
-	dg := r.EvaluateDowngrade("gpt-5.5")
+	// Sol serves opus+fable for OpenAI; the next distinct model below is Terra.
+	dg := r.EvaluateDowngrade("gpt-5.6-sol")
 	if !dg.ShouldDowngrade || dg.NewTier != "sonnet" {
-		t.Fatalf("EvaluateDowngrade(gpt-5.5) = %+v, want fall to sonnet (gpt-5.4)", dg)
+		t.Fatalf("EvaluateDowngrade(gpt-5.6-sol) = %+v, want fall to sonnet (gpt-5.6-terra)", dg)
 	}
 
-	dg = r.EvaluateDowngrade("gpt-5.4")
+	dg = r.EvaluateDowngrade("gpt-5.6-terra")
 	if !dg.ShouldDowngrade || dg.NewTier != "haiku" {
-		t.Fatalf("EvaluateDowngrade(gpt-5.4) = %+v, want fall to haiku (gpt-5.4-mini)", dg)
+		t.Fatalf("EvaluateDowngrade(gpt-5.6-terra) = %+v, want fall to haiku (gpt-5.6-luna)", dg)
 	}
 
 	// The provider's weakest model has nothing to fall to.
-	dg = r.EvaluateDowngrade("gpt-5.4-mini")
+	dg = r.EvaluateDowngrade("gpt-5.6-luna")
 	if dg.ShouldDowngrade || dg.Reason != "downgrade_ladder_exhausted" {
-		t.Fatalf("EvaluateDowngrade(gpt-5.4-mini) = %+v, want exhausted", dg)
+		t.Fatalf("EvaluateDowngrade(gpt-5.6-luna) = %+v, want exhausted", dg)
 	}
 }
 

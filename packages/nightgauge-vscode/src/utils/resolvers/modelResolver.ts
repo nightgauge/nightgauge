@@ -604,8 +604,17 @@ export function getGeminiAuthMethod(workspaceRoot?: string): GeminiAuthMethod {
 
 /** Codex model identifier */
 export type CodexModel = string;
+export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 const DEFAULT_CODEX_CLI_COMMAND = "codex";
+const CODEX_REASONING_EFFORTS: readonly CodexReasoningEffort[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
 
 /**
  * Get the Codex model from config or environment.
@@ -686,6 +695,70 @@ export function getCodexModel(workspaceRoot?: string): CodexModel {
     console.error("Failed to read Codex model from nightgauge config:", error);
     return CODEX_DEFAULT_BASE_MODEL;
   }
+}
+
+/**
+ * Get the default Codex reasoning budget.
+ * Priority: NIGHTGAUGE_CODEX_REASONING_EFFORT env →
+ * ui.core.codex.reasoning_effort → undefined (Codex provider default).
+ */
+export function getCodexReasoningEffort(
+  workspaceRoot?: string
+): CodexReasoningEffort | undefined {
+  const envEffort = process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT?.trim();
+  if (CODEX_REASONING_EFFORTS.includes(envEffort as CodexReasoningEffort)) {
+    return envEffort as CodexReasoningEffort;
+  }
+
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) return undefined;
+
+  try {
+    const pathResult = resolveConfigPathSync(root);
+    if (!pathResult.exists) return undefined;
+    if (pathResult.isLegacy) logDeprecationWarning(pathResult.path);
+
+    const lines = readEffectiveConfigTextSync(pathResult).split("\n");
+    let inUi = false;
+    let inCore = false;
+    let inCodex = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed === "ui:") {
+        inUi = true;
+        continue;
+      }
+      if (inUi && trimmed === "core:") {
+        inCore = true;
+        continue;
+      }
+      if (inCore && trimmed === "codex:") {
+        inCodex = true;
+        continue;
+      }
+      if (trimmed && !trimmed.startsWith("#") && /^[a-z_]+:/.test(trimmed)) {
+        if (!line.startsWith(" ")) {
+          inUi = false;
+          inCore = false;
+          inCodex = false;
+        } else if (line.match(/^ {2}[a-z_]+:/) && !line.match(/^ {4}/)) {
+          inCore = false;
+          inCodex = false;
+        } else if (line.match(/^ {4}[a-z_]+:/) && !line.match(/^ {6}/)) {
+          inCodex = false;
+        }
+      }
+      if (inCodex) {
+        const match = trimmed.match(
+          /^reasoning_effort:\s*['"]?(none|low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
+        );
+        if (match) return match[1] as CodexReasoningEffort;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to read Codex reasoning effort from nightgauge config:", error);
+  }
+  return undefined;
 }
 
 /**
