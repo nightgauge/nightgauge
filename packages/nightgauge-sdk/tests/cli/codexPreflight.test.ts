@@ -300,7 +300,7 @@ describe("codexPreflight", () => {
     expect(result.docsPreconditions).toBe("passed");
   });
 
-  it("should fail when documentation prerequisites are missing", async () => {
+  it("should not require Nightgauge-specific documentation in consumer repositories", async () => {
     const cwd = await createTempWorkspace();
     await fs.rm(path.join(cwd, "docs/README.md"));
     const runner = createRunner({
@@ -311,7 +311,25 @@ describe("codexPreflight", () => {
       "git status --porcelain": { code: 0, stdout: "" },
     });
 
-    await expect(runCodexPreflightChecks({ cwd, runner })).rejects.toThrow(
+    await expect(runCodexPreflightChecks({ cwd, runner })).resolves.toMatchObject({
+      docsPreconditions: "passed",
+    });
+  });
+
+  it("should fail when explicitly configured documentation prerequisites are missing", async () => {
+    const cwd = await createTempWorkspace();
+    await fs.rm(path.join(cwd, "docs/README.md"));
+    const runner = createRunner({
+      "codex --version": CODEX_VERSION_OK,
+      "codex login status": { code: 0 },
+      "gh auth status": { code: 0 },
+      "git branch --show-current": { code: 0, stdout: "feat/docs\n" },
+      "git status --porcelain": { code: 0, stdout: "" },
+    });
+
+    await expect(
+      runCodexPreflightChecks({ cwd, runner, requiredDocs: ["docs/README.md"] })
+    ).rejects.toThrow(
       /missing required documentation prerequisites/
     );
   });

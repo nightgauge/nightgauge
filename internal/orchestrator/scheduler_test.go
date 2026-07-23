@@ -827,7 +827,7 @@ func TestQueueItemPositions(t *testing.T) {
 	}
 }
 
-func TestQueueAddItem_DeduplicatesByIssueNumber(t *testing.T) {
+func TestQueueAddItem_DeduplicatesByRepositoryAndIssueNumber(t *testing.T) {
 	s := &Scheduler{
 		repoRunning: make(map[string]int),
 		mergeLocks:  make(map[string]*sync.Mutex),
@@ -857,11 +857,18 @@ func TestQueueAddItem_DeduplicatesByIssueNumber(t *testing.T) {
 		t.Errorf("Items[1].Title = %q, want %q (duplicate should not overwrite)", state.Items[1].Title, "Beta")
 	}
 
-	// Also verify QueueAdd (legacy) deduplicates
+	// The same issue number in another repository is a distinct work item.
 	s.QueueAdd(QueueEntry{IssueNumber: 10, Repo: "test"})
 	state = s.GetState()
-	if len(state.Items) != 4 {
-		t.Fatalf("after QueueAdd duplicate: len(Items) = %d, want 4", len(state.Items))
+	if len(state.Items) != 5 {
+		t.Fatalf("after cross-repo QueueAdd: len(Items) = %d, want 5", len(state.Items))
+	}
+
+	// Re-adding the same composite identity remains idempotent.
+	s.QueueAdd(QueueEntry{IssueNumber: 10, Repo: "test"})
+	state = s.GetState()
+	if len(state.Items) != 5 {
+		t.Fatalf("after exact duplicate QueueAdd: len(Items) = %d, want 5", len(state.Items))
 	}
 }
 

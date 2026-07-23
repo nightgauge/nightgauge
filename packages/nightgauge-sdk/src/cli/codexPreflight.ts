@@ -45,7 +45,12 @@ export class CodexPreflightError extends Error {
   }
 }
 
-const DEFAULT_REQUIRED_DOCS = ["docs/README.md", "standards/security.md"];
+/**
+ * Portable adapter preflight must not assume the consumer repository uses
+ * Nightgauge's own documentation layout. Callers that enforce repository
+ * documentation prerequisites can still pass `requiredDocs` explicitly.
+ */
+const DEFAULT_REQUIRED_DOCS: string[] = [];
 
 /**
  * The `NIGHTGAUGE_*_MODEL` env var that configures each adapter's model.
