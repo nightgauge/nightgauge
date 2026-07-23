@@ -48,7 +48,7 @@ export NIGHTGAUGE_GEMINI_MODEL=gemini-2.5-flash  # Optional model override
 export NIGHTGAUGE_AUTO_APPROVE=true      # Skip approval prompts
 export NIGHTGAUGE_OUTPUT_FORMAT=json     # JSON output for parsing
 export NIGHTGAUGE_TIMEOUT=3600000        # Global timeout (1 hour)
-export NIGHTGAUGE_STAGE_TIMEOUT=900000   # Stage timeout (15 min)
+export NIGHTGAUGE_STAGE_TIMEOUT=3600000  # Stage timeout (60 min)
 ```
 
 See [docs/CI_INTEGRATION.md](../../docs/CI_INTEGRATION.md) for complete CLI
@@ -72,7 +72,7 @@ import { PipelineOrchestrator } from "@nightgauge/sdk";
 const orchestrator = new PipelineOrchestrator(query, {
   autoApprove: true, // Skip approval prompts (CI mode)
   globalTimeoutMs: 3600000, // 1 hour timeout
-  stageTimeoutMs: 900000, // 15 min per stage
+  stageTimeoutMs: 3600000, // 60 min per stage
 });
 
 // Subscribe to events
@@ -105,7 +105,7 @@ const orchestrator = new PipelineOrchestrator(query, {
   defaultModel: "sonnet", // Optional: sonnet, opus, haiku
   autoApprove: false, // Skip approval prompts (CI mode)
   globalTimeoutMs: 3600000, // Pipeline timeout (1 hour)
-  stageTimeoutMs: 900000, // Per-stage timeout (15 min)
+  stageTimeoutMs: 3600000, // Per-stage timeout (60 min)
 });
 
 // Run full pipeline

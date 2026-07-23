@@ -2,8 +2,8 @@
  * #3969: After a SUCCESSFUL pipeline (PR merged), the slot's worktree is
  * removed AND the local feature branch is deleted — merged branches must not
  * accumulate (142 stale locals piled up across AcmeApp). On FAILURE the
- * branch is preserved (deleteBranch=false) so a re-queue can resume/recover;
- * on a pr-merge failure the whole worktree is preserved.
+ * failed/deferred runs preserve the whole worktree so uncommitted agent work
+ * remains available for inspection and resume.
  *
  * The assertion is on the second arg of WorktreeManager.cleanup(issueNumber,
  * deleteBranch).
@@ -176,7 +176,7 @@ describe("ConcurrentPipelineManager — merge cleanup deletes branch on success 
     expect(mockWorktreeCleanup).toHaveBeenCalledWith(42, true);
   });
 
-  it("preserves the branch (deleteBranch=false) on a non-preserving failure", async () => {
+  it("preserves the whole worktree on an ordinary feature-dev failure", async () => {
     const { manager, controllable } = makeManager(43);
     await manager.fillSlots();
     controllable.resolve(43, {
@@ -190,8 +190,7 @@ describe("ConcurrentPipelineManager — merge cleanup deletes branch on success 
     });
     await manager.settleForTest(43);
 
-    // Worktree still removed, but the branch is kept for resume/recovery.
-    expect(mockWorktreeCleanup).toHaveBeenCalledWith(43, false);
+    expect(mockWorktreeCleanup).not.toHaveBeenCalled();
   });
 
   it("preserves the whole worktree (no cleanup) when pr-merge fails", async () => {

@@ -44,7 +44,10 @@ export const DEFAULT_CONFIG: Omit<CLIConfig, "apiKey"> = {
   outputFormat: "text",
   logLevel: "info",
   globalTimeoutMs: 3600000, // 1 hour
-  stageTimeoutMs: 900000, // 15 minutes
+  // Coding agents routinely need more than 15 minutes to implement and run
+  // validation. Keep the stage bounded by the one-hour global timeout while
+  // allowing callers to lower it through NIGHTGAUGE_STAGE_TIMEOUT/--timeout.
+  stageTimeoutMs: 3600000, // 1 hour
   defaultModel: "sonnet",
   // Multi-agent orchestration is off by default (epic #3899, opt-in). The empty
   // block resolves to DEFAULT_ORCHESTRATION_CONFIG (disabled, no native offload,

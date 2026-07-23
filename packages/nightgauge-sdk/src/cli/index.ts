@@ -14,7 +14,7 @@
  *   NIGHTGAUGE_OUTPUT_FORMAT - Output format: text or json (default: text)
  *   NIGHTGAUGE_LOG_LEVEL     - Log level: debug, info, warn, error (default: info)
  *   NIGHTGAUGE_TIMEOUT       - Global timeout in ms (default: 3600000 = 1 hour)
- *   NIGHTGAUGE_STAGE_TIMEOUT - Per-stage timeout in ms (default: 900000 = 15 min)
+ *   NIGHTGAUGE_STAGE_TIMEOUT - Per-stage timeout in ms (default: 3600000 = 60 min)
  *   NIGHTGAUGE_MODEL         - Model: sonnet, opus, haiku (default: sonnet)
  *
  * Exit Codes:

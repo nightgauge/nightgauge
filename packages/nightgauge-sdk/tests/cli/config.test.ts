@@ -22,6 +22,22 @@ describe("lm-studio adapter config", () => {
 });
 
 describe("cli config auth contract", () => {
+  it("allows realistic coding stages by default while retaining a one-hour bound", () => {
+    const config = loadConfigFromEnv({ NIGHTGAUGE_ADAPTER: "codex" });
+
+    expect(config.stageTimeoutMs).toBe(3_600_000);
+    expect(config.stageTimeoutMs).toBe(config.globalTimeoutMs);
+  });
+
+  it("honors an explicit per-stage timeout override", () => {
+    const config = loadConfigFromEnv({
+      NIGHTGAUGE_ADAPTER: "codex",
+      NIGHTGAUGE_STAGE_TIMEOUT: "1800000",
+    });
+
+    expect(config.stageTimeoutMs).toBe(1_800_000);
+  });
+
   it("defaults to claude-headless adapter when no explicit adapter or API key is set", () => {
     const config = loadConfigFromEnv({});
 

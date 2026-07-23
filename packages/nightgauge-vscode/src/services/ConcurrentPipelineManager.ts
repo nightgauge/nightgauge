@@ -908,9 +908,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private async runSlotPipeline(slot: PipelineSlot): Promise<PipelineRunResult> {
     let pipelineSucceeded = false;
-    let pipelineBudgetExceeded = false;
-    let pipelineFailedAtPrMerge = false;
-    let pipelineFailedAtStreamIdleTimeout = false;
     let isAlreadyResolved = false;
     // #305: a blockedBy deferral is a non-failure. When set, the finally block
     // below skips every failure side-effect (In-review board move, failure
@@ -981,24 +978,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       pipelineResult = result;
       pipelineSucceeded = result.success;
       pipelineDeferred = result.deferred ?? false;
-      pipelineBudgetExceeded = result.budgetExceeded ?? false;
-      pipelineFailedAtPrMerge = !result.success && result.failedStage === "pr-merge";
-      // Detect Anthropic stream-idle-timeout (#3398) and rate-limit quota
-      // exhaustion (#3386) so the worktree is preserved instead of cleaned
-      // up. Pre-fix, $14–24 of in-progress edits were wiped on every
-      // occurrence, including substantial work already written to disk.
-      // Preserving the worktree keeps the work available for inspection
-      // (and a future "resume from worktree" path) and matches the pattern
-      // used for budget-exceeded / pr-merge failures.
-      const errMsg = result.error?.message ?? "";
-      pipelineFailedAtStreamIdleTimeout =
-        !result.success &&
-        (/stream idle timeout/i.test(errMsg) ||
-          /rate-limit-quota-exhausted/i.test(errMsg) ||
-          // Anthropic transport drop (#4002) — same mid-stage death class as
-          // stream-idle-timeout: work already on disk must survive the blip.
-          /socket connection was closed/i.test(errMsg) ||
-          /socket hang up/i.test(errMsg));
       isAlreadyResolved = result.outcomeType === "already-resolved";
 
       this.logger.info("[SlotLifecycle] runPipeline() RESOLVED", {
@@ -1216,12 +1195,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         }
       }
 
-      // Clean up the slot — preserve worktree if budget was exceeded (Issue #1935)
-      // or if pr-merge failed (Issue #500). Preserving the worktree on pr-merge
-      // failure keeps pipeline context files intact so that re-queuing the issue
-      // can resume from pr-merge instead of re-running all stages from scratch.
-      const preserveWorktree =
-        pipelineBudgetExceeded || pipelineFailedAtPrMerge || pipelineFailedAtStreamIdleTimeout;
+      // A failed pipeline may leave valuable uncommitted agent work in the
+      // worktree. Never force-remove that work before an operator can inspect
+      // or resume it. Deferred runs are also resumable by definition. See #66.
+      const preserveWorktree = !pipelineSucceeded || pipelineDeferred;
       // #3969: delete the local feature branch only on a clean success (PR
       // merged). On failure/cancel the branch is preserved for resume/recovery.
       const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;
@@ -1326,9 +1303,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * Clean up a completed/failed slot.
    *
    * @param slot - The pipeline slot to clean up
-   * @param preserveWorktree - If true, skip worktree removal (e.g., budget-exceeded
-   *   failures where WIP was auto-committed and should be inspectable). The branch
-   *   and worktree remain for manual inspection or pipeline retry.
+   * @param preserveWorktree - If true, skip worktree removal. Failed and deferred
+   *   runs may contain uncommitted work or context required for inspection/resume;
+   *   only a clean successful merge is safe to remove automatically.
    *   @see Issue #1935 - Budget-pause instead of budget-kill
    */
   /**
@@ -1643,8 +1620,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // environmental classification path.
       //
       // Match strings are the same patterns used in bootstrap/services.ts
-      // (terminalFailureKind classification) and runSlotPipeline()
-      // (pipelineFailedAtStreamIdleTimeout). Keep aligned.
+      // (terminalFailureKind classification). Keep aligned.
       const haltErrMsg = pipelineResult?.error?.message ?? "";
       const isEnvironmentalFailure =
         /stream idle timeout/i.test(haltErrMsg) ||
