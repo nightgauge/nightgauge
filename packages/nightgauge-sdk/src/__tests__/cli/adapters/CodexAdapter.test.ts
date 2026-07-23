@@ -431,9 +431,9 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
 
   it("rejects an invalid reasoning effort before spawning Codex", async () => {
     vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "ultra");
-    await expect(
-      new CodexAdapter().createQueryFunction({ stage: "feature-dev" })
-    ).rejects.toThrow(/Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT/);
+    await expect(new CodexAdapter().createQueryFunction({ stage: "feature-dev" })).rejects.toThrow(
+      /Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT/
+    );
   });
 
   it("C2: does not inject --model when NIGHTGAUGE_CODEX_MODEL is unset", async () => {

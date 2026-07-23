@@ -702,9 +702,7 @@ export function getCodexModel(workspaceRoot?: string): CodexModel {
  * Priority: NIGHTGAUGE_CODEX_REASONING_EFFORT env →
  * ui.core.codex.reasoning_effort → undefined (Codex provider default).
  */
-export function getCodexReasoningEffort(
-  workspaceRoot?: string
-): CodexReasoningEffort | undefined {
+export function getCodexReasoningEffort(workspaceRoot?: string): CodexReasoningEffort | undefined {
   const envEffort = process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT?.trim();
   if (CODEX_REASONING_EFFORTS.includes(envEffort as CodexReasoningEffort)) {
     return envEffort as CodexReasoningEffort;

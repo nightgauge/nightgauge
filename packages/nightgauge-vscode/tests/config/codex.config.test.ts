@@ -67,12 +67,9 @@ describe("CodexModelSchema", () => {
 });
 
 describe("Codex reasoning effort", () => {
-  it.each(["none", "low", "medium", "high", "xhigh", "max"])(
-    "accepts %s",
-    (reasoning_effort) => {
-      expect(CodexConfigSchema.safeParse({ reasoning_effort }).success).toBe(true);
-    }
-  );
+  it.each(["none", "low", "medium", "high", "xhigh", "max"])("accepts %s", (reasoning_effort) => {
+    expect(CodexConfigSchema.safeParse({ reasoning_effort }).success).toBe(true);
+  });
 
   it("rejects unsupported effort values", () => {
     expect(CodexConfigSchema.safeParse({ reasoning_effort: "ultra" }).success).toBe(false);

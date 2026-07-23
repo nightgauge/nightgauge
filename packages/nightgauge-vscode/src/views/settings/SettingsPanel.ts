@@ -432,8 +432,7 @@ export class SettingsPanel implements vscode.Disposable {
         driftBannerDismissed: this.driftBannerDismissed,
         repositoryProjects: this.repositoryProjectState,
         currentTier: this.tierState.currentTier,
-        adapterConfiguredInTier:
-          getConfigValue(configForView, "ui.core.adapter") !== undefined,
+        adapterConfiguredInTier: getConfigValue(configForView, "ui.core.adapter") !== undefined,
         inheritedGlobalAdapter: this.globalConfig.ui?.core?.adapter ?? "claude",
         effectiveAdapter: this.currentConfig.ui?.core?.adapter ?? "claude",
       }
@@ -957,8 +956,7 @@ export class SettingsPanel implements vscode.Disposable {
     }
 
     const viewTier = this.tierState.currentTier;
-    const tier: EditableTier =
-      viewTier === "project" || viewTier === "global" ? viewTier : "local";
+    const tier: EditableTier = viewTier === "project" || viewTier === "global" ? viewTier : "local";
     const tierLabel = tier === "global" ? "Global" : tier === "project" ? "Project" : "Local";
 
     if (viewTier === "default" || viewTier === "env") {

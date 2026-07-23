@@ -117,19 +117,12 @@ describe("SettingsHtml core section", () => {
       hasProjectConfig: true,
       activeEnvVars: [],
     };
-    const html = getSettingsHtml(
-      { cspSource: "test-csp" } as any,
-      {},
-      new Set(),
-      {},
-      tierState,
-      {
-        currentTier: "project",
-        adapterConfiguredInTier: false,
-        inheritedGlobalAdapter: "codex",
-        effectiveAdapter: "codex",
-      }
-    );
+    const html = getSettingsHtml({ cspSource: "test-csp" } as any, {}, new Set(), {}, tierState, {
+      currentTier: "project",
+      adapterConfiguredInTier: false,
+      inheritedGlobalAdapter: "codex",
+      effectiveAdapter: "codex",
+    });
 
     expect(html).toContain('<option value="" selected>Use Global (codex)</option>');
     expect(html).toContain('data-inherited-value="codex"');

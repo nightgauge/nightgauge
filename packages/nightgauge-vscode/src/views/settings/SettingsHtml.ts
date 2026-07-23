@@ -1300,10 +1300,12 @@ function getCoreSectionHtml(
         adapter,
         [
           ...(supportsGlobalInheritance
-            ? [{
-                value: "",
-                label: `Use Global (${options.inheritedGlobalAdapter ?? "Claude"})`,
-              }]
+            ? [
+                {
+                  value: "",
+                  label: `Use Global (${options.inheritedGlobalAdapter ?? "Claude"})`,
+                },
+              ]
             : []),
           { value: "claude", label: "Claude" },
           { value: "codex", label: "Codex" },

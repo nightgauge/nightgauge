@@ -216,9 +216,7 @@ describe("MACHINE_TIER_KEY_PATHS routing (via configUtils)", () => {
 
   describe("machine config reconstruction", () => {
     it("builds a nested config object from captured dotted paths", () => {
-      const captured = new Map<string, unknown>([
-        ["ui.core.default_model", "gemini-2.5-pro"],
-      ]);
+      const captured = new Map<string, unknown>([["ui.core.default_model", "gemini-2.5-pro"]]);
 
       const machineConfig = buildMachineConfig(captured);
 

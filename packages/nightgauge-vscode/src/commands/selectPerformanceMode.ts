@@ -50,10 +50,15 @@ function getWorkspaceRoot(): string | undefined {
 }
 
 /** Human-facing label for a stage-model choice. */
-function providerModelLabel(choice: Exclude<StageModelChoice, "auto">, adapter: ExecutionAdapter): string {
-  return resolveModelForAdapter(adapter, choice)?.display_name ??
+function providerModelLabel(
+  choice: Exclude<StageModelChoice, "auto">,
+  adapter: ExecutionAdapter
+): string {
+  return (
+    resolveModelForAdapter(adapter, choice)?.display_name ??
     resolveModelForAdapter(adapter, choice)?.id ??
-    choice.charAt(0).toUpperCase() + choice.slice(1);
+    choice.charAt(0).toUpperCase() + choice.slice(1)
+  );
 }
 
 /** Human-facing provider-aware presentation for one performance mode. */

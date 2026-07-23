@@ -768,12 +768,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     // Account commands are contributed in every window, so their handlers must
     // always be registered. platform.enabled gates automatic communication,
     // not an explicit user-requested sign-in or sign-out (#51).
-    ...registerAccountCommands(
-      oauthDeviceFlowService,
-      gitHubAuthService,
-      logger,
-      trialStore
-    ),
+    ...registerAccountCommands(oauthDeviceFlowService, gitHubAuthService, logger, trialStore),
 
     // Subscription management — opens Stripe Customer Portal (Issue #1478)
     registerManageSubscriptionCommand(
