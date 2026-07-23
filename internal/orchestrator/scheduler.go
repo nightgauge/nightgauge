@@ -1329,12 +1329,12 @@ func (s *Scheduler) RunQueue(ctx context.Context) error {
 
 // QueueAdd adds issues to the execution queue.
 // Accepts QueueEntry (legacy) or QueueItem; QueueEntry is promoted to QueueItem internally.
-// Duplicate issue numbers are silently skipped.
+// Duplicate repository+issue identities are silently skipped.
 func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range entries {
-		if s.queueContainsUnlocked(e.IssueNumber) {
+		if s.queueContainsUnlocked(e.Repo, e.IssueNumber) {
 			continue
 		}
 		item := QueueItem{
@@ -1353,12 +1353,12 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 }
 
 // QueueAddItem adds rich queue items to the execution queue.
-// Duplicate issue numbers are silently skipped.
+// Duplicate repository+issue identities are silently skipped.
 func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range items {
-		if s.queueContainsUnlocked(items[i].IssueNumber) {
+		if s.queueContainsUnlocked(items[i].Repo, items[i].IssueNumber) {
 			continue
 		}
 		if items[i].Status == "" {
@@ -1374,11 +1374,11 @@ func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.emitQueueChangedUnlocked()
 }
 
-// queueContainsUnlocked returns true if the queue already contains an item with
-// the given issue number. Caller must hold s.mu.
-func (s *Scheduler) queueContainsUnlocked(issueNumber int) bool {
+// queueContainsUnlocked returns true if the queue already contains the exact
+// repository+issue identity. Issue numbers are only unique within a repository.
+func (s *Scheduler) queueContainsUnlocked(repo string, issueNumber int) bool {
 	for _, existing := range s.queue {
-		if existing.IssueNumber == issueNumber {
+		if existing.Repo == repo && existing.IssueNumber == issueNumber {
 			return true
 		}
 	}
@@ -1402,11 +1402,11 @@ func (s *Scheduler) QueuePendingCount() int {
 
 // queueItemRemoteRunID returns the RemoteRunID for a queued issue, or "" when not found.
 // Used by runPipeline to prefer platform-assigned run IDs over locally-generated ones (#3557).
-func (s *Scheduler) queueItemRemoteRunID(issueNumber int) string {
+func (s *Scheduler) queueItemRemoteRunID(repo string, issueNumber int) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, item := range s.queue {
-		if item.IssueNumber == issueNumber {
+		if item.Repo == repo && item.IssueNumber == issueNumber {
 			return item.RemoteRunID
 		}
 	}
@@ -1789,7 +1789,7 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		// Skip if already in queue (e.g., re-enqueued individually after a
 		// prior failure). Without this, the same issue can be dequeued into
 		// multiple concurrent slots — causing duplicate runs.
-		if s.queueContainsUnlocked(si.Number) {
+		if s.queueContainsUnlocked(subIssueRepo, si.Number) {
 			log.Printf("EnqueueEpic: skipping sub-issue #%d — already in queue", si.Number)
 			epicOrder++
 			continue
@@ -2483,7 +2483,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// from the platform command payload (for remote-triggered runs); fall back
 	// to the locally-generated UUID v7 from runstate.
 	{
-		remoteRunID := s.queueItemRemoteRunID(item.Number)
+		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
 		if remoteRunID != "" {
 			runtime.RunID = remoteRunID
 		} else {
