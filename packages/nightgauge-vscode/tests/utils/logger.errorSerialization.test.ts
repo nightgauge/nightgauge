@@ -105,4 +105,19 @@ describe("Logger — Error serialization in formatMessage", () => {
     expect(logged).toContain("info error");
     expect(logged).not.toContain('"err":{}');
   });
+
+  it("redacts secrets in messages, nested fields, and error stacks before OutputChannel", () => {
+    const githubToken = `ghp_${"a".repeat(24)}`;
+    const geminiKey = `AIza${"b".repeat(35)}`;
+    const err = new Error(`Authorization: Bearer ${"c".repeat(24)}`);
+    logger.error(`failed with ${githubToken}`, { geminiKey, err });
+
+    const logged = mockAppendLine.mock.calls[0][0] as string;
+    expect(logged).not.toContain(githubToken);
+    expect(logged).not.toContain(geminiKey);
+    expect(logged).not.toContain("c".repeat(24));
+    expect(logged).toContain("[REDACTED:GH_TOKEN]");
+    expect(logged).toContain("[REDACTED:GEMINI_KEY]");
+    expect(logged).toContain("Bearer [REDACTED]");
+  });
 });

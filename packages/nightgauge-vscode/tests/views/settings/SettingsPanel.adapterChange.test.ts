@@ -92,6 +92,7 @@ vi.mock("../../../src/utils/logger", () => ({
 }));
 
 import { SettingsPanel } from "../../../src/views/settings/SettingsPanel";
+import * as vscode from "vscode";
 
 describe("SettingsPanel adapter change handling", () => {
   beforeEach(() => {
@@ -114,5 +115,41 @@ describe("SettingsPanel adapter change handling", () => {
     panel.handleChange("ui.core.adapter", "lm-studio");
 
     expect(refreshLmStudioModels).not.toHaveBeenCalled();
+  });
+
+  it("keeps merged-view saves in config.local.yaml after tiers load", async () => {
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    await panel.loadAllTiers();
+    panel.handleChange("project.number", 8);
+
+    await panel.handleSave();
+
+    expect(panel.yamlService.writeLocal).toHaveBeenCalledOnce();
+    expect(panel.yamlService.write).not.toHaveBeenCalled();
+    expect(panel.tierState.defaultEditTier).toBe("local");
+  });
+
+  it("preserves dirty edits when an external config change is kept", async () => {
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Keep My Edits" as never);
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    panel.handleChange("project.number", 8);
+    const load = vi.spyOn(panel, "loadAllTiers");
+
+    await panel.handleExternalConfigChange();
+
+    expect(load).not.toHaveBeenCalled();
+    expect(panel.hasUnsavedChanges).toBe(true);
+  });
+
+  it("reloads only after explicit confirmation and clears dirty state", async () => {
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Reload from Disk" as never);
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    panel.handleChange("project.number", 8);
+    const load = vi.spyOn(panel, "loadAllTiers");
+
+    await panel.handleExternalConfigChange();
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(panel.hasUnsavedChanges).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import {
 } from "../../utils/log-file-writer";
 import type { PipelineLogsConfig } from "../settings/types";
 import type { ContentType } from "./contentFormatter";
+import { redactSecrets } from "../../utils/redaction";
 
 /**
  * Execution mode for the output window
@@ -521,6 +522,13 @@ export class OutputWindowState {
       slotIndex?: number;
     }
   ): OutputEntry {
+    // Sanitize before constructing the retained entry. Output entries are
+    // serialized into workspace state and rendered in the WebView; disk
+    // logging receives the same sanitized values.
+    text = redactSecrets(text);
+    if (options?.details !== undefined) {
+      options = { ...options, details: redactSecrets(options.details) };
+    }
     // #307: an entry's per-run identity (issue number, and below, the disk log
     // root) is bound to the OWNING slot — the explicit `options.slotIndex`
     // captured at stage spawn — never to a shared mutable "current". A slot's

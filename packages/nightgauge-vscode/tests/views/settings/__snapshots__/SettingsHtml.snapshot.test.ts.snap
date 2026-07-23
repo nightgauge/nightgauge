@@ -910,9 +910,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
           <span class="codicon codicon-discard"></span>
           Reset
         </button>
-        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
+        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to Local
         </button>
       </div>
     </header>
@@ -5094,9 +5094,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
           <span class="codicon codicon-discard"></span>
           Reset
         </button>
-        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
+        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to ~/.nightgauge/config.yaml">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to Current Tier
         </button>
       </div>
     </header>
@@ -9260,9 +9260,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
           <span class="codicon codicon-discard"></span>
           Reset
         </button>
-        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
+        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to Current Tier
         </button>
       </div>
     </header>
@@ -13426,9 +13426,9 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
           <span class="codicon codicon-discard"></span>
           Reset
         </button>
-        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
+        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to Local
         </button>
       </div>
     </header>
@@ -17612,7 +17612,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to Current Tier
         </button>
       </div>
     </header>

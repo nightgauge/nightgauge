@@ -5,6 +5,7 @@
  */
 
 import * as vscode from "vscode";
+import { redactSecrets } from "./redaction";
 
 /**
  * Log levels for structured logging
@@ -47,7 +48,7 @@ export class Logger {
           return value;
         })}`
       : "";
-    return `[${timestamp}] [${level}] ${message}${dataStr}`;
+    return redactSecrets(`[${timestamp}] [${level}] ${message}${dataStr}`);
   }
 
   /**

@@ -17,6 +17,7 @@
  *   - Token prefixes: ghp_, gho_, ghs_, ghr_, github_pat_, sk-, sk_live_,
  *     sk_test_, xox[bpars]-, AKIA…, ASIA…, glpat-… (GitLab PAT)
  *   - JWTs (three base64url segments separated by dots, length-bounded)
+ *   - Bearer credentials, Gemini API keys, and webhook URLs
  *   - "...KEY=…", "...TOKEN=…", "...SECRET=…", "...PASSWORD=…" assignments
  *
  * @see Issue #170 - Harden session-log writer with redaction
@@ -37,6 +38,15 @@ export function redactSecrets(input: string): string {
   s = s.replace(/\bsk_(?:live|test)_[A-Za-z0-9]{16,}/g, "[REDACTED:STRIPE_KEY]");
   s = s.replace(/\bxox[bpars]-[A-Za-z0-9-]{10,}/g, "[REDACTED:SLACK_TOKEN]");
   s = s.replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g, "[REDACTED:AWS_ACCESS_KEY]");
+  s = s.replace(/\bAIza[A-Za-z0-9_-]{30,}\b/g, "[REDACTED:GEMINI_KEY]");
+
+  // Authorization headers and webhook URLs often do not use a distinctive
+  // token prefix. Keep the scheme visible while removing the credential.
+  s = s.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, "Bearer [REDACTED]");
+  s = s.replace(
+    /https:\/\/(?:discord(?:app)?\.com\/api\/webhooks|hooks\.slack\.com\/services|[^\s/]+\/hooks)\/[^\s"'<>]+/gi,
+    "[REDACTED:WEBHOOK_URL]"
+  );
 
   // JWTs — header.payload.signature, base64url
   s = s.replace(
