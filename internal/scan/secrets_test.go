@@ -46,6 +46,24 @@ func TestRunSecretsScan_GenericKeyValuePositive(t *testing.T) {
 	}
 }
 
+func TestRunSecretsScan_UnquotedYAMLAndKnownGitHubTokens(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", "github_auth:\n  token: ghp_1234567890abcdefghijklmn\n")
+	res := runSecretsScan(t, dir)
+	if res.Patterns[patternGenericKV] != 1 {
+		t.Errorf("generic_kv = %d, want 1 for unquoted YAML token", res.Patterns[patternGenericKV])
+	}
+}
+
+func TestRunSecretsScan_EnvReferenceIsNotSecret(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "config.yaml", "github_auth:\n  token: env:GITHUB_TOKEN_NIGHTGAUGE\n")
+	res := runSecretsScan(t, dir)
+	if res.Patterns[patternGenericKV] != 0 {
+		t.Errorf("generic_kv = %d, want 0 for env reference", res.Patterns[patternGenericKV])
+	}
+}
+
 // FP filter should suppress matches that include the literal "example",
 // matching the SKILL.md `grep -vE '(example|placeholder|...)'` step.
 func TestRunSecretsScan_GenericKeyValueFalsePositiveFiltered(t *testing.T) {
