@@ -9359,14 +9359,24 @@ func authCmd() *cobra.Command {
 	return cmd
 }
 
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func authCheckCmd() *cobra.Command {
 	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Validate GitHub token scopes for pipeline operations",
 		Long: `Validates the configured GitHub token has the required OAuth scopes
-for pipeline operations (repo, project, read:org) and reports the authenticated
-user and their organisation memberships.
+for pipeline operations (repo, project) and reports the authenticated user and
+their organisation memberships. read:org is recommended for complete private
+organisation membership discovery, but is not a pipeline-blocking requirement.
 
 Resolution methods checked in order:
   1. GITHUB_TOKEN environment variable
@@ -9417,6 +9427,9 @@ Resolution methods checked in order:
 			}
 			if info.Valid {
 				fmt.Println("Status             : OK — all required scopes present")
+				if !containsString(info.Scopes, "read:org") {
+					fmt.Println("Advisory           : read:org is absent; private organisation membership discovery may be incomplete")
+				}
 			} else {
 				fmt.Printf("Status             : INSUFFICIENT — missing scopes: %s\n", strings.Join(info.MissingScopes, ", "))
 				fmt.Println("Tip: generate a new token at https://github.com/settings/tokens with the required scopes.")

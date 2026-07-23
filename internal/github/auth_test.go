@@ -166,6 +166,35 @@ func TestCheckTokenScopes_MissingProject(t *testing.T) {
 	}
 }
 
+func TestCheckTokenScopes_ReadOrgIsAdvisory(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "repo, project")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	})
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"login": "octocat"})
+	})
+	mux.HandleFunc("/user/orgs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]string{{"login": "nightgauge"}})
+	})
+
+	c, _ := newTestServerWithHandlers(t, mux)
+	info, err := c.CheckTokenScopes(context.Background())
+	if err != nil {
+		t.Fatalf("CheckTokenScopes: %v", err)
+	}
+	if !info.Valid {
+		t.Fatalf("expected repo+project token to remain valid, missing=%v", info.MissingScopes)
+	}
+	if len(info.MissingScopes) != 0 {
+		t.Fatalf("expected no missing required scopes, got %v", info.MissingScopes)
+	}
+}
+
 func TestCheckTokenScopes_Unauthorized(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/rate_limit", func(w http.ResponseWriter, r *http.Request) {

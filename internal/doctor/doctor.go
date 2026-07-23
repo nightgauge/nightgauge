@@ -133,6 +133,9 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				hasRequiredFailure = true
 			} else {
 				result.Checks["scopes"] = CheckItem{OK: true, Detail: strings.Join(scopeInfo.Scopes, ", ")}
+				if !containsScope(scopeInfo.Scopes, "read:org") {
+					warnings = append(warnings, "GitHub token does not include read:org; private organisation membership discovery may be incomplete")
+				}
 			}
 		}
 
@@ -231,6 +234,15 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	}
 
 	return result
+}
+
+func containsScope(scopes []string, expected string) bool {
+	for _, scope := range scopes {
+		if scope == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // checkBinary reports whether the `nightgauge` binary is reachable via PATH.
