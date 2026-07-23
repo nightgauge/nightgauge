@@ -166,7 +166,7 @@ function setExistsForAdapter(adapter: "gemini" | "gemini-sdk" | "copilot" | "lm-
   vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
     const filePath = String(p);
     if (filePath.includes("SKILL.md") || filePath.includes("skills/")) return true;
-    if (filePath.includes("run-stage.sh")) return true;
+    if (filePath.includes("sdk-cli.cjs")) return true;
     if (filePath.includes("nightgauge-sdk/dist/cli/index.js")) return true;
     if (
       filePath.endsWith("/node") ||
@@ -291,15 +291,19 @@ describe("gemini-sdk adapter — agentic gate bars pipeline dispatch (#57)", () 
   });
 
   // gemini-sdk is chat-completion-only (no tool loop): the agentic gate
-  // rejects it as primary and the fallback walker lands on an agentic
-  // adapter — the gemini-sdk model env is never stamped. Performance-mode
-  // wiring for it died with the gate (previously asserted here).
-  it("never dispatches gemini-sdk: fallback adapter spawns without NIGHTGAUGE_GEMINI_MODEL", () => {
+  // Explicit provider selections fail closed unless the user configures a
+  // fallback chain. A chat-only adapter must not silently become billable
+  // work on another provider.
+  it("fails closed without silently dispatching another provider", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+    const onError = vi.fn();
 
-    runStageSkillHeadless("pr-create", 42, {});
+    runStageSkillHeadless("pr-create", 42, { onError });
 
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBeUndefined();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("chat-completion-only") })
+    );
   });
 });
 
@@ -354,14 +358,16 @@ describe("lm-studio adapter — agentic gate bars pipeline dispatch (#57)", () =
   });
 
   // lm-studio is chat-completion-only: the agentic gate rejects it as
-  // primary and the fallback walker lands on an agentic adapter — the
-  // local-model env is never stamped and the perf-mode mismatch warning
-  // path is unreachable (previously asserted here).
-  it("never dispatches lm-studio: fallback adapter spawns without the local model env", () => {
+  // primary and fails closed unless the user explicitly configured fallback.
+  it("fails closed without silently dispatching another provider", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+    const onError = vi.fn();
 
-    runStageSkillHeadless("feature-dev", 42, {});
+    runStageSkillHeadless("feature-dev", 42, { onError });
 
-    expect(lastSpawnEnv().NIGHTGAUGE_LM_STUDIO_MODEL).toBeUndefined();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("chat-completion-only") })
+    );
   });
 });

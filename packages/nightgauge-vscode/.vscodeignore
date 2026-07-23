@@ -17,6 +17,11 @@ test-results/**
 playwright.config.ts
 vitest.config.ts
 
+# Runtime/test state is never part of a distributable extension. Tests may
+# create this directory under the package cwd; excluding it prevents local
+# pipeline context, retrospectives, and issue metadata from leaking into a VSIX.
+.nightgauge/**
+
 # Documentation (keep README for marketplace)
 CHANGELOG.md
 

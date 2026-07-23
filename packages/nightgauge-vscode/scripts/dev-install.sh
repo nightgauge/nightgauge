@@ -93,6 +93,7 @@ echo "==> Building..."
 # leaving ExtensionStalenessService unable to read provenance after install.
 # Issue #3650 (Part B): make the stamp's presence in the .vsix non-negotiable.
 npm run build
+"$SCRIPT_DIR/check-runtime-assets.sh" "$PKG_DIR/dist"
 
 # Stamp build provenance into dist/build-info.json so ExtensionStalenessService
 # (Issue #3300) can compare what's running against the workspace HEAD at runtime
@@ -163,6 +164,7 @@ if [[ -z "$VSIX" ]]; then
   echo "ERROR: No .vsix file found after build."
   exit 1
 fi
+"$SCRIPT_DIR/check-runtime-assets.sh" "$VSIX"
 
 # Clean up old extension versions before installing the new one.
 # VSCode keeps every prior version on disk; they accumulate quickly with dev builds.
@@ -178,6 +180,10 @@ fi
 echo "==> Installing $VSIX..."
 code --install-extension "$VSIX" --force
 
+# VSCode installs the artifact under its versioned extension directory.
+INSTALLED_VERSION="$DEV_VERSION"
+INSTALLED_DIR="${EXT_DIR}/${EXT_PREFIX}${INSTALLED_VERSION}"
+
 # Fail-loud assertion: after install, the installed extension directory MUST
 # contain dist/build-info.json. Pre-#3650 the script silently allowed the
 # stamp to go missing (build pipeline rewrite, vsce ignore rule, etc.) which
@@ -187,8 +193,6 @@ code --install-extension "$VSIX" --force
 if [ "${SKIP_BUILD_INFO:-0}" != "1" ]; then
   # Pick the version we just installed — VSCode lays out
   # ~/.vscode/extensions/<publisher>.<name>-<version>/dist/build-info.json.
-  INSTALLED_VERSION="$DEV_VERSION"
-  INSTALLED_DIR="${EXT_DIR}/${EXT_PREFIX}${INSTALLED_VERSION}"
   if [ ! -d "$INSTALLED_DIR" ]; then
     echo "ERROR: Installed extension directory not found at:"
     echo "       $INSTALLED_DIR"
@@ -203,6 +207,12 @@ if [ "${SKIP_BUILD_INFO:-0}" != "1" ]; then
     exit 1
   fi
   echo "==> Verified: $INSTALLED_DIR/dist/build-info.json"
+fi
+
+if ! "$SCRIPT_DIR/check-runtime-assets.sh" "$INSTALLED_DIR/dist"; then
+  echo "ERROR: installed extension is missing a required runtime asset:"
+  echo "       $INSTALLED_DIR"
+  exit 1
 fi
 
 # ---------------------------------------------------------------------------

@@ -298,14 +298,13 @@ describe("validateAdapterPrerequisites — copilot", () => {
     );
   });
 
-  it("returns error when run-stage.sh is not found", () => {
-    // Skill file exists but run-stage.sh does not
+  it("returns error when the packaged SDK CLI is not found", () => {
     vi.mocked(fs.existsSync).mockImplementation((p: unknown) => {
       const filePath = String(p);
       if (filePath.includes("SKILL.md") || filePath.includes("skills/")) {
         return true;
       }
-      if (filePath.includes("run-stage.sh")) return false;
+      if (filePath.includes("sdk-cli.cjs")) return false;
       return false;
     });
     vi.mocked(fs.readFileSync).mockReturnValue(MOCK_SKILL_CONTENT);
@@ -317,7 +316,7 @@ describe("validateAdapterPrerequisites — copilot", () => {
 
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("Unified stage runner not found"),
+        message: expect.stringContaining("Packaged Nightgauge SDK CLI not found"),
       })
     );
   });
@@ -389,7 +388,7 @@ describe("validateAdapterPrerequisites — copilot", () => {
 
     expect(onError).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("built Nightgauge SDK CLI"),
+        message: expect.stringContaining("Packaged Nightgauge SDK CLI"),
       })
     );
   });

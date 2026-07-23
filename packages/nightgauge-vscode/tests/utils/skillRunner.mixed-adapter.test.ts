@@ -9,7 +9,7 @@
  *   1. Each stage calls `resolveStageAdapter(stage)` (per-stage dispatch),
  *      not the prior global lookup.
  *   2. Stage A (claude) spawn args match the Claude CLI shape (`claude -p ...`).
- *   3. Stage B (gemini) spawn args match `scripts/run-stage.sh gemini ...`.
+ *   3. Stage B (gemini) spawns the packaged SDK CLI.
  *   4. MCP tool resolution runs fresh per stage (no leakage across the
  *      adapter switch — `_perStageMcpTools` regression check).
  *   5. onComplete reports `adapterDecision` with `adapter` + `source` per stage.
@@ -208,14 +208,14 @@ allowed-tools: Read Write Edit Bash
     );
   });
 
-  it("AC #3 — gemini stage spawns scripts/run-stage.sh with gemini and stage args", () => {
+  it("AC #3 — gemini stage spawns the packaged SDK CLI with stage args", () => {
     const proc = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(proc);
     runStageSkillHeadless("feature-dev", 42, {});
 
     const [cmd, args] = vi.mocked(spawn).mock.calls[0];
-    expect(String(cmd)).toContain("scripts/run-stage.sh");
-    expect(args).toEqual(["gemini", "feature-dev", "42"]);
+    expect(cmd).toBe("node");
+    expect(args).toEqual(expect.arrayContaining(["stage", "feature-dev", "42"]));
   });
 
   it("AC #3 — gemini stage env carries NIGHTGAUGE_ADAPTER=gemini and gemini config", () => {
