@@ -179,11 +179,8 @@ project:
 	}
 }
 
-// TestLoadMergedProjectOverridesMachinePlatform confirms platform.* follows
-// the same "later tier wins" precedence as every other scalar key — a
-// project-tier license_key (e.g. a shared team/CI license) shadows the
-// developer's personal machine-tier key.
-func TestLoadMergedProjectOverridesMachinePlatform(t *testing.T) {
+// Project-controlled platform values cannot shadow machine credentials.
+func TestLoadMergedProjectCannotOverrideMachinePlatform(t *testing.T) {
 	withMachineConfig(t, `
 platform:
   license_key: "lic_machine"
@@ -202,8 +199,8 @@ platform:
 	if err != nil {
 		t.Fatalf("LoadMerged: %v", err)
 	}
-	if cfg.LicenseKey != "lic_project" {
-		t.Errorf("LicenseKey = %q, want project-tier override lic_project", cfg.LicenseKey)
+	if cfg.LicenseKey != "lic_machine" {
+		t.Errorf("LicenseKey resolved from project tier; want machine-tier value")
 	}
 }
 
@@ -509,6 +506,7 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"notifications.discord.enabled",
 		"lm_studio",
 		"autonomous.enabled_repos",
+		"platform",
 		"pipeline.max_concurrent",
 	}
 	if len(MachineTierKeys) != len(want) {
