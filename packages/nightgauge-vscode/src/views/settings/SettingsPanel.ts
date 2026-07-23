@@ -132,6 +132,8 @@ export class SettingsPanel implements vscode.Disposable {
   // the Global tab is active so machine-tier keys (e.g. the license key) can be
   // saved through the UI (#3997).
   private globalConfig: IncrediConfig = {};
+  private hasUnsavedChanges = false;
+  private externalReloadPrompt: Promise<void> | null = null;
 
   // Callback fired after a runtime-tier write changes pipeline.max_concurrent
   // (Phase 3 of #3313 / #3336). The bootstrap wires this to push the new
@@ -178,10 +180,8 @@ export class SettingsPanel implements vscode.Disposable {
     });
 
     // Subscribe to file changes - reload all tiers
-    const fileChangeDisposable = this.yamlService.onDidChange(async () => {
-      await this.loadAllTiers();
-      this.updatePanel();
-      vscode.window.showInformationMessage("Nightgauge settings reloaded from file");
+    const fileChangeDisposable = this.yamlService.onDidChange(() => {
+      void this.handleExternalConfigChange();
     });
     this.disposables.push(fileChangeDisposable);
     this.disposables.push(this.yamlService);
@@ -344,7 +344,9 @@ export class SettingsPanel implements vscode.Disposable {
     // Update tier state
     this.tierState = {
       currentTier: this.tierState.currentTier, // Preserve current view
-      defaultEditTier: "project",
+      // Merged-view edits are personal overrides. Project/team writes require
+      // explicitly selecting the Project tab.
+      defaultEditTier: this.tierState.defaultEditTier,
       hasGlobalConfig: this.mergeResult.tiers.hasGlobal,
       hasLocalConfig: this.mergeResult.tiers.hasLocal,
       hasProjectConfig: this.mergeResult.tiers.hasProject,
@@ -559,6 +561,7 @@ export class SettingsPanel implements vscode.Disposable {
     ) {
       this.removeConfigValue(config, path);
       this.removeConfigValue(this.currentConfig, path);
+      this.hasUnsavedChanges = true;
       return;
     }
 
@@ -567,11 +570,13 @@ export class SettingsPanel implements vscode.Disposable {
     if (path === "platform.tier_override" && (coerced === "" || coerced === undefined)) {
       this.removeConfigValue(config, path);
       this.removeConfigValue(this.currentConfig, path);
+      this.hasUnsavedChanges = true;
       return;
     }
 
     setConfigValue(config, path, coerced);
     setConfigValue(this.currentConfig, path, coerced);
+    this.hasUnsavedChanges = true;
   }
 
   /**
@@ -592,6 +597,7 @@ export class SettingsPanel implements vscode.Disposable {
     const nextList = [...currentList, value];
     setConfigValue(config, path, nextList);
     setConfigValue(this.currentConfig, path, nextList);
+    this.hasUnsavedChanges = true;
     this.updatePanel();
   }
 
@@ -614,6 +620,7 @@ export class SettingsPanel implements vscode.Disposable {
     newList.splice(index, 1);
     setConfigValue(config, path, newList);
     setConfigValue(this.currentConfig, path, newList);
+    this.hasUnsavedChanges = true;
     this.updatePanel();
   }
 
@@ -683,6 +690,7 @@ export class SettingsPanel implements vscode.Disposable {
     }
 
     if (result.success) {
+      this.hasUnsavedChanges = false;
       // Route tier-3 keys to the runtime store. Failures are logged but do
       // not fail the save — the YAML write already persisted everything else.
       if (tier3Captured.size > 0 && this.runtimeStateStore) {
@@ -763,6 +771,42 @@ export class SettingsPanel implements vscode.Disposable {
       this.panel?.webview.postMessage(createErrorMessage(result.error ?? "Save failed"));
       vscode.window.showErrorMessage(`Failed to save settings: ${result.error}`);
     }
+  }
+
+  /**
+   * Protect in-panel edits from file-watcher reloads. Multiple watcher events
+   * from one atomic save share one prompt. Keeping edits leaves the working
+   * copies untouched; explicit reload is the only destructive choice.
+   */
+  private async handleExternalConfigChange(): Promise<void> {
+    if (!this.hasUnsavedChanges) {
+      await this.loadAllTiers();
+      this.updatePanel();
+      vscode.window.showInformationMessage("Nightgauge settings reloaded from file");
+      return;
+    }
+    if (this.externalReloadPrompt) return this.externalReloadPrompt;
+
+    this.externalReloadPrompt = (async () => {
+      const choice = await vscode.window.showWarningMessage(
+        "Nightgauge settings changed on disk while this panel has unsaved edits.",
+        { modal: true },
+        "Keep My Edits",
+        "Reload from Disk"
+      );
+      if (choice === "Reload from Disk") {
+        this.hasUnsavedChanges = false;
+        await this.loadAllTiers();
+        this.updatePanel();
+      } else {
+        vscode.window.showInformationMessage(
+          "Kept your unsaved Nightgauge settings. Save when ready to apply them."
+        );
+      }
+    })().finally(() => {
+      this.externalReloadPrompt = null;
+    });
+    return this.externalReloadPrompt;
   }
 
   /**

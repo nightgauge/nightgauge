@@ -3971,6 +3971,14 @@ export function getSettingsHtml(
   // Determine if settings should be disabled
   const currentTierConfig = TIER_TABS.find((t) => t.id === effectiveTierState.currentTier);
   const isTierReadOnly = currentTierConfig ? !currentTierConfig.editable : false;
+  const saveDestination =
+    effectiveTierState.currentTier === "merged"
+      ? ".nightgauge/config.local.yaml"
+      : effectiveTierState.currentTier === "local"
+        ? ".nightgauge/config.local.yaml"
+        : effectiveTierState.currentTier === "global"
+          ? "~/.nightgauge/config.yaml"
+          : ".nightgauge/config.yaml";
 
   // Show badges only in merged view
   const showBadges = effectiveTierState.currentTier === "merged";
@@ -4023,9 +4031,9 @@ export function getSettingsHtml(
           <span class="codicon codicon-discard"></span>
           Reset
         </button>
-        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
+        <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to ${saveDestination}">
           <span class="codicon codicon-save"></span>
-          Save
+          Save to ${effectiveTierState.currentTier === "merged" ? "Local" : "Current Tier"}
         </button>
       </div>
     </header>
