@@ -233,12 +233,12 @@ EOF
 
 Some settings make more sense at the global level, others at the project level:
 
-| Setting               | Best At | Reason                                    |
-| --------------------- | ------- | ----------------------------------------- |
-| `pr.merge_strategy`   | Project | Team merge policy                         |
-| `pr.reviewers`        | Project | Team-specific                             |
-| `project.number`      | Project | Repo-specific project board               |
-| `branch.base`         | Project | Repo-specific (main vs master vs develop) |
+| Setting               | Best At | Reason                                      |
+| --------------------- | ------- | ------------------------------------------- |
+| `pr.merge_strategy`   | Project | Team merge policy                           |
+| `pr.reviewers`        | Project | Team-specific                               |
+| `project.number`      | Project | Repo-specific project board                 |
+| `branch.base`         | Project | Repo-specific (main vs master vs develop)   |
 | `human_in_the_loop.*` | Project | Team trust posture (local override allowed) |
 
 ### Viewing Effective Configuration
