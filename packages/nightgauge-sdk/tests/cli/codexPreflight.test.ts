@@ -307,6 +307,7 @@ describe("codexPreflight", () => {
       "codex --version": CODEX_VERSION_OK,
       "codex login status": { code: 0 },
       "gh auth status": { code: 0 },
+      "gh api rate_limit": { code: 0 },
       "git branch --show-current": { code: 0, stdout: "feat/docs\n" },
       "git status --porcelain": { code: 0, stdout: "" },
     });
@@ -329,9 +330,7 @@ describe("codexPreflight", () => {
 
     await expect(
       runCodexPreflightChecks({ cwd, runner, requiredDocs: ["docs/README.md"] })
-    ).rejects.toThrow(
-      /missing required documentation prerequisites/
-    );
+    ).rejects.toThrow(/missing required documentation prerequisites/);
   });
 
   it("should detect codex adapter mode from env", () => {
