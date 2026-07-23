@@ -50,12 +50,8 @@ import type { ForgeListEntry, TierAuditEntry } from "../../services/IpcClientBas
 const TIER_3_KEY_PATHS = new Set<string>(["pipeline.max_concurrent"]);
 
 /**
- * Dotted-path config keys that are credentials mirrored to VSCode SecretStorage
- * (OS keychain) on save. `platform.license_key` is ALSO a machine-tier key
- * (see `MACHINE_TIER_KEY_PATHS`) so it persists to
- * `~/.nightgauge/config.yaml` too; the SecretStorage mirror keeps the
- * SecretStorage-first runtime readers (LicensePreflight, forwardPlatformEnv)
- * in sync (#3997).
+ * Dotted-path credentials persisted only to VSCode SecretStorage (OS keychain).
+ * They are removed from the working copies before any YAML tier is written.
  */
 const SECRET_KEY_PATHS = new Set<string>(["platform.license_key"]);
 
@@ -644,15 +640,16 @@ export class SettingsPanel implements vscode.Disposable {
       }
     }
 
-    // Capture secret values (e.g. the license key) BEFORE any stripping so we
-    // can mirror them to SecretStorage. The mirror keeps the SecretStorage-first
-    // runtime readers in sync; the values still persist to the machine YAML via
-    // the machine-tier routing below (#3997). Captured even when empty so a
-    // cleared key clears the keychain entry too.
+    // Capture secret values before stripping them from every YAML tier. An
+    // empty value clears the keychain entry.
     const secretsCaptured = new Map<string, string>();
     for (const secretPath of SECRET_KEY_PATHS) {
       const value = getConfigValue(config, secretPath);
       secretsCaptured.set(secretPath, value === undefined ? "" : String(value));
+      this.removeConfigValue(config, secretPath);
+      this.removeConfigValue(this.currentConfig, secretPath);
+      this.removeConfigValue(this.globalConfig, secretPath);
+      this.removeConfigValue(this.projectConfig, secretPath);
     }
 
     // When editing the Global tab, the working config IS the machine YAML and

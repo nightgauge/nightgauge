@@ -26,6 +26,28 @@ export interface MigrationResult {
   error?: string;
 }
 
+/** Move the historical plaintext Gemini setting into OS-backed storage. */
+export async function migrateLegacyGeminiApiKey(secretStore: {
+  setApiKey(name: "gemini", value: string): Promise<void>;
+}): Promise<void> {
+  const config = vscode.workspace.getConfiguration("nightgauge");
+  const inspected = config.inspect<string>("gemini.apiKey");
+  const value =
+    inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue;
+  if (value) await secretStore.setApiKey("gemini", value);
+  for (const target of [
+    vscode.ConfigurationTarget.WorkspaceFolder,
+    vscode.ConfigurationTarget.Workspace,
+    vscode.ConfigurationTarget.Global,
+  ]) {
+    try {
+      await config.update("gemini.apiKey", undefined, target);
+    } catch {
+      // A scope can be unavailable when no folder/workspace is open.
+    }
+  }
+}
+
 /**
  * Migrate legacy config file to new location
  *
