@@ -26,7 +26,60 @@ func Cmd() *cobra.Command {
 	cmd.AddCommand(doctorCmd())
 	cmd.AddCommand(syncPayloadCmd())
 	cmd.AddCommand(reposFromProjectCmd())
+	cmd.AddCommand(projectsForRepoCmd())
 	cmd.AddCommand(provisionBoardSyncCmd())
+	return cmd
+}
+
+type linkedProjectJSON struct {
+	ID     string `json:"id"`
+	Owner  string `json:"owner"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+}
+
+func projectsForRepoCmd() *cobra.Command {
+	var owner, repo string
+	cmd := &cobra.Command{
+		Use:   "projects-for-repo",
+		Short: "List GitHub ProjectV2 boards linked to a repository",
+		Long: `projects-for-repo returns linked ProjectV2 boards as discovery
+candidates. A caller must explicitly choose a default when multiple projects
+are returned; repository linkage alone does not define Nightgauge routing.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			wd, err := os.Getwd()
+			if err != nil {
+				return fmt.Errorf("projects-for-repo: getwd: %w", err)
+			}
+			cfg, cfgErr := config.Load(wd)
+			if owner == "" && cfgErr == nil && cfg != nil {
+				owner = cfg.Owner
+			}
+			if repo == "" && cfgErr == nil && cfg != nil {
+				repo = cfg.DefaultRepo
+			}
+			if owner == "" || repo == "" {
+				return fmt.Errorf("projects-for-repo: --owner and --repo are required (or configure both)")
+			}
+			client, err := gh.NewClient()
+			if err != nil {
+				return fmt.Errorf("projects-for-repo: create client: %w", err)
+			}
+			refs, err := gh.FetchRepositoryLinkedProjects(cmd.Context(), client, owner, repo)
+			if err != nil {
+				return fmt.Errorf("projects-for-repo: %w", err)
+			}
+			out := make([]linkedProjectJSON, 0, len(refs))
+			for _, ref := range refs {
+				out = append(out, linkedProjectJSON(ref))
+			}
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(out)
+		},
+	}
+	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner")
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name")
 	return cmd
 }
 

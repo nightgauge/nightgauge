@@ -20,6 +20,7 @@ import type { TierAuditEntry } from "../../services/IpcClientBase";
 import { modelSupportsEffort } from "../../utils/incrediConfig";
 import type { DefaultModel } from "../../utils/incrediConfig";
 import { CODEX_DEFAULT_BASE_MODEL } from "@nightgauge/sdk";
+import type { RepositoryProjectSettingsState } from "../../services/RepositoryProjectSettingsService";
 
 /**
  * Pre-computed mode-aware preview row supplied by `SettingsPanel`.
@@ -63,6 +64,8 @@ export interface SettingsHtmlOptions {
   tierAuditEntries?: TierAuditEntry[];
   /** Whether the drift banner has been dismissed this session. */
   driftBannerDismissed?: boolean;
+  /** Repository-aware GitHub Project assignments and linked-project discovery. */
+  repositoryProjects?: RepositoryProjectSettingsState;
 }
 
 /**
@@ -769,22 +772,106 @@ function getProjectSectionHtml(
 ): string {
   const project = config.project ?? {};
   const g = (path: string) => getSourceForPath(path, sources);
+  const routing = options?.repositoryProjects;
+  const repositoryOptions = routing?.repositories ?? [];
+  const selected = routing?.selectedRepository ?? "";
+  const assignments = routing?.assignments ?? [];
+  const linkedNumbers = new Set((routing?.linkedProjects ?? []).map((entry) => entry.number));
+  const unassignedLinked = (routing?.linkedProjects ?? []).filter(
+    (entry) => !assignments.some((assignment) => assignment.number === entry.number)
+  );
+  const repositoryRoutingHtml = routing
+    ? `
+      <div class="subsection project-routing">
+        <h4 class="subsection-title">Repository project routing</h4>
+        <p class="section-note">Choose a repository, then assign one or more linked GitHub Projects. Exactly one assignment is the default board for pipeline status reads. GitHub linkage is discovery input and is never silently persisted.</p>
+        <div class="setting-row">
+          <div class="setting-info">
+            <label class="setting-label" for="project-repository-selector">Repository</label>
+            <p class="setting-description">Project assignments below apply only to this repository.</p>
+          </div>
+          <div class="setting-control">
+            <select id="project-repository-selector" class="select-input project-repository-selector" ${disabled ? "disabled" : ""}>
+              ${repositoryOptions
+                .map(
+                  (entry) =>
+                    `<option value="${escapeHtml(entry.name)}" ${entry.name === selected ? "selected" : ""}>${escapeHtml(`${entry.owner}/${entry.repo}`)}</option>`
+                )
+                .join("")}
+            </select>
+          </div>
+        </div>
+        <div class="project-assignment-list">
+          ${
+            assignments.length
+              ? assignments
+                  .map(
+                    (entry) => `
+              <div class="setting-row project-assignment-row">
+                <div class="setting-info">
+                  <span class="setting-label">${escapeHtml(entry.name)} · #${entry.number}
+                    <span class="tier-badge tier-badge-ux">${entry.source === "team" ? "Team" : "You"}</span>
+                    ${entry.default ? '<span class="tier-badge tier-badge-ux">Default</span>' : ""}
+                    ${linkedNumbers.has(entry.number) ? '<span class="tier-badge tier-badge-ux">Linked</span>' : ""}
+                  </span>
+                  <p class="setting-description">${entry.default ? "Primary board for status reads and pipeline actions." : "Additional synchronization board."}</p>
+                </div>
+                <div class="setting-control">
+                  ${
+                    entry.default
+                      ? ""
+                      : `<button class="inline-action-btn" data-action="project-set-default" data-project-number="${entry.number}" ${disabled ? "disabled" : ""}>Make default</button>`
+                  }
+                  <button class="inline-action-btn" data-action="project-remove" data-project-number="${entry.number}" ${disabled ? "disabled" : ""}>Remove</button>
+                </div>
+              </div>`
+                  )
+                  .join("")
+              : `<p class="section-note">No explicit project assignment for this repository.${
+                  routing.discovery === "ready" && unassignedLinked.length === 1
+                    ? ` GitHub links one candidate: ${escapeHtml(unassignedLinked[0].title)} (#${unassignedLinked[0].number}). Accept it below to persist the assignment.`
+                    : ""
+                }</p>`
+          }
+        </div>
+        <div class="inline-action-bar">
+          <button class="inline-action-btn" data-action="project-add-linked" ${disabled || unassignedLinked.length === 0 ? "disabled" : ""}>Add linked project${unassignedLinked.length ? ` (${unassignedLinked.length})` : ""}</button>
+          <button class="inline-action-btn" data-action="project-add-number" ${disabled || !selected ? "disabled" : ""}>Add by number</button>
+          <button class="inline-action-btn" data-action="project-refresh-linked" ${!selected ? "disabled" : ""}>Refresh linked projects</button>
+        </div>
+        ${
+          routing.discovery === "loading"
+            ? '<p class="section-note">Discovering linked GitHub Projects…</p>'
+            : routing.discovery === "unavailable"
+              ? `<p class="section-note">Linked-project discovery unavailable: ${escapeHtml(routing.error ?? "unknown error")}. Manual assignment remains available.</p>`
+              : routing.discovery === "ready" && routing.linkedProjects.length > 1
+                ? '<p class="section-note">Multiple linked projects found. Choose assignments explicitly; Nightgauge will not guess the default.</p>'
+                : ""
+        }
+      </div>`
+    : "";
 
   return `
     <div class="section-content">
-      ${getNumberInputHtml(
-        "project.number",
-        "Project Number",
-        "GitHub Project board number (required for issue tracking)",
-        project.number,
-        1,
-        undefined,
-        undefined,
-        disabled,
-        g("project.number"),
-        showBadges,
-        options
-      )}
+${repositoryRoutingHtml}${
+    routing
+      ? project.number
+        ? `<p class="section-note">Legacy project.number #${project.number} remains active for backward compatibility until this repository has an explicit projects[] assignment.</p>`
+        : ""
+      : getNumberInputHtml(
+          "project.number",
+          "Project Number",
+          "Legacy single-repository GitHub Project board number",
+          project.number,
+          1,
+          undefined,
+          undefined,
+          disabled,
+          g("project.number"),
+          showBadges,
+          options
+        )
+  }
       ${getToggleHtml(
         "project.auto_dates",
         "Auto-set Dates",
@@ -3650,8 +3737,19 @@ function getScript(): string {
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 

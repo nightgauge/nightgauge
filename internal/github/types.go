@@ -997,3 +997,19 @@ type userProjectLinkedReposQuery struct {
 		} `graphql:"projectV2(number: $number)"`
 	} `graphql:"user(login: $owner)"`
 }
+
+// repositoryLinkedProjectsQuery enumerates ProjectV2 boards linked to one
+// repository. The repository owner is also the project owner for linkable
+// organization/user projects, so callers can use the requested owner as the
+// stable display/routing owner without querying the ProjectV2Owner union.
+type repositoryLinkedProjectsQuery struct {
+	Repository struct {
+		ProjectsV2 struct {
+			Nodes []struct {
+				ID     graphql.ID
+				Number graphql.Int
+				Title  graphql.String
+			}
+		} `graphql:"projectsV2(first: 100)"`
+	} `graphql:"repository(owner: $owner, name: $name)"`
+}

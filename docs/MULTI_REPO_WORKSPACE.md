@@ -937,6 +937,13 @@ Yes—each repository can have its own `project.number` in its
 `.nightgauge/config.yaml`. The pipeline uses the current repo's project
 configuration.
 
+In VS Code, open **Nightgauge Settings → Project Board**, select a repository,
+and manage its project assignments under **Repository project routing**.
+Nightgauge discovers Projects linked to that GitHub repository, but does not
+guess among multiple linked boards. Use `projects[]` when one repository
+participates in several boards and mark exactly one assignment as the default.
+The legacy `project.number` form remains supported as a one-project shorthand.
+
 ### What happens to existing context files after switching repos?
 
 Context files remain in their respective repositories. Switching repos changes

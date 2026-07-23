@@ -894,6 +894,20 @@ For repositories that need to sync issues to multiple GitHub Projects (e.g.,
 different teams viewing the same issues on different boards), use the `projects`
 array instead of or alongside the single `project` configuration.
 
+The VS Code Settings view exposes this as **Repository project routing**. Select
+the repository first, then accept a linked GitHub Project or add one by number.
+GitHub linkage is candidate discovery only:
+
+- one linked project is presented as an inferred candidate but is not saved
+  until accepted;
+- multiple linked projects always require an explicit choice; and
+- one configured project must be the default board for status reads and
+  pipeline actions.
+
+Settings saves to gitignored `.nightgauge/config.local.yaml` by default. Switch
+to the Team tier before editing `.nightgauge/config.yaml` when the mapping is
+shared policy. Several repositories may explicitly select the same project.
+
 | Option              | Type    | Required | Description                                    |
 | ------------------- | ------- | -------- | ---------------------------------------------- |
 | `name`              | string  | Yes      | Display name for the project                   |

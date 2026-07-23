@@ -1864,11 +1864,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
   
         
     <div class="section-content">
-      
+
     <div class="setting-row ">
       <div class="setting-info">
         <label for="project.number" class="setting-label">Project Number </label>
-        <p class="setting-description">GitHub Project board number (required for issue tracking)</p>
+        <p class="setting-description">Legacy single-repository GitHub Project board number</p>
         
       </div>
       <div class="setting-control">
@@ -3923,8 +3923,19 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 
@@ -5914,11 +5925,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
   
         
     <div class="section-content">
-      
+
     <div class="setting-row ">
       <div class="setting-info">
         <label for="project.number" class="setting-label">Project Number </label>
-        <p class="setting-description">GitHub Project board number (required for issue tracking)</p>
+        <p class="setting-description">Legacy single-repository GitHub Project board number</p>
         
       </div>
       <div class="setting-control">
@@ -7971,8 +7982,19 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 
@@ -9962,11 +9984,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
   
         
     <div class="section-content">
-      
+
     <div class="setting-row ">
       <div class="setting-info">
         <label for="project.number" class="setting-label">Project Number </label>
-        <p class="setting-description">GitHub Project board number (required for issue tracking)</p>
+        <p class="setting-description">Legacy single-repository GitHub Project board number</p>
         
       </div>
       <div class="setting-control">
@@ -12019,8 +12041,19 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 
@@ -14026,11 +14059,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
   
         
     <div class="section-content">
-      
+
     <div class="setting-row ">
       <div class="setting-info">
         <label for="project.number" class="setting-label">Project Number </label>
-        <p class="setting-description">GitHub Project board number (required for issue tracking)</p>
+        <p class="setting-description">Legacy single-repository GitHub Project board number</p>
         
       </div>
       <div class="setting-control">
@@ -16085,8 +16118,19 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 
@@ -18076,11 +18120,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
   
         
     <div class="section-content">
-      
+
     <div class="setting-row ">
       <div class="setting-info">
         <label for="project.number" class="setting-label">Project Number </label>
-        <p class="setting-description">GitHub Project board number (required for issue tracking)</p>
+        <p class="setting-description">Legacy single-repository GitHub Project board number</p>
         
       </div>
       <div class="setting-control">
@@ -20133,8 +20177,19 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
               'lm_studio.base_url': textValue('lm_studio.base_url'),
               'lm_studio.api_key': textValue('lm_studio.api_key'),
               'lm_studio.context_length': numberValue('lm_studio.context_length'),
+              projectNumber: btn.dataset.projectNumber
+                ? Number(btn.dataset.projectNumber)
+                : undefined,
             },
           });
+        });
+      });
+
+      document.getElementById('project-repository-selector')?.addEventListener('change', (event) => {
+        vscode.postMessage({
+          type: 'action',
+          action: 'project-select-repository',
+          payload: { repository: event.target.value },
         });
       });
 

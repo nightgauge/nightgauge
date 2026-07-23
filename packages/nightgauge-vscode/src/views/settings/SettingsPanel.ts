@@ -39,6 +39,15 @@ import { SecretStorageService, SECRET_KEYS } from "../../services/SecretStorageS
 import { IpcClient } from "../../services/IpcClient";
 import type { ForgeInstanceRow } from "./ForgeInstancesSection";
 import type { ForgeListEntry, TierAuditEntry } from "../../services/IpcClientBase";
+import { WorkspaceManager } from "../../services/WorkspaceManager";
+import { getRepoIdentity } from "../../utils/configPathResolver";
+import {
+  normalizeProjectAssignments,
+  RepositoryProjectSettingsService,
+  withSingleDefault,
+  type ProjectAssignment,
+  type RepositoryProjectSettingsState,
+} from "../../services/RepositoryProjectSettingsService";
 
 /**
  * Dotted-path config keys that are owned by the runtime tier (Phase 3 of
@@ -102,6 +111,13 @@ export class SettingsPanel implements vscode.Disposable {
   private lmStudioModels: LmStudioModelInfo[] = [];
   private codexModels: string[] = [];
   private forgeInstances: ForgeInstanceRow[] = [];
+  private readonly repositoryProjectService = new RepositoryProjectSettingsService();
+  private repositoryProjectState: RepositoryProjectSettingsState = {
+    repositories: [],
+    assignments: [],
+    linkedProjects: [],
+    discovery: "idle",
+  };
 
   // Tier drift audit state (Issue #3645)
   private tierAuditEntries: TierAuditEntry[] = [];
@@ -253,38 +269,11 @@ export class SettingsPanel implements vscode.Disposable {
 
     // Load all config tiers
     await this.loadAllTiers();
+    await this.loadRepositoryProjectState();
 
-    // Check if project config exists - prompt to create if not
-    if (!this.tierState.hasProjectConfig) {
-      const create = await vscode.window.showInformationMessage(
-        "No .nightgauge/config.yaml found. Create one with default settings?",
-        "Create",
-        "Cancel"
-      );
-
-      if (create === "Create") {
-        // Prompt for project number
-        const projectNumber = await vscode.window.showInputBox({
-          prompt: "Enter your GitHub Project number",
-          placeHolder: "123",
-          validateInput: (value) => {
-            if (!value) return "Project number is required";
-            const num = parseInt(value, 10);
-            if (isNaN(num) || num <= 0) return "Must be a positive number";
-            return null;
-          },
-        });
-
-        if (projectNumber) {
-          await this.yamlService.create(parseInt(projectNumber, 10));
-          await this.loadAllTiers();
-        } else {
-          return; // User cancelled
-        }
-      } else {
-        return; // User cancelled
-      }
-    }
+    // A project config is no longer a prerequisite for opening Settings.
+    // Repository-aware project discovery can bootstrap an empty repository and
+    // persists only after the user accepts a candidate or enters a number.
 
     // Check if pipeline is running
     if (this.stateService) {
@@ -442,8 +431,114 @@ export class SettingsPanel implements vscode.Disposable {
         defaultForgeId: getConfigValue(this.currentConfig, "default_forge") as string | undefined,
         tierAuditEntries: this.tierAuditEntries,
         driftBannerDismissed: this.driftBannerDismissed,
+        repositoryProjects: this.repositoryProjectState,
       }
     );
+  }
+
+  private async loadRepositoryProjectState(selectedName?: string): Promise<void> {
+    const manager = WorkspaceManager.getInstance(this.workspaceRoot);
+    if (!manager.isInitialized()) await manager.initialize();
+    const repositories = manager.getAllRepositories();
+    const descriptors: RepositoryProjectSettingsState["repositories"] = [];
+    for (const repository of repositories) {
+      await repository.loadConfig();
+      const identity = repository.github ?? (await getRepoIdentity(repository.path));
+      if (!identity?.owner || !identity.repo) continue;
+      descriptors.push({
+        name: repository.name,
+        owner: identity.owner,
+        repo: identity.repo,
+      });
+    }
+    const selectedRepository =
+      selectedName && descriptors.some((entry) => entry.name === selectedName)
+        ? selectedName
+        : this.repositoryProjectState.selectedRepository &&
+            descriptors.some(
+              (entry) => entry.name === this.repositoryProjectState.selectedRepository
+            )
+          ? this.repositoryProjectState.selectedRepository
+          : descriptors[0]?.name;
+    this.repositoryProjectState = {
+      repositories: descriptors,
+      selectedRepository,
+      assignments: [],
+      linkedProjects: [],
+      discovery: selectedRepository ? "loading" : "idle",
+    };
+    if (!selectedRepository) return;
+    const repository = manager.getRepository(selectedRepository);
+    const descriptor = descriptors.find((entry) => entry.name === selectedRepository);
+    if (!repository || !descriptor) return;
+    const yamlService = new IncrediYamlService(repository.path);
+    try {
+      const [teamResult, localResult] = await Promise.all([
+        yamlService.read(),
+        yamlService.readLocal(),
+      ]);
+      const localConfig = localResult.config ?? {};
+      const teamConfig = teamResult.config ?? {};
+      const localAssignments = normalizeProjectAssignments(localConfig, "local");
+      const assignments =
+        localAssignments.length > 0
+          ? localAssignments
+          : normalizeProjectAssignments(teamConfig, "team");
+      try {
+        const linkedProjects = await this.repositoryProjectService.discover(
+          descriptor.owner,
+          descriptor.repo,
+          repository.path
+        );
+        this.repositoryProjectState = {
+          repositories: descriptors,
+          selectedRepository,
+          assignments,
+          linkedProjects,
+          discovery: "ready",
+        };
+      } catch (error) {
+        this.repositoryProjectState = {
+          repositories: descriptors,
+          selectedRepository,
+          assignments,
+          linkedProjects: [],
+          discovery: "unavailable",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    } finally {
+      yamlService.dispose();
+    }
+  }
+
+  private async saveRepositoryAssignments(assignments: ProjectAssignment[]): Promise<void> {
+    const selected = this.repositoryProjectState.selectedRepository;
+    if (!selected) return;
+    const manager = WorkspaceManager.getInstance(this.workspaceRoot);
+    const repository = manager.getRepository(selected);
+    if (!repository) return;
+    const targetTier: "project" | "local" =
+      this.tierState.currentTier === "project" ? "project" : "local";
+    const service = new IncrediYamlService(repository.path);
+    const cleanAssignments = assignments.map(({ source: _source, ...entry }) => entry);
+    try {
+      const result = await service.writeProjectAssignments(cleanAssignments, targetTier);
+      if (!result.success) throw new Error(result.error ?? "Unable to save project assignments");
+      await repository.reloadConfig();
+      await this.loadRepositoryProjectState(selected);
+      this.updatePanel();
+      vscode.window.showInformationMessage(
+        `Project assignments for ${selected} saved to ${
+          targetTier === "project" ? ".nightgauge/config.yaml" : ".nightgauge/config.local.yaml"
+        }`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Unable to save project assignments: ${message}`);
+    } finally {
+      service.dispose();
+    }
   }
 
   private safeGetPerformanceMode(): string {
@@ -985,6 +1080,107 @@ export class SettingsPanel implements vscode.Disposable {
         break;
       case "edit-team-config": {
         await vscode.commands.executeCommand("nightgauge.editTeamConfig");
+        break;
+      }
+      case "project-select-repository": {
+        const repository = typeof payload?.repository === "string" ? payload.repository : "";
+        await this.loadRepositoryProjectState(repository);
+        this.updatePanel();
+        break;
+      }
+      case "project-refresh-linked":
+        await this.loadRepositoryProjectState(this.repositoryProjectState.selectedRepository);
+        this.updatePanel();
+        break;
+      case "project-add-linked": {
+        const configured = new Set(
+          this.repositoryProjectState.assignments.map((entry) => entry.number)
+        );
+        const candidates = this.repositoryProjectState.linkedProjects.filter(
+          (entry) => !configured.has(entry.number)
+        );
+        const picked = await vscode.window.showQuickPick(
+          candidates.map((entry) => ({
+            label: entry.title,
+            description: `#${entry.number}`,
+            project: entry,
+          })),
+          { placeHolder: "Choose a linked GitHub Project" }
+        );
+        if (!picked) return;
+        const next: ProjectAssignment[] = [
+          ...this.repositoryProjectState.assignments,
+          {
+            name: picked.project.title,
+            number: picked.project.number,
+            default: this.repositoryProjectState.assignments.length === 0,
+            source: this.tierState.currentTier === "project" ? "team" : "local",
+          },
+        ];
+        await this.saveRepositoryAssignments(next);
+        break;
+      }
+      case "project-add-number": {
+        const raw = await vscode.window.showInputBox({
+          prompt: "Enter a GitHub Project number",
+          validateInput: (value) =>
+            /^[1-9]\d*$/.test(value.trim()) ? null : "Enter a positive project number",
+        });
+        if (!raw) return;
+        const number = Number(raw);
+        if (this.repositoryProjectState.assignments.some((entry) => entry.number === number)) {
+          vscode.window.showInformationMessage(`Project #${number} is already assigned.`);
+          return;
+        }
+        const title =
+          (await vscode.window.showInputBox({
+            prompt: "Display name for this project",
+            value:
+              this.repositoryProjectState.linkedProjects.find((entry) => entry.number === number)
+                ?.title ?? `Project ${number}`,
+          })) ?? `Project ${number}`;
+        await this.saveRepositoryAssignments([
+          ...this.repositoryProjectState.assignments,
+          {
+            name: title,
+            number,
+            default: this.repositoryProjectState.assignments.length === 0,
+            source: this.tierState.currentTier === "project" ? "team" : "local",
+          },
+        ]);
+        break;
+      }
+      case "project-set-default": {
+        const number = Number(payload?.projectNumber);
+        if (!Number.isInteger(number)) return;
+        await this.saveRepositoryAssignments(
+          withSingleDefault(this.repositoryProjectState.assignments, number)
+        );
+        break;
+      }
+      case "project-remove": {
+        const number = Number(payload?.projectNumber);
+        if (!Number.isInteger(number)) return;
+        const assignment = this.repositoryProjectState.assignments.find(
+          (entry) => entry.number === number
+        );
+        if (
+          assignment?.source === "team" &&
+          this.repositoryProjectState.assignments.length === 1 &&
+          this.tierState.currentTier !== "project"
+        ) {
+          vscode.window.showWarningMessage(
+            "This is the repository's team assignment. Switch to the Team tab to remove it."
+          );
+          return;
+        }
+        const remaining = this.repositoryProjectState.assignments.filter(
+          (entry) => entry.number !== number
+        );
+        if (remaining.length > 0 && !remaining.some((entry) => entry.default)) {
+          remaining[0] = { ...remaining[0], default: true };
+        }
+        await this.saveRepositoryAssignments(remaining);
         break;
       }
       default:
