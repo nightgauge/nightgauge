@@ -13,6 +13,42 @@ type RepoRef struct {
 	Name  string
 }
 
+// LinkedProjectRef is a ProjectV2 linked to a repository.
+type LinkedProjectRef struct {
+	ID     string
+	Owner  string
+	Number int
+	Title  string
+}
+
+// FetchRepositoryLinkedProjects returns the ProjectV2 boards GitHub links to
+// owner/name. Linkage is discovery input only; callers must not infer a default
+// when more than one project is returned.
+func FetchRepositoryLinkedProjects(ctx context.Context, client *Client, owner, name string) ([]LinkedProjectRef, error) {
+	vars := map[string]interface{}{
+		"owner": graphql.String(owner),
+		"name":  graphql.String(name),
+	}
+	var q repositoryLinkedProjectsQuery
+	if err := client.query(ctx, &q, vars); err != nil {
+		return nil, fmt.Errorf("fetch repository linked projects: %w", err)
+	}
+	return linkedProjectsFromQuery(q, owner), nil
+}
+
+func linkedProjectsFromQuery(q repositoryLinkedProjectsQuery, owner string) []LinkedProjectRef {
+	refs := make([]LinkedProjectRef, 0, len(q.Repository.ProjectsV2.Nodes))
+	for _, node := range q.Repository.ProjectsV2.Nodes {
+		refs = append(refs, LinkedProjectRef{
+			ID:     fmt.Sprint(node.ID),
+			Owner:  owner,
+			Number: int(node.Number),
+			Title:  string(node.Title),
+		})
+	}
+	return refs
+}
+
 // FetchProjectLinkedRepos queries GitHub for all repositories linked to a ProjectV2.
 // It supports both organization-owned and user-owned projects via ownerType.
 // Results are capped at 100 — sufficient for any real workspace.

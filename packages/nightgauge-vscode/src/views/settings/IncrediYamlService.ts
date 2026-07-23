@@ -641,6 +641,51 @@ export class IncrediYamlService implements vscode.Disposable {
     }
   }
 
+  /**
+   * Replace only the repository's project-routing fields in one file tier.
+   *
+   * Unlike the general settings writers, this deliberately removes the legacy
+   * `project.number` key so deleting the final `projects[]` assignment does not
+   * unexpectedly reactivate an older scalar value. Other project settings and
+   * unknown YAML keys are preserved.
+   */
+  async writeProjectAssignments(
+    projects: NonNullable<IncrediConfig["projects"]>,
+    tier: "project" | "local"
+  ): Promise<WriteResult> {
+    try {
+      const filePath = tier === "project" ? this.primaryConfigPath : this.localConfigPath;
+      const existing = ((await this.readRawConfigFile(filePath)) ?? {}) as IncrediConfig;
+      if (existing.project) {
+        delete existing.project.number;
+        if (Object.keys(existing.project).length === 0) delete existing.project;
+      }
+      existing.projects = projects;
+      const validation = validateConfig(existing);
+      if (!validation.valid) {
+        return {
+          success: false,
+          error: `Validation failed: ${validation.errors.map((e) => `${e.field}: ${e.message}`).join(", ")}`,
+        };
+      }
+      const cleanConfig = removeUndefined(existing);
+      const directory = vscode.Uri.file(`${this.workspaceRoot}/.nightgauge`);
+      await vscode.workspace.fs.createDirectory(directory);
+      const yaml = stringifyYaml(cleanConfig, { indent: 2, lineWidth: 100, nullStr: "" });
+      await vscode.workspace.fs.writeFile(vscode.Uri.file(filePath), Buffer.from(yaml, "utf-8"));
+      if (tier === "project") {
+        this.resolvedConfigPath = this.primaryConfigPath;
+        this.isLegacyConfig = false;
+      }
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown project-routing write error",
+      };
+    }
+  }
+
   // ============================================================================
   // Global Config Support (Issue #434)
   // ============================================================================
