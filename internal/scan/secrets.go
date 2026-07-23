@@ -79,7 +79,8 @@ const secretsMaxFileBytes int64 = 5 * 1024 * 1024
 // `grep -iE`. The narrower connection-string FP filter is intentionally
 // case-sensitive to match the SKILL.md's `grep -vE` (no -i) exactly.
 var (
-	secretsGenericRE     = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|passwd|token|auth[_-]?token|access[_-]?key|private[_-]?key)\s*[:=]\s*['"][^'"]{8,}['"]`)
+	secretsGenericRE     = regexp.MustCompile(`(?i)(api[_-]?key|secret|password|passwd|token|auth[_-]?token|access[_-]?key|private[_-]?key)\s*[:=]\s*(?:['"][^'"]{8,}['"]|[^\s#'"]{8,})`)
+	secretsKnownTokenRE  = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b`)
 	secretsPEMRE         = regexp.MustCompile(`BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY`)
 	secretsAWSRE         = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
 	secretsJWTRE         = regexp.MustCompile(`(?i)(jwt[_-]?secret|bearer)\s*[:=]\s*['"][^'"]{16,}['"]`)
@@ -243,8 +244,8 @@ func scanFileForSecrets(r io.Reader, ext string, counts map[string]int) error {
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		if contains(secretsGenericExts, ext) && secretsGenericRE.MatchString(line) {
-			if !secretsGenericFPFilt.MatchString(line) {
+		if contains(secretsGenericExts, ext) && (secretsGenericRE.MatchString(line) || secretsKnownTokenRE.MatchString(line)) {
+			if secretsKnownTokenRE.MatchString(line) || (!strings.Contains(line, "env:") && !secretsGenericFPFilt.MatchString(line)) {
 				counts[patternGenericKV]++
 			}
 		}

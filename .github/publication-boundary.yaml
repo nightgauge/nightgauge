@@ -155,6 +155,9 @@ allow:
     rationale: "Directory-structure placeholders."
 
   # ─── Root files ───────────────────────────────────────────────────────────
+  - path: ".gitleaks.toml"
+    class: PUBLIC
+    rationale: "Secret-scanner policy; allowlists only exact synthetic regression fixtures."
   - path: "LICENSE"
     class: PUBLIC
     rationale: "Apache-2.0. Settled — do not propose BSL/ELv2/AGPL (#117)."

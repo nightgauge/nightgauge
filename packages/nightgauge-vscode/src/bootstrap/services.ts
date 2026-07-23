@@ -107,6 +107,8 @@ import { RejectCommandHandler } from "../services/RejectCommandHandler";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
+import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import { migrateLegacyGeminiApiKey } from "../commands/migrateConfig";
 import { NotifierStatusTracker } from "../services/notifications/NotifierStatusTracker";
 import { OAuthDeviceFlowService } from "../services/OAuthDeviceFlowService";
 import { GitHubAuthService } from "../services/GitHubAuthService";
@@ -417,6 +419,10 @@ export async function initializeServices(
   // Pre-load Gemini API key from SecretStorage into process.env for child processes
   const secretService = SecretStorageService.getInstance();
   if (secretService) {
+    // The historical contribution was an ordinary plaintext settings.json
+    // value despite claiming SecretStorage. Migrate it once, then erase every
+    // configuration scope before loading the key for child processes.
+    await migrateLegacyGeminiApiKey(secretService);
     secretService.getApiKey("gemini").then((key) => {
       if (key && !process.env.GEMINI_API_KEY) {
         process.env.GEMINI_API_KEY = key;
@@ -472,7 +478,6 @@ export async function initializeServices(
     void (async () => {
       const fsLib = await import("fs");
       const pathLib = await import("path");
-      const osLib = await import("os");
 
       // 1. Strip + migrate any key embedded in the project config (committed).
       if (primaryWorkspaceForMigration) {
@@ -494,13 +499,16 @@ export async function initializeServices(
       // 2. Seed SecretStorage from the machine config when it has no value yet.
       cachedLicenseKey = await secretService.getSecret(SECRET_KEYS.platformLicenseKey);
       if (!cachedLicenseKey) {
-        const machineCfgPath = pathLib.join(osLib.homedir(), ".nightgauge", "config.yaml");
+        const machineCfgPath = getGlobalConfigPath();
         if (fsLib.existsSync(machineCfgPath)) {
           const machineRaw = fsLib.readFileSync(machineCfgPath, "utf-8");
-          const { key: machineKey } = extractLicenseKeyLine(machineRaw);
+          const { key: machineKey, lineIndex } = extractLicenseKeyLine(machineRaw);
           if (machineKey) {
             await secretService.setSecret(SECRET_KEYS.platformLicenseKey, machineKey);
             cachedLicenseKey = machineKey;
+            const lines = machineRaw.split("\n");
+            lines.splice(lineIndex, 1);
+            fsLib.writeFileSync(machineCfgPath, lines.join("\n"), "utf-8");
           }
         }
       }
