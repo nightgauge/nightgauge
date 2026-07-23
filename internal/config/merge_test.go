@@ -506,9 +506,15 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 	// classification + shadow-warning behavior.
 	want := []string{
 		"github_user",
+		"github_auth",
 		"notifications.discord.enabled",
 		"lm_studio",
 		"autonomous.enabled_repos",
+		"ui.core.adapter",
+		"ui.core.default_model",
+		"ui.core.fallback_model",
+		"ui.core.auth_provider",
+		"platform",
 		"pipeline.max_concurrent",
 	}
 	if len(MachineTierKeys) != len(want) {
@@ -565,6 +571,9 @@ github_user: octocat
 // parity with the TS globalConfigResolver: NIGHTGAUGE_CONFIG_HOME wins,
 // then XDG_CONFIG_HOME/nightgauge, then the ~/.nightgauge default.
 func TestMachineConfigPathEnvOverrides(t *testing.T) {
+	oldGOOS := machineGOOSFn
+	machineGOOSFn = func() string { return "darwin" }
+	t.Cleanup(func() { machineGOOSFn = oldGOOS })
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", "/tmp/ib-config-home")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-home")
 	got, err := defaultMachineConfigPath()
@@ -595,5 +604,68 @@ func TestMachineConfigPathEnvOverrides(t *testing.T) {
 	}
 	if want := filepath.Join(home, ".nightgauge", "config.yaml"); got != want {
 		t.Errorf("default path = %q, want %q", got, want)
+	}
+}
+
+func TestMachineConfigPathPlatformDefaults(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("APPDATA", "/windows/appdata")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldGOOS := machineGOOSFn
+	t.Cleanup(func() { machineGOOSFn = oldGOOS })
+
+	tests := []struct {
+		goos string
+		want string
+	}{
+		{"darwin", filepath.Join(home, ".nightgauge", "config.yaml")},
+		{"linux", filepath.Join(home, ".config", "nightgauge", "config.yaml")},
+		{"windows", filepath.Join("/windows/appdata", "nightgauge", "config.yaml")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.goos, func(t *testing.T) {
+			machineGOOSFn = func() string { return tc.goos }
+			got, pathErr := defaultMachineConfigPath()
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			if got != tc.want {
+				t.Fatalf("path = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	oldGOOS := machineGOOSFn
+	machineGOOSFn = func() string { return "linux" }
+	t.Cleanup(func() { machineGOOSFn = oldGOOS })
+	oldPathFn := machineConfigPathFn
+	machineConfigPathFn = defaultMachineConfigPath
+	t.Cleanup(func() { machineConfigPathFn = oldPathFn })
+
+	legacy := filepath.Join(home, ".nightgauge", "config.yaml")
+	writeTierFile(t, legacy, "github_user: legacy-user\n")
+	got, err := readMachineConfigBytes()
+	if err != nil {
+		t.Fatalf("readMachineConfigBytes: %v", err)
+	}
+	if !strings.Contains(string(got), "legacy-user") {
+		t.Fatalf("legacy config not loaded: %s", got)
+	}
+	canonical, err := defaultMachineConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical != filepath.Join(home, ".config", "nightgauge", "config.yaml") {
+		t.Fatalf("canonical path = %q", canonical)
 	}
 }
