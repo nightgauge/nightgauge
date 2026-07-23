@@ -88,8 +88,7 @@ import { registerConfigureForgeInstanceCommand } from "./configureForgeInstance"
 import { registerConfigureDiscordWebhookCommand } from "./configureDiscordWebhook";
 import { registerConfigureMattermostWebhookCommand } from "./configureMattermostWebhook";
 import { registerConfigureMattermostWorkspaceCommand } from "./configureMattermostWorkspace";
-import { registerSignInCommand } from "./signIn";
-import { registerSignOutCommand } from "./signOut";
+import { registerAccountCommands } from "./accountCommands";
 import { registerManageSubscriptionCommand } from "./manageSubscription";
 import { registerActivateLicenseCommand } from "./activateLicense";
 import { registerStartTrialCommand } from "./startTrial";
@@ -182,8 +181,8 @@ export interface AllCommandDeps {
   brownfieldDashboard: BrownfieldDashboard | null;
   knowledgeValueDashboard: KnowledgeValueDashboard | null;
   usageLimitsService: UsageLimitsService | null;
-  oauthDeviceFlowService: OAuthDeviceFlowService | null;
-  gitHubAuthService: GitHubAuthService | null;
+  oauthDeviceFlowService: OAuthDeviceFlowService;
+  gitHubAuthService: GitHubAuthService;
   sessionManager: SessionManager | null;
   tokenRefreshManager: IOnDemandTokenRefresher | null;
   tierGate: TierGate | null;
@@ -766,16 +765,15 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     // Telemetry Settings — opt-in/opt-out (Issue #1481)
     ...(telemetryConsentService ? [registerTelemetrySettingsCommand(telemetryConsentService)] : []),
 
-    // OAuth sign-in / sign-out (Issue #1464, #1467)
-    ...(oauthDeviceFlowService && gitHubAuthService
-      ? [
-          registerSignInCommand(oauthDeviceFlowService, gitHubAuthService, logger),
-          registerSignOutCommand(oauthDeviceFlowService, logger, trialStore),
-          vscode.commands.registerCommand("nightgauge.signInWithGitHub", async () => {
-            await gitHubAuthService.signInWithGitHub();
-          }),
-        ]
-      : []),
+    // Account commands are contributed in every window, so their handlers must
+    // always be registered. platform.enabled gates automatic communication,
+    // not an explicit user-requested sign-in or sign-out (#51).
+    ...registerAccountCommands(
+      oauthDeviceFlowService,
+      gitHubAuthService,
+      logger,
+      trialStore
+    ),
 
     // Subscription management — opens Stripe Customer Portal (Issue #1478)
     registerManageSubscriptionCommand(
