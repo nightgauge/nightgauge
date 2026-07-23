@@ -271,7 +271,8 @@ export class PipelineRunEmitter {
   constructor(
     private readonly sink: WorkflowEventSink,
     private readonly issueNumber: number,
-    private readonly backend: OrchestrationCapability = "sdk-fanout"
+    private readonly backend: OrchestrationCapability = "sdk-fanout",
+    private readonly provider: string = "claude"
   ) {
     this.runNodeId = `run:${issueNumber}`;
   }
@@ -429,7 +430,7 @@ export class PipelineRunEmitter {
       ts: this.now(),
       status,
       agentId: stage,
-      provider: "claude",
+      provider: this.provider,
       usage: this.agentUsage.get(stage) ?? zeroUsage(),
       terminalKind,
       label: stage,

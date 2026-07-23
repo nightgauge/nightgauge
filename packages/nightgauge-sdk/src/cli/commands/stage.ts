@@ -98,8 +98,9 @@ export async function validateCodexStagePostconditions(options: {
   stage: PipelineStage;
   issueNumber: number;
   cwd: string;
+  finalResponse?: string;
 }): Promise<void> {
-  const { stage, issueNumber, cwd } = options;
+  const { stage, issueNumber, cwd, finalResponse } = options;
 
   const requiredContextFileByStage: Partial<Record<PipelineStage, string>> = {
     "issue-pickup": "issue",
@@ -113,8 +114,11 @@ export async function validateCodexStagePostconditions(options: {
   if (requiredContextPrefix) {
     const requiredPath = getContextPath(cwd, requiredContextPrefix, issueNumber);
     if (!(await fileExists(requiredPath))) {
+      const diagnosticResponse = finalResponse?.trim()
+        ? ` Codex final response: ${JSON.stringify(finalResponse.trim())}`
+        : " Codex returned no final response.";
       throw new Error(
-        `Codex postcondition failed: stage '${stage}' reported success but required context file is missing: ${requiredPath}`
+        `Codex postcondition failed: stage '${stage}' reported success but required context file is missing: ${requiredPath}.${diagnosticResponse}`
       );
     }
   }
@@ -231,7 +235,10 @@ export function registerStageCommand(cli: CAC, config: CLIConfig): void {
       formatter.info(`Running stage '${stage}' for issue #${issueNumber}...`);
 
       try {
-        const queryFn = await createAdapterQueryFunction(finalConfig.adapter);
+        const queryFn = await createAdapterQueryFunction(finalConfig.adapter, {
+          stage,
+          cwd: process.cwd(),
+        });
         const orchestrator = new PipelineOrchestrator(queryFn, {
           stageTimeoutMs: finalConfig.stageTimeoutMs,
           defaultModel: finalConfig.defaultModel,
@@ -262,6 +269,11 @@ export function registerStageCommand(cli: CAC, config: CLIConfig): void {
                 stage,
                 issueNumber,
                 cwd: process.cwd(),
+                finalResponse: result.messages
+                  .filter((message) => message.type === "assistant")
+                  .map((message) => (typeof message.text === "string" ? message.text : ""))
+                  .filter(Boolean)
+                  .join("\n"),
               });
             } catch (error) {
               formatter.error(
