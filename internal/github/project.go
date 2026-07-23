@@ -843,7 +843,7 @@ func (p *ProjectService) EnsureFields(ctx context.Context, schema FieldSchema) (
 			allOpts = append(allOpts, SingleSelectOptionDef{Name: name, Color: "GRAY"})
 		}
 		allOpts = append(allOpts, missing...)
-		if err := p.replaceFieldOptions(ctx, projectID, existing.ID, allOpts); err != nil {
+		if err := p.replaceFieldOptions(ctx, existing.ID, allOpts); err != nil {
 			return nil, fmt.Errorf("update field %q options: %w", fieldDef.Name, err)
 		}
 		result.Updated = append(result.Updated, fieldDef.Name)
@@ -917,13 +917,13 @@ func (p *ProjectService) createField(ctx context.Context, projectID, dataType, n
 	if err := p.client.mutate(ctx, &m, map[string]interface{}{"input": input}); err != nil {
 		return "", err
 	}
-	return string(m.CreateProjectV2Field.ProjectV2Field.ID), nil
+	return string(m.CreateProjectV2Field.ProjectV2Field.ProjectV2FieldCommon.ID), nil
 }
 
 // replaceFieldOptions replaces all options on an existing SINGLE_SELECT field.
 // GitHub's updateProjectV2Field replaces the full option set, so all existing
 // options plus any new ones must be included together.
-func (p *ProjectService) replaceFieldOptions(ctx context.Context, projectID, fieldID string, options []SingleSelectOptionDef) error {
+func (p *ProjectService) replaceFieldOptions(ctx context.Context, fieldID string, options []SingleSelectOptionDef) error {
 	opts := make([]SingleSelectFieldOption, len(options))
 	for i, o := range options {
 		opts[i] = SingleSelectFieldOption{
@@ -934,7 +934,6 @@ func (p *ProjectService) replaceFieldOptions(ctx context.Context, projectID, fie
 	}
 	var m updateProjectV2FieldMutation
 	input := UpdateProjectV2FieldInput{
-		ProjectID:           graphql.ID(projectID),
 		FieldID:             graphql.ID(fieldID),
 		SingleSelectOptions: opts,
 	}

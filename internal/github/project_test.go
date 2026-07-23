@@ -2,10 +2,80 @@ package github
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
+
+func TestProjectFieldMutationsMatchGitHubSchema(t *testing.T) {
+	tests := []struct {
+		name          string
+		response      string
+		wantMutation  string
+		wantProjectID bool
+		invoke        func(*ProjectService) error
+	}{
+		{
+			name:          "create nests common fragment under projectV2Field",
+			response:      `{"data":{"createProjectV2Field":{"projectV2Field":{"id":"PVTF_NEW"}}}}`,
+			wantMutation:  "createProjectV2Field",
+			wantProjectID: true,
+			invoke: func(svc *ProjectService) error {
+				id, err := svc.createField(context.Background(), "PVT_PROJECT", "DATE", "Start date", nil)
+				if err == nil && id != "PVTF_NEW" {
+					t.Errorf("created field ID = %q, want PVTF_NEW", id)
+				}
+				return err
+			},
+		},
+		{
+			name:         "update omits unsupported projectId",
+			response:     `{"data":{"updateProjectV2Field":{"projectV2Field":{"id":"PVTSSF_STATUS"}}}}`,
+			wantMutation: "updateProjectV2Field",
+			invoke: func(svc *ProjectService) error {
+				return svc.replaceFieldOptions(context.Background(), "PVTSSF_STATUS", []SingleSelectOptionDef{{Name: "Ready", Color: "BLUE"}})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Query     string                 `json:"query"`
+					Variables map[string]interface{} `json:"variables"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if !strings.Contains(request.Query, tt.wantMutation) {
+					t.Errorf("query does not contain %s: %s", tt.wantMutation, request.Query)
+				}
+				compactQuery := strings.ReplaceAll(request.Query, " ", "")
+				if !strings.Contains(compactQuery, "projectV2Field{...onProjectV2FieldCommon{id}}") {
+					t.Errorf("common fragment is not nested under projectV2Field: %s", request.Query)
+				}
+				input, _ := request.Variables["input"].(map[string]interface{})
+				_, hasProjectID := input["projectId"]
+				if hasProjectID != tt.wantProjectID {
+					t.Errorf("input projectId presence = %v, want %v; input=%v", hasProjectID, tt.wantProjectID, input)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.response))
+			}))
+			defer srv.Close()
+
+			svc := NewProjectService(NewClientWithURL("test", srv.URL), "nightgauge", 8)
+			if err := tt.invoke(svc); err != nil {
+				t.Fatalf("mutation failed: %v", err)
+			}
+		})
+	}
+}
 
 func TestNewProjectService(t *testing.T) {
 	client := NewClientWithToken("test")

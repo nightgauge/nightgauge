@@ -843,15 +843,16 @@ type CreateProjectV2FieldInput struct {
 type createProjectV2FieldMutation struct {
 	CreateProjectV2Field struct {
 		ProjectV2Field struct {
-			ID graphql.String
-		} `graphql:"... on ProjectV2FieldCommon"`
+			ProjectV2FieldCommon struct {
+				ID graphql.String
+			} `graphql:"... on ProjectV2FieldCommon"`
+		} `graphql:"projectV2Field"`
 	} `graphql:"createProjectV2Field(input: $input)"`
 }
 
 // UpdateProjectV2FieldInput matches GitHub's GraphQL input type for updateProjectV2Field.
 // SingleSelectOptions replaces the full option set on the field.
 type UpdateProjectV2FieldInput struct {
-	ProjectID           graphql.ID                `json:"projectId"`
 	FieldID             graphql.ID                `json:"fieldId"`
 	SingleSelectOptions []SingleSelectFieldOption `json:"singleSelectOptions,omitempty"`
 }
@@ -859,8 +860,10 @@ type UpdateProjectV2FieldInput struct {
 type updateProjectV2FieldMutation struct {
 	UpdateProjectV2Field struct {
 		ProjectV2Field struct {
-			ID graphql.String
-		} `graphql:"... on ProjectV2FieldCommon"`
+			ProjectV2FieldCommon struct {
+				ID graphql.String
+			} `graphql:"... on ProjectV2FieldCommon"`
+		} `graphql:"projectV2Field"`
 	} `graphql:"updateProjectV2Field(input: $input)"`
 }
 
