@@ -248,6 +248,7 @@ export type ProjectEntry = z.infer<typeof ProjectEntrySchema>;
 export const PullRequestConfigSchema = z.object({
   merge_strategy: MergeStrategySchema.optional(),
   delete_branch: z.boolean().optional(),
+  /** @deprecated Accepted for compatibility but has no runtime effect. */
   draft_by_default: z.boolean().optional(),
   reviewers: z.array(z.string()).optional(),
   auto_merge: z.boolean().optional(),
@@ -285,6 +286,7 @@ export const BranchConfigSchema = z.object({
   base: z.string().optional(),
   protected: z.array(z.string()).optional(),
   suggestions: z.boolean().optional(),
+  /** @deprecated Branch prefixes are derived from issue labels. */
   prefixes: BranchPrefixConfigSchema.optional(),
 });
 export type BranchConfig = z.infer<typeof BranchConfigSchema>;
@@ -310,23 +312,20 @@ export type IssueDefaultStatus = z.infer<typeof IssueDefaultStatusSchema>;
  * Controls issue creation and pickup behavior.
  *
  * @behavior
- * - `auto_assign`: When true, issue-pickup assigns the issue to the
- *   current authenticated GitHub user (default: true)
- * - `default_labels`: Labels automatically added to newly created issues.
- *   Merged with user-provided labels, duplicates deduplicated.
  * - `default_status`: Controls whether new issues land in Backlog or Ready
  *   on the project board. Maps to `status:backlog` or `status:ready` label.
  *   Can be overridden per-invocation with `--ready` or `--backlog` flags.
  *
  * @env
- * - `NIGHTGAUGE_ISSUE_AUTO_ASSIGN`: Overrides `auto_assign` ("true"/"false")
  * - `NIGHTGAUGE_ISSUE_DEFAULT_STATUS`: Overrides `default_status` ("backlog"/"ready")
  *
  * @see tests/config/issue.behavior.test.ts - Behavior verification tests
  * @see Issue #950 - Configurable default issue status
  */
 export const IssueConfigSchema = z.object({
+  /** @deprecated Accepted for compatibility but has no runtime effect. */
   auto_assign: z.boolean().optional(),
+  /** @deprecated Accepted for compatibility but has no runtime effect. */
   default_labels: z.array(z.string()).optional(),
   default_status: IssueDefaultStatusSchema.optional(),
 });

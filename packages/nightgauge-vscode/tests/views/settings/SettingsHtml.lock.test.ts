@@ -3,6 +3,8 @@ import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
 import { PIPELINE_LOCKED_SECTIONS, SETTINGS_SECTIONS } from "../../../src/views/settings/types";
 import type { IncrediConfig } from "../../../src/views/settings/types";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const mockWebview = { cspSource: "test-csp" } as any;
 
@@ -17,6 +19,28 @@ const editableTierState = {
 };
 
 describe("SettingsHtml per-section lock", () => {
+  it("resolves every configuration documentation anchor", () => {
+    const markdown = readFileSync(resolve(process.cwd(), "../../docs/CONFIGURATION.md"), "utf8");
+    const slugs = new Set(
+      markdown
+        .split("\n")
+        .filter((line) => /^#{1,6}\s+/.test(line))
+        .map((line) =>
+          line
+            .replace(/^#{1,6}\s+/, "")
+            .toLowerCase()
+            .replace(/`/g, "")
+            .replace(/[^\w\s-]/g, "")
+            .trim()
+            .replace(/\s+/g, "-")
+        )
+    );
+    for (const section of SETTINGS_SECTIONS) {
+      if (!section.docLink.startsWith("docs/CONFIGURATION.md#")) continue;
+      const anchor = section.docLink.split("#")[1];
+      expect(slugs.has(anchor), `${section.id}: ${anchor}`).toBe(true);
+    }
+  });
   it("renders locked sections with disabled inputs when pipeline is running", () => {
     const config = getDefaultConfig() as IncrediConfig;
     const lockedSections = new Set(PIPELINE_LOCKED_SECTIONS);

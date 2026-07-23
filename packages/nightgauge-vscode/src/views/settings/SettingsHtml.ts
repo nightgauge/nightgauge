@@ -864,16 +864,6 @@ function getPullRequestSectionHtml(
         options
       )}
       ${getToggleHtml(
-        "pull_request.draft_by_default",
-        "Draft by Default",
-        "Create PRs as draft initially",
-        pr.draft_by_default ?? false,
-        disabled,
-        g("pull_request.draft_by_default"),
-        showBadges,
-        options
-      )}
-      ${getToggleHtml(
         "pull_request.auto_merge",
         "Auto Merge",
         "Automatically merge when checks pass",
@@ -970,53 +960,6 @@ function getBranchSectionHtml(
         showBadges,
         options
       )}
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        ${getTextInputHtml(
-          "branch.prefixes.feature",
-          "Feature Prefix",
-          "Prefix for feature branches",
-          branch.prefixes?.feature ?? "feat/",
-          "feat/",
-          disabled,
-          g("branch.prefixes.feature"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "branch.prefixes.bugfix",
-          "Bugfix Prefix",
-          "Prefix for bugfix branches",
-          branch.prefixes?.bugfix ?? "fix/",
-          "fix/",
-          disabled,
-          g("branch.prefixes.bugfix"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "branch.prefixes.hotfix",
-          "Hotfix Prefix",
-          "Prefix for hotfix branches",
-          branch.prefixes?.hotfix ?? "hotfix/",
-          "hotfix/",
-          disabled,
-          g("branch.prefixes.hotfix"),
-          showBadges,
-          options
-        )}
-        ${getTextInputHtml(
-          "branch.prefixes.docs",
-          "Docs Prefix",
-          "Prefix for documentation branches",
-          branch.prefixes?.docs ?? "docs/",
-          "docs/",
-          disabled,
-          g("branch.prefixes.docs"),
-          showBadges,
-          options
-        )}
-      </div>
     </div>
   `;
 }
@@ -1036,24 +979,17 @@ function getIssueSectionHtml(
 
   return `
     <div class="section-content">
-      ${getToggleHtml(
-        "issue.auto_assign",
-        "Auto Assign",
-        "Automatically assign issues to yourself on pickup",
-        issue.auto_assign ?? true,
+      ${getSelectHtml(
+        "issue.default_status",
+        "Default Project Status",
+        "Initial project status for newly created issues",
+        issue.default_status ?? "backlog",
+        [
+          { value: "backlog", label: "Backlog" },
+          { value: "ready", label: "Ready" },
+        ],
         disabled,
-        g("issue.auto_assign"),
-        showBadges,
-        options
-      )}
-      ${getListInputHtml(
-        "issue.default_labels",
-        "Default Labels",
-        "Labels to apply when creating issues",
-        issue.default_labels ?? [],
-        "label-name",
-        disabled,
-        g("issue.default_labels"),
+        g("issue.default_status"),
         showBadges,
         options
       )}

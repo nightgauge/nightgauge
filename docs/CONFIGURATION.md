@@ -139,6 +139,16 @@ For example:
 - `branch.base` -> `NIGHTGAUGE_BRANCH_BASE`
 - `pipeline.ci_timeout` -> `NIGHTGAUGE_PIPELINE_CI_TIMEOUT`
 
+Supported dynamic and compatibility families that cannot be inferred from a
+single static path are:
+
+- `NIGHTGAUGE_BATCH_MAX_ISSUES` — maximum issues selected for one batch.
+- `NIGHTGAUGE_PIPELINE_RETRY_MAX_AUTO_ATTEMPTS` — canonical retry limit
+  override (`NIGHTGAUGE_RETRY_MAX_AUTO_ATTEMPTS` remains a compatibility alias).
+- `NIGHTGAUGE_PIPELINE_OUTPUT_TOKEN_LIMIT_<STAGE>` — per-stage output ceiling;
+  replace `<STAGE>` with the uppercase stage name and convert hyphens to
+  underscores, for example `..._FEATURE_DEV`.
+
 > **Scope note.** The TypeScript layer resolves env overrides generically for
 > every key registered in `envVarResolver.ts` (`KNOWN_CONFIG_PATHS`). The Go
 > binary supports env overrides for a specific set of keys read at
@@ -1040,7 +1050,6 @@ Pull request creation and merge settings.
 | `merge_strategy`        | string   | `squash` | Merge strategy for sub-issue/feature PRs: squash, merge, rebase |
 | `epic_merge_strategy`   | string   | `merge`  | Merge strategy for epic→main PRs: merge, squash, rebase         |
 | `delete_branch`         | boolean  | `true`   | Delete feature branch after merge                               |
-| `draft_by_default`      | boolean  | `false`  | Create PRs as drafts by default                                 |
 | `reviewers`             | string[] | `[]`     | Auto-request these reviewers                                    |
 | `auto_merge`            | boolean  | `false`  | Enable GitHub auto-merge                                        |
 | `auto_merge_epic`       | boolean  | `true`   | Auto-merge epic→main PR when all sub-issues complete            |
@@ -1087,7 +1096,6 @@ When CI checks fail, pr-merge can automatically attempt to fix the failures:
 pr:
   merge_strategy: squash
   delete_branch: true
-  draft_by_default: false
   reviewers:
     - alice
     - bob
@@ -1105,7 +1113,6 @@ pr:
 export NIGHTGAUGE_PR_ADMIN_MERGE=true
 export NIGHTGAUGE_PR_MERGE_STRATEGY=rebase
 export NIGHTGAUGE_PR_DELETE_BRANCH=false
-export NIGHTGAUGE_PR_DRAFT_BY_DEFAULT=true
 export NIGHTGAUGE_PR_REVIEWERS=alice,bob
 export NIGHTGAUGE_PR_AUTO_MERGE=true
 export NIGHTGAUGE_PR_AUTO_MERGE_EPIC=true
@@ -1116,8 +1123,7 @@ export NIGHTGAUGE_PR_CI_CHECK_TIMEOUT=600
 
 **Used by:**
 
-- `/nightgauge-pr-create` - Sets draft mode, requests reviewers, enables
-  auto-merge
+- `/nightgauge-pr-create` - Requests reviewers and enables auto-merge
 - `/nightgauge-pr-merge` - Uses admin bypass, merge strategy, branch
   deletion, CI check gate
 
@@ -1131,19 +1137,6 @@ Branch naming and protection settings.
 | ----------- | -------- | -------- | --------------------------------- |
 | `base`      | string   | `main`   | Default base branch for PRs       |
 | `protected` | string[] | `[main]` | Branches that cannot be pushed to |
-| `prefixes`  | object   | -        | Custom branch prefix mappings     |
-
-**Prefixes object:**
-
-| Key        | Default     | Description           |
-| ---------- | ----------- | --------------------- |
-| `feature`  | `feat/`     | Feature branch prefix |
-| `bugfix`   | `fix/`      | Bug fix branch prefix |
-| `docs`     | `docs/`     | Documentation prefix  |
-| `refactor` | `refactor/` | Refactoring prefix    |
-| `chore`    | `chore/`    | Chore/maintenance     |
-| `test`     | `test/`     | Test-only changes     |
-| `hotfix`   | `hotfix/`   | Hotfix prefix         |
 
 **Example:**
 
@@ -1153,10 +1146,6 @@ branch:
   protected:
     - main
     - develop
-  prefixes:
-    feature: feature/
-    bugfix: bugfix/
-    docs: documentation/
 ```
 
 **Environment overrides:**
@@ -1168,7 +1157,7 @@ export NIGHTGAUGE_BRANCH_PROTECTED=main,develop
 
 **Used by:**
 
-- `/nightgauge-issue-pickup` - Creates branches with configured prefixes
+- `/nightgauge-issue-pickup` - Creates branches from the issue type labels
 - `/nightgauge-pr-create` - Targets configured base branch
 
 ---
@@ -1177,26 +1166,20 @@ export NIGHTGAUGE_BRANCH_PROTECTED=main,develop
 
 Issue creation and assignment settings.
 
-| Option           | Type     | Default     | Description                                            |
-| ---------------- | -------- | ----------- | ------------------------------------------------------ |
-| `auto_assign`    | boolean  | `false`     | Auto-assign issues to creator                          |
-| `default_labels` | string[] | `[]`        | Labels to add to all new issues                        |
-| `default_status` | string   | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
+| Option           | Type   | Default     | Description                                            |
+| ---------------- | ------ | ----------- | ------------------------------------------------------ |
+| `default_status` | string | `"backlog"` | Default project board status: `"backlog"` or `"ready"` |
 
 **Example:**
 
 ```yaml
 issue:
-  auto_assign: true
   default_status: backlog
-  default_labels:
-    - needs-triage
 ```
 
 **Environment overrides:**
 
 ```bash
-export NIGHTGAUGE_ISSUE_AUTO_ASSIGN=true
 export NIGHTGAUGE_ISSUE_DEFAULT_STATUS=backlog
 export NIGHTGAUGE_ISSUE_DEFAULT_LABELS=needs-triage
 ```
@@ -4476,9 +4459,12 @@ export NIGHTGAUGE_EPIC_SUMMARY_SUMMARY_DIR=docs/epics
 
 ## UI Configuration (VSCode-Specific)
 
-UI settings control the VSCode extension's visual behavior and are **not
-portable** to config.yaml files. These settings only apply when using the VSCode
-extension and are managed through VSCode settings or the ConfigBridge service.
+UI settings control the VSCode extension's visual behavior. Current `ui.*`
+settings are stored through the tiered YAML Settings panel and are portable
+between extension installations when placed in project configuration. A small
+set of legacy `nightgauge.*` VS Code contributions remains in settings.json;
+those entries are compatibility surfaces and are identified explicitly in
+their descriptions.
 
 > **Note**: UI settings are separate from behavior settings. Behavior settings
 > (like `pr.merge_strategy`) affect pipeline execution and are portable across
@@ -4490,7 +4476,7 @@ extension and are managed through VSCode settings or the ConfigBridge service.
 | Category     | Examples                                        | Portability | Storage                   |
 | ------------ | ----------------------------------------------- | ----------- | ------------------------- |
 | **Behavior** | `pr.merge_strategy`, `pipeline.auto_fix`        | CLI + SDK   | `.nightgauge/config.yaml` |
-| **UI**       | `ui.notifications.sounds`, `ui.output_window.*` | VSCode only | VSCode settings           |
+| **UI**       | `ui.notifications.sounds`, `ui.output_window.*` | VSCode only | tiered YAML (`ui.*`)      |
 
 **Guidelines:**
 
@@ -5060,7 +5046,6 @@ pr:
   reviewers:
     - lead-dev
     - "@org/platform-team"
-  draft_by_default: false
   auto_merge: false
 
 branch:
@@ -5068,12 +5053,6 @@ branch:
   protected:
     - main
     - release
-  prefixes:
-    feature: feat/
-    bugfix: fix/
-
-issue:
-  auto_assign: true
 
 pipeline:
   ci_timeout: 600
@@ -5171,7 +5150,6 @@ project:
 pr:
   merge_strategy: squash
   delete_branch: true
-  draft_by_default: false
   reviewers:
     - lead-dev
   auto_merge: false
@@ -5181,12 +5159,6 @@ branch:
   protected:
     - main
     - release
-  prefixes:
-    feature: feat/
-    bugfix: fix/
-
-issue:
-  auto_assign: true
 
 pipeline:
   ci_timeout: 600

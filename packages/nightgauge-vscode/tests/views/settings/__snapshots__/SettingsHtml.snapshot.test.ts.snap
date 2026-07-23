@@ -1750,7 +1750,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         <span class="codicon codicon-key section-icon"></span>
         <h3 class="section-title">Platform</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform-configuration" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -1952,7 +1952,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         <span class="codicon codicon-git-pull-request section-icon"></span>
         <h3 class="section-title">Pull Request</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pull-request" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pr" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -1993,24 +1993,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                checked
                disabled>
         <label for="pull_request.delete_branch" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="pull_request.draft_by_default" class="setting-label">Draft by Default </label>
-        <p class="setting-description">Create PRs as draft initially</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="pull_request.draft_by_default"
-               class="toggle-input"
-               data-path="pull_request.draft_by_default"
-               
-               disabled>
-        <label for="pull_request.draft_by_default" class="toggle-switch"></label>
       </div>
     </div>
   
@@ -2186,81 +2168,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       </div>
     </div>
   
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.feature" class="setting-label">Feature Prefix </label>
-        <p class="setting-description">Prefix for feature branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.feature"
-               class="text-input"
-               data-path="branch.prefixes.feature"
-               value="feat/"
-               placeholder="feat/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.bugfix" class="setting-label">Bugfix Prefix </label>
-        <p class="setting-description">Prefix for bugfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.bugfix"
-               class="text-input"
-               data-path="branch.prefixes.bugfix"
-               value="fix/"
-               placeholder="fix/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.hotfix" class="setting-label">Hotfix Prefix </label>
-        <p class="setting-description">Prefix for hotfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.hotfix"
-               class="text-input"
-               data-path="branch.prefixes.hotfix"
-               value="hotfix/"
-               placeholder="hotfix/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.docs" class="setting-label">Docs Prefix </label>
-        <p class="setting-description">Prefix for documentation branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.docs"
-               class="text-input"
-               data-path="branch.prefixes.docs"
-               value="docs/"
-               placeholder="docs/"
-               disabled>
-      </div>
-    </div>
-  
-      </div>
     </div>
   
       </div>
@@ -2285,42 +2192,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="issue.auto_assign" class="setting-label">Auto Assign </label>
-        <p class="setting-description">Automatically assign issues to yourself on pickup</p>
+        <label for="issue.default_status" class="setting-label">Default Project Status </label>
+        <p class="setting-description">Initial project status for newly created issues</p>
         
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="issue.auto_assign"
-               class="toggle-input"
-               data-path="issue.auto_assign"
-               checked
-               disabled>
-        <label for="issue.auto_assign" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="issue.default_labels" class="setting-label">Default Labels </label>
-        <p class="setting-description">Labels to apply when creating issues</p>
-        
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="issue.default_labels-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="issue.default_labels-input"
-                 class="list-input"
-                 placeholder="label-name"
-                 disabled>
-          <button class="list-add-btn" data-path="issue.default_labels" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="issue.default_status"
+                class="select-input"
+                data-path="issue.default_status"
+                disabled>
+          <option value="backlog" selected>Backlog</option><option value="ready" >Ready</option>
+        </select>
       </div>
     </div>
   
@@ -3074,7 +2956,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         <span class="codicon codicon-zap section-icon"></span>
         <h3 class="section-title">Human-in-the-Loop</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human-in-the-loop" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human_in_the_loop" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -3624,7 +3506,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         <span class="codicon codicon-server section-icon"></span>
         <h3 class="section-title">Forge Instances</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forges" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forge-configuration-schema_version-2" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -5916,7 +5798,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         <span class="codicon codicon-key section-icon"></span>
         <h3 class="section-title">Platform</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform-configuration" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -6120,7 +6002,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         <span class="codicon codicon-git-pull-request section-icon"></span>
         <h3 class="section-title">Pull Request</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pull-request" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pr" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -6161,24 +6043,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                checked
                >
         <label for="pull_request.delete_branch" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="pull_request.draft_by_default" class="setting-label">Draft by Default </label>
-        <p class="setting-description">Create PRs as draft initially</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="pull_request.draft_by_default"
-               class="toggle-input"
-               data-path="pull_request.draft_by_default"
-               
-               >
-        <label for="pull_request.draft_by_default" class="toggle-switch"></label>
       </div>
     </div>
   
@@ -6354,81 +6218,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       </div>
     </div>
   
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.feature" class="setting-label">Feature Prefix </label>
-        <p class="setting-description">Prefix for feature branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.feature"
-               class="text-input"
-               data-path="branch.prefixes.feature"
-               value="feat/"
-               placeholder="feat/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.bugfix" class="setting-label">Bugfix Prefix </label>
-        <p class="setting-description">Prefix for bugfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.bugfix"
-               class="text-input"
-               data-path="branch.prefixes.bugfix"
-               value="fix/"
-               placeholder="fix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.hotfix" class="setting-label">Hotfix Prefix </label>
-        <p class="setting-description">Prefix for hotfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.hotfix"
-               class="text-input"
-               data-path="branch.prefixes.hotfix"
-               value="hotfix/"
-               placeholder="hotfix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.docs" class="setting-label">Docs Prefix </label>
-        <p class="setting-description">Prefix for documentation branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.docs"
-               class="text-input"
-               data-path="branch.prefixes.docs"
-               value="docs/"
-               placeholder="docs/"
-               >
-      </div>
-    </div>
-  
-      </div>
     </div>
   
       </div>
@@ -6453,42 +6242,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="issue.auto_assign" class="setting-label">Auto Assign </label>
-        <p class="setting-description">Automatically assign issues to yourself on pickup</p>
+        <label for="issue.default_status" class="setting-label">Default Project Status </label>
+        <p class="setting-description">Initial project status for newly created issues</p>
         
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="issue.auto_assign"
-               class="toggle-input"
-               data-path="issue.auto_assign"
-               checked
-               >
-        <label for="issue.auto_assign" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="issue.default_labels" class="setting-label">Default Labels </label>
-        <p class="setting-description">Labels to apply when creating issues</p>
-        
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="issue.default_labels-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="issue.default_labels-input"
-                 class="list-input"
-                 placeholder="label-name"
-                 >
-          <button class="list-add-btn" data-path="issue.default_labels" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="issue.default_status"
+                class="select-input"
+                data-path="issue.default_status"
+                >
+          <option value="backlog" selected>Backlog</option><option value="ready" >Ready</option>
+        </select>
       </div>
     </div>
   
@@ -7242,7 +7006,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         <span class="codicon codicon-zap section-icon"></span>
         <h3 class="section-title">Human-in-the-Loop</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human-in-the-loop" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human_in_the_loop" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -7790,7 +7554,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         <span class="codicon codicon-server section-icon"></span>
         <h3 class="section-title">Forge Instances</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forges" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forge-configuration-schema_version-2" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -10082,7 +9846,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         <span class="codicon codicon-key section-icon"></span>
         <h3 class="section-title">Platform</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform-configuration" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -10286,7 +10050,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         <span class="codicon codicon-git-pull-request section-icon"></span>
         <h3 class="section-title">Pull Request</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pull-request" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pr" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -10327,24 +10091,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                checked
                >
         <label for="pull_request.delete_branch" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="pull_request.draft_by_default" class="setting-label">Draft by Default </label>
-        <p class="setting-description">Create PRs as draft initially</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="pull_request.draft_by_default"
-               class="toggle-input"
-               data-path="pull_request.draft_by_default"
-               
-               >
-        <label for="pull_request.draft_by_default" class="toggle-switch"></label>
       </div>
     </div>
   
@@ -10520,81 +10266,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       </div>
     </div>
   
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.feature" class="setting-label">Feature Prefix </label>
-        <p class="setting-description">Prefix for feature branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.feature"
-               class="text-input"
-               data-path="branch.prefixes.feature"
-               value="feat/"
-               placeholder="feat/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.bugfix" class="setting-label">Bugfix Prefix </label>
-        <p class="setting-description">Prefix for bugfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.bugfix"
-               class="text-input"
-               data-path="branch.prefixes.bugfix"
-               value="fix/"
-               placeholder="fix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.hotfix" class="setting-label">Hotfix Prefix </label>
-        <p class="setting-description">Prefix for hotfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.hotfix"
-               class="text-input"
-               data-path="branch.prefixes.hotfix"
-               value="hotfix/"
-               placeholder="hotfix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.docs" class="setting-label">Docs Prefix </label>
-        <p class="setting-description">Prefix for documentation branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.docs"
-               class="text-input"
-               data-path="branch.prefixes.docs"
-               value="docs/"
-               placeholder="docs/"
-               >
-      </div>
-    </div>
-  
-      </div>
     </div>
   
       </div>
@@ -10619,42 +10290,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="issue.auto_assign" class="setting-label">Auto Assign </label>
-        <p class="setting-description">Automatically assign issues to yourself on pickup</p>
+        <label for="issue.default_status" class="setting-label">Default Project Status </label>
+        <p class="setting-description">Initial project status for newly created issues</p>
         
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="issue.auto_assign"
-               class="toggle-input"
-               data-path="issue.auto_assign"
-               checked
-               >
-        <label for="issue.auto_assign" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="issue.default_labels" class="setting-label">Default Labels </label>
-        <p class="setting-description">Labels to apply when creating issues</p>
-        
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="issue.default_labels-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="issue.default_labels-input"
-                 class="list-input"
-                 placeholder="label-name"
-                 >
-          <button class="list-add-btn" data-path="issue.default_labels" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="issue.default_status"
+                class="select-input"
+                data-path="issue.default_status"
+                >
+          <option value="backlog" selected>Backlog</option><option value="ready" >Ready</option>
+        </select>
       </div>
     </div>
   
@@ -11408,7 +11054,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         <span class="codicon codicon-zap section-icon"></span>
         <h3 class="section-title">Human-in-the-Loop</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human-in-the-loop" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human_in_the_loop" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -11956,7 +11602,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         <span class="codicon codicon-server section-icon"></span>
         <h3 class="section-title">Forge Instances</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forges" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forge-configuration-schema_version-2" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -14266,7 +13912,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         <span class="codicon codicon-key section-icon"></span>
         <h3 class="section-title">Platform</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform-configuration" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -14468,7 +14114,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         <span class="codicon codicon-git-pull-request section-icon"></span>
         <h3 class="section-title">Pull Request</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pull-request" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pr" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -14509,24 +14155,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                checked
                disabled>
         <label for="pull_request.delete_branch" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="pull_request.draft_by_default" class="setting-label">Draft by Default </label>
-        <p class="setting-description">Create PRs as draft initially</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="pull_request.draft_by_default"
-               class="toggle-input"
-               data-path="pull_request.draft_by_default"
-               
-               disabled>
-        <label for="pull_request.draft_by_default" class="toggle-switch"></label>
       </div>
     </div>
   
@@ -14702,81 +14330,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       </div>
     </div>
   
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.feature" class="setting-label">Feature Prefix </label>
-        <p class="setting-description">Prefix for feature branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.feature"
-               class="text-input"
-               data-path="branch.prefixes.feature"
-               value="feat/"
-               placeholder="feat/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.bugfix" class="setting-label">Bugfix Prefix </label>
-        <p class="setting-description">Prefix for bugfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.bugfix"
-               class="text-input"
-               data-path="branch.prefixes.bugfix"
-               value="fix/"
-               placeholder="fix/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.hotfix" class="setting-label">Hotfix Prefix </label>
-        <p class="setting-description">Prefix for hotfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.hotfix"
-               class="text-input"
-               data-path="branch.prefixes.hotfix"
-               value="hotfix/"
-               placeholder="hotfix/"
-               disabled>
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.docs" class="setting-label">Docs Prefix </label>
-        <p class="setting-description">Prefix for documentation branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.docs"
-               class="text-input"
-               data-path="branch.prefixes.docs"
-               value="docs/"
-               placeholder="docs/"
-               disabled>
-      </div>
-    </div>
-  
-      </div>
     </div>
   
       </div>
@@ -14801,42 +14354,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="issue.auto_assign" class="setting-label">Auto Assign </label>
-        <p class="setting-description">Automatically assign issues to yourself on pickup</p>
+        <label for="issue.default_status" class="setting-label">Default Project Status </label>
+        <p class="setting-description">Initial project status for newly created issues</p>
         
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="issue.auto_assign"
-               class="toggle-input"
-               data-path="issue.auto_assign"
-               checked
-               disabled>
-        <label for="issue.auto_assign" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="issue.default_labels" class="setting-label">Default Labels </label>
-        <p class="setting-description">Labels to apply when creating issues</p>
-        
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="issue.default_labels-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="issue.default_labels-input"
-                 class="list-input"
-                 placeholder="label-name"
-                 disabled>
-          <button class="list-add-btn" data-path="issue.default_labels" disabled>
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="issue.default_status"
+                class="select-input"
+                data-path="issue.default_status"
+                disabled>
+          <option value="backlog" selected>Backlog</option><option value="ready" >Ready</option>
+        </select>
       </div>
     </div>
   
@@ -15590,7 +15118,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         <span class="codicon codicon-zap section-icon"></span>
         <h3 class="section-title">Human-in-the-Loop</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human-in-the-loop" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human_in_the_loop" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -16140,7 +15668,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         <span class="codicon codicon-server section-icon"></span>
         <h3 class="section-title">Forge Instances</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forges" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forge-configuration-schema_version-2" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -18432,7 +17960,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         <span class="codicon codicon-key section-icon"></span>
         <h3 class="section-title">Platform</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#platform-configuration" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -18636,7 +18164,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         <span class="codicon codicon-git-pull-request section-icon"></span>
         <h3 class="section-title">Pull Request</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pull-request" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#pr" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -18677,24 +18205,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                checked
                >
         <label for="pull_request.delete_branch" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="pull_request.draft_by_default" class="setting-label">Draft by Default </label>
-        <p class="setting-description">Create PRs as draft initially</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="checkbox"
-               id="pull_request.draft_by_default"
-               class="toggle-input"
-               data-path="pull_request.draft_by_default"
-               
-               >
-        <label for="pull_request.draft_by_default" class="toggle-switch"></label>
       </div>
     </div>
   
@@ -18870,81 +18380,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       </div>
     </div>
   
-      <div class="subsection">
-        <h4 class="subsection-title">Branch Prefixes</h4>
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.feature" class="setting-label">Feature Prefix </label>
-        <p class="setting-description">Prefix for feature branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.feature"
-               class="text-input"
-               data-path="branch.prefixes.feature"
-               value="feat/"
-               placeholder="feat/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.bugfix" class="setting-label">Bugfix Prefix </label>
-        <p class="setting-description">Prefix for bugfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.bugfix"
-               class="text-input"
-               data-path="branch.prefixes.bugfix"
-               value="fix/"
-               placeholder="fix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.hotfix" class="setting-label">Hotfix Prefix </label>
-        <p class="setting-description">Prefix for hotfix branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.hotfix"
-               class="text-input"
-               data-path="branch.prefixes.hotfix"
-               value="hotfix/"
-               placeholder="hotfix/"
-               >
-      </div>
-    </div>
-  
-        
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="branch.prefixes.docs" class="setting-label">Docs Prefix </label>
-        <p class="setting-description">Prefix for documentation branches</p>
-        
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="branch.prefixes.docs"
-               class="text-input"
-               data-path="branch.prefixes.docs"
-               value="docs/"
-               placeholder="docs/"
-               >
-      </div>
-    </div>
-  
-      </div>
     </div>
   
       </div>
@@ -18969,42 +18404,17 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       
     <div class="setting-row ">
       <div class="setting-info">
-        <label for="issue.auto_assign" class="setting-label">Auto Assign </label>
-        <p class="setting-description">Automatically assign issues to yourself on pickup</p>
+        <label for="issue.default_status" class="setting-label">Default Project Status </label>
+        <p class="setting-description">Initial project status for newly created issues</p>
         
       </div>
       <div class="setting-control">
-        <input type="checkbox"
-               id="issue.auto_assign"
-               class="toggle-input"
-               data-path="issue.auto_assign"
-               checked
-               >
-        <label for="issue.auto_assign" class="toggle-switch"></label>
-      </div>
-    </div>
-  
-      
-    <div class="setting-row setting-row-list ">
-      <div class="setting-info">
-        <label for="issue.default_labels" class="setting-label">Default Labels </label>
-        <p class="setting-description">Labels to apply when creating issues</p>
-        
-      </div>
-      <div class="setting-control list-control">
-        <div class="list-items" id="issue.default_labels-items">
-          <div class="list-empty">No items</div>
-        </div>
-        <div class="list-add">
-          <input type="text"
-                 id="issue.default_labels-input"
-                 class="list-input"
-                 placeholder="label-name"
-                 >
-          <button class="list-add-btn" data-path="issue.default_labels" >
-            <span class="codicon codicon-add"></span>
-          </button>
-        </div>
+        <select id="issue.default_status"
+                class="select-input"
+                data-path="issue.default_status"
+                >
+          <option value="backlog" selected>Backlog</option><option value="ready" >Ready</option>
+        </select>
       </div>
     </div>
   
@@ -19758,7 +19168,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         <span class="codicon codicon-zap section-icon"></span>
         <h3 class="section-title">Human-in-the-Loop</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human-in-the-loop" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#human_in_the_loop" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>
@@ -20306,7 +19716,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         <span class="codicon codicon-server section-icon"></span>
         <h3 class="section-title">Forge Instances</h3>
         
-        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forges" title="View documentation">
+        <a href="#" class="doc-link" data-doc="docs/CONFIGURATION.md#forge-configuration-schema_version-2" title="View documentation">
          <span class="codicon codicon-link-external"></span>
        </a>
       </div>

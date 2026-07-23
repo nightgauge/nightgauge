@@ -327,7 +327,6 @@ const KNOWN_CONFIG_PATHS: string[] = [
   // PR / pull_request
   "pr.merge_strategy",
   "pr.delete_branch",
-  "pr.draft_by_default",
   "pr.reviewers",
   "pr.auto_merge",
   "pr.auto_merge_epic",
@@ -337,7 +336,6 @@ const KNOWN_CONFIG_PATHS: string[] = [
   "pr.ci_check_timeout",
   "pull_request.merge_strategy",
   "pull_request.delete_branch",
-  "pull_request.draft_by_default",
   "pull_request.reviewers",
   "pull_request.auto_merge",
   "pull_request.auto_merge_epic",
@@ -349,14 +347,7 @@ const KNOWN_CONFIG_PATHS: string[] = [
   "branch.base",
   "branch.protected",
   "branch.suggestions",
-  "branch.prefixes.feature",
-  "branch.prefixes.bugfix",
-  "branch.prefixes.hotfix",
-  "branch.prefixes.release",
-  "branch.prefixes.docs",
   // Issue
-  "issue.auto_assign",
-  "issue.default_labels",
   "issue.default_status",
   // Pipeline
   "pipeline.ci_timeout",
