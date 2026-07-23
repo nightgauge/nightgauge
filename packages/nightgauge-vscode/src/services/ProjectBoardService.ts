@@ -224,7 +224,17 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       } catch {
         // Config read failed (e.g., test environment) — use default auth
       }
-      if (result.projectNumber) {
+      if (result.projects?.length) {
+        this.projects = result.projects.map((project) => ({
+          name: project.name,
+          number: project.number,
+          syncFilter: project.syncFilter,
+          default: project.default,
+        }));
+        const selected = this.projects.find((project) => project.default) ?? this.projects[0];
+        this.selectedProject = selected.name;
+        this.projectNumber = selected.number;
+      } else if (result.projectNumber) {
         this.projects = [{ name: "Default", number: result.projectNumber, default: true }];
         this.selectedProject = "Default";
       }
@@ -266,6 +276,35 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     this.cacheTimes.clear();
     this.allItemsCache = null;
     this.allItemsCacheTime = 0;
+  }
+
+  /** Reload effective identity and clear board data only when it changed. */
+  async reloadConfigIfChanged(): Promise<boolean> {
+    const before = JSON.stringify({
+      owner: this.owner,
+      ownerType: this.ownerType,
+      repo: this.repo,
+      projectNumber: this.projectNumber,
+      projects: this.projects,
+      githubUser: this.githubUser,
+    });
+    this.configLoaded = false;
+    await this.loadConfig();
+    const after = JSON.stringify({
+      owner: this.owner,
+      ownerType: this.ownerType,
+      repo: this.repo,
+      projectNumber: this.projectNumber,
+      projects: this.projects,
+      githubUser: this.githubUser,
+    });
+    if (before === after) return false;
+    this.cache.clear();
+    this.cacheTimes.clear();
+    this.allItemsCache = null;
+    this.allItemsCacheTime = 0;
+    this._onDidChangeTreeData.fire();
+    return true;
   }
 
   getOwner(): string | null {
