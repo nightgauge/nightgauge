@@ -77,6 +77,54 @@ describe("parseSessionLimitResetsAt (#3792)", () => {
 });
 
 describe("parseStreamJsonLine", () => {
+  it("parses terminal SDK workflow agent usage emitted for Codex stages", () => {
+    const result = parseStreamJsonLine(
+      JSON.stringify({
+        schemaVersion: 4,
+        kind: "agent",
+        status: "succeeded",
+        provider: "codex",
+        usage: {
+          inputTokens: 112636,
+          outputTokens: 13602,
+          cacheReadTokens: 1766400,
+          cacheCreationTokens: 0,
+          costUsd: 0,
+        },
+      })
+    );
+
+    expect(result?.type).toBe("token:usage");
+    expect(result?.usage).toEqual({
+      inputTokens: 112636,
+      outputTokens: 13602,
+      cacheReadTokens: 1766400,
+      cacheCreationTokens: 0,
+      costUsd: 0,
+    });
+  });
+
+  it("treats non-terminal SDK workflow usage as a live cumulative snapshot", () => {
+    const result = parseStreamJsonLine(
+      JSON.stringify({
+        schemaVersion: 4,
+        kind: "agent",
+        status: "running",
+        provider: "codex",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 900,
+          cacheCreationTokens: 0,
+          costUsd: 0,
+        },
+      })
+    );
+
+    expect(result?.usage).toBeUndefined();
+    expect(result?.incrementalUsage?.cacheReadTokens).toBe(900);
+  });
+
   describe("result messages", () => {
     it("should parse result message with full usage stats", () => {
       const line = JSON.stringify({

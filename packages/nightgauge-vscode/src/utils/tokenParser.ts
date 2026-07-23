@@ -200,6 +200,27 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
   try {
     const parsed = JSON.parse(trimmed);
 
+    // Handle Nightgauge workflow agent events emitted by the packaged SDK CLI.
+    // Codex runs are wrapped by the SDK, so skillRunner receives these events
+    // instead of Codex's raw `turn.completed` envelope. A non-terminal running
+    // event is a cumulative progress snapshot; a terminal event is the
+    // authoritative stage total and must flow through the additive usage path.
+    if (parsed.kind === "agent" && parsed.usage && typeof parsed.usage === "object") {
+      const workflowUsage: ParsedTokenUsage = {
+        inputTokens: parsed.usage.inputTokens ?? 0,
+        outputTokens: parsed.usage.outputTokens ?? 0,
+        cacheReadTokens: parsed.usage.cacheReadTokens ?? 0,
+        cacheCreationTokens: parsed.usage.cacheCreationTokens ?? 0,
+        costUsd: parsed.usage.costUsd ?? 0,
+      };
+      const terminal = parsed.status === "succeeded" || parsed.status === "failed";
+      return {
+        type: terminal ? "token:usage" : "assistant",
+        ...(terminal ? { usage: workflowUsage } : { incrementalUsage: workflowUsage }),
+        model: typeof parsed.model === "string" ? parsed.model : undefined,
+      };
+    }
+
     // Handle result messages (contain token usage and session_id)
     // Note: Claude CLI outputs usage directly on the message, not under .result
     if (parsed.type === "result") {
