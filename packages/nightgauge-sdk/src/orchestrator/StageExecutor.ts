@@ -345,6 +345,11 @@ export async function loadStageSkill(
 
   const logicalSkillPath = `${skillsBasePath}/${skillDir}/SKILL.md`;
   const skillCandidates = [
+    // Packaged extension execution provides the exact stage skill directory.
+    // Consumer repositories do not contain Nightgauge's source-tree skills.
+    ...(process.env.NIGHTGAUGE_SKILL_DIR
+      ? [path.join(process.env.NIGHTGAUGE_SKILL_DIR, "SKILL.md")]
+      : []),
     logicalSkillPath,
     path.join(process.cwd(), logicalSkillPath),
     path.join(process.cwd(), "..", "..", logicalSkillPath),

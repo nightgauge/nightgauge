@@ -13,7 +13,6 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
 import { assertValidBranchName } from "./BranchNameValidator";
-import { getExecutionAdapter } from "./incrediConfig";
 
 const execAsync = promisify(exec);
 // #2884: avoid sync subprocess — blocks the VSCode extension host event loop.
@@ -51,12 +50,6 @@ export interface WorktreeCreateOptions {
    * Default: false (do not touch remote branches on normal retries).
    */
   deleteRemoteBranch?: boolean;
-  /**
-   * Override the adapter resolver for testing. When provided, called instead
-   * of getExecutionAdapter() to determine whether to build the SDK CLI.
-   * @internal
-   */
-  _adapterResolver?: (worktreePath: string) => string;
 }
 
 const DEFAULT_NPM_INSTALL_TIMEOUT = 300_000; // 5 minutes
@@ -239,15 +232,6 @@ export class WorktreeManager {
             error instanceof Error ? error.message : "Unknown error"
           }`
         );
-      }
-    }
-
-    if (hasPackageJson) {
-      // Build SDK CLI artifacts for non-Claude adapters that require them
-      const resolveAdapter = options?._adapterResolver ?? getExecutionAdapter;
-      const adapter = resolveAdapter(worktreePath);
-      if (this.requiresSdkBuild(adapter)) {
-        await this.buildSdkCli(worktreePath, issueNumber);
       }
     }
 
@@ -520,50 +504,6 @@ export class WorktreeManager {
       }
     } catch {
       // docker images failing is non-fatal — continue.
-    }
-  }
-
-  /**
-   * Returns true for CLI adapters that require built SDK CLI artifacts.
-   * Claude uses Claude CLI directly and does not need the SDK CLI build.
-   */
-  private requiresSdkBuild(adapter: string): boolean {
-    return adapter === "codex" || adapter === "copilot" || adapter === "lm-studio";
-  }
-
-  /**
-   * Builds the SDK CLI in the worktree so non-Claude adapters can find
-   * packages/nightgauge-sdk/dist/cli/index.js before running stages.
-   */
-  private async buildSdkCli(worktreePath: string, issueNumber: number): Promise<void> {
-    try {
-      // Because `npm install` is skipped, running `tsc` fails. We can copy the host root's dist.
-      const srcDir = path.join(this.repoRoot, "packages", "nightgauge-sdk", "dist");
-      const destDir = path.join(worktreePath, "packages", "nightgauge-sdk", "dist");
-
-      const exists = await fs
-        .access(srcDir)
-        .then(() => true)
-        .catch(() => false);
-      if (exists) {
-        await fs.cp(srcDir, destDir, { recursive: true });
-        return;
-      }
-
-      // Fallback
-      await execAsync("npm run -w @nightgauge/sdk build", {
-        cwd: worktreePath,
-        timeout: 120_000,
-      });
-    } catch (error) {
-      throw new Error(
-        `[WorktreeManager] SDK CLI build failed for issue #${issueNumber}: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }\n` +
-          "This adapter requires built SDK CLI artifacts at packages/nightgauge-sdk/dist/cli/index.js. " +
-          "Run: npm run -w @nightgauge/sdk build",
-        { cause: error }
-      );
     }
   }
 
