@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   StageExecutor,
   buildStagePrompt,
+  loadStageSkill,
   type SDKQueryFunction,
   type SDKQueryOptions,
 } from "../../src/orchestrator/StageExecutor.js";
@@ -28,6 +29,10 @@ describe("StageExecutor", () => {
     eventBus = new EventBus();
     emitter = new PipelineRunEmitter(eventBus, 42, "native-workflow");
     tokenTracker = new TokenTracker();
+  });
+
+  afterEach(() => {
+    delete process.env.NIGHTGAUGE_SKILL_DIR;
   });
 
   describe("execute", () => {
@@ -232,6 +237,17 @@ describe("StageExecutor", () => {
   });
 
   describe("buildStagePrompt", () => {
+    it("loads a packaged skill from NIGHTGAUGE_SKILL_DIR outside the consumer repository", async () => {
+      const skillDir = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-packaged-skill-"));
+      fs.writeFileSync(path.join(skillDir, "SKILL.md"), "# Packaged planning skill\n");
+      process.env.NIGHTGAUGE_SKILL_DIR = skillDir;
+
+      const loaded = await loadStageSkill("feature-planning");
+
+      expect(loaded.skillContent).toContain("Packaged planning skill");
+      fs.rmSync(skillDir, { recursive: true, force: true });
+    });
+
     it("should generate prompt for issue-pickup", async () => {
       const prompt = await buildStagePrompt("issue-pickup", 42);
 

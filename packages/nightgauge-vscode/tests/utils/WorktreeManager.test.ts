@@ -491,60 +491,20 @@ describe("WorktreeManager", () => {
     });
   });
 
-  describe("SDK CLI build", () => {
-    const sdkBuildCmd = "npm run -w @nightgauge/sdk build";
-
+  describe("packaged SDK CLI", () => {
     beforeEach(() => {
       // Restore fsMock.access so hasPackageJson resolves true
       fsMock.access.mockResolvedValue(undefined);
     });
 
-    function withAdapter(adapter: string) {
-      return { _adapterResolver: () => adapter };
-    }
-
-    function getSdkBuildCalls() {
-      return execAsyncMock.mock.calls.filter(
-        ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
-      );
-    }
-
-    it("builds SDK CLI when adapter is codex", async () => {
-      await manager.create(42, "feat/42-codex-test", withAdapter("codex"));
-      // buildSdkCli copies host dist/ when it exists (fs.access succeeds)
-      expect(fsMock.cp).toHaveBeenCalledTimes(1);
-    });
-
-    it("builds SDK CLI when adapter is copilot", async () => {
-      await manager.create(42, "feat/42-copilot-test", withAdapter("copilot"));
-      expect(fsMock.cp).toHaveBeenCalledTimes(1);
-    });
-
-    it("builds SDK CLI when adapter is lm-studio", async () => {
-      await manager.create(42, "feat/42-lm-studio-test", withAdapter("lm-studio"));
-      expect(fsMock.cp).toHaveBeenCalledTimes(1);
-    });
-
-    it("skips SDK build when adapter is claude", async () => {
-      await manager.create(42, "feat/42-claude-test", withAdapter("claude"));
-      expect(getSdkBuildCalls()).toHaveLength(0);
-    });
-
-    it("propagates build error with clear actionable message", async () => {
-      // Make fs.cp fail so buildSdkCli hits the error path
-      fsMock.cp.mockRejectedValueOnce(new Error("ENOENT: no such file or directory"));
-
-      await expect(manager.create(42, "feat/42-build-fail", withAdapter("codex"))).rejects.toThrow(
-        /SDK CLI build failed/
-      );
-    });
-
-    it("skips SDK build when npmInstall is false", async () => {
-      await manager.create(42, "feat/42-no-install", {
-        npmInstall: false,
-        _adapterResolver: () => "codex",
-      });
-      expect(getSdkBuildCalls()).toHaveLength(0);
+    it("does not build Nightgauge source artifacts inside a consumer worktree", async () => {
+      await manager.create(42, "feat/42-consumer-test");
+      expect(fsMock.cp).not.toHaveBeenCalled();
+      expect(
+        execAsyncMock.mock.calls.some(
+          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("@nightgauge/sdk")
+        )
+      ).toBe(false);
     });
   });
 });
