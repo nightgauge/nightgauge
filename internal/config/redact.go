@@ -100,15 +100,9 @@ func redactYAMLNode(node *yaml.Node, path []string) {
 }
 
 func appendPath(path []string, segment string) []string {
-	// A YAML path can never approach MaxInt, but guard the allocation arithmetic
-	// explicitly so untrusted document depth cannot overflow len(path)+1.
-	if len(path) == int(^uint(0)>>1) {
-		return path
-	}
-	out := make([]string, len(path)+1)
-	copy(out, path)
-	out[len(path)] = segment
-	return out
+	// Let append own capacity arithmetic instead of computing len(path)+1 from
+	// document-controlled depth.
+	return append(append([]string(nil), path...), segment)
 }
 
 func redactNodeValue(node *yaml.Node) {
