@@ -3499,6 +3499,7 @@ export const DEFAULT_CONFIG: IncrediConfig = {
     merge_strategy: "squash",
     epic_merge_strategy: "merge",
     delete_branch: true,
+    draft_by_default: false,
     auto_merge: true,
     auto_merge_epic: true,
     reviewers: [],
@@ -3507,8 +3508,17 @@ export const DEFAULT_CONFIG: IncrediConfig = {
     base: "main",
     protected: ["main", "master"],
     suggestions: true,
+    prefixes: {
+      feature: "feat/",
+      bugfix: "fix/",
+      hotfix: "hotfix/",
+      release: "release/",
+      docs: "docs/",
+    },
   },
   issue: {
+    auto_assign: true,
+    default_labels: [],
     default_status: "backlog",
   },
   pipeline: {
