@@ -129,6 +129,47 @@ describe("SettingsPanel adapter change handling", () => {
     expect(panel.tierState.defaultEditTier).toBe("local");
   });
 
+  it("resets only the project tier from the Project tab", async () => {
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Reset Project" as never);
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    panel.tierState.currentTier = "project";
+    panel.projectConfig = { project: { number: 8 } };
+    panel.localConfig = { pipeline: { auto_fix: true } };
+    panel.globalConfig = { ui: { core: { adapter: "codex" } } };
+
+    await panel.handleReset();
+
+    expect(panel.yamlService.write).toHaveBeenCalledWith({}, "project");
+    expect(panel.yamlService.writeLocal).not.toHaveBeenCalled();
+    expect(panel.yamlService.writeGlobal).not.toHaveBeenCalled();
+  });
+
+  it("resets only the local tier from the merged view", async () => {
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Reset Local" as never);
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    panel.tierState.currentTier = "merged";
+    panel.localConfig = { ui: { core: { adapter: "claude" } } };
+
+    await panel.handleReset();
+
+    expect(panel.yamlService.writeLocal).toHaveBeenCalledWith({});
+    expect(panel.yamlService.write).not.toHaveBeenCalled();
+    expect(panel.yamlService.writeGlobal).not.toHaveBeenCalled();
+  });
+
+  it("resets only the global tier from the Global tab", async () => {
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Reset Global" as never);
+    const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;
+    panel.tierState.currentTier = "global";
+    panel.globalConfig = { ui: { core: { adapter: "codex" } } };
+
+    await panel.handleReset();
+
+    expect(panel.yamlService.writeGlobal).toHaveBeenCalledWith({});
+    expect(panel.yamlService.write).not.toHaveBeenCalled();
+    expect(panel.yamlService.writeLocal).not.toHaveBeenCalled();
+  });
+
   it("preserves dirty edits when an external config change is kept", async () => {
     vi.mocked(vscode.window.showWarningMessage).mockResolvedValueOnce("Keep My Edits" as never);
     const panel = new SettingsPanel({ fsPath: "/ext" } as never, "/workspace") as any;

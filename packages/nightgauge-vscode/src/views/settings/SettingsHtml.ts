@@ -66,6 +66,14 @@ export interface SettingsHtmlOptions {
   driftBannerDismissed?: boolean;
   /** Repository-aware GitHub Project assignments and linked-project discovery. */
   repositoryProjects?: RepositoryProjectSettingsState;
+  /** Tier currently rendered; project/local support explicit global inheritance. */
+  currentTier?: ViewTier;
+  /** Whether ui.core.adapter exists in the raw tier being rendered. */
+  adapterConfiguredInTier?: boolean;
+  /** Machine-tier adapter inherited by an unset project/local tier. */
+  inheritedGlobalAdapter?: string;
+  /** Fully merged adapter shown in read-only/merged views. */
+  effectiveAdapter?: string;
 }
 
 /**
@@ -680,6 +688,10 @@ function getSelectHtml(
   const teamTierDisabled = showBadge && source === "project";
   const isDisabled = disabled || teamTierDisabled;
   const editBtnHtml = teamTierDisabled ? getEditTeamConfigBtnHtml() : "";
+  const inheritedValue =
+    id === "ui.core.adapter" && panelOptions?.inheritedGlobalAdapter
+      ? ` data-inherited-value="${escapeHtml(panelOptions.inheritedGlobalAdapter)}"`
+      : "";
 
   return `
     <div class="setting-row ${modifiedClass}">
@@ -691,7 +703,7 @@ function getSelectHtml(
       <div class="setting-control">
         <select id="${id}"
                 class="select-input"
-                data-path="${id}"
+                data-path="${id}"${inheritedValue}
                 ${isDisabled ? "disabled" : ""}>
           ${optionsHtml}
         </select>
@@ -1253,14 +1265,22 @@ function getCoreSectionHtml(
   options: SettingsHtmlOptions
 ): string {
   const core = config.ui?.core ?? {};
-  const adapter = core.adapter ?? "claude";
+  const supportsGlobalInheritance =
+    options.currentTier === "project" || options.currentTier === "local";
+  const adapter =
+    supportsGlobalInheritance && !options.adapterConfiguredInTier
+      ? ""
+      : options.currentTier === "merged"
+        ? (options.effectiveAdapter ?? core.adapter ?? "claude")
+        : (core.adapter ?? "claude");
+  const effectiveAdapter = adapter || options.inheritedGlobalAdapter || "claude";
   const lmStudio = config.lm_studio ?? {};
   const ollama = config.ollama ?? {};
   const g = (path: string) => getSourceForPath(path, sources);
-  const isClaudeAdapter = adapter === "claude";
-  const isCodexAdapter = adapter === "codex";
-  const isLmStudioAdapter = adapter === "lm-studio";
-  const isOllamaAdapter = adapter === "ollama";
+  const isClaudeAdapter = effectiveAdapter === "claude";
+  const isCodexAdapter = effectiveAdapter === "codex";
+  const isLmStudioAdapter = effectiveAdapter === "lm-studio";
+  const isOllamaAdapter = effectiveAdapter === "ollama";
   const codex = core.codex ?? {};
   const lmStudioModelOptions = getLmStudioModelOptions(
     lmStudio.model ?? "",
@@ -1277,8 +1297,14 @@ function getCoreSectionHtml(
         "ui.core.adapter",
         "Execution Adapter",
         "Select pipeline execution backend",
-        core.adapter ?? "claude",
+        adapter,
         [
+          ...(supportsGlobalInheritance
+            ? [{
+                value: "",
+                label: `Use Global (${options.inheritedGlobalAdapter ?? "Claude"})`,
+              }]
+            : []),
           { value: "claude", label: "Claude" },
           { value: "codex", label: "Codex" },
           { value: "gemini", label: "Gemini CLI" },
@@ -3550,7 +3576,7 @@ function getScript(): string {
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -3824,7 +3850,7 @@ function getScript(): string {
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
@@ -4040,6 +4066,14 @@ export function getSettingsHtml(
   }).join("");
 
   const hasLockedSections = lockedSections.size > 0;
+  const resetTier =
+    effectiveTierState.currentTier === "project"
+      ? "Project"
+      : effectiveTierState.currentTier === "global"
+        ? "Global"
+        : "Local";
+  const resetDisabled =
+    effectiveTierState.currentTier === "default" || effectiveTierState.currentTier === "env";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -4061,9 +4095,11 @@ export function getSettingsHtml(
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset ${resetTier} settings only"
+                ${resetDisabled ? "disabled" : ""}>
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset ${resetTier}
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to ${saveDestination}">
           <span class="codicon codicon-save"></span>

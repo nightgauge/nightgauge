@@ -37,6 +37,8 @@ import {
   type StageModelChoice,
 } from "../utils/customStageModels";
 import type { PipelineStage } from "@nightgauge/sdk";
+import { resolveModelForAdapter } from "@nightgauge/sdk";
+import { getExecutionAdapter, type ExecutionAdapter } from "../utils/resolvers/modelResolver";
 
 interface ModeQuickPickItem extends vscode.QuickPickItem {
   /** A preset mode, or the "custom" sentinel that opens the per-stage picker. */
@@ -48,24 +50,54 @@ function getWorkspaceRoot(): string | undefined {
 }
 
 /** Human-facing label for a stage-model choice. */
-function choiceLabel(choice: StageModelChoice): string {
+function providerModelLabel(choice: Exclude<StageModelChoice, "auto">, adapter: ExecutionAdapter): string {
+  return resolveModelForAdapter(adapter, choice)?.display_name ??
+    resolveModelForAdapter(adapter, choice)?.id ??
+    choice.charAt(0).toUpperCase() + choice.slice(1);
+}
+
+/** Human-facing provider-aware presentation for one performance mode. */
+export function getModePresentation(
+  mode: PerformanceMode,
+  adapter: ExecutionAdapter
+): { description: string; costHint: string } {
+  const profile = MODE_PROFILES[mode];
+  const floor = providerModelLabel(profile.envelope?.floor ?? "haiku", adapter);
+  const ceiling = providerModelLabel(profile.envelope?.ceiling ?? "opus", adapter);
+  const provider = adapter === "claude" ? "Claude" : adapter === "codex" ? "Codex" : adapter;
+  const descriptions: Record<PerformanceMode, string> = {
+    efficiency: `Cheap and fast — ${provider} routing constrained to ${floor}…${ceiling}.`,
+    elevated: `Balanced default — adaptive ${provider} routing, ${floor}…${ceiling}.`,
+    maximum: `Best-effort quality — ${ceiling} + high effort everywhere, no budget ceiling.`,
+    frontier: `Premium opt-in — ${provider} may reach ${ceiling} on eligible hard reasoning stages.`,
+  };
+  const costHints: Record<PerformanceMode, string> = {
+    efficiency: "lower cost",
+    elevated: "baseline",
+    maximum: "higher cost",
+    frontier: "highest-capability opt-in",
+  };
+  return { description: descriptions[mode], costHint: costHints[mode] };
+}
+
+function choiceLabel(choice: StageModelChoice, adapter: ExecutionAdapter): string {
   if (choice === "auto") return "Auto";
-  return choice.charAt(0).toUpperCase() + choice.slice(1);
+  return `${providerModelLabel(choice, adapter)} (${choice} tier)`;
 }
 
 /** Short capability/cost hint per stage-model choice. */
-function choiceDetail(choice: StageModelChoice): string {
+function choiceDetail(choice: StageModelChoice, adapter: ExecutionAdapter): string {
   switch (choice) {
     case "auto":
       return "Defer to the adaptive router (recommended)";
     case "haiku":
       return "Cheapest — plumbing / lightweight stages";
     case "sonnet":
-      return "Balanced — near-Opus on code, baseline cost";
+      return `Balanced — ${providerModelLabel(choice, adapter)}`;
     case "opus":
       return "Strongest general — deep reasoning";
     case "fable":
-      return "Frontier tier — ~2× Opus. Deliberate opt-in.";
+      return `Frontier tier — ${providerModelLabel(choice, adapter)}. Deliberate opt-in.`;
   }
 }
 
@@ -80,13 +112,14 @@ async function runCustomStageModelPicker(
   statusBar?: StatusBarManager
 ): Promise<boolean> {
   const selections = readStageModelSelections(root);
+  const adapter = getExecutionAdapter(root);
 
   // Loop the hub until the user saves or cancels.
   for (;;) {
     const stageItems: Array<vscode.QuickPickItem & { stage?: PipelineStage; save?: boolean }> =
       CUSTOM_SELECTABLE_STAGES.map((stage) => ({
         label: stage,
-        description: choiceLabel(selections[stage]),
+        description: choiceLabel(selections[stage], adapter),
         stage,
       }));
 
@@ -126,14 +159,14 @@ async function runCustomStageModelPicker(
     // Drill-in: choose the model for this stage.
     const modelItems: Array<vscode.QuickPickItem & { choice: StageModelChoice }> =
       STAGE_MODEL_CHOICES.map((choice) => ({
-        label: `${selections[stage] === choice ? "$(check) " : "      "}${choiceLabel(choice)}`,
-        detail: choiceDetail(choice),
+        label: `${selections[stage] === choice ? "$(check) " : "      "}${choiceLabel(choice, adapter)}`,
+        detail: choiceDetail(choice, adapter),
         choice,
       }));
 
     const chosen = await vscode.window.showQuickPick(modelItems, {
       title: `Model for ${stage}`,
-      placeHolder: `Current: ${choiceLabel(selections[stage])}`,
+      placeHolder: `Current: ${choiceLabel(selections[stage], adapter)}`,
       matchOnDetail: true,
     });
     if (chosen) {
@@ -162,15 +195,17 @@ export function registerSelectPerformanceModeCommand(
     }
 
     const currentMode = getPerformanceMode(root);
+    const effectiveAdapter = getExecutionAdapter(root);
     const customActive = hasCustomStageOverrides(root);
     const items: ModeQuickPickItem[] = PERFORMANCE_MODES.map((mode) => {
       const profile = MODE_PROFILES[mode];
+      const presentation = getModePresentation(mode, effectiveAdapter);
       // A preset is "current" only when no custom pins are shadowing it.
       const isCurrent = !customActive && mode === currentMode;
       return {
         label: `${isCurrent ? "$(check) " : "      "}${profile.label}`,
-        description: profile.costHint,
-        detail: profile.description,
+        description: presentation.costHint,
+        detail: presentation.description,
         action: mode,
       };
     });

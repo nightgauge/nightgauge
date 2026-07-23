@@ -906,9 +906,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset Local settings only"
+                >
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset Local
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
@@ -3736,7 +3738,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -4010,7 +4012,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
@@ -4983,9 +4985,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset Global settings only"
+                >
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset Global
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to ~/.nightgauge/config.yaml">
           <span class="codicon codicon-save"></span>
@@ -7795,7 +7799,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -8069,7 +8073,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
@@ -9042,9 +9046,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset Local settings only"
+                >
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset Local
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
@@ -11854,7 +11860,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -12128,7 +12134,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
@@ -13101,9 +13107,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset Local settings only"
+                >
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset Local
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.local.yaml">
           <span class="codicon codicon-save"></span>
@@ -15931,7 +15939,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -16205,7 +16213,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
@@ -17178,9 +17186,11 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
         <span class="modified-indicator" title="Unsaved changes"></span>
       </h1>
       <div class="header-actions">
-        <button class="btn" id="resetBtn" title="Reset all settings to defaults">
+        <button class="btn" id="resetBtn"
+                title="Reset Project settings only"
+                >
           <span class="codicon codicon-discard"></span>
-          Reset
+          Reset Project
         </button>
         <button class="btn btn-primary" id="saveBtn" disabled title="Save changes to .nightgauge/config.yaml">
           <span class="codicon codicon-save"></span>
@@ -19990,7 +20000,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
         setModified(true);
         if (path === 'ui.core.adapter') {
-          updateCoreAdapterVisibility(value);
+          updateCoreAdapterVisibility(value || element.dataset.inheritedValue || 'claude');
         }
         if (path === 'lm_studio.model') {
           updateLmStudioModelMetadata();
@@ -20264,7 +20274,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
       // Initialize adapter-specific visibility on initial render.
       const adapterSelect = document.querySelector('[data-path="ui.core.adapter"]');
       if (adapterSelect) {
-        updateCoreAdapterVisibility(adapterSelect.value);
+        updateCoreAdapterVisibility(adapterSelect.value || adapterSelect.dataset.inheritedValue || 'claude');
       }
       updateLmStudioModelMetadata();
 
