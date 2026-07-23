@@ -27,6 +27,25 @@ type mockCmdResult struct {
 	Err    error
 }
 
+type cancelDuringBuildRunner struct {
+	*mockCmdRunner
+	cancel        context.CancelFunc
+	cleanupCtxErr []error
+}
+
+func (r *cancelDuringBuildRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	key := name + " " + strings.Join(args, " ")
+	if key == "go build ./..." {
+		r.cancel()
+		return nil, context.Canceled
+	}
+	if key == "git merge --abort" || key == "git checkout feat/42-test-feature" ||
+		key == "git branch -D temp-pre-push-0" {
+		r.cleanupCtxErr = append(r.cleanupCtxErr, ctx.Err())
+	}
+	return r.mockCmdRunner.Run(ctx, dir, name, args...)
+}
+
 func newMockRunner() *mockCmdRunner {
 	return &mockCmdRunner{
 		results: make(map[string]mockCmdResult),
@@ -190,6 +209,59 @@ func TestEvaluatePrePush_BlocksOnBuildFailure(t *testing.T) {
 	}
 	if !strings.Contains(result.Reason, "Build failed") {
 		t.Errorf("expected reason to mention build failure, got %q", result.Reason)
+	}
+}
+
+func TestEvaluatePrePush_CancelledValidationStillUsesLiveCleanupContext(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &cancelDuringBuildRunner{mockCmdRunner: setupCleanBranchMock(), cancel: cancel}
+	result := EvaluatePrePush(ctx, runner, PrePushInput{
+		IssueNumber:   42,
+		WorkDir:       tmpDir,
+		TargetBranch:  "main",
+		FeatureBranch: "feat/42-test-feature",
+	})
+
+	if result.Decision != "block" {
+		t.Fatalf("decision = %q, want block", result.Decision)
+	}
+	if len(runner.cleanupCtxErr) != 3 {
+		t.Fatalf("cleanup calls = %d, want 3", len(runner.cleanupCtxErr))
+	}
+	for i, ctxErr := range runner.cleanupCtxErr {
+		if ctxErr != nil {
+			t.Errorf("cleanup call %d received cancelled context: %v", i, ctxErr)
+		}
+	}
+}
+
+func TestEvaluatePrePush_BlocksWhenOriginalBranchCannotBeRestored(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := setupCleanBranchMock()
+	runner.set("git checkout feat/42-test-feature", "branch is locked", fmt.Errorf("exit 1"))
+
+	result := EvaluatePrePush(context.Background(), runner, PrePushInput{
+		IssueNumber:   42,
+		WorkDir:       tmpDir,
+		TargetBranch:  "main",
+		FeatureBranch: "feat/42-test-feature",
+	})
+	if result.Decision != "block" || !strings.Contains(result.Reason, "Failed to restore original branch") {
+		t.Fatalf("result = %#v, want restore failure block", result)
 	}
 }
 

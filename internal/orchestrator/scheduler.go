@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	stagecontext "github.com/nightgauge/nightgauge/internal/execution/context"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -2347,7 +2348,29 @@ func hasUncommittedWork(worktreePath string) bool {
 	if err != nil {
 		return false
 	}
-	return len(strings.TrimSpace(string(out))) > 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if path == "AGENTS.md" && onlyManagedAgentsChange(worktreePath) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func onlyManagedAgentsChange(worktreePath string) bool {
+	working, err := os.ReadFile(filepath.Join(worktreePath, "AGENTS.md"))
+	if err != nil {
+		return false
+	}
+	committed, err := exec.Command("git", "-C", worktreePath, "show", "HEAD:AGENTS.md").Output()
+	if err != nil {
+		committed = nil // untracked file: only a pure managed block is ignorable
+	}
+	return codexprovision.IsOnlyManagedSteeringChange(string(committed), string(working))
 }
 
 // recoverUncommittedWork stages all changes, creates a recovery commit, and

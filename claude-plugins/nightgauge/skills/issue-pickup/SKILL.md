@@ -341,7 +341,9 @@ git push -u origin <branch-name>
 
 #### Step 6.2: Assign Issue (Optional)
 
-Offer self-assignment. If yes: `nightgauge forge issue edit <number> --repo $REPO --add-assignee @me`
+Offer self-assignment only when the configured forge exposes an assignment
+command. The provider-neutral `forge issue edit` command edits by node ID and
+does not support `--add-assignee`; do not pass GitHub CLI-only flags to it.
 
 ---
 

@@ -1078,7 +1078,7 @@ else
   # Get sub-issue numbers from batch state or GitHub
   SUB_ISSUES=$(jq -r '.issues[]?.number // empty' .nightgauge/pipeline/batch-state.json 2>/dev/null)
   if [ -z "$SUB_ISSUES" ]; then
-    SUB_ISSUES=$(nightgauge forge issue view "$EPIC_NUMBER" --json body -q '.body' 2>/dev/null | \
+    SUB_ISSUES=$(nightgauge forge issue view "$EPIC_NUMBER" --json --jq '.body' 2>/dev/null | \
       grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -u)
   fi
 

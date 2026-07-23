@@ -179,6 +179,13 @@ func stripManagedSteeringBlock(existing string) string {
 	}
 }
 
+// IsOnlyManagedSteeringChange reports whether two AGENTS.md snapshots differ
+// only by Nightgauge's generated steering block.
+func IsOnlyManagedSteeringChange(committed, working string) bool {
+	return strings.TrimSpace(stripManagedSteeringBlock(committed)) ==
+		strings.TrimSpace(stripManagedSteeringBlock(working))
+}
+
 // computeNextAgentsMd is the pure transform: given the existing AGENTS.md text
 // (hasExisting=false ≈ no file) and the project root, return the next AGENTS.md.
 func computeNextAgentsMd(existing string, hasExisting bool, projectRoot string) string {

@@ -25,13 +25,16 @@ checkout the correct branch for build verification.
 MERGED_INTO=$("$BINARY" pr view "$PR_NUMBER" --json 2>/dev/null | jq -r '.baseRef // empty')
 MERGED_INTO="${MERGED_INTO:-${BASE_BRANCH:-main}}"
 
-if echo "$MERGED_INTO" | grep -q "^epic/"; then
-  git checkout "$MERGED_INTO"
-  git pull origin "$MERGED_INTO"
-else
-  git checkout ${BASE_BRANCH:-main}
-  git pull origin ${BASE_BRANCH:-main}
-fi
+# The origin ref is authoritative. Do not checkout a same-named local branch:
+# in a multi-remote repository it may track a private/different remote, and in
+# a worktree it may already be checked out elsewhere. A detached origin tip is
+# safe and sufficient for post-merge verification.
+git fetch origin "$MERGED_INTO"
+git rev-parse --verify "origin/$MERGED_INTO^{commit}" >/dev/null || {
+  echo "ERROR: origin/$MERGED_INTO does not resolve to a commit" >&2
+  exit 1
+}
+git checkout --detach "origin/$MERGED_INTO"
 
 echo "Running post-merge build verification..."
 if ! npm run build; then
@@ -89,7 +92,7 @@ CLOSE_VERIFIED=false
 if [ "$ISSUE_CLOSED" = "true" ]; then
   echo "Verifying issue #$ISSUE_NUMBER is closed..."
 
-  ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo "ERROR")
+  ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq '.state' 2>/dev/null || echo "ERROR")
 
   if [ "$ISSUE_STATE" = "CLOSED" ]; then
     CLOSE_VERIFIED=true
@@ -98,7 +101,7 @@ if [ "$ISSUE_CLOSED" = "true" ]; then
     echo "Issue state is $ISSUE_STATE (not CLOSED yet), retrying in 5s..."
     sleep 5
 
-    ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo "ERROR")
+    ISSUE_STATE=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq '.state' 2>/dev/null || echo "ERROR")
     if [ "$ISSUE_STATE" = "CLOSED" ]; then
       CLOSE_VERIFIED=true
       echo "Issue #$ISSUE_NUMBER verified CLOSED (after retry)"

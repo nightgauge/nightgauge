@@ -496,7 +496,7 @@ fi
 #### Step 5.5: Report Success
 
 ```bash
-ISSUE_URL=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo $REPO --json url --jq .url 2>/dev/null || \
+ISSUE_URL=$(nightgauge forge issue view "$ISSUE_NUMBER" --repo "$REPO" --json --jq .url 2>/dev/null || \
   echo "https://github.com/$(nightgauge forge repo view --repo $REPO --json nameWithOwner --jq .nameWithOwner)/issues/${ISSUE_NUMBER}")
 
 echo ""

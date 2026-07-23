@@ -54,6 +54,7 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+<!-- include: ../_shared/BATCH_MODE.md -->
 
 # Feature Development
 

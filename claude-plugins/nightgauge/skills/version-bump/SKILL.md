@@ -234,7 +234,7 @@ if [ "$COMPLETE" != "true" ]; then
 fi
 # Enumerate sub-issues from the epic BODY (#N links) — the established pattern
 # (check-completion's JSON carries only the still-open subset, empty once closed).
-SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json body -q '.body' 2>/dev/null \
+SUB_NUMBERS=$(nightgauge forge issue view "$EPIC" --repo "$REPO" --json --jq '.body' 2>/dev/null \
   | grep -oE '#[0-9]+' | grep -oE '[0-9]+' | sort -un)
 if [ -z "$SUB_NUMBERS" ]; then
   echo "ERROR: no sub-issues found referenced in epic #$EPIC's body (#N links). Cannot derive a bump from an empty set."
@@ -310,7 +310,7 @@ classify() {  # echoes one of: major | minor | fix | other
 }
 
 for n in $SUB_NUMBERS; do
-  ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json title,body,labels 2>/dev/null)
+  ISSUE_JSON=$(nightgauge forge issue view "$n" --repo "$REPO" --json 2>/dev/null)
   TITLE=$(echo "$ISSUE_JSON" | jq -r '.title // ""')
   BODY=$(echo "$ISSUE_JSON"  | jq -r '.body // ""')
   LABELS=$(echo "$ISSUE_JSON" | jq -r '(.labels // []) | map(.name) | join(",")')
@@ -494,7 +494,7 @@ Fail with clear remediation when:
 ## Completion Checklist
 
 - [ ] Epic confirmed fully closed (`epic check-completion --json`, `.complete == true`)
-- [ ] Sub-issue titles + bodies + labels fetched (`forge issue view --json title,body,labels`)
+- [ ] Sub-issue titles + bodies + labels fetched (`forge issue view --json`)
 - [ ] Each sub-issue classified; **highest** bump taken across the release
 - [ ] Policy + `--bump` override applied
 - [ ] `pubspec.yaml` `version:` name updated, **`+build` suffix preserved verbatim**

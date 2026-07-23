@@ -202,7 +202,7 @@ When `OPERATION="add"`:
 ```bash
 for ISSUE_NUM in $ISSUE_NUMBERS; do
   # Validate issue exists and is open
-  ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUM" --repo "$REPO" --json number,title,state,labels 2>&1)
+  ISSUE_JSON=$(nightgauge forge issue view "$ISSUE_NUM" --repo "$REPO" --json 2>&1)
   if [ $? -ne 0 ]; then
     echo "SKIP: Issue #$ISSUE_NUM not found"
     continue

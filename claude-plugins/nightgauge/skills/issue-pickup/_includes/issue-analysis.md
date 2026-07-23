@@ -17,7 +17,7 @@ change-detection and routing decision, and produce the requirements summary.
 ## Step 3.1: Fetch Full Issue Details
 
 ```bash
-nightgauge forge issue view <number> --repo $REPO --json number,title,body,labels,milestone,assignees,comments,state
+nightgauge forge issue view <number> --repo "$REPO" --json
 ```
 
 ## Step 3.1.4: Detect Parent Epic

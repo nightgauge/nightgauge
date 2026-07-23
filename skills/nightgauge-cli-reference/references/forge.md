@@ -27,9 +27,9 @@ nightgauge forge auth status
 nightgauge forge repo view --repo "$REPO" --json nameWithOwner -q .nameWithOwner
 
 # Issues
-nightgauge forge issue view <number> --repo "$REPO" --json title,body,labels
+nightgauge forge issue view <number> --repo "$REPO" --json
 nightgauge forge issue create --repo "$REPO" --title "…" --body-file body.md
-nightgauge forge issue edit <number> --repo "$REPO" --add-assignee @me
+nightgauge forge issue edit --node-id <NODE_ID> --body "Updated body"
 nightgauge forge issue comment <number> --repo "$REPO" --body "…"
 
 # PRs
