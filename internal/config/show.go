@@ -59,6 +59,19 @@ type renderPlatform struct {
 // toRenderView projects an in-memory Config into the canonical disk-shaped
 // view used for `nightgauge config show` output.
 func toRenderView(cfg *Config) renderView {
+	var safeGitHubAuth *GitHubAuthConfig
+	if cfg.GitHubAuth != nil {
+		safeGitHubAuth = &GitHubAuthConfig{Users: cfg.GitHubAuth.Users, SuppressGHWarning: cfg.GitHubAuth.SuppressGHWarning}
+		if cfg.GitHubAuth.Token != "" {
+			safeGitHubAuth.Token = redactConfigSecret(cfg.GitHubAuth.Token)
+		}
+		if len(cfg.GitHubAuth.Tokens) > 0 {
+			safeGitHubAuth.Tokens = make(map[string]string, len(cfg.GitHubAuth.Tokens))
+			for owner, token := range cfg.GitHubAuth.Tokens {
+				safeGitHubAuth.Tokens[owner] = redactConfigSecret(token)
+			}
+		}
+	}
 	v := renderView{
 		Project: renderProject{
 			Owner:          cfg.Owner,
@@ -68,9 +81,9 @@ func toRenderView(cfg *Config) renderView {
 			SizeToEstimate: cfg.SizeToEstimate,
 		},
 		GitHubUser:     cfg.GitHubUser,
-		GitHubAuth:     cfg.GitHubAuth,
+		GitHubAuth:     safeGitHubAuth,
 		LogLevel:       cfg.LogLevel,
-		APIKey:         cfg.APIKey,
+		APIKey:         redactConfigSecret(cfg.APIKey),
 		Sanitization:   cfg.Sanitization,
 		FeedbackLoop:   cfg.FeedbackLoop,
 		RemoteCommands: cfg.RemoteCommands,
@@ -85,11 +98,18 @@ func toRenderView(cfg *Config) renderView {
 	if cfg.Telemetry != nil || cfg.PlatformURL != "" || cfg.LicenseKey != "" {
 		v.Platform = &renderPlatform{
 			APIURL:     cfg.PlatformURL,
-			LicenseKey: cfg.LicenseKey,
+			LicenseKey: redactConfigSecret(cfg.LicenseKey),
 			Telemetry:  cfg.Telemetry,
 		}
 	}
 	return v
+}
+
+func redactConfigSecret(value string) string {
+	if value == "" || strings.HasPrefix(value, "env:") {
+		return value
+	}
+	return "<redacted>"
 }
 
 // Render returns a printable view of cfg in the canonical on-disk YAML schema.

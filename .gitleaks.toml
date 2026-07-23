@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic credential-shaped regression fixtures"
+regexTarget = "match"
+regexes = [
+  '''ghp_1234567890abcdefghijklmn''',
+  '''representative_123456789''',
+]

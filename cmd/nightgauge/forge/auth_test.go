@@ -147,14 +147,15 @@ func TestAuthStatus_NeverLeaksToken(t *testing.T) {
 	}
 }
 
-func TestAuthLogin_WritesConfig(t *testing.T) {
+func TestAuthLogin_UsesKeyring(t *testing.T) {
 	calls := []string{}
-	origWrite := writeTokenToConfig
-	writeTokenToConfig = func(token string) (string, error) {
-		calls = append(calls, "write:"+MaskToken(token))
-		return "/tmp/fake.yaml", nil
+	origStore, origScrub := storeTokenInKeyring, scrubPlaintextCredentials
+	storeTokenInKeyring = func(token string) error {
+		calls = append(calls, "keyring:"+MaskToken(token))
+		return nil
 	}
-	defer func() { writeTokenToConfig = origWrite }()
+	scrubPlaintextCredentials = func() ([]string, error) { return nil, nil }
+	defer func() { storeTokenInKeyring, scrubPlaintextCredentials = origStore, origScrub }()
 
 	withFakeForge(t, &fakeForge{auth: &fakeAuthService{}})
 	root := Cmd()
@@ -174,11 +175,10 @@ func TestAuthLogin_WritesConfig(t *testing.T) {
 }
 
 func TestAuthLogout_Idempotent(t *testing.T) {
-	origClear := clearTokenFromConfig
-	clearTokenFromConfig = func() (string, bool, error) {
-		return "/tmp/fake.yaml", false, nil
-	}
-	defer func() { clearTokenFromConfig = origClear }()
+	origRemove, origScrub := removeTokenFromKeyring, scrubPlaintextCredentials
+	removeTokenFromKeyring = func() error { return nil }
+	scrubPlaintextCredentials = func() ([]string, error) { return nil, nil }
+	defer func() { removeTokenFromKeyring, scrubPlaintextCredentials = origRemove, origScrub }()
 
 	root := Cmd()
 	stdout := &bytes.Buffer{}
@@ -194,6 +194,36 @@ func TestAuthLogout_Idempotent(t *testing.T) {
 	}
 	if got["loggedOut"] != true {
 		t.Errorf("loggedOut should be true: %+v", got)
+	}
+}
+
+func TestScrubCredentialFileRemovesLiteralsAndPreservesEnvReferences(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := "owner: TestOrg\ngithub_auth:\n  token: literal-one\n  tokens:\n    TestOrg: literal-two\n    SafeOrg: env:SAFE_TOKEN\nplatform:\n  license_key: literal-three\n  api_key: literal-four\n  api_url: https://example.invalid\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	changed, err := scrubCredentialFile(path)
+	if err != nil || !changed {
+		t.Fatalf("scrubCredentialFile changed=%v err=%v", changed, err)
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read scrubbed config: %v", err)
+	}
+	text := string(out)
+	for _, forbidden := range []string{"literal-one", "literal-two"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatal("plaintext credential remained after scrub")
+		}
+	}
+	if !strings.Contains(text, "env:SAFE_TOKEN") || !strings.Contains(text, "api_url:") {
+		t.Fatal("scrub removed safe configuration")
+	}
+	// Forge auth owns GitHub credentials only. Platform credentials must not be
+	// deleted until the VS Code migration has safely copied them to SecretStorage.
+	if !strings.Contains(text, "literal-three") || !strings.Contains(text, "literal-four") {
+		t.Fatal("forge auth scrubbed credentials it cannot migrate")
 	}
 }
 
@@ -346,12 +376,13 @@ func TestAuthAssert_RequiresRepo(t *testing.T) {
 
 func TestAuthRefresh_ReadsGhAndWrites(t *testing.T) {
 	origRead := readGHToken
-	origWrite := writeTokenToConfig
+	origStore, origScrub := storeTokenInKeyring, scrubPlaintextCredentials
 	readGHToken = func() (string, error) { return "ghp_refreshed_token_value_abcdef", nil }
-	writeTokenToConfig = func(token string) (string, error) { return "/tmp/fake.yaml", nil }
+	storeTokenInKeyring = func(token string) error { return nil }
+	scrubPlaintextCredentials = func() ([]string, error) { return nil, nil }
 	defer func() {
 		readGHToken = origRead
-		writeTokenToConfig = origWrite
+		storeTokenInKeyring, scrubPlaintextCredentials = origStore, origScrub
 	}()
 
 	root := Cmd()

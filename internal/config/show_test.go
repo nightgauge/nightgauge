@@ -31,6 +31,32 @@ func TestRender_FullYAML(t *testing.T) {
 	}
 }
 
+func TestRenderRedactsCredentialValues(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.GitHubAuth = &GitHubAuthConfig{
+		Token:  "credential-value-one",
+		Tokens: map[string]string{"nightgauge": "credential-value-two", "safe": "env:SAFE_TOKEN"},
+	}
+	cfg.APIKey = "credential-value-three"
+	cfg.LicenseKey = "credential-value-four"
+
+	for _, tc := range []struct {
+		key  string
+		json bool
+		raw  bool
+	}{{}, {json: true}, {key: "github_auth.token", raw: true}, {key: "platform.license_key", raw: true}} {
+		out, err := Render(cfg, tc.key, tc.json, tc.raw)
+		if err != nil {
+			t.Fatalf("Render(%q): %v", tc.key, err)
+		}
+		for _, forbidden := range []string{"credential-value-one", "credential-value-two", "credential-value-three", "credential-value-four"} {
+			if strings.Contains(out, forbidden) {
+				t.Fatalf("Render(%q) exposed a credential", tc.key)
+			}
+		}
+	}
+}
+
 func TestRender_FullJSON(t *testing.T) {
 	cfg := &Config{
 		Owner:         "nightgauge",
