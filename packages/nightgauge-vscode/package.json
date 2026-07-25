@@ -768,6 +768,27 @@
         "command": "nightgauge.attentionResolve",
         "title": "Nightgauge: Resolve Decision",
         "icon": "$(check)"
+      },
+      {
+        "command": "nightgauge.attentionSweep",
+        "title": "Nightgauge: Check Repositories for Blockers",
+        "category": "Nightgauge",
+        "icon": "$(search)"
+      },
+      {
+        "command": "nightgauge.attentionOpenLink",
+        "title": "Nightgauge: Open Decision Link",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "nightgauge.attentionMute",
+        "title": "Nightgauge: Mute Until This Changes",
+        "icon": "$(bell-slash)"
+      },
+      {
+        "command": "nightgauge.attentionUnmute",
+        "title": "Nightgauge: Unmute Decision",
+        "icon": "$(bell)"
       }
     ],
     "menus": {
@@ -952,6 +973,11 @@
           "command": "nightgauge.attentionRefresh",
           "when": "view == nightgauge.attentionView",
           "group": "navigation@1"
+        },
+        {
+          "command": "nightgauge.attentionSweep",
+          "when": "view == nightgauge.attentionView",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
@@ -962,8 +988,23 @@
         },
         {
           "command": "nightgauge.attentionResolve",
-          "when": "view == nightgauge.attentionView && viewItem == attention.request",
+          "when": "view == nightgauge.attentionView && viewItem =~ /^attention\\.request/",
           "group": "inline@1"
+        },
+        {
+          "command": "nightgauge.attentionOpenLink",
+          "when": "view == nightgauge.attentionView && viewItem =~ /^attention\\.request\\.link/",
+          "group": "inline@0"
+        },
+        {
+          "command": "nightgauge.attentionMute",
+          "when": "view == nightgauge.attentionView && viewItem =~ /^attention\\.request(\\.link)?$/",
+          "group": "attention@1"
+        },
+        {
+          "command": "nightgauge.attentionUnmute",
+          "when": "view == nightgauge.attentionView && viewItem =~ /^attention\\.request.*\\.muted$/",
+          "group": "attention@1"
         },
         {
           "command": "nightgauge.runStage",
@@ -1950,6 +1991,17 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically delete local branches whose remote tracking branch was removed after PR merge. Runs on extension startup."
+        },
+        "nightgauge.attention.sweepEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check each workspace repository for standing blockers (a failing default branch, a green PR nobody can merge) even when no pipeline run is in flight. Results appear in the Attention view."
+        },
+        "nightgauge.attention.sweepIntervalMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "description": "How often to re-check repositories for standing blockers while this window is open. The conditions it finds persist for hours, so a long interval costs almost nothing in freshness and saves API quota; values between 1 and 5 are raised to 5. Set to 0 to check only on activation, on refresh, and after a run finishes."
         }
       }
     }

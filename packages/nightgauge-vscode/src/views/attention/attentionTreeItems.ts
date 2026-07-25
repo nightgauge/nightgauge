@@ -56,15 +56,29 @@ export function iconForRequest(request: AttentionRequestView): vscode.ThemeIcon 
   );
 }
 
-/** "repo#issue · stage · $cost" — only the parts the request actually carries. */
+/** "repo#issue · stage · $cost" — only the parts the request actually carries.
+ *
+ * A repo-scoped card (issue #93) has no issue and no run, so this collapses to
+ * the bare repo rather than emitting a placeholder for the fields it lacks:
+ * "octocat/acme-web#undefined" is worse than saying nothing. `pr` fills the
+ * `#n` slot when there is no issue — forge numbering is shared between issues
+ * and PRs, so `owner/name#123` is the correct reference for either. */
 export function formatContextLine(context: AttentionContext): string {
   const parts: string[] = [];
-  parts.push(context.issue ? `${context.repo}#${context.issue}` : context.repo);
+  const number = context.issue || context.pr;
+  parts.push(number ? `${context.repo}#${number}` : context.repo);
   if (context.stage) parts.push(context.stage);
   if (context.cost_so_far_usd !== undefined && context.cost_so_far_usd > 0) {
     parts.push(`$${context.cost_so_far_usd.toFixed(2)}`);
   }
   return parts.join(" · ");
+}
+
+/** True for a card that describes a condition of the repository rather than of
+ * a run — no run, no issue, no PR. The default-branch-health card is the
+ * canonical case: it explains why EVERY PR in the repo is stuck. */
+export function isRepoScoped(context: AttentionContext): boolean {
+  return !context.run_id && !context.issue && !context.pr;
 }
 
 /** Relative age ("just now" / "4m ago" / "3h ago" / "2d ago") from an RFC3339 timestamp. */
@@ -81,19 +95,55 @@ export function formatRelativeAge(iso: string): string {
   return `${diffDays}d ago`;
 }
 
-/** Full one-line description: context line + relative age. */
+/** Full one-line description: context line + relative age + suppression state.
+ *
+ * "muted" and "seen" are rendered rather than hidden. A muted card is silenced,
+ * not resolved — it still belongs in the inbox at its severity, and an operator
+ * scanning the list has to be able to tell which entries have already been
+ * spoken for without opening each one. */
 export function formatDescription(request: AttentionRequestView): string {
-  const contextLine = formatContextLine(request.context);
-  const age = formatRelativeAge(request.created_at);
-  return [contextLine, age].filter(Boolean).join(" · ");
+  const parts = [formatContextLine(request.context), formatRelativeAge(request.created_at)];
+  if (request.lifecycle.muted) {
+    parts.push("muted");
+  } else if (request.lifecycle.state === "acknowledged") {
+    parts.push("seen");
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+/**
+ * Tree-item `contextValue`, encoding the affordances a card actually has so
+ * `view/item/context` when-clauses can be regex-matched against it:
+ *
+ * - `attention.request`      — the base; every card is resolvable
+ * - `attention.request.link` — carries a `context.url` worth opening
+ * - a trailing `.muted`      — currently silenced (offer unmute, not mute)
+ *
+ * Suffixes are appended in a fixed order so the four possible values are
+ * enumerable, and the menu clauses need no negation (which VS Code's when-clause
+ * grammar handles poorly around `=~`).
+ */
+export function contextValueFor(request: AttentionRequestView): string {
+  let value = "attention.request";
+  if (request.context.url) value += ".link";
+  if (request.lifecycle.muted) value += ".muted";
+  return value;
 }
 
 /**
  * Human-readable consequence text for a declared option, derived entirely
  * client-side from `verb` + `args` (the schema carries no free-text
  * description field — deriving it here avoids any Go/IPC protocol change).
+ *
+ * `request` is optional context: a `noop` on a STANDING condition is not "takes
+ * no action" — it clears the card and suppresses re-raising until the condition
+ * itself changes, which is a materially different promise from the `noop` a
+ * run-scoped card uses to mean "halt, do nothing".
  */
-export function describeAttentionOption(option: AttentionOption): string {
+export function describeAttentionOption(
+  option: AttentionOption,
+  request?: AttentionRequestView
+): string {
   const args = option.args ?? {};
   const str = (key: string): string | undefined =>
     typeof args[key] === "string" && (args[key] as string).length > 0
@@ -140,7 +190,9 @@ export function describeAttentionOption(option: AttentionOption): string {
       return `Moves the board status to "${status}".`;
     }
     case "noop":
-      return "Takes no action.";
+      return request?.standing
+        ? "Clears the card without changing anything. It returns if the condition changes."
+        : "Takes no action.";
     default:
       return option.style === "danger"
         ? "Applies this action (not reversible)."
@@ -174,7 +226,7 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
     super(request.title, vscode.TreeItemCollapsibleState.None);
     this.description = formatDescription(request);
     this.iconPath = iconForRequest(request);
-    this.contextValue = "attention.request";
+    this.contextValue = contextValueFor(request);
     this.tooltip = this.buildTooltip();
     this.command = {
       command: "nightgauge.attentionResolve",
@@ -188,10 +240,21 @@ export class AttentionRequestTreeItem extends AttentionTreeItem {
   }
 
   private buildTooltip(): vscode.MarkdownString {
+    const { title, body, context, producer, lifecycle } = this.request;
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${this.request.title}**\n\n`);
-    if (this.request.body) md.appendMarkdown(`${this.request.body}\n\n`);
-    md.appendMarkdown(`_Producer: ${this.request.producer}_`);
+    // The URL is rendered as a real markdown link, not prose: for a card whose
+    // only option is "dismiss", following it is the operator's actual next
+    // action, and a link they have to retype is not an affordance.
+    md.isTrusted = false;
+    md.appendMarkdown(`**${title}**\n\n`);
+    if (body) md.appendMarkdown(`${body}\n\n`);
+    if (context.url) md.appendMarkdown(`[Open in browser](${context.url})\n\n`);
+    if (lifecycle.muted) {
+      md.appendMarkdown(
+        `_Muted by ${lifecycle.muted.actor || "an operator"} — re-alerts if the condition changes._\n\n`
+      );
+    }
+    md.appendMarkdown(`_Producer: ${producer}_`);
     return md;
   }
 }

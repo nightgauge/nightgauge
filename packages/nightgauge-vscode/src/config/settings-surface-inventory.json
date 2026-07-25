@@ -155,6 +155,12 @@
       "classification": "extension-only",
       "runtime_consumer": "src/extension.ts",
       "storage": "vscode"
+    },
+    {
+      "setting": "nightgauge.attention.*",
+      "classification": "extension-only",
+      "runtime_consumer": "src/services/AttentionSweepService.ts",
+      "storage": "vscode"
     }
   ],
   "custom_sections": [

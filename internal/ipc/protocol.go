@@ -1376,6 +1376,36 @@ type AttentionAcknowledgeParams struct {
 	Actor string `json:"actor,omitempty"`
 }
 
+// AttentionMuteParams silences alerting on a request until its CONDITION
+// changes (issue #92). Non-terminal: the card stays in the inbox at its
+// severity, so muting is not a covert resolve.
+type AttentionMuteParams struct {
+	ID    string `json:"id"`
+	Actor string `json:"actor,omitempty"`
+}
+
+// AttentionUnmuteParams restores alerting on a muted request.
+type AttentionUnmuteParams struct {
+	ID    string `json:"id"`
+	Actor string `json:"actor,omitempty"`
+}
+
+// AttentionSweepParams scopes one repo-scoped sweep (issues #89 / #93).
+//
+// Repos is supplied by the caller rather than discovered here because the
+// extension already owns workspace membership — the same reason
+// AutonomousStartParams carries workspaceRepos. A sweep with no repos is a
+// no-op, never an error: a window with no resolvable repo identity is a
+// legitimate state, not a failure to report.
+type AttentionSweepParams struct {
+	// Repos are "owner/name" specs to evaluate.
+	Repos []string `json:"repos,omitempty"`
+	// Reason is a short trigger label ("activation", "view-refresh", "timer",
+	// "run-terminated") recorded in the daemon log so a surprising sweep can be
+	// traced back to what asked for it.
+	Reason string `json:"reason,omitempty"`
+}
+
 // IssueRemoveBlockedByParams is the thin IPC wrapper the Action Center adds for
 // the existing internal RemoveBlockedByNumber call (ADR 015 §B). Optional fields
 // last so the generated TS signature keeps required params ahead of optional.

@@ -774,6 +774,36 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       title: "Nightgauge: Resolve Decision",
       icon: "$(check)",
     },
+    {
+      // Repo-scoped sweep (#93) — evaluates every workspace repo for standing
+      // blockers with no run in flight. Also fires automatically on activation,
+      // on a refresh, on the configured interval, and after a run terminates;
+      // this is the operator's explicit "check now".
+      command: "nightgauge.attentionSweep",
+      title: "Nightgauge: Check Repositories for Blockers",
+      category: "Nightgauge",
+      icon: "$(search)",
+    },
+    {
+      // For a card whose only declared option is a dismiss, opening its link is
+      // the real next action — so it gets its own affordance, not just a line
+      // in the tooltip.
+      command: "nightgauge.attentionOpenLink",
+      title: "Nightgauge: Open Decision Link",
+      icon: "$(link-external)",
+    },
+    {
+      // Silences alerting until the CONDITION changes. Not a resolve: the card
+      // stays in the inbox at its severity.
+      command: "nightgauge.attentionMute",
+      title: "Nightgauge: Mute Until This Changes",
+      icon: "$(bell-slash)",
+    },
+    {
+      command: "nightgauge.attentionUnmute",
+      title: "Nightgauge: Unmute Decision",
+      icon: "$(bell)",
+    },
   ],
 
   menus: {
@@ -982,6 +1012,12 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
         when: "view == nightgauge.attentionView",
         group: "navigation@1",
       },
+      {
+        // Explicit repo-scoped sweep (#93).
+        command: "nightgauge.attentionSweep",
+        when: "view == nightgauge.attentionView",
+        group: "navigation@2",
+      },
     ],
     "view/item/context": [
       {
@@ -991,10 +1027,31 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       },
       {
         // Inline resolve icon on a DecisionRequest card (ADR 015 / #325) —
-        // the same command the card's click (TreeItem.command) invokes.
+        // the same command the card's click (TreeItem.command) invokes. The
+        // contextValue gained `.link` / `.muted` suffixes in #93, so this
+        // matches on a prefix rather than equality.
         command: "nightgauge.attentionResolve",
-        when: "view == nightgauge.attentionView && viewItem == attention.request",
+        when: "view == nightgauge.attentionView && viewItem =~ /^attention\\.request/",
         group: "inline@1",
+      },
+      {
+        // One-click open for a card that carries a forge link (#93).
+        command: "nightgauge.attentionOpenLink",
+        when: "view == nightgauge.attentionView && viewItem =~ /^attention\\.request\\.link/",
+        group: "inline@0",
+      },
+      {
+        // Mute is offered only while the card is NOT muted; the two clauses are
+        // written as positive matches because VS Code's when-clause grammar has
+        // no reliable negation around `=~`.
+        command: "nightgauge.attentionMute",
+        when: "view == nightgauge.attentionView && viewItem =~ /^attention\\.request(\\.link)?$/",
+        group: "attention@1",
+      },
+      {
+        command: "nightgauge.attentionUnmute",
+        when: "view == nightgauge.attentionView && viewItem =~ /^attention\\.request.*\\.muted$/",
+        group: "attention@1",
       },
       {
         command: "nightgauge.runStage",

@@ -77,6 +77,8 @@ vi.mock("vscode", () => ({
     }
   },
   ProgressLocation: { Notification: 15 },
+  Uri: { parse: (value: string) => ({ toString: () => value, value }) },
+  env: { openExternal: vi.fn(() => Promise.resolve(true)) },
   commands: {
     registerCommand: vi.fn((_id: string, _handler: unknown) => ({ dispose: vi.fn() })),
     executeCommand: vi.fn(),
@@ -145,23 +147,32 @@ const createLogger = (): Logger =>
 
 describe("registerAttentionCommands", () => {
   let attentionResolve: ReturnType<typeof vi.fn>;
+  let attentionMute: ReturnType<typeof vi.fn>;
+  let attentionUnmute: ReturnType<typeof vi.fn>;
   let logger: Logger;
   let provider: AttentionTreeProvider;
-  let treeView: { badge?: { value: number; tooltip: string } };
+  let treeView: { badge?: { value: number; tooltip: string }; description?: string };
+  let sweep: { sweep: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     vi.clearAllMocks();
     attentionResolve = vi.fn().mockResolvedValue({ ok: true, alreadyResolved: false });
+    attentionMute = vi.fn().mockResolvedValue({ ok: true, muted: true });
+    attentionUnmute = vi.fn().mockResolvedValue({ ok: true, muted: false });
     (IpcClient.getInstance as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       attentionResolve,
+      attentionMute,
+      attentionUnmute,
     });
     logger = createLogger();
     provider = new AttentionTreeProvider();
     treeView = {};
+    sweep = { sweep: vi.fn().mockResolvedValue(undefined) };
     registerAttentionCommands({
       provider,
       treeView: treeView as unknown as vscode.TreeView<vscode.TreeItem>,
       logger,
+      sweep,
     });
   });
 
@@ -213,8 +224,9 @@ describe("registerAttentionCommands", () => {
     source.emit({ action: "created", request: request({ severity: "fyi" }) });
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
 
-    // Blocking, but not a "created" action (e.g. a re-detected idempotency-key
-    // update) — no toast; it is the same request, not a new one.
+    // Blocking, but not a "created" action. On the event-scoped `raise` path an
+    // `updated` is any re-raise of the same open request — identical payload
+    // included — so it is the same request, not new news.
     source.emit({ action: "updated", request: request({ severity: "blocking_fleet" }) });
     expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
 
@@ -327,5 +339,204 @@ describe("registerAttentionCommands", () => {
     await handler();
 
     expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  // ── Repo-scoped surface (issue #93) ──────────────────────────────────────
+
+  /** A repo-scoped standing card: no run, no issue, one noop dismiss, a URL. */
+  const repoCard = (overrides: Partial<AttentionRequestView> = {}) =>
+    request({
+      id: "dr_repo",
+      severity: "blocking_fleet",
+      kind: "unblock",
+      title: "main is red — 'Security & license gates' is failing on octocat/acme-web",
+      producer: "default-branch-health",
+      standing: true,
+      steer: undefined,
+      default_action: "expire_noop",
+      options: [{ id: "dismiss", label: "Dismiss — I've seen it", verb: "noop" }],
+      context: {
+        repo: "octocat/acme-web",
+        blocker: "required check(s) failing on main",
+        url: "https://github.com/octocat/acme-web/actions/runs/1",
+      },
+      ...overrides,
+    });
+
+  it("registers the sweep, open-link, mute and unmute commands", () => {
+    for (const id of [
+      "nightgauge.attentionSweep",
+      "nightgauge.attentionOpenLink",
+      "nightgauge.attentionMute",
+      "nightgauge.attentionUnmute",
+    ]) {
+      expect(vscode.commands.registerCommand).toHaveBeenCalledWith(id, expect.any(Function));
+    }
+  });
+
+  it("refreshing the Action Center also triggers a repo-scoped sweep", async () => {
+    vi.spyOn(provider, "refresh").mockResolvedValue(undefined);
+    await getHandler("nightgauge.attentionRefresh")();
+
+    expect(sweep.sweep).toHaveBeenCalledWith("view-refresh");
+  });
+
+  it("the explicit sweep command runs a manual sweep and re-reads the tree", async () => {
+    const refreshSpy = vi.spyOn(provider, "refresh").mockResolvedValue(undefined);
+    await getHandler("nightgauge.attentionSweep")();
+
+    expect(sweep.sweep).toHaveBeenCalledWith("manual");
+    expect(refreshSpy).toHaveBeenCalled();
+  });
+
+  it("offers the link FIRST for a card whose only option changes nothing", async () => {
+    const handler = getHandler("nightgauge.attentionResolve");
+    let offered: Array<{ label: string }> = [];
+    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+      (items: Array<{ label: string }>) => {
+        offered = items;
+        return Promise.resolve(items[0]);
+      }
+    );
+
+    await handler(new AttentionRequestTreeItem(repoCard()));
+
+    expect(offered[0].label).toContain("Open in browser");
+    expect(vscode.env.openExternal).toHaveBeenCalled();
+    // Opening a link is not a resolution — the condition is still true.
+    expect(attentionResolve).not.toHaveBeenCalled();
+  });
+
+  it("describes a standing dismiss honestly rather than as 'takes no action'", async () => {
+    const handler = getHandler("nightgauge.attentionResolve");
+    let offered: Array<{ label: string; description?: string }> = [];
+    (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+      (items: Array<{ label: string; description?: string }>) => {
+        offered = items;
+        return Promise.resolve(undefined);
+      }
+    );
+
+    await handler(new AttentionRequestTreeItem(repoCard()));
+
+    const dismiss = offered.find((i) => i.label.startsWith("Dismiss"));
+    expect(dismiss?.description).toContain("returns if the condition changes");
+  });
+
+  it("offers mute on a standing card and unmute once it is muted — never on an event card", async () => {
+    const handler = getHandler("nightgauge.attentionResolve");
+    const capture = async (req: AttentionRequestView) => {
+      let offered: Array<{ label: string }> = [];
+      (vscode.window.showQuickPick as ReturnType<typeof vi.fn>).mockImplementation(
+        (items: Array<{ label: string }>) => {
+          offered = items;
+          return Promise.resolve(undefined);
+        }
+      );
+      await handler(new AttentionRequestTreeItem(req));
+      return offered.map((i) => i.label);
+    };
+
+    expect(await capture(repoCard())).toContain("$(bell-slash) Mute until this changes");
+    expect(
+      await capture(
+        repoCard({ lifecycle: { state: "open", muted: { actor: "octocat", at: "now" } } })
+      )
+    ).toContain("$(bell) Unmute");
+    // An event-scoped card has no fingerprint to mute "until it changes".
+    expect(await capture(request())).not.toContain("$(bell-slash) Mute until this changes");
+  });
+
+  it("mute calls attention.mute and does not resolve the request", async () => {
+    const handler = getHandler("nightgauge.attentionMute");
+    await handler(new AttentionRequestTreeItem(repoCard()));
+
+    expect(attentionMute).toHaveBeenCalledWith("dr_repo", expect.anything());
+    expect(attentionResolve).not.toHaveBeenCalled();
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      expect.stringContaining("stays in the inbox")
+    );
+  });
+
+  it("unmute calls attention.unmute", async () => {
+    const handler = getHandler("nightgauge.attentionUnmute");
+    await handler(
+      new AttentionRequestTreeItem(
+        repoCard({ lifecycle: { state: "open", muted: { actor: "octocat", at: "now" } } })
+      )
+    );
+
+    expect(attentionUnmute).toHaveBeenCalledWith("dr_repo", expect.anything());
+  });
+
+  it("names a fleet-wide blocker in the view header so it survives a collapsed tree", async () => {
+    const source = new FakeSource();
+    source.list = [repoCard()];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(treeView.description).toContain("main is red");
+    expect(treeView.badge).toEqual({ value: 1, tooltip: "1 blocking decision pending" });
+  });
+
+  it("does not badge or headline a muted condition", async () => {
+    const source = new FakeSource();
+    source.list = [
+      repoCard({ lifecycle: { state: "open", muted: { actor: "octocat", at: "now" } } }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(treeView.badge).toBeUndefined();
+    expect(treeView.description).toBeUndefined();
+    // …but the card is still there.
+    expect(provider.hasAny()).toBe(true);
+  });
+
+  it("does not badge an acknowledged condition", async () => {
+    const source = new FakeSource();
+    source.list = [
+      repoCard({
+        lifecycle: { state: "acknowledged", acknowledged: { actor: "octocat", at: "now" } },
+      }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(treeView.badge).toBeUndefined();
+  });
+
+  it("re-renders but stays silent for a refreshed standing card, and toasts a real change", async () => {
+    const source = new FakeSource();
+    provider.attach(source);
+    await Promise.resolve();
+
+    // The sweep re-observes an unchanged red `main` every cycle. Toasting each
+    // observation is how an operator learns to dismiss without reading.
+    source.emit({ action: "refreshed", request: repoCard() });
+    expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(provider.getOpenBlockingCount()).toBe(1);
+
+    // A muted card never toasts, even on a genuine transition.
+    source.emit({
+      action: "updated",
+      request: repoCard({ lifecycle: { state: "open", muted: { actor: "octocat", at: "now" } } }),
+    });
+    expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
+
+    // A second check starting to fail moves the fingerprint, which is the only
+    // thing that makes reconciliation emit `updated` rather than `refreshed`.
+    // That IS news.
+    source.emit({
+      action: "updated",
+      request: repoCard({ title: "main is red — 2 required checks failing on octocat/acme-web" }),
+    });
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("2 required checks failing"),
+      "Open Action Center"
+    );
   });
 });

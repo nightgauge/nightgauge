@@ -257,3 +257,167 @@ describe("AttentionTreeProvider", () => {
     provider.dispose();
   });
 });
+
+/**
+ * Repo-scoped cards (issue #93): `context.repo` is set, `run_id` and `issue`
+ * are not. The grouping is by severity, so these need no new section — but that
+ * is a property worth pinning, because any grouping keyed on run or issue would
+ * drop them silently rather than fail loudly.
+ */
+describe("AttentionTreeProvider — repo-scoped cards", () => {
+  const repoScoped = (overrides: Partial<AttentionRequestView> = {}) =>
+    request({
+      severity: "blocking_fleet",
+      title: "main is red — 'Security & license gates' is failing on octocat/acme-web",
+      producer: "default-branch-health",
+      standing: true,
+      fingerprint: "checks:Security & license gates",
+      context: {
+        repo: "octocat/acme-web",
+        blocker: "required check(s) failing on main",
+        url: "https://github.com/octocat/acme-web/actions/runs/1",
+      },
+      ...overrides,
+    });
+
+  it("renders a card with no run and no issue in the Blocking band", async () => {
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [repoScoped({ id: "dr_repo" })];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const roots = await children(provider);
+    expect(roots).toHaveLength(1);
+    expect(String(roots[0].label)).toBe("Blocking (1)");
+
+    const [card] = (await children(provider, roots[0])) as AttentionRequestTreeItem[];
+    expect(card.request.id).toBe("dr_repo");
+    // No placeholder for the fields it does not carry.
+    expect(String(card.description)).toContain("octocat/acme-web");
+    expect(String(card.description)).not.toContain("undefined");
+    expect(String(card.description)).not.toContain("#");
+    // The link is a real affordance, not prose.
+    expect(card.contextValue).toBe("attention.request.link");
+
+    provider.dispose();
+  });
+
+  it("exposes the top fleet blocker so it is visible without expanding a node", async () => {
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [
+      request({ id: "dr_run", severity: "blocking_run" }),
+      repoScoped({ id: "dr_fleet" }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(provider.getTopFleetBlocker()?.id).toBe("dr_fleet");
+    provider.dispose();
+  });
+
+  it("keeps a muted card in the tree but drops it from the badge and the header", async () => {
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [
+      repoScoped({
+        id: "dr_muted",
+        lifecycle: { state: "open", muted: { actor: "octocat", at: "now" } },
+      }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Muting is not resolving — the card stays in the inbox at its severity.
+    const roots = await children(provider);
+    expect(String(roots[0].label)).toBe("Blocking (1)");
+    const [card] = (await children(provider, roots[0])) as AttentionRequestTreeItem[];
+    expect(String(card.description)).toContain("muted");
+    expect(card.contextValue).toBe("attention.request.link.muted");
+
+    // …but it no longer interrupts.
+    expect(provider.getOpenBlockingCount()).toBe(0);
+    expect(provider.getTopFleetBlocker()).toBeUndefined();
+
+    provider.dispose();
+  });
+
+  it("keeps an acknowledged card in the tree but drops it from the badge", async () => {
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [
+      repoScoped({
+        id: "dr_ack",
+        lifecycle: { state: "acknowledged", acknowledged: { actor: "octocat", at: "now" } },
+      }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(provider.hasAny()).toBe(true);
+    expect(provider.getOpenBlockingCount()).toBe(0);
+
+    provider.dispose();
+  });
+
+  it("drops an auto-resolved card with no operator action (the condition cleared)", async () => {
+    const card = repoScoped({ id: "dr_auto" });
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [card];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(provider.getOpenBlockingCount()).toBe(1);
+
+    source.emit({
+      action: "auto_resolved",
+      request: {
+        ...card,
+        lifecycle: {
+          state: "auto_resolved",
+          auto_resolved: {
+            at: "now",
+            producer: "default-branch-health",
+            reason: "condition_cleared",
+          },
+        },
+      },
+    });
+
+    expect(provider.getOpenBlockingCount()).toBe(0);
+    expect(provider.hasAny()).toBe(false);
+    provider.dispose();
+  });
+
+  it("renders a PR-scoped card as repo#pr rather than a blank run field", async () => {
+    const provider = new AttentionTreeProvider();
+    const source = new FakeSource();
+    source.list = [
+      request({
+        id: "dr_pr",
+        severity: "blocking_run",
+        title: "PR #42 is green and waiting — a review is required",
+        context: {
+          repo: "octocat/acme-web",
+          pr: 42,
+          url: "https://github.com/octocat/acme-web/pull/42",
+        },
+      }),
+    ];
+    provider.attach(source);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const roots = await children(provider);
+    const [card] = (await children(provider, roots[0])) as AttentionRequestTreeItem[];
+    expect(String(card.description)).toContain("octocat/acme-web#42");
+
+    provider.dispose();
+  });
+});

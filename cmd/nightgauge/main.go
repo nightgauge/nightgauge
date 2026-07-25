@@ -4160,6 +4160,12 @@ func serveCmd() *cobra.Command {
 				opts = append(opts, ipc.WithSuppressGHWarning(true))
 			}
 
+			// Forge resolution for attention.sweep (#93). The router is built
+			// once and reused: constructing it re-reads config and re-runs the
+			// token chain (which can shell out to `gh`), and the sweep is
+			// invoked on a timer across every workspace repo.
+			opts = append(opts, ipc.WithForgeClientFactory(cachedSweepForgeClient()))
+
 			// Export the configured GitHub token so deterministic `gh`
 			// subprocesses (gates, recovery, board status, skill shell-outs)
 			// authenticate as the pipeline identity rather than the machine's

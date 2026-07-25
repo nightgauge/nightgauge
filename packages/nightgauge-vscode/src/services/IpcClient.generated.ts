@@ -22,7 +22,9 @@ import type {
   AnalyticsTrendsResult,
   AttentionAcknowledgeResult,
   AttentionListResult,
+  AttentionMuteResult,
   AttentionResolveResult,
+  AttentionSweepResult,
   AuthDeviceCodeResult,
   AuthDeviceFlowPollResult,
   AuthTokenResponse,
@@ -519,6 +521,18 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async attentionAcknowledge(id: string, actor?: string): Promise<AttentionAcknowledgeResult> {
     return this.call<AttentionAcknowledgeResult>('attention.acknowledge', { id, actor });
+  }
+
+  async attentionMute(id: string, actor?: string): Promise<AttentionMuteResult> {
+    return this.call<AttentionMuteResult>('attention.mute', { id, actor });
+  }
+
+  async attentionUnmute(id: string, actor?: string): Promise<AttentionMuteResult> {
+    return this.call<AttentionMuteResult>('attention.unmute', { id, actor });
+  }
+
+  async attentionSweep(repos?: string[], reason?: string): Promise<AttentionSweepResult> {
+    return this.call<AttentionSweepResult>('attention.sweep', { repos, reason });
   }
 
 
