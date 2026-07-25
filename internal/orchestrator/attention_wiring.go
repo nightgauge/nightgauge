@@ -105,7 +105,9 @@ func (as *AutonomousScheduler) auditAttentionTransition(entry attention.JournalE
 	if req == nil || req.Context.RunID == "" {
 		return
 	}
-	if entry.Action != attention.ActionResolved && entry.Action != attention.ActionExpired {
+	switch entry.Action {
+	case attention.ActionResolved, attention.ActionExpired, attention.ActionAutoResolved:
+	default:
 		return
 	}
 	root := as.workspaceRoot
@@ -128,6 +130,12 @@ func (as *AutonomousScheduler) auditAttentionTransition(entry attention.JournalE
 	}
 	if req.Lifecycle.Expired != nil {
 		payload.Applied = req.Lifecycle.Expired.Applied
+	}
+	if req.Lifecycle.AutoResolved != nil {
+		// A retraction has no actor and no option: the note carries why the
+		// system withdrew the card, so the audit can tell it apart from a
+		// decision someone made.
+		payload.Note = req.Lifecycle.AutoResolved.Reason
 	}
 	if req.Context.TraceRef != nil {
 		payload.OriginatingSeq = req.Context.TraceRef.Seq

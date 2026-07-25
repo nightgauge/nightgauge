@@ -40,6 +40,10 @@ and resolve it — each option maps to a deterministic, audited verb.`,
 	cmd.AddCommand(attentionListCmd())
 	cmd.AddCommand(attentionShowCmd())
 	cmd.AddCommand(attentionResolveCmd())
+	cmd.AddCommand(attentionAckCmd())
+	cmd.AddCommand(attentionMuteCmd())
+	cmd.AddCommand(attentionUnmuteCmd())
+	cmd.AddCommand(attentionSweepCmd())
 	return cmd
 }
 
@@ -105,8 +109,14 @@ func printAttentionTable(cmd *cobra.Command, reqs []attention.DecisionRequest) {
 		if repo == "" {
 			repo = "(fleet)"
 		}
+		state := string(r.Lifecycle.State)
+		if r.IsMuted() {
+			// A muted card is silenced, not hidden — the operator still sees it,
+			// annotated with why it is quiet.
+			state += " (muted)"
+		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, r.Severity, r.Kind, r.Lifecycle.State, repo, clip(r.Title, 48))
+			r.ID, r.Severity, r.Kind, state, repo, clip(r.Title, 48))
 	}
 	w.Flush()
 }
@@ -174,6 +184,12 @@ func printAttentionDetail(cmd *cobra.Command, r *attention.DecisionRequest) {
 	if r.Context.Blocker != "" {
 		fmt.Fprintf(out, "  blocker:   %s\n", r.Context.Blocker)
 	}
+	if r.Standing {
+		fmt.Fprintf(out, "  standing:  yes (fingerprint %s)\n", r.Fingerprint)
+	}
+	if m := r.Lifecycle.Muted; m != nil {
+		fmt.Fprintf(out, "  muted:     by %s at %s — until the condition changes\n", m.Actor, m.At)
+	}
 	fmt.Fprintf(out, "  expires:   %s (default: %s)\n", r.ExpiresAt, r.DefaultAction)
 	if r.Body != "" {
 		fmt.Fprintf(out, "\n  %s\n", r.Body)
@@ -184,6 +200,9 @@ func printAttentionDetail(cmd *cobra.Command, r *attention.DecisionRequest) {
 	}
 	if r.Lifecycle.Resolved != nil {
 		fmt.Fprintf(out, "\n  Resolved by %s at %s → %s\n", r.Lifecycle.Resolved.Actor, r.Lifecycle.Resolved.At, r.Lifecycle.Resolved.OptionID)
+	}
+	if a := r.Lifecycle.AutoResolved; a != nil {
+		fmt.Fprintf(out, "\n  Auto-resolved at %s — %s (no human decided this)\n", a.At, a.Reason)
 	}
 }
 

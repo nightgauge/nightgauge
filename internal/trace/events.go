@@ -271,7 +271,9 @@ type DecisionRequestPayload struct {
 	ID       string `json:"id"`
 	Kind     string `json:"kind"`
 	Producer string `json:"producer"`
-	// Transition is "resolved" or "expired".
+	// Transition is the journal action: "resolved" or "expired" for a
+	// run-scoped request, plus "created" / "updated" / "auto_resolved" for the
+	// repo-scoped standing conditions `attention sweep` reconciles (issue #92).
 	Transition string `json:"transition"`
 	OptionID   string `json:"option_id,omitempty"`
 	Actor      string `json:"actor,omitempty"`

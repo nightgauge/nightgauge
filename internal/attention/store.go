@@ -65,6 +65,12 @@ type JournalEntry struct {
 	OptionID       string `json:"option_id,omitempty"`
 	Applied        string `json:"applied,omitempty"`
 	At             string `json:"at"`
+	// Fingerprint is the standing condition's material state at this
+	// transition (issue #92); empty for event-scoped requests.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// Muted records that alerting was suppressed at this transition. Consumed
+	// by ShouldNotify.
+	Muted bool `json:"muted,omitempty"`
 }
 
 // Journal action constants.
@@ -291,6 +297,10 @@ type ListFilter struct {
 	IncludeTerminal bool
 	// Repo, when non-empty, restricts to requests whose context repo matches.
 	Repo string
+	// ExcludeMuted drops requests an operator muted. Off by default: a muted
+	// card is silenced, not hidden — it still belongs in the inbox. Surfaces
+	// that render an alert-worthy subset set this.
+	ExcludeMuted bool
 }
 
 // List returns requests matching the filter, ordered most-severe-then-newest
@@ -316,6 +326,9 @@ func (s *Store) List(filter ListFilter) ([]DecisionRequest, error) {
 			continue
 		}
 		if filter.Repo != "" && req.Context.Repo != filter.Repo {
+			continue
+		}
+		if filter.ExcludeMuted && req.IsMuted() {
 			continue
 		}
 		out = append(out, *req)

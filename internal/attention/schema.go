@@ -88,16 +88,23 @@ const (
 	// StateAcknowledged — a surface marked it seen (clears the badge) without
 	// resolving. Non-blocking; a resolve can still follow.
 	StateAcknowledged State = "acknowledged"
-	// StateResolved — terminal: an option was applied.
+	// StateResolved — terminal: an option was applied. A HUMAN decided.
 	StateResolved State = "resolved"
 	// StateExpired — terminal: the sweep applied the default_action past
 	// expires_at.
 	StateExpired State = "expired"
+	// StateAutoResolved — terminal: a repo sweep no longer observed the
+	// standing condition and retracted the card (issue #92). Deliberately
+	// distinct from StateResolved: a card the system withdrew because the
+	// problem fixed itself is a different fact from a card someone acted on,
+	// and the audit trail has to be able to tell them apart.
+	StateAutoResolved State = "auto_resolved"
 )
 
-// IsTerminal reports whether the state is a terminal (resolved | expired) state.
+// IsTerminal reports whether the state is terminal (resolved | expired |
+// auto_resolved).
 func (s State) IsTerminal() bool {
-	return s == StateResolved || s == StateExpired
+	return s == StateResolved || s == StateExpired || s == StateAutoResolved
 }
 
 // ExpireNoop is the sentinel default_action meaning "on expiry, do nothing but
@@ -136,6 +143,23 @@ type DecisionRequest struct {
 	// DefaultAction is an option id applied on expiry, or ExpireNoop.
 	DefaultAction string    `json:"default_action"`
 	Lifecycle     Lifecycle `json:"lifecycle"`
+
+	// Standing marks a request raised from a STANDING condition — one that
+	// persists across observations and is reconciled by `attention sweep`,
+	// rather than an event a run loop observed once and moved past (issue
+	// #92). Only standing requests auto-resolve when their condition clears.
+	Standing bool `json:"standing,omitempty"`
+
+	// Fingerprint is the MATERIAL state of a standing condition: which
+	// required checks are failing, which merge blocker applies — never a
+	// timestamp, elapsed duration, or counter that moves on its own.
+	//
+	// Two observations with equal fingerprints are the same condition, so
+	// re-observation refreshes the card's content WITHOUT re-alerting; a
+	// changed fingerprint is a genuine state transition and does alert. It is
+	// also what "mute until the condition changes" is measured against.
+	// Required on every standing request; ignored on event-scoped ones.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // Context carries everything a card needs without a join, plus the ADR-013
@@ -187,15 +211,45 @@ type Lifecycle struct {
 	State State `json:"state"`
 	// Acknowledged is optional and non-blocking.
 	Acknowledged *AckRecord `json:"acknowledged,omitempty"`
-	// Resolved and Expired are mutually exclusive terminal records.
-	Resolved *ResolvedRecord `json:"resolved,omitempty"`
-	Expired  *ExpiredRecord  `json:"expired,omitempty"`
+	// Muted suppresses alerting until the CONDITION changes, not until a
+	// timer expires (issue #92). Non-terminal: the card stays in the inbox.
+	Muted *MuteRecord `json:"muted,omitempty"`
+	// Resolved, Expired and AutoResolved are mutually exclusive terminal
+	// records.
+	Resolved     *ResolvedRecord     `json:"resolved,omitempty"`
+	Expired      *ExpiredRecord      `json:"expired,omitempty"`
+	AutoResolved *AutoResolvedRecord `json:"auto_resolved,omitempty"`
 }
 
 // AckRecord records a non-blocking acknowledgement.
 type AckRecord struct {
 	Actor string `json:"actor"`
 	At    string `json:"at"`
+}
+
+// MuteRecord audits a mute. Fingerprint pins the condition the operator chose
+// to silence: the mute survives every re-observation of that same condition and
+// is dropped the moment the fingerprint moves, so an operator who knows `main`
+// is red because they are fixing it is not told again — but IS told when a
+// second check starts failing (issue #92).
+type MuteRecord struct {
+	Actor string `json:"actor"`
+	At    string `json:"at"`
+	// Fingerprint is the request's fingerprint at mute time.
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// AutoResolvedRecord audits a system retraction: a sweep evaluated the
+// producer successfully and no longer observed the condition. Separate from
+// ResolvedRecord (which always names a human actor and an option) precisely so
+// the scorecard can count "problems that fixed themselves" apart from
+// "decisions an operator made".
+type AutoResolvedRecord struct {
+	At string `json:"at"`
+	// Producer is the producer whose sweep observed the condition had cleared.
+	Producer string `json:"producer,omitempty"`
+	// Reason is a short machine-stable explanation, e.g. ReasonConditionCleared.
+	Reason string `json:"reason"`
 }
 
 // ResolvedRecord audits a resolution.
@@ -229,4 +283,9 @@ func (r *DecisionRequest) FindOption(id string) *Option {
 // acknowledged — i.e. not terminal).
 func (r *DecisionRequest) IsOpenish() bool {
 	return !r.Lifecycle.State.IsTerminal()
+}
+
+// IsMuted reports whether alerting on this request is currently suppressed.
+func (r *DecisionRequest) IsMuted() bool {
+	return r != nil && r.Lifecycle.Muted != nil
 }
