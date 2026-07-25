@@ -12,11 +12,13 @@ the JSONL append primitive (`internal/history.AppendJSONL`), the remote
 command channel (`internal/platform/commands.go`, #3557/#3551), and the
 one-way Discord notifier (`internal/notify`).
 
-> **Amendment in flight.** This ADR describes the run-scoped Action Center as
-> shipped in E1. Repo-scoped attention — the `attention sweep` evaluation loop,
-> standing-condition semantics, and `auto_resolved` as a terminal state
-> distinct from a human resolution — extends this contract and is tracked in
-> epic #88. Read this document as the base contract, not the current whole.
+> **Amended by epic #88 — repo-scoped attention.** Decisions A–K below describe
+> the run-scoped Action Center as shipped in E1. **Decisions L and M** (added
+> 2026-07-25) extend the same contract to conditions that exist when nothing is
+> running: the `attention sweep` evaluation loop, standing-condition semantics,
+> and `auto_resolved` as a terminal state distinct from a human resolution.
+> Where the two conflict, L and M are current — most notably the lifecycle in
+> Decision A, which gained a fourth terminal state.
 
 ---
 
@@ -38,7 +40,8 @@ every surface can list, subscribe to, and resolve, and whose resolution routes
 1. **A schema** (Decision A) with a closed `kind` set, ADR-013 trace linkage,
    machine-actionable `options[]` bound to a **verb registry** (Decision B),
    free-text steer that becomes pinned next-stage context (Decision G), and a
-   `open → acknowledged → resolved | expired` lifecycle with full audit.
+   `open → acknowledged → resolved | expired` lifecycle with full audit
+   (extended with `auto_resolved` by Decision M).
 2. **Local-first transport** (Decision C): `.nightgauge/attention/` is the
    source of truth, with a **single authoritative writer** (the Go binary) —
    the hard lesson from the #316 write races. Platform sync is additive.
@@ -155,7 +158,7 @@ the Lifecycle Explorer and the audit is bidirectional.
 
 ```jsonc
 {
-  "state": "open", // open → acknowledged → resolved | expired
+  "state": "open", // open → acknowledged → resolved | expired | auto_resolved (M)
   "acknowledged": { "actor": "octocat", "at": "…" }, // optional
   "resolved": {
     "actor": "octocat",
@@ -169,8 +172,8 @@ the Lifecycle Explorer and the audit is bidirectional.
 ```
 
 `acknowledged` is optional and non-blocking — a surface may mark a request seen
-(clearing its badge) without resolving it. Terminal states are `resolved` and
-`expired`; both are audited into the trace and the run history record
+(clearing its badge) without resolving it. Terminal states are `resolved`,
+`expired`, and — for standing conditions — `auto_resolved` (Decision M); both are audited into the trace and the run history record
 (Decision H).
 
 ### B — Options are commands: the verb registry
@@ -290,6 +293,7 @@ surface:
 Surface {
   list(filter)     -> DecisionRequest[]     // open (and optionally recent) requests
   subscribe(onEvent) -> Disposable          // push: created | updated | resolved | expired
+                                            //       | refreshed | auto_resolved (M)
   resolve(id, option_id, actor, steer_text?) -> Result  // the ONLY mutation
 }
 ```
@@ -539,6 +543,176 @@ Following [../../standards/security.md](../../standards/security.md):
 
 E1 delivers exactly two surfaces — the VSCode Action Center tree and the
 dashboard Attention inbox — over one local-first queue.
+
+---
+
+## Amendment: repo-scoped attention (epic #88, 2026-07-25)
+
+Every producer in Decision F fires from inside a run. That was not noticed as a
+limitation because each one describes a condition a run creates. But the
+conditions that block the most work exist **when nothing is running at all**: a
+red required check on the default branch blocks every open PR simultaneously,
+and a green PR waiting on a reviewer is finished work that no run will ever
+revisit.
+
+On 2026-07-25 both went unobserved in this repository long enough to cost real
+work. A red required check on `main` was rediscovered independently by two
+actors who each authored the same fix; the duplicate surfaced only after both
+were complete. Separately, a PR passed all thirteen checks and then sat on
+`REVIEW_REQUIRED` with no signal on any surface. The store had been shipped for
+months and `.nightgauge/attention/` did not exist in the repository — not empty,
+absent. No DecisionRequest had ever been raised, because nothing had ever asked
+the question outside a run.
+
+The gap was never the schema. `context.repo` was already required and
+`context.run_id` already optional, so a repo-scoped request was representable
+from the day the store shipped. What was missing was an **evaluation loop**.
+
+### L — The sweep: an evaluation loop with no run in flight
+
+A **sweep** asks every registered repo-scoped producer "is this repo blocked
+right now?" and reconciles the answers against the store. It is the second
+writer path into `.nightgauge/attention/`, and it obeys the same single-writer
+rule as Decision C — the sweeper runs _inside_ the authoritative writer
+process, never alongside it.
+
+**Reconcile, not append.** This is the whole of the design. A sweep is a diff
+against the open requests for that repo:
+
+- **newly true** → raise (`created`)
+- **still true, materially unchanged** → refresh content in place
+  (`refreshed`, non-alerting)
+- **still true, materially changed** → update and re-alert (`updated`)
+- **no longer true** → retract (`auto_resolved`)
+
+Appending instead would produce one duplicate card per sweep; raising once and
+never retracting would produce cards that outlive the problems they describe.
+Both end identically — operators stop reading the inbox — so the reconciliation
+is not an optimization, it is the reason the feature can exist at all.
+
+**Not a daemon.** A sweep is cheap, idempotent, and safe to run redundantly, so
+it is invoked rather than scheduled: on extension activation, on a repository or
+Action Center refresh, on a conservative timer, and after any run terminates. A
+long-lived process is a larger commitment than the problem warrants and
+complicates the local-first story.
+
+**Degradation is deliberately asymmetric.** A producer that returns an error is
+dropped from the reconciliation input, so _its_ cards are left untouched rather
+than retracted. But an auth, permission, rate-limit, or deadline failure skips
+the **entire** sweep, because no producer can be trusted to have observed
+anything and a partial view must never drive an auto-resolve. The distinction
+is drawn by `errors.Is` against the `forge` sentinels, which is why adapters
+must translate transport failures into them: an unclassified 401 reads as one
+producer having a bad day, and every _other_ producer's empty result is then
+trusted as evidence that its condition cleared.
+
+This is the load-bearing invariant of the whole amendment. **An empty result
+from a producer is a positive assertion that the condition is false.** A
+producer that cannot look must return an error, never an empty slice.
+
+**Forge-neutral.** Producers receive a `forge.ForgeClient`, never a GitHub
+client, so the same producer runs unchanged against another forge.
+
+### M — Standing-condition semantics
+
+A run-scoped producer fires on a **transition**: the condition is observed once
+and the run moves on. A repo-scoped condition is different in kind — a red
+`main` is still red on the next sweep, and the one after that. Applying event
+semantics to a standing condition is what produces either a duplicate per sweep
+or a card that outlives its problem.
+
+- **Sticky identity.** A condition maps to a stable
+  `(producer, idempotency_key)` derived from _what the condition is_ — the check
+  name, the PR number — never from when it was observed. Re-observation updates
+  the existing request in place.
+
+- **Fingerprint = material state.** `fingerprint` carries which required checks
+  are failing, which merge blocker applies. Never a timestamp, elapsed duration,
+  or counter that moves on its own. Two observations with equal fingerprints are
+  the same condition: the card's content refreshes without re-alerting. A
+  changed fingerprint is a genuine transition and does alert. A standing request
+  without a fingerprint is rejected at the boundary rather than allowed to
+  degrade into re-alerting every sweep.
+
+- **`auto_resolved` is terminal and distinct from `resolved`.** A card the
+  system withdrew because the problem fixed itself is a different fact from a
+  card someone acted on, and the audit trail has to be able to tell them apart —
+  otherwise a scorecard counting "decisions made" silently counts problems that
+  resolved themselves. This adds a fourth terminal state to the Decision A
+  lifecycle:
+
+  ```
+  open → acknowledged → resolved | expired | auto_resolved
+  ```
+
+- **Mute until changed.** A mute pins the fingerprint it was applied at, not a
+  timer. It survives every re-observation of that condition and drops the moment
+  the condition itself changes. An operator who knows `main` is red because they
+  are fixing it is not told again — but _is_ told when a second check starts
+  failing. Muting is not resolving: the card stays in the inbox at its severity.
+
+- **A human resolution suppresses re-raise until the fingerprint moves.**
+  Without this, dismissing a card for a condition that is still true hands it
+  straight back on the next sweep. An `auto_resolved` predecessor never
+  suppresses — a condition that cleared and came back is news.
+
+- **Expiry is refreshed on every observation.** A standing request cannot age
+  out from under a condition that is still true, so expiry only ever fires for a
+  producer that stopped being evaluated at all — which is exactly the stale-card
+  case expiry exists to catch.
+
+**Acknowledge and mute are lifecycle operations, not registry verbs.** Resolving
+is terminal (Decision D), so binding mute to an option would end a card whose
+condition is still true. They ship as `attention ack|mute|unmute` and as
+`attention.mute` / `attention.unmute` IPC methods, outside the verb registry.
+
+### The producer extension point
+
+Adding a repo-scoped producer requires no change to the sweep. A producer is
+anything that can answer the question:
+
+```go
+type Producer interface {
+    // Name is the stable producer id stamped on every request it raises. It is
+    // half of the sticky (producer, idempotency_key) identity, so it must never
+    // change once shipped.
+    Name() string
+
+    // Evaluate returns one DecisionRequest per condition that is CURRENTLY
+    // true — each with a stable IdempotencyKey and a Fingerprint derived from
+    // what the condition IS, never from when it was observed.
+    Evaluate(ctx context.Context, in Input) ([]attention.DecisionRequest, error)
+}
+```
+
+Register from an `init()` so a producer is one self-contained file. The full
+authoring contract, including the invariants a producer must not violate, is
+in [../ATTENTION_PRODUCERS.md](../ATTENTION_PRODUCERS.md).
+
+### Producers 9 and 10
+
+| #   | Producer                | Observes                                         | kind                | Severity         |
+| --- | ----------------------- | ------------------------------------------------ | ------------------- | ---------------- |
+| 9   | `default-branch-health` | A required check failing on the default branch   | `unblock`           | `blocking_fleet` |
+| 10  | `human-gate`            | An open PR that is green and blocked on a person | `approve`/`unblock` | `blocking_run`   |
+
+Producer 9 is `blocking_fleet` because nothing can land until it clears —
+that is the definition, and the reason it is one card rather than one per
+stalled run. Producer 10 is `blocking_run`: one unit of work is stalled while
+the repo keeps shipping everything else.
+
+**Neither ships a repair affordance, on purpose.** No verb in the registry can
+fix a red `main` or approve a PR, and Decision B forbids inventing one. An
+option implying otherwise is worse than no option — the operator clicks it,
+nothing changes, and the next card they see is one they have already learned to
+distrust. Each carries a single `noop` dismiss plus a `context.url` the surface
+renders as a real affordance.
+
+Producer 10 defers to producer 6 (`branch-protection`) via `context.pr`: the
+same blocked PR seen from a run and from a repo scan is one fact, and the
+operator gets one card. Above a configured cap, producer 10 collapses its
+individual cards into one aggregate — thirty stale green PRs is a backlog
+problem, not thirty decisions.
 
 ## Alternatives considered
 
