@@ -22,15 +22,51 @@
  *
  * @see Issue #170 - Harden session-log writer with redaction
  */
+const PEM_BEGIN = "-----BEGIN ";
+const PEM_END = "-----END ";
+const PEM_ARMOUR = "-----";
+
+/**
+ * Replace every `-----BEGIN …----- … -----END …-----` block with a placeholder.
+ *
+ * Scanned with `indexOf` rather than matched with a regex. The natural pattern
+ * (`/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/`) re-scans the
+ * remainder of the string from every `-----BEGIN ` that has no matching footer,
+ * which is quadratic on input containing many unterminated headers — CodeQL
+ * `js/polynomial-redos`, and reachable here because the redactor runs over
+ * untrusted stage stdout and webhook payloads.
+ *
+ * Matching is deliberately looser than the old label class: any header text is
+ * accepted, so a novel PEM label still redacts. Both real newlines and literal
+ * `\n` escapes are covered, because nothing constrains the block body.
+ */
+function redactPemBlocks(input: string): string {
+  if (!input.includes(PEM_BEGIN)) return input;
+
+  let out = "";
+  let cursor = 0;
+  for (;;) {
+    const begin = input.indexOf(PEM_BEGIN, cursor);
+    if (begin === -1) break;
+    const headerEnd = input.indexOf(PEM_ARMOUR, begin + PEM_BEGIN.length);
+    if (headerEnd === -1) break;
+    const footer = input.indexOf(PEM_END, headerEnd + PEM_ARMOUR.length);
+    if (footer === -1) break;
+    const footerEnd = input.indexOf(PEM_ARMOUR, footer + PEM_END.length);
+    if (footerEnd === -1) break;
+
+    out += input.slice(cursor, begin) + "[REDACTED:PEM_BLOCK]";
+    cursor = footerEnd + PEM_ARMOUR.length;
+  }
+  return out + input.slice(cursor);
+}
+
 export function redactSecrets(input: string): string {
   if (!input) return input;
   let s = input;
 
   // PEM blocks — match across newlines (real and literal "\n")
-  s = s.replace(
-    /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g,
-    "[REDACTED:PEM_BLOCK]"
-  );
+  s = redactPemBlocks(s);
   // Token prefixes — capture up to a non-token boundary
   s = s.replace(/\b(ghp|gho|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}/g, "[REDACTED:GH_TOKEN]");
   s = s.replace(/\bglpat-[A-Za-z0-9_-]{16,}/g, "[REDACTED:GITLAB_TOKEN]");
