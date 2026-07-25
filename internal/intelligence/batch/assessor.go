@@ -4,6 +4,7 @@ package batch
 
 import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // Strategy indicates the recommended batch processing approach.
@@ -137,15 +138,24 @@ func selectStrategy(issues []IssueInput, estimates []IssueEstimate, hasDeps bool
 	return StrategyParallel, "independent low/medium complexity issues — parallel is efficient"
 }
 
+// recommendModel maps a complexity score to a routing tier, then resolves that
+// tier through the registry. Concrete ids were hardcoded here and drifted a
+// model generation behind (#74) — recommending a superseded model with no
+// failing test, because a stale string is still a valid string.
 func recommendModel(complexityScore int) string {
+	var tier string
 	switch {
 	case complexityScore <= 3:
-		return "claude-haiku-4-5-20251001"
+		tier = "haiku"
 	case complexityScore <= 6:
-		return "claude-sonnet-4-6"
+		tier = "sonnet"
 	default:
-		return "claude-opus-4-8"
+		tier = "opus"
 	}
+	if m, ok := models.Get(tier); ok {
+		return m.ID
+	}
+	return tier
 }
 
 func estimateIssueCost(complexityScore int, model string) float64 {

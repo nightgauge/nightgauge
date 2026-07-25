@@ -60,7 +60,7 @@ export type Provider = z.infer<typeof ProviderSchema>;
  * `satisfies`-style compile guard below fails if the two ever drift, so the
  * source of truth stays single even though Zod needs a runtime enum.
  */
-export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 // Compile-time guard: the enum members must be exactly the ClaudeEffort union.
 type _EffortParity = (typeof EFFORT_LEVELS)[number] extends ClaudeEffort

@@ -819,8 +819,14 @@ function buildAutoRouterOptions(
   };
 }
 
-/** Effort levels in ascending reasoning depth, for envelope clamping (Issue #19). */
-const EFFORT_ORDER: ClaudeEffort[] = ["low", "medium", "high", "xhigh"];
+/**
+ * Effort levels in ascending reasoning depth, for envelope clamping (Issue #19).
+ *
+ * Must list EVERY `ClaudeEffort` member: `clampEffortToEnvelope` treats an
+ * unlisted value as unclampable and returns it untouched, so a missing entry
+ * silently exempts that level from the mode envelope's ceiling (#75).
+ */
+const EFFORT_ORDER: ClaudeEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
 /**
  * Clamp a complexity-derived effort into the mode envelope's `[effortFloor,

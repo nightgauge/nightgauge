@@ -245,10 +245,20 @@ export function getStageBudget(
  * `xhigh` exists for the frontier tier: Anthropic documents `high` as Fable
  * 5's default and `xhigh` for the most capability-sensitive work (#73). The
  * claude CLI accepts it for Opus too (verified on 2.1.186).
+ *
+ * `max` is the top tier introduced with Opus 5 (#75). Opus 5 converts extra
+ * effort into quality more reliably than earlier models, so the ladder is a
+ * real dial rather than a formality — but the guidance is to start at the
+ * default (`high`) and move in either direction on eval evidence, not to raise
+ * the ceiling reflexively. No stage default changed when `max` was added.
+ *
+ * Whether a given model accepts a level is NOT encoded here — the registry's
+ * `supported_efforts` is authoritative, so a model that lacks a level rejects
+ * it loudly rather than being silently downgraded.
  */
-export type ClaudeEffort = "low" | "medium" | "high" | "xhigh";
+export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
-const VALID_CLAUDE_EFFORTS: ClaudeEffort[] = ["low", "medium", "high", "xhigh"];
+const VALID_CLAUDE_EFFORTS: ClaudeEffort[] = ["low", "medium", "high", "xhigh", "max"];
 
 /**
  * Default per-stage model overrides — Sonnet 4.6 era cost-optimized strategy.
@@ -327,6 +337,40 @@ export const EFFORT_SUPPORTING_MODELS: ReadonlySet<DefaultModel> = new Set<Defau
  */
 export function modelSupportsEffort(model: DefaultModel): boolean {
   return EFFORT_SUPPORTING_MODELS.has(model);
+}
+
+/**
+ * Assert that a model accepts a specific effort LEVEL, per the registry's
+ * `supported_efforts` (#75).
+ *
+ * `modelSupportsEffort` answers the coarser question — does this tier take an
+ * `--effort` flag at all. Once the ladder gained `max` (Opus 5 only, at the
+ * time of writing) that stopped being sufficient: `opus` supports effort, but
+ * an older opus-band model does not support `max`.
+ *
+ * Deliberately throws rather than downgrading. A silent coercion here would
+ * mean an operator who configured `max` gets `xhigh` and never learns —
+ * precisely the class of drift that let the opus band run a superseded model
+ * for a full release cycle (#74).
+ *
+ * Unknown models (local ollama/lm-studio, unregistered ids) are NOT validated:
+ * the registry has no entries for them by design, so there is nothing to
+ * validate against and rejecting would break local runs.
+ */
+export function assertEffortSupported(
+  effort: ClaudeEffort,
+  modelId: string,
+  supportedEfforts: readonly string[] | undefined,
+  stage?: string
+): void {
+  if (!supportedEfforts || supportedEfforts.length === 0) return;
+  if (supportedEfforts.includes(effort)) return;
+  const where = stage ? ` for stage "${stage}"` : "";
+  throw new Error(
+    `Effort "${effort}"${where} is not supported by model "${modelId}" ` +
+      `(supports: ${supportedEfforts.join(", ")}). ` +
+      `Choose a supported level or route the stage to a model that accepts "${effort}".`
+  );
 }
 
 /**
@@ -898,7 +942,7 @@ export function getExplicitStageEffort(
 
       if (inStageEfforts) {
         const effortMatch = trimmed.match(
-          /^([a-z][-a-z]*):\s*['"]?(low|medium|high|xhigh)['"]?(?:\s+#.*)?$/
+          /^([a-z][-a-z]*):\s*['"]?(low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
         );
         if (effortMatch && effortMatch[1] === stage) {
           return effortMatch[2] as ClaudeEffort;
@@ -964,7 +1008,7 @@ export function getModelDefaultEffort(workspaceRoot?: string): ClaudeEffort | un
 
       if (inModelRouting) {
         const match = trimmed.match(
-          /^default_effort:\s*['"]?(low|medium|high|xhigh)['"]?(?:\s+#.*)?$/
+          /^default_effort:\s*['"]?(low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
         );
         if (match) {
           return match[1] as ClaudeEffort;

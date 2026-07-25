@@ -64,9 +64,28 @@ describe("model registry — resolution", () => {
   });
 
   it("resolves a tier alias to the current (non-deprecated) model", () => {
-    // sonnet has two entries; the tier must resolve to Sonnet 5, not the deprecated 4.6.
-    expect(getModelDescriptor("sonnet")?.id).toBe("claude-sonnet-5");
-    expect(getModelDescriptor("opus")?.id).toBe("claude-opus-4-8");
+    // Asserts the PROPERTY, not the id of the day. Pinning ids here means the
+    // test has to be chased forward on every model release, and a test nobody
+    // updates is a test that documents a superseded model as correct (#74).
+    for (const tier of ["haiku", "sonnet", "opus", "fable"] as const) {
+      const resolved = getModelDescriptor(tier);
+      expect(resolved, `no model serves the anthropic/${tier} band`).toBeDefined();
+      expect(resolved?.deprecated ?? false, `${tier} resolves to deprecated ${resolved?.id}`).toBe(
+        false
+      );
+      expect(resolved?.tiers).toContain(tier);
+      expect(resolved?.provider).toBe("anthropic");
+    }
+  });
+
+  it("prefers the live model over a deprecated one sharing the same band", () => {
+    // Both sonnet 4.6/5 and opus 4.8/5 coexist; resolution must skip the
+    // deprecated entry rather than returning whichever is listed first.
+    const deprecatedIds = MODEL_REGISTRY.filter((m) => m.deprecated).map((m) => m.id);
+    expect(deprecatedIds.length, "fixture assumes deprecated entries exist").toBeGreaterThan(0);
+    for (const tier of ["sonnet", "opus"] as const) {
+      expect(deprecatedIds).not.toContain(getModelDescriptor(tier)?.id);
+    }
   });
 
   it("returns undefined for an unknown id/tier", () => {
