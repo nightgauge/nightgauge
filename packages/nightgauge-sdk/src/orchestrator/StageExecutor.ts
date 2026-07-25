@@ -377,6 +377,22 @@ export async function loadStageSkill(
 }
 
 /**
+ * Drop trailing `/` and `\` from a directory path.
+ *
+ * Scanned rather than matched with `/[/\\]+$/`: an end-anchored quantifier
+ * makes the engine retry from every separator position, which is quadratic on
+ * a long run of separators (CodeQL `js/polynomial-redos`). The directory comes
+ * from caller-supplied configuration, so it is not trusted input.
+ */
+function trimTrailingSeparators(directory: string): string {
+  let end = directory.length;
+  while (end > 0 && (directory[end - 1] === "/" || directory[end - 1] === "\\")) {
+    end -= 1;
+  }
+  return end === directory.length ? directory : directory.slice(0, end);
+}
+
+/**
  * Rewrite the selected skill's own progressive-disclosure paths for consumer
  * repositories, which do not contain Nightgauge's source-tree `skills/`.
  */
@@ -385,7 +401,7 @@ export function rewriteStageSkillPaths(
   stage: PipelineStage,
   skillDirectory: string
 ): string {
-  const directory = skillDirectory.replace(/[/\\]+$/, "");
+  const directory = trimTrailingSeparators(skillDirectory);
   const sharedDirectory = path.join(path.dirname(directory), "_shared");
   let rewritten = content.split("skills/_shared/").join(`${sharedDirectory}${path.sep}`);
   const ownNames = new Set([path.basename(directory), `nightgauge-${stage}`, stage]);
