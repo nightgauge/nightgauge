@@ -669,6 +669,63 @@ mapper/integration contract tests enforce this.
 > Real-time in-progress requires wiring lifecycle events into
 > `ConcurrentPipelineManager`; tracked as a follow-up.
 
+### Every PR is stuck and nothing says why (repo-wide blocker)
+
+**Symptom:** Multiple PRs sit unmergeable at once. Individually each looks like
+its own problem — a failing check here, a merge that will not go through there —
+and each run rediscovers it independently at its merge stage. Nothing anywhere
+says "this is one condition affecting everything."
+
+**Root cause class — a repo-wide gate, reported per-run.** A required check
+failing on the **default branch** blocks every open PR simultaneously. Before
+the repo-scoped sweep existed, the only producer that could notice was
+`branch-protection`, which fires when a run reaches `pr-merge` and punts. So the
+fact was reported N times as N run-scoped problems, and never once as the single
+repo-scoped fact it is.
+
+**The 2026-07-25 incident** is the canonical shape. A red required check on
+`main` went unobserved long enough that two actors independently authored the
+same fix; the duplicate surfaced only after both were complete. The same day, a
+PR passed all thirteen checks and then sat on `REVIEW_REQUIRED` with no signal
+on any surface. `.nightgauge/attention/` did not exist in the repository at all
+— not empty, **absent** — because every producer shipped to that point fired
+from inside a run, and no run had ever hit these conditions in a way that raised
+one.
+
+**Diagnose:**
+
+```bash
+# Ask the question directly — no run required
+nightgauge attention sweep --repo <owner/name> --json
+
+# Then read the inbox
+nightgauge attention list
+```
+
+A `default-branch-health` card names the specific failing check — which matters,
+because the next action differs entirely between a flaky integration test and a
+dependency gate that started failing with no code change. A `human-gate` card
+names a PR that is green and waiting on a person.
+
+**Notes:**
+
+- The sweep raises nothing for a check that is merely **pending**, and nothing
+  for a failure inside its grace window (default 10 minutes, measured from the
+  check's own completion time) — so a failure that is re-run green never
+  surfaces. If you expect a card and do not see one, check both.
+- No required checks configured on the branch means **nothing is required to
+  merge**, so `default-branch-health` stays silent by design even if the branch
+  looks red.
+- If the sweep reports `skipped`, it could not trust its own view — an auth,
+  permission, rate-limit, or deadline failure. Existing cards are deliberately
+  left untouched rather than retracted. Fix the credential and re-run.
+- Muting a card silences it **until the condition changes**, not until a timer
+  expires: `nightgauge attention mute <id>`. If a second check starts failing,
+  the fingerprint moves, the mute drops, and it alerts again.
+
+See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) and
+[ADR 015](decisions/015-decision-requests.md) (Decisions L and M).
+
 ---
 
 ## Getting Help

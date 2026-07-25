@@ -1049,6 +1049,98 @@ stay in the history and exit-records stores, joined by the shared `run_id`
 issue. Runs pre-dating trace capture simply have no file — consumers degrade
 to stage-level data.
 
+### Attention Operations
+
+_ADR 015 (DecisionRequests) · Epic #88 (repo-scoped attention)._
+
+Readers and lifecycle operations over the Action Center's local-first
+`DecisionRequest` store at `.nightgauge/attention/` — the record the pipeline
+creates when it needs a human decision at a dead end that is otherwise silent
+or one-way. The Go binary is the single authoritative writer; surfaces never
+write these files directly.
+
+```bash
+# Read the inbox
+nightgauge attention list                    # open requests, most-severe first
+nightgauge attention list --json
+nightgauge attention show <id>
+
+# Resolve — terminal, applies one of the request's declared options
+nightgauge attention resolve <id> --option <option-id> [--steer "..."]
+
+# Non-terminal lifecycle operations (issue #92)
+nightgauge attention ack <id>                # clears the badge, keeps the card
+nightgauge attention mute <id>               # silence until the CONDITION changes
+nightgauge attention unmute <id>
+
+# Evaluate a repo's standing blockers with NO run in flight (issue #89)
+nightgauge attention sweep --repo octocat/acme-web
+nightgauge attention sweep --repo octocat/acme-web --json
+nightgauge attention sweep --repo octocat/acme-web --strict
+```
+
+**`ack` and `mute` are lifecycle operations, not registry verbs.** Resolving is
+terminal, so binding mute to an option would end a card whose condition is still
+true. A muted card stays in the inbox at its severity — muting is not resolving,
+and the mute is pinned to the condition's fingerprint rather than to a timer, so
+it drops the moment the condition itself changes.
+
+**`sweep` flags:**
+
+| Flag        | Default | Description                                                   |
+| ----------- | ------- | ------------------------------------------------------------- |
+| `--repo`    | —       | Repo to sweep as `owner/name` (required)                      |
+| `--workdir` | cwd     | Project root                                                  |
+| `--json`    | `false` | Emit the sweep result as JSON                                 |
+| `--strict`  | `false` | Exit non-zero when a producer failed or the sweep was skipped |
+| `--timeout` | `30s`   | Deadline bounding the sweep's forge traffic                   |
+
+The sweep **reconciles rather than appends**: it raises what is newly true,
+refreshes what is still true without re-alerting, and auto-resolves what is no
+longer true. Running it twice over an unchanged repo is a no-op the second time,
+which is why it is safe to invoke on activation, on a view refresh, on a timer,
+and after a run terminates rather than running as a daemon.
+
+Degradation is asymmetric on purpose. A single producer's error drops that
+producer from the reconciliation so its cards are left untouched; an auth,
+permission, rate-limit, or deadline failure skips the **whole** sweep, because a
+partial view must never drive an auto-resolve. Both paths exit `0` unless
+`--strict` is passed — a sweep failure must not be fatal to whatever invoked it.
+
+**Sweep JSON schema (`sweep.Result`):**
+
+| Field         | Type   | Description                                                                                             |
+| ------------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `repo`        | string | The swept repo                                                                                          |
+| `sweep_id`    | string | Trace id, present only when reconciliation changed something                                            |
+| `skipped`     | bool   | The sweep declined to reconcile at all (degraded path)                                                  |
+| `skip_reason` | string | One-line explanation of a skip                                                                          |
+| `evaluated`   | array  | Producers that observed the repo successfully                                                           |
+| `failed`      | object | Producer name → error; their cards were deliberately left alone                                         |
+| `reconciled`  | object | `created` / `updated` / `refreshed` / `suppressed` / `auto_resolved` counts plus per-condition outcomes |
+
+**Registered repo-scoped producers:**
+
+| Producer                | Raises when                                       | Severity         |
+| ----------------------- | ------------------------------------------------- | ---------------- |
+| `default-branch-health` | A required check is failing on the default branch | `blocking_fleet` |
+| `human-gate`            | An open PR is green and blocked on a person       | `blocking_run`   |
+
+Adding a producer is one self-contained file and requires no change to the
+sweep — see [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md).
+
+**IPC methods** (consumed by the VSCode extension, which shares the daemon's
+store so a sweep's writes reach every subscribed surface):
+
+| Method                  | Purpose                                                                   |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `attention.list`        | List requests for the workspace                                           |
+| `attention.resolve`     | Apply a declared option (terminal)                                        |
+| `attention.acknowledge` | Mark seen without resolving                                               |
+| `attention.mute`        | Silence until the condition changes                                       |
+| `attention.unmute`      | Restore alerting                                                          |
+| `attention.sweep`       | Evaluate repos; returns `busy` rather than duplicating an in-flight sweep |
+
 ### Build Operations
 
 Detects the project build system and runs the build. Consolidates build logic

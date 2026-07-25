@@ -21,6 +21,38 @@ report generation, finding-to-issue workflow, and recommendation tracking. See
 [skills/nightgauge-health-check/SKILL.md](../skills/nightgauge-health-check/SKILL.md)
 for codebase health analysis.
 
+### What health analysis does not notice: repo-level blockers
+
+Both concerns above are **retrospective and record-driven** — they read what
+runs did and score it. Neither can see a condition that exists when nothing is
+running, because there is no record to read.
+
+That is a real category, not an edge case. A required check failing on the
+default branch blocks every open PR at once; a green PR waiting on a reviewer is
+finished work no run will revisit. Health analysis would report the downstream
+symptoms — velocity down, reliability findings, attempts-to-green climbing —
+without ever naming the one condition causing them, because from the records'
+point of view a repo where nothing can merge and a repo where nobody is working
+look similar.
+
+Repo-level blockers are the **Action Center's** category, not health analysis's:
+they are observed by `nightgauge attention sweep` with no run in flight and
+raised as `DecisionRequest`s. The two are complements, and the distinction is
+worth keeping sharp when deciding where a new signal belongs:
+
+|             | Health analysis                    | Attention (repo-scoped)            |
+| ----------- | ---------------------------------- | ---------------------------------- |
+| Reads       | Completed run records              | The live repo, via the forge       |
+| Answers     | "Is the pipeline performing well?" | "Is anything blocked right now?"   |
+| Needs a run | Yes — it scores history            | No                                 |
+| Output      | Scored dimensions and findings     | A card asking a human to act       |
+| Clears when | The next period's records improve  | The condition stops being observed |
+
+A health finding that a human must act on can itself become a
+`DecisionRequest` — that is producer role 8 (watchdog / health findings) in
+[ADR 015](decisions/015-decision-requests.md), designed-for but not automated.
+See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) for the authoring contract.
+
 ## System Architecture
 
 ```mermaid
