@@ -119,22 +119,7 @@ func (s *PRService) ListPRs(ctx context.Context, owner, repo string, state strin
 			return nil, fmt.Errorf("list PRs: %w", err)
 		}
 		for _, pr := range q.Repository.PullRequests.Nodes {
-			p := types.PullRequest{
-				NodeID:    fmt.Sprintf("%v", pr.ID),
-				Number:    int(pr.Number),
-				Title:     string(pr.Title),
-				State:     string(pr.State),
-				HeadRef:   string(pr.HeadRefName),
-				BaseRef:   string(pr.BaseRefName),
-				URL:       string(pr.URL),
-				IsDraft:   bool(pr.IsDraft),
-				Repo:      owner + "/" + repo,
-				CreatedAt: string(pr.CreatedAt),
-			}
-			for _, l := range pr.Labels.Nodes {
-				p.Labels = append(p.Labels, string(l.Name))
-			}
-			results = append(results, p)
+			results = append(results, listNodeToPR(pr, owner, repo))
 		}
 	} else {
 		var q pullRequestListByStateQuery
@@ -148,26 +133,41 @@ func (s *PRService) ListPRs(ctx context.Context, owner, repo string, state strin
 			return nil, fmt.Errorf("list PRs: %w", err)
 		}
 		for _, pr := range q.Repository.PullRequests.Nodes {
-			p := types.PullRequest{
-				NodeID:    fmt.Sprintf("%v", pr.ID),
-				Number:    int(pr.Number),
-				Title:     string(pr.Title),
-				State:     string(pr.State),
-				HeadRef:   string(pr.HeadRefName),
-				BaseRef:   string(pr.BaseRefName),
-				URL:       string(pr.URL),
-				IsDraft:   bool(pr.IsDraft),
-				Repo:      owner + "/" + repo,
-				CreatedAt: string(pr.CreatedAt),
-			}
-			for _, l := range pr.Labels.Nodes {
-				p.Labels = append(p.Labels, string(l.Name))
-			}
-			results = append(results, p)
+			results = append(results, listNodeToPR(pr, owner, repo))
 		}
 	}
 
 	return results, nil
+}
+
+// listNodeToPR maps one listed PR node onto the shared PullRequest shape.
+// Both list paths go through it so a field added to the query can never be
+// populated on one path and silently dropped on the other.
+func listNodeToPR(pr pullRequestListNode, owner, repo string) types.PullRequest {
+	p := types.PullRequest{
+		NodeID:           fmt.Sprintf("%v", pr.ID),
+		Number:           int(pr.Number),
+		Title:            string(pr.Title),
+		State:            string(pr.State),
+		HeadRef:          string(pr.HeadRefName),
+		BaseRef:          string(pr.BaseRefName),
+		URL:              string(pr.URL),
+		IsDraft:          bool(pr.IsDraft),
+		Repo:             owner + "/" + repo,
+		CreatedAt:        string(pr.CreatedAt),
+		Mergeable:        string(pr.Mergeable),
+		MergeStateStatus: string(pr.MergeStateStatus),
+		ReviewStatus:     string(pr.ReviewDecision),
+	}
+	for _, l := range pr.Labels.Nodes {
+		p.Labels = append(p.Labels, string(l.Name))
+	}
+	if len(pr.Commits.Nodes) > 0 {
+		if rollup := pr.Commits.Nodes[0].Commit.StatusCheckRollup; rollup != nil {
+			p.CheckStatus = string(rollup.State)
+		}
+	}
+	return p
 }
 
 // CreatePR creates a new pull request.

@@ -327,7 +327,9 @@ func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int,
 		Title:          fmt.Sprintf("PR #%d blocked by branch protection", prNumber),
 		Body:           fmt.Sprintf("pr-merge could not merge PR #%d: %s. Fix the failing check / approval on GitHub, then retry.", prNumber, reason),
 		Producer:       "branch-protection",
-		Context:        attention.Context{Repo: repo, Issue: issue, RunID: runID, Stage: "pr-merge", Blocker: reason, TraceRef: runTraceRef(runID)},
+		// PR is what the sweep's human-gate producer dedupes against: the same
+		// blocked PR seen from a run and from a repo scan is one fact.
+		Context: attention.Context{Repo: repo, Issue: issue, PR: prNumber, RunID: runID, Stage: "pr-merge", Blocker: reason, TraceRef: runTraceRef(runID)},
 		Options: []attention.Option{
 			{ID: "retry-after-fix", Label: "Retry after fix", Verb: attention.VerbAutonomousClearIssueFailures,
 				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},

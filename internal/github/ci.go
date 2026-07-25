@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -242,14 +243,18 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+		return nil, checkRunsStatusError(resp, body)
 	}
 
 	var result struct {
 		CheckRuns []struct {
-			Name       string `json:"name"`
-			Status     string `json:"status"`
-			Conclusion string `json:"conclusion"`
+			Name        string `json:"name"`
+			Status      string `json:"status"`
+			Conclusion  string `json:"conclusion"`
+			CompletedAt string `json:"completed_at"`
+			DetailsURL  string `json:"details_url"`
+			HTMLURL     string `json:"html_url"`
+			HeadSHA     string `json:"head_sha"`
 		} `json:"check_runs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -258,13 +263,48 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 
 	checks := make([]CheckDetail, 0, len(result.CheckRuns))
 	for _, run := range result.CheckRuns {
+		url := run.HTMLURL
+		if url == "" {
+			url = run.DetailsURL
+		}
 		checks = append(checks, CheckDetail{
-			Name:       run.Name,
-			Status:     strings.ToUpper(run.Status),
-			Conclusion: strings.ToUpper(run.Conclusion),
+			Name:        run.Name,
+			Status:      strings.ToUpper(run.Status),
+			Conclusion:  strings.ToUpper(run.Conclusion),
+			CompletedAt: run.CompletedAt,
+			DetailsURL:  url,
+			HeadSHA:     run.HeadSHA,
 		})
 	}
 	return checks, nil
+}
+
+// checkRunsStatusError translates a non-200 from the check-runs endpoint into
+// a forge sentinel where the status is unambiguous.
+//
+// This matters beyond error prose: the attention sweep decides whether a
+// producer failure is that producer's problem (drop it from reconciliation,
+// leave its cards alone) or the whole repo's (skip the sweep entirely) by
+// errors.Is against these sentinels. Without the translation an expired token
+// reads as an ordinary producer failure, and every OTHER producer's empty
+// result is then trusted as evidence that its condition cleared.
+func checkRunsStatusError(resp *http.Response, body []byte) error {
+	base := fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", forge.ErrUnauthorized, base)
+	case http.StatusForbidden, http.StatusTooManyRequests:
+		// GitHub reports both a secondary rate limit and a plain permission
+		// denial as 403; the remaining-quota header is what separates them.
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.StatusCode == http.StatusTooManyRequests {
+			return fmt.Errorf("%w: %s", forge.ErrRateLimited, base)
+		}
+		return fmt.Errorf("%w: %s", forge.ErrPermissionDenied, base)
+	case http.StatusNotFound:
+		return fmt.Errorf("%w: %s", forge.ErrNotFound, base)
+	default:
+		return base
+	}
 }
 
 // WaitConfig is an alias for the forge-agnostic wait configuration.
