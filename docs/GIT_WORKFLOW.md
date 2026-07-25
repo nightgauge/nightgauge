@@ -264,14 +264,47 @@ granularity — squashing the epic throws that away.
 
 ### After Merge
 
-- Delete feature branch
-- Pull latest main locally
+**Cleanup is part of the merge, not an optional follow-up.** A merge that leaves
+its branch and worktree behind is not finished. This applies to every forge —
+GitHub, GitLab, or anything the `forge` abstraction grows next — and to both
+sides: the remote ref AND the local one.
 
 ```bash
+# 1. remote branch — or rely on the forge's delete-on-merge setting
+#    (GitHub: "Automatically delete head branches"; GitLab: "Delete source
+#    branch" checked by default on the MR)
+
+# 2. local branch
 git checkout main
 git pull origin main
-git branch -d feat/my-feature
+git branch -d feat/my-feature      # -D if the PR was squash-merged, since
+                                   # the squash commit is not the branch tip
+
+# 3. the worktree, if the work used one
+git worktree remove .worktrees/my-feature
+git worktree prune                 # drops registrations whose dirs are gone
 ```
+
+**Squash merges need `-D`, not `-d`.** A squash creates a new commit, so the
+branch tip is never an ancestor of `main` and `git branch -d` refuses it. Verify
+the content landed rather than trusting the ancestry check:
+
+```bash
+git diff --stat origin/main..feat/my-feature   # empty ⇒ nothing unmerged
+```
+
+**Why this is a standing rule.** Skipping it is invisible for one merge and
+compounding across a hundred. Accumulated local branches and worktrees make
+`git branch` unreadable, leave `node_modules` trees and per-issue docker stacks
+squatting disk and host ports, and — the failure that actually cost time —
+produce stale checkouts that look like a valid working tree while being months
+out of date. Cleanup is cheap at merge time and expensive to reconstruct later,
+because after the fact you cannot cheaply tell a squash-merged branch from one
+that was never pushed.
+
+> **Pipeline note.** When Nightgauge itself creates the branch and worktree, the
+> pipeline is what must clean them up — the operator should never be the garbage
+> collector for machine-created state.
 
 ## Versioning
 

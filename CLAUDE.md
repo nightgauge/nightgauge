@@ -78,6 +78,16 @@ branch/PR — never a side-channel memory store.
   CI is still a precondition — `--admin` covers the missing reviewer, never a
   failing check. Revisit when a second maintainer exists. See
   [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
+- **Clean up on merge — branch and worktree, remote and local, every forge.** A
+  merge is not finished until its branch and any worktree are gone on both
+  sides. Squash merges need `git branch -D` (the squash commit is not the branch
+  tip, so `-d` refuses); confirm with `git diff --stat origin/main..<branch>`
+  rather than trusting ancestry. Skipping this is invisible once and compounding
+  across a hundred merges — and after the fact you cannot cheaply tell a
+  squash-merged branch from one that was never pushed. When the pipeline created
+  the branch or worktree, the pipeline must remove it; the operator is never the
+  garbage collector for machine-created state. See
+  [docs/GIT_WORKFLOW.md § After Merge](docs/GIT_WORKFLOW.md#after-merge).
 - **Context economy — auto-compact is not a context-management strategy.**
   Frontier-model tokens are expensive and long contexts cost more per step, so
   a large context is justified only when it actually carries the answer to the
