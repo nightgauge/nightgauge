@@ -8,6 +8,11 @@ type Repo struct {
 	NameWithOwner string `json:"nameWithOwner"`
 	Owner         string `json:"owner"`
 	Name          string `json:"name"`
+	// DefaultBranch is the branch every PR targets by default ("main",
+	// "master", "trunk"). Empty when the repository has no commits yet, or
+	// when the adapter cannot report it — callers must treat empty as "I do
+	// not know" and skip, never as a licence to guess "main".
+	DefaultBranch string `json:"defaultBranch,omitempty"`
 }
 
 // Actor is a lightweight representation of a forge user / actor — used

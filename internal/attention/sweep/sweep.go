@@ -61,6 +61,30 @@ type Input struct {
 	// Forge is the forge-abstraction client for this repo. Never nil when a
 	// producer is called.
 	Forge forge.ForgeClient
+
+	// Existing is every non-terminal request already open for this repo, from
+	// every producer including the run-scoped ones.
+	//
+	// It exists so a sweep producer can decline to raise a condition another
+	// producer is already carding. A PR blocked by branch protection is one
+	// fact; a run that punted on it and a sweep that scanned for it are two
+	// vantage points on that one fact, and the operator should get one card,
+	// not two. Producers must treat this as read-only advisory context — the
+	// store is the sweeper's to write.
+	Existing []attention.DecisionRequest
+}
+
+// OpenRequestForPR returns the first non-terminal request from the named
+// producer that is about the given PR. Producers use it to dedupe; it is a
+// method on Input so the "one condition, one card" rule has one implementation
+// rather than one per producer.
+func (in Input) OpenRequestForPR(producer string, pr int) (attention.DecisionRequest, bool) {
+	for _, r := range in.Existing {
+		if r.Producer == producer && r.Context.PR == pr && !r.Lifecycle.State.IsTerminal() {
+			return r, true
+		}
+	}
+	return attention.DecisionRequest{}, false
 }
 
 // Producer evaluates one class of repo-scoped standing condition.
@@ -217,7 +241,19 @@ func (s *Sweeper) Sweep(ctx context.Context, repo string) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	in := Input{Repo: repo, Owner: owner, Name: name, Forge: s.Forge}
+	// Read the repo's open cards ONCE, before any producer runs, so every
+	// producer dedupes against the same snapshot. Reading per-producer would
+	// let the first producer's own writes influence the second's decisions
+	// within a single sweep, which makes the outcome depend on registration
+	// order. A read failure is not fatal: producers lose their dedupe context
+	// and may double-card, which is strictly better than skipping the sweep.
+	existing, err := s.Store.List(attention.ListFilter{Repo: repo})
+	if err != nil {
+		s.logf("attention sweep: could not read open requests for %s (producers lose dedupe context): %v", repo, err)
+		existing = nil
+	}
+
+	in := Input{Repo: repo, Owner: owner, Name: name, Forge: s.Forge, Existing: existing}
 	var observed []attention.DecisionRequest
 	for _, p := range producers {
 		reqs, perr := p.Evaluate(ctx, in)

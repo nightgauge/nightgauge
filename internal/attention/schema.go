@@ -167,6 +167,12 @@ type DecisionRequest struct {
 type Context struct {
 	Repo  string `json:"repo"`
 	Issue int    `json:"issue,omitempty"`
+	// PR is the pull/merge request the card is about. Repo-scoped producers
+	// raise cards that have no issue and no run but do name a PR, and it is
+	// also how two producers observing the same PR from different vantage
+	// points (a run's branch-protection punt and a sweep's human-gate scan)
+	// recognise each other and avoid double-carding it.
+	PR int `json:"pr,omitempty"`
 	// RunID is absent for fleet-scoped requests (e.g. work exhaustion).
 	RunID string `json:"run_id,omitempty"`
 	// Stage is absent for run-scoped/fleet-scoped requests.
@@ -174,6 +180,11 @@ type Context struct {
 	// CostSoFarUSD is the operator's own run spend, for context only.
 	CostSoFarUSD float64 `json:"cost_so_far_usd,omitempty"`
 	Blocker      string  `json:"blocker,omitempty"`
+	// URL deep-links the card at the forge object that explains it — the
+	// failing check run, the blocked PR. A repo-scoped card whose only honest
+	// affordance is "go look at this" carries the link here rather than buried
+	// in prose a surface would have to parse.
+	URL string `json:"url,omitempty"`
 	// TraceRef points at the exact ADR-013 trace node that raised the request,
 	// so the card deep-links into the Lifecycle Explorer and the audit is
 	// bidirectional. Absent for fleet-scoped requests with no run trace.

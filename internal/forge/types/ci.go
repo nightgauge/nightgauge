@@ -28,6 +28,18 @@ type CheckDetail struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	Required   bool   `json:"required"`
+	// CompletedAt is the RFC3339 instant the check reached its conclusion,
+	// empty while it is still queued or running. It is how a caller answers
+	// "how long has this been failing?" without keeping state of its own —
+	// which is what lets the default-branch producer hold a grace period over
+	// a failure that is about to be re-run green.
+	CompletedAt string `json:"completedAt,omitempty"`
+	// DetailsURL points at the run's page on the forge. A card whose only
+	// honest affordance is "go look" needs somewhere to send the operator.
+	DetailsURL string `json:"detailsUrl,omitempty"`
+	// HeadSHA is the commit the check ran against — the commit that introduced
+	// the failure, when the branch has not moved since.
+	HeadSHA string `json:"headSha,omitempty"`
 }
 
 // WaitConfig configures CI wait polling.

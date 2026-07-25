@@ -468,20 +468,7 @@ type pullRequestQuery struct {
 type pullRequestListQuery struct {
 	Repository struct {
 		PullRequests struct {
-			Nodes []struct {
-				ID          graphql.ID
-				Number      graphql.Int
-				Title       graphql.String
-				State       graphql.String
-				HeadRefName graphql.String
-				BaseRefName graphql.String
-				URL         graphql.String
-				IsDraft     graphql.Boolean
-				CreatedAt   graphql.String
-				Labels      struct {
-					Nodes []labelNode
-				} `graphql:"labels(first: 20)"`
-			}
+			Nodes []pullRequestListNode
 		} `graphql:"pullRequests(first: $first, states: $states, headRefName: $headRef)"`
 	} `graphql:"repository(owner: $owner, name: $name)"`
 }
@@ -489,22 +476,42 @@ type pullRequestListQuery struct {
 type pullRequestListByStateQuery struct {
 	Repository struct {
 		PullRequests struct {
-			Nodes []struct {
-				ID          graphql.ID
-				Number      graphql.Int
-				Title       graphql.String
-				State       graphql.String
-				HeadRefName graphql.String
-				BaseRefName graphql.String
-				URL         graphql.String
-				IsDraft     graphql.Boolean
-				CreatedAt   graphql.String
-				Labels      struct {
-					Nodes []labelNode
-				} `graphql:"labels(first: 20)"`
-			}
+			Nodes []pullRequestListNode
 		} `graphql:"pullRequests(first: $first, states: $states)"`
 	} `graphql:"repository(owner: $owner, name: $name)"`
+}
+
+// pullRequestListNode carries the mergeability triple (mergeStateStatus,
+// reviewDecision, statusCheckRollup) alongside the identity fields. Listing
+// them costs nothing extra on a query that is already paying for the
+// connection, and it is the difference between one list call and one list call
+// plus a GetPR per PR for any caller that needs to know which open PRs are
+// actually blocked.
+type pullRequestListNode struct {
+	ID               graphql.ID
+	Number           graphql.Int
+	Title            graphql.String
+	State            graphql.String
+	HeadRefName      graphql.String
+	BaseRefName      graphql.String
+	URL              graphql.String
+	IsDraft          graphql.Boolean
+	CreatedAt        graphql.String
+	Mergeable        graphql.String
+	MergeStateStatus graphql.String
+	ReviewDecision   graphql.String
+	Labels           struct {
+		Nodes []labelNode
+	} `graphql:"labels(first: 20)"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup *struct {
+					State graphql.String
+				}
+			}
+		}
+	} `graphql:"commits(last: 1)"`
 }
 
 type createPullRequestMutation struct {

@@ -64,6 +64,10 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 			NameWithOwner graphql.String
 			Owner         struct{ Login graphql.String }
 			Name          graphql.String
+			// Null on a repository with no commits, hence the pointer.
+			DefaultBranchRef *struct {
+				Name graphql.String
+			}
 		} `graphql:"repository(owner: $owner, name: $name)"`
 	}
 	vars := map[string]interface{}{
@@ -73,11 +77,15 @@ func (r *RepoService) RepoMetadata(ctx context.Context, owner, name string) (*fo
 	if err := r.client.Query(ctx, &q, vars); err != nil {
 		return nil, fmt.Errorf("repo view %s/%s: %w", owner, name, err)
 	}
-	return &forgetypes.Repo{
+	out := &forgetypes.Repo{
 		NameWithOwner: string(q.Repository.NameWithOwner),
 		Owner:         string(q.Repository.Owner.Login),
 		Name:          string(q.Repository.Name),
-	}, nil
+	}
+	if ref := q.Repository.DefaultBranchRef; ref != nil {
+		out.DefaultBranch = string(ref.Name)
+	}
+	return out, nil
 }
 
 // ExecuteGraphQL satisfies forge.GraphQLService — the github adapter
