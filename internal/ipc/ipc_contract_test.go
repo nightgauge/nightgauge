@@ -93,6 +93,9 @@ var contractTestedMethods = map[string]bool{
 	"attention.list":        true,
 	"attention.resolve":     true,
 	"attention.acknowledge": true,
+	"attention.mute":        true,
+	"attention.unmute":      true,
+	"attention.sweep":       true,
 	// Pipeline
 	"pipeline.cancelActiveForNetworkOutage": true,
 	"pipeline.getState":                     true,
@@ -1196,6 +1199,24 @@ func TestContract_Attention(t *testing.T) {
 	t.Run("attention.acknowledge/registered", func(t *testing.T) {
 		id := h.sendRequest("attention.acknowledge", map[string]interface{}{"id": "dr_x"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.acknowledge")
+	})
+
+	t.Run("attention.mute/registered", func(t *testing.T) {
+		id := h.sendRequest("attention.mute", map[string]interface{}{"id": "dr_x"})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.mute")
+	})
+
+	t.Run("attention.unmute/registered", func(t *testing.T) {
+		id := h.sendRequest("attention.unmute", map[string]interface{}{"id": "dr_x"})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.unmute")
+	})
+
+	// attention.sweep degrades rather than erroring when the daemon has no
+	// attention store or forge factory (issue #93) — it fires on activation and
+	// must never be able to surface a failure there.
+	t.Run("attention.sweep/registered", func(t *testing.T) {
+		id := h.sendRequest("attention.sweep", map[string]interface{}{"repos": []string{"o/r"}})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.sweep")
 	})
 }
 

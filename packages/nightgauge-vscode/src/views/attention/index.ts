@@ -14,4 +14,6 @@ export {
   formatDescription,
   describeAttentionOption,
   compareRequests,
+  contextValueFor,
+  isRepoScoped,
 } from "./attentionTreeItems";

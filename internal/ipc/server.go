@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gitops "github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
@@ -121,6 +122,12 @@ type Server struct {
 	// In-memory only; full persistence is tracked in #3361.
 	forgeRegistry   map[string]ForgeInstanceConfig
 	forgeRegistryMu sync.Mutex
+
+	// forgeClientFn resolves a forge.ForgeClient for an "owner/name" spec.
+	// attention.sweep is its only consumer today. Stored as a closure for the
+	// same reason as notificationReloader: the router builder lives in cmd/,
+	// and internal/ipc must not import it.
+	forgeClientFn func(repo string) (forge.ForgeClient, error)
 }
 
 // ForgeInstanceConfig captures the forge kind + host bound to a repository.
@@ -427,6 +434,17 @@ func WithNotificationReloader(fn func(*config.Config) error) ServerOption {
 func WithCommandAuthorizer(fn func(ctx context.Context, mattermostUserID, channelID, commandType, repoSlug string) (bool, string, string)) ServerOption {
 	return func(s *Server) {
 		s.authorizeCommandFn = fn
+	}
+}
+
+// WithForgeClientFactory registers the resolver attention.sweep uses to obtain
+// a forge client per repo. The closure is built in cmd/, where the router
+// builder is already in scope, so internal/ipc keeps no dependency on it.
+// Without it, attention.sweep reports Unavailable rather than failing — a
+// daemon with no forge configured is a legitimate local-first state.
+func WithForgeClientFactory(fn func(repo string) (forge.ForgeClient, error)) ServerOption {
+	return func(s *Server) {
+		s.forgeClientFn = fn
 	}
 }
 
@@ -3855,6 +3873,19 @@ func (s *Server) registerMethods() {
 
 	//ipc:method attentionAcknowledge params:AttentionAcknowledgeParams result:AttentionAcknowledgeResult
 	s.methods["attention.acknowledge"] = s.handleAttentionAcknowledge
+
+	//ipc:method attentionMute params:AttentionMuteParams result:AttentionMuteResult
+	s.methods["attention.mute"] = s.handleAttentionMute
+
+	//ipc:method attentionUnmute params:AttentionUnmuteParams result:AttentionMuteResult
+	s.methods["attention.unmute"] = s.handleAttentionUnmute
+
+	// Repo-scoped evaluation with no run in flight (#89/#93). Deliberately
+	// caller-triggered: the sweep is cheap and idempotent, so the extension
+	// invokes it on activation, on a view refresh, on its configured interval,
+	// and after a run terminates. No timer lives here.
+	//ipc:method attentionSweep params:AttentionSweepParams result:AttentionSweepResult
+	s.methods["attention.sweep"] = s.handleAttentionSweep
 
 	//ipc:method issueRemoveBlockedBy params:IssueRemoveBlockedByParams result:void
 	s.methods["issue.removeBlockedBy"] = s.handleIssueRemoveBlockedBy

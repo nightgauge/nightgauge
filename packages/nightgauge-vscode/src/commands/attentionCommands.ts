@@ -18,11 +18,21 @@
  * concrete option) has no safe vehicle for steer-only resolution — the flow
  * tells the operator to pick a listed option instead.
  *
- * This module also wires the two chrome effects that ride the same
+ * Repo-scoped cards (issue #93) reach the same quick-pick with two additions.
+ * `Open in browser` leads the list whenever the card carries a `context.url`,
+ * because for a condition no verb in the registry can repair — a red default
+ * branch, a PR waiting on a reviewer — following the link IS the action.
+ * `Mute until this changes` appears on standing cards: it silences alerting
+ * without resolving, so the card stays in the inbox at its severity and
+ * re-alerts the moment the condition's fingerprint moves.
+ *
+ * This module also wires the chrome effects that ride the same
  * `attention.event` push the tree provider already folds: the view badge
- * (open blocking-request count) and the `viewsWelcome` empty-state context
- * key, plus a toast on every newly **created** blocking request with an
- * "Open Action Center" button that focuses the view — no polling anywhere.
+ * (alert-worthy blocking count — muted and acknowledged excluded), the
+ * `viewsWelcome` empty-state context key, a view-header line naming any
+ * fleet-wide blocker so it is legible without expanding a node, and a toast on
+ * genuinely new or materially changed blocking requests with an "Open Action
+ * Center" button that focuses the view — no polling anywhere.
  */
 
 import * as vscode from "vscode";
@@ -44,6 +54,9 @@ export interface AttentionCommandDeps {
   provider: AttentionTreeProvider;
   treeView: vscode.TreeView<vscode.TreeItem>;
   logger: Logger;
+  /** The repo-scoped sweep (issue #93). Optional so a window without one still
+   * gets the full run-scoped Action Center. */
+  sweep?: { sweep(trigger: "manual" | "view-refresh"): Promise<unknown> };
 }
 
 /** Best-effort local actor for the resolution audit trail — never blocks or throws. */
@@ -55,18 +68,61 @@ function resolveActor(): string | undefined {
   }
 }
 
-/** A quick-pick entry for a declared option, or the "Custom steer…" escape hatch. */
+/** A quick-pick entry for a declared option, the link, or the "Custom steer…" escape hatch. */
 interface AttentionPickItem extends vscode.QuickPickItem {
   optionId?: string;
   isSteer?: boolean;
+  openUrl?: string;
+  muteAction?: "mute" | "unmute";
 }
 
-function buildPickItems(request: AttentionRequestView): AttentionPickItem[] {
-  const items: AttentionPickItem[] = request.options.map((opt) => ({
-    label: opt.label,
-    description: describeAttentionOption(opt),
-    optionId: opt.id,
-  }));
+export function buildPickItems(request: AttentionRequestView): AttentionPickItem[] {
+  const items: AttentionPickItem[] = [];
+
+  // The link comes FIRST when the card has one. For a repo-scoped card whose
+  // only declared option is a dismiss — a red default branch, a PR waiting on a
+  // reviewer — no verb in the registry can fix the condition, so the honest
+  // primary action is "go look at the thing". Burying that under the options
+  // would make the quick-pick's default the one choice that changes nothing.
+  if (request.context.url) {
+    items.push({
+      label: "$(link-external) Open in browser",
+      description: request.context.blocker
+        ? `Opens the ${request.context.blocker.split(":")[0]} this card is about`
+        : "Opens the forge object this card is about",
+      openUrl: request.context.url,
+    });
+  }
+
+  items.push(
+    ...request.options.map((opt) => ({
+      label: opt.label,
+      description: describeAttentionOption(opt, request),
+      optionId: opt.id,
+    }))
+  );
+
+  // Mute/unmute are offered on STANDING cards only. On an event-scoped card
+  // there is no condition to mute "until it changes" — the fingerprint that
+  // mute is measured against does not exist, so the entry would promise
+  // semantics the record cannot deliver.
+  if (request.standing) {
+    items.push(
+      request.lifecycle.muted
+        ? {
+            label: "$(bell) Unmute",
+            description: "Restores alerting on this condition.",
+            muteAction: "unmute" as const,
+          }
+        : {
+            label: "$(bell-slash) Mute until this changes",
+            description:
+              "Keeps the card, stops the alerts. Re-alerts if the condition itself changes.",
+            muteAction: "mute" as const,
+          }
+    );
+  }
+
   if (request.steer?.enabled) {
     items.push({
       label: "$(comment) Custom steer…",
@@ -152,7 +208,58 @@ async function resolveWithSteer(request: AttentionRequestView, logger: Logger): 
   await runResolve(request, defaultOption.id, defaultOption.label, trimmed, logger);
 }
 
-/** The full click-to-resolve flow: quick-pick, then dispatch to the option or steer path. */
+/** Open a card's `context.url` in the operator's browser. */
+export async function openAttentionLink(
+  request: AttentionRequestView,
+  logger: Logger
+): Promise<void> {
+  const url = request.context.url;
+  if (!url) return;
+  try {
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.warn("nightgauge.attentionOpenLink failed", { error: message, id: request.id, url });
+    vscode.window.showErrorMessage(`Nightgauge: Could not open ${url}`);
+  }
+}
+
+/** Mute or unmute a standing card. Neither resolves it — the card stays in the
+ * inbox at its severity, silenced until its condition changes. */
+export async function setAttentionMute(
+  request: AttentionRequestView,
+  action: "mute" | "unmute",
+  logger: Logger
+): Promise<void> {
+  const ipcClient = IpcClient.getInstance();
+  try {
+    const result =
+      action === "mute"
+        ? await ipcClient.attentionMute(request.id, resolveActor())
+        : await ipcClient.attentionUnmute(request.id, resolveActor());
+    if (action === "mute" && !result.muted) {
+      // The store declined — the request already reached a terminal state.
+      vscode.window.showInformationMessage(
+        "Nightgauge: This request is already closed — nothing to mute."
+      );
+      return;
+    }
+    vscode.window.showInformationMessage(
+      action === "mute"
+        ? "Nightgauge: Muted — this card stays in the inbox and re-alerts if the condition changes."
+        : "Nightgauge: Unmuted — alerting restored."
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(`nightgauge.attention${action === "mute" ? "Mute" : "Unmute"} failed`, {
+      error: message,
+      id: request.id,
+    });
+    vscode.window.showErrorMessage(`Nightgauge: Could not ${action} the request — ${message}`);
+  }
+}
+
+/** The full click-to-resolve flow: quick-pick, then dispatch to the chosen path. */
 export async function resolveAttentionRequest(
   request: AttentionRequestView,
   logger: Logger
@@ -163,6 +270,14 @@ export async function resolveAttentionRequest(
   });
   if (!picked) return;
 
+  if (picked.openUrl) {
+    await openAttentionLink(request, logger);
+    return;
+  }
+  if (picked.muteAction) {
+    await setAttentionMute(request, picked.muteAction, logger);
+    return;
+  }
   if (picked.isSteer) {
     await resolveWithSteer(request, logger);
     return;
@@ -171,22 +286,39 @@ export async function resolveAttentionRequest(
   await runResolve(request, picked.optionId, picked.label, undefined, logger);
 }
 
-/** True for a newly created, still-open, blocking-severity request (toast-worthy). */
-function isNewBlockingRequest(evt: AttentionEvent): boolean {
-  return (
-    evt.action === "created" &&
-    evt.request.lifecycle.state === "open" &&
-    (evt.request.severity === "blocking_run" || evt.request.severity === "blocking_fleet")
-  );
+/**
+ * True for a request that should INTERRUPT, as opposed to one the tree should
+ * merely re-render.
+ *
+ * `created` always qualifies. `updated` qualifies only for a STANDING card,
+ * because the two write paths mean different things by it: reconciliation
+ * (issue #92) emits `updated` only when the condition's fingerprint materially
+ * moved — a second check going red — and `refreshed` for the nine re-observations
+ * that changed nothing, which is what makes `updated` genuine news there. The
+ * event-scoped `raise` path emits `updated` for any re-raise of an open request,
+ * identical payload included, so toasting it would fire on every retry of the
+ * same run-scoped condition. `refreshed`, `acknowledged`, `muted` and the
+ * terminal actions never interrupt, and a muted card never interrupts at all.
+ *
+ * This is the surface-side counterpart of the store's `JournalEntry.ShouldNotify`:
+ * alerting, not rendering. Every transition still reaches the tree.
+ */
+export function isToastWorthy(evt: AttentionEvent): boolean {
+  const req = evt.request;
+  if (evt.action !== "created" && !(evt.action === "updated" && req.standing)) return false;
+  if (req.lifecycle.muted) return false;
+  if (req.lifecycle.state !== "open") return false;
+  return req.severity === "blocking_run" || req.severity === "blocking_fleet";
 }
 
 export function registerAttentionCommands(deps: AttentionCommandDeps): vscode.Disposable[] {
-  const { provider, treeView, logger } = deps;
+  const { provider, treeView, logger, sweep } = deps;
   const disposables: vscode.Disposable[] = [];
 
-  // Badge (open blocking-request count) + the viewsWelcome empty-state context
-  // key — both driven off the same tree-data change the provider already
-  // fires on every `attention.event` fold. No separate IPC subscription.
+  // Badge (alert-worthy blocking count) + the viewsWelcome empty-state context
+  // key + the view-header summary — all driven off the same tree-data change
+  // the provider already fires on every `attention.event` fold. No separate IPC
+  // subscription.
   const updateChrome = () => {
     const blockingCount = provider.getOpenBlockingCount();
     treeView.badge =
@@ -201,16 +333,25 @@ export function registerAttentionCommands(deps: AttentionCommandDeps): vscode.Di
       "nightgauge.attentionHasRequests",
       provider.hasAny()
     );
+    // A fleet-wide blocker has to be legible without expanding anything. The
+    // header description survives a collapsed tree and a scrolled sidebar,
+    // which the card itself does not — and an invisible fleet blocker is the
+    // exact failure the epic was opened for.
+    const fleetBlocker = provider.getTopFleetBlocker();
+    treeView.description = fleetBlocker?.title;
   };
   updateChrome();
   disposables.push(provider.onDidChangeTreeData(updateChrome));
 
-  // Toast on new blocking request (scope item 3) — driven by the same
+  // Toast on an alert-worthy blocking transition — driven by the same
   // `attention.event` push, re-broadcast by the provider after it folds the
-  // event into tree state. No polling.
+  // event into tree state. No polling. A refreshed standing card re-renders in
+  // the tree and is deliberately silent here: the sweep re-observes a red
+  // `main` every cycle, and toasting each observation is how an operator learns
+  // to dismiss the notification without reading it.
   disposables.push(
     provider.onDidReceiveEvent((evt) => {
-      if (!isNewBlockingRequest(evt)) return;
+      if (!isToastWorthy(evt)) return;
       vscode.window
         .showWarningMessage(`Nightgauge: ${evt.request.title}`, "Open Action Center")
         .then((action) => {
@@ -223,6 +364,12 @@ export function registerAttentionCommands(deps: AttentionCommandDeps): vscode.Di
 
   disposables.push(
     vscode.commands.registerCommand("nightgauge.attentionRefresh", async () => {
+      // Trigger 2 of the sweep's four invocation points: an explicit refresh is
+      // the operator asking for the CURRENT state of the repo, which the local
+      // store only knows if something evaluated it. Fire and forget — the tree
+      // re-reads immediately, and any card the sweep raises arrives through the
+      // `attention.event` push a moment later.
+      void sweep?.sweep("view-refresh");
       try {
         await provider.refresh();
       } catch (err) {
@@ -234,12 +381,67 @@ export function registerAttentionCommands(deps: AttentionCommandDeps): vscode.Di
   );
 
   disposables.push(
+    vscode.commands.registerCommand("nightgauge.attentionSweep", async () => {
+      if (!sweep) {
+        vscode.window.showInformationMessage(
+          "Nightgauge: The repo-scoped sweep is not available in this window."
+        );
+        return;
+      }
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Nightgauge: Checking repositories for blockers…",
+          cancellable: false,
+        },
+        async () => {
+          await sweep.sweep("manual");
+        }
+      );
+      await provider.refresh();
+    })
+  );
+
+  disposables.push(
     vscode.commands.registerCommand(
       "nightgauge.attentionResolve",
       async (item?: AttentionRequestTreeItem) => {
         const request = item?.request;
         if (!request) return;
         await resolveAttentionRequest(request, logger);
+      }
+    )
+  );
+
+  disposables.push(
+    vscode.commands.registerCommand(
+      "nightgauge.attentionOpenLink",
+      async (item?: AttentionRequestTreeItem) => {
+        const request = item?.request;
+        if (!request) return;
+        await openAttentionLink(request, logger);
+      }
+    )
+  );
+
+  disposables.push(
+    vscode.commands.registerCommand(
+      "nightgauge.attentionMute",
+      async (item?: AttentionRequestTreeItem) => {
+        const request = item?.request;
+        if (!request) return;
+        await setAttentionMute(request, "mute", logger);
+      }
+    )
+  );
+
+  disposables.push(
+    vscode.commands.registerCommand(
+      "nightgauge.attentionUnmute",
+      async (item?: AttentionRequestTreeItem) => {
+        const request = item?.request;
+        if (!request) return;
+        await setAttentionMute(request, "unmute", logger);
       }
     )
   );

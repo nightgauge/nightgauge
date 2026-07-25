@@ -50,6 +50,7 @@ import {
   AttentionTreeProvider,
   type AttentionTreeItem,
 } from "../views";
+import { AttentionSweepService, resolveSweepRepos } from "../services/AttentionSweepService";
 import { IssueDragAndDropController } from "../views/IssueDragAndDropController";
 import { RepositoriesDragAndDropController } from "../views/RepositoriesDragAndDropController";
 import { type TabId } from "../types/TabConfig";
@@ -254,6 +255,13 @@ export interface ExtensionServices {
    */
   attentionTreeProvider: AttentionTreeProvider;
   attentionTreeView: vscode.TreeView<AttentionTreeItem>;
+  /**
+   * Repo-scoped attention sweep (#93) — evaluates each workspace repo for
+   * standing blockers with no run in flight. Not a daemon: it fires on
+   * activation, on an Action Center refresh, on a conservative timer, and after
+   * a run terminates.
+   */
+  attentionSweepService: AttentionSweepService;
 }
 
 /**
@@ -2196,6 +2204,34 @@ export async function initializeServices(
   });
   context.subscriptions.push(attentionTreeView);
   attentionTreeProvider.attach(IpcClient.getInstance());
+
+  // Repo-scoped sweep (#93). The Action Center could only ever show what a RUN
+  // had noticed; this is what asks "is this repo blocked?" when nothing is
+  // running — the case the operator is least likely to catch on their own.
+  // Started in extension.ts once activation settles, not here, so a slow forge
+  // call can never sit in front of the sidebar rendering.
+  const attentionSweepService = new AttentionSweepService({
+    ipc: IpcClient.getInstance(),
+    logger,
+    resolveRepos: () =>
+      resolveSweepRepos(workspaceManager, async () => {
+        const specs: string[] = [];
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+          try {
+            const identity = await getRepoIdentity(folder.uri.fsPath);
+            if (identity) specs.push(`${identity.owner}/${identity.repo}`);
+          } catch {
+            // A folder with no resolvable repo identity is simply not swept.
+          }
+        }
+        return specs;
+      }),
+    // The `attention.event` push already re-renders the tree for every
+    // transition the sweep writes; this covers the window where the push is not
+    // yet wired (no autonomous scheduler attached).
+    onChanged: () => void attentionTreeProvider.refresh(),
+  });
+  context.subscriptions.push(attentionSweepService);
 
   // Initialize project board tree views (one per status tab)
   const workspaceRoot = getWorkspaceRoot();
@@ -4316,5 +4352,6 @@ export async function initializeServices(
     workflowTreeProvider,
     attentionTreeProvider,
     attentionTreeView,
+    attentionSweepService,
   };
 }

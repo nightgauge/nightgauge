@@ -84,6 +84,7 @@ import { registerFocusPipelineViewCommand } from "./focusPipelineView";
 import { registerFocusProjectBoardViewCommand } from "./focusProjectBoardView";
 import { registerAttentionCommands } from "./attentionCommands";
 import type { AttentionTreeProvider, AttentionTreeItem } from "../views/attention";
+import type { AttentionSweepService } from "../services/AttentionSweepService";
 import { registerConfigureForgeInstanceCommand } from "./configureForgeInstance";
 import { registerConfigureDiscordWebhookCommand } from "./configureDiscordWebhook";
 import { registerConfigureMattermostWebhookCommand } from "./configureMattermostWebhook";
@@ -202,6 +203,9 @@ export interface AllCommandDeps {
   /** Action Center sidebar tree (ADR 015 / #325). */
   attentionTreeProvider: AttentionTreeProvider;
   attentionTreeView: vscode.TreeView<AttentionTreeItem>;
+  /** Repo-scoped attention sweep (#93) — drives the Action Center's refresh
+   * and "check now" affordances. */
+  attentionSweepService: AttentionSweepService;
 }
 
 /**
@@ -250,6 +254,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
     runtimeStateStore,
     attentionTreeProvider,
     attentionTreeView,
+    attentionSweepService,
   } = deps;
 
   // Local free-trial record (countdown source). Shared by the status bar
@@ -433,6 +438,13 @@ export function registerAllCommands(deps: AllCommandDeps): void {
   const refreshRepositoriesCommand = vscode.commands.registerCommand(
     "nightgauge.refreshRepositories",
     async () => {
+      // Trigger 2 of the sweep's four invocation points (#93): refreshing the
+      // repository view is the operator asking what state their repos are in,
+      // and a standing blocker is part of that answer. Fires independently of
+      // the tree provider so it still runs in a window where the view failed to
+      // initialize; the sweep's own throttle keeps a rapid click free.
+      void attentionSweepService.sweep("view-refresh");
+
       if (!repositoriesTreeProvider) {
         logger.warn("RepositoriesTreeProvider not initialized");
         return;
@@ -842,6 +854,7 @@ export function registerAllCommands(deps: AllCommandDeps): void {
       provider: attentionTreeProvider,
       treeView: attentionTreeView,
       logger,
+      sweep: attentionSweepService,
     }),
 
     // Performance mode selector (Issue #3009 — replaces Supercharge from #2433)

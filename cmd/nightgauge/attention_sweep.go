@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	forgecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/forge"
@@ -34,6 +35,31 @@ var sweepForgeClient = func(repo string) (forge.ForgeClient, error) {
 		return nil, err
 	}
 	return router.For("", repo)
+}
+
+// cachedSweepForgeClient returns a resolver that builds the router at most
+// once. The CLI path rebuilds per invocation because it runs one sweep and
+// exits; the serve daemon sweeps every workspace repo on a timer, and
+// BuildRouter re-reads config and re-runs the token chain (which can shell out
+// to `gh`) each time. A failed build is not cached — a daemon that started
+// before the operator authenticated must be able to recover without a restart.
+func cachedSweepForgeClient() func(repo string) (forge.ForgeClient, error) {
+	var (
+		mu     sync.Mutex
+		router *forge.Router
+	)
+	return func(repo string) (forge.ForgeClient, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if router == nil {
+			r, err := forgecmd.BuildRouter("", 0, "")
+			if err != nil {
+				return nil, err
+			}
+			router = r
+		}
+		return router.For("", repo)
+	}
 }
 
 func attentionSweepCmd() *cobra.Command {

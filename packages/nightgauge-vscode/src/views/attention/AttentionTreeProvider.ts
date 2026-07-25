@@ -13,8 +13,14 @@
  * dashboard, a future Discord bot) disappears from this tree on the next
  * push, exactly as it does after a local resolve.
  *
+ * Grouping is by SEVERITY, not by run — which is why repo-scoped requests
+ * (issue #93) needed no new top-level section. A card raised by the sweep has
+ * `context.repo` and nothing else: no run, no issue, no stage. Any grouping
+ * keyed on those would have dropped it silently, so the severity bands are load
+ * bearing here, not merely cosmetic.
+ *
  * @see docs/decisions/015-decision-requests.md
- * @see Issue #325
+ * @see Issue #325, Issue #93
  */
 
 import * as vscode from "vscode";
@@ -35,8 +41,18 @@ function isBlocking(severity: AttentionRequestView["severity"]): boolean {
   return severity === "blocking_fleet" || severity === "blocking_run";
 }
 
+/** Terminal states drop out of the inbox. `auto_resolved` is a sweep retracting
+ * a standing card whose condition cleared (issue #92) — the operator did
+ * nothing and the card disappears, which is the point. */
 function isTerminalState(state: AttentionRequestView["lifecycle"]["state"]): boolean {
-  return state === "resolved" || state === "expired";
+  return state === "resolved" || state === "expired" || state === "auto_resolved";
+}
+
+/** Whether a request should still interrupt. Muting and acknowledging both
+ * silence a card without claiming its condition ended, so both suppress
+ * alerting while leaving the card in the tree. */
+function isAlertWorthy(request: AttentionRequestView): boolean {
+  return !request.lifecycle.muted && request.lifecycle.state !== "acknowledged";
 }
 
 export class AttentionTreeProvider
@@ -96,9 +112,34 @@ export class AttentionTreeProvider
     this._onDidReceiveEvent.fire(evt);
   }
 
-  /** Count of open blocking requests (`blocking_fleet` + `blocking_run`) — drives the view badge. */
+  /**
+   * Count of ALERT-WORTHY blocking requests — drives the view badge.
+   *
+   * Muted and acknowledged cards are excluded here and ONLY here. Both are
+   * still rendered in the tree at their severity: acknowledging says "I have
+   * seen this", muting says "stop telling me until it changes", and neither
+   * says "this is no longer true". The badge is the interruption channel, so it
+   * is the one surface where that distinction has to bite — a badge that keeps
+   * counting a condition the operator explicitly silenced is how an inbox
+   * teaches people to ignore it.
+   */
   getOpenBlockingCount(): number {
-    return this.requests.filter((r) => isBlocking(r.severity)).length;
+    return this.requests.filter((r) => isBlocking(r.severity) && isAlertWorthy(r)).length;
+  }
+
+  /**
+   * The most urgent `blocking_fleet` request, or undefined when none is open.
+   *
+   * A fleet-wide blocker has to be legible without expanding a tree node — the
+   * 2026-07-25 incident (epic #88) failed precisely because a red `main` was
+   * blocking every PR in the repo and nothing said so anywhere. The view header
+   * renders this, so it survives a collapsed tree. Muted cards are excluded for
+   * the same reason as the badge: the operator already knows.
+   */
+  getTopFleetBlocker(): AttentionRequestView | undefined {
+    return [...this.requests]
+      .filter((r) => r.severity === "blocking_fleet" && isAlertWorthy(r))
+      .sort(compareRequests)[0];
   }
 
   /** Whether any non-terminal request exists — drives the `viewsWelcome` empty state's `when` clause. */

@@ -853,21 +853,36 @@ export interface AttentionTraceRef {
   seq: number;
 }
 
-/** Card context: repo/issue/run/stage/cost + the trace back-reference. */
+/** Card context: repo/issue/pr/run/stage/cost + the trace back-reference.
+ *
+ * `repo` is the only guaranteed field. A repo-scoped card (issue #93) carries
+ * neither `issue` nor `run_id` by design — it describes a condition of the
+ * repository, not of a run — so anything keyed on those must tolerate their
+ * absence rather than treat it as malformed. */
 export interface AttentionContext {
   repo: string;
   issue?: number;
+  /** The PR the card is about. Repo-scoped producers name a PR with no issue. */
+  pr?: number;
   run_id?: string;
   stage?: string;
   cost_so_far_usd?: number;
   blocker?: string;
+  /** Deep link to the forge object that explains the card — the failing check
+   * run, the blocked PR. For a card whose only honest affordance is "go look at
+   * this", opening this link IS the primary action. */
+  url?: string;
   trace_ref?: AttentionTraceRef;
 }
 
 /** Lifecycle state machine + audit for one DecisionRequest. */
 export interface AttentionLifecycle {
-  state: "open" | "acknowledged" | "resolved" | "expired";
+  state: "open" | "acknowledged" | "resolved" | "expired" | "auto_resolved";
   acknowledged?: { actor: string; at: string };
+  /** Present while alerting is suppressed. Muting is NOT resolving: the card
+   * stays in the inbox at its severity, and the mute drops the moment the
+   * request's fingerprint moves (issue #92). */
+  muted?: { actor: string; at: string; fingerprint?: string };
   resolved?: {
     actor: string;
     at: string;
@@ -876,6 +891,9 @@ export interface AttentionLifecycle {
     note?: string;
   };
   expired?: { at: string; applied: string };
+  /** A sweep retracted the card because the condition cleared — deliberately
+   * distinct from `resolved`, which always names a human. */
+  auto_resolved?: { at: string; producer?: string; reason: string };
 }
 
 /** A DecisionRequest — the materialized card the Action Center renders. */
@@ -895,6 +913,15 @@ export interface AttentionRequestView {
   expires_at: string;
   default_action: string;
   lifecycle: AttentionLifecycle;
+  /** Raised from a STANDING condition — one that persists across observations
+   * and is reconciled by a sweep, rather than an event a run loop saw once.
+   * Only standing requests auto-resolve when their condition clears. */
+  standing?: boolean;
+  /** The MATERIAL state of a standing condition (which checks are failing,
+   * which merge blocker applies) — never a timestamp or counter. Equal
+   * fingerprints mean the same condition; a changed one re-alerts and drops
+   * any mute. */
+  fingerprint?: string;
 }
 
 /** Result from attention.list — open (and optionally terminal) requests,
@@ -913,6 +940,53 @@ export interface AttentionResolveResult {
 /** Result from attention.acknowledge. */
 export interface AttentionAcknowledgeResult {
   ok: boolean;
+}
+
+/** Result from attention.mute / attention.unmute. `muted` is the RESULTING
+ * state, which is not always what was asked for — muting an already-terminal
+ * request is a no-op the caller should see rather than a silent success. */
+export interface AttentionMuteResult {
+  ok: boolean;
+  muted: boolean;
+}
+
+/** One repo's outcome from attention.sweep. Every failure mode is a field, not
+ * a thrown error: a sweep fires on activation and on a timer, and must never be
+ * able to surface a modal because a token expired. */
+export interface AttentionSweepRepoResult {
+  repo: string;
+  /** The sweep declined to reconcile at all (auth / rate-limit). Nothing was
+   * created, updated, or retracted. */
+  skipped?: boolean;
+  skipReason?: string;
+  /** The repo could not be swept — unresolvable forge client or bad spec. */
+  error?: string;
+  /** Producers that observed this repo successfully. */
+  evaluated?: string[];
+  /** Producer name → the error that stopped it. Its cards were left untouched. */
+  failed?: Record<string, string>;
+  created: number;
+  updated: number;
+  refreshed: number;
+  suppressed: number;
+  autoResolved: number;
+}
+
+/** Result from attention.sweep — the repo-scoped evaluation loop (issues
+ * #89 / #93). Reconcile, not append: it raises what is newly true, leaves
+ * untouched what is still true, and auto-resolves what is no longer true. */
+export interface AttentionSweepResult {
+  repos: AttentionSweepRepoResult[];
+  created: number;
+  updated: number;
+  autoResolved: number;
+  /** Nothing was evaluated: no attention store or no forge factory attached.
+   * A legitimate local-first state, not a failure. */
+  unavailable?: boolean;
+  /** Another sweep was already in flight and this call was declined. */
+  busy?: boolean;
+  /** Echo of the trigger label the caller sent. */
+  reason?: string;
 }
 
 /** Payload of the `attention.event` push (created|updated|acknowledged|

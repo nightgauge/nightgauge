@@ -110,6 +110,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runtimeStateStore,
     attentionTreeProvider,
     attentionTreeView,
+    attentionSweepService,
   } = services;
 
   // Register all commands
@@ -154,6 +155,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       runtimeStateStore,
       attentionTreeProvider,
       attentionTreeView,
+      attentionSweepService,
     });
     logger.info("All commands registered successfully");
   } catch (error) {
@@ -321,6 +323,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       })
     );
   }
+
+  // Repo-scoped attention sweep (#93) — trigger 1 of 4: the window opening is
+  // the operator arriving, and the conditions this finds (a red default branch,
+  // a green PR nobody can merge) are exactly the ones that accumulate while
+  // nobody is looking. Deferred past activation so a forge round-trip never
+  // sits in front of the sidebar; failures inside are logged, never surfaced.
+  setTimeout(() => {
+    attentionSweepService.start();
+  }, 4000);
 
   // Auto-cleanup stale local branches (default: enabled)
   const autoCleanup = vscode.workspace
