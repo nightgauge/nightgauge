@@ -295,6 +295,7 @@ deny:
       - "docs/decisions/009-workspace-schema-migration.md"
       - "docs/decisions/010-progressive-disclosure.md"
       - "docs/decisions/011-model-eval-system.md"
+      - "docs/decisions/016-model-aware-skill-overlays.md"
     rationale: >-
       ADRs are private until individually reviewed and excepted. The exceptions
       describe shipped open-source implementation decisions.
