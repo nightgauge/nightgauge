@@ -52,6 +52,29 @@ type ModelDescriptor struct {
 	Recommended bool `json:"recommended,omitempty"`
 	// ResearchPreview excludes the model from default catalog/UI listings.
 	ResearchPreview bool `json:"research_preview,omitempty"`
+	// Behavior carries factual runtime properties of the model. Optional:
+	// models without it (and every local model, which has no entry at all)
+	// behave exactly as before.
+	Behavior *Behavior `json:"behavior,omitempty"`
+}
+
+// Behavior holds factual, vendor-documented runtime properties — never prose
+// and never judgment. Anything here must be checkable against the provider's
+// own documentation.
+type Behavior struct {
+	// ThinkingDefault is "on" or "off": whether the model reasons by default
+	// with no thinking parameter set. Opus 5 flipped this to "on".
+	ThinkingDefault string `json:"thinking_default,omitempty"`
+	// ThinkingDisableMaxEffort is the highest effort level at which thinking
+	// may be disabled. Empty means unconstrained (the pre-Opus-5 behavior,
+	// where the two settings were independent). On Opus 5 this is "high":
+	// disabling thinking at xhigh or max is a 400 from the API.
+	ThinkingDisableMaxEffort string `json:"thinking_disable_max_effort,omitempty"`
+	// EffortDefault is the provider's default effort when none is requested.
+	EffortDefault string `json:"effort_default,omitempty"`
+	// MaxOutputTokens bounds thinking AND response text together, so a stage
+	// running at high effort needs headroom here or it truncates.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
 }
 
 // HasTier reports whether the model serves the given capability band.
@@ -153,3 +176,41 @@ func ProviderForAdapter(adapter string) string {
 
 // RawJSON returns the embedded canonical registry bytes (used by parity tests).
 func RawJSON() []byte { return registryJSON }
+
+// EffortOrder is the effort ladder in ascending reasoning depth. Mirrors
+// EFFORT_LEVELS in the SDK (modelEvalSchemas.ts).
+var EffortOrder = []string{"low", "medium", "high", "xhigh", "max"}
+
+func effortIndex(effort string) int {
+	for i, e := range EffortOrder {
+		if e == effort {
+			return i
+		}
+	}
+	return -1
+}
+
+// ThinkingDisableConflict reports whether disabling thinking is invalid for
+// this model at the given effort, and returns the highest effort at which
+// disabling IS allowed.
+//
+// Opus 5 made these two settings interdependent: `thinking: {"type":
+// "disabled"}` is accepted only at effort `high` or below, and the pairing
+// returns a 400 at `xhigh`/`max`. That is a breaking change from Opus 4.8,
+// where the settings were independent — so a configuration that worked for
+// years starts failing the moment the opus band moves.
+//
+// The rule is data, not a model-name check: a future model with different
+// limits needs a registry edit, not a code change. Models with no constraint
+// declared (and unknown/local models, which have no entry) never conflict.
+func (m ModelDescriptor) ThinkingDisableConflict(effort string) (conflict bool, maxAllowed string) {
+	if m.Behavior == nil || m.Behavior.ThinkingDisableMaxEffort == "" {
+		return false, ""
+	}
+	limit := effortIndex(m.Behavior.ThinkingDisableMaxEffort)
+	requested := effortIndex(effort)
+	if limit < 0 || requested < 0 {
+		return false, m.Behavior.ThinkingDisableMaxEffort
+	}
+	return requested > limit, m.Behavior.ThinkingDisableMaxEffort
+}

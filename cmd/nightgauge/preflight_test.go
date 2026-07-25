@@ -18,7 +18,7 @@ func TestPreflightCmd_RegistersAllSubcommands(t *testing.T) {
 		got = append(got, s.Use)
 	}
 	sort.Strings(got)
-	want := []string{"ac-reconcile <issue-number>", "dependency-guard", "links", "secrets", "skill-anti-patterns", "skill-no-direct-gh", "skill-portability", "syntax"}
+	want := []string{"ac-reconcile <issue-number>", "dependency-guard", "links", "secrets", "skill-anti-patterns", "skill-no-direct-gh", "skill-portability", "syntax", "thinking-effort"}
 	if len(got) != len(want) {
 		t.Fatalf("subcommand count = %d, want %d (got: %v)", len(got), len(want), got)
 	}

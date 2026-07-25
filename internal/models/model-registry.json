@@ -16,7 +16,13 @@
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 1000000
+      "context_window": 1000000,
+      "behavior": {
+        "thinking_default": "on",
+        "thinking_disable_max_effort": "high",
+        "effort_default": "high",
+        "max_output_tokens": 128000
+      }
     },
     {
       "id": "claude-opus-4-8",
@@ -34,7 +40,10 @@
       "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true,
-      "replacement": "claude-opus-5"
+      "replacement": "claude-opus-5",
+      "behavior": {
+        "thinking_default": "off"
+      }
     },
     {
       "id": "claude-sonnet-5",
