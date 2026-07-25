@@ -123,6 +123,30 @@ pipeline control.
 No pipeline-created PR ever uses the `--auto` flag — the `pr-merge` stage owns
 the entire merge lifecycle.
 
+### Single-Maintainer Merge Policy
+
+`main` carries a ruleset requiring an approving review. With one maintainer on
+the project, no PR can satisfy it — a self-authored PR cannot be self-approved,
+so every PR reaches `mergeStateStatus: BLOCKED` / `REVIEW_REQUIRED` and stops
+there regardless of CI.
+
+Until a second maintainer exists, the sanctioned merge is:
+
+```bash
+gh pr merge <n> --squash --admin --delete-branch
+```
+
+This is a deliberate policy, not a bypass. Two rules keep it honest:
+
+- **`--admin` substitutes for the missing reviewer, never for a failing check.**
+  All checks must be green first; a red gate is a real failure to fix or
+  root-cause, exactly as before.
+- **`--auto` remains forbidden.** Auto-merge surrenders the merge moment to
+  GitHub, which is what the rest of this document exists to prevent.
+
+Revisit this section the moment a second maintainer can review — the review
+requirement is worth keeping once it is satisfiable.
+
 ### Identity Preflight
 
 Before dispatching **any** stage for a target repo, the scheduler asserts the

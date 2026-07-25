@@ -72,7 +72,12 @@ branch/PR — never a side-channel memory store.
 - **Manual PR merges only.** Auto-merge is disabled on all workspace repos.
   Watch CI (`gh pr checks`), fix/rerun real failures (never dismiss a failing
   test as "flaky" without root-causing it), then `gh pr merge --squash` — never
-  `--auto`, never `--admin`. See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
+  `--auto`. **`--admin` is required while the project has a single maintainer**:
+  `main` rulesets demand an approving review that nobody else can give, so
+  `--squash --admin` after green CI is the sanctioned path, not a bypass. Green
+  CI is still a precondition — `--admin` covers the missing reviewer, never a
+  failing check. Revisit when a second maintainer exists. See
+  [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
 - **Context economy — auto-compact is not a context-management strategy.**
   Frontier-model tokens are expensive and long contexts cost more per step, so
   a large context is justified only when it actually carries the answer to the
