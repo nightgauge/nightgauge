@@ -39,6 +39,82 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightSkillPortabilityCmd())
 	cmd.AddCommand(preflightDependencyGuardCmd())
 	cmd.AddCommand(preflightACReconcileCmd())
+	cmd.AddCommand(preflightThinkingEffortCmd())
+	return cmd
+}
+
+// preflightThinkingEffortCmd implements `nightgauge preflight thinking-effort`
+// — the Opus 5 interlock gate (#76).
+func preflightThinkingEffortCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		model      string
+		effort     string
+		stage      string
+	)
+	cmd := &cobra.Command{
+		Use:   "thinking-effort",
+		Short: "Fail when disabled thinking is paired with an effort the model rejects",
+		Long: `Validate a resolved (model, effort) pair against the registry's
+thinking/effort constraint before a stage is dispatched.
+
+Opus 5 made two previously independent settings interdependent: disabling
+thinking is accepted only at effort ` + "`high`" + ` or below, and the pairing returns
+HTTP 400 at ` + "`xhigh`" + `/` + "`max`" + `. Before this gate the failure surfaced mid-stage as
+an opaque provider error, which the pipeline classified as a generic stage
+failure and retried into the same wall.
+
+The gate is inert unless CLAUDE_CODE_DISABLE_THINKING is truthy in the
+environment — with thinking on (the default) there is nothing to conflict
+with. Models that declare no constraint, and unknown/local models with no
+registry entry, never produce a finding.
+
+The rule is registry data (behavior.thinking_disable_max_effort), so a future
+model with different limits is a JSON edit, not a code change.
+
+Exit codes:
+  0  the pair is valid (or the gate is inert)
+  1  the pair would be rejected by the provider
+  2  hard error`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if model == "" || effort == "" {
+				fmt.Fprintln(os.Stderr, "preflight thinking-effort: --model and --effort are required")
+				os.Exit(2)
+			}
+			source := "resolved"
+			if stage != "" {
+				source = "stage_efforts." + stage
+			}
+			result := preflight.RunThinkingEffortCheck(preflight.ThinkingEffortOptions{
+				Efforts: map[string]preflight.ModelEffort{source: {Model: model, Effort: effort}},
+			})
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				fmt.Printf("nightgauge preflight thinking-effort — schema v%d\n", result.V)
+				if !result.ThinkingDisabled {
+					fmt.Printf("%s not set — thinking is enabled, nothing to check ✓\n", preflight.DisableThinkingEnvVar)
+				}
+				for _, f := range result.Findings {
+					fmt.Printf("  ✗ %s\n", f.Message)
+				}
+				if result.ThinkingDisabled && len(result.Findings) == 0 {
+					fmt.Printf("%s=%s with thinking disabled is within %s's limit ✓\n", source, effort, model)
+				}
+			}
+			if len(result.Findings) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON")
+	cmd.Flags().StringVar(&model, "model", "", "Resolved model id or tier band (required)")
+	cmd.Flags().StringVar(&effort, "effort", "", "Resolved effort level (required)")
+	cmd.Flags().StringVar(&stage, "stage", "", "Stage name, for a more specific finding source label")
 	return cmd
 }
 

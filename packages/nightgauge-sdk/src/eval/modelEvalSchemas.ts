@@ -100,6 +100,32 @@ export const TokenRatesSchema = z
 export type TokenRates = z.infer<typeof TokenRatesSchema>;
 
 /**
+ * Factual runtime properties of a model (#76).
+ *
+ * Strictly things the provider documents and a reader could verify — no
+ * judgment, no instructions. Behavioral GUIDANCE lives in skill overlays
+ * (ADR 016); this is the data those overlays reason about, so a fact is stated
+ * once here rather than restated in every overlay that depends on it.
+ */
+export const BehaviorSchema = z
+  .object({
+    /** Whether the model reasons by default with no thinking parameter set. */
+    thinking_default: z.enum(["on", "off"]).optional(),
+    /**
+     * Highest effort at which thinking may be disabled. Omitted = unconstrained
+     * (pre-Opus-5, where the two settings were independent). Opus 5 caps this
+     * at `high`; disabling thinking at `xhigh`/`max` is a 400.
+     */
+    thinking_disable_max_effort: EffortLevelSchema.optional(),
+    /** Provider default effort when none is requested. */
+    effort_default: EffortLevelSchema.optional(),
+    /** Bounds thinking AND response text together — headroom matters at high effort. */
+    max_output_tokens: z.number().int().positive().optional(),
+  })
+  .strict();
+export type Behavior = z.infer<typeof BehaviorSchema>;
+
+/**
  * Provider-neutral description of an evaluable model — the single source of
  * truth for cost computation and capability metadata. The S2 registry is a list
  * of these; adding a model (e.g. a new release) is one entry.
@@ -133,6 +159,12 @@ export const ModelDescriptorSchema = z
     recommended: z.boolean().optional(),
     /** Research-preview model — excluded from default catalog/UI listings. */
     research_preview: z.boolean().optional(),
+    /**
+     * Factual, vendor-documented runtime properties (#76). Optional — a model
+     * without it behaves exactly as before, and local models have no registry
+     * entry at all. Facts only: never prose, never instructions.
+     */
+    behavior: BehaviorSchema.optional(),
   })
   .strict();
 export type ModelDescriptor = z.infer<typeof ModelDescriptorSchema>;

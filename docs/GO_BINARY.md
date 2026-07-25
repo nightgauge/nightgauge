@@ -264,6 +264,9 @@ nightgauge preflight skill-anti-patterns --root . [--json]
 
 # Fail when a skill embeds a non-portable (VSCode-extension) binary path
 nightgauge preflight skill-portability --root . [--json]
+
+# Fail when disabled thinking is paired with an effort the model rejects (#76)
+nightgauge preflight thinking-effort --model opus --effort max [--stage feature-dev] [--json]
 ```
 
 **Exit codes (uniform across the family):**
@@ -276,14 +279,15 @@ nightgauge preflight skill-portability --root . [--json]
 
 **Subcommand details:**
 
-| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                     |
-| --------------------- | ---------------------- | ------------------------------------------------------------------------------------------- |
-| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                     |
-| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings` |
-| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                     |
-| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`  |
-| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                    |
-| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`              |
+| Subcommand            | Wraps                  | Stable JSON schema (v1)                                                                            |
+| --------------------- | ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                            |
+| `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`        |
+| `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                            |
+| `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`         |
+| `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                           |
+| `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings` |
+| `skill-portability`   | `internal/preflight`   | `v, root, files_checked, findings[{skill_file, line, check, match}], warnings`                     |
 
 **`syntax` finding format enum:** `"json"` or `"yaml"`. Empty files are
 treated as valid (matches `python3 -m json.tool` and `yaml.safe_load`
