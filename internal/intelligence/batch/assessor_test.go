@@ -2,6 +2,8 @@ package batch
 
 import (
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 func TestAssessor_EmptyInput(t *testing.T) {
@@ -82,22 +84,35 @@ func TestAssessor_CostEstimates(t *testing.T) {
 	}
 }
 
-func TestRecommendModel_HighComplexityReturnsOpus47(t *testing.T) {
+// TestRecommendModel_ResolvesCurrentBandModel asserts the score→BAND mapping
+// and that each band resolves through the registry — deliberately not a pinned
+// concrete id. The previous version of this test pinned ids and had to be
+// chased forward on every model release; by 2026-07 it was asserting a
+// deprecated sonnet and a superseded opus, which is how the drift in #74 went
+// unnoticed. A test that pins the answer cannot detect a stale answer.
+func TestRecommendModel_ResolvesCurrentBandModel(t *testing.T) {
 	cases := []struct {
 		score int
-		want  string
+		tier  string
 	}{
-		{1, "claude-haiku-4-5-20251001"},
-		{3, "claude-haiku-4-5-20251001"},
-		{5, "claude-sonnet-4-6"},
-		{6, "claude-sonnet-4-6"},
-		{7, "claude-opus-4-8"},
-		{10, "claude-opus-4-8"},
+		{1, "haiku"},
+		{3, "haiku"},
+		{5, "sonnet"},
+		{6, "sonnet"},
+		{7, "opus"},
+		{10, "opus"},
 	}
 	for _, tc := range cases {
+		want, ok := models.Get(tc.tier)
+		if !ok {
+			t.Fatalf("registry has no non-deprecated model for tier %q", tc.tier)
+		}
 		got := recommendModel(tc.score)
-		if got != tc.want {
-			t.Errorf("recommendModel(%d) = %q, want %q", tc.score, got, tc.want)
+		if got != want.ID {
+			t.Errorf("recommendModel(%d) = %q, want %q (current %s band)", tc.score, got, want.ID, tc.tier)
+		}
+		if want.Deprecated {
+			t.Errorf("tier %q resolves to deprecated model %q", tc.tier, want.ID)
 		}
 	}
 }

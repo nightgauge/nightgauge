@@ -18,6 +18,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/models"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -2120,9 +2121,15 @@ func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
 		t.Fatalf("reRouteContext error: %v", err)
 	}
 
-	// maximum mode → opus for all stages
-	if rec.Model != "claude-opus-4-8" {
-		t.Errorf("rec.Model = %q, want claude-opus-4-8", rec.Model)
+	// maximum mode → the opus band for all stages. Asserted through the
+	// registry rather than as a pinned id (#74) — a hardcoded expectation here
+	// silently documents whichever model was current when the test was written.
+	wantOpus, ok := models.Get("opus")
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
+	if rec.Model != wantOpus.ID {
+		t.Errorf("rec.Model = %q, want %q (current opus band)", rec.Model, wantOpus.ID)
 	}
 }
 

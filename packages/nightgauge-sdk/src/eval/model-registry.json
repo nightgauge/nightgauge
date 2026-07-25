@@ -3,6 +3,22 @@
   "version": "2",
   "models": [
     {
+      "id": "claude-opus-5",
+      "provider": "anthropic",
+      "tiers": ["opus"],
+      "display_name": "Opus 5",
+      "concrete_version": "claude-opus-5",
+      "rates": {
+        "input": 5.0,
+        "output": 25.0,
+        "cache_read": 0.5,
+        "cache_creation": 6.25
+      },
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_reasoning": ["none", "low", "medium", "high"],
+      "context_window": 1000000
+    },
+    {
       "id": "claude-opus-4-8",
       "provider": "anthropic",
       "tiers": ["opus"],
@@ -16,7 +32,9 @@
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 200000
+      "context_window": 200000,
+      "deprecated": true,
+      "replacement": "claude-opus-5"
     },
     {
       "id": "claude-sonnet-5",

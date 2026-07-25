@@ -1,6 +1,10 @@
 package tokens
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/models"
+)
 
 func TestBudget_Record(t *testing.T) {
 	b := NewBudget(100_000, 50_000, 5.00)
@@ -122,10 +126,17 @@ func TestCalculateCost_OpusPricing(t *testing.T) {
 	}
 }
 
-func TestDefaultModelForEstimate_HighComplexityReturnsOpus(t *testing.T) {
+// Asserts the BAND, resolved through the registry — not a pinned id. See the
+// note on TestRecommendModel_ResolvesCurrentBandModel (#74): pinning the
+// concrete id is what let this layer keep naming a superseded model.
+func TestDefaultModelForEstimate_HighComplexityReturnsCurrentOpus(t *testing.T) {
+	want, ok := models.Get("opus")
+	if !ok {
+		t.Fatal("registry has no non-deprecated opus-band model")
+	}
 	got := defaultModelForEstimate("feature-dev", 9)
-	if got != "claude-opus-4-8" {
-		t.Errorf("high-complexity feature-dev model = %s, want claude-opus-4-8", got)
+	if got != want.ID {
+		t.Errorf("high-complexity feature-dev model = %s, want %s (current opus band)", got, want.ID)
 	}
 }
 

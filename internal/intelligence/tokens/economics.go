@@ -171,15 +171,28 @@ func EstimateCost(stages []string, complexityScore int) CostEstimate {
 func defaultModelForEstimate(stage string, complexity int) string {
 	switch stage {
 	case "issue-pickup", "pr-create", "pr-merge":
-		return "claude-haiku-4-5-20251001"
+		return concreteForTier("haiku")
 	default:
 		if complexity <= 3 {
-			return "claude-haiku-4-5-20251001"
+			return concreteForTier("haiku")
 		} else if complexity <= 6 {
-			return "claude-sonnet-4-6"
+			return concreteForTier("sonnet")
 		}
-		return "claude-opus-4-8"
+		return concreteForTier("opus")
 	}
+}
+
+// concreteForTier resolves a routing tier to the current non-deprecated model
+// serving that band. Hardcoding concrete ids here is how this layer drifted a
+// full model generation behind the registry (#74): the ids kept naming
+// superseded models long after the band moved on, and nothing failed loudly.
+// An unknown tier returns the tier name itself, which costs $0 via the
+// unknown-model default rather than fabricating a price.
+func concreteForTier(tier string) string {
+	if m, ok := models.Get(tier); ok {
+		return m.ID
+	}
+	return tier
 }
 
 type tokenPair struct{ Input, Output int }

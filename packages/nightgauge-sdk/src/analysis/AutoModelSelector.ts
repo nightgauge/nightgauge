@@ -80,8 +80,15 @@ export function clampTier(tier: ModelTier, envelope: ModelEnvelope): ModelTier {
 
 /** Size complexity labels @since Issue #730 */
 export type ComplexityLabel = "XS" | "S" | "M" | "L" | "XL";
-/** Claude effort levels for reasoning depth @since Issue #934; `xhigh` for the frontier tier (#73) */
-export type ClaudeEffort = "low" | "medium" | "high" | "xhigh";
+/**
+ * Claude effort levels for reasoning depth @since Issue #934; `xhigh` for the
+ * frontier tier (#73), `max` at the top of the ladder from Opus 5 (#75).
+ *
+ * Per-model support is NOT encoded in this union — the registry's
+ * `supported_efforts` is authoritative, so a level a model does not accept is
+ * rejected loudly instead of silently downgraded.
+ */
+export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Stage categories for the complexity-to-model matrix @since Issue #730, #942, #1593 */
 export type StageCategory =
@@ -473,7 +480,36 @@ const PIPELINE_STAGES = [
  *
  * @since Issue #948 (originally p90 guesses, recalibrated with real data)
  */
-const TOKEN_BASELINES: Record<string, Record<ClaudeEffort, { input: number; output: number }>> = {
+type EffortBaseline = { input: number; output: number };
+type EffortBaselines = Record<ClaudeEffort, EffortBaseline>;
+
+/**
+ * `max` rows are derived from `xhigh` by the SAME documented bootstrap the
+ * `xhigh` rows themselves use (~1.25× input, ~1.4× output), rather than typed
+ * out as six more uncalibrated literals (#75). Deriving keeps the estimate
+ * honest about its provenance: nobody can mistake these for measurements, and
+ * calibration overrides them once real `max` runs exist.
+ */
+const MAX_FROM_XHIGH_INPUT = 1.25;
+const MAX_FROM_XHIGH_OUTPUT = 1.4;
+
+function withExtrapolatedMax(
+  rows: Record<string, Omit<EffortBaselines, "max">>
+): Record<string, EffortBaselines> {
+  const out: Record<string, EffortBaselines> = {};
+  for (const [stage, levels] of Object.entries(rows)) {
+    out[stage] = {
+      ...levels,
+      max: {
+        input: Math.round(levels.xhigh.input * MAX_FROM_XHIGH_INPUT),
+        output: Math.round(levels.xhigh.output * MAX_FROM_XHIGH_OUTPUT),
+      },
+    };
+  }
+  return out;
+}
+
+const TOKEN_BASELINES: Record<string, EffortBaselines> = withExtrapolatedMax({
   // xhigh rows are UNCALIBRATED extrapolations from the high rows (~1.25×
   // input, ~1.4× output) — the same bootstrap this table started from before
   // real data recalibrated it. xhigh is only reached on router-escalated
@@ -515,7 +551,7 @@ const TOKEN_BASELINES: Record<string, Record<ClaudeEffort, { input: number; outp
     high: { input: 910_000, output: 6_000 },
     xhigh: { input: 1_150_000, output: 8_500 },
   },
-};
+});
 
 /**
  * Categorize a pipeline stage into a StageCategory.

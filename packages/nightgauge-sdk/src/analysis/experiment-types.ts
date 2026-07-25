@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { EFFORT_LEVELS } from "../eval/modelEvalSchemas.js";
 
 // ============================================================================
 // Schemas
@@ -16,8 +17,14 @@ import { z } from "zod";
 /** Model tier schema (matches DefaultModelSchema from config/schema.ts) */
 const ModelTierSchema = z.enum(["sonnet", "opus", "haiku", "fable"]);
 
-/** Claude effort schema (matches ClaudeEffort from AutoModelSelector; xhigh for the frontier tier, #73) */
-const EffortSchema = z.enum(["low", "medium", "high", "xhigh"]);
+/**
+ * Claude effort schema — derived from `EFFORT_LEVELS`, not re-listed.
+ *
+ * This was a fourth independent copy of the effort ladder and it fell behind
+ * when `max` was added (#75): experiments silently could not express the top
+ * level. Deriving means the next level added is available here for free.
+ */
+const EffortSchema = z.enum(EFFORT_LEVELS);
 
 /** Experiment group variant */
 export const ExperimentGroupSchema = z.enum(["control", "treatment"]);

@@ -62,7 +62,8 @@ const TASK: EvalTask = {
 
 describe("model-eval schemas — parity guards", () => {
   it("EFFORT_LEVELS matches the ClaudeEffort union exactly", () => {
-    expect([...EFFORT_LEVELS]).toEqual(["low", "medium", "high", "xhigh"]);
+    // `max` is the top of the ladder from Opus 5 (#75).
+    expect([...EFFORT_LEVELS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   it("REASONING_LEVELS is the provider-neutral budget axis", () => {
