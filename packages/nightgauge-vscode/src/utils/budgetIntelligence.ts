@@ -30,6 +30,7 @@ import {
 } from "@nightgauge/sdk";
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 import type { NormalizedRunRecord } from "./executionHistoryReader";
+import { p75 } from "./adaptiveBudgetLoader";
 
 /**
  * Resolve the main repository root from a potential worktree path.
@@ -44,6 +45,77 @@ function resolveMainRepoRoot(workspaceRoot: string): string {
     return workspaceRoot.substring(0, idx);
   }
   return workspaceRoot;
+}
+
+// ============================================================================
+// Historical cost calibration (shared by Tier 1 and Tier 2)
+// ============================================================================
+
+/**
+ * Minimum matching runs before a historical cost is trusted as a calibration
+ * input. One sample is an anecdote, and a p75 over two points is just the max.
+ */
+const MIN_CALIBRATION_SAMPLES = 3;
+
+/**
+ * Which cohort of historical runs produced a calibration figure.
+ * `"none"` means calibration is OFF — the caller is flying on the static
+ * estimate alone.
+ */
+export type CalibrationSource = "same-size" | "all-sizes" | "none";
+
+/** Historical cost signal for one size bucket, derived from run history. */
+export interface HistoricalCalibration {
+  /** p75 cost of the matched cohort in USD, or null when nothing matched */
+  costUsd: number | null;
+  /** Number of historical runs behind `costUsd` */
+  sampleCount: number;
+  /** Which cohort `costUsd` came from */
+  source: CalibrationSource;
+}
+
+/**
+ * Compute the historical cost signal for a size bucket (#112).
+ *
+ * **p75, not mean.** The observed cost distribution has a long right tail —
+ * one estimate bucket produced actuals spanning $1.66 to $107.02 — so the mean
+ * both understates the realistic bad case and lurches on every new outlier.
+ * p75 is a stable order statistic that answers the question the budget gate
+ * actually asks ("how much does a run like this usually take, worst-case-ish?")
+ * and matches the statistic the adaptive stage-budget loader already uses.
+ *
+ * **Size-null tolerance.** Records written before the size hydration fix carry
+ * `size: null`, and runs on issues with no `size:*` label still do. Demanding
+ * an exact size match would keep calibration switched off until a full history
+ * of labelled records accumulated, so a cohort too small to trust falls back to
+ * every scored run instead of to nothing. A cross-size p75 is blunter than a
+ * same-size one but is still far better than the uncorrected static estimate.
+ */
+export function computeHistoricalCalibration(
+  runs: Array<{ sizeLabel: string | null; totalCostUsd: number }>,
+  sizeLabel: string,
+  minSamples: number = MIN_CALIBRATION_SAMPLES
+): HistoricalCalibration {
+  const scored = runs.filter((c) => c.totalCostUsd > 0);
+  const sameSize = scored.filter((c) => c.sizeLabel === sizeLabel);
+  const useSameSize = sameSize.length >= minSamples;
+  const cohort = useSameSize ? sameSize : scored;
+
+  if (cohort.length < minSamples) {
+    return { costUsd: null, sampleCount: cohort.length, source: "none" };
+  }
+
+  const sorted = cohort.map((c) => c.totalCostUsd).sort((a, b) => a - b);
+  return {
+    costUsd: p75(sorted),
+    sampleCount: cohort.length,
+    source: useSameSize ? "same-size" : "all-sizes",
+  };
+}
+
+/** Human-readable cohort name for a calibration figure. */
+function calibrationCohortLabel(source: CalibrationSource, sizeLabel: string): string {
+  return source === "same-size" ? sizeLabel : "all sizes";
 }
 
 // ============================================================================
@@ -114,10 +186,12 @@ export interface PreFlightBudgetResult {
     model: string;
     skipped: boolean;
   }>;
-  /** Average cost of similar issues (same size label) from history, or null if no data */
-  historicalAvgCost: number | null;
-  /** Number of historical runs used for the average */
+  /** p75 cost of comparable issues from history, or null when calibration is off */
+  historicalCostUsd: number | null;
+  /** Number of historical runs behind `historicalCostUsd` */
   historicalSampleCount: number;
+  /** Which cohort produced `historicalCostUsd` ("none" = calibration off) */
+  historicalSource: CalibrationSource;
   /** Human-readable summary for the warning notification */
   summary: string;
   /** The pinned inputs this estimate was computed under (#198) */
@@ -161,29 +235,38 @@ export async function runPreFlightBudgetCheck(
     snap.mode
   );
 
-  // Step 2: Get historical average for similar-sized issues
-  // historyRoot already resolved above (Step 1) from main repo root.
-  let historicalAvgCost: number | null = null;
-  let historicalSampleCount = 0;
+  // Step 2: Calibrate the static estimate against what runs like this have
+  // ACTUALLY cost. historyRoot already resolved above (Step 1) from main repo
+  // root. This is the correction that carries the whole gate: the static
+  // estimate emits ~10 discrete values with essentially no predictive signal
+  // (one $2.70 bucket produced actuals from $1.66 to $107.02), so without a
+  // historical anchor the projection is noise (#112).
+  let calibration: HistoricalCalibration = { costUsd: null, sampleCount: 0, source: "none" };
 
   try {
-    const sizeLabel = estimate.complexity; // XS/S/M/L/XL
     const allCosts = await ExecutionHistoryReader.getCostByIssue(
       historyRoot,
-      100 // get enough data for a meaningful average
+      100 // get enough data for a meaningful percentile
     );
-    const sameSizeRuns = allCosts.filter((c) => c.sizeLabel === sizeLabel && c.totalCostUsd > 0);
-    if (sameSizeRuns.length > 0) {
-      historicalAvgCost =
-        sameSizeRuns.reduce((sum, c) => sum + c.totalCostUsd, 0) / sameSizeRuns.length;
-      historicalSampleCount = sameSizeRuns.length;
-    }
-  } catch {
-    // Non-critical — historical data is informational only
+    calibration = computeHistoricalCalibration(allCosts, estimate.complexity);
+  } catch (err) {
+    console.warn("[Nightgauge] pre-flight calibration lookup failed:", err);
   }
 
-  // Step 3: Use the HIGHER of estimated cost and historical average for comparison
-  const projectedCost = Math.max(estimate.totalEstimatedCost, historicalAvgCost ?? 0);
+  if (calibration.costUsd === null) {
+    // Loud by design. The old code just omitted the historical segment from the
+    // summary when nothing matched, so a silently uncalibrated projection was
+    // indistinguishable from a calibrated one — which is how a median 3.9x
+    // under-estimate survived 112 runs unnoticed (#112).
+    console.warn(
+      `[Nightgauge] pre-flight cost calibration OFF for ${estimate.complexity}: ` +
+        `${calibration.sampleCount} usable historical runs (need ${MIN_CALIBRATION_SAMPLES}). ` +
+        `Projecting from the uncorrected static estimate.`
+    );
+  }
+
+  // Step 3: Use the HIGHER of estimated cost and historical p75 for comparison
+  const projectedCost = Math.max(estimate.totalEstimatedCost, calibration.costUsd ?? 0);
   const ceilingRatio = ceilingUsd > 0 ? projectedCost / ceilingUsd : 0;
   const shouldWarn = ceilingRatio >= warningThreshold;
 
@@ -196,15 +279,20 @@ export async function runPreFlightBudgetCheck(
   }));
 
   let summary = `Estimated cost: $${estimate.totalEstimatedCost.toFixed(2)}`;
-  if (historicalAvgCost !== null) {
-    summary += ` | Historical avg (${estimate.complexity}): $${historicalAvgCost.toFixed(2)} (${historicalSampleCount} runs)`;
+  if (calibration.costUsd !== null) {
+    const cohort = calibrationCohortLabel(calibration.source, estimate.complexity);
+    summary += ` | Historical p75 (${cohort}): $${calibration.costUsd.toFixed(2)} (${calibration.sampleCount} runs)`;
+  } else {
+    // Never omit the segment — an absent one reads as "calibrated and cheap".
+    summary += ` | Historical p75: UNCALIBRATED (${calibration.sampleCount} usable runs)`;
   }
   summary += ` | Ceiling: $${ceilingUsd.toFixed(2)} (${(ceilingRatio * 100).toFixed(0)}%)`;
 
   if (shouldWarn) {
     summary += `\n\nThis issue is projected to use ${(ceilingRatio * 100).toFixed(0)}% of the budget ceiling.`;
-    if (historicalAvgCost && historicalAvgCost > ceilingUsd) {
-      summary += ` Similar ${estimate.complexity}-sized issues have historically exceeded the ceiling.`;
+    if (calibration.costUsd && calibration.costUsd > ceilingUsd) {
+      const cohort = calibrationCohortLabel(calibration.source, estimate.complexity);
+      summary += ` Comparable runs (${cohort}) have historically exceeded the ceiling.`;
     }
     summary += " Consider increasing the ceiling or splitting this issue.";
   }
@@ -216,8 +304,9 @@ export async function runPreFlightBudgetCheck(
     shouldWarn,
     complexity: estimate.complexity,
     stages,
-    historicalAvgCost,
-    historicalSampleCount,
+    historicalCostUsd: calibration.costUsd,
+    historicalSampleCount: calibration.sampleCount,
+    historicalSource: calibration.source,
     summary,
     snapshot: snap,
   };
@@ -248,8 +337,8 @@ export interface BudgetRetroResult {
   burnRatePerMinute: number;
   /** Whether context compaction was detected during this stage */
   compactionDetected: boolean;
-  /** Historical avg cost for same-size issues, or null */
-  historicalAvgCost: number | null;
+  /** Historical p75 cost for comparable issues, or null when uncalibrated */
+  historicalCostUsd: number | null;
   /** How this run's cost compares: 'normal' | 'above-average' | 'anomalous' */
   costAssessment: "normal" | "above-average" | "anomalous";
   /** Human-readable diagnostic for the notification message */
@@ -323,22 +412,20 @@ export async function buildBudgetRetro(params: {
 
   // Historical comparison — use main repo root, not worktree
   const retroHistoryRoot = resolveMainRepoRoot(workspaceRoot);
-  let historicalAvgCost: number | null = null;
+  let calibration: HistoricalCalibration = { costUsd: null, sampleCount: 0, source: "none" };
   let costAssessment: "normal" | "above-average" | "anomalous" = "normal";
 
   try {
     const allCosts = await ExecutionHistoryReader.getCostByIssue(retroHistoryRoot, 100);
-    const sameSizeRuns = allCosts.filter((c) => c.sizeLabel === sizeLabel && c.totalCostUsd > 0);
-    if (sameSizeRuns.length >= 3) {
-      historicalAvgCost =
-        sameSizeRuns.reduce((sum, c) => sum + c.totalCostUsd, 0) / sameSizeRuns.length;
+    // Same calibration lookup as the pre-flight gate (#112) — this comparison
+    // was equally dead while every IPC-written record carried a null size.
+    calibration = computeHistoricalCalibration(allCosts, sizeLabel);
 
-      // Classify: above 1.5x avg = above-average, above 2.5x = anomalous
-      if (historicalAvgCost > 0) {
-        const ratio = currentCost / historicalAvgCost;
-        if (ratio > 2.5) costAssessment = "anomalous";
-        else if (ratio > 1.5) costAssessment = "above-average";
-      }
+    // Classify: above 1.5x the historical p75 = above-average, above 2.5x = anomalous
+    if (calibration.costUsd !== null && calibration.costUsd > 0) {
+      const ratio = currentCost / calibration.costUsd;
+      if (ratio > 2.5) costAssessment = "anomalous";
+      else if (ratio > 1.5) costAssessment = "above-average";
     }
   } catch {
     // Non-critical
@@ -368,10 +455,16 @@ export async function buildBudgetRetro(params: {
   }
 
   // Historical comparison
-  if (historicalAvgCost !== null) {
-    const ratio = currentCost / historicalAvgCost;
+  if (calibration.costUsd !== null) {
+    const ratio = currentCost / calibration.costUsd;
+    const cohort = calibrationCohortLabel(calibration.source, sizeLabel);
     lines.push(
-      `Historical avg for ${sizeLabel}: $${historicalAvgCost.toFixed(2)} (this run: ${ratio.toFixed(1)}x)`
+      `Historical p75 for ${cohort}: $${calibration.costUsd.toFixed(2)} ` +
+        `(${calibration.sampleCount} runs; this run: ${ratio.toFixed(1)}x)`
+    );
+  } else {
+    lines.push(
+      `Historical p75: UNCALIBRATED (${calibration.sampleCount} usable runs) — no cost baseline to compare against`
     );
   }
 
@@ -401,7 +494,7 @@ export async function buildBudgetRetro(params: {
     dominantStagePercent,
     burnRatePerMinute,
     compactionDetected,
-    historicalAvgCost,
+    historicalCostUsd: calibration.costUsd,
     costAssessment,
     diagnosticSummary: lines.join("\n"),
     recommendation,

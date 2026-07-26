@@ -16,7 +16,9 @@ package attention
 //   - STICKY IDENTITY. A condition maps to a stable (producer,
 //     idempotency_key) derived from what the condition IS — the check name,
 //     the PR number — never from when it was observed. Re-observation updates
-//     the existing request in place; it never creates a second one.
+//     the existing request in place; it never creates a second one. That holds
+//     across expiry too (#108): an expired card is revived under its own id,
+//     because expiry records that nobody looked, not that anything changed.
 //
 //   - AUTO-RESOLUTION. When a sweep evaluates a producer successfully and no
 //     longer observes one of its conditions, that request transitions to
@@ -218,25 +220,9 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 		if _, stillTrue := byKey[req.IdempotencyKey]; stillTrue {
 			continue
 		}
-		at := s.nowUTC().Format(tsLayout)
-		req.Lifecycle.State = StateAutoResolved
-		req.Lifecycle.AutoResolved = &AutoResolvedRecord{
-			At:       at,
-			Producer: req.Producer,
-			Reason:   ReasonConditionCleared,
-		}
-		if err := s.writeMaterializedLocked(rec.path, req); err != nil {
+		if !s.autoResolveLocked(rec) {
 			continue
 		}
-		s.emitLocked(JournalEntry{
-			Action:         ActionAutoResolved,
-			ID:             req.ID,
-			IdempotencyKey: req.IdempotencyKey,
-			Producer:       req.Producer,
-			State:          req.Lifecycle.State,
-			Fingerprint:    req.Fingerprint,
-			At:             at,
-		}, req)
 		res.AutoResolved++
 		res.Outcomes = append(res.Outcomes, StandingOutcome{
 			Key: req.IdempotencyKey, ID: req.ID, Producer: req.Producer, Action: ActionAutoResolved,
@@ -244,6 +230,83 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 	}
 
 	return res, nil
+}
+
+// AutoResolveUnobserved retracts every open standing request raised by producer
+// whose idempotency_key is absent from observed, returning how many it
+// retracted.
+//
+// It is the run-loop counterpart of ReconcileStanding's auto-resolve leg, for
+// the standing producers wired into the scheduler rather than into a repo
+// sweep. Those re-evaluate their whole condition set on every cycle across
+// every repo they watch — the fleet is idle or it is not; an issue still
+// carries a human-only label or it does not — so a repo scope would be the
+// wrong filter, and the producer name is the right one.
+//
+// The caller must invoke this only after the producer SUCCESSFULLY evaluated:
+// an empty observed slice is a positive assertion that no condition holds, not
+// a way to say "I could not look" (docs/ATTENTION_PRODUCERS.md invariant 1).
+// Retracting a real card because a scan failed is the exact failure mode that
+// makes an inbox untrustworthy.
+func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, error) {
+	if strings.TrimSpace(producer) == "" {
+		return 0, fmt.Errorf("attention: auto-resolve requires a producer")
+	}
+	stillTrue := make(map[string]bool, len(observed))
+	for _, k := range observed {
+		stillTrue[k] = true
+	}
+
+	mu := lockFor(s.dir)
+	mu.Lock()
+	defer mu.Unlock()
+
+	stored, err := s.scanLocked()
+	if err != nil {
+		return 0, err
+	}
+	retracted := 0
+	for _, rec := range stored {
+		req := rec.req
+		if !req.Standing || req.Lifecycle.State.IsTerminal() {
+			continue
+		}
+		if req.Producer != producer || stillTrue[req.IdempotencyKey] {
+			continue
+		}
+		if s.autoResolveLocked(rec) {
+			retracted++
+		}
+	}
+	return retracted, nil
+}
+
+// autoResolveLocked retracts one open standing request because its condition
+// was no longer observed. Reports whether the transition was persisted — a
+// per-file write failure leaves the card exactly as it was rather than aborting
+// the caller's whole reconciliation.
+func (s *Store) autoResolveLocked(rec storedRequest) bool {
+	req := rec.req
+	at := s.nowUTC().Format(tsLayout)
+	req.Lifecycle.State = StateAutoResolved
+	req.Lifecycle.AutoResolved = &AutoResolvedRecord{
+		At:       at,
+		Producer: req.Producer,
+		Reason:   ReasonConditionCleared,
+	}
+	if err := s.writeMaterializedLocked(rec.path, req); err != nil {
+		return false
+	}
+	s.emitLocked(JournalEntry{
+		Action:         ActionAutoResolved,
+		ID:             req.ID,
+		IdempotencyKey: req.IdempotencyKey,
+		Producer:       req.Producer,
+		State:          req.Lifecycle.State,
+		Fingerprint:    req.Fingerprint,
+		At:             at,
+	}, req)
+	return true
 }
 
 // prepareObservations normalises each observation into a fully-defaulted,
@@ -260,12 +323,6 @@ func (s *Store) prepareObservations(sw StandingSweep) ([]DecisionRequest, error)
 		if r.Context.Repo != sw.Repo {
 			return nil, fmt.Errorf("attention: observation %q is scoped to %q, not the swept repo %q",
 				r.IdempotencyKey, r.Context.Repo, sw.Repo)
-		}
-		if strings.TrimSpace(r.Fingerprint) == "" {
-			// Without a fingerprint there is no way to tell a re-observation
-			// from a state change, so every sweep would re-alert. Reject at the
-			// boundary rather than degrade into the spam-folder failure mode.
-			return nil, fmt.Errorf("attention: standing request %q requires a fingerprint", r.IdempotencyKey)
 		}
 		if seen[r.IdempotencyKey] {
 			return nil, fmt.Errorf("attention: duplicate idempotency_key %q in one sweep", r.IdempotencyKey)
@@ -348,6 +405,13 @@ func (s *Store) reconcileOneLocked(o *DecisionRequest, stored []storedRequest) (
 		return outcome, nil
 	}
 
+	// An expired predecessor is revived under its own id (#108): expiry is the
+	// safety net firing because the producer stopped being evaluated, so a
+	// re-observation is this card returning rather than a second card for the
+	// same condition.
+	if prior, ok := findExpiredByKey(stored, o.IdempotencyKey); ok {
+		o.ID = prior.ID
+	}
 	path, err := s.pathFor(o.ID)
 	if err != nil {
 		return outcome, err
@@ -408,6 +472,31 @@ func findOpenByKey(stored []storedRequest, key string) (*DecisionRequest, string
 		}
 	}
 	return nil, "", false
+}
+
+// findExpiredByKey returns the most recently EXPIRED request for a key.
+//
+// Expiry is the one terminal state that records no decision: it fires because
+// nobody looked, never because the condition changed. So a producer raising the
+// key again is the same card coming back, and it is revived under the same id
+// rather than superseded by a second file — a fresh id per TTL window turns one
+// standing condition into an unbounded stream of cards (#108).
+//
+// A resolved or auto-resolved predecessor is a closed chapter and deliberately
+// does NOT revive: a human decided, or the condition genuinely cleared, and its
+// return is news that deserves its own record.
+func findExpiredByKey(stored []storedRequest, key string) (*DecisionRequest, bool) {
+	var best *DecisionRequest
+	for _, rec := range stored {
+		r := rec.req
+		if r.IdempotencyKey != key || r.Lifecycle.State != StateExpired || r.Lifecycle.Expired == nil {
+			continue
+		}
+		if best == nil || r.Lifecycle.Expired.At > best.Lifecycle.Expired.At {
+			best = r
+		}
+	}
+	return best, best != nil
 }
 
 // latestResolvedByKey returns the most recently HUMAN-resolved request for a

@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 )
@@ -173,6 +175,114 @@ func TestProducerStuckEpicOffersEscalationVerb(t *testing.T) {
 		t.Error("stuck-epic must offer the run.retryWithEscalation verb (ADR producer 8)")
 	}
 	assertSteerSet(t, reqs[0])
+}
+
+// alertingTransitions counts the journal transitions that would interrupt an
+// operator, which is the number that must not grow with observation count.
+func alertingTransitions(t *testing.T, as *AutonomousScheduler) int {
+	t.Helper()
+	entries, err := as.Attention().ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if e.ShouldNotify() {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRunLoopStandingProducersDeclareStandingAndAFingerprint pins the #108
+// migration. These three describe conditions the scheduler re-evaluates every
+// cycle, not transitions it observed once; without Standing + a Fingerprint
+// every observation is a fresh event and the inbox fills with copies of one
+// problem.
+func TestRunLoopStandingProducersDeclareStandingAndAFingerprint(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseWorkExhaustion(3)
+	as.raiseOwnerActionHandoff("octocat/acme", 51, "Rotate Cloudflare token", "owner-action")
+	as.raiseStuckEpic("octocat/acme", 100, "Auth epic", "epic #100 stalled: #101 ready but undispatched")
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 3 {
+		t.Fatalf("got %d requests, want 3", len(reqs))
+	}
+	for _, r := range reqs {
+		if !r.Standing {
+			t.Errorf("producer %q: standing = false, want true", r.Producer)
+		}
+		if r.Fingerprint == "" {
+			t.Errorf("producer %q: no fingerprint — a standing card without one re-alerts every cycle", r.Producer)
+		}
+		// The safety net, not the card's lifetime: a standing card is removed
+		// when its condition clears, so expiry may only fire for a producer
+		// that stopped being evaluated at all.
+		exp, err := time.Parse(time.RFC3339Nano, r.ExpiresAt)
+		if err != nil {
+			t.Fatalf("producer %q: unparseable expires_at %q: %v", r.Producer, r.ExpiresAt, err)
+		}
+		if time.Until(exp) < attention.StandingExpiry-time.Hour {
+			t.Errorf("producer %q: expires in %s, want the declared standing window", r.Producer, time.Until(exp))
+		}
+	}
+}
+
+// TestReDetectingOneStalledEpicNeverGrowsTheInbox is the producer-level shape
+// of the reported failure: the watchdog re-fires on every idle cycle, and the
+// operator must end up with one card and one alert.
+func TestReDetectingOneStalledEpicNeverGrowsTheInbox(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	for i := 0; i < 6; i++ {
+		// The epic gets retitled between cycles. Prose moves on its own; only
+		// the blocker set is material, so every re-detection must refresh the
+		// card silently rather than alert.
+		as.raiseStuckEpic("octocat/acme", 100, fmt.Sprintf("Auth epic (rev %d)", i),
+			"epic #100 stalled: #101 ready but undispatched")
+	}
+	if got := len(openRequests(t, as)); got != 1 {
+		t.Fatalf("six detections of one stalled epic produced %d cards, want 1", got)
+	}
+	if got := alertingTransitions(t, as); got != 1 {
+		t.Errorf("six detections alerted %d times, want 1", got)
+	}
+}
+
+// TestStandingCardsRetractWhenTheirConditionStopsBeingObserved covers the other
+// half of standing semantics: the card clears itself, distinguishably from a
+// decision someone made.
+func TestStandingCardsRetractWhenTheirConditionStopsBeingObserved(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseWorkExhaustion(3)
+	as.raiseStuckEpic("octocat/acme", 100, "Auth epic", "epic #100 stalled: #101 ready but undispatched")
+	as.raiseStuckEpic("octocat/acme", 200, "Billing epic", "epic #200 stalled: #201 ready but undispatched")
+	if got := len(openRequests(t, as)); got != 3 {
+		t.Fatalf("got %d cards before retraction, want 3", got)
+	}
+
+	// The fleet finds work again.
+	as.retractWorkExhaustion()
+	// A later scan sees only the billing epic still stalled.
+	as.autoResolveAttention(producerStuckEpic, []string{keyStuckEpic("octocat/acme", 200)})
+
+	open := openRequests(t, as)
+	if len(open) != 1 || open[0].Context.Issue != 200 {
+		t.Fatalf("want only the still-stalled epic open, got %+v", open)
+	}
+	all, err := as.Attention().List(attention.ListFilter{IncludeTerminal: true})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	retracted := 0
+	for _, r := range all {
+		if r.Lifecycle.State == attention.StateAutoResolved {
+			retracted++
+		}
+	}
+	if retracted != 2 {
+		t.Errorf("%d cards auto-resolved, want 2 — a cleared condition is a system withdrawal, not a human decision", retracted)
+	}
 }
 
 func TestProducerBudgetCeilingHitEmitsApprove(t *testing.T) {
