@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+	"github.com/nightgauge/nightgauge/internal/execution"
 )
 
 // installFakeDockerForCleanup writes a recording shim onto PATH and returns
@@ -74,7 +75,7 @@ func TestSelectCleanupTargets_AllFlagOverridesOrphaned(t *testing.T) {
 	}
 }
 
-func TestExtractIssueNumber(t *testing.T) {
+func TestIssueNumberFromWorktreeDir(t *testing.T) {
 	cases := []struct {
 		in     string
 		want   int
@@ -88,9 +89,9 @@ func TestExtractIssueNumber(t *testing.T) {
 		{"", 0, false},
 	}
 	for _, tc := range cases {
-		gotN, gotOK := extractIssueNumber(tc.in)
+		gotN, gotOK := execution.IssueNumberFromWorktreeDir(tc.in)
 		if gotN != tc.want || gotOK != tc.wantOK {
-			t.Errorf("extractIssueNumber(%q) = (%d,%v), want (%d,%v)", tc.in, gotN, gotOK, tc.want, tc.wantOK)
+			t.Errorf("execution.IssueNumberFromWorktreeDir(%q) = (%d,%v), want (%d,%v)", tc.in, gotN, gotOK, tc.want, tc.wantOK)
 		}
 	}
 }

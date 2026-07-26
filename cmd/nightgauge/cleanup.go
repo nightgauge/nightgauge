@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/spf13/cobra"
 )
 
@@ -152,31 +153,12 @@ func listActiveWorktreeIssues() (map[int]bool, error) {
 			continue
 		}
 		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		base := filepath.Base(path)
-		// Match either "issue-NNN" (TS WorktreeManager) or
+		// Matches either "issue-NNN" (TS WorktreeManager) or
 		// "<repo>-issue-NNN" (Go execution.Manager) directory shapes.
-		num, ok := extractIssueNumber(base)
+		num, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path))
 		if ok {
 			out[num] = true
 		}
 	}
 	return out, nil
-}
-
-// extractIssueNumber returns the trailing issue number from a worktree
-// directory base name. Accepts "issue-NNN" and "<prefix>-issue-NNN".
-func extractIssueNumber(base string) (int, bool) {
-	idx := strings.LastIndex(base, "issue-")
-	if idx < 0 {
-		return 0, false
-	}
-	tail := base[idx+len("issue-"):]
-	if tail == "" {
-		return 0, false
-	}
-	var n int
-	if _, err := fmt.Sscanf(tail, "%d", &n); err != nil || n <= 0 {
-		return 0, false
-	}
-	return n, true
 }

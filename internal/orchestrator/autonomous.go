@@ -1827,6 +1827,15 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		as.sweepSurvivalRecords(ctx)
 	}
 
+	// 2e. (#110) Reclaim pipeline worktrees whose branch already landed on the
+	// default branch. Inline post-merge cleanup misses every run that was swept
+	// mid-flight, so without a reconcile pass those worktrees accumulate
+	// forever. Local git only — no forge quota — but paced with the other
+	// sweeps so a workspace of stale worktrees isn't re-stat'ed every cycle.
+	if graphWasFresh {
+		as.sweepMergedWorktrees()
+	}
+
 	// 3. Re-check effective slots after graph build — a pipeline may have
 	// completed while we were fetching.
 	availableSlots = as.effectiveAvailableSlots()

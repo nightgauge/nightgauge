@@ -1994,34 +1994,24 @@ func (s *Scheduler) activeWorktreeIssues() map[int]bool {
 			continue
 		}
 		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		base := filepath.Base(path)
-		idx := strings.LastIndex(base, "issue-")
-		if idx < 0 {
-			continue
-		}
-		tail := base[idx+len("issue-"):]
-		if tail == "" {
-			continue
-		}
-		var n int
-		if _, err := fmt.Sscanf(tail, "%d", &n); err == nil && n > 0 {
+		if n, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path)); ok {
 			out[n] = true
 		}
 	}
 	return out
 }
 
-// crashScanRoots returns every filesystem root whose current-run.json sidecar
-// orchestrator-crash recovery must inspect: the scheduler's launch root plus
-// every repo registered with the roots resolver. Since #229 a run's sidecar is
-// written at its TARGET repo root (via runRoot), so a cross-repo run that
-// crashes leaves its sidecar outside the launch root — scanning only the launch
-// root would miss it (mirrors the IPC pipelineStateScanRoots fix, #218).
-// Deduplicated: the primary repo is typically both the launch root and a
-// registered path, and each run's sidecar lives under exactly one root, so
-// there is no duplicate reconciliation. In CLI/auto mode the resolver is nil
-// and only the launch root is returned (#239).
-func (s *Scheduler) crashScanRoots() []string {
+// repoScanRoots returns every filesystem root a workspace-wide reconcile must
+// inspect: the scheduler's launch root plus every repo registered with the
+// roots resolver. Since #229 a run's on-disk state (current-run.json sidecar,
+// worktrees) is rooted at its TARGET repo, so a cross-repo run leaves state
+// outside the launch root — scanning only the launch root would miss it
+// (mirrors the IPC pipelineStateScanRoots fix, #218). Deduplicated: the primary
+// repo is typically both the launch root and a registered path, and each run's
+// state lives under exactly one root, so there is no duplicate reconciliation.
+// In CLI/auto mode the resolver is nil and only the launch root is returned
+// (#239).
+func (s *Scheduler) repoScanRoots() []string {
 	seen := make(map[string]bool)
 	var roots []string
 	add := func(root string) {
@@ -2045,7 +2035,7 @@ func (s *Scheduler) crashScanRoots() []string {
 // the queue. Safe to call when no sidecar exists. (Issue #3001 ADR-003, #239)
 func (s *Scheduler) recoverOrchestratorCrash() {
 	now := time.Now().UTC()
-	for _, root := range s.crashScanRoots() {
+	for _, root := range s.repoScanRoots() {
 		s.recoverOrchestratorCrashAt(root, now)
 	}
 }

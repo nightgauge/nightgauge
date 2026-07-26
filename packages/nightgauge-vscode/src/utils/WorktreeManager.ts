@@ -287,7 +287,16 @@ export class WorktreeManager {
         cwd: this.repoRoot,
         timeout: 15_000,
       });
-    } catch {
+    } catch (error) {
+      // Best-effort, but never silent. A swallowed failure here is exactly how
+      // leaked worktrees stayed invisible until someone counted them days
+      // later (Issue #110) — the reconcile sweep reclaims them eventually, but
+      // the operator should be able to see the leak happen.
+      console.warn(
+        `[WorktreeManager] git worktree remove failed for issue #${issueNumber} at ${worktreePath} — falling back to manual removal: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       // If git worktree remove fails, try manual cleanup
       try {
         await fs.rm(worktreePath, { recursive: true, force: true });
@@ -295,8 +304,12 @@ export class WorktreeManager {
           cwd: this.repoRoot,
           timeout: 10_000,
         });
-      } catch {
-        // Best effort cleanup
+      } catch (fallbackError) {
+        console.warn(
+          `[WorktreeManager] manual removal of ${worktreePath} also failed — worktree LEAKED: ${
+            fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+          }`
+        );
       }
     }
 

@@ -270,6 +270,42 @@ describe("WorktreeManager", () => {
       );
     });
 
+    // Issue #110 — a swallowed removal failure is how leaked worktrees stayed
+    // invisible until someone counted them days later. The fallback may still
+    // succeed, but the failure must always be observable.
+    it("warns when git worktree remove fails (#110)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("worktree remove")) {
+          return Promise.reject(new Error("not a valid worktree"));
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+
+      await manager.cleanup(42);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("git worktree remove failed for issue #42")
+      );
+      warn.mockRestore();
+    });
+
+    it("warns that the worktree LEAKED when manual removal also fails (#110)", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("worktree remove")) {
+          return Promise.reject(new Error("not a valid worktree"));
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      fsMock.rm.mockRejectedValueOnce(new Error("EPERM"));
+
+      await manager.cleanup(42);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("worktree LEAKED"));
+      warn.mockRestore();
+    });
+
     it("deletes branch when deleteBranch is true", async () => {
       execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) => {
         if (args.includes("--show-current")) {

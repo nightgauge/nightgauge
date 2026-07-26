@@ -776,6 +776,51 @@ dependencies at the source.
 nightgauge git branch-create [<branch-name> | --issue N] [--json]
 ```
 
+### Worktree Reclamation (Issue #110)
+
+Worktree removal has two halves. The **inline** half runs when a run finishes.
+The **reconcile** half catches what inline cleanup structurally cannot: a run
+swept mid-flight (window reload, crash, kill) never reaches its cleanup step, so
+its worktree outlives the merge that retired its branch. The reconcile pass is
+folded into the autonomous reconcile cycle — poll-on-reconcile, no new cron —
+and is also exposed for manual/CI invocation:
+
+```bash
+# Reclaim pipeline worktrees whose branch already landed on the default branch
+nightgauge worktree sweep [--workdir <repo>] [--default-branch main] [--dry-run] [--json]
+```
+
+**Merged-ness is a content check, not an ancestry check.** A squash merge leaves
+the branch tip a non-ancestor of the default branch, so `git merge-base
+--is-ancestor` reports a false negative for every merged branch. The sweep uses
+`git diff --stat origin/<default>..<branch>` instead (see
+[GIT_WORKFLOW.md § After Merge](GIT_WORKFLOW.md#after-merge)).
+
+A worktree is reclaimed only when **all** of these hold; every skip is reported
+with its reason:
+
+| Guard                                          | Skip reason             |
+| ---------------------------------------------- | ----------------------- |
+| Not the primary checkout                       | `primary-checkout`      |
+| Not `git worktree lock`ed                      | `locked`                |
+| Holds a branch                                 | `detached-head`         |
+| Branch is not main/master/default              | `protected-branch`      |
+| Directory is `issue-NNN` or `<repo>-issue-NNN` | `not-pipeline-managed`  |
+| Issue has no run in flight                     | `active-run`            |
+| No uncommitted or untracked changes            | `uncommitted-changes`   |
+| Branch has commits of its own                  | `no-commits-of-its-own` |
+| Content already on the default branch          | `unmerged-content`      |
+
+`no-commits-of-its-own` is a safety guard, not part of the merge test: a
+worktree created at the tip of the default branch that has committed nothing yet
+also has an empty content diff, and is indistinguishable from a run about to
+start writing.
+
+Reclaiming removes the worktree and deletes the local branch with `-D` (a squash
+merge makes `-d` refuse it). Removal failures are logged at `[WARN]` rather than
+swallowed — on both the inline and reconcile paths — so a leak is observable
+when it happens instead of inferred days later from disk usage.
+
 ### PR Operations
 
 ```bash

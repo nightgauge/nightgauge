@@ -489,6 +489,7 @@ func rootCmd() *cobra.Command {
 		knowledgeCmd(),
 		spikeCmd(),
 		cleanupCmd(),
+		worktreeCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),
