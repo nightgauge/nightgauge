@@ -487,7 +487,37 @@ func runRecordKey(rec V2RunRecord) string {
 	if rec.RunID != "" {
 		return "run:" + rec.RunID
 	}
-	return fmt.Sprintf("issue:%d|%s", rec.IssueNumber, rec.StartedAt)
+	return fallbackRunKey(rec.IssueNumber, rec.StartedAt)
+}
+
+// fallbackRunKey is the run-identity key for records that carry no run_id.
+// It is NOT repo-qualified on purpose: a history directory belongs to exactly
+// one repository, so the directory already scopes the key.
+//
+// The timestamp is normalized to a whole UTC second (#141). Two writers
+// finalizing the SAME run format started_at differently — the Go writer emits a
+// local offset with microseconds (…T14:54:43.559048-06:00) while the extension
+// emits a UTC millisecond string (…T20:54:43.624Z) — so a raw string comparison
+// treated one run as two and every finalize appended another record instead of
+// being dropped as a duplicate. Comparing instants, bucketed to the second,
+// makes the two agree. Sub-second bucketing is deliberate: the writers observe
+// the same completion tens of milliseconds apart, while two genuinely distinct
+// runs of one issue can never start within the same second.
+func fallbackRunKey(issueNumber int, startedAt string) string {
+	return fmt.Sprintf("issue:%d|%s", issueNumber, normalizeStartInstant(startedAt))
+}
+
+// normalizeStartInstant reduces an RFC3339 timestamp to a whole-second UTC
+// bucket so the same instant compares equal regardless of the offset and
+// sub-second precision the producer chose. An unparseable value is returned
+// verbatim — a key that is merely as weak as before, never a collision between
+// unrelated runs.
+func normalizeStartInstant(startedAt string) string {
+	t, err := time.Parse(time.RFC3339, startedAt)
+	if err != nil {
+		return startedAt
+	}
+	return t.UTC().Truncate(time.Second).Format(time.RFC3339)
 }
 
 // recordRichness measures how much stage-level data a record carries. A late
@@ -960,7 +990,7 @@ func indexEntryKey(e V2IndexEntry) string {
 	if e.RunID != "" {
 		return "run:" + e.RunID
 	}
-	return fmt.Sprintf("issue:%d|%s", e.IssueNumber, e.StartedAt)
+	return fallbackRunKey(e.IssueNumber, e.StartedAt)
 }
 
 // buildIndexEntry projects a run record onto its index entry.

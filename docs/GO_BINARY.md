@@ -3635,6 +3635,44 @@ nightgauge pipeline aggregate \
   || echo '{"v":1,"runs_analyzed":0,"runs":[],"stage_metrics":{},"model_usage":{"by_stage":{},"by_source":{}},"warnings":["pipeline aggregate failed"]}' > /tmp/audit_extracted.json
 ```
 
+#### `pipeline repair-history`
+
+```bash
+nightgauge pipeline repair-history [--workdir DIR] [--apply] [--json] [--top N]
+```
+
+Collapses duplicate run records in `.nightgauge/pipeline/history/*.jsonl` so
+each pipeline run occupies exactly one record (Issue #141).
+
+**Reports by default; rewrites only with `--apply`.** Collapsing records is
+destructive and irreversible, so the operator sees the shape of the damage —
+how many runs, how badly duplicated, whether the directory holds another
+repository's runs — before agreeing to it.
+
+Records are grouped by run identity: `run_id` when present, otherwise
+`(repo, issue, started_at)` with `started_at` compared as an **instant bucketed
+to the second**. The duplicates carry the same instant formatted differently by
+each writer (a local offset with microseconds versus a UTC millisecond string),
+so exact string matching does not collapse them. Within a group the richest
+record survives — the one with the most stages carrying per-stage token data —
+so a skeleton can never bury the only measured copy of a run's cost. Non-run
+records and unparseable lines are preserved verbatim.
+
+With `--apply`, each daily file is rewritten via temp-file + rename and
+`index.json` is rebuilt from the repaired records.
+
+Run records carrying no `repo` are counted and reported but **never relocated**:
+nothing on such a record says which repository it belongs to, and guessing a
+destination would compound the error that produced it.
+
+```bash
+# See what would change — writes nothing
+nightgauge pipeline repair-history --workdir .
+
+# Apply after reviewing the report
+nightgauge pipeline repair-history --workdir . --apply
+```
+
 ### Modernize — Assessment Aggregation
 
 #### modernize aggregate-findings

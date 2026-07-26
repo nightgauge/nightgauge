@@ -61,7 +61,6 @@ import { getCoreSettings } from "../../config/coreSettings";
 import type { Container } from "../../bootstrap/Container";
 import type { TelemetryStore } from "../../services/TelemetryStore";
 import { ExecutionHistoryReader } from "../../utils/executionHistoryReader";
-import { ExecutionHistoryWriter } from "../../utils/executionHistoryWriter";
 import { getPerformanceMode } from "../../utils/incrediConfig";
 import { PERFORMANCE_MODES, type PerformanceMode as ModeProfile } from "../../utils/modeProfiles";
 import {
@@ -74,7 +73,6 @@ import {
   getRunwayCeilingUsd,
 } from "../../utils/resolvers/monitoringResolver";
 import type { CostCapWarningRow } from "./tabs/CostTabHtml";
-import type { ToolCallRecord } from "../../schemas/executionHistory";
 import {
   exportAsJson,
   exportAsCsvRuns,
@@ -214,7 +212,8 @@ type WebViewMessage =
  */
 export class Dashboard implements vscode.Disposable {
   /** Delay after run completion before loading tool calls from JSONL (Issue #2578).
-   *  Gives writeBackupHistoryRecord time to flush before the JSONL read fires. */
+   *  Gives the Go scheduler's authoritative history write time to flush before
+   *  the JSONL read fires (#141 — the dashboard no longer writes its own copy). */
   private static readonly TOOL_CALL_PRELOAD_DELAY_MS = 500;
 
   private panel: vscode.WebviewPanel | undefined;
@@ -321,7 +320,6 @@ export class Dashboard implements vscode.Disposable {
   /** Guard to prevent duplicate health snapshots for the same pipeline run */
   private lastSnapshotIssueNumber: number | null = null;
   /** Guard: prevent duplicate execution history writes for the same issue */
-  private lastHistoryWriteIssueNumber: number | null = null;
 
   /** DI container — used to resolve ProjectBoardService instead of creating a new instance (Issue #2771) */
   private readonly container: Container | undefined;
@@ -1060,18 +1058,17 @@ export class Dashboard implements vscode.Disposable {
 
     if (!currentRun && pipelineState.issue_number) {
       if (allStagesTerminal) {
-        // Pipeline already completed - write backup history record, then backfill
-        // from disk artifacts so health/cost/sparklines reflect the completion.
-        const writePromise = this.writeBackupHistoryRecord(pipelineState);
-        writePromise
-          .then(() => this.backfillHistoryFromArtifacts())
+        // Pipeline already completed while the panel was closed — backfill from
+        // disk artifacts so health/cost/sparklines reflect the completion. The
+        // run's history record is written by the Go authoritative writer; the
+        // dashboard only reads it (#141).
+        this.backfillHistoryFromArtifacts()
           .then(() => this.refreshAllMetrics())
           .then(() => this.updatePanel("autoRefreshMetrics"));
         return;
       }
       // Pipeline still running - start tracking and reconcile completed stages (Issue #639)
       this.lastSnapshotIssueNumber = null; // Reset guard for new run
-      this.lastHistoryWriteIssueNumber = null; // Reset guard for new run
       this.state.startRun(
         pipelineState.issue_number,
         pipelineState.title ?? `Issue #${pipelineState.issue_number}`,
@@ -1142,13 +1139,6 @@ export class Dashboard implements vscode.Disposable {
           () => {}
         );
       }
-
-      // Backup execution history write: ensure JSONL record exists for this run.
-      // The primary write paths (Go recordV2History + TS pipeline.complete IPC handler)
-      // may not fire reliably in all execution modes. This backup guarantees the
-      // dashboard's JSONL data source stays current.
-      // Pass currentRun.toolCalls before completeRun() nulls this.currentRun (Issue #2578).
-      this.writeBackupHistoryRecord(pipelineState, currentRun.toolCalls).catch(() => {});
 
       // Auto-refresh all metrics after pipeline completion (Issue #998)
       // refreshAllMetrics() is async and non-blocking; the subsequent
@@ -2637,88 +2627,6 @@ export class Dashboard implements vscode.Disposable {
       });
     } finally {
       this.boardRefreshInProgress = false;
-    }
-  }
-
-  /**
-   * Write a backup execution history record from pipeline state.
-   * Ensures JSONL data stays current even if the primary write paths
-   * (Go recordV2History, TS pipeline.complete IPC handler) don't fire.
-   * Guarded by lastHistoryWriteIssueNumber to prevent duplicate writes.
-   */
-  private async writeBackupHistoryRecord(
-    pipelineState: PipelineState,
-    toolCalls?: ToolCallEntry[]
-  ): Promise<void> {
-    if (!pipelineState.issue_number || !pipelineState.started_at) return;
-    if (this.lastHistoryWriteIssueNumber === pipelineState.issue_number) return;
-    this.lastHistoryWriteIssueNumber = pipelineState.issue_number;
-
-    const store = this.state.getTelemetryStore();
-    if (!store) return;
-
-    try {
-      const toolCallRecords =
-        toolCalls && toolCalls.length > 0
-          ? toolCalls.map((tc): ToolCallRecord => ({
-              tool: tc.tool,
-              target: tc.target || undefined,
-              timestamp: tc.timestamp.toISOString(),
-              duration_ms: tc.durationMs,
-              args: tc.args,
-              result: tc.result,
-              error: tc.error,
-            }))
-          : undefined;
-
-      // Preserve the performance-mode tag on the backup write so dashboards,
-      // cost-trend exclusions, and outcome calibration do not silently
-      // mis-classify non-baseline runs as elevated (Issues #2433, #3009).
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const performanceMode = workspaceFolder ? getPerformanceMode(workspaceFolder) : "elevated";
-      const supercharge = performanceMode === "maximum" || undefined;
-
-      // Read run_id from run-state.json for batch telemetry deduplication (#3558)
-      let runIdForHistory: string | undefined;
-      try {
-        if (this.workspaceRoot) {
-          const pathLib = await import("node:path");
-          const runStatePath = pathLib.join(
-            this.workspaceRoot,
-            ".nightgauge",
-            "pipeline",
-            "run-state.json"
-          );
-          const runStateBytes = await vscode.workspace.fs.readFile(vscode.Uri.file(runStatePath));
-          const runStateParsed = JSON.parse(Buffer.from(runStateBytes).toString("utf8")) as {
-            run_id?: string;
-          };
-          runIdForHistory = runStateParsed.run_id || undefined;
-        }
-      } catch {
-        // Non-fatal — run_id is best-effort for deduplication
-      }
-
-      const record = ExecutionHistoryWriter.buildRunRecord(
-        pipelineState as Parameters<typeof ExecutionHistoryWriter.buildRunRecord>[0],
-        undefined,
-        undefined,
-        {
-          tool_calls: toolCallRecords,
-          performance_mode: performanceMode,
-          is_supercharge: supercharge,
-          run_id: runIdForHistory,
-        }
-      );
-      const written = await store.appendRunRecord(record);
-      if (written) {
-        this.logger.info("Backup execution history record written", {
-          issueNumber: pipelineState.issue_number,
-          toolCallCount: toolCallRecords?.length ?? 0,
-        });
-      }
-    } catch {
-      // Non-critical: backup write failure should never break dashboard
     }
   }
 

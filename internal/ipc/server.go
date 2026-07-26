@@ -308,13 +308,24 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 		snap := runtime
 		perStage := make([]map[string]interface{}, len(snap.CompletedStages))
 		for i, sr := range snap.CompletedStages {
-			perStage[i] = map[string]interface{}{
+			entry := map[string]interface{}{
 				"stage":        string(sr.Stage),
 				"inputTokens":  sr.InputTokens,
 				"outputTokens": sr.OutputTokens,
 				"cacheRead":    sr.CacheRead,
 				"costUsd":      sr.CostUSD,
 			}
+			// The model that ACTUALLY executed the stage (#141). StageResult
+			// itself carries no model, but the runtime records the served model
+			// per stage — the same source BuildV2Record uses for
+			// model_selection — so the event can carry it without inventing one.
+			// Absent when the stage ran no model (deterministic/skipped path):
+			// omitted rather than emitted empty, so "unknown" stays
+			// distinguishable from "no model".
+			if m := snap.StageModels[string(sr.Stage)]; m != "" {
+				entry["model"] = m
+			}
+			perStage[i] = entry
 		}
 		now := time.Now()
 		durationMs := int64(0)
@@ -323,8 +334,17 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			startedAt = snap.StartedAt.Format(time.RFC3339)
 			durationMs = now.Sub(snap.StartedAt).Milliseconds()
 		}
+		// Run identity (#141). `repo` and `runId` were both in scope here and
+		// dropped, which left every downstream consumer keying on issueNumber
+		// alone — ambiguous the moment two repos in one workspace carry the
+		// same issue number — and left the extension unable to correlate this
+		// event with the authoritative run record the scheduler writes.
+		// runId is the same UUID v7 that record carries, so consumers can join
+		// on it instead of guessing by (issue, timestamp).
 		s.Emit("pipeline.complete", map[string]interface{}{
 			"executionId":       fmt.Sprintf("%s#%d", cbRepo, issue),
+			"repo":              cbRepo,
+			"runId":             snap.RunID,
 			"issueNumber":       issue,
 			"success":           ok,
 			"totalInputTokens":  snap.InputTokens,

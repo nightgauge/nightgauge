@@ -246,240 +246,26 @@ function allCompleteState(issueNumber: number) {
   };
 }
 
-describe("Dashboard - tool_calls written to JSONL on pipeline completion (Issue #2578)", () => {
-  let dashboard: Dashboard;
-  let workspaceState: vscode.Memento;
-  const workspaceRoot = "/test/workspace";
-  const mockExtensionUri = { fsPath: "/mock/extension" } as vscode.Uri;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // Silence DashboardState background async logs (preloadMostRecentToolCalls,
-    // epic estimate refresh, etc.) that outlive the test and cause
-    // "Closing rpc while onUserConsoleLog was pending" teardown races when
-    // this file runs alongside the full suite.
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "debug").mockImplementation(() => {});
-    mockEventHandlers = {
-      stateChanged: [],
-      stageStart: [],
-      stageComplete: [],
-      stageError: [],
-      tokenUsageUpdated: [],
-      toolCallRecorded: [],
-      backtrackTriggered: [],
-      backtrackBlocked: [],
-      modelEscalated: [],
-      historyRecorded: [],
-    };
-    mockDisposables = [];
-    workspaceState = createMockMemento();
-    dashboard = new Dashboard(mockExtensionUri, workspaceState, workspaceRoot);
-  });
-
-  afterEach(async () => {
-    // Dispose before draining so any in-flight async work is cancelled
-    // rather than completing and firing console logs after rpc teardown.
-    dashboard.dispose();
-    // Drain multiple microtask + macrotask cycles so promise chains scheduled
-    // by dispose itself resolve while the console spy is still in place.
-    // restoreAllMocks must NOT run while there are pending log emitters —
-    // otherwise their console.log lands on the real console and races vitest's
-    // onUserConsoleLog RPC during worker teardown (#3239).
-    for (let i = 0; i < 5; i++) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    vi.restoreAllMocks();
-  });
-
-  it("should pass tool_calls to buildRunRecord when currentRun has accumulated tool calls", async () => {
-    const dashboardState = dashboard.getState();
-
-    // Set up a mock TelemetryStore so writeBackupHistoryRecord doesn't return early
-    const mockAppendRunRecord = vi.fn().mockResolvedValue(true);
-    vi.spyOn(dashboardState, "getTelemetryStore").mockReturnValue({
-      appendRunRecord: mockAppendRunRecord,
-    } as any);
-
-    // Spy on buildRunRecord to capture the options passed to it
-    const buildRunRecordSpy = vi.spyOn(ExecutionHistoryWriter, "buildRunRecord").mockReturnValue({
-      schema_version: "2",
-      record_type: "run",
-      issue_number: 2578,
-      title: "Test",
-      branch: "feat/2578",
-      base_branch: "main",
-      execution_mode: "automatic",
-      started_at: new Date().toISOString(),
-      completed_at: new Date().toISOString(),
-      total_duration_ms: 1000,
-      outcome: "complete",
-      labels: [],
-      size: null,
-      type: null,
-      priority: null,
-      stages: {},
-      tokens: {
-        total_input: 0,
-        total_output: 0,
-        total_cache_read: 0,
-        total_cache_creation: 0,
-        estimated_cost_usd: 0,
-      },
-      files: { read_count: 0, written_count: 0 },
-      routing: { complexity_score: 0, path: "unknown", skip_stages: [] },
-      recorded_at: new Date().toISOString(),
-    } as any);
-
-    // Start a run and add tool calls
-    dashboardState.startRun(2578, "Fix tool call history", "feat/2578");
-    dashboard.recordToolCall({
-      tool: "Read",
-      target: "src/utils/helper.ts",
-      timestamp: new Date(),
-      durationMs: 120,
-    });
-    dashboard.recordToolCall({
-      tool: "Edit",
-      target: "src/utils/helper.ts",
-      timestamp: new Date(),
-      durationMs: 85,
-    });
-
-    expect(dashboardState.getCurrentRun()?.toolCalls).toHaveLength(2);
-
-    // Fire stateChanged with all stages complete — triggers syncFromPipelineState
-    mockEventHandlers.stateChanged.forEach((handler) => handler(allCompleteState(2578)));
-
-    // Wait for the async backup write to complete
-    await vi.waitFor(() => {
-      expect(buildRunRecordSpy).toHaveBeenCalled();
-    });
-
-    // Verify buildRunRecord was called with tool_calls populated
-    const callArgs = buildRunRecordSpy.mock.calls[0];
-    const options = callArgs[3];
-    expect(options?.tool_calls).toBeDefined();
-    expect(options?.tool_calls).toHaveLength(2);
-    expect(options?.tool_calls?.[0].tool).toBe("Read");
-    expect(options?.tool_calls?.[0].target).toBe("src/utils/helper.ts");
-    expect(options?.tool_calls?.[0].duration_ms).toBe(120);
-    expect(options?.tool_calls?.[1].tool).toBe("Edit");
-  });
-
-  it("should pass undefined tool_calls to buildRunRecord when currentRun has no tool calls", async () => {
-    const dashboardState = dashboard.getState();
-
-    const mockAppendRunRecord = vi.fn().mockResolvedValue(true);
-    vi.spyOn(dashboardState, "getTelemetryStore").mockReturnValue({
-      appendRunRecord: mockAppendRunRecord,
-    } as any);
-
-    const buildRunRecordSpy = vi.spyOn(ExecutionHistoryWriter, "buildRunRecord").mockReturnValue({
-      schema_version: "2",
-      record_type: "run",
-      issue_number: 2578,
-      title: "Test",
-      branch: "feat/2578",
-      base_branch: "main",
-      execution_mode: "automatic",
-      started_at: new Date().toISOString(),
-      completed_at: new Date().toISOString(),
-      total_duration_ms: 1000,
-      outcome: "complete",
-      labels: [],
-      size: null,
-      type: null,
-      priority: null,
-      stages: {},
-      tokens: {
-        total_input: 0,
-        total_output: 0,
-        total_cache_read: 0,
-        total_cache_creation: 0,
-        estimated_cost_usd: 0,
-      },
-      files: { read_count: 0, written_count: 0 },
-      routing: { complexity_score: 0, path: "unknown", skip_stages: [] },
-      recorded_at: new Date().toISOString(),
-    } as any);
-
-    // Start a run but do NOT add tool calls
-    dashboardState.startRun(2578, "No tool calls run", "feat/2578");
-
-    // Fire stateChanged with all stages complete
-    mockEventHandlers.stateChanged.forEach((handler) => handler(allCompleteState(2578)));
-
-    await vi.waitFor(() => {
-      expect(buildRunRecordSpy).toHaveBeenCalled();
-    });
-
-    // tool_calls should be undefined (not an empty array) when no calls were recorded
-    const options = buildRunRecordSpy.mock.calls[0][3];
-    expect(options?.tool_calls).toBeUndefined();
-  });
-
-  it("should convert ToolCallEntry timestamps (Date) to ISO strings in ToolCallRecord", async () => {
-    const dashboardState = dashboard.getState();
-
-    const mockAppendRunRecord = vi.fn().mockResolvedValue(true);
-    vi.spyOn(dashboardState, "getTelemetryStore").mockReturnValue({
-      appendRunRecord: mockAppendRunRecord,
-    } as any);
-
-    const buildRunRecordSpy = vi.spyOn(ExecutionHistoryWriter, "buildRunRecord").mockReturnValue({
-      schema_version: "2",
-      record_type: "run",
-      issue_number: 2578,
-      title: "Test",
-      branch: "feat/2578",
-      base_branch: "main",
-      execution_mode: "automatic",
-      started_at: new Date().toISOString(),
-      completed_at: new Date().toISOString(),
-      total_duration_ms: 1000,
-      outcome: "complete",
-      labels: [],
-      size: null,
-      type: null,
-      priority: null,
-      stages: {},
-      tokens: {
-        total_input: 0,
-        total_output: 0,
-        total_cache_read: 0,
-        total_cache_creation: 0,
-        estimated_cost_usd: 0,
-      },
-      files: { read_count: 0, written_count: 0 },
-      routing: { complexity_score: 0, path: "unknown", skip_stages: [] },
-      recorded_at: new Date().toISOString(),
-    } as any);
-
-    const specificDate = new Date("2026-04-10T12:00:00.000Z");
-    dashboardState.startRun(2578, "Timestamp conversion test", "feat/2578");
-    dashboard.recordToolCall({
-      tool: "Bash",
-      target: "npm test",
-      timestamp: specificDate,
-      durationMs: 3000,
-    });
-
-    mockEventHandlers.stateChanged.forEach((handler) => handler(allCompleteState(2578)));
-
-    await vi.waitFor(() => {
-      expect(buildRunRecordSpy).toHaveBeenCalled();
-    });
-
-    const options = buildRunRecordSpy.mock.calls[0][3];
-    // timestamp must be a string (ISO format), not a Date object
-    expect(typeof options?.tool_calls?.[0].timestamp).toBe("string");
-    expect(options?.tool_calls?.[0].timestamp).toBe("2026-04-10T12:00:00.000Z");
-  });
-});
-
+/**
+ * The block that used to sit here — "tool_calls written to JSONL on pipeline
+ * completion (#2578)" — exercised `Dashboard.writeBackupHistoryRecord`, which
+ * #141 deleted.
+ *
+ * That method was a second run-record writer. It could not name the run's repo
+ * or run_id (`PipelineState` carries neither), so its records were filed under
+ * whichever repo happened to be workspaceFolders[0] and could not be
+ * de-duplicated against the authoritative record. Its write guard was a single
+ * issue-number slot on the Dashboard singleton, which thrashes whenever two
+ * runs are in flight — the mechanism behind runs accumulating hundreds of
+ * duplicate records.
+ *
+ * KNOWN REGRESSION: it was also the ONLY writer of `tool_calls` into history
+ * (the Go authoritative record has no tool-call field). Per-run tool calls are
+ * therefore no longer persisted, and the read path below now only ever finds
+ * them on records written before this change. Restoring the feature means
+ * threading tool calls into the Go record, not reviving a second writer —
+ * tracked separately.
+ */
 describe("Dashboard - post-completion tool call auto-load (Issue #2578)", () => {
   let dashboard: Dashboard;
   let workspaceState: vscode.Memento;
