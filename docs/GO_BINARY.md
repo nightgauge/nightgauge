@@ -727,6 +727,24 @@ nightgauge epic check-lifecycle --sweep [--owner ORG] [--repo REPO] [--project N
 #                  "orphaned": N, "stale_blocker": N, "fixed": N, "errors": N } }
 # Flags: --project (default 5) sets the project board number for board lookups.
 # Note: fix mode is not exposed on this command; use audit lifecycle --fix for auto-remediation.
+#
+# ORPHANED_ISSUE — the board-membership invariant
+# The autonomous scheduler only ever considers items that are ON a project board.
+# An open issue that is on no board is therefore never dispatched, never counted
+# in a rejection reason, and never reported anywhere else: it is simply invisible.
+# ORPHANED_ISSUE is the only check that surfaces it.
+#
+# Board membership is matched on (owner, repo, number) — never on the number
+# alone. A single project board routinely serves every repo in a workspace, so
+# bare numbers collide across it: keying on the number let a sibling repo's
+# issue #142 satisfy the lookup for <this-repo>#142 and the audit reported clean.
+# Measured on real multi-repo boards, that masked roughly half of all true
+# orphans — and up to two thirds on the board with the most repos sharing it.
+#
+# There is deliberately no auto-fix. Placing an issue on a board also decides
+# WHICH board (multi-repo routing) and at which Status — and a wrong Status makes
+# the issue immediately dispatchable. Both are triage decisions, so the finding
+# is reported and left to the operator or to `nightgauge project add`.
 
 # Group sub-issues into parallel execution waves based on blockedBy relationships
 nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [--json]

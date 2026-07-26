@@ -91,12 +91,25 @@ func (s *LifecycleAuditService) RunAudit(ctx context.Context, owner, repo string
 		return nil, fmt.Errorf("fetch board items: %w", err)
 	}
 
-	// Build set of issue numbers on the board for ORPHANED_ISSUE detection.
-	boardNumbers := make(map[int]struct{}, len(boardItems))
+	// Build the set of issues already on the board, for ORPHANED_ISSUE detection.
+	//
+	// The key MUST carry the repo. One project board routinely serves every repo
+	// in a workspace, so a bare issue number is not unique across it: auditing
+	// acme/web against a board that also holds acme/api's issue 142 would mark
+	// acme/web#142 as "on the board" and report nothing. Measured against two
+	// real multi-repo workspaces, number-only keying hid 17 of 36 genuinely
+	// orphaned issues (65% in the denser org) — the check silently passed on
+	// the exact issues it exists to find.
+	//
+	// item.Repo is empty for items whose home repo is the audited one, so it is
+	// resolved through the same helper the blocker path uses.
+	boardKeys := make(map[string]struct{}, len(boardItems))
 	for _, item := range boardItems {
-		if !item.IsPR {
-			boardNumbers[item.Number] = struct{}{}
+		if item.IsPR {
+			continue
 		}
+		itemOwner, itemRepo := resolveItemRepo(item.Repo, owner, repo)
+		boardKeys[boardKey(itemOwner, itemRepo, item.Number)] = struct{}{}
 	}
 
 	// Fetch all open epics (filtered by label) for STALE_EPIC detection.
@@ -212,10 +225,17 @@ func (s *LifecycleAuditService) RunAudit(ctx context.Context, owner, repo string
 	}
 
 	// --- ORPHANED_ISSUE ---
-	// Open issues with no corresponding entry on the project board.
-	// No auto-fix: adding to board requires creating a project item (not yet implemented).
+	// Open issues with no corresponding entry on the project board. These are
+	// invisible to the autonomous scheduler, which only ever considers board
+	// items — an orphaned issue is never worked, and nothing else reports it.
+	//
+	// Still no auto-fix. ProjectService.AddItem makes the mutation available,
+	// but placing an issue on a board also decides WHICH board in a multi-repo
+	// workspace and at which Status, and guessing either would either misroute
+	// the issue or make it immediately dispatchable. Wiring that up needs the
+	// routing manifest, so it is deliberately left to a follow-up.
 	for _, issue := range allOpenIssues {
-		if _, onBoard := boardNumbers[issue.Number]; !onBoard {
+		if _, onBoard := boardKeys[boardKey(owner, repo, issue.Number)]; !onBoard {
 			findings = append(findings, LifecycleFinding{
 				Category:    "ORPHANED_ISSUE",
 				Severity:    "low",
@@ -254,6 +274,13 @@ func (s *LifecycleAuditService) RunAudit(ctx context.Context, owner, repo string
 // from multiple repos (N:1 topology), so lifecycle fixes must target the
 // item's home repo — using the audit's --repo for a cross-repo item fails to
 // resolve the issue and silently leaves the finding unfixed. #3792.
+// boardKey identifies an issue uniquely across every repo sharing a board.
+// Owner and repo are lowercased because GitHub treats them case-insensitively
+// while the board and issue APIs do not always agree on casing.
+func boardKey(owner, repo string, number int) string {
+	return fmt.Sprintf("%s/%s#%d", strings.ToLower(owner), strings.ToLower(repo), number)
+}
+
 func resolveItemRepo(itemRepo, fallbackOwner, fallbackRepo string) (string, string) {
 	// item.Repo is GitHub's NameWithOwner ("owner/repo"). Only override the
 	// fallback when BOTH parts are present; anything malformed (no slash, empty
