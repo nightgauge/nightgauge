@@ -118,6 +118,63 @@ function countCalls(predicate: (c: string[]) => boolean): number {
   return calls.value.filter(predicate).length;
 }
 
+// Drive the caller so the execution-path recording is covered, not just the
+// fallback's return value. The mocked binary answers the gate call with `{}`,
+// which reads as passed=false — the recovery branch.
+function makeOrchestratorForRecovery() {
+  const orch = new HeadlessOrchestrator(null, makeLogger(), { contextFileWaitMs: 0 });
+  return {
+    orch,
+    verify: (n = 42) =>
+      (
+        orch as unknown as {
+          verifyPostCreateState: (n: number) => Promise<Error | null>;
+        }
+      ).verifyPostCreateState(n),
+    paths: () =>
+      (
+        orch as unknown as {
+          stageExecutionPaths: Map<string, { path: string; puntReason?: string }>;
+        }
+      ).stageExecutionPaths,
+  };
+}
+
+describe("execution_path attribution when the fallback recovers (#122)", () => {
+  beforeEach(() => {
+    branchName.value = "feat/42-add-thing";
+    preExistingPrs.value = [];
+    commitsAhead.value = "2";
+    pushFails.value = false;
+    createFails.value = false;
+    prCreated.value = false;
+    calls.value = [];
+  });
+
+  // The regression: this branch is only reachable after the LLM skill ran and
+  // its post-condition gate failed, so the stage already cost full LLM price.
+  // Recording "deterministic" — which the schema defines as "skill skipped" —
+  // booked that spend as a deterministic saving. One observed stage billed
+  // $1.80 over 276s and was filed as a zero-cost deterministic run.
+  it("records execution_path='llm' when the deterministic fallback rescues a failed LLM create", async () => {
+    const { verify, paths } = makeOrchestratorForRecovery();
+
+    await verify(42);
+
+    const decision = paths().get("pr-create");
+    expect(decision?.path).toBe("llm");
+    expect(decision?.path).not.toBe("deterministic");
+  });
+
+  it("keeps the recovery observable via punt_reason rather than dropping it", async () => {
+    const { verify, paths } = makeOrchestratorForRecovery();
+
+    await verify(42);
+
+    expect(paths().get("pr-create")?.puntReason).toMatch(/^deterministic-recovery:/);
+  });
+});
+
 describe("tryDeterministicCreateFallback (#3927)", () => {
   beforeEach(() => {
     branchName.value = "feat/42-add-thing";

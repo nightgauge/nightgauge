@@ -182,18 +182,32 @@ type V2StageDetail struct {
 	PerformanceMode string `json:"performance_mode,omitempty"`
 	// ExecutionPath records whether this stage ran via the deterministic Go
 	// path or the LLM skill path (Issue #3264). One of "deterministic" | "llm".
+	// It names what actually consumed resources, so cost attribution derived
+	// from it is correct: "deterministic" means the skill was skipped and the
+	// stage cost nothing in tokens. A stage where the skill ran and a
+	// deterministic fallback later rescued it is "llm" with a
+	// "deterministic-recovery: …" PuntReason — it cost full LLM price (#122).
 	// Set on records emitted ≥ PR #3264; absent on older records — readers
 	// must treat absence as `unknown` rather than defaulting to a value. The
 	// deterministic-first pr-merge runner is the first producer of this field;
 	// future stages (pr-create has been suggested in epic #3261) can adopt it
 	// without schema growth.
 	ExecutionPath string `json:"execution_path,omitempty"`
-	// PuntReason is the machine-readable reason the deterministic-first hook
-	// declined and this stage fell through to the LLM path (Issue #297). Only
-	// set alongside ExecutionPath=="llm" when a deterministic hook actually ran
-	// and punted (e.g. "missing-dev-context", "dirty-merge-state: BLOCKED",
-	// "ci-wait-timeout"); absent on deterministic successes, on LLM-only stages
-	// with no deterministic hook, and on records emitted before #297. Lets
+	// PuntReason is the machine-readable reason this stage did not take the
+	// plain deterministic-success path (Issue #297). Only set alongside
+	// ExecutionPath=="llm", in either of two shapes:
+	//
+	//   - punt — the deterministic hook ran first and declined, so the skill
+	//     ran (e.g. "missing-dev-context", "dirty-merge-state: BLOCKED",
+	//     "ci-wait-timeout").
+	//   - "deterministic-recovery: …" — the skill ran first and its
+	//     post-condition gate failed, and the deterministic fallback then
+	//     completed the work. The stage still cost full LLM price, so it is
+	//     ExecutionPath=="llm"; recording it as "deterministic" booked LLM
+	//     spend as a deterministic saving (#122).
+	//
+	// Absent on deterministic successes, on LLM-only stages with no
+	// deterministic hook, and on records emitted before #297. Lets
 	// pipeline-health / retro answer WHY the expensive path ran without the
 	// forensic log archaeology #288 required. Readers treat absence as unknown.
 	PuntReason string `json:"punt_reason,omitempty"`

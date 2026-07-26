@@ -1831,10 +1831,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       if (isTerminal && prState === "OPEN") {
         const fb = await this.tryDeterministicMergeFallback(prNumber, issueNumber, cwd);
         if (fb.merged) {
-          // The deterministic path (not the LLM) actually merged this PR —
-          // record it so the history stage record's execution_path is truthful
-          // (Issue #297).
-          this.stageExecutionPaths.set("pr-merge", { path: "deterministic" });
+          // Same correction as the pr-create fallback below (#122): this branch
+          // is only reachable after the LLM skill ran and its post-condition
+          // gate failed, so the stage already cost full LLM price. Recording
+          // "deterministic" — which the schema defines as "skill skipped" —
+          // credited that spend to the deterministic path.
+          this.stageExecutionPaths.set("pr-merge", {
+            path: "llm",
+            puntReason:
+              "deterministic-recovery: fallback merged the PR after the LLM path's gate failed",
+          });
           return null;
         }
         blockerReason = fb.blocker;
@@ -2477,9 +2483,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "Post-create verification: deterministic create fallback opened the PR — recovering",
           { issueNumber }
         );
-        // The deterministic path opened the PR, not the LLM — record it so the
-        // history stage record's execution_path is truthful (Issue #297).
-        this.stageExecutionPaths.set("pr-create", { path: "deterministic" });
+        // The LLM skill already ran to completion here — this branch is only
+        // reachable after its post-condition gate failed — so the stage cost
+        // full LLM price and then the fallback on top. Recording
+        // "deterministic" (defined as "skill skipped") booked that spend as a
+        // deterministic saving and inflated the very adoption metric
+        // deterministic-first is judged by: one observed stage billed $1.80
+        // over 276s and filed as a zero-cost deterministic run (#122).
+        // execution_path names what consumed resources; punt_reason carries
+        // why the deterministic hook was involved at all.
+        this.stageExecutionPaths.set("pr-create", {
+          path: "llm",
+          puntReason:
+            "deterministic-recovery: fallback opened the PR after the LLM path's gate failed",
+        });
         return null;
       }
       // The deterministic create declined; the LLM path is what ran. Capture the
