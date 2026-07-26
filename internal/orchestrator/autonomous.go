@@ -2038,6 +2038,11 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		}
 		as.mu.Unlock()
 		as.raiseWorkExhaustion(promotable)
+	} else {
+		// The fleet has work again. Idleness is a STANDING condition (#108), so
+		// the card is retracted rather than left to age out of its own TTL —
+		// this branch IS the successful observation that it is no longer true.
+		as.retractWorkExhaustion()
 	}
 
 	// Action Center expiry sweep (ADR 015 §C): piggyback the periodic scan so no
@@ -2344,6 +2349,12 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	rejected := map[string]int{}
 	bump := func(reason string) { rejected[reason]++ }
 
+	// Owner-action handoffs are a STANDING condition (#108): this pass walks
+	// every node, so the keys it collects are the complete set of human-only
+	// skips that are true right now, and anything else the producer has open
+	// describes an issue that has since been closed, relabelled, or completed.
+	var ownerActionObserved []string
+
 	var candidates []CandidateItem
 	for key, node := range g.Nodes {
 		// Skip nodes not in the filtered repo set (--repos restriction).
@@ -2406,6 +2417,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			// checklist + mark-done-and-requeue-dependents. Dedup on issue key
 			// keeps re-detection from spawning duplicates.
 			as.raiseOwnerActionHandoff(node.Repo, node.Number, node.Title, label)
+			ownerActionObserved = append(ownerActionObserved, keyOwnerActionHandoff(node.Repo, node.Number))
 			continue
 		}
 
@@ -2509,6 +2521,10 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			UnblockCount: unblockCount,
 		})
 	}
+
+	// The scan is complete, so every owner-action card the producer still holds
+	// open for an issue it did NOT just see describes a handoff that is over.
+	as.autoResolveAttention(producerOwnerActionHandoff, ownerActionObserved)
 
 	// Dangling epic gate warning: when cascade is disabled, warn if an epic has
 	// an open blockedBy but one or more of its sub-issues became candidates.

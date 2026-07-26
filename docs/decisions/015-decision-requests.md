@@ -661,6 +661,25 @@ or a card that outlives its problem.
   producer that stopped being evaluated at all — which is exactly the stale-card
   case expiry exists to catch.
 
+- **An expired card is revived, never duplicated** (#108). Sticky identity holds
+  across expiry, not only while a card is open: re-raising a key whose previous
+  card expired reopens that record under its original id. Expiry is the one
+  terminal state that records no decision — it fires because nobody looked — so
+  a re-observation is the same card returning. Minting a fresh id per TTL window
+  makes the card count track the number of windows instead of the number of
+  problems, which is the same inbox-destroying outcome as appending per sweep. A
+  `resolved` or `auto_resolved` predecessor is a closed chapter and does not
+  revive.
+
+- **Standing is a property of the trigger site, not of the file it lives in.**
+  Decision F's producers 1, 2 and 8 (work exhaustion, owner-action handoff,
+  stuck-epic watchdog) fire from the scheduler loop, but that loop re-evaluates
+  their whole condition set on every cycle — so they are standing, and carry a
+  fingerprint, the declared standing expiry, and an auto-resolve pass over the
+  keys the cycle did not observe. The declared TTLs in the Decision F table
+  applied to them as events; a standing card's lifetime is set by its condition,
+  and expiry is only the safety net for a producer that stopped running.
+
 **Acknowledge and mute are lifecycle operations, not registry verbs.** Resolving
 is terminal (Decision D), so binding mute to an option would end a card whose
 condition is still true. They ship as `attention ack|mute|unmute` and as

@@ -1314,6 +1314,36 @@ func splitLines(data []byte) [][]byte {
 	return lines
 }
 
+// ExtractSizeFromLabels extracts the XS/S/M/L/XL size bucket from a `size:*`
+// label. Returns "" when no size label is present, which leaves
+// V2RunRecord.Size null.
+//
+// Size is the JOIN KEY the pre-flight cost estimator matches run history on
+// (#112) — a wrong bucket poisons calibration for every future run of that
+// size, an absent one only skips this record — so an unrecognized value never
+// falls back to a default here. The consumer tolerates the absence instead.
+func ExtractSizeFromLabels(labels []string) string {
+	for _, l := range labels {
+		lower := strings.ToLower(strings.TrimSpace(l))
+		if !strings.HasPrefix(lower, "size:") {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(lower, "size:"))) {
+		case "XS":
+			return "XS"
+		case "S":
+			return "S"
+		case "M":
+			return "M"
+		case "L":
+			return "L"
+		case "XL":
+			return "XL"
+		}
+	}
+	return ""
+}
+
 // ExtractTypeFromLabels extracts the issue type from labels.
 func ExtractTypeFromLabels(labels []string) string {
 	for _, l := range labels {

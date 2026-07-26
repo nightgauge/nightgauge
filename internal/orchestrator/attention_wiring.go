@@ -5,8 +5,16 @@ package orchestrator
 // one-way Discord embed, the trigger site calls a `raise*` builder here, which
 // routes through the single authoritative store (as.attention) with a stable
 // idempotency_key, a declared default_action/expires_at, and options bound to
-// registry verbs. Re-detecting the same condition UPDATES the open request in
-// place (dedup), so calling from a per-cycle loop never spawns duplicates.
+// registry verbs. Re-detecting the same condition UPDATES the record in place
+// (dedup), so calling from a per-cycle loop never spawns duplicates.
+//
+// Three of these producers are STANDING rather than event-shaped (#108): work
+// exhaustion, the owner-action handoff, and the stuck-epic watchdog each
+// describe a condition the scheduler re-evaluates on every cycle, not a
+// transition it observed once. They declare Standing + a Fingerprint so a
+// re-observation refreshes silently, and their trigger sites call
+// autoResolveAttention with the complete set they just saw, so a condition that
+// stopped being true retracts its own card instead of waiting out a TTL.
 //
 // All raise paths are fail-open and nil-safe: an attention-write failure or an
 // unconfigured store must never break the scheduler.
@@ -22,6 +30,35 @@ import (
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
+
+// Producer ids for the three STANDING run-loop producers (#108). A standing
+// producer is re-evaluated on every scheduler cycle, so its name is needed
+// twice — once to stamp the card, once to retract the cards whose condition
+// stopped being observed — and a literal in two places is a name waiting to
+// drift.
+const (
+	producerWorkExhaustion     = "work-exhaustion"
+	producerOwnerActionHandoff = "owner-action-handoff"
+	producerStuckEpic          = "watchdog-stuck-epic"
+)
+
+// keyWorkExhaustion is the fleet-idle condition's sticky identity. There is one
+// fleet, so there is one key.
+const keyWorkExhaustion = producerWorkExhaustion + ":fleet"
+
+// keyOwnerActionHandoff / keyStuckEpic build the sticky (producer,
+// idempotency_key) identity for a per-issue standing condition.
+//
+// The stuck-epic key prefix is `stuck-epic`, not the producer name — it shipped
+// that way and an idempotency_key is durable identity, so "correcting" it would
+// orphan every live card and re-raise each one under a new id.
+func keyOwnerActionHandoff(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerOwnerActionHandoff, repo, issue)
+}
+
+func keyStuckEpic(repo string, epic int) string {
+	return fmt.Sprintf("stuck-epic:%s#%d", repo, epic)
+}
 
 // isBranchProtectionPunt reports whether a pr-merge punt reason is a
 // branch-protection / required-check / review block that no LLM retry can clear
@@ -45,6 +82,19 @@ func isBranchProtectionPunt(reason string) bool {
 func expiryFromNow(d time.Duration) string {
 	return time.Now().UTC().Add(d).Format(time.RFC3339Nano)
 }
+
+// standingExpiry is the expiry every STANDING producer declares (#108).
+//
+// For an event, expires_at answers "how long is this worth showing?" — it is
+// the only thing that ever removes the card. For a standing condition it
+// answers a different question: the card is removed when the condition clears,
+// so expiry is purely the safety net for a producer that stopped being
+// evaluated at all. The short event TTLs fired routinely on a perfectly healthy
+// producer — the stuck-epic watchdog only runs on idle cycles, so its 30-minute
+// window lapsed between observations — which is how one standing condition
+// became a card per window. attention.StandingExpiry is the declared window for
+// exactly this role.
+func standingExpiry() string { return expiryFromNow(attention.StandingExpiry) }
 
 // Attention returns the DecisionRequest store (nil when unconfigured).
 func (as *AutonomousScheduler) Attention() *attention.Store {
@@ -78,6 +128,25 @@ func (s *Scheduler) raiseAttention(req attention.DecisionRequest) {
 		return
 	}
 	raiseThrough(s.attention, req)
+}
+
+// autoResolveAttention retracts every open standing card from producer whose
+// idempotency_key is absent from observed — the condition stopped being true.
+// Callers must have just evaluated the producer's whole condition set
+// successfully; an empty observed slice asserts that nothing holds, and is
+// never a way to say "I could not look". Fail-open like every raise path.
+func (as *AutonomousScheduler) autoResolveAttention(producer string, observed []string) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	n, err := as.attention.AutoResolveUnobserved(producer, observed)
+	if err != nil {
+		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producer, err)
+		return
+	}
+	if n > 0 {
+		log.Printf("attention: retracted %d %q card(s) — condition no longer observed", n, producer)
+	}
 }
 
 func raiseThrough(store *attention.Store, req attention.DecisionRequest) {
@@ -170,23 +239,42 @@ func (as *AutonomousScheduler) sweepAttentionExpired(ctx context.Context) {
 // raiseWorkExhaustion surfaces the fleet-idle dead-end: nothing dispatchable
 // (remaining==0 && running==0). Fleet-scoped (no run/repo). promotable is the
 // count of Backlog candidates the operator could promote.
+//
+// Standing (#108): "the fleet has nothing to do" is a condition, not an event —
+// every idle cycle re-observes it. retractWorkExhaustion clears the card the
+// moment work reappears.
 func (as *AutonomousScheduler) raiseWorkExhaustion(promotable int) {
 	as.raiseAttention(attention.DecisionRequest{
-		IdempotencyKey: "work-exhaustion:fleet",
+		IdempotencyKey: keyWorkExhaustion,
 		Kind:           attention.KindChoose,
 		Severity:       attention.SeverityFYI,
 		Title:          fmt.Sprintf("Fleet idle — %d Backlog item(s) promotable", promotable),
 		Body:           "No dispatchable work remains. Re-scan for newly-ready work, or leave the fleet idle.",
-		Producer:       "work-exhaustion",
+		Producer:       producerWorkExhaustion,
 		Context:        attention.Context{},
+		Standing:       true,
+		// The condition is binary: nothing is dispatchable. The promotable
+		// tally belongs in the title, not the fingerprint — it moves as backoff
+		// windows elapse, and a fingerprint that moves on its own re-alerts
+		// every cycle (docs/ATTENTION_PRODUCERS.md invariant 2). The card
+		// clears when the fleet has work again, which is the only transition
+		// there is.
+		Fingerprint: "fleet:idle",
 		Options: []attention.Option{
 			{ID: "rescan", Label: "Re-scan for work", Verb: attention.VerbAutonomousRescan, Style: attention.StylePrimary},
 			noopOption("leave", "Leave idle"),
 		},
 		DefaultAction: "leave",
-		ExpiresAt:     expiryFromNow(24 * time.Hour),
+		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Add context for the chosen option"},
 	})
+}
+
+// retractWorkExhaustion auto-resolves the fleet-idle card once anything is
+// dispatchable again. Called from the same cycle branch that would have raised
+// it, so "not idle" is always a fresh observation.
+func (as *AutonomousScheduler) retractWorkExhaustion() {
+	as.autoResolveAttention(producerWorkExhaustion, nil)
 }
 
 // --- Producer 2: owner-action handoff (per-issue) ----------------------------
@@ -194,23 +282,32 @@ func (as *AutonomousScheduler) raiseWorkExhaustion(promotable int) {
 // raiseOwnerActionHandoff surfaces a human-only (owner-action) issue the fleet
 // skipped silently. handoff kind: it needs a human, so the default is
 // expire_noop (no auto-mutation).
+//
+// Standing (#108): the issue carries the label until someone removes it or
+// closes the issue, and every prioritize pass re-observes that. The scan that
+// stops seeing it retracts the card.
 func (as *AutonomousScheduler) raiseOwnerActionHandoff(repo string, issue int, title, label string) {
 	owner, name := splitRepo(repo)
 	as.raiseAttention(attention.DecisionRequest{
-		IdempotencyKey: fmt.Sprintf("owner-action-handoff:%s#%d", repo, issue),
+		IdempotencyKey: keyOwnerActionHandoff(repo, issue),
 		Kind:           attention.KindHandoff,
 		Severity:       attention.SeverityBlockingRun,
 		Title:          fmt.Sprintf("Owner-action needed: %s (#%d)", title, issue),
 		Body:           fmt.Sprintf("Issue #%d carries the human-only label %q; no pipeline retry can clear it. Complete the checklist, then mark done to requeue dependents.", issue, label),
-		Producer:       "owner-action-handoff",
+		Producer:       producerOwnerActionHandoff,
 		Context:        attention.Context{Repo: repo, Issue: issue, Blocker: "human-only label: " + label},
+		Standing:       true,
+		// WHICH human-only label is holding the issue. A retitled issue is the
+		// same handoff and refreshes silently; a different exclude label is a
+		// different ask and re-alerts.
+		Fingerprint: "label:" + strings.ToLower(label),
 		Options: []attention.Option{
 			{ID: "mark-done", Label: "Mark done & requeue dependents", Verb: attention.VerbAutonomousComplete,
 				Args: map[string]any{"owner": owner, "repo": name, "issueNumber": issue, "then": "issue.close"}, Style: attention.StylePrimary},
 			noopOption("snooze", "Snooze"),
 		},
 		DefaultAction: attention.ExpireNoop,
-		ExpiresAt:     expiryFromNow(7 * 24 * time.Hour),
+		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Optional note — recorded in the decision audit and visible to dependent work"},
 	})
 }
@@ -267,16 +364,26 @@ func (as *AutonomousScheduler) raiseBlockedByDeferral(repo string, issue int, ti
 
 // raiseStuckEpic surfaces an epic the watchdog flagged as stalled (open with
 // open sub-issues, zero eligible work, no running pipeline).
+//
+// Standing (#108): a stalled epic stays stalled until someone unblocks it, and
+// the watchdog re-detects it on every idle cycle. summary is StuckEpic.Summary()
+// — the blocker set sorted by sub-issue number, each with its board status or
+// taxonomy failure kind — so it is material state and doubles as the
+// fingerprint. It carries no timestamp, elapsed duration, or counter, which is
+// what makes that safe; a different set of blockers is a genuine change and
+// re-alerts.
 func (as *AutonomousScheduler) raiseStuckEpic(repo string, epic int, title, summary string) {
 	owner, name := splitRepo(repo)
 	as.raiseAttention(attention.DecisionRequest{
-		IdempotencyKey: fmt.Sprintf("stuck-epic:%s#%d", repo, epic),
+		IdempotencyKey: keyStuckEpic(repo, epic),
 		Kind:           attention.KindChoose,
 		Severity:       attention.SeverityFYI,
 		Title:          fmt.Sprintf("Epic stalled: %s (#%d)", title, epic),
 		Body:           summary,
-		Producer:       "watchdog-stuck-epic",
+		Producer:       producerStuckEpic,
 		Context:        attention.Context{Repo: repo, Issue: epic, Blocker: summary},
+		Standing:       true,
+		Fingerprint:    "stall:" + summary,
 		Options: []attention.Option{
 			{ID: "escalate", Label: "Escalate model & retry", Verb: attention.VerbRunRetryWithEscalation,
 				Args: map[string]any{"issueNumber": epic, "tier": "opus"}, Style: attention.StylePrimary},
@@ -285,7 +392,7 @@ func (as *AutonomousScheduler) raiseStuckEpic(repo string, epic int, title, summ
 			noopOption("wait", "Wait"),
 		},
 		DefaultAction: "wait",
-		ExpiresAt:     expiryFromNow(30 * time.Minute),
+		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline what to do differently on retry"},
 	})
 }

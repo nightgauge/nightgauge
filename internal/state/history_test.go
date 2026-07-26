@@ -774,3 +774,26 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 		t.Errorf("index entry PerformanceMode = %q, want %q", got, "elevated")
 	}
 }
+
+func TestExtractSizeFromLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		want   string
+	}{
+		{"canonical label", []string{"type:feature", "size:M"}, "M"},
+		{"lowercase value", []string{"size:xl"}, "XL"},
+		{"whitespace tolerated", []string{" Size: L "}, "L"},
+		{"first size label wins", []string{"size:S", "size:L"}, "S"},
+		{"no size label", []string{"type:bug", "area:vscode"}, ""},
+		{"unrecognized bucket is not defaulted", []string{"size:huge"}, ""},
+		{"empty", nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExtractSizeFromLabels(tt.labels); got != tt.want {
+				t.Errorf("ExtractSizeFromLabels(%v) = %q, want %q", tt.labels, got, tt.want)
+			}
+		})
+	}
+}

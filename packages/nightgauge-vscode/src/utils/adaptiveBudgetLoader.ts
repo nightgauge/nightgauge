@@ -82,8 +82,12 @@ function resolveMainRepoRoot(workspaceRoot: string): string {
 
 /**
  * Compute the p75 of a sorted number array (nearest-rank method).
+ *
+ * Exported so the pre-flight cost calibration (#112) shares one definition of
+ * the statistic rather than growing a second, subtly different one.
+ * Callers must pass an ascending-sorted array.
  */
-function p75(sorted: number[]): number {
+export function p75(sorted: number[]): number {
   if (sorted.length === 0) return 0;
   const idx = Math.floor(0.75 * (sorted.length - 1));
   return sorted[Math.min(idx, sorted.length - 1)];

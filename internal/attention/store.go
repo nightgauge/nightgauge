@@ -158,10 +158,20 @@ func (s *Store) pathFor(id string) (string, error) {
 	return filepath.Join(s.dir, id+".json"), nil
 }
 
-// Raise creates a new request, or UPDATES the existing open request with the
-// same idempotency_key in place (at most one open per key — ADR-015 §C/§D). It
-// rejects identity-less records (empty id/idempotency_key/producer) — the #316
-// lesson encoded. Returns the id of the live (created or updated) request.
+// Raise creates a new request, or folds it into the record that already exists
+// for the same idempotency_key (ADR-015 §C/§D). It rejects identity-less
+// records (empty id/idempotency_key/producer) — the #316 lesson encoded.
+// Returns the id of the live request.
+//
+// "One record per key" holds across expiry, not just while a card is open
+// (#108). An open record is updated in place; an EXPIRED one is revived under
+// its original id, because a producer re-raising the key is asserting the
+// condition outlived its own TTL — and minting a fresh id per TTL window turns
+// one long-lived condition into an unbounded stream of duplicate cards.
+//
+// Standing requests additionally follow the §M rules: an unchanged fingerprint
+// refreshes the card without re-alerting, and a condition a human already
+// resolved is not handed straight back until its fingerprint moves.
 func (s *Store) Raise(req DecisionRequest) (string, error) {
 	if err := validateForRaise(&req); err != nil {
 		return "", err
@@ -172,30 +182,65 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	stored, err := s.scanLocked()
+	if err != nil {
+		return "", err
+	}
+
 	// Dedup: an open (non-terminal) request with the same key is updated in
 	// place rather than duplicated.
-	if existing, path, ok, err := s.findOpenByKeyLocked(req.IdempotencyKey); err != nil {
-		return "", err
-	} else if ok {
+	if existing, path, ok := findOpenByKey(stored, req.IdempotencyKey); ok {
 		// Preserve durable identity + creation + lifecycle; refresh the payload.
 		merged := req
 		merged.ID = existing.ID
 		merged.CreatedAt = existing.CreatedAt
 		merged.Lifecycle = existing.Lifecycle
+		action := ActionUpdated
+		if merged.Standing && merged.Fingerprint == existing.Fingerprint {
+			// The same condition re-observed: bodies and titles move on their
+			// own, so refresh the content and stay silent.
+			action = ActionRefreshed
+		} else if merged.Standing {
+			// The condition itself moved. Drop a mute pinned to the fingerprint
+			// that no longer applies, and re-open an acknowledgement that was
+			// scoped to the condition the operator actually saw.
+			merged.Lifecycle.Muted = nil
+			if merged.Lifecycle.State == StateAcknowledged {
+				merged.Lifecycle.State = StateOpen
+				merged.Lifecycle.Acknowledged = nil
+			}
+		}
 		if err := s.writeMaterializedLocked(path, &merged); err != nil {
 			return "", err
 		}
 		s.emitLocked(JournalEntry{
-			Action:         ActionUpdated,
+			Action:         action,
 			ID:             merged.ID,
 			IdempotencyKey: merged.IdempotencyKey,
 			Producer:       merged.Producer,
 			State:          merged.Lifecycle.State,
+			Fingerprint:    merged.Fingerprint,
+			Muted:          merged.IsMuted(),
 			At:             s.nowUTC().Format(tsLayout),
 		}, &merged)
 		return merged.ID, nil
 	}
 
+	// No open record. A human who already resolved THIS EXACT standing
+	// condition is not told about it again until it changes (ADR-015 §M);
+	// without this, dismissing a card for a condition that is still true hands
+	// it back on the next observation.
+	if req.Standing {
+		if prior, ok := latestResolvedByKey(stored, req.IdempotencyKey); ok && prior.Fingerprint == req.Fingerprint {
+			return prior.ID, nil
+		}
+	}
+
+	// Revive an expired predecessor under its own id rather than writing a
+	// second file for the same condition (#108).
+	if prior, ok := findExpiredByKey(stored, req.IdempotencyKey); ok {
+		req.ID = prior.ID
+	}
 	path, err := s.pathFor(req.ID)
 	if err != nil {
 		return "", err
@@ -209,6 +254,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 		IdempotencyKey: req.IdempotencyKey,
 		Producer:       req.Producer,
 		State:          req.Lifecycle.State,
+		Fingerprint:    req.Fingerprint,
 		At:             s.nowUTC().Format(tsLayout),
 	}, &req)
 	return req.ID, nil
@@ -237,6 +283,13 @@ func validateForRaise(req *DecisionRequest) error {
 	}
 	if strings.TrimSpace(req.Title) == "" {
 		return fmt.Errorf("attention: title is required")
+	}
+	if req.Standing && strings.TrimSpace(req.Fingerprint) == "" {
+		// Without a fingerprint there is no way to tell a re-observation from a
+		// state change, so every observation would re-alert. Reject at the
+		// boundary rather than degrade into the spam-folder failure mode
+		// (ADR-015 §M).
+		return fmt.Errorf("attention: standing request %q requires a fingerprint", req.IdempotencyKey)
 	}
 	// Every declared option must bind a registered verb (the security boundary
 	// applies at raise time too, so a producer cannot persist a bad option).
@@ -548,30 +601,6 @@ func (s *Store) loadLocked(id string) (string, *DecisionRequest, error) {
 		return "", nil, err
 	}
 	return path, req, nil
-}
-
-func (s *Store) findOpenByKeyLocked(key string) (*DecisionRequest, string, bool, error) {
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, "", false, nil
-		}
-		return nil, "", false, fmt.Errorf("attention: read dir: %w", err)
-	}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		path := filepath.Join(s.dir, e.Name())
-		req, rerr := readRequest(path)
-		if rerr != nil {
-			continue
-		}
-		if req.IdempotencyKey == key && !req.Lifecycle.State.IsTerminal() {
-			return req, path, true, nil
-		}
-	}
-	return nil, "", false, nil
 }
 
 // writeMaterializedLocked persists the request via write-temp + rename so a

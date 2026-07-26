@@ -459,7 +459,10 @@ func latestRunRecordFromDir(historyDir, repo string, number int) (*state.V2RunRe
 // IPC/CLI snapshot, and emits a de-duplicated Discord alert per newly-stalled
 // epic. Wired into runCycle's idle branch (#4073).
 func (as *AutonomousScheduler) surfaceStuckEpics(ctx context.Context, graph *depgraph.Graph) {
-	if !as.config.StuckEpicDetectionEnabled {
+	if !as.config.StuckEpicDetectionEnabled || graph == nil {
+		// Nothing looked, so nothing may be retracted below (#108): detection
+		// being off, or the graph being absent, is "I could not observe" — never
+		// a positive assertion that no epic is stalled.
 		return
 	}
 	epics := as.detectStuckEpics(graph)
@@ -467,6 +470,16 @@ func (as *AutonomousScheduler) surfaceStuckEpics(ctx context.Context, graph *dep
 	as.mu.Lock()
 	as.state.StuckEpics = epics
 	as.mu.Unlock()
+
+	// Detection ran over the whole graph, so an epic missing from the result is
+	// a stall that cleared, not a stall we failed to look for. Retract its card
+	// before the early return below — an empty result is the case that most
+	// needs retracting (#108).
+	observed := make([]string, 0, len(epics))
+	for _, e := range epics {
+		observed = append(observed, keyStuckEpic(e.Repo, e.Number))
+	}
+	as.autoResolveAttention(producerStuckEpic, observed)
 
 	if len(epics) == 0 {
 		return
