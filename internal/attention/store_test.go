@@ -112,6 +112,256 @@ func TestRaiseDedupsOnIdempotencyKey(t *testing.T) {
 	}
 }
 
+// standingRaise builds a well-formed STANDING request for the Raise path — the
+// shape the scheduler's re-evaluated producers emit (#108).
+func standingRaise(id, key, fingerprint string) DecisionRequest {
+	r := validRequest(id, key)
+	r.Standing = true
+	r.Fingerprint = fingerprint
+	return r
+}
+
+func TestRaiseRejectsAStandingRequestWithNoFingerprint(t *testing.T) {
+	s := New(t.TempDir())
+	r := standingRaise(mustID(t), "cond", "")
+	if _, err := s.Raise(r); err == nil {
+		t.Fatal("a standing request with no fingerprint must be rejected at the boundary")
+	}
+}
+
+// TestReRaisingAnExpiredKeyRevivesTheSameRecord is the #108 regression. A
+// condition that outlives its own TTL is the definition of a standing
+// condition; before the fix each re-raise took the create path and minted a new
+// id, so the card count tracked the number of TTL windows rather than the
+// number of distinct problems.
+func TestReRaisingAnExpiredKeyRevivesTheSameRecord(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+	s := New(t.TempDir()).WithClock(func() time.Time { return now })
+
+	// The producer re-detects the same condition, generating a fresh candidate
+	// id every time — exactly as the fail-open raise path does.
+	raise := func() string {
+		t.Helper()
+		r := standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101 ready but undispatched")
+		r.ExpiresAt = now.Add(30 * time.Minute).Format(tsLayout)
+		id, err := s.Raise(r)
+		if err != nil {
+			t.Fatalf("Raise: %v", err)
+		}
+		return id
+	}
+
+	first := raise()
+	// Four TTL windows elapse with nobody looking. The condition never changes.
+	for i := 0; i < 4; i++ {
+		now = now.Add(31 * time.Minute)
+		n, err := s.SweepExpired(context.Background(), NoopExecutor{})
+		if err != nil {
+			t.Fatalf("SweepExpired: %v", err)
+		}
+		if n != 1 {
+			t.Fatalf("window %d: expired %d requests, want 1", i, n)
+		}
+		if got := raise(); got != first {
+			t.Fatalf("window %d: re-raise minted id %q, want the existing %q", i, got, first)
+		}
+	}
+
+	all, err := s.List(ListFilter{IncludeTerminal: true})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("one condition across five TTL windows materialized %d records, want exactly 1", len(all))
+	}
+	if all[0].Lifecycle.State != StateOpen {
+		t.Errorf("state = %q, want open — a revived record is a live card", all[0].Lifecycle.State)
+	}
+	if all[0].Lifecycle.Expired != nil {
+		t.Error("a revived record still carries the expiry audit of the window it outlived")
+	}
+}
+
+// TestRaiseIntoAStoreThatAlreadyAccumulatedDuplicates covers the state the bug
+// left behind: four expired records under one key, written before the fix. The
+// next raise must fold into the newest and add nothing, so an affected store
+// stops growing without a migration.
+func TestRaiseIntoAStoreThatAlreadyAccumulatedDuplicates(t *testing.T) {
+	s := New(t.TempDir())
+	var ids []string
+	for i := 0; i < 4; i++ {
+		r := standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101")
+		r.SchemaVersion = SchemaVersion
+		r.CreatedAt = fmt.Sprintf("2026-07-2%dT00:00:00Z", 1+i)
+		r.ExpiresAt = fmt.Sprintf("2026-07-2%dT00:30:00Z", 1+i)
+		r.Lifecycle = Lifecycle{State: StateExpired, Expired: &ExpiredRecord{
+			At: fmt.Sprintf("2026-07-2%dT00:30:00Z", 1+i), Applied: ExpireNoop,
+		}}
+		path, err := s.pathFor(r.ID)
+		if err != nil {
+			t.Fatalf("pathFor: %v", err)
+		}
+		if err := s.writeMaterializedLocked(path, &r); err != nil {
+			t.Fatalf("seed record %d: %v", i, err)
+		}
+		ids = append(ids, r.ID)
+	}
+
+	id, err := s.Raise(standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if got := len(mustList(t, s, ListFilter{IncludeTerminal: true})); got != 4 {
+		t.Fatalf("an already-duplicated store grew to %d records, want 4", got)
+	}
+	if id != ids[3] {
+		t.Errorf("revived %q, want the most recently expired record %q", id, ids[3])
+	}
+	if got := len(mustList(t, s, ListFilter{})); got != 1 {
+		t.Errorf("%d open cards for one condition, want 1", got)
+	}
+}
+
+// TestRaiseRefreshesAStandingConditionWithoutReAlerting pins the §M rule on the
+// Raise path: prose moves on every observation, so only a moved fingerprint is
+// a genuine change worth interrupting an operator for.
+func TestRaiseRefreshesAStandingConditionWithoutReAlerting(t *testing.T) {
+	s := New(t.TempDir())
+	raise := func(title, fingerprint string) {
+		t.Helper()
+		r := standingRaise(mustID(t), "cond", fingerprint)
+		r.Title = title
+		if _, err := s.Raise(r); err != nil {
+			t.Fatalf("Raise: %v", err)
+		}
+	}
+	raise("epic stalled — 12m", "stall:#101 ready but undispatched")
+	for i := 0; i < 5; i++ {
+		raise(fmt.Sprintf("epic stalled — %dm", 13+i), "stall:#101 ready but undispatched")
+	}
+
+	entries, err := s.ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	alerts := 0
+	for _, e := range entries {
+		if e.ShouldNotify() {
+			alerts++
+		}
+	}
+	if alerts != 1 {
+		t.Errorf("six observations of one unchanged condition alerted %d times, want 1", alerts)
+	}
+
+	// A second sub-issue blocking the epic IS a change, and does alert.
+	raise("epic stalled", "stall:#101 ready but undispatched; #102 blocked by #101")
+	entries, _ = s.ReadJournal()
+	alerts = 0
+	for _, e := range entries {
+		if e.ShouldNotify() {
+			alerts++
+		}
+	}
+	if alerts != 2 {
+		t.Errorf("a moved fingerprint must alert: got %d alerts, want 2", alerts)
+	}
+}
+
+// TestRaiseDoesNotHandBackAConditionAHumanJustResolved — dismissing a card for
+// a condition that is still true must not return it on the next cycle.
+func TestRaiseDoesNotHandBackAConditionAHumanJustResolved(t *testing.T) {
+	s := New(t.TempDir())
+	id, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if _, err := s.Resolve(context.Background(), id, "leave", "octocat", "", "", &spyExecutor{}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1")); err != nil || got != id {
+		t.Fatalf("re-raise after resolve returned (%q, %v), want the resolved id %q and no new card", got, err, id)
+	}
+	if open := mustList(t, s, ListFilter{}); len(open) != 0 {
+		t.Fatalf("a resolved condition that has not changed must stay resolved, got %d open", len(open))
+	}
+	// The condition itself changing is news. The resolution stays on the record
+	// that earned it — a decision is a closed chapter — and the new condition
+	// gets its own card, matching what a repo sweep does with the same facts.
+	if _, err := s.Raise(standingRaise(mustID(t), "cond", "fp:2")); err != nil {
+		t.Fatalf("Raise after change: %v", err)
+	}
+	open := mustList(t, s, ListFilter{})
+	if len(open) != 1 {
+		t.Fatalf("a changed condition must be carded: got %d open", len(open))
+	}
+	if open[0].ID == id {
+		t.Error("the resolved record was reopened; a human's resolution must stay auditable on its own record")
+	}
+	if resolved, _, _ := s.Get(id); resolved.Lifecycle.State != StateResolved {
+		t.Errorf("prior record state = %q, want resolved", resolved.Lifecycle.State)
+	}
+}
+
+// TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions covers
+// the retraction half of standing semantics for the run-loop producers: a
+// condition that stopped being true clears its card, and nothing else moves.
+func TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions(t *testing.T) {
+	s := New(t.TempDir())
+	mk := func(key, producer string, standing bool) string {
+		t.Helper()
+		r := standingRaise(mustID(t), key, "fp")
+		r.Producer = producer
+		r.Standing = standing
+		if !standing {
+			r.Fingerprint = ""
+		}
+		id, err := s.Raise(r)
+		if err != nil {
+			t.Fatalf("Raise %s: %v", key, err)
+		}
+		return id
+	}
+	stillTrue := mk("p:a", "watchdog-stuck-epic", true)
+	cleared := mk("p:b", "watchdog-stuck-epic", true)
+	otherProducer := mk("q:a", "owner-action-handoff", true)
+	event := mk("p:event", "watchdog-stuck-epic", false)
+
+	n, err := s.AutoResolveUnobserved("watchdog-stuck-epic", []string{"p:a"})
+	if err != nil {
+		t.Fatalf("AutoResolveUnobserved: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("retracted %d cards, want 1", n)
+	}
+	got, _, _ := s.Get(cleared)
+	if got.Lifecycle.State != StateAutoResolved {
+		t.Errorf("cleared card state = %q, want auto_resolved", got.Lifecycle.State)
+	}
+	if got.Lifecycle.AutoResolved == nil || got.Lifecycle.AutoResolved.Reason != ReasonConditionCleared {
+		t.Error("a retraction must be auditable as a system withdrawal, not a human decision")
+	}
+	for _, survivor := range []string{stillTrue, otherProducer, event} {
+		r, _, _ := s.Get(survivor)
+		if r.Lifecycle.State.IsTerminal() {
+			t.Errorf("request %s was retracted; only the producer's own unobserved standing cards may be", survivor)
+		}
+	}
+
+	if _, err := s.AutoResolveUnobserved("", nil); err == nil {
+		t.Error("auto-resolve without a producer scope must be rejected — it would retract the whole inbox")
+	}
+}
+
+func mustList(t *testing.T, s *Store, f ListFilter) []DecisionRequest {
+	t.Helper()
+	out, err := s.List(f)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return out
+}
+
 // spyExecutor counts verb executions and records the last option.
 type spyExecutor struct {
 	count atomic.Int64
