@@ -46,6 +46,11 @@ type Edge struct {
 	Type       string `json:"type"`       // "blockedBy", "crossRepo"
 	Source     string `json:"source"`     // "graphql", "body_text", "structured_section", "depends_on"
 	Resolvable bool   `json:"resolvable"` // false if target repo not in workspace
+	// SourceLine is the issue-body line this edge was parsed from, for
+	// body-derived edges only (empty for "graphql" edges). A dependency edge
+	// created by a line of prose is otherwise indistinguishable from a real
+	// GitHub relation, which made a stalled fleet undiagnosable (#126).
+	SourceLine string `json:"sourceLine,omitempty"`
 }
 
 // Graph is the unified cross-repo dependency DAG.

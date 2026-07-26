@@ -544,3 +544,187 @@ func TestExtractDepContextNoSections(t *testing.T) {
 		t.Errorf("body with no dep context should return empty, got %q", got)
 	}
 }
+
+// --- #126: status markers in "## Cross-Repo Dependencies" must be honoured ---
+
+// TestStructuredSectionMarkerGating pins the gating semantics of every status
+// marker the "## Cross-Repo Dependencies" section invites authors to use, in
+// both the slug (`owner/repo#N`) and URL entry forms.
+//
+// Before #126 the marker was captured but consulted only for `✅` (to set
+// Verified). Every other entry — including one an author wrote specifically to
+// say "this is deferred, it does not gate us" — produced a hard scheduler edge.
+// Because the epic-blockedBy cascade propagates a parent's blockers to all its
+// sub-issues, one such line silently stalled an entire epic sub-tree.
+func TestStructuredSectionMarkerGating(t *testing.T) {
+	tests := []struct {
+		name         string
+		entry        string
+		wantEdge     bool
+		wantVerified bool
+	}{
+		// --- slug form ---
+		{
+			name:         "check mark gates and is verified",
+			entry:        "- ✅ acme/platform#535 — API endpoint verified",
+			wantEdge:     true,
+			wantVerified: true,
+		},
+		{
+			name:     "cross mark gates",
+			entry:    "- ❌ acme/platform#535 — not yet implemented",
+			wantEdge: true,
+		},
+		{
+			name:     "warning gates (documented as watch-this, still a dependency)",
+			entry:    "- ⚠️ acme/platform#535 — partial implementation",
+			wantEdge: true,
+		},
+		{
+			name:     "pause does not gate",
+			entry:    "- ⏸️ acme/platform#535 — store distribution",
+			wantEdge: false,
+		},
+		{
+			name:     "unmarked entry does not gate (no status marker, no edge)",
+			entry:    "- acme/platform#535 — plain entry",
+			wantEdge: false,
+		},
+		{
+			name:     "textual deferred token does not gate",
+			entry:    "- ⚠️ acme/platform#535 — deferred, tracked for later",
+			wantEdge: false,
+		},
+		{
+			name:     "textual not-gating token does not gate",
+			entry:    "- ⚠️ acme/platform#535 — informational, not-gating",
+			wantEdge: false,
+		},
+
+		// --- URL form (extracted via the dep-section URL path) ---
+		{
+			name:     "check mark URL entry gates",
+			entry:    "- ✅ https://github.com/acme/platform/issues/535 — verified",
+			wantEdge: true,
+		},
+		{
+			name:     "warning URL entry gates",
+			entry:    "- ⚠️ https://github.com/acme/platform/issues/535 — partial",
+			wantEdge: true,
+		},
+		{
+			name:     "pause URL entry does not gate",
+			entry:    "- ⏸️ https://github.com/acme/platform/issues/535 — store distribution",
+			wantEdge: false,
+		},
+		{
+			name:     "textual deferred URL entry does not gate",
+			entry:    "- https://github.com/acme/platform/issues/535 — deferred to a later release",
+			wantEdge: false,
+		},
+
+		// --- non-gating marker wins over an explicit blocked-by phrase ---
+		{
+			name:     "pause marker overrides a blocked-by phrase on the same line",
+			entry:    "- ⏸️ Blocked by acme/platform#535 — deferred, not gating",
+			wantEdge: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "## Goal\n\nSomething.\n\n## Cross-Repo Dependencies\n\n" + tc.entry + "\n\n## Testing Plan\n\nMore.\n"
+			refs := ParseCrossRepoRefs(body, nil)
+
+			if !tc.wantEdge {
+				if len(refs) != 0 {
+					t.Fatalf("entry %q must produce NO dependency edge, got %d: %+v",
+						tc.entry, len(refs), refs)
+				}
+				return
+			}
+
+			if len(refs) != 1 {
+				t.Fatalf("entry %q must produce exactly 1 dependency edge, got %d: %+v",
+					tc.entry, len(refs), refs)
+			}
+			if refs[0].Repo != "acme/platform" || refs[0].Number != 535 {
+				t.Errorf("expected acme/platform#535, got %s#%d", refs[0].Repo, refs[0].Number)
+			}
+			if refs[0].Verified != tc.wantVerified {
+				t.Errorf("Verified = %v, want %v", refs[0].Verified, tc.wantVerified)
+			}
+		})
+	}
+}
+
+// TestIsNonGatingLine pins the predicate itself, so the "no edge" outcome for
+// ⏸️ is a deliberate classification rather than a side effect of which runes
+// happen to be in the entry regex's character class.
+func TestIsNonGatingLine(t *testing.T) {
+	tests := []struct {
+		line string
+		want bool
+	}{
+		{"- ⏸️ acme/platform#535 — store distribution", true},
+		{"- acme/platform#535 — deferred", true},
+		{"- acme/platform#535 — Deferred until Q3", true},
+		{"- acme/platform#535 — informational, not-gating", true},
+		{"- acme/platform#535 — informational, not gating", true},
+		{"- acme/platform#535 — non-gating reference", true},
+		{"- ✅ acme/platform#535 — API endpoint verified", false},
+		{"- ⚠️ acme/platform#535 — partial implementation", false},
+		{"- ❌ acme/platform#535 — not yet implemented", false},
+		{"Blocked by acme/platform#535", false},
+		{"", false},
+	}
+	for _, tc := range tests {
+		if got := isNonGatingLine(tc.line); got != tc.want {
+			t.Errorf("isNonGatingLine(%q) = %v, want %v", tc.line, got, tc.want)
+		}
+	}
+}
+
+// TestStructuredSectionMixedMarkers is the live incident from #126 in
+// miniature: an epic whose Cross-Repo Dependencies section carries one real
+// blocker and one entry it was explicitly rescoped away from. Only the real
+// blocker may become an edge.
+func TestStructuredSectionMixedMarkers(t *testing.T) {
+	body := `## Cross-Repo Dependencies
+
+- ⚠️ acme/platform#209 — store distribution
+- ⏸️ acme/mobile#77 — deferred, out of scope for this epic
+- ✅ acme/dashboard#12 — shipped
+`
+	refs := ParseCrossRepoRefs(body, nil)
+	got := map[int]bool{}
+	for _, r := range refs {
+		got[r.Number] = true
+	}
+	if !got[209] {
+		t.Errorf("⚠️ entry #209 must remain a dependency edge, got %+v", refs)
+	}
+	if !got[12] {
+		t.Errorf("✅ entry #12 must remain a dependency edge, got %+v", refs)
+	}
+	if got[77] {
+		t.Errorf("⏸️ entry #77 must NOT produce a dependency edge, got %+v", refs)
+	}
+}
+
+// TestParseRefsCarrySourceLine verifies that every ref records the body line it
+// came from, so a dispatch blocked by body prose can name the prose. Without
+// this, diagnosing #126 required reading parser.go.
+func TestParseRefsCarrySourceLine(t *testing.T) {
+	body := `## Cross-Repo Dependencies
+
+- ⚠️ acme/platform#209 — store distribution
+`
+	refs := ParseCrossRepoRefs(body, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].SourceLine != "- ⚠️ acme/platform#209 — store distribution" {
+		t.Errorf("SourceLine = %q, want the originating body line", refs[0].SourceLine)
+	}
+}

@@ -281,6 +281,7 @@ func buildGraphFromFetcherWithBatch(
 				Type:       "crossRepo",
 				Source:     ref.Source,
 				Resolvable: workspaceRepos[ref.Repo],
+				SourceLine: ref.SourceLine,
 			}
 			eKey := edgeKey(edge)
 			if !edgeSeen[eKey] {
@@ -347,6 +348,7 @@ func BuildGraphFromItems(items []types.BoardItem, bodies map[string]string, work
 				Type:       "crossRepo",
 				Source:     ref.Source,
 				Resolvable: workspaceRepos[ref.Repo],
+				SourceLine: ref.SourceLine,
 			}
 			eKey := edgeKey(edge)
 			if !edgeSeen[eKey] {
