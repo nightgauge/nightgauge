@@ -65,18 +65,36 @@ describe("redactSecrets — PEM blocks", () => {
     // input grew quadratically in cost. Both sizes must cost about the same
     // per byte.
     const build = (n: number) => armour("BEGIN", " ").repeat(n);
+
+    // Best-of-N, not a single sample. Scheduler contention only ever *adds*
+    // time, so the minimum is the least noise-contaminated estimate of the
+    // real cost. A lone sample made this assertion depend on whatever else the
+    // machine happened to be doing.
     const time = (text: string) => {
-      const started = performance.now();
-      redactSecrets(text);
-      return performance.now() - started;
+      let best = Infinity;
+      for (let i = 0; i < 5; i += 1) {
+        const started = performance.now();
+        redactSecrets(text);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
     };
 
     time(build(1_000)); // warm up the JIT before measuring
-    const small = time(build(2_000));
-    const large = time(build(8_000));
+    const small = time(build(4_000));
+    const large = time(build(16_000));
+
+    // Guard the ratio below: if the small case is too fast to measure, the
+    // comparison is meaningless and the workload needs raising. Failing here
+    // says exactly that, rather than silently degrading into an absolute bound.
+    expect(small).toBeGreaterThan(0);
 
     // 4x the input must not cost anywhere near 16x. Generous bound so the
-    // assertion fails only on a genuine return to quadratic scaling.
-    expect(large).toBeLessThan(Math.max(small, 1) * 8);
+    // assertion fails only on a genuine return to quadratic scaling. Compared
+    // as a pure ratio — the previous `Math.max(small, 1) * 8` form collapsed
+    // into a flat 8ms ceiling whenever the small case came in under 1ms, which
+    // both failed under load and would have let a real regression pass on fast
+    // hardware.
+    expect(large / small).toBeLessThan(8);
   });
 });
