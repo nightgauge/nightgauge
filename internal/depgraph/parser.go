@@ -13,6 +13,10 @@ type CrossRepoRef struct {
 	Source    string // "body_text", "structured_section", "depends_on"
 	Verified  bool   // from structured section: checkmark = true
 	SourceURL string // original full URL when parsed from a URL reference (empty for slug refs)
+	// SourceLine is the trimmed body line the reference was parsed from. It
+	// exists so a scheduler that blocks on a body-derived edge can name the
+	// prose responsible instead of leaving an operator to read this file (#126).
+	SourceLine string
 }
 
 // DefaultRepoAliases maps short names used in issue bodies to full GitHub
@@ -48,8 +52,22 @@ var (
 
 	// Structured section entries:
 	// "- ✅ platform #535 — description" / "- ❌ flutter #127" / "- ⚠️ angular #152"
+	//
+	// ⏸️ is deliberately part of the marker class even though a ⏸️ entry never
+	// becomes an edge: recognizing the marker and then classifying it as
+	// non-gating (see isNonGatingLine) makes the outcome an intentional
+	// decision rather than an accident of which runes the class happens to
+	// contain. See docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
 	reStructuredEntry = regexp.MustCompile(
-		`(?m)^[ \t]*-\s*([✅❌⚠️]+)\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+		`(?m)^[ \t]*-\s*([✅❌⚠️⏸]+)\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+	)
+
+	// Textual tokens that declare a line to be documentation rather than a
+	// gating dependency. Unlike the ⏸️ marker these are ordinary English words
+	// that can appear incidentally, so they yield to an explicit dependency
+	// declaration on the same line — see isNonGatingLine.
+	reNonGatingText = regexp.MustCompile(
+		`(?i)\bdeferred\b|\bnot[- ]gating\b|\bnon[- ]gating\b`,
 	)
 
 	// Section header detection for "## Cross-Repo Dependencies"
@@ -87,6 +105,61 @@ var (
 	)
 )
 
+// nonGatingMarker is the ⏸️ "pause" marker. Only the base rune is matched so
+// the marker is recognized with or without its U+FE0F variation selector.
+const nonGatingMarker = "⏸"
+
+// isNonGatingLine reports whether a body line declares itself documentation
+// rather than a gating dependency.
+//
+// The status markers the "## Cross-Repo Dependencies" format invites authors
+// to use are only meaningful if the scheduler honours them: ⏸️ and the textual
+// "deferred" / "not-gating" / "non-gating" tokens mean "recorded for context,
+// does not block us", while ✅, ❌ and ⚠️ all remain gating.
+//
+// Precedence, strongest first:
+//
+//  1. The ⏸️ marker suppresses unconditionally. An author placed it there
+//     deliberately, so it wins even on a "Blocked by" line — writing both
+//     means the marker.
+//  2. An explicit dependency declaration ("Blocked by …" / "Depends on …")
+//     defeats the textual tokens. Those tokens are ordinary English words that
+//     appear incidentally — "Blocked by platform #491 — needed for the
+//     deferred rollout" is a real blocker, and dropping it would dispatch work
+//     before its prerequisite, silently and with no operator-visible symptom.
+//     A permissive failure like that is strictly worse than the loud one this
+//     suppression exists to prevent, so a stray adjective never overrides an
+//     author who wrote the declaration outright.
+//  3. Otherwise a textual token suppresses.
+//
+// The contract is documented in docs/AUTONOMOUS_ORCHESTRATOR.md so authors
+// know these tokens carry scheduling weight and are not decoration.
+func isNonGatingLine(line string) bool {
+	if strings.Contains(line, nonGatingMarker) {
+		return true
+	}
+	if reBlockedByOrDependsOnMarker.MatchString(line) {
+		return false
+	}
+	return reNonGatingText.MatchString(line)
+}
+
+// lineAt returns the whole line containing byte offset off in s, trimmed of
+// surrounding whitespace. Offsets outside s yield "".
+func lineAt(s string, off int) string {
+	if off < 0 || off > len(s) {
+		return ""
+	}
+	start := strings.LastIndexByte(s[:off], '\n') + 1
+	end := strings.IndexByte(s[off:], '\n')
+	if end == -1 {
+		end = len(s)
+	} else {
+		end += off
+	}
+	return strings.TrimSpace(s[start:end])
+}
+
 // extractDepContext returns the body slice(s) that count as dependency
 // declarations for URL extraction:
 //  1. Body under any ## Blocked by / ## Depends on / ## Dependencies /
@@ -94,6 +167,8 @@ var (
 //  2. Any individual line containing a "blocked by" or "depends on" textual
 //     marker (so "Blocked by https://github.com/o/r/issues/42" works even
 //     without a section header).
+//
+// Lines marked non-gating (see isNonGatingLine) are excluded from both.
 //
 // Returns a single concatenated string. Empty input returns empty string.
 // See #3635 — URLs in prose sections (Goal, Plan, etc.) were silently being
@@ -131,14 +206,31 @@ func extractDepContext(body string) string {
 		}
 	}
 
-	return strings.Join(parts, "\n")
+	// Drop lines the author explicitly marked as non-gating. A URL sitting on
+	// a "deferred / ⏸️" line is documentation even inside a dependency
+	// section — without this filter the URL entry form re-creates exactly the
+	// edge the marker was written to prevent (#126).
+	var kept []string
+	for _, line := range strings.Split(strings.Join(parts, "\n"), "\n") {
+		if isNonGatingLine(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+
+	return strings.Join(kept, "\n")
 }
 
 // ParseCrossRepoRefs extracts cross-repo dependency references from an issue body.
 // It handles three patterns:
 //  1. "Blocked by <repo> #NNN"
-//  2. "## Cross-Repo Dependencies" section with "- ✅/❌/⚠️ <repo> #NNN" entries
+//  2. "## Cross-Repo Dependencies" section with "- ✅/❌/⚠️/⏸️ <repo> #NNN" entries
 //  3. "Depends on: <repo> #NNN" / "Depends on <repo> #NNN"
+//
+// A line that carries a non-gating marker (⏸️, or a textual "deferred" /
+// "not-gating" / "non-gating" token) yields no reference from any pattern —
+// it is documentation, not a dependency. See isNonGatingLine and
+// docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
 //
 // repoAliases maps short names to full "owner/repo" names. If nil,
 // DefaultRepoAliases is used.
@@ -163,11 +255,15 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 	}
 
 	// 1. "Blocked by ..." pattern
-	for _, m := range reBlockedBy.FindAllStringSubmatch(body, -1) {
-		repo := resolveAlias(m[1], repoAliases)
-		num, _ := strconv.Atoi(m[2])
+	for _, m := range reBlockedBy.FindAllStringSubmatchIndex(body, -1) {
+		line := lineAt(body, m[0])
+		if isNonGatingLine(line) {
+			continue
+		}
+		repo := resolveAlias(body[m[2]:m[3]], repoAliases)
+		num, _ := strconv.Atoi(body[m[4]:m[5]])
 		if repo != "" && num > 0 {
-			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "body_text"})
+			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "body_text", SourceLine: line})
 		}
 	}
 
@@ -183,23 +279,41 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 			sectionBody = sectionBody[:len(body[loc[0]:loc[1]])+nextLoc[0]]
 		}
 
-		for _, m := range reStructuredEntry.FindAllStringSubmatch(sectionBody, -1) {
-			status := m[1]
-			repo := resolveAlias(m[2], repoAliases)
-			num, _ := strconv.Atoi(m[3])
+		for _, m := range reStructuredEntry.FindAllStringSubmatchIndex(sectionBody, -1) {
+			line := lineAt(sectionBody, m[0])
+			// ⏸️ / "deferred" / "not-gating" entries are documentation the
+			// author recorded for context — they must not become scheduler
+			// edges. ✅, ❌ and ⚠️ all still gate; ⚠️ reads as "watch this",
+			// which is a dependency worth honouring (#126).
+			if isNonGatingLine(line) {
+				continue
+			}
+			status := sectionBody[m[2]:m[3]]
+			repo := resolveAlias(sectionBody[m[4]:m[5]], repoAliases)
+			num, _ := strconv.Atoi(sectionBody[m[6]:m[7]])
 			if repo != "" && num > 0 {
 				verified := strings.Contains(status, "✅")
-				addRef(CrossRepoRef{Repo: repo, Number: num, Source: "structured_section", Verified: verified})
+				addRef(CrossRepoRef{
+					Repo:       repo,
+					Number:     num,
+					Source:     "structured_section",
+					Verified:   verified,
+					SourceLine: line,
+				})
 			}
 		}
 	}
 
 	// 3. "Depends on ..." pattern
-	for _, m := range reDependsOn.FindAllStringSubmatch(body, -1) {
-		repo := resolveAlias(m[1], repoAliases)
-		num, _ := strconv.Atoi(m[2])
+	for _, m := range reDependsOn.FindAllStringSubmatchIndex(body, -1) {
+		line := lineAt(body, m[0])
+		if isNonGatingLine(line) {
+			continue
+		}
+		repo := resolveAlias(body[m[2]:m[3]], repoAliases)
+		num, _ := strconv.Atoi(body[m[4]:m[5]])
 		if repo != "" && num > 0 {
-			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "depends_on"})
+			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "depends_on", SourceLine: line})
 		}
 	}
 
@@ -211,24 +325,36 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 	depContext := extractDepContext(body)
 	if depContext != "" {
 		// 4. Full GitHub issue URLs.
-		for _, m := range reGitHubURL.FindAllStringSubmatch(depContext, -1) {
-			repo := resolveAlias(m[1], repoAliases)
+		for _, m := range reGitHubURL.FindAllStringSubmatchIndex(depContext, -1) {
+			repo := resolveAlias(depContext[m[2]:m[3]], repoAliases)
 			if repo == "" {
-				repo = m[1] // accept as-is when not in alias map
+				repo = depContext[m[2]:m[3]] // accept as-is when not in alias map
 			}
-			num, _ := strconv.Atoi(m[2])
+			num, _ := strconv.Atoi(depContext[m[4]:m[5]])
 			if repo != "" && num > 0 {
-				addRef(CrossRepoRef{Repo: repo, Number: num, Source: "body_text", SourceURL: m[0]})
+				addRef(CrossRepoRef{
+					Repo:       repo,
+					Number:     num,
+					Source:     "body_text",
+					SourceURL:  depContext[m[0]:m[1]],
+					SourceLine: lineAt(depContext, m[0]),
+				})
 			}
 		}
 
 		// 5. Full GitLab issue URLs.
-		for _, m := range reGitLabURL.FindAllStringSubmatch(depContext, -1) {
-			// m[2] is the group/project path (may be multi-level)
-			repo := m[2]
-			num, _ := strconv.Atoi(m[3])
+		for _, m := range reGitLabURL.FindAllStringSubmatchIndex(depContext, -1) {
+			// group 2 is the group/project path (may be multi-level)
+			repo := depContext[m[4]:m[5]]
+			num, _ := strconv.Atoi(depContext[m[6]:m[7]])
 			if repo != "" && num > 0 {
-				addRef(CrossRepoRef{Repo: repo, Number: num, Source: "body_text", SourceURL: m[0]})
+				addRef(CrossRepoRef{
+					Repo:       repo,
+					Number:     num,
+					Source:     "body_text",
+					SourceURL:  depContext[m[0]:m[1]],
+					SourceLine: lineAt(depContext, m[0]),
+				})
 			}
 		}
 	}

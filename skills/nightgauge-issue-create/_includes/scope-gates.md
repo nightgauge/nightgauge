@@ -66,7 +66,19 @@ provide specific functionality, verify those assumptions against reality:
    - ✅ GET /v1/analytics/health — verified (200)
    - ❌ GET /v1/pipeline-runs — not found (404), blocked by platform #491
    - ⚠️ Docker not running — endpoint verification skipped
+   - ⏸️ acme/store #209 — deferred, out of scope for this issue
    ```
+
+   **The marker decides whether the entry gates dispatch.** `✅`, `❌`, and `⚠️`
+   each become a real scheduler edge — an open blocker stops this issue, and on
+   an epic it stops every sub-issue too. `⏸️` records the relationship without
+   creating an edge, and beats everything else on the line. The words
+   `deferred` / `not-gating` do the same, **except** on a line that also says
+   `Blocked by …` / `Depends on …` — an explicit declaration outranks a word
+   that may just be describing something else ("blocked by platform #491 —
+   needed for the deferred rollout" stays an edge). Never write `⚠️` on a
+   dependency the work has been rescoped away from; use `⏸️`. Full marker
+   contract: `docs/AUTONOMOUS_ORCHESTRATOR.md` § "Which markers gate dispatch".
 
 **Why this phase exists**: Issues created with unverified API assumptions
 produce code that works against mocks but fails against the real platform. This
