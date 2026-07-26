@@ -112,7 +112,7 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 
 // TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered guards the
 // idempotency criterion: the primary repo is typically BOTH the launch root and
-// a registered path, so crashScanRoots must dedup and reconcile the single
+// a registered path, so repoScanRoots must dedup and reconcile the single
 // sidecar exactly once (one synthesized record, not two).
 func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.T) {
 	launchRoot := t.TempDir()
@@ -199,20 +199,20 @@ func TestCrashScanRoots_DedupsAndOrders(t *testing.T) {
 			return []string{"/launch", "", "/repo-a", "/repo-b", "/repo-a"}
 		},
 	}
-	got := s.crashScanRoots()
+	got := s.repoScanRoots()
 	want := []string{"/launch", "/repo-a", "/repo-b"}
 	if len(got) != len(want) {
-		t.Fatalf("crashScanRoots() = %v, want %v", got, want)
+		t.Fatalf("repoScanRoots() = %v, want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Errorf("crashScanRoots()[%d] = %q, want %q", i, got[i], want[i])
+			t.Errorf("repoScanRoots()[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
 
 	// Nil resolver → launch root only (single-repo / CLI-auto).
 	s2 := &Scheduler{workspaceRoot: "/launch"}
-	if got := s2.crashScanRoots(); len(got) != 1 || got[0] != "/launch" {
-		t.Errorf("crashScanRoots() with nil resolver = %v, want [/launch]", got)
+	if got := s2.repoScanRoots(); len(got) != 1 || got[0] != "/launch" {
+		t.Errorf("repoScanRoots() with nil resolver = %v, want [/launch]", got)
 	}
 }

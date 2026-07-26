@@ -304,7 +304,11 @@ that was never pushed.
 
 > **Pipeline note.** When Nightgauge itself creates the branch and worktree, the
 > pipeline is what must clean them up — the operator should never be the garbage
-> collector for machine-created state.
+> collector for machine-created state. Inline cleanup alone cannot honor that: a
+> run swept mid-flight never reaches its cleanup step. A reconcile sweep
+> (`nightgauge worktree sweep`, also folded into the autonomous reconcile cycle)
+> reclaims the leftovers using the same content check shown above. See
+> [GO_BINARY.md § Worktree Reclamation](GO_BINARY.md#worktree-reclamation-issue-110).
 
 ## Versioning
 

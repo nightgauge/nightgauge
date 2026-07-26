@@ -236,6 +236,11 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	cmd := exec.Command("git", "worktree", "remove", worktreeDir, "--force")
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
+		// A failure here used to be silent whenever the manual fallback
+		// succeeded, which is how leaked worktrees stayed invisible until
+		// someone counted them days later (#110). Log it.
+		log.Printf("[WARN] worktree teardown: git worktree remove %s failed (%v): %s — falling back to manual removal",
+			worktreeDir, err, strings.TrimSpace(string(output)))
 		// If git worktree remove fails, try manual cleanup
 		if rmErr := os.RemoveAll(worktreeDir); rmErr != nil {
 			return fmt.Errorf("git worktree remove: %s (manual cleanup also failed: %v)", string(output), rmErr)
@@ -243,7 +248,10 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 		// Prune worktree references
 		pruneCmd := exec.Command("git", "worktree", "prune")
 		pruneCmd.Dir = repoRoot
-		_ = pruneCmd.Run()
+		if pruneOut, pruneErr := pruneCmd.CombinedOutput(); pruneErr != nil {
+			log.Printf("[WARN] worktree teardown: git worktree prune after manual removal of %s failed (%v): %s",
+				worktreeDir, pruneErr, strings.TrimSpace(string(pruneOut)))
+		}
 	}
 
 	return nil

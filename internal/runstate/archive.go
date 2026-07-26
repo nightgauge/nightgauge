@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,6 +86,10 @@ func CleanupBranchAndWorktree(repoRoot string, rs *RunState) error {
 		cmd := exec.Command("git", "worktree", "remove", *rs.WorktreePath, "--force")
 		cmd.Dir = repoRoot
 		if out, err := cmd.CombinedOutput(); err != nil {
+			// Best-effort, but never silent: a swallowed removal failure is
+			// how leaked worktrees go unnoticed for days (#110).
+			log.Printf("[WARN] discard teardown: git worktree remove %s failed (%v): %s — falling back to manual removal",
+				*rs.WorktreePath, err, strings.TrimSpace(string(out)))
 			// Manual cleanup if git refuses.
 			if rmErr := os.RemoveAll(*rs.WorktreePath); rmErr != nil {
 				if firstErr == nil {
