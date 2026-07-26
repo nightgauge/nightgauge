@@ -61,40 +61,35 @@ describe("redactSecrets — PEM blocks", () => {
   });
 
   it("scans unterminated headers in linear time", () => {
-    // The old regex re-scanned the remainder from every failed header, so this
-    // input grew quadratically in cost. Both sizes must cost about the same
-    // per byte.
+    // The old regex re-scanned the remainder from every failed header, so
+    // this input grew quadratically in cost.
+    //
+    // Asserted as an absolute bound on one large input rather than a ratio
+    // between two sizes. The ratio form was tried twice and abandoned: with
+    // a 4x input spread, linear (~4x) and quadratic (~16x) sit close enough
+    // together that CI timing noise crosses the threshold — it failed at
+    // 8.76 on a runner while measuring ~4.0 locally, blocking an unrelated
+    // PR. Widening the spread stabilises the ratio but makes a genuine
+    // regression take minutes to surface.
+    //
+    // At 50k unterminated headers a healthy `indexOf` scanner takes ~8ms, so
+    // the bound below has >200x headroom and cannot be crossed by machine
+    // noise. The quadratic regex takes ~23s on the same input — measured, by
+    // swapping it back in — so it fails by more than 10x. The assertion
+    // therefore depends on the algorithm, not on the hardware.
+    //
+    // Size is a deliberate trade: `redactSecrets` is synchronous, so the test
+    // timeout cannot interrupt a quadratic scan mid-flight. 100k also works
+    // but takes ~92s to fail; 50k keeps the same immunity and surfaces a
+    // regression roughly 4x sooner.
     const build = (n: number) => armour("BEGIN", " ").repeat(n);
 
-    // Best-of-N, not a single sample. Scheduler contention only ever *adds*
-    // time, so the minimum is the least noise-contaminated estimate of the
-    // real cost. A lone sample made this assertion depend on whatever else the
-    // machine happened to be doing.
-    const time = (text: string) => {
-      let best = Infinity;
-      for (let i = 0; i < 5; i += 1) {
-        const started = performance.now();
-        redactSecrets(text);
-        best = Math.min(best, performance.now() - started);
-      }
-      return best;
-    };
+    redactSecrets(build(1_000)); // warm up the JIT before measuring
 
-    time(build(1_000)); // warm up the JIT before measuring
-    const small = time(build(4_000));
-    const large = time(build(16_000));
+    const started = performance.now();
+    redactSecrets(build(50_000));
+    const elapsed = performance.now() - started;
 
-    // Guard the ratio below: if the small case is too fast to measure, the
-    // comparison is meaningless and the workload needs raising. Failing here
-    // says exactly that, rather than silently degrading into an absolute bound.
-    expect(small).toBeGreaterThan(0);
-
-    // 4x the input must not cost anywhere near 16x. Generous bound so the
-    // assertion fails only on a genuine return to quadratic scaling. Compared
-    // as a pure ratio — the previous `Math.max(small, 1) * 8` form collapsed
-    // into a flat 8ms ceiling whenever the small case came in under 1ms, which
-    // both failed under load and would have let a real regression pass on fast
-    // hardware.
-    expect(large / small).toBeLessThan(8);
-  });
+    expect(elapsed).toBeLessThan(2_000);
+  }, 15_000);
 });
