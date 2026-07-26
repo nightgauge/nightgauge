@@ -88,6 +88,18 @@ branch/PR — never a side-channel memory store.
   the branch or worktree, the pipeline must remove it; the operator is never the
   garbage collector for machine-created state. See
   [docs/GIT_WORKFLOW.md § After Merge](docs/GIT_WORKFLOW.md#after-merge).
+- **Concurrent issues must be conflict-free by construction.** Before working
+  two issues at the same time, compare the file sets they will plausibly touch.
+  If those sets overlap, either work the issues **sequentially** or declare a
+  `blockedBy` edge and **honor it** — declaring the edge and then starting both
+  anyway is the same failure with extra steps. Separate worktrees isolate the
+  checkout, not the merge: two agents editing one file in two worktrees each see
+  a clean tree and green CI, and the collision only surfaces when the second PR
+  rebases. Prefer sequencing whenever the overlap is uncertain; the cost of
+  serializing two issues is far below the cost of untangling a conflict after
+  both are "done". Broad mechanical sweeps (renames, redactions, codemods) touch
+  everything by definition — land them alone, over settled code, never
+  alongside logic changes to the same files.
 - **Context economy — auto-compact is not a context-management strategy.**
   Frontier-model tokens are expensive and long contexts cost more per step, so
   a large context is justified only when it actually carries the answer to the
