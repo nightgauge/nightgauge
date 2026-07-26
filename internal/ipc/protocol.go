@@ -1339,6 +1339,16 @@ type RecordStageExitParams struct {
 	LastBashExit    *int   `json:"lastBashExit,omitempty"`
 	StopHookErrored bool   `json:"stopHookErrored,omitempty"`
 	StderrTail      string `json:"stderrTail,omitempty"`
+
+	// Post-condition gate outcome (#125). The Go-scheduler write path already
+	// stamps StageExitRecord.GateKind/GateReason from
+	// runtime.StageGateResults; the TS dispatch path had no channel for them,
+	// so a stage the gate failed after a clean exit-0 was recorded as
+	// `success=true` with no trace of WHY. TS now sends the gate's verdict
+	// alongside the post-gate `Success` so both write paths produce the same
+	// forensic shape. Values mirror gates.Kind ("ok" | "no_op" | "fail").
+	GateKind   string `json:"gateKind,omitempty"`
+	GateReason string `json:"gateReason,omitempty"`
 }
 
 // RecordStageExitResult is the response payload — `Recorded` is true on

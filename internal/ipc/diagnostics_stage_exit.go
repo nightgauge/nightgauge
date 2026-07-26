@@ -79,6 +79,13 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 		LastBashExit:    p.LastBashExit,
 		StopHookErrored: p.StopHookErrored,
 		StderrTail:      p.StderrTail,
+		// #125: the post-condition gate's verdict, when one overrode the
+		// skill's self-report. Mirrors what scheduler_exit_record.go copies
+		// out of runtime.StageGateResults on the Go-scheduler path, so
+		// `jq 'select(.gate_kind=="fail")'` finds gate-caught failures from
+		// either dispatch path.
+		GateKind:   p.GateKind,
+		GateReason: p.GateReason,
 		Tokens: diagnostics.ExitRecordTokens{
 			Input:         p.InputTokens,
 			Output:        p.OutputTokens,

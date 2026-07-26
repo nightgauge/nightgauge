@@ -54,7 +54,7 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `stage`                                                              | string                 | Go scheduler   | One of `issue-pickup`, `feature-planning`, `feature-dev`, `feature-validate`, `pr-create`, `pr-merge`.                                                                      |
 | `run_id`                                                             | string                 | Go scheduler   | UUID v7 from runstate (#3557). Joins this record to the matching V3 RunRecord row.                                                                                          |
 | `session_id`                                                         | string                 | TS SkillRunner | Claude CLI conversation id when captured before exit. Empty when the subprocess never produced a `result` envelope (the most common pathology this record exists to debug). |
-| `success`                                                            | bool                   | Go scheduler   | Mirrors the scheduler's success flag. Healthy runs carry `true`.                                                                                                            |
+| `success`                                                            | bool                   | Go scheduler   | The stage's **post-gate** outcome — never the skill's bare exit code. A skill that exits 0 and then fails its post-condition gate records `false` (#125).                   |
 | `exit_code`                                                          | int (ptr)              | Go scheduler   | Pointer-shaped so a real `0` is distinguishable from "never observed".                                                                                                      |
 | `signal`                                                             | string                 | TS SkillRunner | POSIX signal name (`SIGTERM` / `SIGKILL` / …). Empty when the process exited naturally.                                                                                     |
 | `signal_source`                                                      | string                 | TS SkillRunner | Names the in-binary code path that delivered `signal`. One of `stall-kill`, `hard-cap`, `quota-fast-fail`, `processTree-reaper`, `external`. Empty when no signal.          |
@@ -68,6 +68,8 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `stderr_tail`                                                        | string                 | TS SkillRunner | Last 4 KB of stderr from the SkillRunner ring buffer. Includes the `[skillRunner] …` kill markers so retro can reconstruct the chosen kill path from a single line.         |
 | `rate_limit_remaining_at_exit`                                       | int                    | Go scheduler   | GitHub GraphQL bucket reading at stage end (REST / GraphQL share a tracker on the Go side). `-1` means "unavailable"; `0+` is a real reading.                               |
 | `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).        |
+| `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                               |
+| `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.        |
 
 ### Schema Invariants
 
@@ -75,6 +77,29 @@ The JSON tags MUST stay stable once shipped. Additive fields are allowed
 (always with `omitempty`), but renames or removals would break the
 `nightgauge exit-records tail` reader and any external operator tooling
 that `grep`s or `jq`s the daily file.
+
+### `success` is the Post-Gate Outcome (#125)
+
+`success` and the run record's `V2StageDetail.status` describe the same
+event and must never disagree. A stage's skill exiting 0 is a **self-report**,
+not an outcome: the deterministic post-condition gate that runs afterwards is
+what decides the stage (see [STAGE_GATES.md](STAGE_GATES.md) — the
+`skill-said-success` failure mode). Both write paths therefore record the
+verdict _after_ the gate, with `gate_kind="fail"` and the gate's reason
+attached.
+
+Find gate-caught failures with:
+
+```bash
+nightgauge exit-records tail --limit 200 --json | jq 'select(.gate_kind == "fail")'
+```
+
+> **Reading historical data**: records written before #125 by the VSCode/IPC
+> dispatch path carry `success=true` for stages the gate failed, and cannot be
+> backfilled — the gate verdict was never persisted anywhere joinable. Treat
+> pre-#125 success ratios from that path as an **upper bound**: they
+> under-count exactly the failures gates exist to catch. Records with
+> `exit_code=0` and no `gate_kind` are the ambiguous population.
 
 ---
 
