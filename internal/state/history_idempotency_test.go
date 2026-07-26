@@ -376,3 +376,97 @@ func TestUpdateIndex_RebuildDedupesLegacyDuplicates(t *testing.T) {
 		t.Errorf("reader record stage count = %d, want 3 (richest)", len(recs[0].Stages))
 	}
 }
+
+// --- Issue #141: run identity across writers ---
+
+// TestIdempotency_SameRunDifferentTimestampFormats is the reported corruption
+// in miniature. Two finalizers observe the SAME run tens of milliseconds apart
+// and, carrying no run_id, key it by issue+started_at — but each formats the
+// instant its own way (the Go writer a local offset with microsecond precision,
+// the extension a UTC millisecond string). Compared as strings the two keys
+// never collide, so every finalize appended another record instead of being
+// dropped as a duplicate. Exactly one record must survive.
+func TestIdempotency_SameRunDifferentTimestampFormats(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+
+	// 2026-06-06T14:54:43.559048-06:00 and 2026-06-06T20:54:43.624Z are the
+	// same second in UTC — one run, two writers, two spellings.
+	goStyle := makeRunRec("", 141, "2026-06-06T14:54:43.559048-06:00", "issue-pickup", "feature-dev")
+	tsStyle := makeRunRec("", 141, "2026-06-06T20:54:43.624Z", "issue-pickup", "feature-dev")
+
+	if err := hw.WriteV2Record(goStyle, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := hw.WriteV2Record(tsStyle, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	if lines := rawDailyLines(t, dir); len(lines) != 1 {
+		t.Fatalf("daily JSONL lines = %d, want 1 — the same run written by two "+
+			"producers with different timestamp formats must collapse to one record",
+			len(lines))
+	}
+	idx := readIndexFile(t, dir)
+	if idx.TotalRuns != 1 || len(idx.Entries) != 1 {
+		t.Fatalf("index total_runs=%d entries=%d, want 1/1", idx.TotalRuns, len(idx.Entries))
+	}
+}
+
+// TestIdempotency_DistinctRunsSameIssueStillSeparate guards the tolerance
+// above: bucketing started_at to the second must not fuse two genuinely
+// different runs of one issue into a single record.
+func TestIdempotency_DistinctRunsSameIssueStillSeparate(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+
+	first := makeRunRec("", 141, "2026-06-06T20:54:43.624Z", "issue-pickup")
+	second := makeRunRec("", 141, "2026-06-06T21:30:00.000Z", "issue-pickup")
+
+	if err := hw.WriteV2Record(first, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := hw.WriteV2Record(second, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	if lines := rawDailyLines(t, dir); len(lines) != 2 {
+		t.Fatalf("daily JSONL lines = %d, want 2 (two distinct runs of one issue)", len(lines))
+	}
+}
+
+// TestHistory_RunIsWrittenOnlyToItsOwnRepo: a run belonging to repo A must not
+// appear in repo B's history. The writer is rooted at the run's own repo, so
+// this asserts the routing contract every producer has to honour — a producer
+// that writes to a shared "launch root" instead is what let one repository's
+// history absorb the whole workspace's runs.
+func TestHistory_RunIsWrittenOnlyToItsOwnRepo(t *testing.T) {
+	repoA := t.TempDir()
+	repoB := t.TempDir()
+
+	recA := makeRunRec("run-in-a", 11, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev")
+	recA.Repo = "example/repo-a"
+	recB := makeRunRec("run-in-b", 22, "2026-07-19T09:05:00Z", "issue-pickup", "feature-dev")
+	recB.Repo = "example/repo-b"
+
+	if err := NewHistoryWriter(repoA).WriteV2Record(recA, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewHistoryWriter(repoB).WriteV2Record(recB, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+
+	linesA := rawDailyLines(t, repoA)
+	linesB := rawDailyLines(t, repoB)
+	if len(linesA) != 1 || len(linesB) != 1 {
+		t.Fatalf("repo A lines=%d, repo B lines=%d, want 1/1", len(linesA), len(linesB))
+	}
+	if linesA[0].Repo != "example/repo-a" || linesA[0].IssueNumber != 11 {
+		t.Errorf("repo A history holds %s#%d — a foreign run leaked in",
+			linesA[0].Repo, linesA[0].IssueNumber)
+	}
+	if linesB[0].Repo != "example/repo-b" || linesB[0].IssueNumber != 22 {
+		t.Errorf("repo B history holds %s#%d — a foreign run leaked in",
+			linesB[0].Repo, linesB[0].IssueNumber)
+	}
+}

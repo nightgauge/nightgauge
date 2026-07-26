@@ -39,7 +39,34 @@ function runRecordKey(record: ExecutionHistoryRecord): string {
   const runId = (record as { run_id?: unknown }).run_id;
   if (typeof runId === "string" && runId !== "") return `run:${runId}`;
   const startedAt = (record as { started_at?: unknown }).started_at ?? "";
-  return `issue:${record.issue_number}|${String(startedAt)}`;
+  return fallbackRunKey(record.issue_number, String(startedAt));
+}
+
+/**
+ * Fallback run identity for records carrying no run_id. Not repo-qualified on
+ * purpose: a history directory belongs to exactly one repository, so the
+ * directory already scopes the key.
+ *
+ * The timestamp is normalised to a whole UTC second (#141). Producers format
+ * the same instant differently — a local offset with microseconds versus a UTC
+ * millisecond string — so comparing the raw strings split one run into several
+ * identities and defeated de-duplication entirely. Mirrors the Go writer's
+ * fallbackRunKey; the two must agree or each writer's records de-duplicate only
+ * against its own.
+ */
+function fallbackRunKey(issueNumber: number, startedAt: string): string {
+  return `issue:${issueNumber}|${normalizeStartInstant(startedAt)}`;
+}
+
+/**
+ * Reduce an ISO-8601 timestamp to a whole-second UTC bucket. An unparseable
+ * value is returned verbatim — a key no weaker than before, never a collision
+ * between unrelated runs.
+ */
+function normalizeStartInstant(startedAt: string): string {
+  const ms = Date.parse(startedAt);
+  if (Number.isNaN(ms)) return startedAt;
+  return new Date(Math.floor(ms / 1000) * 1000).toISOString().replace(".000Z", "Z");
 }
 
 /**
@@ -59,7 +86,7 @@ function stageRichness(record: ExecutionHistoryRecord): number {
  */
 function indexEntryKey(entry: HistoryIndexEntry): string {
   if (entry.run_id) return `run:${entry.run_id}`;
-  return `issue:${entry.issue_number}|${entry.started_at}`;
+  return fallbackRunKey(entry.issue_number, entry.started_at);
 }
 
 /**
@@ -293,28 +320,33 @@ export class ExecutionHistoryWriter {
     record: ExecutionHistoryRecord
   ): Promise<boolean> {
     try {
-      // #307 identity-integrity gate — runs BEFORE the lenient #2249
-      // "write-anyway" path below. A run record whose `repo` or `run_id` is
-      // PRESENT but empty (explicit null or "") is proof of the concurrent
-      // cross-contamination bug: it was assembled from shared/cleared per-run
-      // state and mis-routed into a sibling repo's history JSONL (live dogfood
-      // 2026-07-19: three null-identity "issue 209" rows landed in another
-      // repo's history within 4s while the authoritative record — with a real
-      // run_id — landed correctly). A record without identity is evidence of
-      // the bug, never legitimate telemetry, so reject it loudly rather than
-      // let the write-anyway policy persist it. Absent (undefined) fields are
-      // the normal shape of the current builder and are deliberately NOT
-      // rejected here — only a present-but-empty identity is.
+      // #307/#141 identity-integrity gate — runs BEFORE the lenient #2249
+      // "write-anyway" path below. A run record must name the repository it
+      // belongs to and the run it describes. Without both, the record cannot be
+      // attributed (nothing on it says which repo's history it belongs in) and
+      // cannot be de-duplicated (the idempotency key falls back to
+      // issue+timestamp, which two writers format differently and therefore
+      // never collide on) — so it is silently mis-filed AND duplicated. That is
+      // exactly how one repository's history came to hold sibling repos' runs
+      // at roughly nine records per real run.
+      //
+      // #307 originally rejected only a PRESENT-but-empty identity, treating an
+      // ABSENT one as "the normal shape of the current builder". That exemption
+      // is what let the damage through: the builders that omitted the fields
+      // were the ones producing the corrupt records. The exemption is gone —
+      // absent and empty are both rejected, because the producers now set them
+      // (the Go writer from RuntimeState, which has carried both all along).
       if (record.record_type === "run") {
         const repoVal = (record as { repo?: unknown }).repo;
         const runIdVal = (record as { run_id?: unknown }).run_id;
-        const emptyRepo = repoVal === null || repoVal === "";
-        const emptyRunId = runIdVal === null || runIdVal === "";
-        if (emptyRepo || emptyRunId) {
+        const hasRepo = typeof repoVal === "string" && repoVal !== "";
+        const hasRunId = typeof runIdVal === "string" && runIdVal !== "";
+        if (!hasRepo || !hasRunId) {
           const msg =
-            `[Nightgauge] Rejecting run record with empty identity ` +
+            `[Nightgauge] Rejecting run record with missing identity ` +
             `(issue #${record.issue_number}, repo=${JSON.stringify(repoVal)}, ` +
-            `run_id=${JSON.stringify(runIdVal)}) — cross-contamination guard (#307)`;
+            `run_id=${JSON.stringify(runIdVal)}) — a run record must name its ` +
+            `repo and run_id (#307, #141)`;
           console.error(msg);
           ExecutionHistoryWriter.lastValidationError = msg;
           return false;

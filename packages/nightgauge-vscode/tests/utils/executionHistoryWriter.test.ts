@@ -57,9 +57,20 @@ describe("ExecutionHistoryWriter", () => {
     });
   });
 
+  /**
+   * Stamps run identity onto a built record (#141). `buildRunRecord` derives a
+   * record from PipelineState, which carries neither the repo nor the run_id —
+   * so a record straight out of the builder is rejected by the identity guard.
+   * Tests exercising append MECHANICS supply identity here; the guard itself is
+   * covered in executionHistoryWriter.identityGuard.test.ts.
+   */
+  function withIdentity<T>(record: T, runId = "run-fixture"): T {
+    return { ...record, repo: "example/repo-a", run_id: runId };
+  }
+
   describe("appendRecord()", () => {
     it("should write a valid run record as JSONL", async () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createMockPipelineState());
+      const record = withIdentity(ExecutionHistoryWriter.buildRunRecord(createMockPipelineState()));
 
       await ExecutionHistoryWriter.appendRecord(workspaceRoot, record);
 
@@ -76,11 +87,13 @@ describe("ExecutionHistoryWriter", () => {
     });
 
     it("should write multiple records to same day file", async () => {
-      const record1 = ExecutionHistoryWriter.buildRunRecord(
-        createMockPipelineState({ issue_number: 42 })
+      const record1 = withIdentity(
+        ExecutionHistoryWriter.buildRunRecord(createMockPipelineState({ issue_number: 42 })),
+        "run-42"
       );
-      const record2 = ExecutionHistoryWriter.buildRunRecord(
-        createMockPipelineState({ issue_number: 43 })
+      const record2 = withIdentity(
+        ExecutionHistoryWriter.buildRunRecord(createMockPipelineState({ issue_number: 43 })),
+        "run-43"
       );
 
       await ExecutionHistoryWriter.appendRecord(workspaceRoot, record1);
@@ -95,6 +108,11 @@ describe("ExecutionHistoryWriter", () => {
       const invalidRecord = {
         schema_version: "2" as const,
         record_type: "run" as const,
+        // Identity is mandatory even for a schema-imperfect record (#141) —
+        // it is what routes and de-duplicates the write. Everything else is
+        // deliberately missing so the schema still flags issues.
+        repo: "example/repo-a",
+        run_id: "run-schema-issues",
         // Missing required fields — schema will flag issues
         recorded_at: new Date().toISOString(),
       } as any;
@@ -112,7 +130,7 @@ describe("ExecutionHistoryWriter", () => {
       vi.mocked(fs.mkdir).mockRejectedValue(new Error("EACCES: permission denied"));
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const record = ExecutionHistoryWriter.buildRunRecord(createMockPipelineState());
+      const record = withIdentity(ExecutionHistoryWriter.buildRunRecord(createMockPipelineState()));
 
       const result = await ExecutionHistoryWriter.appendRecord(workspaceRoot, record);
       expect(result).toBe(false);

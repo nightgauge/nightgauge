@@ -354,49 +354,6 @@ export function readIssueLabels(issueNumber: number): string[] | undefined {
 }
 
 /**
- * Extract size, type, and priority from a labels array.
- * Used by both the Go pipeline.complete handler and the pipeline-finish bookend
- * to populate metadata fields in JSONL history records. Mirrors the extraction
- * logic in HeadlessOrchestrator (extractSizeLabel/extractTypeLabel/extractPriorityLabel).
- */
-function extractMetadata(labels: string[] | undefined): {
-  size: string | null;
-  type: string | null;
-  priority: string | null;
-} {
-  if (!labels) {
-    return { size: null, type: null, priority: null };
-  }
-
-  let size: string | null = null;
-  let type: string | null = null;
-  let priority: string | null = null;
-
-  for (const label of labels) {
-    if (!size && label.startsWith("size:")) {
-      const value = label.slice("size:".length).toUpperCase();
-      if (["XS", "S", "M", "L", "XL"].includes(value)) {
-        size = value;
-      }
-    }
-    if (!type && label.startsWith("type:")) {
-      const value = label.slice("type:".length).toLowerCase();
-      if (["feature", "bug", "docs", "refactor", "chore", "test", "verification"].includes(value)) {
-        type = value;
-      }
-    }
-    if (!priority && label.startsWith("priority:")) {
-      const value = label.slice("priority:".length).toLowerCase();
-      if (["critical", "high", "medium", "low"].includes(value)) {
-        priority = value;
-      }
-    }
-  }
-
-  return { size, type, priority };
-}
-
-/**
  * Initialize ALL extension services, tree views, event wiring, and subscriptions.
  *
  * This is a pure extraction from extension.ts activate() — no logic changes.
@@ -2600,169 +2557,52 @@ export async function initializeServices(
   // Used by the pipeline.complete handler to trigger a history reload after write.
   let dashboardHistoryReloader: (() => Promise<void>) | null = null;
 
-  // Subscribe to Go pipeline.complete for history writing (Issue #1984)
-  // The Go scheduler emits this event on every pipeline completion (success or failure).
-  // Legacy HeadlessOrchestrator path writes history via the 'pipeline-finish' stage handler
-  // above — these two paths are mutually exclusive, no double-write risk.
+  // Subscribe to Go pipeline.complete for post-run UI work (Issue #1984, #141).
+  // The Go scheduler emits this event on every pipeline completion (success or
+  // failure) and is also the authoritative writer of the run's history record —
+  // the extension reads that record, it does not produce one.
   {
     const ipc = IpcClient.getInstance();
     const disposeGoHistoryWriter = ipc.on("pipeline.complete", async (data: unknown) => {
-      if (!incrediRoot || !telemetryStore) return;
       const d = data as {
+        repo?: string;
+        runId?: string;
         issueNumber: number;
         success: boolean;
-        totalInputTokens: number;
-        totalOutputTokens: number;
         totalCostUSD: number;
-        durationMs?: number;
-        startedAt?: string;
-        perStage: Array<{
-          stage: string;
-          inputTokens: number;
-          outputTokens: number;
-          cacheRead?: number;
-          costUsd?: number;
-        }>;
       };
 
+      // This handler used to assemble and write a SECOND history record for a
+      // run the Go scheduler had already recorded (#141). That record was a
+      // strict subset of the authoritative one — no run_id, no repo, no
+      // per-stage cache data, hardcoded zero cache/file counters — so it could
+      // not be de-duplicated against the real record and every completion
+      // appended another line. Worse, it went to `telemetryStore`, which is
+      // rooted at workspaceFolders[0], so a run belonging to a sibling repo
+      // landed in the launch repo's history. `Scheduler.recordV2History`
+      // already writes the full record into the run's OWN repo root
+      // (`runRoot(item.Repo)`), so the write here added nothing and corrupted
+      // the store. Deleted rather than repaired, for the same reason the
+      // #319 outcome writer was: a second writer keyed off bootstrap-level
+      // shared state cannot be made correct for a run it cannot identify.
+      //
+      // The remaining work is what only the extension can do: mark the issue
+      // so the legacy pipeline-finish handler skips its own write, refresh the
+      // dashboard, and record a health snapshot for concurrent slots (#2245),
+      // which per-slot PipelineStateServices never trigger on the singleton.
+      pipelineCompleteIssues.add(d.issueNumber);
+
       try {
-        // Mark as Go-driven before any writes so pipeline-finish handler can
-        // detect this and skip its duplicate history write (Issue #2545).
-        pipelineCompleteIssues.add(d.issueNumber);
-
-        // Read issue context for metadata (title, branch, labels, routing).
-        // Try new subdirectory format first (Go scheduler path writes
-        // issue-{N}/issue-pickup-context.json), then fall back to the flat
-        // format (HeadlessOrchestrator path writes issue-{N}.json).
-        const pipelineDir = path.join(incrediRoot, ".nightgauge", "pipeline");
-        const issueContextPaths = [
-          path.join(pipelineDir, `issue-${d.issueNumber}`, "issue-pickup-context.json"),
-          path.join(pipelineDir, `issue-${d.issueNumber}.json`),
-        ];
-        let issueCtx: {
-          title?: string;
-          branch?: string;
-          base_branch?: string;
-          labels?: string[];
-          routing?: {
-            complexity_score?: number;
-            suggested_route?: string;
-            skip_stages?: string[];
-          };
-        } = {};
-        for (const issueContextPath of issueContextPaths) {
-          try {
-            const raw = await fs.readFile(issueContextPath, "utf-8");
-            issueCtx = JSON.parse(raw) as typeof issueCtx;
-            break; // Stop at first readable file
-          } catch {
-            // Try next path
-          }
-        }
-
-        const now = new Date().toISOString();
-        const startedAt = d.startedAt ?? now;
-        const durationMs = d.durationMs ?? 0;
-
-        // Build per-stage token map (keyed by stage name)
-        const perStageTokens: Record<
-          string,
-          {
-            input: number;
-            output: number;
-            cache_read: number;
-            cache_creation: number;
-            cost_usd: number;
-          }
-        > = {};
-        for (const s of d.perStage) {
-          perStageTokens[s.stage] = {
-            input: s.inputTokens,
-            output: s.outputTokens,
-            cache_read: s.cacheRead ?? 0,
-            cache_creation: 0,
-            cost_usd: s.costUsd ?? 0,
-          };
-        }
-
-        // Build stages record — mark all ran stages as complete, last as failed if pipeline failed
-        const stages: Record<string, { status: "complete" | "failed" | "skipped" | "pending" }> =
-          {};
-        for (const s of d.perStage) {
-          stages[s.stage] = { status: "complete" };
-        }
-        if (!d.success && d.perStage.length > 0) {
-          const lastStage = d.perStage[d.perStage.length - 1].stage;
-          stages[lastStage] = { status: "failed" };
-        }
-
-        const goRecordMetadata = extractMetadata(issueCtx.labels);
-        const record = {
-          schema_version: "2" as const,
-          record_type: "run" as const,
-          issue_number: d.issueNumber,
-          title: issueCtx.title ?? `Issue #${d.issueNumber}`,
-          branch: issueCtx.branch ?? "",
-          base_branch: issueCtx.base_branch ?? "main",
-          execution_mode: "automatic" as const,
-          started_at: startedAt,
-          completed_at: now,
-          total_duration_ms: durationMs,
-          outcome: (d.success ? "complete" : "failed") as "complete" | "failed" | "cancelled",
-          labels: issueCtx.labels,
-          size: goRecordMetadata.size,
-          type: goRecordMetadata.type,
-          priority: goRecordMetadata.priority,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          stages: stages as any,
-          tokens: {
-            total_input: d.totalInputTokens,
-            total_output: d.totalOutputTokens,
-            total_cache_read: 0,
-            total_cache_creation: 0,
-            estimated_cost_usd: d.totalCostUSD,
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            per_stage: perStageTokens as any,
-          },
-          files: { read_count: 0, written_count: 0 },
-          routing: {
-            complexity_score: issueCtx.routing?.complexity_score ?? 0,
-            path: issueCtx.routing?.suggested_route ?? "standard",
-            skip_stages: issueCtx.routing?.skip_stages ?? [],
-          },
-          recorded_at: now,
-        };
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const written = await telemetryStore.appendRunRecord(record as any);
-        if (written) {
-          logger.info("Go pipeline history record written", {
-            issueNumber: d.issueNumber,
-          });
-          // Reload dashboard history so health sparklines reflect the new run
-          // without requiring the user to close and reopen the dashboard panel.
-          // Then record a health snapshot to health-history.jsonl — this was
-          // previously only triggered via Dashboard.syncFromPipelineState(),
-          // which never fires for concurrent slots because per-slot
-          // PipelineStateServices don't notify the Dashboard singleton.
-          // Issue #2245: health snapshots missing for concurrent pipeline runs.
-          try {
-            await dashboardHistoryReloader?.();
-            await dashboard.recordHealthSnapshotForRun(d.issueNumber, d.totalCostUSD);
-            logger.info("Health snapshot recorded for concurrent slot", {
-              issueNumber: d.issueNumber,
-              costUsd: d.totalCostUSD,
-            });
-          } catch {
-            // Non-critical — panel may not be open
-          }
-        } else {
-          logger.warn("Go pipeline history record REJECTED by schema validation", {
-            issueNumber: d.issueNumber,
-          });
-        }
-      } catch (err) {
-        logger.warn("Failed to write Go pipeline history record", { err });
+        await dashboardHistoryReloader?.();
+        await dashboard.recordHealthSnapshotForRun(d.issueNumber, d.totalCostUSD);
+        logger.info("Pipeline complete: dashboard refreshed", {
+          repo: d.repo,
+          runId: d.runId,
+          issueNumber: d.issueNumber,
+          costUsd: d.totalCostUSD,
+        });
+      } catch {
+        // Non-critical — panel may not be open
       }
 
       // Trigger a telemetry upload after pipeline completion (#3315). This is a

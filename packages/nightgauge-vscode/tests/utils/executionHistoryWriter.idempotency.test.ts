@@ -130,7 +130,15 @@ describe("ExecutionHistoryWriter run-record idempotency (#313)", () => {
     expect(idx.total_runs).toBe(2);
   });
 
-  it("defers to a record already on disk that lacks a run_id (issue+started_at key)", async () => {
+  // #141 supersedes the previous assertion here. This case used to write two
+  // run_id-less records for one run and check that the issue+started_at
+  // fallback key collapsed them to a single line. The identity guard now
+  // refuses a run record with no run_id outright, so the pair never reaches the
+  // de-duplication step at all — a strictly stronger outcome than de-duplicating
+  // them, and the reason the fallback key stopped being load-bearing for new
+  // writes. (It still matters when reading and re-indexing the legacy records
+  // already on disk, which is covered by the writer's index de-duplication.)
+  it("refuses run records that lack a run_id rather than de-duplicating them (#141)", async () => {
     const a = runRecord({
       run_id: undefined,
       issue_number: 500,
@@ -141,8 +149,9 @@ describe("ExecutionHistoryWriter run-record idempotency (#313)", () => {
       issue_number: 500,
       started_at: "2026-07-19T08:00:00.000Z",
     });
-    await ExecutionHistoryWriter.appendRecord(ws, a);
-    await ExecutionHistoryWriter.appendRecord(ws, b);
-    expect(await dailyLines()).toHaveLength(1);
+    expect(await ExecutionHistoryWriter.appendRecord(ws, a)).toBe(false);
+    expect(await ExecutionHistoryWriter.appendRecord(ws, b)).toBe(false);
+    // Nothing was written at all — not even an empty daily file.
+    await expect(dailyLines()).rejects.toThrow();
   });
 });

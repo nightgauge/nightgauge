@@ -10326,6 +10326,7 @@ stable JSON schema (audit row B2).`,
 	cmd.AddCommand(pipelineAggregateCmd())
 	cmd.AddCommand(pipelineBatchFailuresCmd())
 	cmd.AddCommand(pipelineBackfillCmd())
+	cmd.AddCommand(pipelineRepairHistoryCmd())
 	return cmd
 }
 
