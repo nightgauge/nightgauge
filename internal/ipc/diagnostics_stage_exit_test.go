@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -355,5 +356,123 @@ func TestRecordStageExitIPC_AppendSemantics(t *testing.T) {
 	expectedDir := filepath.Join(dir, ".nightgauge", "pipeline", "exit-records")
 	if _, err := os.Stat(expectedDir); err != nil {
 		t.Errorf("expected directory %s missing: %v", expectedDir, err)
+	}
+}
+
+// TestRecordStageExitIPC_TokenConsumingStageWritesNonEmptyTokens (#109) is the
+// regression guard for the defect that made every IPC-path record useless for
+// cost forensics: the TS caller passed literal `undefined` for the exit code
+// and all five token/cost fields, so 1,735 of 1,735 records across 24 days
+// landed with `"tokens": {}` while the runtime state for the same stage showed
+// millions of tokens and dollars of spend.
+//
+// `ExitRecordTokens` is a struct, so `omitempty` cannot elide it — the empty
+// object IS the tell. This asserts on the raw JSON line rather than the decoded
+// record so the on-disk shape (what `nightgauge exit-records tail`, the
+// pipeline-audit skill, and ad-hoc `jq` all read) is what is pinned.
+func TestRecordStageExitIPC_TokenConsumingStageWritesNonEmptyTokens(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := &Server{
+		workspaceRoot: dir,
+		methods:       map[string]Handler{},
+	}
+	handler := makeDiagnosticsRecordStageExitHandler(srv)
+
+	exitCode := 0
+	params := RecordStageExitParams{
+		Repo:                "nightgauge/nightgauge",
+		IssueNumber:         307,
+		Stage:               "feature-planning",
+		Success:             true,
+		ExitCode:            &exitCode,
+		ElapsedMs:           784194,
+		InputTokens:         4937274,
+		OutputTokens:        49252,
+		CacheReadTokens:     4937180,
+		CacheCreationTokens: 61204,
+		CostUsd:             3.7963349,
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if _, err := handler(nil, raw); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	records := readDailyRecords(t, dir)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record in daily file, got %d", len(records))
+	}
+	tok := records[0].Tokens
+	if tok.Input != params.InputTokens {
+		t.Errorf("tokens.input = %d, want %d", tok.Input, params.InputTokens)
+	}
+	if tok.Output != params.OutputTokens {
+		t.Errorf("tokens.output = %d, want %d", tok.Output, params.OutputTokens)
+	}
+	if tok.CacheRead != params.CacheReadTokens {
+		t.Errorf("tokens.cache_read = %d, want %d", tok.CacheRead, params.CacheReadTokens)
+	}
+	if tok.CacheCreation != params.CacheCreationTokens {
+		t.Errorf("tokens.cache_creation = %d, want %d", tok.CacheCreation, params.CacheCreationTokens)
+	}
+	if tok.CostUsd != params.CostUsd {
+		t.Errorf("tokens.cost_usd = %v, want %v", tok.CostUsd, params.CostUsd)
+	}
+	if records[0].ExitCode == nil || *records[0].ExitCode != 0 {
+		t.Errorf("exit_code = %v, want a real 0 (pointer-shaped, not omitted)", records[0].ExitCode)
+	}
+
+	// The literal on-disk line must never again read `"tokens":{}`.
+	lines, err := os.ReadFile(diagnostics.DailyFilePath(dir, time.Now()))
+	if err != nil {
+		t.Fatalf("read daily file: %v", err)
+	}
+	if strings.Contains(string(lines), `"tokens":{}`) {
+		t.Errorf("daily line still carries an empty tokens object:\n%s", string(lines))
+	}
+	if !strings.Contains(string(lines), `"exit_code":0`) {
+		t.Errorf("daily line dropped exit_code:\n%s", string(lines))
+	}
+}
+
+// TestRecordStageExitIPC_DeterministicStageStillRecordsZero (#109) pins the
+// other half of the contract: a no-LLM stage (pipeline-start, issue-pickup on
+// the deterministic path) consumed nothing, so it must record nothing. The fix
+// forwards real figures — it never synthesizes them.
+func TestRecordStageExitIPC_DeterministicStageStillRecordsZero(t *testing.T) {
+	dir := t.TempDir()
+
+	srv := &Server{
+		workspaceRoot: dir,
+		methods:       map[string]Handler{},
+	}
+	handler := makeDiagnosticsRecordStageExitHandler(srv)
+
+	raw, err := json.Marshal(RecordStageExitParams{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 307,
+		Stage:       "pipeline-start",
+		Success:     true,
+		ElapsedMs:   12,
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	if _, err := handler(nil, raw); err != nil {
+		t.Fatalf("handler returned error: %v", err)
+	}
+
+	records := readDailyRecords(t, dir)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record in daily file, got %d", len(records))
+	}
+	if got := records[0].Tokens; got != (diagnostics.ExitRecordTokens{}) {
+		t.Errorf("deterministic stage booked tokens = %+v, want the zero value", got)
+	}
+	if records[0].ExitCode != nil {
+		t.Errorf("exit_code = %v, want nil (never observed)", *records[0].ExitCode)
 	}
 }

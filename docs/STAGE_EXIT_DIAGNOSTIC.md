@@ -155,6 +155,27 @@ layer with first-hand knowledge of it:
      **forward-compatible**: once the TS side ships, the daily JSONL gains
      richer fields with no Go-side change required.
 
+### Two Write Paths, One Schema
+
+Records reach the daily file from either dispatch path, and both populate the
+same fields:
+
+- **Go scheduler** (`auto` / CLI mode) — `scheduler_exit_record.go`, which also
+  fills the Go-only `rate_limit_remaining_at_exit` and
+  `concurrent_pipelines_at_exit`.
+- **IPC / VSCode mode** — `HeadlessOrchestrator.recordStageExitDiagnostic()`
+  calls `diagnostics.recordStageExit`. Token/cost, `exit_code`, and the
+  forensic anchors come from the `StageExitTelemetry` captured off the skill
+  subprocess at exit (issue #109 — before that fix this path passed `undefined`
+  for all of them, so every record it wrote carried `"tokens": {}`).
+
+`tokens.*` is a **per-stage-attempt** figure on both paths, never a
+pipeline-wide running total. When one stage attempt spawns more than one
+subprocess (the API-error auto-retry), the record sums the attempts — their
+accumulators are disjoint, so this cannot double-book. A stage that spawned no
+subprocess at all (`pipeline-start`, a pre-stage ceiling block) legitimately
+records zero; values are never synthesized.
+
 ---
 
 ## Why "All Exits, Not Just Failures"
@@ -183,9 +204,6 @@ to the V3 record we already write.
   deployment the workspace sidecar pattern will need to evolve. The CLI's
   in-process fallback writes `?#NUMBER` keys to make the limitation
   obvious.
-- **TS-side fields land on a separate PR.** The Go-side reception is wired
-  today; once the SkillRunner emits the fields the daily file becomes
-  richer with no Go-side change.
 - **Best-effort writes.** A filesystem failure logs at INFO and never
   blocks pipeline progress — we'd rather lose a diagnostic record than
   fail a stage on a disk error.
@@ -200,6 +218,9 @@ to the V3 record we already write.
 - `internal/orchestrator/scheduler.go` — call site + injection points
   (`SetRunningSiblingsFn`, `SetRateLimitRemainingFn`)
 - `internal/ipc/pipeline_messages.go` — IPC contract (TS → Go forwarding)
+- `internal/ipc/diagnostics_stage_exit.go` — IPC-mode handler + record builder
+- `packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts` —
+  IPC-mode caller (`recordStageExitDiagnostic`)
 - `cmd/nightgauge/exit_records.go` — CLI reader
 
 ---
