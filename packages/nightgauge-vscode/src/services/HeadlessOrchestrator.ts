@@ -5738,17 +5738,33 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * totals are per-stage-attempt, matching what the Go scheduler path books
    * (`scheduler.go` → `result.InputTokens`); a stage that never spawned a
    * subprocess still records zero rather than a synthesized number.
+   *
+   * Issue #125: `result.success` is the skill's SELF-REPORT (its process exit
+   * code) — not the stage's outcome. A stage that exits 0 and then fails its
+   * post-condition gate is failed in history but was recorded here as
+   * `success=true`, so gate-caught failures landed in the healthy baseline of
+   * every ratio-based health analysis. `gateFailure` carries the gate's verdict
+   * so the record reflects the POST-gate truth and names the reason. Callers
+   * pass it only when a gate overrode a clean exit; a skill-exit-code failure
+   * still records `success=false` through the untouched `result.success` path.
    */
   private async recordStageExitDiagnostic(
     stage: PipelineStage,
     issueNumber: number,
     result: StageRunResult,
-    stageStartTime: number
+    stageStartTime: number,
+    gateFailure?: { kind: string; reason: string }
   ): Promise<void> {
     try {
       const ipc = IpcClient.getInstance();
       const elapsedMs = result.durationMs ?? Date.now() - stageStartTime;
-      const errorText = result.error?.message ?? "";
+      // A gate override is authoritative: it is the verdict history records.
+      const success = result.success && !gateFailure;
+      // The gate's reason replaces the (absent) skill error so Go's
+      // ClassifyTerminalKind sees the real cause — e.g. the
+      // `[validation-failed]` marker → `validation_failed`, matching the run
+      // record's terminal_failure_kind instead of a generic fallback.
+      const errorText = gateFailure?.reason ?? result.error?.message ?? "";
       // Pre-classify the common terminal kinds we already detect at this layer.
       // Empty string defers to the Go-side `ClassifyTerminalKind` fallback so
       // both write paths produce consistent `terminal_kind` values.
@@ -5774,7 +5790,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         repo,
         issueNumber,
         stage,
-        result.success,
+        success,
         this.currentPipelineRunId ?? undefined,
         new Date(stageStartTime).toISOString(),
         model || undefined,
@@ -5797,7 +5813,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         telemetry?.lastBashCommand,
         telemetry?.lastBashExit,
         telemetry?.stopHookErrored,
-        telemetry?.stderrTail
+        telemetry?.stderrTail,
+        gateFailure?.kind,
+        // `gate_reason` is documented as the SHORT reason; cap it so a verbose
+        // orchestrator-synthesized message can't bloat the daily JSONL. The
+        // full text still reaches Go via errorText for classification.
+        gateFailure?.reason.slice(0, 500)
       );
     } catch (err) {
       // Never block pipeline progress on a diagnostic write failure. Logged
@@ -8507,8 +8528,57 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // ===================================================================
     await this.detectAndRestoreExistingPr(issueNumber);
 
+    // ===================================================================
+    // POST-GATE EXIT RECORD (Issue #125)
+    // A stage's skill exiting 0 is a self-report, not an outcome — the
+    // post-condition gates below (verifyPostValidateState, verifyPostCreate/
+    // MergeState, context validation, ...) are what decide the stage, and
+    // they are what history books as `V2StageDetail.status`. Writing the
+    // stage-exit diagnostic at the moment the skill returned recorded the
+    // PRE-gate view forever, so every gate-caught failure was filed in the
+    // healthy baseline of the forensic corpus — under-counting exactly the
+    // failures gates exist to catch.
+    //
+    // So the success-path record is held here and flushed once the stage's
+    // fate is settled: as a failure when a gate marked this stage failed, as
+    // a success otherwise. Exit records are append-only JSONL with no
+    // dedupe, so writing-then-correcting would double-count; deferring is
+    // the only shape that keeps one record per stage attempt.
+    //
+    // Flushed from exactly two places — the top of each iteration (draining
+    // the previous stage, including the `continue` paths) and the `finally`
+    // below (covering every `break`, early return, and throw). Failure-path
+    // records are unaffected: they are still written immediately.
+    // ===================================================================
+    let pendingStageExit: {
+      stage: PipelineStage;
+      result: StageRunResult;
+      startedAt: number;
+    } | null = null;
+    const flushPendingStageExit = (): void => {
+      const pending = pendingStageExit;
+      if (!pending) return;
+      pendingStageExit = null;
+      // `failedStage` is set by every gate that halts the loop, immediately
+      // before it breaks — so it is the post-gate verdict for this stage.
+      const gateFailed = failedStage === pending.stage;
+      void this.recordStageExitDiagnostic(
+        pending.stage,
+        issueNumber,
+        pending.result,
+        pending.startedAt,
+        gateFailed
+          ? {
+              kind: "fail",
+              reason: error?.message ?? "stage post-condition gate failed",
+            }
+          : undefined
+      );
+    };
+
     try {
       for (let stageIndex = 0; stageIndex < STAGE_ORDER.length; stageIndex++) {
+        flushPendingStageExit();
         const stage = STAGE_ORDER[stageIndex];
         // Check if aborted
         if (this.abortController?.signal.aborted) {
@@ -9155,7 +9225,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // #3619: record the healthy-exit diagnostic too. Successful runs
         // anchor what "normal" looks like for ratio-based health analysis;
         // omitting them would bias the corpus toward failures.
-        void this.recordStageExitDiagnostic(stage, issueNumber, result, stageStartTime);
+        // #125: held until the post-condition gates below have ruled — see
+        // flushPendingStageExit(). The skill exiting 0 is not yet an outcome.
+        pendingStageExit = { stage, result, startedAt: stageStartTime };
 
         // Emit stage.completed and skill.invoked audit events (Issue #1582)
         const stageDurationMs = Date.now() - stageStartTime;
@@ -10015,6 +10087,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
       }
     } finally {
+      // #125: the loop exited (break / return / throw) — settle the held
+      // stage-exit record with whatever verdict the gates reached. Runs first
+      // so it reads `failedStage`/`error` before any teardown below.
+      flushPendingStageExit();
       this.isRunning = false;
       this.currentStage = null;
       this.abortController = null;

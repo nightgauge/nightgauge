@@ -183,6 +183,47 @@ func TestBuildStageExitRecordFromIPC_HonorsPreClassifiedTerminalKind(t *testing.
 	}
 }
 
+// TestBuildStageExitRecordFromIPC_CarriesGateVerdict pins the #125 channel:
+// a stage whose skill exited 0 but whose post-condition gate failed it arrives
+// with Success=false plus the gate's kind/reason, and both reach the on-disk
+// record. Before #125 the TS dispatch path had no way to send either, so a
+// gate-caught failure was written as success=true with no trace of why — and
+// landed in the healthy baseline of every ratio-based health analysis.
+func TestBuildStageExitRecordFromIPC_CarriesGateVerdict(t *testing.T) {
+	cleanExit := 0
+	p := RecordStageExitParams{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 125,
+		Stage:       "feature-validate",
+		// Post-GATE outcome, not the skill's exit code.
+		Success:    false,
+		ExitCode:   &cleanExit,
+		GateKind:   "fail",
+		GateReason: `[validation-failed] feature-validate reported validation_status="failed"`,
+		ErrorText:  `[validation-failed] feature-validate reported validation_status="failed"`,
+	}
+	rec := buildStageExitRecordFromIPC(p)
+	if rec.Success {
+		t.Error("Success = true, want false — the gate's verdict is authoritative")
+	}
+	if rec.GateKind != "fail" {
+		t.Errorf("GateKind = %q, want %q", rec.GateKind, "fail")
+	}
+	if rec.GateReason != p.GateReason {
+		t.Errorf("GateReason = %q, want %q", rec.GateReason, p.GateReason)
+	}
+	// The reason must still classify: retros join on terminal_kind, and the
+	// run record books validation_failed for this exact shape.
+	if rec.TerminalKind != "validation_failed" {
+		t.Errorf("TerminalKind = %q, want %q", rec.TerminalKind, "validation_failed")
+	}
+	// A clean exit code alongside success=false is the signature of a
+	// gate-caught failure — it must survive as 0, not be erased.
+	if rec.ExitCode == nil || *rec.ExitCode != 0 {
+		t.Errorf("ExitCode = %v, want 0 (the skill really did exit 0)", rec.ExitCode)
+	}
+}
+
 // TestRecordStageExitIPC_EndToEnd_WritesDailyJSONL is the integration test:
 // invoke the IPC handler and assert the JSONL line appeared in the right
 // place. This is the regression guard that would have caught the #3608 gap
