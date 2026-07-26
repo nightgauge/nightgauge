@@ -22,6 +22,52 @@ import type { PipelineStateService } from "../../services/PipelineStateService";
 import type { Logger } from "../../utils/logger";
 import type { SizeLabel } from "../../utils/budgetEnforcer";
 import type { ContextFileType } from "../../services/RepositoryContextLoader";
+import type { ParsedTokenUsage } from "../../utils/tokenParser";
+
+/**
+ * Forensic telemetry captured from the skill subprocess at stage exit and
+ * forwarded verbatim to the `diagnostics.recordStageExit` IPC handler.
+ *
+ * Every figure describes THIS stage attempt only. `runStageSkillHeadless()`
+ * builds one `TokenAccumulator` per spawn, so the accumulator's running total
+ * IS the per-stage total — it is never a pipeline-wide running figure. The
+ * per-callback delta conversion that `PipelineStateService.updateTokens()`
+ * needs (@see Issue #843) does NOT apply here: the exit record wants the
+ * stage's totals, not an increment.
+ *
+ * Absent when the stage never spawned a subprocess (bookend stages, a
+ * pre-stage ceiling block) — those legitimately record zero rather than a
+ * synthesized figure.
+ *
+ * @see Issue #109 — the IPC write path passed literal `undefined` for all of
+ *   these, so every exit record it ever wrote landed with `"tokens": {}`.
+ * @see docs/STAGE_EXIT_DIAGNOSTIC.md for the on-disk schema.
+ */
+export interface StageExitTelemetry {
+  /**
+   * Subprocess exit code. `null` when the process died on a signal and no
+   * exit code ever existed — the record keeps that distinct from a real 0.
+   */
+  exitCode?: number | null;
+  /** Token / cost totals booked for this stage attempt. */
+  tokenUsage?: ParsedTokenUsage;
+  /** Milliseconds since the last subprocess output chunk at exit. */
+  idleMsAtExit?: number;
+  /** POSIX signal name delivered at kill time (SIGTERM / SIGKILL). */
+  signal?: string;
+  /** In-binary code path that delivered `signal` (e.g. `stall-kill`). */
+  signalSource?: string;
+  /** Claude CLI conversation id, when the stream reported one. */
+  sessionId?: string;
+  /** Most recent `Bash` tool_use input observed before exit. */
+  lastBashCommand?: string;
+  /** Exit code of the tool_result matching `lastBashCommand`. */
+  lastBashExit?: number;
+  /** True when a stop-hook error notification preceded the exit. */
+  stopHookErrored?: boolean;
+  /** Trailing stderr from the SkillRunner ring buffer. */
+  stderrTail?: string;
+}
 
 /**
  * Result of a single stage run.
@@ -49,6 +95,14 @@ export interface StageRunResult {
    * @see Issue #3666
    */
   shippedPartially?: boolean;
+  /**
+   * Stage-exit telemetry for this run, attached by `_runSkillStageCore` on
+   * every resolution path so a killed stage reports the same figures a clean
+   * one does. Consumed by `HeadlessOrchestrator.recordStageExitDiagnostic()`.
+   *
+   * @see Issue #109
+   */
+  exitTelemetry?: StageExitTelemetry;
 }
 
 /**

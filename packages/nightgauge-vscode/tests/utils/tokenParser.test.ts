@@ -14,6 +14,7 @@ import {
   TokenAccumulator,
   LiveStageEstimator,
   resolveStageBookedUsage,
+  sumTokenUsage,
   parseStreamJsonOutput,
   extractTokenUsage,
   formatTokenCount,
@@ -2174,5 +2175,46 @@ describe("TokenAccumulator.setModel (#91)", () => {
     const total = acc.getTotal();
     expect(total.costUsd).toBe(0.42);
     expect(total.costSource).toBe("native");
+  });
+});
+
+describe("sumTokenUsage (#109)", () => {
+  const a: ParsedTokenUsage = {
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: 90,
+    cacheCreationTokens: 5,
+    costUsd: 0.25,
+    costSource: "computed",
+  };
+  const b: ParsedTokenUsage = {
+    inputTokens: 400,
+    outputTokens: 80,
+    cacheReadTokens: 350,
+    cacheCreationTokens: 15,
+    costUsd: 1.75,
+    costSource: "native",
+  };
+
+  it("sums two disjoint attempt totals field by field", () => {
+    expect(sumTokenUsage(a, b)).toEqual({
+      inputTokens: 500,
+      outputTokens: 100,
+      cacheReadTokens: 440,
+      cacheCreationTokens: 20,
+      costUsd: 2.0,
+      costSource: "native",
+    });
+  });
+
+  it("passes either operand through when the other is absent", () => {
+    expect(sumTokenUsage(undefined, b)).toBe(b);
+    expect(sumTokenUsage(a, undefined)).toBe(a);
+    expect(sumTokenUsage(undefined, undefined)).toBeUndefined();
+  });
+
+  it("keeps the earlier costSource when the later attempt has none", () => {
+    const unlabeled: ParsedTokenUsage = { ...b, costSource: undefined };
+    expect(sumTokenUsage(a, unlabeled)?.costSource).toBe("computed");
   });
 });

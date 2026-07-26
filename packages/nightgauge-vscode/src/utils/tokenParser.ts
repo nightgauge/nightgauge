@@ -781,6 +781,38 @@ export function resolveStageBookedUsage(
 }
 
 /**
+ * Sum two independently-accumulated stage usage totals.
+ *
+ * Used when one `runStage()` call spawned more than one subprocess (the API-
+ * error auto-retry recursion), so a single stage-exit record accounts for
+ * every token the call spent. Each attempt owns a SEPARATE
+ * {@link TokenAccumulator}, so the operands never overlap and summing cannot
+ * double-book — unlike the cumulative totals a single accumulator streams
+ * through `onTokenUsage`, which must be delta-converted before they are added
+ * to anything (@see Issue #843).
+ *
+ * `costSource` follows the later attempt when it has one; the earlier
+ * attempt's label is the fallback so a resolved label is never lost.
+ *
+ * @see Issue #109
+ */
+export function sumTokenUsage(
+  earlier: ParsedTokenUsage | undefined,
+  later: ParsedTokenUsage | undefined
+): ParsedTokenUsage | undefined {
+  if (!earlier) return later;
+  if (!later) return earlier;
+  return {
+    inputTokens: earlier.inputTokens + later.inputTokens,
+    outputTokens: earlier.outputTokens + later.outputTokens,
+    cacheReadTokens: earlier.cacheReadTokens + later.cacheReadTokens,
+    cacheCreationTokens: earlier.cacheCreationTokens + later.cacheCreationTokens,
+    costUsd: earlier.costUsd + later.costUsd,
+    costSource: later.costSource ?? earlier.costSource,
+  };
+}
+
+/**
  * Parse multiple lines of stream-json output
  *
  * Splits input by newlines and parses each line, filtering out invalid lines.
