@@ -183,6 +183,23 @@ export class RepositoryContextLoader implements vscode.Disposable {
   }
 
   /**
+   * Absolute on-disk paths of every repository configured in the workspace.
+   *
+   * The worktree-containment check (Issue #129) needs the FULL list, not the
+   * active repo: it enforces that a stage wrote nowhere but its own worktree,
+   * and the repos it must inspect are precisely the ones it is not running in.
+   *
+   * This pass-through exists because the containment check runs inside
+   * `runStageSkillHeadless`, which is the single dispatch chokepoint for both
+   * the Go-scheduler path and the legacy orchestrator path but has no
+   * `WorkspaceManager` of its own. Returns `[]` in single-repo mode and before
+   * initialization — both read downstream as "nothing to enforce".
+   */
+  getAllRepositoryPaths(): string[] {
+    return this.workspaceManager?.getAllRepositories().map((repo) => repo.path) ?? [];
+  }
+
+  /**
    * Get the context directory for the current or specified repository
    *
    * Returns the path to .nightgauge/pipeline/ directory.

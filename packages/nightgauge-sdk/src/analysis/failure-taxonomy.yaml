@@ -101,6 +101,18 @@ categories:
       - "Cap set too low for the issue size — raise pipeline.stage_cost_caps.<stage> or unset to disable"
       - "Model-routing escalation pushed the stage into a more expensive model than the cap accommodates"
 
+  worktree-containment-breach:
+    display_name: "Stage Wrote Outside Its Worktree"
+    description: "Stage modified files in a workspace repository it does not own, instead of (or as well as) its own worktree — the work is not on the issue's branch and nothing downstream can see it (Issue #129)"
+    patterns:
+      - "\\[stage:worktree-containment\\]"
+      - "wrote outside its worktree"
+    auto_fixable: false
+    typical_root_causes:
+      - "Issue filed in a repository that contains none of the code it describes — transfer it to the repo that owns the code"
+      - "Acceptance criteria genuinely span repositories — file a linked issue in each repo that must change; one run works one worktree"
+      - "Stage resolved an absolute path outside its CWD (sibling checkout, shared config) rather than a worktree-relative one"
+
   issue-too-large:
     display_name: "Issue Too Large"
     description: "Issue scope exceeds pipeline size thresholds — decomposition required"

@@ -696,6 +696,52 @@ const workingDir = RepositoryContextLoader.getInstance().getWorkingDirectory();
 // All file paths resolved relative to here
 ```
 
+### Write Containment (Issue #129)
+
+Isolation of the working directory is not the same as isolation of writes. A
+stage's CWD is its worktree, but nothing in the filesystem stops it writing
+anywhere else — and when an issue's work genuinely lives in another repo of the
+workspace, the agent reasons correctly about where the code is and writes into
+**that repo's live checkout**: uncommitted, on whatever branch the operator has
+out. Worktree isolation used to be a convention the agent happened to follow.
+It is now a boundary the pipeline enforces.
+
+Every stage dispatch snapshots `git status --porcelain` for each configured
+workspace repo it does not own, and compares after the stage closes:
+
+| Transition during the stage        | Verdict                                            |
+| ---------------------------------- | -------------------------------------------------- |
+| clean → dirty                      | **Stage failure.** Attributed, captured, reported. |
+| dirty → dirty, fingerprint changed | Warning only. Never attributed, never captured.    |
+| dirty at baseline, unchanged       | Ignored — the operator's standing work.            |
+| anything under `.nightgauge/`      | Ignored — the pipeline mirrors artifacts there.    |
+
+The asymmetry is deliberate. A sibling repo is very often dirty because the
+**operator** is working in it, and an operator's edit is indistinguishable from
+a stage write once both have happened. Only a path whose pre-stage content was
+HEAD-or-absent can be attributed with confidence, so that is the only case that
+fails the run. Under-detecting costs one more incident; misattributing costs the
+operator's trust, and — if the response were destructive — their work.
+
+The response is therefore **capture, never mutate**. The attributed changes are
+written as a `git apply`-able patch under `.nightgauge/containment/` in the
+stage repo's canonical root, which survives the worktree teardown a re-dispatch
+performs. Nothing in the other repo is staged, committed, stashed, reverted or
+touched. (This is why the #128 work-in-progress preservation is not reused: it
+commits the worktree in place, which would sweep up the operator's unrelated
+files, move their HEAD, and refuse outright on `main`.)
+
+Scope notes:
+
+- The repo's **main checkout is in scope** while a stage runs in a linked
+  worktree of it — a separate working tree, and one that is frequently sitting
+  on `main`.
+- In single-repo mode, and for a stage running directly in its repo rather than
+  in a worktree, there is nothing out of bounds and the check is a no-op.
+- The check fails **open**: if git cannot be consulted the stage is unaffected.
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for recovery steps.
+
 ---
 
 ## Knowledge Base
