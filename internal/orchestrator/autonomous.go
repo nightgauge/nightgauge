@@ -2167,6 +2167,32 @@ func rawAdjacency(g *depgraph.Graph) map[string][]string {
 	return adj
 }
 
+// describeEdgeSource returns a compact, human-readable provenance label for the
+// dependency edge(s) between two nodes: "blockedBy" for a real GitHub relation,
+// or the parser source ("structured_section", "body_text", "depends_on") plus
+// the originating body line for an edge derived from issue-body prose.
+//
+// Without this, a dispatch blocked by a line of documentation logs identically
+// to one blocked by a real relation — the operator sees an idle fleet, removes
+// the GraphQL blockedBy relation, and nothing changes because the body text
+// re-creates the edge on every graph rebuild. Diagnosing that required reading
+// internal/depgraph/parser.go (#126).
+func describeEdgeSource(g *depgraph.Graph, fromKey, toKey string) string {
+	for _, e := range g.Edges {
+		if g.NodeKey(e.From) != fromKey || g.NodeKey(e.To) != toKey {
+			continue
+		}
+		if e.Type == "blockedBy" {
+			return "blockedBy"
+		}
+		if e.SourceLine != "" {
+			return fmt.Sprintf("%s from issue body line %q", e.Source, e.SourceLine)
+		}
+		return e.Source
+	}
+	return "unknown"
+}
+
 // depBlockResult is the outcome of scanning a node's outgoing dependency
 // edges for the first unsatisfied blocker.
 type depBlockResult struct {
@@ -2453,23 +2479,24 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// the next scan — self-healing.) "Done" is already CLOSED so it never
 		// reaches this branch.
 		blocked := false
-		var blocker, blockerStatus string
+		var blocker, blockerStatus, blockerEdge string
 		offBoard := false
 		if res := evaluateDeps(adj[key], g, resolvedDepStates); res.blocked {
 			blocked = true
 			blocker = res.blocker
 			blockerStatus = res.status
 			offBoard = res.offBoard
+			blockerEdge = describeEdgeSource(g, key, res.blocker)
 		}
 		if blocked {
 			reason := "blocked-by-open-dep"
 			if offBoard {
 				reason = "blocked-by-offboard-dep"
-				log.Printf("autonomous: blocked %s by off-board dep %s (%s) — this blocker is not on any project board; fix board hygiene (add it to a board, or correct/remove the blockedBy edge)",
-					key, blocker, blockerStatus)
+				log.Printf("autonomous: blocked %s by off-board dep %s (%s, edge=%s) — this blocker is not on any project board; fix board hygiene (add it to a board, or correct/remove the blockedBy edge)",
+					key, blocker, blockerStatus, blockerEdge)
 			} else {
-				log.Printf("autonomous: blocked %s by open dep %s (status=%q)",
-					key, blocker, blockerStatus)
+				log.Printf("autonomous: blocked %s by open dep %s (status=%q, edge=%s)",
+					key, blocker, blockerStatus, blockerEdge)
 			}
 			bump(reason)
 			continue
@@ -2487,6 +2514,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
+					blockerEdge = describeEdgeSource(g, epicKey, res.blocker)
 					prefix := "(via epic #" + strconv.Itoa(node.EpicNumber) + ") "
 					if res.offBoard {
 						prefix = "(via epic #" + strconv.Itoa(node.EpicNumber) + ", off-board) "
@@ -2501,8 +2529,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				reason = "blocked-by-offboard-epic-dep"
 			}
 			bump(reason)
-			log.Printf("autonomous: blocked %s by epic dep %s (status=%q)",
-				key, blocker, blockerStatus)
+			log.Printf("autonomous: blocked %s by epic dep %s (status=%q, edge=%s)",
+				key, blocker, blockerStatus, blockerEdge)
 			continue
 		}
 

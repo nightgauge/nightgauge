@@ -430,9 +430,71 @@ A dedicated section in the issue body with status indicators:
 - ✅ platform #535 — API endpoint verified
 - ❌ flutter #127 — not yet implemented
 - ⚠️ angular #152 — partial implementation
+- ⏸️ acme/store #209 — deferred, out of scope for this epic
 ```
 
-The checkmark (`✅`) indicates the dependency has been verified as satisfied.
+#### Which markers gate dispatch
+
+**The status marker is not decoration — it changes whether the entry becomes a
+scheduler edge.** Entries in this section are parsed into real dependency
+edges, and an open blocker stops the issue (and, via the epic cascade below,
+every sub-issue of an epic that carries it) from dispatching.
+
+| Marker                         | Becomes an edge? | Meaning                                                                                                                                                        |
+| ------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `✅`                           | **Yes**          | Verified as satisfied (sets `Verified`); still an edge until the issue closes.                                                                                 |
+| `❌`                           | **Yes**          | Known-unsatisfied dependency.                                                                                                                                  |
+| `⚠️`                           | **Yes**          | "Watch this" — a real dependency with caveats, deliberately still gating.                                                                                      |
+| `⏸️`                           | **No**           | Deferred / recorded for context. Documentation, not a dependency. Unconditional — see precedence below.                                                        |
+| `deferred` / `not-gating` text | **No\***         | Same as `⏸️`, for authors writing prose instead of a marker. **\*Except** on a line that also declares `Blocked by …` / `Depends on …` — see precedence below. |
+| _(no marker)_                  | **No**           | The entry regex requires a status marker; unmarked lines are ignored.                                                                                          |
+
+#### Precedence when signals conflict
+
+Three things on one line can disagree: an author-placed marker, an explicit
+dependency declaration, and a textual token. They resolve strongest-first:
+
+1. **The `⏸️` marker beats everything.** Somebody typed it deliberately, so it
+   wins even on a `Blocked by …` line — writing both means the marker.
+   `- ⏸️ Blocked by acme/store#209 — deferred` is inert, by design.
+2. **An explicit declaration beats a textual token.** `deferred`,
+   `not-gating`, and `non-gating` are ordinary words that show up
+   incidentally, so they never override an author who wrote `Blocked by …` or
+   `Depends on …` outright on that same line.
+   `- Blocked by acme/platform#491 — needed for the deferred rollout` **is** an
+   edge: the declaration is the stated intent; "deferred" is describing the
+   rollout, not the dependency.
+3. **Otherwise the textual token suppresses.** With no declaration on the line,
+   `deferred` / `not-gating` / `non-gating` mean what they say.
+
+The asymmetry is deliberate. Dropping a real edge is a _permissive_ failure —
+the scheduler dispatches work before its prerequisite, silently, with no
+symptom an operator can see. That is worse than the loud failure this section
+exists to prevent (a spurious edge halting a fleet), so an incidental adjective
+never gets to delete a dependency somebody declared explicitly.
+
+Use `⏸️` (or the word `deferred`) when you want to record a relationship the
+work has been rescoped away from. Use `⚠️` only when the dependency really
+should hold up dispatch. Writing `⚠️` on a dependency you have been rescoped
+away from will stall the issue and, for an epic, its whole sub-tree — this is
+the failure mode [#126](https://github.com/nightgauge/nightgauge/issues/126)
+exists to prevent.
+
+#### Telling a body-derived edge from a real relation
+
+Body text re-creates its edges on every graph rebuild, so deleting a GraphQL
+`blockedBy` relation does not clear an edge that came from prose. When the
+scheduler blocks a dispatch it names the edge's provenance:
+
+```
+autonomous: blocked owner/repo#42 by epic dep owner/repo#209 (status="(via epic #40) OPEN", edge=structured_section from issue body line "- ⚠️ acme/store#209 — store distribution")
+autonomous: blocked owner/repo#42 by open dep owner/repo#7 (status="Ready", edge=blockedBy)
+```
+
+`edge=blockedBy` is a real GitHub relation — fix it on the issue.
+`edge=structured_section` / `body_text` / `depends_on` came from the quoted
+line — fix the issue body. `graph build --json` reports the same provenance on
+every edge (`source`, and `sourceLine` for body-derived edges).
 
 ### Spike Routing for Cross-Repo Epics
 
@@ -627,7 +689,20 @@ Detection still surfaces via state and the CLI when no webhook is configured.
 - Check body text format: `Blocked by <repo> #<number>` or
   `Depends on <repo> #<number>`
 - For structured sections, use the exact header `## Cross-Repo Dependencies`
+- Check the status marker: `⏸️`, `deferred`, and `not-gating` entries are
+  intentionally **not** edges (see
+  [Which markers gate dispatch](#which-markers-gate-dispatch))
 - Run `graph build --json` to see all detected edges and their sources
+
+### An issue (or a whole epic sub-tree) never dispatches
+
+- Read the `autonomous: blocked …` line and look at `edge=`. `edge=blockedBy`
+  is a real GitHub relation; `edge=structured_section`/`body_text`/`depends_on`
+  came from the issue body and quotes the exact line responsible
+- Body-derived edges are re-created on every graph rebuild, so removing the
+  GraphQL `blockedBy` relation will **not** clear one — edit the issue body
+- An epic's blockers cascade to all of its sub-issues, so a single stray line
+  in an epic body can idle the entire sub-tree
 
 ### Safety rail triggered unexpectedly
 
