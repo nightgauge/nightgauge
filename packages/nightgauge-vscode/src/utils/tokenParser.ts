@@ -214,6 +214,24 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
         costUsd: parsed.usage.costUsd ?? 0,
       };
       const terminal = parsed.status === "succeeded" || parsed.status === "failed";
+      // The SDK's stage-start emission seeds the agent node with a ZEROED usage
+      // block, and its later non-zero progress tick is usually dropped by the
+      // EventBus 1 Hz coalescing window — so for a Codex stage the only
+      // non-terminal snapshot the extension ever sees is empty. Surfacing it as
+      // `incrementalUsage` would mark the LiveStageEstimator as having observed
+      // a burn, and a stage killed before its terminal node would then book
+      // "estimated $0.0000" instead of the honest "nothing observed" (#111).
+      const hasTokens =
+        workflowUsage.inputTokens > 0 ||
+        workflowUsage.outputTokens > 0 ||
+        workflowUsage.cacheReadTokens > 0 ||
+        workflowUsage.cacheCreationTokens > 0;
+      if (!terminal && !hasTokens) {
+        return {
+          type: "assistant",
+          model: typeof parsed.model === "string" ? parsed.model : undefined,
+        };
+      }
       return {
         type: terminal ? "token:usage" : "assistant",
         ...(terminal ? { usage: workflowUsage } : { incrementalUsage: workflowUsage }),
@@ -800,14 +818,20 @@ export function parseStreamJsonOutput(output: string): ParsedStreamMessage[] {
  *
  * Convenience function that parses output and extracts any token usage.
  *
- * @param output - Multi-line string from Claude CLI stdout
- * @returns Token usage if found in any result message, null otherwise
+ * @param output - Multi-line string from a stage CLI's stdout
+ * @returns Token usage from the first terminal envelope found, null otherwise
  */
 export function extractTokenUsage(output: string): ParsedTokenUsage | null {
   const messages = parseStreamJsonOutput(output);
 
   for (const msg of messages) {
-    if (msg.type === "result" && msg.usage) {
+    // Two authoritative terminal envelopes exist: `result` from the Claude CLI
+    // and `token:usage` from the SDK CLI's terminal workflow-agent node, which
+    // is what every SDK-routed adapter (Codex, Gemini, Copilot, ...) emits.
+    // Recognizing only `result` left this rescue blind in exactly the
+    // framing-race case it exists for, so an SDK-routed stage that exited 0
+    // still booked zero tokens (#111).
+    if ((msg.type === "result" || msg.type === "token:usage") && msg.usage) {
       return msg.usage;
     }
   }
