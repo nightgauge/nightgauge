@@ -146,3 +146,6 @@ docs/strategy/
 # Transient pipeline exhaust that was previously tracked by accident.
 .branch-context
 .nightgauge/planning-summary-*.txt
+
+# Captured output from scripts/ci-local.sh (see run_step)
+.ci-local-logs/

@@ -81,8 +81,13 @@ branch/PR — never a side-channel memory store.
 - **Clean up on merge — branch and worktree, remote and local, every forge.** A
   merge is not finished until its branch and any worktree are gone on both
   sides. Squash merges need `git branch -D` (the squash commit is not the branch
-  tip, so `-d` refuses); confirm with `git diff --stat origin/main..<branch>`
-  rather than trusting ancestry. Skipping this is invisible once and compounding
+  tip, so `-d` refuses); confirm by content rather than ancestry — but **not**
+  with `git diff origin/main..<branch>`, which also reports every change `main`
+  gained afterwards and so marks any branch older than `main`'s tip as
+  unmerged. Compare only the files the branch actually touches:
+  `git diff --stat origin/main "<branch>" -- $(git diff --name-only origin/main..."<branch>")`
+  — empty output means the branch's content is already in `main` and it is safe
+  to delete. Skipping this is invisible once and compounding
   across a hundred merges — and after the fact you cannot cheaply tell a
   squash-merged branch from one that was never pushed. When the pipeline created
   the branch or worktree, the pipeline must remove it; the operator is never the

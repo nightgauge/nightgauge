@@ -13,20 +13,38 @@ cd "$REPO_ROOT"
 
 FAIL_COUNT=0
 FAILED_STEPS=()
+FAILED_LOGS=()
+
+# Every step's output is captured as well as streamed. Without this a failure
+# that does not reproduce is unidentifiable after the fact: the run scrolls
+# past, `npm` only logs its own exit code (never the test runner's stdout), and
+# a caller that pipes to `tail` discards the very lines naming the failing
+# test. Recovering "which test failed" must never depend on having guessed the
+# right pipeline beforehand.
+LOG_DIR="${CI_LOCAL_LOG_DIR:-$REPO_ROOT/.ci-local-logs}"
+mkdir -p "$LOG_DIR"
+rm -f "$LOG_DIR"/*.log 2>/dev/null || true
 
 run_step() {
   local label="$1"
   shift
+  local slug log code
+  slug="$(printf '%s' "$label" | tr -c '[:alnum:]' '-' | tr -s '-' | sed 's/^-//; s/-$//')"
+  log="$LOG_DIR/${slug}.log"
   echo ""
   echo "▶ $label"
   echo "  \$ $*"
-  if "$@"; then
+  # `tee` keeps the terminal output live; PIPESTATUS[0] preserves the command's
+  # own exit code, which a bare pipeline would otherwise replace with tee's.
+  "$@" 2>&1 | tee "$log"
+  code=${PIPESTATUS[0]}
+  if [ "$code" -eq 0 ]; then
     echo "  ✓ $label"
   else
-    local code=$?
     echo "  ✗ $label (exit $code)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     FAILED_STEPS+=("$label")
+    FAILED_LOGS+=("$log")
   fi
 }
 
@@ -121,8 +139,18 @@ if [ "$FAIL_COUNT" -eq 0 ]; then
   exit 0
 else
   echo "✗ $FAIL_COUNT check(s) failed:"
-  for step in "${FAILED_STEPS[@]}"; do
-    echo "  - $step"
+  for i in "${!FAILED_STEPS[@]}"; do
+    echo "  - ${FAILED_STEPS[$i]}"
+    echo "      full output: ${FAILED_LOGS[$i]}"
+    # Pull the failing assertions up to the summary. A vitest failure can sit
+    # thousands of lines above the exit line, so "scroll up" is not a usable
+    # instruction — and is exactly how a failure escapes identification.
+    matches="$(grep -aE '^[[:space:]]*(×|✗|FAIL |--- FAIL|AssertionError|Error:)' "${FAILED_LOGS[$i]}" 2>/dev/null | head -15 || true)"
+    if [ -n "$matches" ]; then
+      printf '%s\n' "$matches" | sed 's/^/      /'
+    else
+      echo "      (no recognised failure marker — see the log above for detail)"
+    fi
   done
   echo ""
   echo "Fix the failures before pushing. Most format/lint failures are auto-fixable:"
