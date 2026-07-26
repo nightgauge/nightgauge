@@ -30,6 +30,46 @@ func TestResolveItemRepo(t *testing.T) {
 	}
 }
 
+// A single project board serves every repo in a multi-repo workspace, so issue
+// numbers collide across it constantly. Keying board membership on the bare
+// number made an orphaned issue look present whenever ANY sibling repo happened
+// to have an issue with the same number — across two real workspaces that hid
+// 17 of 36 genuine orphans, so the check reported clean on what it looks for.
+func TestBoardKey_DistinguishesReposSharingOneBoard(t *testing.T) {
+	const num = 142
+
+	board := []types.BoardItem{
+		{Number: num, Repo: "acme/api"},
+		{Number: 7, Repo: ""}, // empty Repo => the audited repo
+	}
+
+	keys := make(map[string]struct{})
+	for _, item := range board {
+		o, r := resolveItemRepo(item.Repo, "acme", "web")
+		keys[boardKey(o, r, item.Number)] = struct{}{}
+	}
+
+	// The sibling repo's issue must NOT satisfy the audited repo's lookup.
+	if _, found := keys[boardKey("acme", "web", num)]; found {
+		t.Errorf("acme/web#%d reported on-board, but only acme/api#%d is — "+
+			"orphan would be silently missed", num, num)
+	}
+	// The item that IS the audited repo's must still be found.
+	if _, found := keys[boardKey("acme", "web", 7)]; !found {
+		t.Error("item with empty Repo did not resolve to the audited repo")
+	}
+	// And the sibling's own key must resolve for its own repo.
+	if _, found := keys[boardKey("acme", "api", num)]; !found {
+		t.Errorf("acme/api#%d missing from board keys", num)
+	}
+}
+
+func TestBoardKey_CaseInsensitive(t *testing.T) {
+	if boardKey("Acme", "Web-App", 9) != boardKey("acme", "web-app", 9) {
+		t.Error("boardKey must fold case; GitHub treats owner/repo case-insensitively")
+	}
+}
+
 func TestNewLifecycleAuditService(t *testing.T) {
 	client := NewClientWithToken("test")
 	svc := NewLifecycleAuditService(client, "nightgauge", 5)
