@@ -37,7 +37,11 @@ import {
 } from "../utils/rateLimitCircuitBreaker";
 import { isConnectivityError } from "../utils/networkOutageCircuitBreaker";
 import { StageRunnerRegistry } from "../orchestrator/stages/StageRunnerRegistry";
-import type { StageRunContext, StageRunResult } from "../orchestrator/stages/StageRunner";
+import type {
+  StageExitTelemetry,
+  StageRunContext,
+  StageRunResult,
+} from "../orchestrator/stages/StageRunner";
 import { SkillLoader } from "../orchestrator/skills/SkillLoader";
 import {
   ContextAssembler,
@@ -144,7 +148,7 @@ import { loadAdaptiveBudgetOverrides } from "../utils/adaptiveBudgetLoader";
 import type { EstimateSource } from "../utils/adaptiveBudgetLoader";
 import { PipelineBudgetCeiling } from "../utils/pipelineBudgetCeiling";
 import { nextBudgetActions, livePipelineCostUsd } from "../utils/budgetStreamEnforcement";
-import type { ParsedTokenUsage } from "../utils/tokenParser";
+import { sumTokenUsage, type ParsedTokenUsage } from "../utils/tokenParser";
 import {
   runPreFlightBudgetCheck,
   captureEstimatorInputs,
@@ -5708,6 +5712,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * persistence. Fields the TS layer doesn't have (rate-limit remaining at
    * exit, concurrent sibling pipelines) are left empty; the record is
    * strictly better than the prior "nothing written" status quo.
+   *
+   * Issue #109: this method used to pass literal `undefined` for the exit code
+   * and every token/cost field, so all 1,735 records this path had written
+   * carried `"tokens": {}` — and `ExitRecordTokens` is a struct, so `omitempty`
+   * could not even elide the empty object. Every figure now comes from
+   * `result.exitTelemetry`, captured off the skill subprocess at exit. The
+   * totals are per-stage-attempt, matching what the Go scheduler path books
+   * (`scheduler.go` → `result.InputTokens`); a stage that never spawned a
+   * subprocess still records zero rather than a synthesized number.
    */
   private async recordStageExitDiagnostic(
     stage: PipelineStage,
@@ -5736,6 +5749,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
       const repo = this.repoOverride ?? "";
       const model = this.stageModelOverrides.get(stage) ?? "";
+      const telemetry = result.exitTelemetry;
+      // Per-stage-attempt totals, NOT a pipeline-wide running figure — the
+      // accumulator behind them is created per subprocess spawn.
+      const usage = telemetry?.tokenUsage;
       await ipc.diagnosticsRecordStageExit(
         repo,
         issueNumber,
@@ -5744,16 +5761,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         this.currentPipelineRunId ?? undefined,
         new Date(stageStartTime).toISOString(),
         model || undefined,
-        undefined, // exitCode — not exposed at this layer
+        // `null` means the subprocess died on a signal, so no exit code ever
+        // existed. Send undefined so Go's `*int` stays nil ("never observed")
+        // instead of booking a fake 0.
+        telemetry?.exitCode ?? undefined,
         terminalKind || undefined,
         errorText || undefined,
         elapsedMs,
-        undefined, // idleMsAtExit — captured deeper in SkillRunner only
-        undefined, // inputTokens — captured via tokenAccumulator, not surfaced here
-        undefined, // outputTokens
-        undefined, // cacheReadTokens
-        undefined, // cacheCreationTokens
-        undefined // costUsd
+        telemetry?.idleMsAtExit,
+        usage?.inputTokens,
+        usage?.outputTokens,
+        usage?.cacheReadTokens,
+        usage?.cacheCreationTokens,
+        usage?.costUsd,
+        telemetry?.signal,
+        telemetry?.signalSource,
+        telemetry?.sessionId,
+        telemetry?.lastBashCommand,
+        telemetry?.lastBashExit,
+        telemetry?.stopHookErrored,
+        telemetry?.stderrTail
       );
     } catch (err) {
       // Never block pipeline progress on a diagnostic write failure. Logged
@@ -11371,6 +11398,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       costUsd: 0,
     };
 
+    // Stage-exit telemetry for the diagnostic record (Issue #109). Unlike
+    // `prevUsage` above — which exists to delta-convert for the additive
+    // updateTokens() — the exit record wants this attempt's TOTALS, so the
+    // cumulative value is stored verbatim. Mutated in place from both the
+    // authoritative token callback and the terminal onComplete so a stage that
+    // is killed before its `result` envelope still records the burn it did.
+    const exitTelemetry: StageExitTelemetry = {};
+
     // Phase timeout event subscriptions (Issue #1187)
     // Subscribe to stale/timeout events to log warnings and optionally kill.
     // ptm may be null in test environments where vscode.EventEmitter is unavailable.
@@ -11475,7 +11510,29 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
-    return new Promise((resolve) => {
+    return new Promise((resolveStage) => {
+      /**
+       * Resolve with this attempt's stage-exit telemetry attached (Issue #109).
+       * Every resolution path funnels through here — clean exit, budget kill,
+       * stall kill, zombie watchdog, auto-retry — so a failed stage's exit
+       * record carries the same token/cost figures a healthy one does.
+       *
+       * When the incoming result already carries telemetry it came from the
+       * nested auto-retry `runStage()` below, which ran its own subprocess with
+       * its own accumulator. Those totals SUM (disjoint accumulators, so no
+       * double-book) while the forensic anchors come from the attempt that
+       * actually exited last.
+       */
+      const resolve = (result: StageRunResult): void => {
+        const nested = result.exitTelemetry;
+        resolveStage({
+          ...result,
+          exitTelemetry: nested
+            ? { ...nested, tokenUsage: sumTokenUsage(exitTelemetry.tokenUsage, nested.tokenUsage) }
+            : { ...exitTelemetry },
+        });
+      };
+
       // ── First-output watchdog (#252 — zombie-run guard) ──────────────────
       // Covers the window every other detector is blind to: the skill-runner
       // preamble's unbounded awaits before spawn, and a session that spawns
@@ -11561,6 +11618,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             cacheCreationTokens: usage.cacheCreationTokens,
             costUsd: usage.costUsd,
           };
+
+          // Keep the exit record's running snapshot on the authoritative
+          // cadence (Issue #109). A stage killed before its terminal envelope
+          // never reaches onComplete's booked figure, so this is what makes a
+          // kill-path record report real spend instead of zeros.
+          exitTelemetry.tokenUsage = usage;
 
           // Update PipelineStateService with token usage delta (Issue #404)
           // This fires the unified onTokenUsageUpdated event for UI components
@@ -12429,6 +12492,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             stageResultResolved = true;
             const durationMs = Date.now() - startTime;
             this.currentProcess = null;
+
+            // Capture the stage-exit telemetry the diagnostic record needs
+            // (Issue #109). `result.tokenUsage` is the BOOKED per-stage total —
+            // the reconciled accumulator on the normal path, the live estimate
+            // on a kill path (#296) — so it supersedes the running snapshot
+            // taken in evaluateBudgetAndCeiling. Left untouched when the run
+            // produced none (a stage that consumed nothing books nothing).
+            exitTelemetry.exitCode = result.exitCode;
+            exitTelemetry.idleMsAtExit = result.idleMsAtExit;
+            exitTelemetry.signal = result.signal;
+            exitTelemetry.signalSource = result.signalSource;
+            exitTelemetry.sessionId = result.sessionId;
+            exitTelemetry.lastBashCommand = result.lastBashCommand;
+            exitTelemetry.lastBashExit = result.lastBashExit;
+            exitTelemetry.stopHookErrored = result.stopHookErrored;
+            exitTelemetry.stderrTail = result.stderrTail;
+            if (result.tokenUsage) {
+              exitTelemetry.tokenUsage = result.tokenUsage;
+            }
 
             // Collect stall events from this stage for history recording (Issue #2652).
             // Cap the per-stage array — a pathologically stuck stage can emit
