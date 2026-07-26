@@ -154,6 +154,13 @@ import { withBehavioralPreamble } from "./behavioralPreamble";
 import { ProgressMonitor, recordToolCallProgress, isBlindMonitorKill } from "./progressMonitor";
 import { preserveWorkInProgress, shouldPreserveWorkOnExit } from "./preserveWorkInProgress";
 import {
+  captureContainmentBaseline,
+  detectContainmentBreach,
+  formatContainmentFailure,
+  formatContainmentWarning,
+  type ContainmentBaseline,
+} from "./worktreeContainment";
+import {
   resolveStageAdapter,
   walkAdapterFallback,
   enumerateAvailableAdapters,
@@ -569,6 +576,18 @@ export interface SkillProcessHandle {
   stage: PipelineStage;
   issueNumber?: number;
   kill: () => void;
+  /**
+   * Resolves once the worktree-containment baseline has been taken (Issue
+   * #129) — i.e. once every out-of-bounds workspace repo's pre-stage dirty
+   * state has been recorded and any write observed afterwards is attributable.
+   *
+   * `runStageSkillHeadless` is synchronous by contract, so the baseline is
+   * started before `spawn` and deliberately not awaited: the snapshot overlaps
+   * only the CLI's own start-up, which writes nothing. Exposed so a caller that
+   * needs the boundary to be established before it does anything observable —
+   * in practice the containment tests — can wait for it rather than race it.
+   */
+  containmentBaselineReady?: Promise<unknown>;
   /**
    * Whether the process is currently waiting for user input
    * (e.g., AskUserQuestion tool)
@@ -1132,6 +1151,23 @@ function deriveCanonicalFromWorktree(workspaceRoot: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * On-disk paths of every repository configured in the workspace, for the
+ * worktree-containment check (Issue #129).
+ *
+ * Reads the `RepositoryContextLoader` singleton — the only workspace-aware
+ * object reachable from this module. Returns `[]` when the loader is not
+ * initialized (unit tests, manual single-stage invocation) or in single-repo
+ * mode, both of which mean "no sibling repos to contain".
+ */
+function resolveContainmentRepoPaths(): string[] {
+  try {
+    return RepositoryContextLoader.getInstance().getAllRepositoryPaths();
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -3029,6 +3065,39 @@ export function runStageSkillHeadless(
     };
   }
 
+  // ── Worktree write containment: baseline (Issue #129) ─────────────────
+  // Snapshot the dirty state of every configured workspace repo the stage does
+  // NOT own, so the close handler can tell what the stage wrote from what the
+  // operator already had. Started here rather than awaited (this function is
+  // synchronous by contract — it returns a handle): the snapshot overlaps only
+  // the CLI's own start-up, which does no file writing.
+  //
+  // This lives in `runStageSkillHeadless` and not in an orchestrator because
+  // this is the single dispatch chokepoint — the Go scheduler reaches it via
+  // `services/SkillRunner.ts` and the legacy `HeadlessOrchestrator` via
+  // `_runSkillStageCore`. Enforcing in either orchestrator would leave the
+  // other path uncontained.
+  //
+  // The `hasOutOfBoundsRepo` pre-filter is pure path math on purpose: when
+  // there is demonstrably nowhere to escape TO — an uninitialized workspace, or
+  // a single-repo one where the stage runs in the repo itself — no promise is
+  // created, no git runs, and `onComplete` stays synchronous on the close tick
+  // exactly as before. Only workspaces that actually have a boundary pay for
+  // one. (A single-repo workspace still qualifies when the stage runs in a
+  // worktree: the repo's main checkout is a distinct tree.)
+  const containmentRepoPaths = workspaceRoot ? resolveContainmentRepoPaths() : [];
+  const stageCwdResolved = workspaceRoot ? path.resolve(workspaceRoot) : "";
+  const hasOutOfBoundsRepo = containmentRepoPaths.some(
+    (repoPath) => path.resolve(repoPath) !== stageCwdResolved
+  );
+  const containmentBaseline: Promise<ContainmentBaseline> | null =
+    workspaceRoot && hasOutOfBoundsRepo
+      ? captureContainmentBaseline({
+          stageCwd: workspaceRoot,
+          repoPaths: containmentRepoPaths,
+        })
+      : null;
+
   const proc = spawn(cmd, args, {
     cwd: workspaceRoot,
     shell: false,
@@ -4853,11 +4922,44 @@ export function runStageSkillHeadless(
       }
     }
 
+    // ── Worktree write containment: verdict (Issue #129) ────────────────
+    // Compare each out-of-bounds repo against its pre-stage baseline. A stage
+    // that wrote into a repo it does not own FAILS here, naming the repo and
+    // the paths — otherwise the run dies two stages later as "no
+    // implementation work detected", which is true of the branch and sends
+    // triage in entirely the wrong direction. The escaped changes are captured
+    // as a patch first; nothing in the other repo is modified. Runs before
+    // onComplete so the artifact is durable before the scheduler acts.
+    let containmentError: Error | undefined;
+    if (containmentBaseline) {
+      try {
+        const report = await detectContainmentBreach({
+          baseline: await containmentBaseline,
+          stage,
+          ...(issueNumber != null ? { issueNumber } : {}),
+        });
+        if (report.warnings.length > 0) {
+          callbacks?.onStderr?.(`${formatContainmentWarning(stage, report)}\n`);
+        }
+        if (report.breaches.length > 0) {
+          const reason = formatContainmentFailure(stage, report);
+          callbacks?.onStderr?.(`${reason}\n`);
+          containmentError = new Error(reason);
+        }
+      } catch (err) {
+        // Fail OPEN: containment is a safety net, never a new failure mode.
+        callbacks?.onStderr?.(
+          `[containment-check-failed] Stage ${stage}: ${err instanceof Error ? err.message : String(err)}. ` +
+            `Out-of-worktree writes were NOT checked for this stage. (Issue #129)\n`
+        );
+      }
+    }
+
     activeProcesses.delete(processKey);
     callbacks?.onComplete?.({
-      success,
+      success: containmentError ? false : success,
       exitCode,
-      error: inferredError,
+      error: containmentError ?? inferredError,
       wipCommitSha,
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,
@@ -4953,6 +5055,9 @@ export function runStageSkillHeadless(
     // Issue #3851: expose the productive-progress signal so the orchestrator's
     // unattended budget/ceiling escalation can gate on real progress.
     getProductiveProgressDelta: () => progressMonitor.getProductiveProgressDelta(),
+    // Issue #129: lets a caller wait for the containment boundary to be
+    // established instead of racing it.
+    ...(containmentBaseline ? { containmentBaselineReady: containmentBaseline } : {}),
   };
 
   activeProcesses.set(processKey, handle);

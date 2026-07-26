@@ -785,6 +785,58 @@ branch, detached HEAD, or a git error such as a stale `index.lock`).
 under `.nightgauge/worktrees/issue-<N>/` — provided the issue has not been
 re-dispatched since. Copy them out before re-queuing the issue.
 
+### A stage wrote into another repo's checkout (#129)
+
+**Symptom:** the stage fails with
+
+```
+[stage:worktree-containment] Stage feature-dev wrote outside its worktree into 1 repository/repositories it does not own.
+  acme-platform (/Users/you/repos/acme-platform) — 7 path(s):
+    src/api/handlers.ts
+    ...
+    preserved: /Users/you/repos/acme/.nightgauge/containment/feature-dev-129-2026-07-26T.../acme-platform.patch
+```
+
+**Root cause:** the issue's work does not live in the repo the issue was filed
+in. The agent reasons correctly about where the code is and writes there — into
+that repo's live working checkout, uncommitted, on whatever branch happens to be
+out. Two shapes cause it:
+
+1. **A misfiled issue** — filed in a coordination repo that contains none of the
+   relevant code. Transfer the issue to the repo that owns the code and re-run.
+2. **Genuinely cross-repo acceptance criteria** — e.g. a dashboard issue whose
+   criteria require an endpoint in the platform repo. File a second issue in the
+   other repo and link them; one pipeline run works one repo's worktree.
+
+Before #129 neither shape failed here. The stage exited 0, `feature-validate`
+two stages later reported **"no implementation work detected"** — true of the
+branch and completely misleading — and the run was billed in full and recorded
+as a failure with substantial work stranded uncommitted in a repo the operator
+was actively using, where a `git checkout .`, a branch switch or a `git pull`
+would destroy it silently.
+
+**Recovering the work.** Nothing in the other repo was modified, staged,
+committed or reverted — the files are still on disk exactly as the stage left
+them, and a patch of them is captured under the stage repo's canonical root
+(which outlives the worktree a re-dispatch removes):
+
+```bash
+ls .nightgauge/containment/                      # one dir per detection
+cat .nightgauge/containment/<dir>/manifest.json  # repos, paths, reason
+git -C <repoPath> apply .nightgauge/containment/<dir>/<repoName>.patch
+```
+
+**`[containment-ambiguous]` is a warning, not a failure.** It means a path that
+was ALREADY dirty before the stage started changed while it ran. An operator
+saving their own in-progress file is indistinguishable from a stage write and is
+the likelier explanation, so those paths are never attributed to the stage,
+never captured, and never fail the run — they are only named so you can check
+them. Only paths that went **clean → dirty** during the stage are attributed.
+
+**`[containment-check-failed]`** means git could not be consulted (missing repo,
+timeout). The check fails open: out-of-worktree writes were not verified for
+that stage, but nothing else changed.
+
 ---
 
 ## Getting Help
