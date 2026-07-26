@@ -554,6 +554,31 @@ a Go function symbol.
 Despite Ready+Open issues, GitHub's `projectV2.items` index can go stale. Fix:
 delete and re-add each stuck item to the board (preserving Status/Priority/Size).
 
+### `[PRE-FLIGHT]` says `Historical p75: UNCALIBRATED` (#112)
+
+The pre-flight line is projecting from the **static** cost estimate alone, which
+carries almost no predictive signal on its own (one `$2.70` estimate bucket
+produced actuals from `$1.66` to `$107.02`). Expect the number to run low.
+
+Calibration needs at least three history records with a non-zero cost. It
+prefers records whose `size` matches the issue's size bucket and falls back to
+the cross-size cohort when too few match, so this line means the run history is
+genuinely thin — not that the size join failed.
+
+Root cause of the original outage: `size` is the **join key** for cost
+calibration, and the IPC history-write path left it `null` on every
+extension-driven run (it looked like a cosmetic `omitempty` display field), so
+the historical override was silently disabled and estimates ran a median 3.9x
+under actual across 112 runs. New records hydrate `labels`/`size`/`type` from
+the run's `issue-{N}.json`. An issue with **no `size:*` label** still records a
+null size on purpose — a guessed bucket would poison calibration for every
+future run of that size — and the Go log says so per run:
+`#N has no size:* label — its run record cannot calibrate the pre-flight cost estimate`.
+
+Budget _enforcement_ is unaffected by this and was never implicated: the
+warning, wind-down, stage-terminate, escalation, and ceiling-stop guardrails all
+measure real spend, not the forecast.
+
 ### Opus 4.8 fatal 400 "thinking blocks cannot be modified"
 
 **Historical (#3801, retired 2026-07-13).** On claude CLI 2.1.154, multi-turn

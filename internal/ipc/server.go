@@ -2726,8 +2726,26 @@ func (s *Server) registerMethods() {
 					// not a generic failure. Empty for ordinary failures.
 					input.OutcomeType = orchestrator.OutcomeTypeForTerminalFailure(errMsg)
 				}
-				// TODO(#226 follow-up): hydrate Labels/Size/Type from the target
-				// repo's issue-{N}.json (they are omitempty, so absent for now).
+				// Hydrate Labels/Size/Type from the run's issue-{N}.json (#112).
+				// These were left absent on the assumption they were cosmetic
+				// display fields. Size is not: it is the join key the VSCode
+				// pre-flight estimator matches run history on, so every record
+				// written without it was unusable as calibration input and the
+				// projection collapsed to the raw static estimate — which ran a
+				// median 3.9x under actual across 112 runs before anyone noticed.
+				cls := loadIssueClassification(root, snap.WorktreeDir, p.IssueNumber)
+				input.Labels = cls.Labels
+				input.IssueType = cls.Type
+				input.Size = cls.Size
+				if cls.Size == "" {
+					// Loud by design: a silently size-less record is exactly how
+					// the calibration path stayed switched off unnoticed (#112).
+					log.Printf(
+						"notifyComplete: #%d has no size:* label — its run record cannot calibrate the pre-flight cost estimate (#112)",
+						p.IssueNumber,
+					)
+				}
+
 				hw := state.NewHistoryWriter(root)
 				now := time.Now()
 				record := hw.BuildV2Record(snap, p.Success, errMsg, input, now)
