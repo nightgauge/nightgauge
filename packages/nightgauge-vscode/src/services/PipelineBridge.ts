@@ -557,6 +557,16 @@ export class PipelineBridge {
       // captured before the throw so the Output Window shows real usage.
       // errorText carries the thrown reason so the Go scheduler classifies
       // this as a real failure rather than dropping the V3 RunRecord. (Issue #3207)
+      //
+      // The stage-exit forensic fields (#3605) are forwarded here too, and must
+      // stay in lock-step with the success path above. This branch runs when a
+      // stage THREW — which is exactly when an operator needs to know what the
+      // agent was doing at the moment it died. Omitting them here produced exit
+      // records that named the failure kind and its cost but could not say what
+      // command was in flight, forcing causation to be reconstructed by hand
+      // from raw session logs. `result` is undefined only when SkillRunner threw
+      // before returning anything; every field is optional and dropped at the
+      // IPC boundary when absent, so a partial record stays valid. (#147)
       await this.ipcClient.call("pipeline.stageResult", {
         stage: ipcParams.stage,
         issueNumber: ipcParams.issueNumber,
@@ -569,6 +579,16 @@ export class PipelineBridge {
         costUsd: result?.costUsd ?? 0,
         errorText: `pipeline-bridge: ${String(err)}`,
         lastOutputLines: result?.lastOutputLines,
+        // ── #3605 forensic anchors — see the success path for field docs ──
+        sessionId: result?.sessionId,
+        signal: result?.signal,
+        signalSource: result?.signalSource,
+        elapsedMs: result?.elapsedMs,
+        idleMsAtExit: result?.idleMsAtExit,
+        lastBashCommand: result?.lastBashCommand,
+        lastBashExit: result?.lastBashExit,
+        stopHookErrored: result?.stopHookErrored,
+        stderrTail: result?.stderrTail,
       });
     }
   }
