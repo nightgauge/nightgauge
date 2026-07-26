@@ -30,6 +30,15 @@ Getting this wrong is not a style error. A standing condition raised as an event
 produces one duplicate card per observation; an event raised as a standing
 condition auto-resolves itself the moment the run ends.
 
+**Where it lives and whether it is standing are two different questions.** Three
+run-scoped producers — `work-exhaustion`, `owner-action-handoff`, and
+`watchdog-stuck-epic` — fire from the scheduler's own loop, but the loop
+re-evaluates their whole condition set on every cycle. That makes them standing:
+they set `Standing: true` with a fingerprint, and their trigger sites call
+`AutoResolveUnobserved` with the complete set they just saw. The test is not
+which file the producer lives in, it is whether the trigger site observes a
+transition once or re-answers the same question forever.
+
 ## Repo-scoped: the interface
 
 ```go
@@ -198,8 +207,24 @@ today's output as the contract.
 
 Add a `raise*` method in `internal/orchestrator/attention_wiring.go` and call it
 at the trigger point. The same identity rules apply — a stable
-`idempotency_key`, options bound to registered verbs — but no `fingerprint` is
-needed, because an event is observed once rather than reconciled.
+`idempotency_key`, options bound to registered verbs.
+
+A genuine event needs no fingerprint: it is observed once rather than
+reconciled. If instead your trigger site re-answers the same question on every
+cycle, the producer is standing and needs the full treatment:
+
+- `Standing: true` and a fingerprint, or `Raise` rejects it.
+- `ExpiresAt` set to the declared standing window
+  (`attention.StandingExpiry`), because expiry is now only the safety net for a
+  producer that stopped being evaluated. A short TTL on a producer that runs
+  every few minutes fires while the producer is perfectly healthy, and the
+  condition returns under a card the operator has already dismissed once.
+- A call to `autoResolveAttention(producer, observed)` at the end of the scan,
+  passing the **complete** set of keys the scan just saw. Invariant 1 applies
+  unchanged: only call it when the scan actually completed.
+
+`Raise` enforces one record per `idempotency_key` across expiry, so a condition
+that outlives its own TTL revives its card rather than minting a new one (#108).
 
 Set `Context.PR` when the request is about a pull request, so repo-scoped
 producers can dedupe against it.
