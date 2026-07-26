@@ -631,6 +631,78 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
     });
   });
 
+  // The catch path is the one that matters most: it runs when the stage threw,
+  // which is exactly when an operator needs to know what the agent was doing.
+  // It previously forwarded only tokens + errorText, so every exit record born
+  // on this path named the failure and its cost but could not say what command
+  // was in flight — causation had to be reconstructed by hand from raw session
+  // logs. Reachable whenever SkillRunner returns a result and a later step in
+  // the try block throws. (#147)
+  it("forwards forensic anchors on the CATCH path when a later step throws", async () => {
+    const { SkillRunner: MockSkillRunner } = await import("../../src/services/SkillRunner");
+    vi.mocked(MockSkillRunner).mockImplementation(function () {
+      return {
+        runStage: vi.fn().mockResolvedValue({
+          success: false,
+          exitCode: 143,
+          inputTokens: 212,
+          outputTokens: 63_293,
+          cacheReadTokens: 16_654_393,
+          cacheCreationTokens: 222_112,
+          costUsd: 7.28,
+          durationMs: 2_400_980,
+          errorText: "[runaway-progress] feature-validate terminated",
+          sessionId: "ddfe5686-ba8e-4ce8-93b7-a27794bc0396",
+          signal: "SIGTERM",
+          signalSource: "runaway-progress",
+          elapsedMs: 2_400_980,
+          idleMsAtExit: 621,
+          lastBashCommand: "flutter test integration_test/app_e2e/scoring_test.dart",
+          lastBashExit: 1,
+          stopHookErrored: false,
+          stderrTail: "Timed out after 30s waiting for: finder to match: widget with key",
+        }),
+        abort: vi.fn(),
+        isRunning: false,
+      } as any;
+    });
+
+    // Make the FIRST stageResult call throw so control reaches the catch path;
+    // the catch's own call must still succeed or there is nothing to assert.
+    let stageResultCalls = 0;
+    mockIpcCall.mockImplementation(async (method: string) => {
+      if (method === "pipeline.stageResult") {
+        stageResultCalls += 1;
+        if (stageResultCalls === 1) throw new Error("transport blip");
+      }
+      return {};
+    });
+
+    new PipelineBridge(ipc as any, logger);
+    ipc.emit("pipeline.runStage", makeRunStageParams());
+
+    await vi.waitFor(() => expect(stageResultCalls).toBe(2));
+
+    const catchCall = mockIpcCall.mock.calls.filter(
+      (c: unknown[]) => c[0] === "pipeline.stageResult"
+    )[1];
+    const payload = catchCall?.[1] as Record<string, unknown> | undefined;
+
+    // The whole point of the record: what was it doing when it died?
+    expect(payload?.lastBashCommand).toBe(
+      "flutter test integration_test/app_e2e/scoring_test.dart"
+    );
+    expect(payload?.stderrTail).toBe(
+      "Timed out after 30s waiting for: finder to match: widget with key"
+    );
+    expect(payload?.lastBashExit).toBe(1);
+    // And the surrounding context that makes it interpretable.
+    expect(payload?.signalSource).toBe("runaway-progress");
+    expect(payload?.sessionId).toBe("ddfe5686-ba8e-4ce8-93b7-a27794bc0396");
+    expect(payload?.idleMsAtExit).toBe(621);
+    expect(payload?.success).toBe(false);
+  });
+
   it("omits diagnostic fields when SkillRunner leaves them undefined (healthy run)", async () => {
     const { SkillRunner: MockSkillRunner } = await import("../../src/services/SkillRunner");
     vi.mocked(MockSkillRunner).mockImplementation(function () {

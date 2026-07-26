@@ -4922,6 +4922,28 @@ export function runStageSkillHeadless(
       }
     }
 
+    // ── Forensic-capture self-check (Issue #147) ────────────────────────
+    // `last_bash_command` is documented as the strongest single forensic
+    // anchor, on the reasoning that most silent kills happen mid-Bash. It was
+    // nonetheless absent from every exit record ever written, and because the
+    // field is `omitempty` its absence looked like a healthy terse record
+    // rather than a defect — so the gap survived unnoticed until a failure
+    // needed it and it was not there.
+    //
+    // A stage that parsed tool events but captured no Bash command means the
+    // stream shape and the parser have diverged. Say so on stderr, which is
+    // itself captured into `stderr_tail`, so the record carries evidence of
+    // its own incompleteness instead of quietly under-reporting.
+    if (!lastBashCommand && parsedToolEventCount > 0) {
+      callbacks?.onStderr?.(
+        `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+          `event(s) but captured no Bash command, so last_bash_command will be absent ` +
+          `from the exit record and a retro cannot answer "what was it doing when it ` +
+          `died?". The stream parser and the CLI's event shape have likely diverged. ` +
+          `(Issue #147)\n`
+      );
+    }
+
     // ── Worktree write containment: verdict (Issue #129) ────────────────
     // Compare each out-of-bounds repo against its pre-stage baseline. A stage
     // that wrote into a repo it does not own FAILS here, naming the repo and
