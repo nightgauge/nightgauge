@@ -8258,7 +8258,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           ceilingUsd: preFlightResult.ceilingUsd,
           ceilingRatio: preFlightResult.ceilingRatio,
           complexity: preFlightResult.complexity,
-          historicalAvgCost: preFlightResult.historicalAvgCost,
+          historicalCostUsd: preFlightResult.historicalCostUsd,
+          historicalSampleCount: preFlightResult.historicalSampleCount,
+          historicalSource: preFlightResult.historicalSource,
           shouldWarn: preFlightResult.shouldWarn,
           estimatorInputsCapturedAt: this.estimatorSnapshot.capturedAt,
           estimatorMode: this.estimatorSnapshot.mode,
@@ -8302,8 +8304,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             `Issue #${issueNumber} (${preFlightResult.complexity}) is projected ` +
               `to use ${(preFlightResult.ceilingRatio * 100).toFixed(0)}% of the ` +
               `$${preFlightResult.ceilingUsd.toFixed(0)} budget ceiling.` +
-              (preFlightResult.historicalAvgCost !== null
-                ? ` Similar issues averaged $${preFlightResult.historicalAvgCost.toFixed(2)}.`
+              (preFlightResult.historicalCostUsd !== null
+                ? ` Comparable runs hit $${preFlightResult.historicalCostUsd.toFixed(2)} at p75 ` +
+                  `(${preFlightResult.historicalSampleCount} runs).`
                 : ""),
             { modal: false },
             "Proceed Anyway",
