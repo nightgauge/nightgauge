@@ -660,7 +660,8 @@ func TestStructuredSectionMarkerGating(t *testing.T) {
 
 // TestIsNonGatingLine pins the predicate itself, so the "no edge" outcome for
 // ⏸️ is a deliberate classification rather than a side effect of which runes
-// happen to be in the entry regex's character class.
+// happen to be in the entry regex's character class, and so the precedence
+// between marker, declaration, and textual token is asserted directly.
 func TestIsNonGatingLine(t *testing.T) {
 	tests := []struct {
 		line string
@@ -677,11 +678,89 @@ func TestIsNonGatingLine(t *testing.T) {
 		{"- ❌ acme/platform#535 — not yet implemented", false},
 		{"Blocked by acme/platform#535", false},
 		{"", false},
+
+		// Precedence: an explicit declaration defeats an incidental textual
+		// token, but never the author-placed ⏸️ marker.
+		{"- Blocked by acme/platform#491 — needed for the deferred rollout", false},
+		{"- Depends on acme/platform#492 — the deferred rollout needs it", false},
+		{"Blocked by acme/platform#491 — this work was deferred to beta GTM", false},
+		{"- ⏸️ Blocked by acme/platform#535 — deferred, not gating", true},
+		{"- ⏸️ Depends on acme/platform#535", true},
 	}
 	for _, tc := range tests {
 		if got := isNonGatingLine(tc.line); got != tc.want {
 			t.Errorf("isNonGatingLine(%q) = %v, want %v", tc.line, got, tc.want)
 		}
+	}
+}
+
+// TestNonGatingPrecedence pins the precedence rule between the three signals
+// that can appear on one line: an author-placed marker, an explicit dependency
+// declaration, and an incidental textual token.
+//
+//	⏸️ marker         beats everything (an author placed it deliberately)
+//	explicit decl     beats a textual token ("Blocked by X" states intent directly)
+//	textual token     applies only where no explicit declaration is present
+//
+// Suppressing an edge is a *permissive* failure: the scheduler dispatches work
+// before its prerequisite, silently, with no operator-visible symptom. That is
+// strictly worse than the loud failure #126 fixed, so a word like "deferred"
+// appearing incidentally in a sentence must never override an author who
+// literally wrote "Blocked by". "deferred" is common vocabulary in these
+// repos — the epic behind the original incident says "deferred to beta GTM".
+func TestNonGatingPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		entry      string
+		wantEdge   bool
+		wantNumber int
+	}{
+		{
+			name:       "explicit blocked-by declaration beats an incidental deferred adjective",
+			entry:      "- Blocked by acme/platform#491 — needed for the deferred rollout",
+			wantEdge:   true,
+			wantNumber: 491,
+		},
+		{
+			name:       "explicit depends-on declaration beats an incidental deferred adjective",
+			entry:      "- Depends on acme/platform#492 — the deferred rollout needs it",
+			wantEdge:   true,
+			wantNumber: 492,
+		},
+		{
+			name:     "pause marker beats an explicit declaration",
+			entry:    "- ⏸️ Blocked by acme/platform#535 — deferred, not gating",
+			wantEdge: false,
+		},
+		{
+			name:     "textual token still suppresses where there is no explicit declaration",
+			entry:    "- ⚠️ acme/platform#535 — deferred, tracked for later",
+			wantEdge: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "## Cross-Repo Dependencies\n\n" + tc.entry + "\n"
+			refs := ParseCrossRepoRefs(body, nil)
+
+			if !tc.wantEdge {
+				if len(refs) != 0 {
+					t.Fatalf("entry %q must produce NO dependency edge, got %d: %+v",
+						tc.entry, len(refs), refs)
+				}
+				return
+			}
+
+			if len(refs) != 1 {
+				t.Fatalf("entry %q must produce exactly 1 dependency edge, got %d: %+v",
+					tc.entry, len(refs), refs)
+			}
+			if refs[0].Repo != "acme/platform" || refs[0].Number != tc.wantNumber {
+				t.Errorf("expected acme/platform#%d, got %s#%d",
+					tc.wantNumber, refs[0].Repo, refs[0].Number)
+			}
+		})
 	}
 }
 

@@ -440,18 +440,38 @@ scheduler edge.** Entries in this section are parsed into real dependency
 edges, and an open blocker stops the issue (and, via the epic cascade below,
 every sub-issue of an epic that carries it) from dispatching.
 
-| Marker                         | Becomes an edge? | Meaning                                                                        |
-| ------------------------------ | ---------------- | ------------------------------------------------------------------------------ |
-| `✅`                           | **Yes**          | Verified as satisfied (sets `Verified`); still an edge until the issue closes. |
-| `❌`                           | **Yes**          | Known-unsatisfied dependency.                                                  |
-| `⚠️`                           | **Yes**          | "Watch this" — a real dependency with caveats, deliberately still gating.      |
-| `⏸️`                           | **No**           | Deferred / recorded for context. Documentation, not a dependency.              |
-| `deferred` / `not-gating` text | **No**           | Same as `⏸️`, for authors writing prose instead of a marker.                   |
-| _(no marker)_                  | **No**           | The entry regex requires a status marker; unmarked lines are ignored.          |
+| Marker                         | Becomes an edge? | Meaning                                                                                                                                                        |
+| ------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `✅`                           | **Yes**          | Verified as satisfied (sets `Verified`); still an edge until the issue closes.                                                                                 |
+| `❌`                           | **Yes**          | Known-unsatisfied dependency.                                                                                                                                  |
+| `⚠️`                           | **Yes**          | "Watch this" — a real dependency with caveats, deliberately still gating.                                                                                      |
+| `⏸️`                           | **No**           | Deferred / recorded for context. Documentation, not a dependency. Unconditional — see precedence below.                                                        |
+| `deferred` / `not-gating` text | **No\***         | Same as `⏸️`, for authors writing prose instead of a marker. **\*Except** on a line that also declares `Blocked by …` / `Depends on …` — see precedence below. |
+| _(no marker)_                  | **No**           | The entry regex requires a status marker; unmarked lines are ignored.                                                                                          |
 
-A line carrying a non-gating marker produces no edge from **any** pattern —
-including a `Blocked by …` phrase or an issue URL on the same line. So
-`- ⏸️ Blocked by acme/store#209 — deferred` is inert, by design.
+#### Precedence when signals conflict
+
+Three things on one line can disagree: an author-placed marker, an explicit
+dependency declaration, and a textual token. They resolve strongest-first:
+
+1. **The `⏸️` marker beats everything.** Somebody typed it deliberately, so it
+   wins even on a `Blocked by …` line — writing both means the marker.
+   `- ⏸️ Blocked by acme/store#209 — deferred` is inert, by design.
+2. **An explicit declaration beats a textual token.** `deferred`,
+   `not-gating`, and `non-gating` are ordinary words that show up
+   incidentally, so they never override an author who wrote `Blocked by …` or
+   `Depends on …` outright on that same line.
+   `- Blocked by acme/platform#491 — needed for the deferred rollout` **is** an
+   edge: the declaration is the stated intent; "deferred" is describing the
+   rollout, not the dependency.
+3. **Otherwise the textual token suppresses.** With no declaration on the line,
+   `deferred` / `not-gating` / `non-gating` mean what they say.
+
+The asymmetry is deliberate. Dropping a real edge is a _permissive_ failure —
+the scheduler dispatches work before its prerequisite, silently, with no
+symptom an operator can see. That is worse than the loud failure this section
+exists to prevent (a spurious edge halting a fleet), so an incidental adjective
+never gets to delete a dependency somebody declared explicitly.
 
 Use `⏸️` (or the word `deferred`) when you want to record a relationship the
 work has been rescoped away from. Use `⚠️` only when the dependency really

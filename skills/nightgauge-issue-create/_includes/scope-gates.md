@@ -71,11 +71,14 @@ provide specific functionality, verify those assumptions against reality:
 
    **The marker decides whether the entry gates dispatch.** `✅`, `❌`, and `⚠️`
    each become a real scheduler edge — an open blocker stops this issue, and on
-   an epic it stops every sub-issue too. `⏸️` (or the words `deferred` /
-   `not-gating`) records the relationship without creating an edge. Never write
-   `⚠️` on a dependency the work has been rescoped away from; use `⏸️`. Full
-   marker contract: `docs/AUTONOMOUS_ORCHESTRATOR.md` §
-   "Which markers gate dispatch".
+   an epic it stops every sub-issue too. `⏸️` records the relationship without
+   creating an edge, and beats everything else on the line. The words
+   `deferred` / `not-gating` do the same, **except** on a line that also says
+   `Blocked by …` / `Depends on …` — an explicit declaration outranks a word
+   that may just be describing something else ("blocked by platform #491 —
+   needed for the deferred rollout" stays an edge). Never write `⚠️` on a
+   dependency the work has been rescoped away from; use `⏸️`. Full marker
+   contract: `docs/AUTONOMOUS_ORCHESTRATOR.md` § "Which markers gate dispatch".
 
 **Why this phase exists**: Issues created with unverified API assumptions
 produce code that works against mocks but fails against the real platform. This

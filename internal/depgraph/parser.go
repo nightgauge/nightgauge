@@ -62,15 +62,12 @@ var (
 		`(?m)^[ \t]*-\s*([✅❌⚠️⏸]+)\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
 	)
 
-	// Markers that declare a line to be documentation rather than a gating
-	// dependency: the ⏸️ pause marker, or an explicit textual token. A line
-	// carrying any of these produces no dependency edge from any pattern.
-	// See #126 — a line written to say "this is deferred, it does not gate us"
-	// used to block dispatch exactly like a real blocker, and because the
-	// epic-blockedBy cascade propagates a parent's blockers to its sub-issues,
-	// one such line stalled an entire epic sub-tree with no visible cause.
-	reNonGatingMarker = regexp.MustCompile(
-		`(?i)⏸|\bdeferred\b|\bnot[- ]gating\b|\bnon[- ]gating\b`,
+	// Textual tokens that declare a line to be documentation rather than a
+	// gating dependency. Unlike the ⏸️ marker these are ordinary English words
+	// that can appear incidentally, so they yield to an explicit dependency
+	// declaration on the same line — see isNonGatingLine.
+	reNonGatingText = regexp.MustCompile(
+		`(?i)\bdeferred\b|\bnot[- ]gating\b|\bnon[- ]gating\b`,
 	)
 
 	// Section header detection for "## Cross-Repo Dependencies"
@@ -108,17 +105,43 @@ var (
 	)
 )
 
-// isNonGatingLine reports whether a body line explicitly declares itself
-// documentation rather than a gating dependency.
+// nonGatingMarker is the ⏸️ "pause" marker. Only the base rune is matched so
+// the marker is recognized with or without its U+FE0F variation selector.
+const nonGatingMarker = "⏸"
+
+// isNonGatingLine reports whether a body line declares itself documentation
+// rather than a gating dependency.
 //
 // The status markers the "## Cross-Repo Dependencies" format invites authors
-// to use are only meaningful if the scheduler honours them. ⏸️ (and the
-// textual "deferred" / "not-gating" / "non-gating" tokens) mean "recorded for
-// context, does not block us"; ✅, ❌ and ⚠️ all remain gating. The marker
-// contract is documented in docs/AUTONOMOUS_ORCHESTRATOR.md so that authors
+// to use are only meaningful if the scheduler honours them: ⏸️ and the textual
+// "deferred" / "not-gating" / "non-gating" tokens mean "recorded for context,
+// does not block us", while ✅, ❌ and ⚠️ all remain gating.
+//
+// Precedence, strongest first:
+//
+//  1. The ⏸️ marker suppresses unconditionally. An author placed it there
+//     deliberately, so it wins even on a "Blocked by" line — writing both
+//     means the marker.
+//  2. An explicit dependency declaration ("Blocked by …" / "Depends on …")
+//     defeats the textual tokens. Those tokens are ordinary English words that
+//     appear incidentally — "Blocked by platform #491 — needed for the
+//     deferred rollout" is a real blocker, and dropping it would dispatch work
+//     before its prerequisite, silently and with no operator-visible symptom.
+//     A permissive failure like that is strictly worse than the loud one this
+//     suppression exists to prevent, so a stray adjective never overrides an
+//     author who wrote the declaration outright.
+//  3. Otherwise a textual token suppresses.
+//
+// The contract is documented in docs/AUTONOMOUS_ORCHESTRATOR.md so authors
 // know these tokens carry scheduling weight and are not decoration.
 func isNonGatingLine(line string) bool {
-	return reNonGatingMarker.MatchString(line)
+	if strings.Contains(line, nonGatingMarker) {
+		return true
+	}
+	if reBlockedByOrDependsOnMarker.MatchString(line) {
+		return false
+	}
+	return reNonGatingText.MatchString(line)
 }
 
 // lineAt returns the whole line containing byte offset off in s, trimmed of
