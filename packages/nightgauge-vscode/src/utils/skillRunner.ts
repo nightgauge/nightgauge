@@ -152,6 +152,7 @@ import {
 import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAwareRouting";
 import { withBehavioralPreamble } from "./behavioralPreamble";
 import { ProgressMonitor, recordToolCallProgress, isBlindMonitorKill } from "./progressMonitor";
+import { preserveWorkInProgress, shouldPreserveWorkOnExit } from "./preserveWorkInProgress";
 import {
   resolveStageAdapter,
   walkAdapterFallback,
@@ -283,6 +284,18 @@ export interface SkillRunResult {
    * (Issue #3508)
    */
   costWarnFired?: boolean;
+  /**
+   * SHA of the work-in-progress commit written when a guard kill (runaway /
+   * stall / hard-cap / quota / abort) terminated the stage with a dirty
+   * worktree (Issue #128).
+   *
+   * A killed stage's deliverable exists only in the worktree — feature-dev
+   * never commits (#1608) — so the kill path commits it to the stage branch
+   * rather than leaving it to be pruned. Undefined when the tree was clean,
+   * when the stage exited normally, or when the commit was refused (protected
+   * branch / detached HEAD / git error), each of which is logged.
+   */
+  wipCommitSha?: string;
   /**
    * The dollar ceiling that was actually crossed to trigger the kill (USD).
    * Only populated when a real dollar ceiling fired. It is `undefined` for the
@@ -3349,6 +3362,8 @@ export function runStageSkillHeadless(
   // stalled) and the kill is suppressed — a blind monitor must never shoot.
   let parsedToolEventCount = 0;
   let runawayFeedDisconnectWarned = false;
+  // One-shot marker for the #128 activity gate log (see checkRunaway).
+  let runawayActivityGateLogged = false;
 
   // Warn threshold (Issue #3508): historicalMedian × cost_warn_multiplier.
   // Populated by the caller (HeadlessOrchestrator) and passed in as a parameter.
@@ -3530,6 +3545,26 @@ export function runStageSkillHeadless(
     if (result.shouldWarn && !costWarnFired) {
       callbacks?.onStderr?.(
         `[runaway-progress-warn] Stage ${stage}: ${result.reason} (Issue #3783)\n`
+      );
+    }
+
+    // One-shot observability for the activity gate (Issue #128): the
+    // productive window elapsed but the stage is still making novel tool
+    // calls, so the kill was deferred. Logged once — this is the state a
+    // healthy stage sits in for its whole terminal verification phase, and
+    // the #128 incident is unreadable in retrospect without it.
+    if (
+      !force &&
+      !result.shouldKill &&
+      !runawayActivityGateLogged &&
+      result.msSinceLastProgress > progressRunawayWindowMs
+    ) {
+      runawayActivityGateLogged = true;
+      callbacks?.onStderr?.(
+        `[runaway-progress-activity-gate] Stage ${stage}: no productive progress for ` +
+          `${Math.round(result.msSinceLastProgress / 1000)}s but tool activity ` +
+          `${Math.round(result.msSinceLastActivity / 1000)}s ago — not killing a working ` +
+          `stage. (Issue #128)\n`
       );
     }
 
@@ -4652,7 +4687,11 @@ export function runStageSkillHeadless(
   });
 
   // Handle process completion
-  proc.on("close", (exitCode) => {
+  // `async` so the #128 work-in-progress preservation below can await git
+  // without a sync subprocess (#2884 forbids execFileSync on the extension
+  // host). Every statement before that await still runs synchronously on the
+  // close tick; only the terminal onComplete is deferred by one microtask.
+  proc.on("close", async (exitCode) => {
     stageCompleted = true;
     clearStallTicker();
     // Drain the lifecycle trace recorder's append chain (fail-open, #180).
@@ -4781,11 +4820,45 @@ export function runStageSkillHeadless(
           `as the stage cost so the killed stage's real burn is recorded (#296).\n`
       );
     }
+    // ── Work-in-progress preservation (Issue #128) ──────────────────────
+    // Every guard kill (progress-runaway, idle-stall, hard-cap, quota
+    // fast-fail, autonomous abort) funnels through this single close handler,
+    // so one call here covers them all. A killed stage's deliverable lives
+    // ONLY in the worktree — feature-dev never commits (#1608) — so a kill
+    // with a dirty tree destroys completed work that nothing downstream can
+    // see. Commit it to the stage branch instead, anchored by a durable ref
+    // that survives the worktree/branch teardown a re-dispatch performs.
+    // Runs before
+    // onComplete so the commit is durable before the Go scheduler acts on the
+    // result (it may rebuild or prune the worktree). Fail-open by contract —
+    // preserveWorkInProgress never throws.
+    let wipCommitSha: string | undefined;
+    if (shouldPreserveWorkOnExit({ success, stallKilled, costCapExceeded })) {
+      const wip = await preserveWorkInProgress({
+        cwd: workspaceRoot,
+        stage,
+        ...(issueNumber != null ? { issueNumber } : {}),
+        killReason: exitSignalSource || "stage-kill",
+      });
+      if (wip.outcome === "committed") {
+        wipCommitSha = wip.commitSha;
+        callbacks?.onStderr?.(
+          `[wip-preserved] Stage ${stage} was terminated with uncommitted work — ${wip.detail}. ` +
+            `The work is committed, not discarded. (Issue #128)\n`
+        );
+      } else if (wip.outcome !== "clean") {
+        callbacks?.onStderr?.(
+          `[wip-preserve-skipped] Stage ${stage}: ${wip.detail}. (Issue #128)\n`
+        );
+      }
+    }
+
     activeProcesses.delete(processKey);
     callbacks?.onComplete?.({
       success,
       exitCode,
       error: inferredError,
+      wipCommitSha,
       tokenUsage: bookedUsage?.usage,
       costEstimated: bookedUsage?.estimated || undefined,
       sessionId: capturedSessionId,

@@ -92,16 +92,28 @@ describe("ProgressMonitor", () => {
     );
 
     // Distinct tool calls every 2s for 12s — under the (huge) churn threshold,
-    // so churn does not fire — but they do NOT advance the no-progress window,
-    // so the no-progress kill DOES fire. (Old behaviour: this would NOT kill.)
+    // so churn does not fire — and they do NOT advance the PRODUCTIVE window.
     for (let i = 0; i < 6; i++) {
       vi.advanceTimersByTime(2_000);
       monitor.recordSignal("distinct_tool", `cmd-${i}`);
     }
 
-    const result = monitor.check(15.0);
-    expect(result.shouldKill).toBe(true);
-    expect(result.productiveSignals).toBe(0);
+    // The #3851 invariant this test exists for: novel tool calls buy no
+    // productive credit whatsoever — the productive window is fully elapsed.
+    const active = monitor.check(15.0);
+    expect(active.productiveSignals).toBe(0);
+    expect(active.msSinceLastProgress).toBeGreaterThan(5_000);
+    // #128 changed WHEN the kill lands, not what counts as progress: while the
+    // stage is still issuing novel tool calls it is working, not stalled, so
+    // the no-progress kill is deferred (a stage's terminal verification phase
+    // looks exactly like this).
+    expect(active.shouldKill).toBe(false);
+
+    // Once the tool calls stop too, the kill fires as before.
+    vi.advanceTimersByTime(5_001);
+    const wedged = monitor.check(15.0);
+    expect(wedged.shouldKill).toBe(true);
+    expect(wedged.productiveSignals).toBe(0);
   });
 
   // ── AC Regression Test B' (cheap identical loop) ─────────────────────────
@@ -150,20 +162,28 @@ describe("ProgressMonitor", () => {
     expect(result.shouldKill).toBe(false);
   });
 
-  it("does NOT reset the window for a distinct_tool signal (#3851)", () => {
+  it("does NOT reset the productive window for a distinct_tool signal (#3851)", () => {
     const monitor = new ProgressMonitor(
       makeConfig({ noProgressWindowMs: 5_000, churnToolThreshold: 1000 })
     );
 
-    // A novel tool call at 4.5s does NOT reset the window, so by 5.5s the
-    // no-progress window has elapsed and the stage is killed. (This is the
-    // opposite of the pre-#3851 behaviour.)
+    // A novel tool call at 4.5s does NOT reset the PRODUCTIVE window, so by
+    // 5.5s that window has fully elapsed. (This is the opposite of the
+    // pre-#3851 behaviour, where any novel signature reset it.)
     vi.advanceTimersByTime(4_500);
     monitor.recordSignal("distinct_tool", "cmd-a");
     vi.advanceTimersByTime(1_000); // total 5.5s since construction, no productive signal
 
     const result = monitor.check(1.0);
-    expect(result.shouldKill).toBe(true);
+    expect(result.msSinceLastProgress).toBeGreaterThan(5_000);
+    expect(result.productiveSignals).toBe(0);
+    // #128: the separate ACTIVITY clock was refreshed 1s ago, so the kill is
+    // deferred while the stage is demonstrably alive...
+    expect(result.shouldKill).toBe(false);
+
+    // ...and fires as soon as that clock goes cold too.
+    vi.advanceTimersByTime(5_001);
+    expect(monitor.check(1.0).shouldKill).toBe(true);
   });
 
   // ── distinct_tool deduplication ─────────────────────────────────────────

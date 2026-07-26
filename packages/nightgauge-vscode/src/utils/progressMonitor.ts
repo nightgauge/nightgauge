@@ -25,7 +25,31 @@
  *   - `ci_progress`  — CI checks advanced
  *
  * `distinct_tool` (and duplicate `file_change` to an already-seen path) is
- * tracked ONLY for the churn detector below — it never advances the window.
+ * tracked ONLY for the churn detector below — it never advances the
+ * PRODUCTIVE window.
+ *
+ * ## Activity gate on the no-progress kill (Issue #128)
+ *
+ * Productive signals are *artifact* signals. But the terminal phase of every
+ * stage — final verification, scope-tidying, the self-assessment epilogue —
+ * creates no artifacts by definition: it runs tests, reads files, reverts
+ * out-of-scope edits. Under a productive-signals-only rule that phase is
+ * indistinguishable from a wedged process, so the monitor was most likely to
+ * fire exactly when a stage was closest to succeeding (and the kill was
+ * maximally destructive, because `feature-dev` commits nothing — #1608).
+ *
+ * The fix is NOT a bigger window (that only delays the misfire); it is a
+ * second clock. `lastActivityMs` tracks NOVEL tool invocations, and the plain
+ * no-progress kill now requires BOTH clocks to be cold:
+ *
+ *   - no productive signal for `noProgressWindowMs`  (unchanged), AND
+ *   - no novel tool call for `noProgressWindowMs`    (new).
+ *
+ * "Novel" is load-bearing: a process re-issuing the SAME tool signature is
+ * spinning, not working, and its repeats are deduplicated before they reach
+ * the activity clock — so an identical-call loop is still killed. A genuinely
+ * wedged process makes no tool calls at all and is still killed on the same
+ * schedule as before.
  *
  * ## Churn detector (Issue #3851)
  *
@@ -35,6 +59,12 @@
  *   2. distinct-tool signatures climbed by ≥ `churnToolThreshold` since the
  *      last productive signal, and
  *   3. no productive signal has arrived for at least `noProgressWindowMs`.
+ *
+ * The churn detector is deliberately NOT activity-gated — killing a stage that
+ * is busy but not converging is its entire purpose (#3811: 530 tool calls, 0
+ * commits, $112). It remains the bound on how long the activity gate above can
+ * keep a non-productive stage alive, alongside the stage hard-cap and the
+ * catastrophic cost backstop.
  *
  * This is deliberately conservative so a HEALTHY long stage (steady commits /
  * new-file writes / phase markers) is NEVER killed — only a stage that is
@@ -97,11 +127,22 @@ export interface ProgressCheckResult {
   productiveSignals: number;
   /** Number of distinct tool signatures observed since the last productive signal. */
   churnSinceProgress: number;
+  /**
+   * Ms since the last NOVEL tool invocation (or construction) — the "is the
+   * process alive?" clock the no-progress kill is gated on (Issue #128).
+   */
+  msSinceLastActivity: number;
 }
 
 export class ProgressMonitor {
   /** Wall-clock of the last PRODUCTIVE signal (advances the no-progress window). */
   private lastProgressMs: number;
+  /**
+   * Wall-clock of the last NOVEL tool invocation OR productive signal
+   * (Issue #128). Repeated identical tool signatures are deduplicated before
+   * they reach this clock, so a spin loop never refreshes it.
+   */
+  private lastActivityMs: number;
   private readonly distinctToolSigs = new Set<string>();
   /** Paths that have already received a write — re-writes are churn, not progress. */
   private readonly writtenPaths = new Set<string>();
@@ -113,6 +154,16 @@ export class ProgressMonitor {
 
   constructor(private readonly config: ProgressMonitorConfig) {
     this.lastProgressMs = Date.now();
+    this.lastActivityMs = this.lastProgressMs;
+  }
+
+  /**
+   * Quiet-activity window (Issue #128). Derived from `noProgressWindowMs` so
+   * the monitor keeps exactly ONE tunable window — a second knob would let the
+   * two clocks drift out of sync with nothing to reconcile them.
+   */
+  private get activityWindowMs(): number {
+    return this.config.noProgressWindowMs;
   }
 
   /**
@@ -140,6 +191,10 @@ export class ProgressMonitor {
       this.distinctToolSigs.add(sig);
       this.totalSignals++;
       this.churnSinceProgress++;
+      // A NOVEL tool invocation proves the process is alive and doing
+      // something new — it gates (but never satisfies) the no-progress kill.
+      // Issue #128.
+      this.lastActivityMs = Date.now();
       return;
     }
 
@@ -173,6 +228,10 @@ export class ProgressMonitor {
   /** Mark a productive signal: advance the window and reset the churn gauge. */
   private advanceProgress(): void {
     this.lastProgressMs = Date.now();
+    // Productive progress is also activity — keep the two clocks consistent
+    // so a stage that only ever emits productive signals is never treated as
+    // "no tool activity" by the gate below (Issue #128).
+    this.lastActivityMs = this.lastProgressMs;
     this.totalSignals++;
     this.productiveSignals++;
     this.churnSinceProgress = 0;
@@ -199,6 +258,18 @@ export class ProgressMonitor {
   }
 
   /**
+   * Ms since the last NOVEL tool invocation or productive signal (Issue #128).
+   *
+   * This is the "is the process alive?" clock. A stage in its terminal
+   * verification / epilogue phase keeps this near zero while
+   * {@link msSinceLastProductiveProgress} grows without bound; a wedged
+   * process lets both grow together.
+   */
+  get msSinceLastActivity(): number {
+    return Date.now() - this.lastActivityMs;
+  }
+
+  /**
    * Evaluate whether the stage should be killed or warned.
    *
    * Call from the 30-second stall ticker. O(1) — no I/O.
@@ -208,6 +279,7 @@ export class ProgressMonitor {
       signalsSeen: this.totalSignals,
       productiveSignals: this.productiveSignals,
       churnSinceProgress: this.churnSinceProgress,
+      msSinceLastActivity: this.msSinceLastActivity,
     };
 
     if (!this.config.enabled) {
@@ -297,9 +369,34 @@ export class ProgressMonitor {
       };
     }
 
+    // ── Activity gate (Issue #128) ────────────────────────────────────────
+    // The productive window has elapsed, but the stage is still issuing NOVEL
+    // tool calls — running tests, reading files, reverting an out-of-scope
+    // edit, writing its self-assessment. That is the terminal phase of a
+    // healthy stage, not a stall, and killing there destroys work no
+    // downstream stage can recover (`feature-dev` commits nothing — #1608).
+    // Defer the no-progress kill while the activity clock is warm. The churn
+    // detector above, the stage hard-cap, and the catastrophic cost backstop
+    // remain in force, so this defers the kill — it cannot disable it.
+    const msSinceLastActivity = this.msSinceLastActivity;
+    if (msSinceLastActivity <= this.activityWindowMs) {
+      return {
+        shouldKill: false,
+        shouldWarn: false,
+        reason:
+          `No productive progress for ${Math.round(msSinceLastProgress / 1000)}s, but tool ` +
+          `activity ${Math.round(msSinceLastActivity / 1000)}s ago ` +
+          `(activity window: ${this.activityWindowMs / 1000}s) — working, not stalled ` +
+          `(Issue #128)`,
+        msSinceLastProgress,
+        ...base,
+      };
+    }
+
     const reason =
       `No productive progress (commit / new file / phase / CI) for ` +
       `${Math.round(msSinceLastProgress / 1000)}s ` +
+      `and no tool activity for ${Math.round(msSinceLastActivity / 1000)}s ` +
       `(window: ${this.config.noProgressWindowMs / 1000}s, productive signals: ${this.productiveSignals}, ` +
       `activity signals: ${this.totalSignals})`;
 

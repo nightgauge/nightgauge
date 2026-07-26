@@ -751,6 +751,40 @@ names a PR that is green and waiting on a person.
 See [ATTENTION_PRODUCERS.md](ATTENTION_PRODUCERS.md) and
 [ADR 015](decisions/015-decision-requests.md) (Decisions L and M).
 
+### A stage was killed and its implementation is "gone" (#128)
+
+**Symptom:** a stage is terminated by a guard —
+`[runaway-progress-exceeded]`, `[stall-killed]`, `exceeded stage_hard_cap`,
+`[rate-limit-quota-exhausted]` — and the implementation it had already written
+cannot be found. `feature-validate` reports that there is no implementation
+work, or the retry starts from an empty branch.
+
+**Root cause:** `feature-dev` never commits (#1608). Between its first edit and
+`feature-validate` Phase 5, the entire deliverable exists only as uncommitted
+worktree changes. Re-dispatching an issue force-removes the worktree, runs
+`git branch -D <branch>`, and re-creates the branch from `origin/<base>`
+(`WorktreeManager.create`) — so anything uncommitted, and anything committed to
+that branch alone, is gone.
+
+**Where the work is now.** Since #128 every guard kill commits the dirty tree
+before the process is reaped, and anchors the commit outside `refs/heads/`:
+
+```bash
+# In the repo the issue was worked in (not the worktree — the worktree is gone):
+git for-each-ref --sort=-creatordate --format='%(refname) %(creatordate:short)' \
+  refs/nightgauge/wip
+git show --stat <ref>          # what was preserved
+git cherry-pick <ref>          # or: git checkout <ref> -- <paths>
+```
+
+Look for `[wip-preserved]` in the stage log to confirm the commit was written,
+or `[wip-preserve-skipped]` with the reason it was not (clean tree, protected
+branch, detached HEAD, or a git error such as a stale `index.lock`).
+
+**If the kill predates #128** the changes may still be sitting in the worktree
+under `.nightgauge/worktrees/issue-<N>/` — provided the issue has not been
+re-dispatched since. Copy them out before re-queuing the issue.
+
 ---
 
 ## Getting Help

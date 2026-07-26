@@ -120,8 +120,43 @@ returns `shouldKill: true` when:
 2. `costUsd >= minCostToActivateUsd` (default $0.50 — prevents false kills on
    short/cheap stages)
 3. `Date.now() - lastProgressMs > noProgressWindowMs` (default 2 min)
-4. `observeOnly: false` (maximum performance mode forces this to true — warns but
+4. `Date.now() - lastActivityMs > noProgressWindowMs` — the **activity gate**
+   (Issue #128), see below
+5. `observeOnly: false` (maximum performance mode forces this to true — warns but
    never kills)
+
+### Activity Gate (Issue #128)
+
+Productive signals are _artifact_ signals, but the terminal phase of every stage
+— final verification, scope-tidying, the self-assessment epilogue — produces no
+artifacts by definition. Under a productive-signals-only rule that phase is
+indistinguishable from a wedged process, so the monitor was most likely to fire
+exactly when a stage was closest to succeeding. A `feature-dev` stage was killed
+153s into precisely that phase, after 3 productive signals and a complete
+implementation.
+
+The monitor therefore keeps a second clock, `lastActivityMs`, advanced by every
+**novel** tool invocation (and by every productive signal). The plain
+no-progress kill requires both clocks to be cold. "Novel" is load-bearing:
+repeated identical tool signatures are deduplicated before they reach the
+activity clock, so a spin loop is still killed, and a wedged process — which
+issues no tool calls at all — is killed on exactly the schedule it was before.
+
+The gate defers the no-progress kill; it cannot disable it. The churn detector
+(below), the stage hard-cap, and the catastrophic cost backstop all still fire
+against a busy-but-unproductive stage. When the gate defers a kill, skillRunner
+logs `[runaway-progress-activity-gate]` once so the deferral is visible in a
+retro.
+
+### Churn Detector
+
+A non-converging stage spins through many distinct tool signatures while making
+no productive progress. The churn detector kills when cost is past the
+activation floor, distinct-tool signatures have climbed by
+`churn_tool_threshold` (default 40) since the last productive signal, and the
+productive window has elapsed. It is deliberately **not** activity-gated —
+killing a stage that is busy but not converging is its entire purpose (#3811:
+530 tool calls, 0 commits, $112).
 
 ### Dollar-Ceiling Demotion
 
@@ -162,3 +197,37 @@ When the progress monitor fires, `exitSignalSource = "runaway-progress"` is set
 and the kill marker `[runaway-progress-exceeded]` is emitted. The Go
 `failure_handler.go` maps this to `TerminalKindRunawayProgress` — same recovery
 path as stall-kill (30m backoff, board→Ready, no lifetime-failure-cap increment).
+
+### Work-in-Progress Preservation (Issue #128)
+
+`feature-dev` never commits — the commit lives in `feature-validate` Phase 5
+(#1608). So between a stage's first edit and that commit, the entire deliverable
+exists only as uncommitted changes in the worktree, and **every** guard kill
+lands on work nothing downstream can see.
+
+`preserveWorkInProgress` (`packages/nightgauge-vscode/src/utils/`) closes that
+hole. Every kill path — progress-runaway, idle-stall, hard-cap, quota fast-fail,
+autonomous abort — funnels through skillRunner's single process-close handler,
+which calls it whenever the stage was killed by a guard (`shouldPreserveWorkOnExit`)
+and the worktree is dirty. It:
+
+- commits the worktree to the stage branch with `--no-verify` and
+  `commit.gpgsign=false`, so no hook or pinentry prompt can block a kill path;
+- refuses on `main` / `master` and on a detached HEAD, leaving the work in place
+  rather than committing it somewhere dangerous or unreachable;
+- writes a durable anchor ref under `refs/nightgauge/wip/`. Re-dispatch
+  force-removes the worktree and runs `git branch -D <branch>` before
+  re-creating the branch from `origin/<base>` (`WorktreeManager.create`), which
+  would orphan a branch-only commit; the anchor survives both, so the work is
+  always a `git log refs/nightgauge/wip/` away;
+- never throws — every failure mode is reported and logged
+  (`[wip-preserved]` / `[wip-preserve-skipped]`), never propagated into the kill
+  path.
+
+Stages that fail on their own are left alone: a non-zero exit is the stage's own
+verdict and `feature-validate` explicitly leaves a failed tree in place for
+triage. Only work the pipeline destroyed is work the pipeline preserves.
+
+This is the safety net that makes the whole class of guard kill non-destructive
+regardless of how the guards are tuned — a mis-tuned kill costs a retry, never
+the work.
