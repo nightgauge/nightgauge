@@ -4700,10 +4700,12 @@ export function runStageSkillHeadless(
     const stdoutText = appendTail(stdoutRawTail, stdoutBuffer, OUTPUT_ERROR_TAIL_MAX_CHARS).trim();
 
     // Safety-net fallback (Issue #2919): if the streaming line parser missed the
-    // CLI's terminal `type:"result"` envelope but it did make it into the raw
-    // stdout tail, rescue the usage block here. Prevents slot badges from
-    // showing $0.00 / 0 tokens on successful runs where stream-json framing
-    // raced the close event or the envelope was wrapped in unexpected output.
+    // stage's terminal usage envelope (`type:"result"` from the Claude CLI, or
+    // the SDK CLI's terminal workflow-agent node for every SDK-routed adapter —
+    // #111) but it did make it into the raw stdout tail, rescue the usage block
+    // here. Prevents slot badges from showing $0.00 / 0 tokens on successful
+    // runs where stream-json framing raced the close event or the envelope was
+    // wrapped in unexpected output.
     if (success && !tokenAccumulator.hasTokens() && stdoutText.length > 0) {
       const rescued = extractTokenUsage(stdoutText);
       if (rescued) {
