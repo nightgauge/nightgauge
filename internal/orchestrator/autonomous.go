@@ -3243,6 +3243,41 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// Issue #163: the run's branch has forked from its remote — the remote
+		// head is not reachable from the local tip, so every push is rejected as
+		// non-fast-forward. Retrying cannot clear it: the next run rebuilds the
+		// same local history against the same unchanged remote and is rejected
+		// identically, after regenerating a full implementation to get there.
+		// That loop is the defect — a full pipeline's spend per cycle, and a
+		// LifetimeIssueFailures increment per cycle, for a condition the pipeline
+		// itself created by leaving a killed stage's pushed commit on origin.
+		//
+		// So: no lifetime-cap increment, no cascade-breaker feed (a forked branch
+		// says nothing about the health of the factory), no board revert to Ready
+		// — the issue is deliberately left where it is so nothing re-dispatches
+		// it. The Action Center card raised by the scheduler's pre-flight is the
+		// way back in: resolving it clears the failure cooldown and requeues.
+		if terminalFailureKind == TerminalKindBranchForked {
+			detail := failureDetail
+			if detail == "" {
+				detail = "branch forked from origin — pushes rejected as non-fast-forward"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail)
+			log.Printf("autonomous: %s#%d branch-forked (unrecoverable by retry — left for human triage, queue continues) — %s",
+				repo, issue, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordCompletion(success, 0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
 		// Issue #3691: pr-merge "completed but PR not merged" is an
 		// externally-blocked state, not a generic failure. The TS-side
 		// diagnostic in HeadlessOrchestrator.diagnosePrMergeBlocker has

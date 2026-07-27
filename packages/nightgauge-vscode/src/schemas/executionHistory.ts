@@ -338,6 +338,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `adapter_auth_failed` — pipeline-start adapter auth gate refused to launch (probe timed out after retry, or logged out); retryable infra, no cascade/lifetime-cap (#312)
  *  - `no_changes_produced` — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for, e.g. a dispatched human-only issue (#317)
  *  - `validation_failed` — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash (#326)
+ *  - `branch_forked` — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it (#163)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -366,6 +367,7 @@ export const TerminalFailureKindSchema = z.enum([
   "adapter_auth_failed", // Issue #312 — adapter auth pre-flight refused to launch (probe timed out after retry, or logged out); retryable infra
   "no_changes_produced", // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure
+  "branch_forked", // Issue #163 — branch diverged from its remote; pushes rejected non-fast-forward, unrecoverable by retry
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 

@@ -429,6 +429,16 @@ func (rs *RuntimeState) SetBranch(branch string) {
 	rs.Branch = branch
 }
 
+// FeatureBranch returns the recorded feature branch, or "" before issue-pickup
+// has resolved one. A lock-safe single-field read: the branch-fork pre-flight
+// (#163) needs it once per stage, and taking a full Snapshot (a deep copy of
+// every stage record) to read one string is a cost that scales with the run.
+func (rs *RuntimeState) FeatureBranch() string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Branch
+}
+
 // SetGateResults stores quality gate results (populated after feature-validate).
 func (rs *RuntimeState) SetGateResults(results []GateResult) {
 	rs.mu.Lock()

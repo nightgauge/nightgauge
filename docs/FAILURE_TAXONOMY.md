@@ -236,6 +236,41 @@ record may carry both fields, neither, or only one.
 | `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra |
 | `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope       |
 | `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                  |
+| `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action     |
+
+`branch_forked` (Issue #163) is the one kind that is **strictly harmful to
+retry**. The remote branch head is not reachable from the run's local tip, so
+every push is rejected as non-fast-forward; a retry rebuilds the same local
+history against the same unchanged remote and is rejected identically — after
+regenerating a full implementation (~$25 observed) to get there. Two causes
+produce it, and neither is recoverable by the pipeline unaided:
+
+1. A stage SIGTERM-killed mid-`git push` that had **already pushed**. The kill
+   discards the local run; it does not discard the remote commit. The next
+   attempt branches from the base again and forks.
+2. An operator pushing to a pipeline-owned branch, which makes
+   `--force-with-lease` refuse.
+
+Three mechanisms address it, all deterministic:
+
+- **Pre-flight** (`CheckBranchFork`, `internal/orchestrator/branch_fork.go`) —
+  one `git ls-remote` before every post-pickup stage, comparing the remote head
+  against the local branch tip. Turns a full wasted run into an immediate
+  diagnosis naming both SHAs. Fail-open: an unreachable remote or a missing
+  branch degrades to "unknown", never to "forked".
+- **Orphaned-push reclamation** (`ReclaimOrphanedRemoteBranch`) — on a failed
+  run with no PR, drops origin's copy of the branch **only** when the remote
+  head is contained in the run's local history (proof the pipeline pushed it).
+  A commit the run never authored is left standing for the pre-flight to report
+  rather than deleted.
+- **Routing** — the autonomous scheduler does NOT increment
+  `LifetimeIssueFailures`, does NOT feed the cascade breaker, does NOT set a
+  retry backoff, and the Go scheduler skips the board revert. The Action Center
+  `branch-fork` producer raises an `unblock` card naming both SHAs; resolving it
+  clears the failure cooldown and requeues.
+
+Classified `infrastructure` (0.05 weight): the dominant cause is the pipeline's
+own kill path, not the quality of the implementation the run produced.
 
 `validation_failed` (Issue #326) is an **organic** kind — a true
 implementation failure, full (1.0) weight. feature-validate exits 0 even when
@@ -316,6 +351,7 @@ Go scheduler skips the board-status revert — the issue is re-dispatchable.
 | `adapter_auth_failed`        | `infrastructure` — probe starvation / credential state, not the issue                       |
 | `no_changes_produced`        | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
 | `validation_failed`          | `organic` — true implementation failure caught by feature-validate's own quality gate       |
+| `branch_forked`              | `infrastructure` — the pipeline's own orphaned push (or an operator's), not the code        |
 | `worktree_uncommitted`       | recoverable — work preserved, not counted as a failure                                      |
 | `budget_ceiling_hit`         | recoverable — real spend, not a code defect                                                 |
 
@@ -355,6 +391,7 @@ export const TerminalFailureKindSchema = z.enum([
   "adapter_auth_failed", // Issue #312
   "no_changes_produced", // Issue #317
   "validation_failed", // Issue #326
+  "branch_forked", // Issue #163
 ]);
 
 export const ExecutionHistoryRunRecordV3Schema = ExecutionHistoryRunRecordV2Schema.extend({

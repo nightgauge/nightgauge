@@ -116,6 +116,7 @@ describe("Issue #3001 — V3 execution history schema", () => {
         "adapter_auth_failed", // Issue #312
         "no_changes_produced", // Issue #317
         "validation_failed", // Issue #326
+        "branch_forked", // Issue #163
       ] as const;
       for (const kind of kinds) {
         expect(TerminalFailureKindSchema.safeParse(kind).success).toBe(true);

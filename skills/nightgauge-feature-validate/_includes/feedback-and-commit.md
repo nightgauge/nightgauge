@@ -434,8 +434,23 @@ git push origin HEAD
 
 If push fails, classify the failure:
 
-- **Non-recoverable** (rejected, non-fast-forward, auth denied): stop and
-  report. Do NOT write context — the pipeline cannot proceed without a push.
+- **Forked branch** (`non-fast-forward`, `fetch first`, `--force-with-lease`
+  refused): origin carries a commit this worktree never saw. Report it with the
+  marker below and stop. Do NOT force-push over it, and do NOT fall back to a
+  `-retry2` branch — both discard evidence the operator needs to decide which
+  side survives.
+
+  ```bash
+  echo "[branch-forked] PUSH REJECTED: non-fast-forward — origin/$(git rev-parse --abbrev-ref HEAD) is at $(git ls-remote --heads origin "$(git rev-parse --abbrev-ref HEAD)" | cut -f1 | cut -c1-8), local tip is $(git rev-parse --short=8 HEAD)."
+  ```
+
+  The `[branch-forked]` marker is what classifies the run as `branch_forked`
+  rather than a generic crash, so the pipeline stops retrying a rejection no
+  retry can clear (#163). The scheduler's pre-stage pre-flight normally catches
+  this before the stage runs; reaching it here means the fork appeared mid-run.
+
+- **Other non-recoverable** (auth denied, protected branch): stop and report. Do
+  NOT write context — the pipeline cannot proceed without a push.
 - **Transient network failure** (DNS, timeout): continue to write context, but
   set `PUSH_STATUS="deferred"` and include a note in the summary.
 

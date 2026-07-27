@@ -126,6 +126,21 @@ export function classifyFailureCategory(
     return "agent";
   }
 
+  // Branch forked from its remote (#163). Infrastructure (0.05), not organic:
+  // the dominant cause is the pipeline's own kill path leaving a pushed commit
+  // on origin that nothing tracks, and the other observed cause is an operator
+  // pushing to a pipeline-owned branch. Neither says anything about the quality
+  // of the implementation the run produced — charging it full organic weight
+  // would depress reliability for a tooling defect. Matched before the agent
+  // block so a push rejection is never read as a transient API condition.
+  if (
+    t.includes("[branch-forked]") ||
+    t.includes("branch_forked") ||
+    t.includes("non-fast-forward")
+  ) {
+    return "infrastructure";
+  }
+
   // Agent: transient/recoverable AI-side failures
   if (
     t.includes("timeout") ||
@@ -189,7 +204,8 @@ export type TerminalFailureKind =
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
-  | "validation_failed"; // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
+  | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
+  | "branch_forked"; // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
 
 /**
  * Classify the *kind* of terminal failure from an error message.
@@ -329,6 +345,24 @@ export function classifyTerminalKind(
   // "exit " heuristic would otherwise bucket this as a process death.
   if (t.includes("[validation-failed]") || t.includes("validation_failed")) {
     return "validation_failed";
+  }
+
+  // Branch forked from its remote (#163). Two entry points, one kind: the Go
+  // scheduler's pre-stage fork pre-flight stamps `[branch-forked]` before the
+  // stage spends a token, and a fork that first surfaces at push time is
+  // recognised by the skills' `PUSH REJECTED: non-fast-forward` sentence.
+  // Matched BEFORE the subagent_crash fallback, whose "exit " heuristic would
+  // otherwise read a push rejection as a process death — which is how every
+  // retry looked like a fresh crash instead of the same unrecoverable fork.
+  // The bare phrase "non-fast-forward" is enough: git emits it for exactly this
+  // condition. Mirrors the Go matcher in failure_handler.go.
+  if (
+    t.includes("[branch-forked]") ||
+    t.includes("branch_forked") ||
+    t.includes("non-fast-forward") ||
+    (t.includes("push rejected") && t.includes("fetch first"))
+  ) {
+    return "branch_forked";
   }
 
   // Process death / non-zero exit fallback.

@@ -275,31 +275,50 @@ func (m *Manager) repoRoot(repo string) string {
 	return m.RepoRoot(repo)
 }
 
+// CleanupLocalBranch deletes only the local ref and prunes stale
+// remote-tracking refs. It exists so a caller that must NOT touch origin — a
+// failed run whose remote branch is holding an open PR, or one whose remote
+// head came from someone else (#163) — can still drop its local ref without
+// reaching for CleanupBranch's unconditional remote delete.
+// Idempotent; protected branches are never deleted.
+func (m *Manager) CleanupLocalBranch(branchName string) error {
+	if branchName == "" || branchName == "main" || branchName == "master" {
+		return nil
+	}
+	repoRoot := m.workspaceRoot
+
+	delLocal := exec.Command("git", "branch", "-D", branchName)
+	delLocal.Dir = repoRoot
+	_ = delLocal.Run() // ignore error — branch may not exist locally
+
+	prune := exec.Command("git", "remote", "prune", "origin")
+	prune.Dir = repoRoot
+	_ = prune.Run()
+
+	return nil
+}
+
 // CleanupBranch deletes a local branch and its remote tracking branch.
 // Idempotent — ignores errors for branches that don't exist.
 // Protected branches (main, master) are never deleted.
+//
+// The unconditional remote delete is correct only for a run that SHIPPED: the
+// PR is merged, so origin's copy is spent. On a failed run use
+// CleanupLocalBranch plus the guarded ReclaimOrphanedRemoteBranch, which drops
+// origin's copy only when the pipeline itself pushed it.
 func (m *Manager) CleanupBranch(branchName string) error {
 	if branchName == "" || branchName == "main" || branchName == "master" {
 		return nil
 	}
 	repoRoot := m.workspaceRoot
 
-	// Delete local branch
-	delLocal := exec.Command("git", "branch", "-D", branchName)
-	delLocal.Dir = repoRoot
-	_ = delLocal.Run() // ignore error — branch may not exist locally
-
 	// Delete remote branch
 	delRemote := exec.Command("git", "push", "origin", "--delete", branchName)
 	delRemote.Dir = repoRoot
 	_ = delRemote.Run() // ignore error — branch may not exist on remote
 
-	// Prune stale remote-tracking refs
-	prune := exec.Command("git", "remote", "prune", "origin")
-	prune.Dir = repoRoot
-	_ = prune.Run()
-
-	return nil
+	// Delete local branch + prune stale remote-tracking refs
+	return m.CleanupLocalBranch(branchName)
 }
 
 // CleanupMergedBranches removes local branches whose remote tracking branch

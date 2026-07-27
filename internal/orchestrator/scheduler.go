@@ -2741,15 +2741,47 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		}
 		removeCurrentRunSidecar(workspaceRoot)
 
-		// Clean up feature branch after pipeline completes (success or failure).
-		// Only deletes if the branch exists; protected branches are never deleted.
-		if s.execMgr != nil {
-			if branchName := loadFeatureBranch(workspaceRoot, item.Number); branchName != "" {
+		// Clean up the feature branch after the pipeline completes.
+		//
+		// A shipped run's branch is spent: the PR merged, so origin's copy and
+		// the local ref both go. A FAILED run is the #163 case and is handled
+		// deliberately, because the pre-fix behaviour here was to delete origin's
+		// copy unconditionally — which is wrong in both directions. It destroys
+		// the remote branch of an open PR that is holding the work, and (because
+		// the branch name was only ever looked up in the main workspace root, so
+		// every worktree-isolated run resolved "") it in practice deleted nothing
+		// at all, leaving a killed stage's pushed commit orphaned on origin to
+		// fork the branch on the next attempt.
+		//
+		// So: PR present → keep origin's copy, drop only the local ref. No PR →
+		// ReclaimOrphanedRemoteBranch, which drops origin's copy ONLY when its
+		// head is contained in this run's local history (proof the pipeline
+		// pushed it) and leaves anyone else's commit standing for the next
+		// attempt's fork pre-flight to report.
+		if branchName := resolveFeatureBranch(runtime, workspaceRoot, item.Number); branchName != "" && s.execMgr != nil {
+			switch {
+			case pipelineSuccess:
 				if err := s.execMgr.CleanupBranch(branchName); err != nil {
 					log.Printf("#%d: branch cleanup failed for %s: %v", item.Number, branchName, err)
 				} else {
 					log.Printf("#%d: cleaned up feature branch %s", item.Number, branchName)
 				}
+			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
+				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
+					item.Number, branchName)
+				_ = s.execMgr.CleanupLocalBranch(branchName)
+			default:
+				// Reclaim from the repo root, not the worktree: linked worktrees
+				// share the ref store and object database, so the branch tip is
+				// resolvable from either — but the worktree may already have been
+				// pruned by the time this runs, and the repo root has not.
+				res := ReclaimOrphanedRemoteBranch(context.Background(), workspaceRoot, branchName)
+				if res.Deleted {
+					log.Printf("#%d: orphaned-push reclamation — %s", item.Number, res.Reason)
+				} else {
+					log.Printf("#%d: orphaned-push reclamation declined — %s", item.Number, res.Reason)
+				}
+				_ = s.execMgr.CleanupLocalBranch(branchName)
 			}
 		}
 
@@ -2764,8 +2796,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// lets the pipeline (or operator) re-run the next stage. In autonomous
 		// mode, revertFailedIssueStatus still resets it to Ready for
 		// re-dispatch — but without a LifetimeIssueFailures increment.
+		//
+		// Issue #163 adds a third, for the opposite reason: branch_forked is NOT
+		// recoverable by re-running. Reverting the board to Ready re-dispatches
+		// the issue straight back into the same non-fast-forward rejection, which
+		// is the loop that burned a full pipeline per cycle. The issue stays put
+		// and its Action Center card is the way back in.
 		skipBoardRevert := terminalFailureKind == TerminalKindWorktreeUncommitted ||
-			terminalFailureKind == TerminalKindBudgetCeiling
+			terminalFailureKind == TerminalKindBudgetCeiling ||
+			terminalFailureKind == TerminalKindBranchForked
 		if !pipelineSuccess && !skipBoardRevert && s.stateSvc != nil && s.onFailureStatus != "unchanged" {
 			var targetStatus state.BoardStatus
 			switch s.onFailureStatus {
@@ -2986,6 +3025,44 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				log.Printf("#%d: stage %s prerequisite missing: %s context (resolved skip-aware)",
 					item.Number, stage, ctxType)
 				return // Pipeline failed — missing prerequisite
+			}
+		}
+
+		// Branch-fork pre-flight (#163). One `git ls-remote` at the stage
+		// boundary, before a single token is spent. If the remote branch head is
+		// not reachable from the local tip, the branch has forked and every push
+		// this run makes is already doomed — pre-fix that was discovered at push
+		// time, i.e. after a full pipeline had regenerated the whole
+		// implementation (~$25) to reach a guaranteed rejection, once per retry
+		// cycle. See branchForkPreflightApplies for which stages it gates, and
+		// CheckBranchFork for why every non-answer (offline, no origin) is
+		// fail-open — an unreachable remote must never manufacture a block.
+		if branchForkPreflightApplies(stage) {
+			if branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number); branch != "" {
+				fork := CheckBranchFork(ctx, stageWorkspace(runtime, workspaceRoot), branch)
+				if fork.Forked() {
+					reason := fmt.Sprintf("[branch-forked] %s", fork.Detail)
+					log.Printf("#%d: stage %s blocked before dispatch — %s", item.Number, stage, reason)
+					// Enter the stage before failing it. Nothing is dispatched
+					// (the point is that no tokens are spent), but the run record
+					// keys its failure detail off the CURRENT stage: without this
+					// the record would name the terminal kind and drop the
+					// sentence carrying the two SHAs — which is the only part a
+					// post-mortem can act on.
+					runtime.BeginStage(stage)
+					runtime.SetStageError(stage, reason)
+					terminalFailureKind = TerminalKindBranchForked
+					s.emitStateChanged(item.Repo, item.Number, runtime)
+					tracer.Emit(trace.KindStageSkip, string(stage), trace.StageSkipPayload{
+						Source: "branch-fork-preflight",
+						Reason: fork.Detail,
+					})
+					// Action Center branch-fork producer (#163): no retry clears a
+					// fork, so surface it as an unblock card rather than letting the
+					// run recycle into the same rejection.
+					s.raiseBranchForked(item.Repo, item.Number, runtime.RunID, branch, fork)
+					return
+				}
 			}
 		}
 
@@ -3395,7 +3472,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// Populate metadata after specific stages for Discord/UI enrichment
 		switch stage {
 		case state.StageIssuePickup:
-			if b := loadFeatureBranch(workspaceRoot, item.Number); b != "" {
+			// Resolve worktree-first (#163): on a worktree-isolated run
+			// issue-{N}.json is written inside the worktree, so the main-root
+			// lookup this used to do returned "" and the run carried no branch at
+			// all — which is what left the post-run cleanup and the fork
+			// pre-flight with nothing to act on.
+			if b := resolveFeatureBranch(runtime, workspaceRoot, item.Number); b != "" {
 				runtime.SetBranch(b)
 			}
 			// Auto-create epic branch if this is a sub-issue and config allows
@@ -4941,6 +5023,56 @@ func loadLatestRetro(workspaceRoot string, issueNumber int, failedStage string) 
 		}
 	}
 	return summary
+}
+
+// branchForkPreflightApplies reports whether the branch-fork pre-flight (#163)
+// gates a stage.
+//
+// It gates the stages whose work is only useful if the local tip can eventually
+// be pushed — planning, dev, validate, pr-create — which is where the entire
+// wasted spend lives. It deliberately does NOT gate:
+//
+//   - issue-pickup, which is the stage that creates the branch. There is
+//     nothing to compare yet.
+//   - pr-merge, which merges server-side and does not depend on the local tip.
+//     A remote branch that legitimately moved ahead (GitHub's "Update branch",
+//     a merge queue) would otherwise block a merge that was never at risk; the
+//     branch-out-of-date recovery already owns that case.
+//   - spike-materialize, which reads a merged artifact and pushes nothing.
+func branchForkPreflightApplies(stage state.PipelineStage) bool {
+	switch stage {
+	case state.StageFeaturePlanning,
+		state.StageFeatureDev,
+		state.StageFeatureValidate,
+		state.StagePRCreate:
+		return true
+	}
+	return false
+}
+
+// resolveFeatureBranch resolves the run's feature branch from the most
+// authoritative source that has it: the live runtime (populated at issue-pickup
+// via SetBranch), then the issue context in the worktree the stages actually
+// executed in, then the main workspace root.
+//
+// Pre-#163 the post-run branch cleanup consulted only the last of the three. On
+// a worktree-isolated run issue-{N}.json is written INSIDE the worktree, so the
+// lookup returned "" and the cleanup silently no-opped — which is how a killed
+// stage's pushed commit survived to fork the branch on the next attempt. A
+// cleanup that cannot name its branch does nothing and says nothing, so the
+// gap was invisible until the fork it caused was diagnosed two attempts later.
+func resolveFeatureBranch(runtime *state.RuntimeState, workspaceRoot string, issueNumber int) string {
+	if runtime != nil {
+		if b := runtime.FeatureBranch(); b != "" {
+			return b
+		}
+	}
+	if ws := stageWorkspace(runtime, workspaceRoot); ws != workspaceRoot {
+		if b := loadFeatureBranch(ws, issueNumber); b != "" {
+			return b
+		}
+	}
+	return loadFeatureBranch(workspaceRoot, issueNumber)
 }
 
 // loadFeatureBranch reads the branch name from the issue context JSON.
