@@ -20,6 +20,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
@@ -149,6 +150,11 @@ type StageRunResult struct {
 	LastBashCommand string
 	// LastBashExit is the exit code of the matching Bash tool_result.
 	LastBashExit *int
+	// RecentBash is the tail of the stage's Bash history (oldest first, at
+	// most 10), each entry with its own exit code. Superset of
+	// LastBashCommand/LastBashExit — its last element is that same command
+	// (#156).
+	RecentBash []diagnostics.RecentBashEntry
 	// StopHookErrored is true when the stream included a stop-hook-error.
 	StopHookErrored bool
 	// StderrTail is the last 4 KB of stderr from the SkillRunner ring buffer.

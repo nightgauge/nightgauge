@@ -5812,6 +5812,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         telemetry?.sessionId,
         telemetry?.lastBashCommand,
         telemetry?.lastBashExit,
+        telemetry?.recentBash,
         telemetry?.stopHookErrored,
         telemetry?.stderrTail,
         gateFailure?.kind,
@@ -12599,6 +12600,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             exitTelemetry.sessionId = result.sessionId;
             exitTelemetry.lastBashCommand = result.lastBashCommand;
             exitTelemetry.lastBashExit = result.lastBashExit;
+            exitTelemetry.recentBash = result.recentBash;
             exitTelemetry.stopHookErrored = result.stopHookErrored;
             exitTelemetry.stderrTail = result.stderrTail;
             if (result.tokenUsage) {

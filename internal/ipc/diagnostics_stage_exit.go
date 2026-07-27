@@ -77,6 +77,9 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 		IdleMsAtExit:    p.IdleMsAtExit,
 		LastBashCommand: p.LastBashCommand,
 		LastBashExit:    p.LastBashExit,
+		// Bounded here as well as on the Go-scheduler path (#156) so neither
+		// dispatch path can write an unbounded command history.
+		RecentBash:      diagnostics.BoundRecentBash(p.RecentBash),
 		StopHookErrored: p.StopHookErrored,
 		StderrTail:      p.StderrTail,
 		// #125: the post-condition gate's verdict, when one overrode the

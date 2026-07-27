@@ -57,6 +57,10 @@ const ARG = {
   signal: 17,
   signalSource: 18,
   sessionId: 19,
+  lastBashCommand: 20,
+  lastBashExit: 21,
+  recentBash: 22,
+  stopHookErrored: 23,
 } as const;
 
 function makeLogger(): Logger {
@@ -161,6 +165,42 @@ describe("HeadlessOrchestrator.recordStageExitDiagnostic — token/cost forwardi
     // The whole point of #296 + #109: a killed stage records its real burn.
     expect(args[ARG.inputTokens]).toBe(812345);
     expect(args[ARG.costUsd]).toBe(1.42);
+  });
+
+  // `diagnosticsRecordStageExit` is generated with POSITIONAL parameters from
+  // the Go struct's field order, so inserting a field mid-struct silently
+  // shifts every argument after it. This pins the ring's slot and the two
+  // neighbours that would absorb the shift — the same class of quiet
+  // layer-skip that #154 was. (#156)
+  it("forwards the Bash ring to the exit record, in its own argument slot", async () => {
+    const result: StageRunResult = {
+      success: false,
+      stage: "feature-validate",
+      durationMs: 60000,
+      error: new Error("[validation-failed] feature-validate reported failure"),
+      exitTelemetry: {
+        exitCode: 0,
+        lastBashCommand: "true",
+        lastBashExit: 0,
+        recentBash: [
+          { cmd: "npm run -w nightgauge-vscode vitest run", exit: 1 },
+          { cmd: "true", exit: 0 },
+        ],
+        stopHookErrored: false,
+      },
+    };
+
+    await orch.recordStageExitDiagnostic("feature-validate", 156, result, Date.now() - 60000);
+
+    const args = recordStageExit.mock.calls[0];
+    expect(args[ARG.lastBashCommand]).toBe("true");
+    expect(args[ARG.lastBashExit]).toBe(0);
+    expect(args[ARG.recentBash]).toEqual([
+      { cmd: "npm run -w nightgauge-vscode vitest run", exit: 1 },
+      { cmd: "true", exit: 0 },
+    ]);
+    // If the ring landed in stopHookErrored's slot, this would be an array.
+    expect(args[ARG.stopHookErrored]).toBe(false);
   });
 
   it("records zero for a deterministic no-LLM stage instead of synthesizing", async () => {

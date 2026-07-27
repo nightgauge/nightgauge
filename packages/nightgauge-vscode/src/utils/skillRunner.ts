@@ -390,6 +390,14 @@ export interface SkillRunResult {
    */
   lastBashExit?: number;
   /**
+   * The last {@link RECENT_BASH_MAX_ENTRIES} Bash commands observed in the
+   * stream, oldest first, each with its own exit code. Superset of
+   * `lastBashCommand`/`lastBashExit`, which stay as-is for existing readers:
+   * the final entry is the same command. Undefined when the stage ran no
+   * Bash at all. (#156)
+   */
+  recentBash?: RecentBashEntry[];
+  /**
    * True when the stream included a stop-hook error notification before
    * the stage exited. (#3605)
    */
@@ -1262,6 +1270,109 @@ export function extractBashCommand(toolName: string, toolInput: unknown): string
   return cmd.length > LAST_BASH_COMMAND_MAX_CHARS
     ? cmd.slice(0, LAST_BASH_COMMAND_MAX_CHARS) + "…"
     : cmd;
+}
+
+/** How many Bash commands the stage-exit record retains. */
+export const RECENT_BASH_MAX_ENTRIES = 10;
+
+/** One retained Bash command and the exit code of its tool_result. */
+export interface RecentBashEntry {
+  /** The command, truncated per {@link LAST_BASH_COMMAND_MAX_CHARS}. */
+  cmd: string;
+  /**
+   * 0 / 1 once the matching tool_result landed; absent when the stage ended
+   * before it did. Absent-vs-0 is load-bearing — Go stores it as `*int` so a
+   * command that succeeded is distinguishable from one still in flight.
+   */
+  exit?: number;
+}
+
+/**
+ * Bounded ring of the most recent Bash commands observed in a stage's stream.
+ *
+ * Stage subprocesses run with `--no-session-persistence`, so no transcript
+ * survives the stage and the exit record is the only durable evidence of what
+ * the stage did. A single `last_bash_command` slot made that evidence one
+ * command deep: a validate stage that exited with `last_bash_command` = `true`
+ * is equally consistent with a benign trailing `|| true` and with a stage that
+ * ran no verification at all, and after the fact the two are indistinguishable.
+ * Ten commands of context answer that question without a re-run. (#156)
+ *
+ * Lives outside `runStageSkillHeadless` because that function spawns a
+ * subprocess and cannot be exercised cheaply — the same reason
+ * {@link extractBashCommand} was extracted in #147.
+ */
+export class RecentBashRing {
+  private readonly entries: RecentBashEntry[] = [];
+  /**
+   * tool_use id → its entry, for correlating the tool_result that arrives in a
+   * later *user* message. Holds only ids still present in the ring; evicted
+   * entries are deleted so the map stays bounded alongside it.
+   */
+  private readonly byId = new Map<string, RecentBashEntry>();
+
+  /**
+   * Record a Bash tool_use. No-op for every other tool and for a Bash call
+   * carrying no string command.
+   *
+   * The CLI can deliver the *same* tool_use through both the singular
+   * `content_block_start` and plural assistant-message shapes. With a single
+   * slot that double-report was harmless (the second write stored the same
+   * value); a ring would keep five commands twice and silently halve its own
+   * depth, so repeat ids are ignored.
+   */
+  observeToolUse(toolName: string, toolInput: unknown, toolUseId?: string): void {
+    const cmd = extractBashCommand(toolName, toolInput);
+    if (cmd === undefined) return;
+    if (toolUseId !== undefined && this.byId.has(toolUseId)) return;
+
+    const entry: RecentBashEntry = { cmd };
+    this.entries.push(entry);
+    if (toolUseId !== undefined) this.byId.set(toolUseId, entry);
+
+    while (this.entries.length > RECENT_BASH_MAX_ENTRIES) {
+      const evicted = this.entries.shift();
+      if (!evicted) break;
+      for (const [id, candidate] of this.byId) {
+        if (candidate === evicted) {
+          this.byId.delete(id);
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Bind a tool_result's outcome to the Bash command that produced it.
+   *
+   * The CLI's tool_result envelope carries no literal exit code, so `is_error`
+   * is mapped to 1/0 — enough resolution to answer "did the last thing it ran
+   * fail?". Keyed by id rather than by recency, so a result that lands after a
+   * newer command started still binds to its own command instead of being
+   * dropped (single-slot correlation lost those) or, worse, misattributed.
+   */
+  observeToolResult(toolUseId: string, isError: boolean): void {
+    const entry = this.byId.get(toolUseId);
+    if (!entry) return;
+    entry.exit = isError ? 1 : 0;
+  }
+
+  /** Oldest-first copy for serialisation. Entries are cloned, not aliased. */
+  snapshot(): RecentBashEntry[] {
+    return this.entries.map((e) =>
+      e.exit === undefined ? { cmd: e.cmd } : { cmd: e.cmd, exit: e.exit }
+    );
+  }
+
+  /** The entry backing `last_bash_command` / `last_bash_exit`. */
+  last(): RecentBashEntry | undefined {
+    return this.entries[this.entries.length - 1];
+  }
+
+  /** Number of retained commands; 0 drives the #147 forensic-gap warning. */
+  get size(): number {
+    return this.entries.length;
+  }
 }
 
 // Claude Code stream-json emits a terminal envelope `{type:"result", is_error, result, subtype}`
@@ -3550,9 +3661,12 @@ export function runStageSkillHeadless(
   // omitempty at the IPC boundary so healthy runs stay terse.
   let exitSignal: string = "";
   let exitSignalSource: string = "";
-  let lastBashCommand: string = "";
-  let lastBashExit: number | undefined;
-  let pendingBashToolUseId: string | undefined;
+  // Bash forensics are a bounded ring rather than a single slot (#156): the
+  // record is the only evidence that outlives the stage, and one command deep
+  // cannot distinguish "ran the suite, then a no-op tail" from "ran nothing".
+  // `lastBashCommand` / `lastBashExit` are derived from its final entry at
+  // build time, so those two fields keep their exact pre-#156 meaning.
+  const recentBashRing = new RecentBashRing();
   let stopHookErrored = false;
   // 4 KB stderr ring buffer (Issue #3605). Existing OUTPUT_ERROR_TAIL_MAX_CHARS
   // is 50 KB and serves the V3 record. The narrower 4 KB ring is purpose-built
@@ -4558,21 +4672,12 @@ export function runStageSkillHeadless(
           // Stage-exit forensics (#147). The CLI delivers tool_use inside
           // complete `assistant` messages — the plural shape handled here —
           // while the singular `content_block_start` capture below fires only
-          // for the streaming shape. Whichever arrives last legitimately wins:
-          // the field means "most recent Bash command", not "first".
-          const plural = extractBashCommand(name, input);
-          if (plural !== undefined) {
-            lastBashCommand = plural;
-            // Correlate the exit code the same way the singular shape does.
-            // The tool_result arrives in a later *user* message, so the
-            // matching logic below is already shape-agnostic — it only needed
-            // the id, which the parser now propagates. When the id is missing
-            // the exit stays unknown rather than being attributed from an
-            // unrelated call; a stale pending id is cleared for the same
-            // reason, so a later result can never bind to the wrong command.
-            pendingBashToolUseId = id;
-            lastBashExit = undefined;
-          }
+          // for the streaming shape. Both feed the same ring, which dedupes on
+          // the tool_use id so a call reported through both shapes occupies
+          // one slot rather than two (#156). The id also lets each entry carry
+          // its own exit code; when it is missing the exit stays unknown
+          // rather than being attributed from an unrelated call.
+          recentBashRing.observeToolUse(name, input, id);
         }
       }
 
@@ -4706,20 +4811,12 @@ export function runStageSkillHeadless(
           callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
         }
 
-        // Stage-exit diagnostic capture (Issue #3605): record the most recent
-        // Bash command (truncated to 500 chars) so retros can answer "what was
+        // Stage-exit diagnostic capture (Issue #3605): record recent Bash
+        // commands (each truncated to 500 chars) so retros can answer "what was
         // it doing when it died?" without grepping the full session log. The
-        // matching tool_result's `is_error` flag flips lastBashExit so we know
-        // whether the command actually failed before the stage ended.
-        if (parsed.toolName === "Bash") {
-          const singular = extractBashCommand(parsed.toolName, parsed.toolInput);
-          if (singular !== undefined) {
-            lastBashCommand = singular;
-          }
-          pendingBashToolUseId = toolUseId;
-          // Reset the matching exit code until the tool_result lands.
-          lastBashExit = undefined;
-        }
+        // matching tool_result's `is_error` flag sets that entry's exit code so
+        // we know whether the command actually failed before the stage ended.
+        recentBashRing.observeToolUse(parsed.toolName, parsed.toolInput, toolUseId);
       }
 
       // Detect tool_result in user messages for telemetry backfill (Issue #1031)
@@ -4731,16 +4828,14 @@ export function runStageSkillHeadless(
           parsed.toolResult.isError
         );
 
-        // Stage-exit diagnostic capture (Issue #3605): when the tool_result
-        // belongs to the most recent Bash tool_use we tracked, flip
-        // lastBashExit. We don't have the literal exit code from the CLI's
-        // tool_result envelope, but we can distinguish success (0) from
-        // failure (1) via the isError flag — sufficient resolution to
-        // diagnose "stage exited mid-Bash, last bash command failed."
-        if (pendingBashToolUseId && parsed.toolResult.toolUseId === pendingBashToolUseId) {
-          lastBashExit = parsed.toolResult.isError ? 1 : 0;
-          pendingBashToolUseId = undefined;
-        }
+        // Stage-exit diagnostic capture (Issue #3605): bind this result to the
+        // Bash tool_use that produced it. We don't have the literal exit code
+        // from the CLI's tool_result envelope, but we can distinguish success
+        // (0) from failure (1) via the isError flag — sufficient resolution to
+        // diagnose "stage exited mid-Bash, last bash command failed." Matching
+        // by id rather than by recency means a result that arrives after a
+        // newer command started still lands on its own entry (#156).
+        recentBashRing.observeToolResult(parsed.toolResult.toolUseId, parsed.toolResult.isError);
       }
 
       // Stage-exit diagnostic capture (Issue #3605): detect stop-hook errors
@@ -4979,7 +5074,7 @@ export function runStageSkillHeadless(
     // stream shape and the parser have diverged. Say so on stderr, which is
     // itself captured into `stderr_tail`, so the record carries evidence of
     // its own incompleteness instead of quietly under-reporting.
-    if (!lastBashCommand && parsedToolEventCount > 0) {
+    if (recentBashRing.size === 0 && parsedToolEventCount > 0) {
       const gapWarning =
         `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
         `event(s) but captured no Bash command, so last_bash_command will be absent ` +
@@ -5076,8 +5171,13 @@ export function runStageSkillHeadless(
       elapsedMs: Date.now() - startedAtMs,
       idleMsAtExit: Date.now() - lastChunkAtMs,
       cacheCreationTokens: bookedUsage?.usage.cacheCreationTokens,
-      lastBashCommand: lastBashCommand || undefined,
-      lastBashExit,
+      // `lastBash*` are the ring's final entry, not a separately tracked slot,
+      // so the two views can never disagree. Both stay exactly as they were
+      // pre-#156 for existing readers and retro tooling; `recentBash` is added
+      // alongside, never in place of them.
+      lastBashCommand: recentBashRing.last()?.cmd || undefined,
+      lastBashExit: recentBashRing.last()?.exit,
+      recentBash: recentBashRing.size > 0 ? recentBashRing.snapshot() : undefined,
       stopHookErrored: stopHookErrored || undefined,
       stderrTail: exitStderrTail || undefined,
       // ── #91 served-model attribution ───────────────────────────────────

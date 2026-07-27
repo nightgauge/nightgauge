@@ -173,6 +173,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			CacheCreationTokens: result.CacheCreationTokens,
 			LastBashCommand:     result.LastBashCommand,
 			LastBashExit:        result.LastBashExit,
+			RecentBash:          result.RecentBash,
 			StopHookErrored:     result.StopHookErrored,
 			StderrTail:          result.StderrTail,
 			// #3666 follow-up: budget-kill + shipped-partially via IPC.

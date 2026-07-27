@@ -46,30 +46,31 @@ cross-process; an in-process mutex for goroutine interleaving).
 
 ### Schema
 
-| Field                                                                | Type                   | Source         | Notes                                                                                                                                                                       |
-| -------------------------------------------------------------------- | ---------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ts`                                                                 | RFC3339Nano UTC string | Go scheduler   | Set at write time so concurrent stage exits keep monotonic ordering.                                                                                                        |
-| `repo`                                                               | string                 | Go scheduler   | Canonical `owner/name`.                                                                                                                                                     |
-| `issue`                                                              | int                    | Go scheduler   | GitHub issue number.                                                                                                                                                        |
-| `stage`                                                              | string                 | Go scheduler   | One of `issue-pickup`, `feature-planning`, `feature-dev`, `feature-validate`, `pr-create`, `pr-merge`.                                                                      |
-| `run_id`                                                             | string                 | Go scheduler   | UUID v7 from runstate (#3557). Joins this record to the matching V3 RunRecord row.                                                                                          |
-| `session_id`                                                         | string                 | TS SkillRunner | Claude CLI conversation id when captured before exit. Empty when the subprocess never produced a `result` envelope (the most common pathology this record exists to debug). |
-| `success`                                                            | bool                   | Go scheduler   | The stage's **post-gate** outcome — never the skill's bare exit code. A skill that exits 0 and then fails its post-condition gate records `false` (#125).                   |
-| `exit_code`                                                          | int (ptr)              | Go scheduler   | Pointer-shaped so a real `0` is distinguishable from "never observed".                                                                                                      |
-| `signal`                                                             | string                 | TS SkillRunner | POSIX signal name (`SIGTERM` / `SIGKILL` / …). Empty when the process exited naturally.                                                                                     |
-| `signal_source`                                                      | string                 | TS SkillRunner | Names the in-binary code path that delivered `signal`. One of `stall-kill`, `hard-cap`, `quota-fast-fail`, `processTree-reaper`, `external`. Empty when no signal.          |
-| `terminal_kind`                                                      | string                 | Go scheduler   | Post-classification terminal failure category from `ClassifyTerminalKind`. Empty on success.                                                                                |
-| `elapsed_ms`                                                         | int64                  | TS or Go       | Total wall time from stage start to exit. Prefers the TS-reported value when forwarded; falls back to the scheduler-measured stage duration.                                |
-| `idle_ms_at_exit`                                                    | int64                  | TS SkillRunner | Milliseconds since the last subprocess output chunk at the moment of exit. Distinguishes wedged-then-killed (large) from killed-mid-activity (small).                       |
-| `tokens.input / .output / .cache_read / .cache_creation / .cost_usd` | -                      | Go scheduler   | Per-stage token / cost snapshot.                                                                                                                                            |
-| `last_bash_command`                                                  | string                 | TS SkillRunner | Most recent `Bash` tool_use input, truncated to 500 chars. Many silent kills happen mid-Bash — this is the strongest single forensic anchor.                                |
-| `last_bash_exit`                                                     | int (ptr)              | TS SkillRunner | Exit code of the matching Bash tool_result. Pointer-shaped so `0` is distinguishable from "never observed".                                                                 |
-| `stop_hook_errored`                                                  | bool                   | TS SkillRunner | `true` when the stream included a `notification.key == "stop-hook-error"` event before exit.                                                                                |
-| `stderr_tail`                                                        | string                 | TS SkillRunner | Last 4 KB of stderr from the SkillRunner ring buffer. Includes the `[skillRunner] …` kill markers so retro can reconstruct the chosen kill path from a single line.         |
-| `rate_limit_remaining_at_exit`                                       | int                    | Go scheduler   | GitHub GraphQL bucket reading at stage end (REST / GraphQL share a tracker on the Go side). `-1` means "unavailable"; `0+` is a real reading.                               |
-| `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).        |
-| `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                               |
-| `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.        |
+| Field                                                                | Type                   | Source         | Notes                                                                                                                                                                                       |
+| -------------------------------------------------------------------- | ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ts`                                                                 | RFC3339Nano UTC string | Go scheduler   | Set at write time so concurrent stage exits keep monotonic ordering.                                                                                                                        |
+| `repo`                                                               | string                 | Go scheduler   | Canonical `owner/name`.                                                                                                                                                                     |
+| `issue`                                                              | int                    | Go scheduler   | GitHub issue number.                                                                                                                                                                        |
+| `stage`                                                              | string                 | Go scheduler   | One of `issue-pickup`, `feature-planning`, `feature-dev`, `feature-validate`, `pr-create`, `pr-merge`.                                                                                      |
+| `run_id`                                                             | string                 | Go scheduler   | UUID v7 from runstate (#3557). Joins this record to the matching V3 RunRecord row.                                                                                                          |
+| `session_id`                                                         | string                 | TS SkillRunner | Claude CLI conversation id when captured before exit. Empty when the subprocess never produced a `result` envelope (the most common pathology this record exists to debug).                 |
+| `success`                                                            | bool                   | Go scheduler   | The stage's **post-gate** outcome — never the skill's bare exit code. A skill that exits 0 and then fails its post-condition gate records `false` (#125).                                   |
+| `exit_code`                                                          | int (ptr)              | Go scheduler   | Pointer-shaped so a real `0` is distinguishable from "never observed".                                                                                                                      |
+| `signal`                                                             | string                 | TS SkillRunner | POSIX signal name (`SIGTERM` / `SIGKILL` / …). Empty when the process exited naturally.                                                                                                     |
+| `signal_source`                                                      | string                 | TS SkillRunner | Names the in-binary code path that delivered `signal`. One of `stall-kill`, `hard-cap`, `quota-fast-fail`, `processTree-reaper`, `external`. Empty when no signal.                          |
+| `terminal_kind`                                                      | string                 | Go scheduler   | Post-classification terminal failure category from `ClassifyTerminalKind`. Empty on success.                                                                                                |
+| `elapsed_ms`                                                         | int64                  | TS or Go       | Total wall time from stage start to exit. Prefers the TS-reported value when forwarded; falls back to the scheduler-measured stage duration.                                                |
+| `idle_ms_at_exit`                                                    | int64                  | TS SkillRunner | Milliseconds since the last subprocess output chunk at the moment of exit. Distinguishes wedged-then-killed (large) from killed-mid-activity (small).                                       |
+| `tokens.input / .output / .cache_read / .cache_creation / .cost_usd` | -                      | Go scheduler   | Per-stage token / cost snapshot.                                                                                                                                                            |
+| `last_bash_command`                                                  | string                 | TS SkillRunner | Most recent `Bash` tool_use input, truncated to 500 chars. Many silent kills happen mid-Bash — this is the strongest single forensic anchor.                                                |
+| `last_bash_exit`                                                     | int (ptr)              | TS SkillRunner | Exit code of the matching Bash tool_result. Pointer-shaped so `0` is distinguishable from "never observed".                                                                                 |
+| `recent_bash`                                                        | []{cmd, exit}          | TS SkillRunner | The last 10 Bash commands, oldest first, each with its own exit code (`exit` omitted when the result never landed). Superset of `last_bash_command` — its tail is that same command (#156). |
+| `stop_hook_errored`                                                  | bool                   | TS SkillRunner | `true` when the stream included a `notification.key == "stop-hook-error"` event before exit.                                                                                                |
+| `stderr_tail`                                                        | string                 | TS SkillRunner | Last 4 KB of stderr from the SkillRunner ring buffer. Includes the `[skillRunner] …` kill markers so retro can reconstruct the chosen kill path from a single line.                         |
+| `rate_limit_remaining_at_exit`                                       | int                    | Go scheduler   | GitHub GraphQL bucket reading at stage end (REST / GraphQL share a tracker on the Go side). `-1` means "unavailable"; `0+` is a real reading.                                               |
+| `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).                        |
+| `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                                               |
+| `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.                        |
 
 ### Schema Invariants
 
@@ -173,12 +174,44 @@ layer with first-hand knowledge of it:
 
 4. **Forwarded verbatim from TS SkillRunner via `pipeline.stageResult`:**
    - `session_id`, `signal`, `signal_source`, `idle_ms_at_exit`,
-     `last_bash_command`, `last_bash_exit`, `stop_hook_errored`,
-     `stderr_tail`, `cache_creation_tokens`.
+     `last_bash_command`, `last_bash_exit`, `recent_bash`,
+     `stop_hook_errored`, `stderr_tail`, `cache_creation_tokens`.
    - These are zero / empty when the TS SkillRunner pre-dates the #3605
      update — the record is still valid, just terser. The schema is
      **forward-compatible**: once the TS side ships, the daily JSONL gains
      richer fields with no Go-side change required.
+
+### Why `recent_bash` and not just `last_bash_command` (#156)
+
+Stage subprocesses run with `--no-session-persistence`, so **no conversation
+transcript survives the stage**. This record is not one forensic source among
+several — it is the only durable evidence of what a stage did, which is more
+weight than a single-value field can bear.
+
+Observed in practice: a validate stage exited with `last_bash_command` = `true`.
+That is equally consistent with a benign trailing `|| true` and with a stage
+that ran no verification at all, and with no transcript the two are
+indistinguishable after the fact. The field answered "what was the last thing it
+typed" when the useful question was "what did it actually do".
+
+`recent_bash` keeps the last 10 commands with their own exit codes, so that case
+becomes self-answering — ten commands of context show whether a test suite ran
+before the no-op tail, with no re-run required:
+
+```bash
+nightgauge exit-records tail --limit 200 --json \
+  | jq 'select(.stage == "feature-validate") | {issue, recent_bash}'
+```
+
+Bounds: 10 entries × 500 chars per command, enforced at the point of persistence
+by `diagnostics.BoundRecentBash` on **both** write paths, not merely trusted from
+the producer. Commands and exit codes only — capturing per-command stdout/stderr
+would reintroduce the size and secret-leakage problems the truncation rules
+exist to avoid.
+
+`last_bash_command` / `last_bash_exit` are unchanged and remain the fields
+existing readers and retro tooling key on; `recent_bash`'s last entry is that
+same command.
 
 ### Two Write Paths, One Schema
 

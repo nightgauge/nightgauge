@@ -1,5 +1,7 @@
 package ipc
 
+import "github.com/nightgauge/nightgauge/internal/diagnostics"
+
 // RunStageParams is the payload for the "pipeline.runStage" event (Go→TS).
 // The Go scheduler emits this event to ask the TypeScript SkillRunner to
 // execute a pipeline stage via the Claude CLI.
@@ -104,6 +106,11 @@ type StageResultParams struct {
 	// Pointer-shaped so a 0 (success) is distinguishable from "never
 	// observed". JSON receivers should test for null/absent. (#3605)
 	LastBashExit *int `json:"lastBashExit,omitempty"`
+	// RecentBash is the tail of the stage's Bash history (oldest first, at
+	// most 10 entries), each carrying its own exit code. Superset of
+	// LastBashCommand/LastBashExit, which keep their exact meaning — the last
+	// element is the same command. Absent when the stage ran no Bash. (#156)
+	RecentBash []diagnostics.RecentBashEntry `json:"recentBash,omitempty"`
 	// StopHookErrored is true when the stream included a
 	// `notification.key == "stop-hook-error"` event before exit. (#3605)
 	StopHookErrored bool `json:"stopHookErrored,omitempty"`
