@@ -88,6 +88,12 @@ type StageResultParams struct {
 	// "stall-kill" | "hard-cap" | "quota-fast-fail" | "processTree-reaper" |
 	// "external" | "" (no signal). (#3605)
 	SignalSource string `json:"signalSource,omitempty"`
+	// KillCeiling is the stable name of the LIMIT that terminated the stage
+	// and KillCeilingValue is its resolved value plus derivation (#161).
+	// SignalSource names only the delivering closure; several limits share
+	// each label, so it cannot identify which one fired.
+	KillCeiling      string `json:"killCeiling,omitempty"`
+	KillCeilingValue string `json:"killCeilingValue,omitempty"`
 	// ElapsedMs is total wall time from stage start to exit (ms).
 	// Optional — zero is "unknown" (Go fills its own elapsed when zero). (#3605)
 	ElapsedMs int64 `json:"elapsedMs,omitempty"`

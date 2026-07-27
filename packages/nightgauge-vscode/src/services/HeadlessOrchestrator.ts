@@ -5819,7 +5819,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // `gate_reason` is documented as the SHORT reason; cap it so a verbose
         // orchestrator-synthesized message can't bloat the daily JSONL. The
         // full text still reaches Go via errorText for classification.
-        gateFailure?.reason.slice(0, 500)
+        gateFailure?.reason.slice(0, 500),
+        // #161: the ceiling that fired and its configured value. Without this
+        // pair, a killed stage's record names only the closure that delivered
+        // SIGTERM, and identifying the actual limit means re-tracing the whole
+        // resolver chain — which #161 showed does not converge for derived
+        // ceilings.
+        telemetry?.killCeiling,
+        telemetry?.killCeilingValue
       );
     } catch (err) {
       // Never block pipeline progress on a diagnostic write failure. Logged
@@ -12597,6 +12604,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             exitTelemetry.idleMsAtExit = result.idleMsAtExit;
             exitTelemetry.signal = result.signal;
             exitTelemetry.signalSource = result.signalSource;
+            exitTelemetry.killCeiling = result.killCeiling;
+            exitTelemetry.killCeilingValue = result.killCeilingValue;
             exitTelemetry.sessionId = result.sessionId;
             exitTelemetry.lastBashCommand = result.lastBashCommand;
             exitTelemetry.lastBashExit = result.lastBashExit;

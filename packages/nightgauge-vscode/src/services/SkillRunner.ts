@@ -137,6 +137,10 @@ export interface StageResult {
    * "stall-kill" | "hard-cap" | "quota-fast-fail" | "processTree-reaper" | "external".
    */
   signalSource?: string;
+  /** Stable name of the ceiling that terminated the stage (#161). */
+  killCeiling?: string;
+  /** The ceiling's resolved limit plus how it was derived (#161). */
+  killCeilingValue?: string;
   /** Wall time from spawn to exit in milliseconds. */
   elapsedMs?: number;
   /** Milliseconds since the last subprocess output chunk at exit. */
@@ -454,6 +458,8 @@ export class SkillRunner {
               sessionId: result.sessionId,
               signal: result.signal,
               signalSource: result.signalSource,
+              killCeiling: result.killCeiling,
+              killCeilingValue: result.killCeilingValue,
               elapsedMs: result.elapsedMs ?? durationMs,
               idleMsAtExit: result.idleMsAtExit,
               lastBashCommand: result.lastBashCommand,

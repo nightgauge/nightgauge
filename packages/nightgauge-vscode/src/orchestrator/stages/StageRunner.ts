@@ -58,6 +58,14 @@ export interface StageExitTelemetry {
   signal?: string;
   /** In-binary code path that delivered `signal` (e.g. `stall-kill`). */
   signalSource?: string;
+  /**
+   * Stable name of the ceiling that terminated the stage (e.g.
+   * `nx-stall-multiple`). Several limits share one `signalSource`, so this is
+   * what identifies the limit that actually fired. (#161)
+   */
+  killCeiling?: string;
+  /** The ceiling's resolved limit plus how it was derived. (#161) */
+  killCeilingValue?: string;
   /** Claude CLI conversation id, when the stream reported one. */
   sessionId?: string;
   /** Most recent `Bash` tool_use input observed before exit. */

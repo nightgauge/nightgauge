@@ -216,6 +216,17 @@ func printExitRecordsHuman(records []diagnostics.StageExitRecord) {
 			fmtMs(rec.IdleMsAtExit),
 			signal,
 		)
+		// #161: the ceiling that fired, on its own line. `sig=SIGTERM(runaway-
+		// progress)` names only the delivering closure, and four unrelated
+		// limits share that label — an operator reading the tail should not
+		// have to open the JSONL to learn which one, or what it was set to.
+		if rec.KillCeiling != "" {
+			if rec.KillCeilingValue != "" {
+				fmt.Printf("    ceiling: %s = %s\n", rec.KillCeiling, rec.KillCeilingValue)
+			} else {
+				fmt.Printf("    ceiling: %s\n", rec.KillCeiling)
+			}
+		}
 		if rec.LastBashCommand != "" {
 			fmt.Printf("    bash: %s\n", rec.LastBashCommand)
 		}

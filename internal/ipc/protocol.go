@@ -1354,6 +1354,20 @@ type RecordStageExitParams struct {
 	// forensic shape. Values mirror gates.Kind ("ok" | "no_op" | "fail").
 	GateKind   string `json:"gateKind,omitempty"`
 	GateReason string `json:"gateReason,omitempty"`
+
+	// KillCeiling names the specific limit that terminated the stage and
+	// KillCeilingValue carries its resolved value plus derivation (#161).
+	// SignalSource names only the closure that delivered the signal, and
+	// several distinct limits share each label — "runaway-progress" alone
+	// cannot distinguish the no-progress window from the churn detector from
+	// the derived Nx stall multiple, so identifying the ceiling meant
+	// re-reading the resolver chain (which does not resolve a derived value).
+	//
+	// Appended at the END of the struct on purpose: the IPC codegen emits
+	// positional TypeScript parameters in field order, so inserting mid-struct
+	// silently renumbers every argument after it.
+	KillCeiling      string `json:"killCeiling,omitempty"`
+	KillCeilingValue string `json:"killCeilingValue,omitempty"`
 }
 
 // RecordStageExitResult is the response payload — `Recorded` is true on

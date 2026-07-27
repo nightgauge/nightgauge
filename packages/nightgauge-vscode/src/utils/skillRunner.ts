@@ -98,6 +98,7 @@ import {
   getStallIdleMs,
   getQuotaSignalIdleMs,
   shouldQuotaFastFail,
+  shouldNxRunawayKill,
   getStageHardCapMs,
   getStageCostCapUsd,
   getEffectiveStageCostCap,
@@ -151,6 +152,8 @@ import {
 } from "./incrediConfig";
 import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAwareRouting";
 import { withBehavioralPreamble } from "./behavioralPreamble";
+import type { KillCeiling } from "./killCeiling";
+import { formatKillCeilingValue, msLimit } from "./killCeiling";
 import { ProgressMonitor, recordToolCallProgress, isBlindMonitorKill } from "./progressMonitor";
 import { preserveWorkInProgress, shouldPreserveWorkOnExit } from "./preserveWorkInProgress";
 import {
@@ -359,6 +362,25 @@ export interface SkillRunResult {
    * "quota-fast-fail" | "processTree-reaper" | "external" | "". (#3605)
    */
   signalSource?: string;
+  /**
+   * Stable name of the ceiling that terminated the stage — e.g.
+   * `nx-stall-multiple`, `stage-hard-cap`, `progress-no-progress-window`.
+   * (#161)
+   *
+   * `signalSource` names the closure that delivered the signal; multiple
+   * distinct limits share each of those labels, so it cannot identify which
+   * limit fired. Absent when the exit was not a limit enforcement.
+   */
+  killCeiling?: string;
+  /**
+   * The ceiling's resolved limit plus how it was derived — e.g.
+   * `"2400000ms (stall warn threshold 300s (source: static) ×
+   * NX_RUNAWAY_KILL_MULTIPLE=8)"`. The derivation is load-bearing for a
+   * ceiling that is computed rather than configured: without it the reader is
+   * sent back into the resolver chain, which is exactly the dead end #161
+   * documented. (#161)
+   */
+  killCeilingValue?: string;
   /**
    * Total wall time from spawn to exit in milliseconds. Captured by the
    * SkillRunner because Go's stageStartedAt brackets the deterministic-merge
@@ -3570,6 +3592,8 @@ export function runStageSkillHeadless(
   let runawayFeedDisconnectWarned = false;
   // One-shot marker for the #128 activity gate log (see checkRunaway).
   let runawayActivityGateLogged = false;
+  // One-shot marker for the #161 activity gate on the Nx escalation path.
+  let nxActivityGateLogged = false;
 
   // Warn threshold (Issue #3508): historicalMedian × cost_warn_multiplier.
   // Populated by the caller (HeadlessOrchestrator) and passed in as a parameter.
@@ -3661,6 +3685,12 @@ export function runStageSkillHeadless(
   // omitempty at the IPC boundary so healthy runs stay terse.
   let exitSignal: string = "";
   let exitSignalSource: string = "";
+  // Which ceiling terminated the stage, and what it was configured to (#161).
+  // `exitSignalSource` names the closure that delivered the signal; several
+  // distinct limits share each of those labels, so on its own it cannot answer
+  // "which limit fired?" — the question #161's triage ran aground on. Captured
+  // at signal-delivery time alongside exitSignal/exitSignalSource.
+  let exitKillCeiling: KillCeiling | undefined;
   // Bash forensics are a bounded ring rather than a single slot (#156): the
   // record is the only evidence that outlives the stage, and one command deep
   // cannot distinguish "ran the suite, then a no-op tail" from "ran nothing".
@@ -3740,13 +3770,21 @@ export function runStageSkillHeadless(
   // TerminalKindRunawayProgress by Go (stall-kill recovery path, 30m backoff).
   // costCapExceeded is set true for backward compat with the Go scheduler's
   // result evaluation (it checks costCapExceeded to classify terminal outcomes).
-  // `force` (Issue #3851): bypass the progress-window/churn gate inside
+  // `forced` (Issue #3851): bypass the progress-window/churn gate inside
   // ProgressMonitor.check because the caller (the Nx-threshold escalation) has
   // ALREADY confirmed no productive progress over the window AND a high stall
   // multiple. Reuses the same kill machinery + [runaway-progress-exceeded]
   // marker so the Go scheduler classifies it identically (transient stall-kill
   // path, 30m backoff).
-  const checkRunaway = (force = false): boolean => {
+  //
+  // A forced caller MUST supply its own ceiling and reason (#161). Previously
+  // the forced path reported `result.reason` — which, precisely because the
+  // monitor declined to kill, is a NON-kill sentence. Real records read
+  // "Stage feature-validate terminated: cost $0.0000 below activation
+  // threshold $0.5 ... ms since last progress: 0", naming a threshold that had
+  // nothing to do with the kill and a progress clock the monitor never
+  // computed. The caller knows what actually fired; make it say so.
+  const checkRunaway = (forced?: { ceiling: KillCeiling; reason: string }): boolean => {
     if (costCapExceeded || stallKilled || stallKillDisabled) return false;
     const costNow = tokenAccumulator.getTotal().costUsd;
     const result = progressMonitor.check(costNow);
@@ -3763,7 +3801,7 @@ export function runStageSkillHeadless(
     // healthy stage sits in for its whole terminal verification phase, and
     // the #128 incident is unreadable in retrospect without it.
     if (
-      !force &&
+      !forced &&
       !result.shouldKill &&
       !runawayActivityGateLogged &&
       result.msSinceLastProgress > progressRunawayWindowMs
@@ -3777,7 +3815,7 @@ export function runStageSkillHeadless(
       );
     }
 
-    if (!force && !result.shouldKill) return false;
+    if (!forced && !result.shouldKill) return false;
 
     // Fail-open guard (Issue #295): a blind monitor must never shoot. The stage
     // parsed real tool events (`parsedToolEventCount > 0`) but the monitor
@@ -3801,6 +3839,11 @@ export function runStageSkillHeadless(
 
     costCapExceeded = true; // backward compat — scheduler checks this flag
     exitSignalSource = "runaway-progress";
+    // The kill names the ceiling it tripped (#161). The forced caller's
+    // ceiling wins because the monitor declined to kill on its own terms.
+    const killCeiling = forced?.ceiling ?? result.ceiling;
+    const killReasonText = forced?.reason ?? result.reason;
+    exitKillCeiling = killCeiling;
     // Report the REAL burn (#296). `costNow` is the authoritative accumulator,
     // which mid-stage is usually empty (no terminal `result` envelope has
     // arrived), so on its own it under-reports the kill cost — the live
@@ -3822,10 +3865,12 @@ export function runStageSkillHeadless(
     stallEvents.push(killEvent);
     callbacks?.onStallEvent?.(killEvent);
     callbacks?.onStderr?.(
-      `[runaway-progress-exceeded] Stage ${stage} terminated: ${result.reason}. ` +
+      `[runaway-progress-exceeded] Stage ${stage} terminated: ${killReasonText}. ` +
+        `Ceiling: ${killCeiling ? `${killCeiling.name}=${formatKillCeilingValue(killCeiling)}` : "(unattributed)"}. ` +
         `Cost $${reportedCostUsd.toFixed(4)}, signals seen: ${result.signalsSeen}, ` +
-        `ms since last progress: ${result.msSinceLastProgress}. ` +
-        `Treated as transient (stall-kill path). (Issue #3783)\n`
+        `ms since last productive progress: ${progressMonitor.msSinceLastProductiveProgress}, ` +
+        `ms since last tool activity: ${progressMonitor.msSinceLastActivity}. ` +
+        `Treated as transient (stall-kill path). (Issue #3783, #161)\n`
     );
 
     clearStallTicker();
@@ -4280,6 +4325,39 @@ export function runStageSkillHeadless(
         : quotaExhausted
           ? `[rate-limit-quota-exhausted] idle ${formatElapsed(reportedIdleMs)} after rate_limit_event (status=${lastRateLimitEvent?.status ?? "unknown"}; ${lastRateLimitEvent?.rateLimitType ?? "unknown"} bucket; resetsAt=${lastRateLimitEvent?.resetsAt ?? "unknown"})`
           : `exceeded stall idle threshold (${formatElapsed(stallKillMs)} without output)`;
+      // Name the ceiling and its resolved value (#161). `signalSource` alone
+      // is ambiguous — `hard-cap` covers both `stage_hard_caps` and the
+      // zero-cost-adapter `stage_time_caps` fallback, which resolve from
+      // different config keys. Computed here so the on-disk diagnostic below
+      // and the exit record forwarded to Go carry the same attribution.
+      const killCeiling: KillCeiling = hardCapReached
+        ? timeCapActive
+          ? {
+              name: "stage-time-cap",
+              limit: msLimit(effectiveHardCapMs),
+              derivation:
+                `min(pipeline.stage_hard_caps.${stage}=${msLimit(hardCapMs)}, ` +
+                `pipeline.stage_time_caps.${stage}=${msLimit(stageTimeCapMs)}) — ` +
+                `adapter=${adapter} has provider_scale=0`,
+            }
+          : {
+              name: "stage-hard-cap",
+              limit: msLimit(effectiveHardCapMs),
+              derivation: `pipeline.stage_hard_caps.${stage} (total runtime, progress-gated)`,
+            }
+        : quotaFastFailReached
+          ? {
+              name: "quota-fast-fail-idle",
+              limit: msLimit(quotaFastFailThresholdMs),
+              derivation: quotaExhaustedSignalActive
+                ? `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS after a rate_limit_event with status=limited`
+                : `min(stallKillMs, quota_signal_idle_ms) after a degraded rate_limit_event`,
+            }
+          : {
+              name: "stall-idle",
+              limit: msLimit(stallKillMs),
+              derivation: `idle-kill threshold (source: ${thresholdSource}) — no subprocess output`,
+            };
       const killEvent: StallEvent = {
         timestamp: new Date().toISOString(),
         elapsed_ms: elapsed,
@@ -4341,6 +4419,10 @@ export function runStageSkillHeadless(
           `hard_cap_ms: ${hardCapMs}`,
           `stage_time_cap_ms: ${stageTimeCapMs}`,
           `effective_hard_cap_ms: ${effectiveHardCapMs}`,
+          // #161: the diagnostic must name the ceiling, not leave it to be
+          // re-derived from the resolver chain.
+          `kill_ceiling: ${killCeiling.name}`,
+          `kill_ceiling_value: ${formatKillCeilingValue(killCeiling)}`,
           ``,
           `=== STDOUT ===`,
           diagStdoutBuffer || "(empty)",
@@ -4369,6 +4451,7 @@ export function runStageSkillHeadless(
           : quotaFastFailReached
             ? "quota-fast-fail"
             : "stall-kill";
+        exitKillCeiling = killCeiling;
       }
       // SIGKILL fallback after 5 seconds — also reap orphaned children
       // (vitest, jest, build commands) so a hung subprocess can't survive
@@ -4496,22 +4579,68 @@ export function runStageSkillHeadless(
         // existing runaway kill machinery. Progress-gated: a stage steadily
         // committing / writing new files keeps resetting the productive window,
         // so a healthy long run is never killed here (#2982/#3840 guard).
-        if (
-          currentMultiplier >= NX_RUNAWAY_KILL_MULTIPLE &&
-          !progressRunawayConfig.observeOnly &&
-          !stallKilled &&
-          !stallKillDisabled &&
-          !costCapExceeded &&
-          progressMonitor.msSinceLastProductiveProgress > progressRunawayWindowMs
-        ) {
+        //
+        // Issue #161: this is a DERIVED, deterministic wall-clock ceiling —
+        // `stallThresholdMs × NX_RUNAWAY_KILL_MULTIPLE`, e.g. 300s × 8 = 40m
+        // for feature-validate — that appears in no config file. Two
+        // feature-validate stages were killed by it at exactly 2400s while
+        // mid-tool-call (`idle_ms_at_exit` 376ms / 621ms), one of them having
+        // already committed and pushed. It bypassed ProgressMonitor.check
+        // wholesale, so the #128 activity gate never saw the kill.
+        //
+        // It is now gated on the same clock: a stage still issuing NOVEL tool
+        // calls is demonstrably working, not looping. That gate is the entire
+        // difference between the stages #128 saved and the ones #161 lost. It
+        // defers, it cannot disable — churn (novel tools, no product) is still
+        // caught by the churn detector, which counts distinct signatures
+        // instead of clocks, and a genuinely wedged stage lets both clocks go
+        // cold and is killed here on the next Nx tick.
+        const msSinceActivity = progressMonitor.msSinceLastActivity;
+        const msSinceProductive = progressMonitor.msSinceLastProductiveProgress;
+        const nxDecision = shouldNxRunawayKill({
+          currentMultiplier,
+          killMultiple: NX_RUNAWAY_KILL_MULTIPLE,
+          observeOnly: progressRunawayConfig.observeOnly,
+          stallKilled,
+          stallKillDisabled,
+          costCapExceeded,
+          msSinceLastProductiveProgress: msSinceProductive,
+          msSinceLastActivity: msSinceActivity,
+          windowMs: progressRunawayWindowMs,
+        });
+
+        if (nxDecision === "activity-gated") {
+          if (!nxActivityGateLogged) {
+            nxActivityGateLogged = true;
+            callbacks?.onStderr?.(
+              `[runaway-nx-activity-gate] Stage ${stage} reached ${currentMultiplier}× stall ` +
+                `threshold with no productive progress for ` +
+                `${Math.round(msSinceProductive / 1000)}s, but issued a novel tool call ` +
+                `${Math.round(msSinceActivity / 1000)}s ago (activity window: ` +
+                `${progressRunawayWindowMs / 1000}s) — working, not looping. Kill deferred. ` +
+                `(Issue #161)\n`
+            );
+          }
+        } else if (nxDecision === "kill") {
+          const nxCeiling: KillCeiling = {
+            name: "nx-stall-multiple",
+            limit: msLimit(stallThresholdMs * NX_RUNAWAY_KILL_MULTIPLE),
+            derivation:
+              `stall warn threshold ${stallThresholdSec}s (source: ${thresholdSource}) ` +
+              `× NX_RUNAWAY_KILL_MULTIPLE=${NX_RUNAWAY_KILL_MULTIPLE}`,
+          };
+          const nxReason =
+            `elapsed ${Math.round(effectiveElapsed / 1000)}s reached ${currentMultiplier}× the ` +
+            `stall warn threshold with no productive progress for ` +
+            `${Math.round(msSinceProductive / 1000)}s and no tool activity for ` +
+            `${Math.round(msSinceActivity / 1000)}s ` +
+            `(productive signals: ${progressMonitor.getProductiveProgressDelta()})`;
           callbacks?.onStderr?.(
-            `[runaway-nx-threshold] Stage ${stage} hit ${currentMultiplier}× stall threshold ` +
-              `with no productive progress for ` +
-              `${Math.round(progressMonitor.msSinceLastProductiveProgress / 1000)}s ` +
-              `(productive signals: ${progressMonitor.getProductiveProgressDelta()}). ` +
-              `Escalating to runaway kill. (Issue #3851)\n`
+            `[runaway-nx-threshold] Stage ${stage}: ${nxReason}. Ceiling ` +
+              `${nxCeiling.name}=${formatKillCeilingValue(nxCeiling)}. ` +
+              `Escalating to runaway kill. (Issue #3851, #161)\n`
           );
-          checkRunaway(true);
+          checkRunaway({ ceiling: nxCeiling, reason: nxReason });
           return;
         }
       }
@@ -4651,6 +4780,18 @@ export function runStageSkillHeadless(
         for (const marker of parsePhaseMarkers(parsed.toolResult.content)) {
           lastPhaseName = marker.name;
           phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
+          // #161: feed the runaway monitor here too. Phase markers are a
+          // PRODUCTIVE signal, but only the assistant-text branch above
+          // recorded one — and every skill emits its markers by `printf`,
+          // whose output reaches us solely through this tool_result channel.
+          // The window therefore never advanced on the marker stream that
+          // actually exists: a feature-validate stage that walked 18 of its 23
+          // phases was recorded with 4 productive signals and killed for "no
+          // productive progress" while running its commit-and-push phase.
+          // Same marker cannot arrive on both channels (tokenParser does not
+          // surface the tool_use command echo — #217), so this cannot
+          // double-count.
+          progressMonitor.recordSignal("phase_marker");
           traceRecorder.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
         }
@@ -5168,6 +5309,11 @@ export function runStageSkillHeadless(
       // optional — empty values yield a (still valid) terser daily record.
       signal: exitSignal || undefined,
       signalSource: exitSignalSource || undefined,
+      // #161: which ceiling fired, and what it was set to. Absent on healthy
+      // exits and on kills that enforce no configured limit (operator abort,
+      // external signal), so the record stays terse.
+      killCeiling: exitKillCeiling?.name,
+      killCeilingValue: exitKillCeiling ? formatKillCeilingValue(exitKillCeiling) : undefined,
       elapsedMs: Date.now() - startedAtMs,
       idleMsAtExit: Date.now() - lastChunkAtMs,
       cacheCreationTokens: bookedUsage?.usage.cacheCreationTokens,

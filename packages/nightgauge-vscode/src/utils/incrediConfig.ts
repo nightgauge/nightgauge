@@ -157,6 +157,8 @@ export {
   getQuotaSignalIdleMs,
   DEFAULT_QUOTA_SIGNAL_IDLE_MS,
   shouldQuotaFastFail,
+  shouldNxRunawayKill,
+  type NxRunawayDecision,
   getStageHardCapMs,
   getStageCostCapUsd,
   getCostCapModelScale,

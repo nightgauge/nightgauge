@@ -209,6 +209,56 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 	}
 }
 
+// TestWriteStageExitRecord_ForwardsKillCeiling pins the #161 pair on the
+// Go-scheduler write path, so both dispatch paths produce the same forensic
+// shape and `jq 'select(.kill_ceiling=="nx-stall-multiple")'` finds the kill
+// regardless of which one ran it.
+//
+// #161: three stages were killed with signal_source=runaway-progress while
+// mid-tool-call, and a complete exit record could not say which ceiling fired.
+// Four unrelated limits share that one label, and the one that did fire is
+// derived at runtime (`stall warn threshold × 8`) and configured nowhere.
+func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 161, "item-id")
+	runtime.RunID = "run-161-ceiling"
+	item := types.BoardItem{Number: 161, Repo: "nightgauge/nightgauge"}
+
+	const wantValue = "2400000ms (stall warn threshold 300s (source: static) × NX_RUNAWAY_KILL_MULTIPLE=8)"
+	result := &StageRunResult{
+		ExitCode:         143,
+		Signal:           "SIGTERM",
+		SignalSource:     "runaway-progress",
+		ElapsedMs:        2_400_654,
+		IdleMsAtExit:     376,
+		KillCeiling:      "nx-stall-multiple",
+		KillCeilingValue: wantValue,
+	}
+
+	s.writeStageExitRecord(item, state.StageFeatureValidate, runtime, result,
+		143, errors.New("[runaway-progress-exceeded] terminated"), 0, "sonnet-4-5",
+		0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+	if got.KillCeiling != "nx-stall-multiple" {
+		t.Errorf("KillCeiling = %q, want %q", got.KillCeiling, "nx-stall-multiple")
+	}
+	if got.KillCeilingValue != wantValue {
+		t.Errorf("KillCeilingValue = %q, want %q", got.KillCeilingValue, wantValue)
+	}
+	// The record must be self-sufficient: idle at exit shows the stage was
+	// mid-tool-call AND the ceiling names what stopped it, so neither has to
+	// be inferred from the other.
+	if got.IdleMsAtExit != 376 {
+		t.Errorf("IdleMsAtExit = %d, want 376", got.IdleMsAtExit)
+	}
+}
+
 // TestWriteStageExitRecord_ForwardsRecentBash pins the #156 field on the
 // Go-scheduler write path.
 //

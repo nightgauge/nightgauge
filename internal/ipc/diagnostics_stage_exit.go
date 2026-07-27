@@ -72,7 +72,12 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 		ExitCode:        p.ExitCode,
 		Signal:          p.Signal,
 		SignalSource:    p.SignalSource,
-		TerminalKind:    p.TerminalKind,
+		// #161: which configured limit fired and what it was set to. Carried
+		// verbatim so `jq 'select(.kill_ceiling=="nx-stall-multiple")'` finds
+		// the same kills from either dispatch path.
+		KillCeiling:      p.KillCeiling,
+		KillCeilingValue: p.KillCeilingValue,
+		TerminalKind:     p.TerminalKind,
 		ElapsedMs:       p.ElapsedMs,
 		IdleMsAtExit:    p.IdleMsAtExit,
 		LastBashCommand: p.LastBashCommand,

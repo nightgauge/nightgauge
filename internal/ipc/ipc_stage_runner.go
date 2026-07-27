@@ -168,6 +168,8 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			SessionID:           result.SessionID,
 			Signal:              result.Signal,
 			SignalSource:        result.SignalSource,
+			KillCeiling:         result.KillCeiling,
+			KillCeilingValue:    result.KillCeilingValue,
 			ElapsedMs:           result.ElapsedMs,
 			IdleMsAtExit:        result.IdleMsAtExit,
 			CacheCreationTokens: result.CacheCreationTokens,
