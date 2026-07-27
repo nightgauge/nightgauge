@@ -94,7 +94,7 @@ func TestOpenPRMergeStatesForRepo_BatchesOneCall(t *testing.T) {
 	if !ok || calls != 1 {
 		t.Fatalf("got ok=%v calls=%d, want ok=true calls=1", ok, calls)
 	}
-	if states[43] != "DIRTY" || states[44] != "BEHIND" || states[45] != "CLEAN" {
+	if states[43].MergeState != "DIRTY" || states[44].MergeState != "BEHIND" || states[45].MergeState != "CLEAN" {
 		t.Fatalf("unexpected states map: %v", states)
 	}
 }
