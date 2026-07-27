@@ -1809,13 +1809,23 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	// per repo, so gating it to the graph TTL (instead of every cycle) avoids
 	// draining the GitHub quota that the pipeline-start preflight depends on.
 	if graphWasFresh {
-		as.reconcileStuckInReviewPRs(ctx, graph)
-		// Refresh the "open PR is BLOCKED" set consumed by prioritize() below.
-		// Gated to fresh builds (one gh-pr-list per repo) for the same quota
-		// reason as the in-review sweep; prioritize() reads the cached set every
-		// cycle without any GitHub call. Ends the failed-pr-merge → revert-to-
-		// Ready → full-re-run churn for PRs a human must unblock.
+		// Refresh the "open PR cannot merge" set consumed by prioritize() below
+		// FIRST, against the board statuses GitHub actually reports. Gated to
+		// fresh builds (one gh-pr-list per repo) for the same quota reason as
+		// the in-review sweep; prioritize() reads the cached set every cycle
+		// without any GitHub call. Ends the failed-pr-merge → revert-to-Ready →
+		// full-re-run churn for PRs a human must unblock.
+		//
+		// Order matters (#159): the in-review sweep rewrites node.BoardStatus to
+		// "Ready" in this same graph to hand an issue back for ONE bounded
+		// pr-merge retry. Refreshing after that would let the guard — which now
+		// also treats a stale head under a strict base as un-mergeable — mark
+		// the just-handed-back issue blocked, stranding it in Ready where the
+		// in-review sweep can no longer see it. Snapshotting first gives the
+		// recovery its attempt; if that attempt does not fix the PR, the NEXT
+		// fresh scan sees a Ready issue with an un-mergeable PR and blocks it.
 		as.refreshBlockedReadyPRs(ctx, graph)
+		as.reconcileStuckInReviewPRs(ctx, graph)
 	}
 
 	// 2d. (#4151) Finalize due post-merge survival records — poll-on-reconcile,
