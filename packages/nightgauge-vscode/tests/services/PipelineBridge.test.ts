@@ -599,6 +599,10 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
           idleMsAtExit: 4_521,
           lastBashCommand: "nightgauge project move-status 3591 in-progress",
           lastBashExit: 1,
+          recentBash: [
+            { cmd: "npm run -w nightgauge-vscode vitest run", exit: 0 },
+            { cmd: "nightgauge project move-status 3591 in-progress", exit: 1 },
+          ],
           stopHookErrored: true,
           stderrTail: "[skillRunner] Stage exceeded stall idle threshold (20m).",
         }),
@@ -623,6 +627,12 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
           idleMsAtExit: 4_521,
           lastBashCommand: "nightgauge project move-status 3591 in-progress",
           lastBashExit: 1,
+          // #156: additive — the single-slot fields above keep their meaning,
+          // and the ring carries the context they cannot.
+          recentBash: [
+            { cmd: "npm run -w nightgauge-vscode vitest run", exit: 0 },
+            { cmd: "nightgauge project move-status 3591 in-progress", exit: 1 },
+          ],
           stopHookErrored: true,
           stderrTail: "[skillRunner] Stage exceeded stall idle threshold (20m).",
           cacheCreationTokens: 80,
@@ -659,6 +669,10 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
           idleMsAtExit: 621,
           lastBashCommand: "flutter test integration_test/app_e2e/scoring_test.dart",
           lastBashExit: 1,
+          recentBash: [
+            { cmd: "flutter pub get", exit: 0 },
+            { cmd: "flutter test integration_test/app_e2e/scoring_test.dart", exit: 1 },
+          ],
           stopHookErrored: false,
           stderrTail: "Timed out after 30s waiting for: finder to match: widget with key",
         }),
@@ -696,6 +710,14 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
       "Timed out after 30s waiting for: finder to match: widget with key"
     );
     expect(payload?.lastBashExit).toBe(1);
+    // #156: the catch path must carry the ring too. #149 was a dropped
+    // catch-path branch and #154 was a layer skipped in the middle; a field
+    // that reaches Go only on the success path is a field that is absent from
+    // exactly the records a post-mortem opens.
+    expect(payload?.recentBash).toEqual([
+      { cmd: "flutter pub get", exit: 0 },
+      { cmd: "flutter test integration_test/app_e2e/scoring_test.dart", exit: 1 },
+    ]);
     // And the surrounding context that makes it interpretable.
     expect(payload?.signalSource).toBe("runaway-progress");
     expect(payload?.sessionId).toBe("ddfe5686-ba8e-4ce8-93b7-a27794bc0396");
@@ -741,6 +763,7 @@ describe("PipelineBridge — stage-exit diagnostic forwarding (Issue #3605)", ()
     expect(payload?.signal).toBeUndefined();
     expect(payload?.signalSource).toBeUndefined();
     expect(payload?.lastBashCommand).toBeUndefined();
+    expect(payload?.recentBash).toBeUndefined();
     expect(payload?.stopHookErrored).toBeUndefined();
     expect(payload?.stderrTail).toBeUndefined();
   });

@@ -24,6 +24,7 @@ import {
   type SkillProcessHandle,
   type ErrorCategory,
   type RateLimitEventData,
+  type RecentBashEntry,
 } from "../utils/skillRunner";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
@@ -144,6 +145,13 @@ export interface StageResult {
   lastBashCommand?: string;
   /** Exit code of the matching Bash tool_result, when observed. */
   lastBashExit?: number;
+  /**
+   * The last 10 Bash commands, oldest first, each with its own exit code.
+   * Superset of `lastBashCommand`/`lastBashExit` — its final entry is the same
+   * command — so one command of context becomes ten without displacing the
+   * fields existing readers depend on. (#156)
+   */
+  recentBash?: RecentBashEntry[];
   /** True when the stream included a stop-hook error notification. */
   stopHookErrored?: boolean;
   /** Last 4 KB of stderr from the SkillRunner ring buffer. */
@@ -450,6 +458,7 @@ export class SkillRunner {
               idleMsAtExit: result.idleMsAtExit,
               lastBashCommand: result.lastBashCommand,
               lastBashExit: result.lastBashExit,
+              recentBash: result.recentBash,
               stopHookErrored: result.stopHookErrored,
               stderrTail: result.stderrTail,
               // ── #91 served-model attribution forwarding ────────────

@@ -136,6 +136,10 @@ func (s *Scheduler) writeStageExitRecord(
 		rec.IdleMsAtExit = result.IdleMsAtExit
 		rec.LastBashCommand = truncExitRecordBashCommand(result.LastBashCommand)
 		rec.LastBashExit = result.LastBashExit
+		// #156: the surrounding Bash history, bounded at the point of
+		// persistence rather than trusted from the producer. Same helper the
+		// IPC write path calls, so both produce identical on-disk shapes.
+		rec.RecentBash = diagnostics.BoundRecentBash(result.RecentBash)
 		rec.StopHookErrored = result.StopHookErrored
 		rec.StderrTail = truncExitRecordStderrTail(result.StderrTail)
 		// Prefer the TS-provided elapsed over the Go-side fallback when present —

@@ -23,6 +23,7 @@ import type { Logger } from "../../utils/logger";
 import type { SizeLabel } from "../../utils/budgetEnforcer";
 import type { ContextFileType } from "../../services/RepositoryContextLoader";
 import type { ParsedTokenUsage } from "../../utils/tokenParser";
+import type { RecentBashEntry } from "../../utils/skillRunner";
 
 /**
  * Forensic telemetry captured from the skill subprocess at stage exit and
@@ -63,6 +64,12 @@ export interface StageExitTelemetry {
   lastBashCommand?: string;
   /** Exit code of the tool_result matching `lastBashCommand`. */
   lastBashExit?: number;
+  /**
+   * The last 10 Bash commands with their own exit codes, oldest first. The
+   * final entry is `lastBashCommand`; the rest are the context that says
+   * whether the stage did real work before it. (#156)
+   */
+  recentBash?: RecentBashEntry[];
   /** True when a stop-hook error notification preceded the exit. */
   stopHookErrored?: boolean;
   /** Trailing stderr from the SkillRunner ring buffer. */

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
 )
 
 // Request is an incoming IPC request from VSCode.
@@ -1337,8 +1338,12 @@ type RecordStageExitParams struct {
 	SessionID       string `json:"sessionId,omitempty"`
 	LastBashCommand string `json:"lastBashCommand,omitempty"`
 	LastBashExit    *int   `json:"lastBashExit,omitempty"`
-	StopHookErrored bool   `json:"stopHookErrored,omitempty"`
-	StderrTail      string `json:"stderrTail,omitempty"`
+	// RecentBash carries the last 10 Bash commands with their own exit codes
+	// (#156). Additive: LastBashCommand/LastBashExit keep their meaning and
+	// remain the fields existing readers use.
+	RecentBash      []diagnostics.RecentBashEntry `json:"recentBash,omitempty"`
+	StopHookErrored bool                          `json:"stopHookErrored,omitempty"`
+	StderrTail      string                        `json:"stderrTail,omitempty"`
 
 	// Post-condition gate outcome (#125). The Go-scheduler write path already
 	// stamps StageExitRecord.GateKind/GateReason from

@@ -29,6 +29,7 @@ package diagnostics
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/history"
@@ -43,6 +44,18 @@ type ExitRecordTokens struct {
 	CacheRead     int     `json:"cache_read,omitempty"`
 	CacheCreation int     `json:"cache_creation,omitempty"`
 	CostUsd       float64 `json:"cost_usd,omitempty"`
+}
+
+// RecentBashEntry is one retained Bash command and the exit code of its
+// tool_result, as observed by the TS SkillRunner's stream parser.
+//
+// Exit is a pointer for the same reason StageExitRecord.LastBashExit is: a
+// command that succeeded (0) must stay distinguishable from one whose result
+// never landed before the stage exited. A plain int would render both as 0 and
+// erase exactly the distinction a post-mortem needs.
+type RecentBashEntry struct {
+	Cmd  string `json:"cmd"`
+	Exit *int   `json:"exit,omitempty"`
 }
 
 // StageExitRecord is the structured forensic payload written at every stage
@@ -107,6 +120,17 @@ type StageExitRecord struct {
 	// it landed before the stage exited. Pointer so 0 is distinguishable
 	// from "never observed."
 	LastBashExit *int `json:"last_bash_exit,omitempty"`
+	// RecentBash is the tail of the stage's Bash history, oldest first, each
+	// entry carrying its own exit code. The last element is the same command
+	// as LastBashCommand — this is a superset, not a replacement (#156).
+	//
+	// One command is thin evidence. Stage subprocesses run with
+	// `--no-session-persistence`, so no transcript survives and this record is
+	// the only durable account of what a stage did; a validate stage whose
+	// LastBashCommand is `true` is equally consistent with a benign trailing
+	// `|| true` and with a stage that ran no verification at all. The
+	// surrounding commands settle that without a re-run.
+	RecentBash []RecentBashEntry `json:"recent_bash,omitempty"`
 	// StopHookErrored is true when the stream included a
 	// `notification.key == "stop-hook-error"` event before exit.
 	StopHookErrored bool `json:"stop_hook_errored,omitempty"`
@@ -149,6 +173,48 @@ type StageExitRecord struct {
 // live in. Exported as a package constant so the CLI reader uses the same
 // path without re-deriving it.
 const exitRecordsSubdir = ".nightgauge/pipeline/exit-records"
+
+// RecentBashMaxEntries caps how many Bash commands a record retains. Kept in
+// lock-step with RECENT_BASH_MAX_ENTRIES in the TS skillRunner.
+const RecentBashMaxEntries = 10
+
+// RecentBashCommandMaxRunes caps each retained command. Matches
+// LAST_BASH_COMMAND_MAX_CHARS on the TS side, which truncates before sending.
+const RecentBashCommandMaxRunes = 500
+
+// BoundRecentBash clamps a recent-Bash slice to the retention limits before it
+// is persisted: at most RecentBashMaxEntries entries (keeping the *newest*,
+// since the tail is what a post-mortem reads) and at most
+// RecentBashCommandMaxRunes runes per command, eliding with "…".
+//
+// The TS side already applies both bounds. This is belt-and-braces for any
+// caller that bypasses it — the ring is what keeps a pathological stage from
+// turning one daily JSONL line into megabytes, so the cap is enforced at the
+// point of persistence rather than trusted from the producer. Applied by both
+// write paths so the two produce identical on-disk shapes.
+func BoundRecentBash(entries []RecentBashEntry) []RecentBashEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	if len(entries) > RecentBashMaxEntries {
+		entries = entries[len(entries)-RecentBashMaxEntries:]
+	}
+	out := make([]RecentBashEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, RecentBashEntry{Cmd: truncRunes(e.Cmd, RecentBashCommandMaxRunes), Exit: e.Exit})
+	}
+	return out
+}
+
+// truncRunes truncates s to at most maxRunes runes, marking truncation with a
+// trailing "…" so a persisted command is unambiguously incomplete.
+func truncRunes(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return strings.TrimRight(string(r[:maxRunes]), " ") + "…"
+}
 
 // ExitRecordsDir returns the absolute path to the per-project exit-records
 // directory. The directory itself is not created — WriteStageExitRecord

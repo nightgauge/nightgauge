@@ -56,6 +56,7 @@ func readDailyRecords(t *testing.T, rootDir string) []diagnostics.StageExitRecor
 func TestBuildStageExitRecordFromIPC_AllFieldsCarriedVerbatim(t *testing.T) {
 	exitCode := 137
 	bashExit := 1
+	okExit := 0
 	p := RecordStageExitParams{
 		Repo:                "nightgauge/nightgauge",
 		IssueNumber:         3340,
@@ -78,8 +79,12 @@ func TestBuildStageExitRecordFromIPC_AllFieldsCarriedVerbatim(t *testing.T) {
 		SessionID:           "abc-def-123",
 		LastBashCommand:     "npm run -w nightgauge-vscode vitest run",
 		LastBashExit:        &bashExit,
-		StopHookErrored:     true,
-		StderrTail:          "[skillRunner] idle threshold exceeded\n",
+		RecentBash: []diagnostics.RecentBashEntry{
+			{Cmd: "go build ./...", Exit: &okExit},
+			{Cmd: "npm run -w nightgauge-vscode vitest run", Exit: &bashExit},
+		},
+		StopHookErrored: true,
+		StderrTail:      "[skillRunner] idle threshold exceeded\n",
 	}
 
 	rec := buildStageExitRecordFromIPC(p)
@@ -132,6 +137,23 @@ func TestBuildStageExitRecordFromIPC_AllFieldsCarriedVerbatim(t *testing.T) {
 	}
 	if rec.LastBashExit == nil || *rec.LastBashExit != *p.LastBashExit {
 		t.Errorf("LastBashExit mismatch (got %v, want %v)", rec.LastBashExit, p.LastBashExit)
+	}
+	if len(rec.RecentBash) != len(p.RecentBash) {
+		t.Fatalf("len(RecentBash) = %d, want %d", len(rec.RecentBash), len(p.RecentBash))
+	}
+	for i := range p.RecentBash {
+		if rec.RecentBash[i].Cmd != p.RecentBash[i].Cmd {
+			t.Errorf("RecentBash[%d].Cmd = %q, want %q", i, rec.RecentBash[i].Cmd, p.RecentBash[i].Cmd)
+		}
+		if rec.RecentBash[i].Exit == nil || *rec.RecentBash[i].Exit != *p.RecentBash[i].Exit {
+			t.Errorf("RecentBash[%d].Exit = %v, want %v", i, rec.RecentBash[i].Exit, p.RecentBash[i].Exit)
+		}
+	}
+	// The ring is a superset, not a replacement — its tail names the same
+	// command LastBashCommand does. (#156)
+	if rec.RecentBash[len(rec.RecentBash)-1].Cmd != rec.LastBashCommand {
+		t.Errorf("RecentBash tail %q disagrees with LastBashCommand %q",
+			rec.RecentBash[len(rec.RecentBash)-1].Cmd, rec.LastBashCommand)
 	}
 	if rec.StopHookErrored != p.StopHookErrored {
 		t.Errorf("StopHookErrored = %v, want %v", rec.StopHookErrored, p.StopHookErrored)
@@ -221,6 +243,39 @@ func TestBuildStageExitRecordFromIPC_CarriesGateVerdict(t *testing.T) {
 	// gate-caught failure — it must survive as 0, not be erased.
 	if rec.ExitCode == nil || *rec.ExitCode != 0 {
 		t.Errorf("ExitCode = %v, want 0 (the skill really did exit 0)", rec.ExitCode)
+	}
+}
+
+// TestBuildStageExitRecordFromIPC_BoundsRecentBash proves the retention limits
+// are enforced on THIS path too, not only on the Go-scheduler path. Both write
+// into the same daily file that operator tooling greps, so a bound applied to
+// one and not the other would let the TS dispatch path — the one autonomous
+// mode actually uses — write unbounded command history. (#156)
+func TestBuildStageExitRecordFromIPC_BoundsRecentBash(t *testing.T) {
+	var oversized []diagnostics.RecentBashEntry
+	for i := 0; i < diagnostics.RecentBashMaxEntries*2; i++ {
+		oversized = append(oversized, diagnostics.RecentBashEntry{Cmd: "cmd"})
+	}
+	oversized = append(oversized, diagnostics.RecentBashEntry{
+		Cmd: strings.Repeat("z", diagnostics.RecentBashCommandMaxRunes+50),
+	})
+
+	rec := buildStageExitRecordFromIPC(RecordStageExitParams{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 156,
+		Stage:       "feature-dev",
+		RecentBash:  oversized,
+	})
+
+	if len(rec.RecentBash) != diagnostics.RecentBashMaxEntries {
+		t.Errorf("len(RecentBash) = %d, want %d", len(rec.RecentBash), diagnostics.RecentBashMaxEntries)
+	}
+	tail := rec.RecentBash[len(rec.RecentBash)-1].Cmd
+	if !strings.HasSuffix(tail, "…") {
+		t.Errorf("over-long command not elided: len=%d", len([]rune(tail)))
+	}
+	if len([]rune(tail)) != diagnostics.RecentBashCommandMaxRunes+1 {
+		t.Errorf("len(tail runes) = %d, want %d", len([]rune(tail)), diagnostics.RecentBashCommandMaxRunes+1)
 	}
 }
 

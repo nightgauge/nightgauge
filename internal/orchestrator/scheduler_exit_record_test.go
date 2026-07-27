@@ -209,6 +209,103 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 	}
 }
 
+// TestWriteStageExitRecord_ForwardsRecentBash pins the #156 field on the
+// Go-scheduler write path.
+//
+// The scenario is the one from the issue: a validate stage whose last command
+// is `true`. With only last_bash_command that is indistinguishable from a
+// stage that ran no verification at all — and since stage subprocesses run
+// with `--no-session-persistence`, no transcript exists to settle it. The ring
+// shows the suite ran first, and shows it failed.
+func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id")
+	runtime.RunID = "run-156-recent-bash"
+	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
+
+	failed, ok := 1, 0
+	result := &StageRunResult{
+		ExitCode:        0,
+		LastBashCommand: "true",
+		LastBashExit:    &ok,
+		RecentBash: []diagnostics.RecentBashEntry{
+			{Cmd: "npm run -w nightgauge-vscode vitest run", Exit: &failed},
+			{Cmd: "true", Exit: &ok},
+		},
+	}
+
+	s.writeStageExitRecord(item, state.StageFeatureValidate, runtime, result,
+		0, nil, 0, "sonnet-4-5", 0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0]
+
+	// Additive: the pre-#156 fields are untouched, so existing readers and
+	// retro tooling keep working.
+	if got.LastBashCommand != "true" {
+		t.Errorf("LastBashCommand = %q, want %q", got.LastBashCommand, "true")
+	}
+	if got.LastBashExit == nil || *got.LastBashExit != 0 {
+		t.Errorf("LastBashExit = %v, want 0", got.LastBashExit)
+	}
+	if len(got.RecentBash) != 2 {
+		t.Fatalf("len(RecentBash) = %d, want 2", len(got.RecentBash))
+	}
+	// The evidence the single slot could not carry.
+	if got.RecentBash[0].Cmd != "npm run -w nightgauge-vscode vitest run" {
+		t.Errorf("RecentBash[0].Cmd = %q", got.RecentBash[0].Cmd)
+	}
+	if got.RecentBash[0].Exit == nil || *got.RecentBash[0].Exit != 1 {
+		t.Errorf("RecentBash[0].Exit = %v, want 1 — per-entry exits are the point",
+			got.RecentBash[0].Exit)
+	}
+	if got.RecentBash[1].Exit == nil || *got.RecentBash[1].Exit != 0 {
+		t.Errorf("RecentBash[1].Exit = %v, want 0 (a real zero, not 'unobserved')",
+			got.RecentBash[1].Exit)
+	}
+	if got.RecentBash[len(got.RecentBash)-1].Cmd != got.LastBashCommand {
+		t.Errorf("ring tail %q disagrees with LastBashCommand %q",
+			got.RecentBash[len(got.RecentBash)-1].Cmd, got.LastBashCommand)
+	}
+}
+
+// TestWriteStageExitRecord_BoundsRecentBash keeps the daily JSONL bounded even
+// if a caller bypasses the TS-side ring. Both write paths call the same helper,
+// so a record cannot grow without limit from either direction. (#156)
+func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id")
+	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
+
+	var oversized []diagnostics.RecentBashEntry
+	for i := 0; i < diagnostics.RecentBashMaxEntries*5; i++ {
+		oversized = append(oversized, diagnostics.RecentBashEntry{Cmd: fmt.Sprintf("cmd-%d", i)})
+	}
+	newest := oversized[len(oversized)-1].Cmd
+
+	s.writeStageExitRecord(item, state.StageFeatureDev, runtime,
+		&StageRunResult{RecentBash: oversized},
+		0, nil, 0, "sonnet-4-5", 0, 0, 0, time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	if n := len(recs[0].RecentBash); n != diagnostics.RecentBashMaxEntries {
+		t.Errorf("len(RecentBash) = %d, want %d", n, diagnostics.RecentBashMaxEntries)
+	}
+	// Truncating from the wrong end would keep the stage's startup noise and
+	// discard the commands nearest the failure.
+	if tail := recs[0].RecentBash[len(recs[0].RecentBash)-1].Cmd; tail != newest {
+		t.Errorf("tail = %q, want the newest command %q", tail, newest)
+	}
+}
+
 // TestWriteStageExitRecord_PreUpdateTSStillWrites verifies that when the TS
 // SkillRunner has not yet been updated to populate diagnostic fields (all
 // fields zero), Go still writes a valid record carrying just the Go-side

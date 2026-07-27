@@ -515,6 +515,7 @@ export class PipelineBridge {
         cacheCreationTokens: result.cacheCreationTokens,
         lastBashCommand: result.lastBashCommand,
         lastBashExit: result.lastBashExit,
+        recentBash: result.recentBash,
         stopHookErrored: result.stopHookErrored,
         stderrTail: result.stderrTail,
         // #3666 follow-up: budget-kill + shipped-partially signal forwarded
@@ -587,6 +588,7 @@ export class PipelineBridge {
         idleMsAtExit: result?.idleMsAtExit,
         lastBashCommand: result?.lastBashCommand,
         lastBashExit: result?.lastBashExit,
+        recentBash: result?.recentBash,
         stopHookErrored: result?.stopHookErrored,
         stderrTail: result?.stderrTail,
       });
