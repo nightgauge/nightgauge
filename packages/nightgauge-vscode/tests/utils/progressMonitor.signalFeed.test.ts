@@ -94,8 +94,11 @@ describe("Issue #295 — runaway monitor signal feed", () => {
     expect(parsed?.type).toBe("assistant");
     // This is why the pre-#295 toolName-gated block never fired at runtime:
     expect(parsed?.toolName).toBeUndefined();
-    // The tool call is only reachable via the plural array:
-    expect(parsed?.toolUses).toEqual([{ name: "Bash", input: { command: "git status" } }]);
+    // The tool call is only reachable via the plural array. `id` rides along so
+    // stage-exit forensics can correlate the later tool_result for an exit code.
+    expect(parsed?.toolUses).toEqual([
+      { name: "Bash", input: { command: "git status" }, id: "toolu_01FIXTURE" },
+    ]);
   });
 
   it("REGRESSION: feeding a killed-run-shaped assistant event yields totalSignals > 0", () => {

@@ -146,8 +146,14 @@ export interface ParsedStreamMessage {
    * (not `content_block_start` events), so `toolName`/`toolInput` above — which
    * only populate for `content_block_start` — miss them. This array exposes
    * every tool call so deterministic phase inference can observe tool activity.
+   *
+   * `id` is the block's `tool_use` id, present on the wire and carried through
+   * so stage-exit forensics can match the later `tool_result` (which arrives in
+   * a separate user message) and recover the command's exit code. Optional
+   * because a malformed block must leave the exit unknown rather than let a
+   * result bind to an unrelated call.
    */
-  toolUses?: { name: string; input: unknown }[];
+  toolUses?: { name: string; input: unknown; id?: string }[];
   /** Session ID for conversation resumption (Issue #118) */
   sessionId?: string;
   /** Tool result extracted from user messages (Issue #1031) */
@@ -427,7 +433,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       const contentBlocks = parsed.message?.content;
       if (Array.isArray(contentBlocks)) {
         const textParts: string[] = [];
-        const toolUses: { name: string; input: unknown }[] = [];
+        const toolUses: { name: string; input: unknown; id?: string }[] = [];
         for (const block of contentBlocks) {
           if (block.type === "text" && typeof block.text === "string") {
             textParts.push(block.text);
@@ -435,8 +441,16 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
           // Collect every tool_use block so phase inference can observe tool
           // activity (Issue #3760) — the CLI delivers tool calls here, not via
           // content_block_start events.
+          // `id` is propagated so the stage-exit forensics can correlate a
+          // later tool_result back to this call and recover its exit code.
+          // Without it the plural shape can record WHAT ran but never whether
+          // it succeeded — see skillRunner's Bash capture.
           if (block.type === "tool_use" && typeof block.name === "string") {
-            toolUses.push({ name: block.name, input: block.input });
+            toolUses.push({
+              name: block.name,
+              input: block.input,
+              ...(typeof block.id === "string" ? { id: block.id } : {}),
+            });
           }
           // Deliberately NOT extracted: phase markers inside Bash tool_use
           // command inputs. The printf command echo is the same marker that
