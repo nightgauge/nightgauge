@@ -1238,6 +1238,32 @@ export function inferProcessError(
 
 type StreamJsonOutcome = { kind: "error"; error: Error } | { kind: "success" } | { kind: "absent" };
 
+/** Max length of a `last_bash_command` before it is elided. */
+export const LAST_BASH_COMMAND_MAX_CHARS = 500;
+
+/**
+ * Extract the `last_bash_command` forensic anchor from one parsed tool call.
+ *
+ * Returns `undefined` for any non-Bash tool and for a Bash call whose input
+ * carries no string `command`, so callers can leave the previous value intact
+ * rather than clobbering it with a blank.
+ *
+ * Exists as a named helper because the CLI delivers tool calls in two shapes —
+ * singular `content_block_start` (`parsed.toolName`) and plural assistant-message
+ * (`parsed.toolUses[]`) — and the capture must behave identically for both.
+ * Reading only the singular shape is why `last_bash_command` was empty in 100%
+ * of stage-exit records: the progress monitor read both and counted hundreds of
+ * tool events per stage, while the forensic capture read one and saw none. (#147)
+ */
+export function extractBashCommand(toolName: string, toolInput: unknown): string | undefined {
+  if (toolName !== "Bash") return undefined;
+  const cmd = (toolInput as { command?: unknown } | undefined)?.command;
+  if (typeof cmd !== "string") return undefined;
+  return cmd.length > LAST_BASH_COMMAND_MAX_CHARS
+    ? cmd.slice(0, LAST_BASH_COMMAND_MAX_CHARS) + "…"
+    : cmd;
+}
+
 // Claude Code stream-json emits a terminal envelope `{type:"result", is_error, result, subtype}`
 // when the CLI exits. When is_error is true, `result` carries the real cause. When it is false
 // the CLI succeeded at the protocol level even if the process returned non-zero (e.g. wrapper
@@ -4528,6 +4554,20 @@ export function runStageSkillHeadless(
             traceRecorder.phaseTransition(stage, inferred);
             callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
           }
+
+          // Stage-exit forensics (#147). The CLI delivers tool_use inside
+          // complete `assistant` messages — the plural shape handled here —
+          // while the singular `content_block_start` capture below fires only
+          // for the streaming shape. Whichever arrives last legitimately wins:
+          // the field means "most recent Bash command", not "first".
+          const plural = extractBashCommand(name, input);
+          if (plural !== undefined) {
+            lastBashCommand = plural;
+            // The plural shape carries no per-call tool_use id to correlate a
+            // tool_result against, so the exit code stays unknown rather than
+            // being attributed from an unrelated call.
+            lastBashExit = undefined;
+          }
         }
       }
 
@@ -4667,9 +4707,9 @@ export function runStageSkillHeadless(
         // matching tool_result's `is_error` flag flips lastBashExit so we know
         // whether the command actually failed before the stage ended.
         if (parsed.toolName === "Bash") {
-          const cmd = (parsed.toolInput as { command?: unknown } | undefined)?.command;
-          if (typeof cmd === "string") {
-            lastBashCommand = cmd.length > 500 ? cmd.slice(0, 500) + "…" : cmd;
+          const singular = extractBashCommand(parsed.toolName, parsed.toolInput);
+          if (singular !== undefined) {
+            lastBashCommand = singular;
           }
           pendingBashToolUseId = toolUseId;
           // Reset the matching exit code until the tool_result lands.
@@ -4935,13 +4975,19 @@ export function runStageSkillHeadless(
     // itself captured into `stderr_tail`, so the record carries evidence of
     // its own incompleteness instead of quietly under-reporting.
     if (!lastBashCommand && parsedToolEventCount > 0) {
-      callbacks?.onStderr?.(
+      const gapWarning =
         `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
-          `event(s) but captured no Bash command, so last_bash_command will be absent ` +
-          `from the exit record and a retro cannot answer "what was it doing when it ` +
-          `died?". The stream parser and the CLI's event shape have likely diverged. ` +
-          `(Issue #147)\n`
-      );
+        `event(s) but captured no Bash command, so last_bash_command will be absent ` +
+        `from the exit record and a retro cannot answer "what was it doing when it ` +
+        `died?". The stream parser and the CLI's event shape have likely diverged. ` +
+        `(Issue #147)\n`;
+      callbacks?.onStderr?.(gapWarning);
+      // `exitStderrTail` is fed ONLY by the subprocess's own stderr stream, so
+      // an onStderr callback does not reach it — the callback notifies the
+      // caller, it does not write the ring. Append explicitly, or this warning
+      // lands in the session log and the exit record still looks healthy and
+      // terse, which is the exact failure being reported on.
+      exitStderrTail = appendTail(exitStderrTail, gapWarning, STAGE_EXIT_STDERR_TAIL_MAX);
     }
 
     // ── Worktree write containment: verdict (Issue #129) ────────────────
