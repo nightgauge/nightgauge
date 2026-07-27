@@ -98,6 +98,7 @@ import {
   getStallIdleMs,
   getQuotaSignalIdleMs,
   shouldQuotaFastFail,
+  shouldNxRunawayKill,
   getStageHardCapMs,
   getStageCostCapUsd,
   getEffectiveStageCostCap,
@@ -3591,6 +3592,8 @@ export function runStageSkillHeadless(
   let runawayFeedDisconnectWarned = false;
   // One-shot marker for the #128 activity gate log (see checkRunaway).
   let runawayActivityGateLogged = false;
+  // One-shot marker for the #161 activity gate on the Nx escalation path.
+  let nxActivityGateLogged = false;
 
   // Warn threshold (Issue #3508): historicalMedian × cost_warn_multiplier.
   // Populated by the caller (HeadlessOrchestrator) and passed in as a parameter.
@@ -4579,18 +4582,46 @@ export function runStageSkillHeadless(
         //
         // Issue #161: this is a DERIVED, deterministic wall-clock ceiling —
         // `stallThresholdMs × NX_RUNAWAY_KILL_MULTIPLE`, e.g. 300s × 8 = 40m
-        // for feature-validate — that appears in no config file. A kill here
-        // must therefore say so itself; nothing downstream can re-derive it.
+        // for feature-validate — that appears in no config file. Two
+        // feature-validate stages were killed by it at exactly 2400s while
+        // mid-tool-call (`idle_ms_at_exit` 376ms / 621ms), one of them having
+        // already committed and pushed. It bypassed ProgressMonitor.check
+        // wholesale, so the #128 activity gate never saw the kill.
+        //
+        // It is now gated on the same clock: a stage still issuing NOVEL tool
+        // calls is demonstrably working, not looping. That gate is the entire
+        // difference between the stages #128 saved and the ones #161 lost. It
+        // defers, it cannot disable — churn (novel tools, no product) is still
+        // caught by the churn detector, which counts distinct signatures
+        // instead of clocks, and a genuinely wedged stage lets both clocks go
+        // cold and is killed here on the next Nx tick.
         const msSinceActivity = progressMonitor.msSinceLastActivity;
         const msSinceProductive = progressMonitor.msSinceLastProductiveProgress;
-        if (
-          currentMultiplier >= NX_RUNAWAY_KILL_MULTIPLE &&
-          !progressRunawayConfig.observeOnly &&
-          !stallKilled &&
-          !stallKillDisabled &&
-          !costCapExceeded &&
-          msSinceProductive > progressRunawayWindowMs
-        ) {
+        const nxDecision = shouldNxRunawayKill({
+          currentMultiplier,
+          killMultiple: NX_RUNAWAY_KILL_MULTIPLE,
+          observeOnly: progressRunawayConfig.observeOnly,
+          stallKilled,
+          stallKillDisabled,
+          costCapExceeded,
+          msSinceLastProductiveProgress: msSinceProductive,
+          msSinceLastActivity: msSinceActivity,
+          windowMs: progressRunawayWindowMs,
+        });
+
+        if (nxDecision === "activity-gated") {
+          if (!nxActivityGateLogged) {
+            nxActivityGateLogged = true;
+            callbacks?.onStderr?.(
+              `[runaway-nx-activity-gate] Stage ${stage} reached ${currentMultiplier}× stall ` +
+                `threshold with no productive progress for ` +
+                `${Math.round(msSinceProductive / 1000)}s, but issued a novel tool call ` +
+                `${Math.round(msSinceActivity / 1000)}s ago (activity window: ` +
+                `${progressRunawayWindowMs / 1000}s) — working, not looping. Kill deferred. ` +
+                `(Issue #161)\n`
+            );
+          }
+        } else if (nxDecision === "kill") {
           const nxCeiling: KillCeiling = {
             name: "nx-stall-multiple",
             limit: msLimit(stallThresholdMs * NX_RUNAWAY_KILL_MULTIPLE),
@@ -4749,6 +4780,18 @@ export function runStageSkillHeadless(
         for (const marker of parsePhaseMarkers(parsed.toolResult.content)) {
           lastPhaseName = marker.name;
           phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
+          // #161: feed the runaway monitor here too. Phase markers are a
+          // PRODUCTIVE signal, but only the assistant-text branch above
+          // recorded one — and every skill emits its markers by `printf`,
+          // whose output reaches us solely through this tool_result channel.
+          // The window therefore never advanced on the marker stream that
+          // actually exists: a feature-validate stage that walked 18 of its 23
+          // phases was recorded with 4 productive signals and killed for "no
+          // productive progress" while running its commit-and-push phase.
+          // Same marker cannot arrive on both channels (tokenParser does not
+          // surface the tool_use command echo — #217), so this cannot
+          // double-count.
+          progressMonitor.recordSignal("phase_marker");
           traceRecorder.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
         }

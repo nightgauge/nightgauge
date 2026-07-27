@@ -148,6 +148,33 @@ against a busy-but-unproductive stage. When the gate defers a kill, skillRunner
 logs `[runaway-progress-activity-gate]` once so the deferral is visible in a
 retro.
 
+### Nx Stall-Multiple Escalation (#3851, gated in #161)
+
+The escalating stall warnings (2×, 3×, … the warn threshold) used to be a pure
+no-op. #3851 turned the Nth into a kill: at `NX_RUNAWAY_KILL_MULTIPLE` (8×) with
+no productive progress over the window, skillRunner escalates to the runaway
+kill machinery. This is a **derived** wall-clock ceiling —
+`stall warn threshold × 8`, so 40 min for `feature-validate` (300s default) and
+80 min for `feature-dev` (600s default) — that exists in no config file.
+
+As shipped it called the kill in force mode, which bypassed
+`ProgressMonitor.check` entirely: not just the progress window, but the cost
+activation floor and the #128 activity gate with it. #161 recorded the result —
+two `feature-validate` stages killed at exactly 2400s with `idle_ms_at_exit` of
+376ms and 621ms, one of them having already built, validated, committed, and
+reached its final `git push`. The kill even reported the monitor's _non-kill_
+sentence ("cost $0.0000 below activation threshold $0.5") as its termination
+reason.
+
+The Nx path is now activity-gated on the same clock as the plain no-progress
+kill: a stage that issued a novel tool call inside the window is working, not
+looping, and is not killed. Deferrals log `[runaway-nx-activity-gate]` once. A
+kill that does fire names its ceiling (`nx-stall-multiple`) and value in the
+stage-exit record — see
+[STAGE_EXIT_DIAGNOSTIC.md § Kill Ceilings](STAGE_EXIT_DIAGNOSTIC.md#kill-ceilings-161).
+Churn is still bounded by the churn detector below, which counts distinct tool
+signatures rather than clocks and is deliberately not gated.
+
 ### Churn Detector
 
 A non-converging stage spins through many distinct tool signatures while making

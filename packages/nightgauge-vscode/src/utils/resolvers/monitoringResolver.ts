@@ -518,6 +518,92 @@ export function shouldQuotaFastFail(params: {
   return false;
 }
 
+/**
+ * Outcome of the Nx stall-multiple escalation check on one stall tick.
+ *
+ * - `"kill"`           — escalate to the runaway kill machinery.
+ * - `"activity-gated"` — the multiple and the productive window are both past,
+ *                        but the stage issued a novel tool call inside the
+ *                        window. Working, not looping — defer (#161).
+ * - `"no-op"`          — nothing to do this tick.
+ */
+export type NxRunawayDecision = "kill" | "activity-gated" | "no-op";
+
+/**
+ * Decide whether the Nx stall-multiple escalation should kill on this tick.
+ *
+ * The Nth escalating stall warning (#3851) is the pipeline's only bound on a
+ * stage that warns forever without stopping. Its threshold is DERIVED —
+ * `stall warn threshold × killMultiple` — so it is a real, deterministic,
+ * per-stage wall-clock ceiling that appears in no config file: 300s × 8 = 40
+ * min for `feature-validate`, 600s × 8 = 80 min for `feature-dev`.
+ *
+ * Issue #161: as shipped, this path called the runaway kill in FORCE mode,
+ * which bypassed `ProgressMonitor.check` wholesale — including the #128
+ * activity gate. Two `feature-validate` stages were killed at exactly 2400s
+ * with `idle_ms_at_exit` of 376ms and 621ms; one had already built, validated,
+ * committed, and was on its final `git push`. Sub-second idle at exit is proof
+ * the stage was mid-tool-call, and a kill path that cannot tell "looping" from
+ * "working" must not fire against a stage that is demonstrably producing tool
+ * results.
+ *
+ * The gate defers; it cannot disable. A genuinely wedged stage lets the
+ * activity clock go cold and is killed on the next Nx tick, and a churning
+ * stage (novel tools, no product) is still bounded by the churn detector,
+ * which counts distinct signatures rather than clocks.
+ *
+ * Extracted as a pure function so this cost-sensitive decision is unit-testable
+ * without spawning a subprocess — same rationale as {@link shouldQuotaFastFail}.
+ *
+ * @see Issue #3851 — the escalation
+ * @see Issue #161 — the activity gate on it
+ */
+export function shouldNxRunawayKill(params: {
+  /** Stall-threshold multiple reached on this tick (2 = 2× the warn threshold). */
+  currentMultiplier: number;
+  /** Multiple at which the escalation becomes a kill (`NX_RUNAWAY_KILL_MULTIPLE`). */
+  killMultiple: number;
+  /** True in maximum performance mode — warn, never kill. */
+  observeOnly: boolean;
+  /** True once any kill path has already fired for this stage. */
+  stallKilled: boolean;
+  /** True when the operator chose "Keep Waiting". */
+  stallKillDisabled: boolean;
+  /** True once the progress-runaway kill has already claimed this stage. */
+  costCapExceeded: boolean;
+  /** Ms since the last PRODUCTIVE signal (commit / new file / phase / CI). */
+  msSinceLastProductiveProgress: number;
+  /** Ms since the last NOVEL tool invocation — the "is it working?" clock. */
+  msSinceLastActivity: number;
+  /** `no_progress_window_ms`; both clocks are measured against it. */
+  windowMs: number;
+}): NxRunawayDecision {
+  const {
+    currentMultiplier,
+    killMultiple,
+    observeOnly,
+    stallKilled,
+    stallKillDisabled,
+    costCapExceeded,
+    msSinceLastProductiveProgress,
+    msSinceLastActivity,
+    windowMs,
+  } = params;
+
+  if (
+    currentMultiplier < killMultiple ||
+    observeOnly ||
+    stallKilled ||
+    stallKillDisabled ||
+    costCapExceeded ||
+    msSinceLastProductiveProgress <= windowMs
+  ) {
+    return "no-op";
+  }
+
+  return msSinceLastActivity <= windowMs ? "activity-gated" : "kill";
+}
+
 // ============================================================================
 // Stage Hard Cap Config (Issue #2871)
 // ============================================================================
