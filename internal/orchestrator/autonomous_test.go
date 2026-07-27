@@ -2934,6 +2934,104 @@ func TestDedupeFailedItems_Idempotent(t *testing.T) {
 	}
 }
 
+// LifetimeIssueFailures is the per-issue terminal-failure cap, and its whole
+// value is that it outlives a process. Its doc comment says so: "tracks
+// failures across sessions (NOT cleared on Resume) ... Cleared only by an
+// explicit ClearIssueFailures call (manual triage)". #3020 records the
+// incident that motivated it — $64.77 spent retrying one issue three times
+// because a per-session counter reset.
+//
+// That cross-session guarantee had no cross-session test. Every existing test
+// assigns the map in memory (`as.state.LifetimeIssueFailures = map[string]int{}`)
+// and asserts against it directly, so nothing exercised the disk round trip
+// the guarantee actually depends on. A field that is only ever read back from
+// the same process it was written in is not being tested for persistence.
+//
+// The field is also `omitempty`, so an emptied map serialises to nothing at
+// all — the loss would leave no trace in state.json to notice later. (#150)
+func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	const capped = "acme/web#315"
+	const other = "acme/api#42"
+
+	// Session 1: two issues have accrued failures; persist as the real
+	// scheduler does rather than hand-writing the file.
+	first := &AutonomousScheduler{
+		workspaceRoot: tmpDir,
+		state: &AutonomousState{
+			Status:                "running",
+			LifetimeIssueFailures: map[string]int{capped: MaxLifetimeFailuresPerIssue, other: 1},
+		},
+	}
+	first.persistState()
+
+	// Session 2: a fresh scheduler, as after a restart or window reload.
+	second := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	second.loadState()
+
+	if got := second.state.LifetimeIssueFailures[capped]; got != MaxLifetimeFailuresPerIssue {
+		t.Fatalf("lifetime count for %s = %d after restart, want %d — a restart must not "+
+			"restore retries to an issue that already exhausted its cap", capped, got, MaxLifetimeFailuresPerIssue)
+	}
+	if got := second.state.LifetimeIssueFailures[other]; got != 1 {
+		t.Errorf("lifetime count for %s = %d after restart, want 1", other, got)
+	}
+
+	// The cap must still be enforced against the restored count, not merely
+	// stored: a number that survives but is never consulted buys nothing.
+	if second.state.LifetimeIssueFailures[capped] < MaxLifetimeFailuresPerIssue {
+		t.Errorf("restored count %d is below the cap %d, so the issue would dispatch again",
+			second.state.LifetimeIssueFailures[capped], MaxLifetimeFailuresPerIssue)
+	}
+
+	// And it must survive being written back out again — a second restart
+	// must not be the one that loses it.
+	second.persistState()
+	third := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	third.loadState()
+	if got := third.state.LifetimeIssueFailures[capped]; got != MaxLifetimeFailuresPerIssue {
+		t.Fatalf("lifetime count for %s = %d after a SECOND restart, want %d",
+			capped, got, MaxLifetimeFailuresPerIssue)
+	}
+}
+
+// Manual triage is the documented escape hatch, and it must be the only one.
+func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge/autonomous"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	const key = "acme/web#315"
+
+	as := &AutonomousScheduler{
+		workspaceRoot: tmpDir,
+		state: &AutonomousState{
+			Status:                "running",
+			LifetimeIssueFailures: map[string]int{key: MaxLifetimeFailuresPerIssue},
+		},
+	}
+
+	if n := as.ClearIssueFailures(key); n != 1 {
+		t.Fatalf("ClearIssueFailures(%q) = %d, want 1", key, n)
+	}
+	if _, still := as.state.LifetimeIssueFailures[key]; still {
+		t.Error("explicit triage did not clear the counter")
+	}
+
+	// The clear must be durable, or the next restart resurrects the cap and
+	// a triaged issue stays locked out.
+	reloaded := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	reloaded.loadState()
+	if _, resurrected := reloaded.state.LifetimeIssueFailures[key]; resurrected {
+		t.Error("cleared counter came back after restart — triage did not persist")
+	}
+}
+
 func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 	// Previously loadState nil'd Running, so when the serve-startup goroutine
 	// called RecoverOrphanedRunning there was nothing left to reset. The
