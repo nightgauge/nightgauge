@@ -245,6 +245,26 @@ const (
 	// not a tooling/runtime defect and not a planning/scope failure. Issue
 	// #326.
 	TerminalKindValidationFailed = "validation_failed"
+	// TerminalKindBranchForked is set when the run's branch and its remote
+	// counterpart have diverged: the remote head is not reachable from the
+	// local tip, so every push from this worktree is rejected as
+	// non-fast-forward. Two causes produce it — a stage killed mid-push that
+	// had already pushed, and an operator pushing to a pipeline-owned branch —
+	// and neither can be cleared by retrying. Pre-fix it surfaced as a generic
+	// stage failure and the run was re-dispatched, regenerating a full
+	// implementation (~$25) to reach a guaranteed rejection, once per cycle,
+	// until the lifetime failure cap tripped on a condition the pipeline
+	// itself created (#163).
+	//
+	// Emitted by the Go scheduler's pre-stage fork pre-flight (CheckBranchFork)
+	// with the `[branch-forked]` marker, and matched on the skills' push-time
+	// `PUSH REJECTED: non-fast-forward` sentence so a fork that first surfaces
+	// at push time classifies identically. Requires human action (or the
+	// post-run orphan reclamation) — the autonomous scheduler neither counts it
+	// toward LifetimeIssueFailures nor feeds the cascade breaker with it, and
+	// does not re-dispatch: an automatic retry is precisely the loop this kind
+	// exists to stop.
+	TerminalKindBranchForked = "branch_forked"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error
@@ -554,6 +574,26 @@ func ClassifyTerminalKind(errorText string) string {
 	if strings.Contains(t, "[validation-failed]") ||
 		strings.Contains(t, "validation_failed") {
 		return TerminalKindValidationFailed
+	}
+
+	// Branch forked from its remote (#163). Two entry points, one kind:
+	// the Go scheduler's pre-stage fork pre-flight stamps `[branch-forked]`
+	// before the stage spends a token, and a fork that first surfaces at push
+	// time is recognised by the skills' `PUSH REJECTED: non-fast-forward`
+	// sentence. Matched BEFORE the generic subagent-crash fallback, whose
+	// "exit " substring would otherwise misbucket a push rejection as a
+	// process death — the misbucketing that made every retry look like a fresh
+	// crash instead of the same unrecoverable fork.
+	//
+	// The bare phrase "non-fast-forward" is enough on its own: git emits it for
+	// exactly this condition and nothing else. "rejected" alone is not, so it
+	// is required to co-occur with a push, keeping an unrelated failure that
+	// merely says "rejected" out of this bucket.
+	if strings.Contains(t, "[branch-forked]") ||
+		strings.Contains(t, "branch_forked") ||
+		strings.Contains(t, "non-fast-forward") ||
+		(strings.Contains(t, "push rejected") && strings.Contains(t, "fetch first")) {
+		return TerminalKindBranchForked
 	}
 
 	// Subagent process death / non-zero exit fallback.

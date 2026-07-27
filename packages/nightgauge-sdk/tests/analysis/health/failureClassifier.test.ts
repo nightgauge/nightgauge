@@ -263,6 +263,64 @@ describe("classifyFailureCategory — validation_failed is organic (the default)
   });
 });
 
+describe("classifyTerminalKind — branch_forked (#163)", () => {
+  it("classifies the pre-flight marker, which names both diverged SHAs", () => {
+    expect(
+      classifyTerminalKind(
+        "[branch-forked] origin/fix/163-orphaned-push is at 4f21ab90, which is NOT an ancestor " +
+          "of the local tip 9c0de117 — the remote carries a commit this worktree never saw, so " +
+          "every push from here is rejected as non-fast-forward"
+      )
+    ).toBe("branch_forked");
+  });
+
+  it("classifies the push-time rejection, the shape observed in the bash ring", () => {
+    // The #163 diagnosis came from `echo "PUSH REJECTED: non-fast-forward."`
+    // sitting in the recent_bash ring (#156). That text carries no structured
+    // kind, so the classifier is the only thing that can name it.
+    expect(classifyTerminalKind("PUSH REJECTED: non-fast-forward.")).toBe("branch_forked");
+  });
+
+  it("is NOT bucketed as subagent_crash when wrapped with an exit-code prefix", () => {
+    // The Go scheduler's generic wrapper is `exit %d: %v`; its "exit "
+    // substring would otherwise read a push rejection as a process death —
+    // which is exactly why every retry looked like a fresh crash instead of
+    // the same unrecoverable fork.
+    expect(
+      classifyTerminalKind("exit 1: feature-validate failed — PUSH REJECTED: non-fast-forward.")
+    ).toBe("branch_forked");
+  });
+
+  it("does not steal from neighbouring kinds", () => {
+    expect(classifyTerminalKind("[validation-failed] quality gates failed")).toBe(
+      "validation_failed"
+    );
+    expect(classifyTerminalKind("[no-changes-produced] zero commits ahead of base")).toBe(
+      "no_changes_produced"
+    );
+  });
+});
+
+describe("classifyFailureCategory — branch_forked is infrastructure-class (#163)", () => {
+  it("classifies the marker as infrastructure (0.05), not organic", () => {
+    // The dominant cause is the pipeline's own kill path orphaning a pushed
+    // commit. Charging that full organic weight would depress reliability for
+    // a tooling defect the implementation had no part in.
+    expect(
+      classifyFailureCategory(
+        "[branch-forked] origin/fix/163-x is at 4f21ab90, which is NOT an ancestor of the local tip 9c0de117",
+        "feature-validate"
+      )
+    ).toBe("infrastructure");
+  });
+
+  it("classifies a bare push rejection as infrastructure too", () => {
+    expect(classifyFailureCategory("PUSH REJECTED: non-fast-forward.", "feature-validate")).toBe(
+      "infrastructure"
+    );
+  });
+});
+
 describe("classifyFailureCategory — premature_turn_end is agent-class (#74)", () => {
   it("classifies the stamp as agent even when the gate reason names a context file", () => {
     // Without the #74 rule, the embedded "context file" phrase would bucket

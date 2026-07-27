@@ -472,6 +472,44 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 	})
 }
 
+// --- Producer 8: branch forked from its remote (run-scoped, Scheduler) ------
+
+// raiseBranchForked surfaces a branch whose remote head is not reachable from
+// the local tip (#163). unblock kind: no pipeline retry can clear it — the
+// remote carries a commit this worktree never saw, so every push is rejected
+// as non-fast-forward until a human decides which side survives.
+//
+// The card names both SHAs. A fork is only actionable if the operator can see
+// what diverged; "your branch has forked" without the two commits sends them
+// back to the terminal to re-derive the evidence the pipeline already had.
+func (s *Scheduler) raiseBranchForked(repo string, issue int, runID, branch string, fork BranchFork) {
+	s.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("branch-forked:%s#%d", repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Branch %s has forked from origin", branch),
+		Body: fmt.Sprintf(
+			"#%d cannot push: %s\n\n"+
+				"No retry clears this. Decide which side survives — reset the local branch onto origin/%s, "+
+				"or delete origin/%s if the remote commit is an orphan from a killed run — then retry.",
+			issue, fork.Detail, branch, branch),
+		Producer: "branch-fork",
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID,
+			Blocker:  fmt.Sprintf("origin/%s=%s local=%s", branch, shortSHA(fork.RemoteSHA), shortSHA(fork.LocalSHA)),
+			TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			{ID: "resolved-retry", Label: "Fork resolved — retry", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("wait", "Leave for manual triage"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     expiryFromNow(48 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Say how the fork was resolved before the retry"},
+	})
+}
+
 // runTraceRef builds a best-effort ADR-013 trace back-reference for a run-scoped
 // request. Producer is the Go binary; seq is unknown at raise time (0) — the
 // resolution audit leg re-emits into the same run trace, joined by run_id.
