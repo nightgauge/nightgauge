@@ -4547,7 +4547,7 @@ export function runStageSkillHeadless(
       // is the primary signal for edit-heavy stages (feature-dev) that don't
       // reliably emit phase markers. No-op for self-reporting stages; monotonic.
       if (parsed?.toolUses) {
-        for (const { name, input } of parsed.toolUses) {
+        for (const { name, input, id } of parsed.toolUses) {
           const inferred = phaseInference.observeToolUse(name, input);
           if (inferred) {
             lastPhaseName = inferred.name;
@@ -4563,9 +4563,14 @@ export function runStageSkillHeadless(
           const plural = extractBashCommand(name, input);
           if (plural !== undefined) {
             lastBashCommand = plural;
-            // The plural shape carries no per-call tool_use id to correlate a
-            // tool_result against, so the exit code stays unknown rather than
-            // being attributed from an unrelated call.
+            // Correlate the exit code the same way the singular shape does.
+            // The tool_result arrives in a later *user* message, so the
+            // matching logic below is already shape-agnostic — it only needed
+            // the id, which the parser now propagates. When the id is missing
+            // the exit stays unknown rather than being attributed from an
+            // unrelated call; a stale pending id is cleared for the same
+            // reason, so a later result can never bind to the wrong command.
+            pendingBashToolUseId = id;
             lastBashExit = undefined;
           }
         }

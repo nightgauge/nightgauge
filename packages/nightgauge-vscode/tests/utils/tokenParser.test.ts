@@ -488,9 +488,10 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
+      // `id` rides along for stage-exit exit-code correlation.
       expect(result?.toolUses).toEqual([
-        { name: "Write", input: { file_path: "src/x.ts" } },
-        { name: "Bash", input: { command: "go test ./..." } },
+        { name: "Write", input: { file_path: "src/x.ts" }, id: "toolu_1" },
+        { name: "Bash", input: { command: "go test ./..." }, id: "toolu_2" },
       ]);
     });
 
