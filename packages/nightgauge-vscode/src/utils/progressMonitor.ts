@@ -72,6 +72,8 @@
  * false-kill class this guards against.
  */
 
+import type { KillCeiling } from "./killCeiling";
+import { msLimit, usdLimit } from "./killCeiling";
 import type { ParsedStreamMessage } from "./tokenParser";
 
 export type ProgressSignalType =
@@ -132,6 +134,15 @@ export interface ProgressCheckResult {
    * process alive?" clock the no-progress kill is gated on (Issue #128).
    */
   msSinceLastActivity: number;
+  /**
+   * The specific ceiling behind `shouldKill` / `shouldWarn`, with its
+   * configured value (Issue #161). Undefined for the no-op outcomes (disabled,
+   * below the cost activation floor, progress healthy, activity-gated) —
+   * nothing was crossed. `reason` remains the human sentence; this is the
+   * machine-readable identity that lands in the stage-exit record so a reader
+   * never has to re-derive which limit fired.
+   */
+  ceiling?: KillCeiling;
 }
 
 export class ProgressMonitor {
@@ -314,6 +325,13 @@ export class ProgressMonitor {
       this.config.catastrophicLimitUsd > 0 &&
       currentCostUsd >= this.config.catastrophicLimitUsd
     ) {
+      const catastrophicCeiling: KillCeiling = {
+        name: "progress-catastrophic-cost",
+        limit: usdLimit(this.config.catastrophicLimitUsd),
+        derivation:
+          `pipeline.progress_runaway.catastrophic_limit_usd, ` +
+          `no productive progress for > ${msLimit(this.config.noProgressWindowMs)}`,
+      };
       if (this.config.catastrophicKill && !this.config.observeOnly && windowExceeded) {
         return {
           shouldKill: true,
@@ -323,6 +341,7 @@ export class ProgressMonitor {
             `$${this.config.catastrophicLimitUsd.toFixed(2)} with no productive progress for ` +
             `${Math.round(msSinceLastProgress / 1000)}s (catastrophic kill, Issue #3851)`,
           msSinceLastProgress,
+          ceiling: catastrophicCeiling,
           ...base,
         };
       }
@@ -331,6 +350,7 @@ export class ProgressMonitor {
         shouldWarn: true,
         reason: `Cost $${currentCostUsd.toFixed(2)} reached catastrophic limit $${this.config.catastrophicLimitUsd.toFixed(2)} (warn-only backstop)`,
         msSinceLastProgress,
+        ceiling: catastrophicCeiling,
         ...base,
       };
     }
@@ -355,6 +375,13 @@ export class ProgressMonitor {
           `progress (commits/new-files/phase) for ${Math.round(msSinceLastProgress / 1000)}s ` +
           `(threshold: ${this.config.churnToolThreshold}, Issue #3851)`,
         msSinceLastProgress,
+        ceiling: {
+          name: "progress-churn-tools",
+          limit: `${this.config.churnToolThreshold} tools`,
+          derivation:
+            `pipeline.progress_runaway.churn_tool_threshold, ` +
+            `no productive progress for > ${msLimit(this.config.noProgressWindowMs)}`,
+        },
         ...base,
       };
     }
@@ -400,6 +427,14 @@ export class ProgressMonitor {
       `(window: ${this.config.noProgressWindowMs / 1000}s, productive signals: ${this.productiveSignals}, ` +
       `activity signals: ${this.totalSignals})`;
 
+    const noProgressCeiling: KillCeiling = {
+      name: "progress-no-progress-window",
+      limit: msLimit(this.config.noProgressWindowMs),
+      derivation:
+        `pipeline.progress_runaway.no_progress_window_ms, ` +
+        `applied to BOTH the productive and the activity clock (Issue #128)`,
+    };
+
     // In observe-only mode (maximum performance mode) never kill — only warn
     // (kill demoted to warn for the whole no-progress condition, matching the
     // pre-#3851 observability contract).
@@ -409,6 +444,7 @@ export class ProgressMonitor {
         shouldWarn: true,
         reason,
         msSinceLastProgress,
+        ceiling: noProgressCeiling,
         ...base,
       };
     }
@@ -422,6 +458,7 @@ export class ProgressMonitor {
       shouldWarn: false,
       reason,
       msSinceLastProgress,
+      ceiling: noProgressCeiling,
       ...base,
     };
   }

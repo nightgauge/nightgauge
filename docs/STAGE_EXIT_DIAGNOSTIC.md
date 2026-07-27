@@ -57,7 +57,9 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `success`                                                            | bool                   | Go scheduler   | The stage's **post-gate** outcome — never the skill's bare exit code. A skill that exits 0 and then fails its post-condition gate records `false` (#125).                                   |
 | `exit_code`                                                          | int (ptr)              | Go scheduler   | Pointer-shaped so a real `0` is distinguishable from "never observed".                                                                                                                      |
 | `signal`                                                             | string                 | TS SkillRunner | POSIX signal name (`SIGTERM` / `SIGKILL` / …). Empty when the process exited naturally.                                                                                                     |
-| `signal_source`                                                      | string                 | TS SkillRunner | Names the in-binary code path that delivered `signal`. One of `stall-kill`, `hard-cap`, `quota-fast-fail`, `processTree-reaper`, `external`. Empty when no signal.                          |
+| `signal_source`                                                      | string                 | TS SkillRunner | Names the in-binary code path that delivered `signal`. One of `stall-kill`, `hard-cap`, `quota-fast-fail`, `runaway-progress`, `processTree-reaper`, `external`. Empty when no signal.      |
+| `kill_ceiling`                                                       | string                 | TS SkillRunner | Stable name of the **limit** that terminated the stage — see [Kill Ceilings](#kill-ceilings-161). Empty when the exit enforced no configured limit.                                         |
+| `kill_ceiling_value`                                                 | string                 | TS SkillRunner | That ceiling's resolved limit plus how it was derived, e.g. `2400000ms (stall warn threshold 300s (source: static) × NX_RUNAWAY_KILL_MULTIPLE=8)`.                                          |
 | `terminal_kind`                                                      | string                 | Go scheduler   | Post-classification terminal failure category from `ClassifyTerminalKind`. Empty on success.                                                                                                |
 | `elapsed_ms`                                                         | int64                  | TS or Go       | Total wall time from stage start to exit. Prefers the TS-reported value when forwarded; falls back to the scheduler-measured stage duration.                                                |
 | `idle_ms_at_exit`                                                    | int64                  | TS SkillRunner | Milliseconds since the last subprocess output chunk at the moment of exit. Distinguishes wedged-then-killed (large) from killed-mid-activity (small).                                       |
@@ -71,6 +73,45 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).                        |
 | `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                                               |
 | `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.                        |
+
+### Kill Ceilings (#161)
+
+`signal_source` names the **closure** that delivered the signal; several
+distinct limits funnel into each of those labels. `runaway-progress` alone
+covers four unrelated ceilings, and one of them — the Nx stall multiple — is
+computed at runtime and appears in no config file. Issue #161 lost three stages
+(~$34, nothing merged) to a ceiling that could not be identified from a
+complete exit record: reading `DEFAULT_STAGE_HARD_CAPS`, `stage_time_caps`,
+`no_progress_window_ms`, and the cost ceiling ruled every one of them out and
+left no candidate.
+
+`kill_ceiling` closes that gap by naming the limit itself, and
+`kill_ceiling_value` carries what it resolved to **and how**:
+
+| `kill_ceiling`                | Fires when                                                              | `kill_ceiling_value` is derived from                                              |
+| ----------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `progress-no-progress-window` | No productive signal, and no novel tool call, for the window            | `pipeline.progress_runaway.no_progress_window_ms`                                 |
+| `progress-churn-tools`        | `churn_tool_threshold` distinct tools with no productive signal         | `pipeline.progress_runaway.churn_tool_threshold`                                  |
+| `progress-catastrophic-cost`  | `catastrophic_limit_usd` reached with no productive progress            | `pipeline.progress_runaway.catastrophic_limit_usd`                                |
+| `nx-stall-multiple`           | Elapsed reached N× the stall **warn** threshold, no productive progress | `stall warn threshold × NX_RUNAWAY_KILL_MULTIPLE` — **derived, not configurable** |
+| `stage-hard-cap`              | Elapsed reached the absolute per-stage cap                              | `pipeline.stage_hard_caps.<stage>`                                                |
+| `stage-time-cap`              | Elapsed cap for zero-cost adapters (`provider_scale=0`)                 | `min(stage_hard_caps.<stage>, stage_time_caps.<stage>)`                           |
+| `quota-fast-fail-idle`        | Idle past the quota budget after a rate-limit signal                    | `QUOTA_EXHAUSTED_FAST_FAIL_IDLE_MS` or `min(stallKillMs, quota_signal_idle_ms)`   |
+| `stall-idle`                  | Idle past `stallKillMs` with no subprocess output                       | Calibrated or static idle-kill threshold                                          |
+
+These names are a diagnostic contract — they are grepped in retros and appear
+verbatim in historical records, so treat the set as append-mostly.
+
+```bash
+# Which ceiling is killing stages this week, and what was it set to?
+cat .nightgauge/pipeline/exit-records/*.jsonl \
+  | jq -r 'select(.kill_ceiling != null)
+           | [.stage, .kill_ceiling, .kill_ceiling_value] | @tsv' \
+  | sort | uniq -c | sort -rn
+```
+
+A kill that records no ceiling was not limit enforcement — an operator abort, an
+external signal, or a crash.
 
 ### Schema Invariants
 

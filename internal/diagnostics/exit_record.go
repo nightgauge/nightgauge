@@ -100,6 +100,30 @@ type StageExitRecord struct {
 	//   "processTree-reaper" — orphan reaper killed a survivor (#3605 cross-pipeline forensic)
 	//   "external"           — signal arrived from outside the pipeline
 	SignalSource string `json:"signal_source,omitempty"`
+	// KillCeiling is the stable name of the LIMIT that terminated the stage
+	// (#161). SignalSource names the closure that delivered the signal, and
+	// several distinct limits share each of those labels — "runaway-progress"
+	// covers the no-progress window, the churn detector, the catastrophic cost
+	// backstop, and the derived Nx stall multiple. Issue #161 lost three
+	// stages to a ceiling that could not be identified from a complete exit
+	// record, because the one that fired is computed at runtime and appears in
+	// no config file. Known values:
+	//   "progress-no-progress-window"  — no productive signal for the window
+	//   "progress-churn-tools"         — churn_tool_threshold distinct tools
+	//   "progress-catastrophic-cost"   — catastrophic_limit_usd reached
+	//   "nx-stall-multiple"            — elapsed hit warn threshold × N
+	//   "stage-hard-cap"               — pipeline.stage_hard_caps.<stage>
+	//   "stage-time-cap"               — pipeline.stage_time_caps.<stage>
+	//   "quota-fast-fail-idle"         — idle past the quota fast-fail budget
+	//   "stall-idle"                   — idle past stallKillMs
+	// Empty when the exit enforced no configured limit.
+	KillCeiling string `json:"kill_ceiling,omitempty"`
+	// KillCeilingValue is that ceiling's resolved limit plus how it was
+	// derived, e.g. "2400000ms (stall warn threshold 300s (source: static) ×
+	// NX_RUNAWAY_KILL_MULTIPLE=8)". The derivation half is what makes a
+	// computed ceiling actionable — the number alone sends the reader back
+	// into the resolver chain.
+	KillCeilingValue string `json:"kill_ceiling_value,omitempty"`
 	// TerminalKind is the post-classification terminal failure category
 	// (see internal/orchestrator.TerminalKind*). Empty for success records
 	// and for generic failures that fell through every classifier.

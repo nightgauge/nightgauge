@@ -133,6 +133,11 @@ func (s *Scheduler) writeStageExitRecord(
 		rec.SessionID = result.SessionID
 		rec.Signal = result.Signal
 		rec.SignalSource = result.SignalSource
+		// #161: the ceiling that fired and its configured value. Without the
+		// pair, a killed stage's record names only the delivering closure and
+		// the actual limit has to be re-derived from the resolver chain.
+		rec.KillCeiling = result.KillCeiling
+		rec.KillCeilingValue = result.KillCeilingValue
 		rec.IdleMsAtExit = result.IdleMsAtExit
 		rec.LastBashCommand = truncExitRecordBashCommand(result.LastBashCommand)
 		rec.LastBashExit = result.LastBashExit

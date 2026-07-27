@@ -140,6 +140,10 @@ type StageRunResult struct {
 	Signal string
 	// SignalSource names the in-binary code path that delivered Signal.
 	SignalSource string
+	// KillCeiling is the stable name of the LIMIT that terminated the stage
+	// and KillCeilingValue is its resolved value plus derivation (#161).
+	KillCeiling      string
+	KillCeilingValue string
 	// ElapsedMs is total wall time from stage start to exit (ms).
 	ElapsedMs int64
 	// IdleMsAtExit is ms since the last subprocess output chunk at exit.
