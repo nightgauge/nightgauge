@@ -327,10 +327,19 @@ func (m *Manager) CleanupBranch(branchName string) error {
 func (m *Manager) CleanupMergedBranches() ([]string, error) {
 	repoRoot := m.workspaceRoot
 
-	// Prune stale remote-tracking refs first
+	// Prune stale remote-tracking refs first. This is NOT best-effort: the
+	// "[gone]" marker this function keys on only appears once the stale
+	// remote-tracking ref is pruned. If the fetch fails — no network, expired
+	// credentials, a remote that no longer resolves — nothing is ever marked
+	// gone, the loop below matches nothing, and this returns ([], nil): a
+	// clean "0 branches cleaned" that is indistinguishable from "there was
+	// nothing to clean" (#166). Report it instead of guessing.
 	prune := exec.Command("git", "fetch", "--prune")
 	prune.Dir = repoRoot
-	_ = prune.Run()
+	if out, err := prune.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("fetch --prune (required to detect merged branches): %w: %s",
+			err, strings.TrimSpace(string(out)))
+	}
 
 	// Get current branch to protect it
 	currentCmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
@@ -371,8 +380,15 @@ func (m *Manager) CleanupMergedBranches() ([]string, error) {
 		if track == "[gone]" {
 			delCmd := exec.Command("git", "branch", "-D", branch)
 			delCmd.Dir = repoRoot
-			if err := delCmd.Run(); err == nil {
+			if out, err := delCmd.CombinedOutput(); err == nil {
 				deleted = append(deleted, branch)
+			} else {
+				// A branch git refuses to delete — most often one checked out
+				// in another worktree — is silently absent from the returned
+				// list, which reads as "not a candidate" rather than "tried
+				// and failed". Name it so a persistent failure is visible.
+				log.Printf("[WARN] cleanup: git branch -D %s failed (%v): %s",
+					branch, err, strings.TrimSpace(string(out)))
 			}
 		}
 	}
