@@ -74,7 +74,7 @@
 
 import type { KillCeiling } from "./killCeiling";
 import { msLimit, usdLimit } from "./killCeiling";
-import type { ParsedStreamMessage } from "./tokenParser";
+import { collectToolCalls, type ParsedStreamMessage } from "./tokenParser";
 
 export type ProgressSignalType =
   | "phase_marker" // <!-- phase:start ... --> detected in output (productive)
@@ -513,20 +513,10 @@ export function recordToolCallProgress(
   monitor: ProgressMonitor,
   parsed: ParsedStreamMessage | null
 ): number {
-  if (!parsed) {
-    return 0;
-  }
-
-  // Collect every tool call in this message from BOTH delivery shapes.
-  const calls: { name: string; input: unknown }[] = [];
-  if (typeof parsed.toolName === "string" && parsed.toolName) {
-    calls.push({ name: parsed.toolName, input: parsed.toolInput });
-  }
-  if (parsed.toolUses) {
-    for (const t of parsed.toolUses) {
-      calls.push({ name: t.name, input: t.input });
-    }
-  }
+  // Both delivery shapes, flattened by the one normaliser every consumer now
+  // shares (#169). This function had its own copy of that collection step; two
+  // copies is how the shapes drifted apart in the first place.
+  const calls = collectToolCalls(parsed);
 
   for (const { name, input } of calls) {
     const toolInput = (input ?? {}) as Record<string, unknown>;

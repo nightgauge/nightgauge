@@ -85,14 +85,22 @@ describe("skillRunner - AskUserQuestion Loop Detection", () => {
   });
 
   /**
-   * Helper to emit a stream-json tool_use message
+   * Helper to emit a stream-json tool_use message.
+   *
+   * The id is a monotonic counter, not `Date.now()`: several calls emitted in
+   * the same millisecond used to share one id, which no longer merely looks
+   * untidy. Observation dedupes on the `tool_use` id (#169), so colliding ids
+   * make three distinct attempts read as one repeat of the same attempt. Real
+   * CLI ids are unique per call — that is what they are for — so a fixture that
+   * reuses one is testing a stream the CLI never sends.
    */
+  let toolUseSeq = 0;
   function emitToolUse(toolName: string, input: unknown) {
     const message = JSON.stringify({
       type: "content_block_start",
       content_block: {
         type: "tool_use",
-        id: `tool_${Date.now()}`,
+        id: `toolu_${++toolUseSeq}`,
         name: toolName,
         input,
       },
