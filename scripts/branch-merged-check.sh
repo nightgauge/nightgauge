@@ -93,11 +93,20 @@ classify() {
     return 2
   fi
 
+  # Cheapest positive case: the branch tip is already contained in base, so
+  # base has every commit it has. This is what `git branch -d` accepts, and it
+  # is decisive on its own — no content comparison needed.
+  if git merge-base --is-ancestor "$branch" "$base" 2>/dev/null; then
+    echo "SAFE-DELETE  tip is an ancestor of $base — fully contained"
+    return 0
+  fi
+
   files=$(git diff --name-only "$base...$branch" 2>/dev/null)
   if [ -z "$files" ]; then
-    # NOT "merged" — undecidable. Could be an empty branch, a ref sitting at
-    # the merge base, or a wrong base. Never auto-delete on this.
-    echo "UNKNOWN      touches no files vs $base — inspect by hand"
+    # NOT "merged" — undecidable, and NOT the ancestor case (ruled out above).
+    # A branch that introduces nothing yet is not contained in base means the
+    # base ref is probably wrong. Never auto-delete on this.
+    echo "UNKNOWN      touches no files vs $base, and not an ancestor — check the base ref"
     return 2
   fi
 
