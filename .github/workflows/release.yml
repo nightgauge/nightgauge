@@ -18,12 +18,17 @@
 #     (PAT with contents:write on nightgauge/homebrew-tap)
 #   - nightgauge/homebrew-tap repository must exist
 #
-# VS Code Marketplace publish (#4155): publishing requires BOTH the VSCE_PAT
-# secret AND the MARKETPLACE_PUBLISH repository variable set to "true".
-# The double gate exists because a Marketplace publish is public and permanent
-# even while this repo is private — the Marketplace launch is its own
-# deliberately-timed event (Gate 2), not a side effect of tagging a release.
-# The .vsix is attached to the GitHub Release either way.
+# VS Code Marketplace publish: gated on the MARKETPLACE_PUBLISH repository
+# variable being "true". The gate exists because a Marketplace publish is
+# public and permanent — the Marketplace launch is its own deliberately-timed
+# event, not a side effect of tagging a release. The .vsix is attached to the
+# GitHub Release either way.
+#
+# Authentication is Microsoft Entra ID via GitHub OIDC, not a PAT: Azure
+# DevOps decommissions all global PATs on 2026-12-01 and the Marketplace does
+# not accept organization-scoped ones. Set up with
+# scripts/setup-marketplace-identity.sh, which writes the AZURE_CLIENT_ID and
+# AZURE_TENANT_ID secrets this workflow reads.
 
 name: Release
 
@@ -103,32 +108,28 @@ jobs:
       # ---------------------------------------------------------------------
       # PREFLIGHT — validate every publish credential BEFORE anything is
       # published. GoReleaser creates the GitHub Release and pushes the Homebrew
-      # cask long before the Marketplace step runs, so an invalid VSCE_PAT
-      # discovered late leaves a half-published release. Fail fast instead.
+      # cask long before the Marketplace step runs, so a publishing identity
+      # found broken late leaves a half-published release. Fail fast instead.
       # ---------------------------------------------------------------------
       - name: Preflight — publish credentials
         id: preflight
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           MARKETPLACE_PUBLISH: ${{ vars.MARKETPLACE_PUBLISH }}
         run: |
           set -euo pipefail
-          PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
 
           if [ "${MARKETPLACE_PUBLISH:-}" != "true" ]; then
             echo "::notice::MARKETPLACE_PUBLISH repository variable is not 'true' — Marketplace publish will be skipped. The Marketplace launch (Gate 2) is an explicit opt-in: set the repo variable MARKETPLACE_PUBLISH=true when ready to publish."
             echo "vsce=false" >> "$GITHUB_OUTPUT"
-          elif [ -n "${VSCE_PAT:-}" ]; then
-            echo "VSCE_PAT present — verifying against publisher '$PUBLISHER'…"
-            if ! npx --yes @vscode/vsce@3.9.1 verify-pat "$PUBLISHER"; then
-              echo "::error::VSCE_PAT is set but is NOT valid for Marketplace publisher '$PUBLISHER'. Create the publisher at https://marketplace.visualstudio.com/manage and use an Azure DevOps PAT with Marketplace:Manage scope (All accessible organizations) — or remove the VSCE_PAT secret to skip Marketplace publishing. Failing now, before anything is published."
-              exit 1
-            fi
+          elif [ -n "${AZURE_CLIENT_ID:-}" ] && [ -n "${AZURE_TENANT_ID:-}" ]; then
+            echo "Entra publishing identity configured — the federated credential is exercised by the next step, before anything is published."
             echo "vsce=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::VSCE_PAT not set — Marketplace publish will be skipped."
-            echo "vsce=false" >> "$GITHUB_OUTPUT"
+            echo "::error::MARKETPLACE_PUBLISH=true but the Entra publishing identity is not configured. Run scripts/setup-marketplace-identity.sh to create the managed identity and write the AZURE_CLIENT_ID and AZURE_TENANT_ID secrets. Failing now, before anything is published."
+            exit 1
           fi
 
           # Homebrew degrades gracefully: without a tap token, skip that pipe
@@ -139,6 +140,26 @@ jobs:
             echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
             echo "goreleaser_args=release --clean --skip=homebrew" >> "$GITHUB_OUTPUT"
           fi
+
+      # Exchange the GitHub OIDC token for an Entra token HERE — before
+      # GoReleaser creates the GitHub Release and pushes the Homebrew cask.
+      # This is the step that actually proves the publishing identity works;
+      # the preflight above can only confirm the secrets are non-empty. Placing
+      # it after GoReleaser would surface a broken federated credential only
+      # once the release was already half-published.
+      #
+      # `vsce publish --azure-credential` resolves the token through
+      # DefaultAzureCredential, which picks up the CLI session this step
+      # establishes. The session persists for the rest of the job.
+      - name: Sign in to Azure via OIDC (Marketplace publishing identity)
+        if: ${{ steps.preflight.outputs.vsce == 'true' }}
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          # The identity holds no role on any subscription — it only ever talks
+          # to Azure DevOps and the Marketplace.
+          allow-no-subscriptions: true
 
       # Cross-compile every target binary up front so each platform-specific
       # .vsix can bundle the matching one. The extension loads its Go binary from
@@ -348,26 +369,29 @@ jobs:
           subject-path: packages/nightgauge-vscode/*.vsix
 
       # --- VS Code Marketplace ---
-      # Whether to publish was decided (and the PAT VERIFIED against the
-      # publisher) in the Preflight step, before anything was published. The
-      # `secrets` context cannot be used in a step-level `if:` — GitHub rejects
-      # the whole workflow at load time — so we gate on the preflight's output.
-      # Do NOT inline `secrets.VSCE_PAT` back into an `if:`.
+      # Authentication is Microsoft Entra ID, not a PAT. Azure DevOps
+      # decommissions every global PAT on 2026-12-01, and organization-scoped
+      # PATs are not accepted by the Marketplace (microsoft/vscode#322741), so
+      # there is no PAT worth carrying here.
+      #
+      # Whether to publish was decided in the Preflight step and the identity
+      # was exercised by the Azure login step, both before anything was
+      # published. The `secrets` context cannot be used in a step-level `if:` —
+      # GitHub rejects the whole workflow at load time — so we gate on the
+      # preflight's output.
       - name: Publish per-target VSIXs to VS Code Marketplace
         if: ${{ steps.preflight.outputs.vsce == 'true' }}
         working-directory: packages/nightgauge-vscode
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           set -euo pipefail
           # Each .vsix carries its targetPlatform in the manifest, so vsce
           # publishes it for the right platform without re-specifying --target.
           for VSIX in *.vsix; do
             echo "Publishing $VSIX"
-            npx @vscode/vsce@3.9.1 publish --no-dependencies --packagePath "$VSIX"
+            npx @vscode/vsce@3.9.1 publish --no-dependencies --azure-credential --packagePath "$VSIX"
           done
 
       - name: Marketplace publish skipped
         if: ${{ steps.preflight.outputs.vsce != 'true' }}
         run: |
-          echo "::notice::Skipped VS Code Marketplace publish — requires BOTH the VSCE_PAT secret and the MARKETPLACE_PUBLISH=true repository variable (tracked in #4155). The .vsix is already attached to this GitHub Release; satisfy both gates and re-run this workflow (or vsce publish manually) to publish it."
+          echo "::notice::Skipped VS Code Marketplace publish — the MARKETPLACE_PUBLISH repository variable is not 'true'. The .vsix is already attached to this GitHub Release; set MARKETPLACE_PUBLISH=true and re-run this workflow to publish it."
