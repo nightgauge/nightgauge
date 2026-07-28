@@ -118,7 +118,7 @@ jq -n \
   --arg min_dur_warning "${MINIMUM_DURATION_WARNING:-}" \
   --arg created_at "$TIMESTAMP" \
   '{
-    schema_version: "2.4",
+    schema_version: "2.5",
     issue_number: $issue_number,
     commit_sha: $commit_sha,
     validation_status: $validation_status,

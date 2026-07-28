@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
 // PRCreatePath is the outcome of a deterministic pr-create attempt.
@@ -113,6 +115,11 @@ type PRCreateSnapshot struct {
 	BuildPassed           bool
 	UnitTestsPassed       bool
 	IntegrationPassed     bool
+	// UnverifiedDeliverable is set when the run built a test suite it never
+	// executed (#152). It rides in the PR body so the gap is visible where a
+	// reviewer actually looks, rather than only in prose inside a JSON
+	// artifact nobody reads unless already suspicious.
+	UnverifiedDeliverable deliverable.Finding
 	DeadCodeWarningError  bool   // true when any dead_code_warnings entry has severity == "error"
 	SecurityScan          string // "passed" | "failed" | "skipped" | ""
 	ScopeDrift            string // "passed" | "failed" | "skipped" | ""
@@ -142,7 +149,7 @@ type PRCreateDecision struct {
 //	IssueType == "spike"                       → Punt (spike-issue)
 //	Branch == BaseBranch                       → Punt (branch-is-base)
 //	!HasValidate                               → Punt (missing-validate-context)
-//	ValidationStatus != "passed"               → Punt (validation-not-passed)
+//	ValidationStatus ∉ {passed, passed_unverified} → Punt (validation-not-passed)
 //	ValidateErrorCategory != ""                → Punt (validate-error-category)
 //	DeadCodeWarningError                       → Punt (dead-code-blocked)
 //	SecurityScan == "failed"                   → Punt (security-scan-failed)
@@ -166,7 +173,7 @@ func DecideCreate(snap PRCreateSnapshot) PRCreateDecision {
 	if !snap.HasValidate {
 		return PRCreateDecision{Punt: true, Reason: ReasonMissingValidateContext}
 	}
-	if snap.ValidationStatus != "passed" {
+	if snap.ValidationStatus != "passed" && snap.ValidationStatus != deliverable.StatusPassedUnverified {
 		return PRCreateDecision{Punt: true, Reason: fmt.Sprintf("%s: %s", ReasonValidationNotPassed, snap.ValidationStatus)}
 	}
 	if snap.ValidateErrorCategory != "" {
@@ -327,6 +334,27 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString(fmt.Sprintf("- Scope drift: %s\n", snap.ScopeDrift))
 	}
 	b.WriteString("\n")
+
+	// Unexercised deliverable (#152). Rendered as its own heading rather than a
+	// bullet under Validation, because the whole failure was a true statement
+	// filed somewhere nobody reads. A reviewer skimming the Validation list
+	// sees passes; this has to interrupt that.
+	if snap.UnverifiedDeliverable.Detected() {
+		f := snap.UnverifiedDeliverable
+		b.WriteString("## ⚠️ Unverified deliverable\n\n")
+		b.WriteString(fmt.Sprintf("%s\n\n", f.Summary()))
+		b.WriteString("These files were added but no suite that could run them executed:\n\n")
+		for _, p := range f.Paths() {
+			b.WriteString(fmt.Sprintf("- `%s`\n", p))
+		}
+		b.WriteString("\n")
+		for _, t := range f.Tiers {
+			if reason := f.TierReasons[t]; reason != "" {
+				b.WriteString(fmt.Sprintf("`%s` tier did not run — %s\n\n", t, reason))
+			}
+		}
+		b.WriteString("Validation reported `passed` for everything that did run; that verdict was superseded because it would otherwise read as though this code had been exercised.\n\n")
+	}
 
 	// Knowledge — caller pre-renders the block (or leaves empty).
 	if snap.KnowledgeSection != "" {
@@ -754,6 +782,13 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 		snap.HasValidate = true
 		snap.ValidationStatus = raw.ValidationStatus
 		snap.ValidateErrorCategory = raw.ErrorCategory
+		// Read the unexercised-deliverable block through the same decoder the
+		// gate wrote it with, rather than restating its shape here — a second
+		// hand-written copy of a wire shape is how consumers drift apart.
+		var doc map[string]any
+		if json.Unmarshal(data, &doc) == nil {
+			snap.UnverifiedDeliverable = deliverable.FindingFromArtifact(doc)
+		}
 		snap.BuildPassed = raw.Build.Passed
 		snap.UnitTestsPassed = raw.UnitTests.Passed
 		snap.IntegrationPassed = raw.IntegrationTests.Passed

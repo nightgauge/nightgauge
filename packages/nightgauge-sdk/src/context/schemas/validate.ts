@@ -24,6 +24,7 @@ import { flexEnum, optionalString } from "./helpers.js";
  * - 2.2: Added coverage_map_path for PRD AC coverage check results (issue #3595)
  * - 2.3: Added mobile_mcp object for agent-driven mobile-mcp E2E results (issue #24)
  * - 2.4: Added verify_ui object for the browser-driven web UI verification gate (issue #4193)
+ * - 2.5: Added passed_unverified status + unverified_deliverable block (issue #152)
  *
  * @see docs/CONTEXT_ARCHITECTURE.md for field documentation
  */
@@ -218,7 +219,29 @@ export const ValidateContextSchema = z
   .object({
     schema_version: z.string().regex(/^\d+\.\d+$/),
     issue_number: z.number().int().positive(),
-    validation_status: flexEnum(["passed", "failed", "partial", "skipped"] as const).nullish(),
+    /**
+     * Overall verdict.
+     *
+     * `passed_unverified` (v2.5, #152) means every gate that ran passed, but
+     * the change introduced a test suite that no executed tier could have run.
+     * It is written by the Go feature-validate gate, which re-derives the
+     * verdict from the change's git diff and the per-tier `ran` flags rather
+     * than trusting the skill's roll-up — the roll-up computes "passed unless
+     * something actively failed", so a tier that never ran cannot lower it.
+     *
+     * This value MUST stay in this enum. The `errorCategory` note below
+     * describes what happens otherwise, and it applies verbatim here: a value
+     * the writer emits but this enum omits fails the parse, and the signal is
+     * dropped as a non-fatal schema mismatch. For this field that would restore
+     * the exact silence #152 was filed about.
+     */
+    validation_status: flexEnum([
+      "passed",
+      "passed_unverified",
+      "failed",
+      "partial",
+      "skipped",
+    ] as const).nullish(),
     /**
      * Explicit failure category for hard-gate failures (v2.1, Issue #3041).
      *
@@ -281,6 +304,28 @@ export const ValidateContextSchema = z
     dead_code_warnings: z.array(DeadCodeWarningSchema).nullish(),
     preexisting_failures: z.array(PreexistingFailureSchema).nullish(),
     skipped_phases: z.array(SkippedPhaseSchema).nullish(),
+    /**
+     * Evidence for a `passed_unverified` verdict (v2.5, #152).
+     *
+     * Written by the Go feature-validate gate, never by the skill — the whole
+     * defect was a stage declaring its own deliverable out of scope and then
+     * validating against that declaration, so the finding has to come from
+     * outside that loop. `superseded_status` retains what the skill rolled up,
+     * so a retro sees the divergence and not merely the correction.
+     */
+    unverified_deliverable: z
+      .object({
+        detected: z.boolean(),
+        /** Idle tiers, canonical unit → integration → e2e order. */
+        tiers: z.array(flexEnum(["unit", "integration", "e2e"] as const)).nullish(),
+        /** The introduced test files no executed tier could have run. */
+        files: z.array(z.string()).nullish(),
+        /** Each idle tier's own stated reason, lifted from its block. */
+        tier_reasons: z.record(z.string(), z.string()).nullish(),
+        superseded_status: optionalString(),
+        summary: optionalString(),
+      })
+      .nullish(),
     /** AC completion gate result for type:docs issues (v1.5+) */
     ac_completion_check: z
       .object({

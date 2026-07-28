@@ -82,6 +82,33 @@ func FailOpenResult(reason string) ClassifyResult {
 	return res
 }
 
+// DefaultDiffBases are the refs tried, in order, when a caller has no explicit
+// base: the remote tip first, then the local branch for a repo without a
+// fetched remote.
+var DefaultDiffBases = []string{"origin/main", "main"}
+
+// ChangedFilesAgainstDefaultBase lists the files changed on the checked-out
+// branch relative to the first of DefaultDiffBases that resolves.
+//
+// Fail-safe: every base failing returns nil rather than an error, because both
+// callers treat "no diff" as the conservative answer — the CI relaxation gate
+// declines to relax, and the unexercised-deliverable check declines to
+// accuse. Neither should ever act on a diff it could not compute.
+//
+// Shared by the relaxation gate and the deliverable check on purpose. Two
+// copies of "which ref is the base" is precisely how one caller ends up
+// comparing against something the other does not.
+func ChangedFilesAgainstDefaultBase(workdir string) []string {
+	for _, base := range DefaultDiffBases {
+		files, err := ChangedFilesFromGit(workdir, base, "HEAD")
+		if err != nil {
+			continue
+		}
+		return files
+	}
+	return nil
+}
+
 // ChangedFilesFromGit returns the files changed between base and head via
 // `git diff --name-only base...head`. The three-dot form lists changes on head
 // since its merge-base with base — matching how the CI gate compares a PR head

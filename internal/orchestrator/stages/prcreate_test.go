@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
 // richSnap returns a minimal snapshot that the decision matrix accepts —
@@ -524,5 +526,85 @@ func TestRunner_RichContext_FastAndCheap(t *testing.T) {
 	}
 	if res.DurationMs >= 10_000 {
 		t.Errorf("DurationMs = %d, want < 10000 (AC #7)", res.DurationMs)
+	}
+}
+
+// ── Unexercised deliverable (#152) ────────────────────────────────────────
+
+// `passed_unverified` means every gate that ran passed, but the change built a
+// test suite that never executed. It must NOT punt.
+//
+// Blocking would be the easy reading of #152 and the wrong one. The reported
+// run could not execute its suite because that needed a cross-repo Docker
+// stack, a booted emulator and a mail catcher; demanding those before a PR may
+// open blocks legitimate work, and a gate that blocks legitimate work gets
+// routed around — which is how the pipeline came to grant itself the exemption
+// this verdict exists to expose. The fix is a verdict that does not read as
+// clean, not a veto.
+func TestDecideCreate_PassedUnverified_StillCreates(t *testing.T) {
+	s := richSnap()
+	s.ValidationStatus = "passed_unverified"
+
+	d := DecideCreate(s)
+
+	if d.Punt {
+		t.Fatalf("passed_unverified must not punt, got %+v", d)
+	}
+	if !d.ShouldCreate {
+		t.Fatalf("passed_unverified should still create a PR, got %+v", d)
+	}
+}
+
+// The permission above is scoped to exactly one new value. Every other
+// non-passed verdict must keep punting — a typo, a schema drift, or a future
+// status must not inherit a free pass.
+func TestDecideCreate_OtherNonPassedVerdicts_StillPunt(t *testing.T) {
+	for _, status := range []string{"failed", "partial", "skipped", "", "passed_unverifed", "unverified"} {
+		t.Run(status, func(t *testing.T) {
+			s := richSnap()
+			s.ValidationStatus = status
+
+			if d := DecideCreate(s); !d.Punt {
+				t.Fatalf("status %q must punt, got %+v", status, d)
+			}
+		})
+	}
+}
+
+func TestRenderBody_AnnotatesUnverifiedDeliverable(t *testing.T) {
+	s := richSnap()
+	s.ValidationStatus = "passed_unverified"
+	s.UnverifiedDeliverable = deliverable.Finding{
+		Artifacts: []deliverable.TestArtifact{
+			{Path: "integration_test/signup_flow_test.dart",
+				Tiers: []deliverable.Tier{deliverable.TierIntegration, deliverable.TierE2E}},
+		},
+		Tiers: []deliverable.Tier{deliverable.TierIntegration, deliverable.TierE2E},
+		TierReasons: map[deliverable.Tier]string{
+			deliverable.TierE2E: "suite unwired from CI per plan scope",
+		},
+		SupersededStatus: "passed",
+	}
+
+	body := RenderBody(s)
+
+	if !strings.Contains(body, "Unverified deliverable") {
+		t.Fatal("PR body must carry the gap where a reviewer looks")
+	}
+	if !strings.Contains(body, "integration_test/signup_flow_test.dart") {
+		t.Fatal("PR body must name the file that was never executed")
+	}
+	// The stage's own explanation was the most useful sentence in the artifact
+	// and it never reached a human.
+	if !strings.Contains(body, "suite unwired from CI per plan scope") {
+		t.Fatal("PR body must carry the idle tier's stated reason")
+	}
+}
+
+// A clean run's body must be byte-identical to what it was before #152 — the
+// annotation is an exception path, not a new permanent section.
+func TestRenderBody_CleanRunIsUnannotated(t *testing.T) {
+	if strings.Contains(RenderBody(richSnap()), "Unverified deliverable") {
+		t.Fatal("clean run must not carry the annotation")
 	}
 }

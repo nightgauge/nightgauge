@@ -36,7 +36,7 @@ wins):
 | `issue.type == "spike"`                        | Punt   | `spike-issue`                  |
 | Branch missing or equal to base branch         | Punt   | `branch-is-base`               |
 | `validate-{N}.json` missing                    | Punt   | `missing-validate-context`     |
-| `validation_status != "passed"`                | Punt   | `validation-not-passed: <s>`   |
+| `validation_status` not passed/unverified      | Punt   | `validation-not-passed: <s>`   |
 | `errorCategory != ""`                          | Punt   | `validate-error-category: <c>` |
 | Any `dead_code_warnings[].severity == "error"` | Punt   | `dead-code-blocked`            |
 | Security scan failed (preflight rerun)         | Punt   | `security-scan-failed`         |

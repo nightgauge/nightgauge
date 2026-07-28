@@ -140,4 +140,27 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
     const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
     expect(result).toBeNull();
   });
+
+  /**
+   * `passed_unverified` (#152) must not halt the pipeline.
+   *
+   * This gate already behaved correctly the moment the new verdict existed,
+   * because it matches "failed" specifically rather than "not passed" — but it
+   * behaved correctly BY ACCIDENT, and an accident is not a guarantee. A future
+   * tightening to `status !== "passed"` would read as a hardening and would
+   * silently convert every unexercised-deliverable run into a terminal stage
+   * failure. Pin it.
+   */
+  it("returns null for passed_unverified — an unexercised deliverable is not a halt", () => {
+    writeValidateContext(workdir, 42, {
+      validation_status: "passed_unverified",
+      unverified_deliverable: {
+        detected: true,
+        tiers: ["integration", "e2e"],
+        files: ["integration_test/signup_flow_test.dart"],
+      },
+    });
+    const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);
+    expect(result).toBeNull();
+  });
 });

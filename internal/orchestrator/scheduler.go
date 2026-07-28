@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -3551,6 +3553,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 						runtime.SetAuthoritativeChangeClass(cc)
 					}
 				}
+
+				// Unexercised deliverable (#152). The validate gate has just
+				// re-derived the verdict and, if the run built a suite nothing
+				// executed, rewritten the artifact. Read it back here rather
+				// than plumbing a second return value through GateResult: the
+				// artifact is the thing pr-create and every later consumer
+				// read, so a card raised from anything else could disagree
+				// with the PR body describing the same run.
+				if stage == state.StageFeatureValidate && gateRes.Passed {
+					if doc, derr := deliverable.ReadValidateContext(
+						stageWorkspace(runtime, workspaceRoot), item.Number); derr == nil {
+						if f := deliverable.FindingFromArtifact(doc); f.Detected() {
+							log.Printf("#%d: %s", item.Number, f.Summary())
+							s.raiseUnverifiedDeliverable(item.Repo, item.Number, runtime.RunID, f)
+						}
+					}
+				}
 				if !gateRes.Passed {
 					log.Printf("#%d: stage %s post-condition gate FAILED: %s",
 						item.Number, stage, gateRes.Reason)
@@ -4868,23 +4887,12 @@ func (s *Scheduler) gateRelaxContext(ctx context.Context, stage state.PipelineSt
 // origin/main (falling back to main), name-only. Fail-safe: any error returns
 // nil, so RelaxDecision classifies it as Empty and the gate is NOT relaxed —
 // the conservative direction.
+//
+// Delegates to internal/ci so the unexercised-deliverable check (#152) and this
+// gate resolve the same base. They used to be two hand-written copies of the
+// same git invocation, which is how they would have drifted.
 func changedFilesAgainstBase(workspaceRoot string) []string {
-	for _, base := range []string{"origin/main", "main"} {
-		cmd := exec.Command("git", "diff", "--name-only", base+"...HEAD")
-		cmd.Dir = workspaceRoot
-		out, err := cmd.Output()
-		if err != nil {
-			continue
-		}
-		var files []string
-		for _, line := range strings.Split(string(out), "\n") {
-			if f := strings.TrimSpace(line); f != "" {
-				files = append(files, f)
-			}
-		}
-		return files
-	}
-	return nil
+	return ci.ChangedFilesAgainstDefaultBase(workspaceRoot)
 }
 
 // effectivePrereqContextType returns the input-context prefix a stage should

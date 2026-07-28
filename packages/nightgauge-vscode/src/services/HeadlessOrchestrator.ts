@@ -2214,6 +2214,52 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * pre-condition and post-create gates remain as backstops). It returns an
    * Error ONLY when it positively reads a failed verdict.
    */
+  /**
+   * Runs the deterministic feature-validate gate so it can supersede a `passed`
+   * verdict with `passed_unverified` when the run introduced a test suite that
+   * no executed tier could have run (#152).
+   *
+   * The derivation deliberately lives in one place — `internal/deliverable`,
+   * reached through `nightgauge gate verify feature-validate` — rather than
+   * being reimplemented here. A TypeScript copy would be a second
+   * implementation of a classification rule, and two copies of one rule is
+   * precisely how the tool-call shapes drifted apart in #169.
+   *
+   * The gate's pass/fail verdict is intentionally discarded: on this path
+   * `verifyPostValidateState` below already owns the halt decision, and taking
+   * it from two places would let them disagree. What is wanted here is only the
+   * gate's side effect on the artifact. Every error is swallowed — a binary
+   * that will not resolve, a timeout, or exit 2 all leave the artifact exactly
+   * as the skill wrote it, which is the direction that never accuses a run of
+   * something it cannot demonstrate.
+   */
+  private async deriveUnexercisedDeliverable(issueNumber: number): Promise<void> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        return;
+      }
+      await execFileAsync(
+        binary,
+        [
+          "gate",
+          "verify",
+          "feature-validate",
+          String(issueNumber),
+          "--workdir",
+          cwd,
+          "--json",
+          "--timeout",
+          "60",
+        ],
+        { encoding: "utf-8", cwd, timeout: 90_000 }
+      );
+    } catch {
+      // See the doc comment: silence is the conservative direction here.
+    }
+  }
+
   private verifyPostValidateState(issueNumber: number): Error | null {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
@@ -9315,6 +9361,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // @see Issue #4220 - failed feature-validate advanced to pr-create
         // ===================================================================
         if (stage === "feature-validate") {
+          // Re-derive the verdict before reading it (#152). The skill rolls up
+          // "passed unless something actively failed", so a run that built a
+          // test suite nothing executed reports a clean pass. The correction
+          // is deterministic and lives in the Go gate; this path must invoke
+          // it or the whole check would be dead here — which is the same
+          // never-executes failure #169 was.
+          await this.deriveUnexercisedDeliverable(issueNumber);
+
           const validateVerdictError = this.verifyPostValidateState(issueNumber);
           if (validateVerdictError) {
             this.logger.error(

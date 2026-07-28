@@ -374,6 +374,7 @@ single writer.
 | 6   | Branch-protection block    | `stages/prmerge.go` `Decide`→`PathPunt`; taxonomy `CatRulesetBlocked` (`taxonomy.go`, `Escalate:true`); [PR merge](../PR_MERGE_STAGE.md)                       | `unblock`       | open-PR (link, human fixes) · retry-after-fix (`autonomous.clearIssueFailures` + `rescan`)     | none (needs a human) · 48h          |
 | 7   | Definitive auth failure    | `identity_preflight.go` `CheckIdentity` (fail-closed) / taxonomy `CatPermission` (401/403); [adapter doctor](../ADAPTER_DOCTOR.md)                             | `provide_input` | login-and-retry (guidance + `autonomous.clearIssueFailures`) · halt                            | halt · 12h                          |
 | 8   | Watchdog / health findings | `autonomous_stuck_epic.go` `surfaceStuckEpics`; TS stall detector → `stall_recovery.go` `ClassifyStallSignal`; [health](../HEALTH_MONITORING.md) · stage quiet | `choose`        | wait · kill+retry (`pipeline.stop` + `queue.add`) · escalate-model (`run.retryWithEscalation`) | wait (bounded), then escalate · 30m |
+| 11  | Unexercised deliverable    | `gates/feature_validate_gate.go` `markUnexercisedDeliverable` → `scheduler.go` post-gate · run introduced test files no executed tier could run (#152)         | `approve`       | acknowledged (noop) · will-verify (noop)                                                       | noop · 72h                          |
 
 Each producer replaces a dead-end that is today silent or one-way. Producers
 2 and 8 are the direct fixes for the motivating incidents (the invisible
