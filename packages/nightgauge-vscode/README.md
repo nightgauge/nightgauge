@@ -16,16 +16,12 @@ conversation history, so context stays focused and any stage can be retried
 independently. Deterministic code verifies repository state and selected stage
 outputs; provider behavior and manual review remain part of the trust model.
 
-> **Screenshot pending.** A real screenshot/GIF of the sidebar and a
-> completed pipeline run hasn't been captured yet — see
-> [Screenshots Needed](#screenshots-needed) below. This is not a finished
-> marketplace listing until that's done.
+![Nightgauge dashboard — live pipeline slots, queued issues, model routing, and token/cost spend in the Overview tab](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/dashboard.png)
 
 ## Quick Start
 
-1. **Install** — Before Marketplace publication, install the target-specific
-   VSIX from the GitHub Release. Release-candidate testers should use the VSIX
-   from the reviewed Actions run, not a local development build.
+1. **Install** — Install **Nightgauge** from the VS Code Marketplace. The
+   Marketplace serves the build matching your platform automatically.
 2. **Sign in** — Run **Nightgauge: Sign In with GitHub** from the
    Command Palette to connect your GitHub account.
 3. **Initialize the repo** — Open the Nightgauge sidebar in a repository
@@ -43,12 +39,18 @@ outputs; provider behavior and manual review remain part of the trust model.
 
 ### Installing
 
-Download the VSIX matching your OS and architecture from the GitHub Release and
-install it through **Extensions → … → Install from VSIX**. For extension
-development, clone the repository and use `scripts/dev-install.sh`; that script
-builds the working tree with a timestamped development version and is not a
-release-validation path. Marketplace installation will be documented after the
-first listing is live.
+Nightgauge ships a separate build per platform. The Marketplace picks the right
+one for you; **macOS (Apple Silicon and Intel) and Linux x64 are supported.**
+Windows is not supported yet — the pipeline backend is a native binary that has
+no Windows build, so the Marketplace will report the extension as unavailable
+there.
+
+To install a specific build instead, download the VSIX matching your OS and
+architecture from the [GitHub
+Release](https://github.com/nightgauge/nightgauge/releases) and use
+**Extensions → … → Install from VSIX**. For extension development, clone the
+repository and run `scripts/dev-install.sh`; that builds the working tree with a
+timestamped development version and is not a release-validation path.
 
 ## Features
 
@@ -64,6 +66,37 @@ first listing is live.
 - **Knowledge Value Dashboard** - Aggregates KB telemetry into header cards, a
   hit-rate gauge, per-stage bar chart, top-recalled/stale tables, and
   graduation history (see below)
+
+## Screenshots
+
+**Live in your sidebar** — standard VS Code TreeViews: running pipelines with
+per-stage status and token/cost per stage, repositories with epic grouping and
+`blockedBy` lock icons, and a knowledge graph that travels with you.
+
+![Nightgauge sidebar showing the Pipeline, Repositories, and Knowledge tree views alongside an open source file](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/sidebar.png)
+
+**Codebase health, scored** — six-dimensional health assessment with deduped
+findings, modernization recommendations, and 30-day trend deltas.
+
+![Health dashboard with six scored dimensions, findings, and trend deltas](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/health.png)
+
+**Context that compounds** — per-issue PRDs, ADRs, lessons, and retro outcomes,
+read by future runs so context does not evaporate after a PR merges.
+
+![Knowledge Value dashboard showing recall telemetry, per-stage hit rates, and graduation history](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/knowledge.png)
+
+**Brownfield modernization, planned** — deterministic readiness scores across
+eight axes plus a phased modernization plan with characterization-test coverage.
+
+![Brownfield dashboard with readiness scores across eight axes and a phased modernization plan](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/brownfield.png)
+
+**Configuration with drift detection** — see which layer wins every key, spot
+drift between local and team config, and move overrides up the stack.
+
+![Settings panel showing layered configuration resolution and drift between local and team config](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/screenshots/settings.png)
+
+> Screenshots show the extension populated with representative mock data.
+> Exact appearance varies with your VS Code theme, platform, and version.
 
 ## Privacy and Telemetry
 
@@ -382,18 +415,6 @@ in the warning notification that appears on workspace load.
 
 - VS Code 1.85.0 or higher
 - Node.js 18.0.0 or higher
-
-## Screenshots Needed
-
-Tracked for #4155 — none of these exist yet. **Do not consider the
-marketplace listing finished until real captures replace this list:**
-
-- [ ] Nightgauge sidebar (Pipeline + Repositories + Ready Items views)
-      on a real repository
-- [ ] A pipeline run in progress (stage tree with live status)
-- [ ] A completed pipeline run that produced a linked pull request
-- [ ] Active Issue Knowledge panel with populated PRD.md/decisions.md
-- [ ] Knowledge Value Dashboard with real telemetry
 
 ## License
 
