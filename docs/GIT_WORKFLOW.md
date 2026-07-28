@@ -291,11 +291,23 @@ the content landed rather than trusting the ancestry check — with the script,
 not by hand:
 
 ```bash
-scripts/branch-merged-check.sh feat/my-feature   # 0 MERGED, 1 UNMERGED, 2 UNKNOWN
+scripts/branch-merged-check.sh feat/my-feature   # 0 SAFE-DELETE, 1 KEEP, 2 UNKNOWN
 scripts/branch-merged-check.sh --all             # sweep every local branch
+NO_PR=1 scripts/branch-merged-check.sh --all     # offline; conservative by design
 ```
 
-Only exit `0` authorizes a delete. `2` means undecidable, not safe.
+Only exit `0` authorizes a delete. `2` means undecidable, not safe. Every
+`SAFE-DELETE` cites its evidence — either identical content or the merged PR
+number — so the verdict is auditable rather than trusted.
+
+**Content alone cannot decide this retrospectively.** Comparing base-tip to
+branch-tip is exact _at merge time_, when base has not moved. Later it is not: a
+branch that was merged reads "differs" once base evolves those files. A branch
+merged via squash PR read `6 files changed, 6 insertions(+), 292 deletions(-)`
+sixteen days on. Large deletion counts mean base is ahead and the branch is
+stale, not that the branch holds work. The script therefore also accepts a
+merged PR whose **head SHA equals the branch tip** — proof the branch is
+precisely what merged, however far base has moved since.
 
 **Do not substitute a hand-written `git diff`.** Both obvious forms report
 "nothing unmerged" on branches that carry real work:

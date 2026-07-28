@@ -1,96 +1,134 @@
 #!/usr/bin/env bash
-# Answer one question: is this branch's content already in the base branch,
-# so the branch is safe to delete?
+# Answer one question: is this branch safe to delete?
 #
 # Usage:
-#   scripts/branch-merged-check.sh <branch> [base]      # default base: origin/main
-#   scripts/branch-merged-check.sh --all [base]         # every local branch
+#   scripts/branch-merged-check.sh <branch> [base]     # default base: origin/main
+#   scripts/branch-merged-check.sh --all [base]        # every local branch
+#   NO_PR=1 scripts/branch-merged-check.sh ...         # skip the forge lookup (offline)
 #
-# Exit codes (single-branch mode):
-#   0  MERGED    — every file the branch touches is identical in base; safe to delete
-#   1  UNMERGED  — the branch carries content the base does not have
-#   2  UNKNOWN   — could not decide; do NOT delete
+# Verdicts / exit codes (single-branch mode):
+#   0  SAFE-DELETE  content is in base, or the branch is exactly what a merged PR merged
+#   1  KEEP         carries content base does not have, or has commits past the merge
+#   2  UNKNOWN      undecidable — do NOT delete
 #
 # Why this is a script and not a one-liner
 # ----------------------------------------
-# Ancestry (`git branch -d`, `git merge-base --is-ancestor`) does not work after
-# a squash merge: the squash commit is not the branch tip, so a fully-merged
+# Ancestry (`git branch -d`, `merge-base --is-ancestor`) does not work after a
+# squash merge: the squash commit is not the branch tip, so a fully-merged
 # branch still looks unmerged.
 #
-# The obvious content check is `git diff origin/main..<branch>`, but the two-dot
-# form also reports every change `main` gained afterwards, so any branch older
-# than `main`'s tip reads as unmerged. You must restrict the comparison to the
-# files the branch actually touches.
+# The content check that replaces it has three failure modes, and ALL of them
+# fail toward "safe to delete" — the direction that loses work:
 #
-# That restriction is where the hand-written idiom goes wrong, in two ways that
-# both fail toward "safe to delete" — the direction that loses work:
+#   1. Two-dot `git diff origin/main..<branch>` also reports everything `main`
+#      gained after the branch.
+#   2. Restricting to the branch's own files is right, but
+#      `files=$(git diff --name-only ...)` then `-- $files` does NOT word-split
+#      in zsh — an unquoted parameter expansion stays one word there, unlike an
+#      unquoted command substitution. The joined list becomes a single pathspec,
+#      matches nothing, the diff is empty, and EVERY branch reads merged.
+#   3. A branch touching no files vs the merge base yields the same false empty.
 #
-#   1. Capture-then-splat. `files=$(git diff --name-only ...)` followed by
-#      `-- $files` word-splits in bash but NOT in zsh, where an unquoted
-#      parameter expansion stays one word. The whole newline-joined list
-#      becomes a single pathspec, it matches no file, the diff is empty, and
-#      EVERY branch reads "merged". (Unquoted *command substitution* does split
-#      in zsh, which is why the inline form appears to work and the refactored
-#      form silently does not.)
-#   2. Empty file list. If the branch touches no files relative to the merge
-#      base, the pathspec is empty, the diff is empty, and the branch again
-#      reads "merged" — when the truth is "this needs a human".
+# All three produce clean-looking output and exit 0. This script splits
+# NUL-safely and reports UNKNOWN rather than guessing.
 #
-# Both are silent: correct-looking output, exit 0, and a deletion you cannot
-# cheaply undo. This script splits NUL-safely (so filenames with spaces are
-# fine) and reports UNKNOWN rather than guessing.
+# The content check alone is not enough
+# -------------------------------------
+# Comparing base-tip to branch-tip is EXACT at merge time, when base has not
+# moved. Retrospectively it is not: a branch that WAS merged reads "differs"
+# once base evolves those files. Observed live — a branch merged via a squash
+# PR read `6 files changed, 6 insertions(+), 292 deletions(+)` sixteen days
+# later. Large deletion counts are the tell: base is ahead, the branch is stale.
+#
+# So content alone cannot distinguish "carries unmerged work" from "was merged,
+# then base moved on". This script consults the forge for a merged PR whose head
+# SHA equals the branch tip — which means the branch is precisely what merged
+# and is therefore safe to delete regardless of how far base has since moved.
+# Set NO_PR=1 to skip that lookup; the result is then conservative by design.
 
 set -uo pipefail
 
 usage() {
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
 [ $# -ge 1 ] || usage
-[ "$1" = "-h" ] || [ "$1" = "--help" ] && usage
+case "$1" in -h | --help) usage ;; esac
+
+BASE_DEFAULT="origin/main"
+
+# ---------------------------------------------------------------------------
+# Merged-PR index: "<headRefName>\t<headRefOid>" per merged PR, fetched once.
+# Empty when NO_PR=1, gh is missing, unauthenticated, or the remote is not a
+# forge we can query — in which case classification stays content-only.
+# ---------------------------------------------------------------------------
+PR_INDEX=""
+build_pr_index() {
+  [ "${NO_PR:-0}" = "1" ] && return 0
+  command -v gh >/dev/null 2>&1 || return 0
+  PR_INDEX=$(gh pr list --state merged --limit 500 \
+    --json headRefName,headRefOid,number \
+    --jq '.[] | "\(.headRefName)\t\(.headRefOid)\t\(.number)"' 2>/dev/null) || PR_INDEX=""
+}
+
+# merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
+merged_pr_for() {
+  [ -n "$PR_INDEX" ] || return 1
+  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" '$1==b {print $2 "\t" $3; found=1; exit} END{exit !found}'
+}
 
 # ---------------------------------------------------------------------------
 # classify <branch> <base> -> prints verdict, returns 0/1/2
 # ---------------------------------------------------------------------------
 classify() {
-  local branch="$1" base="$2" files residual
+  local branch="$1" base="$2" files residual tip pr pr_sha pr_num
 
   if ! git rev-parse --verify --quiet "$branch" >/dev/null; then
-    echo "UNKNOWN   no such ref: $branch"
+    echo "UNKNOWN      no such ref: $branch"
     return 2
   fi
   if ! git rev-parse --verify --quiet "$base" >/dev/null; then
-    echo "UNKNOWN   no such base ref: $base"
+    echo "UNKNOWN      no such base ref: $base"
     return 2
   fi
 
-  # Files the branch changed relative to the merge base (three-dot).
   files=$(git diff --name-only "$base...$branch" 2>/dev/null)
   if [ -z "$files" ]; then
-    # Not "merged" — undecidable. A branch with no unique files against the
-    # merge base may be an empty branch, a ref at the merge base, or a sign
-    # the base ref is wrong. Never auto-delete on this.
-    echo "UNKNOWN   touches no files vs $base — inspect by hand"
+    # NOT "merged" — undecidable. Could be an empty branch, a ref sitting at
+    # the merge base, or a wrong base. Never auto-delete on this.
+    echo "UNKNOWN      touches no files vs $base — inspect by hand"
     return 2
   fi
 
-  # Compare base TIP against branch TIP, restricted to those paths. NUL-split
-  # so spaces in filenames cannot corrupt the pathspec, and so the list is
-  # never routed through shell word-splitting.
+  # Base TIP vs branch TIP, restricted to those paths. NUL-split so the list
+  # never routes through shell word-splitting and spaces are safe.
   residual=$(git diff --name-only -z "$base...$branch" \
     | xargs -0 git diff --stat "$base" "$branch" -- 2>/dev/null)
 
   if [ -z "$residual" ]; then
-    echo "MERGED    $(printf '%s\n' "$files" | grep -c .) file(s), all identical in $base"
+    echo "SAFE-DELETE  content identical in $base ($(printf '%s\n' "$files" | grep -c .) files)"
     return 0
   fi
 
-  echo "UNMERGED  $(printf '%s\n' "$residual" | tail -1 | sed 's/^ *//')"
+  # Content differs — ask the forge whether this branch already merged.
+  tip=$(git rev-parse "$branch" 2>/dev/null)
+  if pr=$(merged_pr_for "$branch"); then
+    pr_sha=$(printf '%s' "$pr" | cut -f1)
+    pr_num=$(printf '%s' "$pr" | cut -f2)
+    if [ "$pr_sha" = "$tip" ]; then
+      echo "SAFE-DELETE  merged as PR #$pr_num at this exact tip; $base moved on since"
+      return 0
+    fi
+    echo "KEEP         PR #$pr_num merged a DIFFERENT tip (${pr_sha:0:7} vs ${tip:0:7}) — commits past the merge"
+    return 1
+  fi
+
+  echo "KEEP         $(printf '%s\n' "$residual" | tail -1 | sed 's/^ *//')"
   return 1
 }
 
-BASE_DEFAULT="origin/main"
+build_pr_index
 
 if [ "$1" = "--all" ]; then
   base="${2:-$BASE_DEFAULT}"
@@ -98,8 +136,9 @@ if [ "$1" = "--all" ]; then
   rc=0
   while IFS= read -r b; do
     [ "$b" = "$base_short" ] && continue
-    printf '  %-52s %s\n' "$b" "$(classify "$b" "$base")"
+    out=$(classify "$b" "$base")
     [ $? -ne 0 ] && rc=1
+    printf '  %-52s %s\n' "$b" "$out"
   done < <(git for-each-ref --format='%(refname:short)' refs/heads/)
   exit $rc
 fi

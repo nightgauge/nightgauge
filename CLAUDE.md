@@ -83,9 +83,13 @@ branch/PR — never a side-channel memory store.
   sides. Squash merges need `git branch -D` (the squash commit is not the branch
   tip, so `-d` refuses); confirm by content rather than ancestry. **Do not
   hand-write the comparison — run `scripts/branch-merged-check.sh <branch>`**
-  (`--all` for every local branch). It exits `0` MERGED / `1` UNMERGED / `2`
-  UNKNOWN, and only `0` authorizes deletion. The idiom is scripted because both
-  hand-written forms fail toward "safe to delete", silently: `git diff
+  (`--all` for every local branch). It exits `0` SAFE-DELETE / `1` KEEP / `2`
+  UNKNOWN, and only `0` authorizes deletion. Content alone cannot decide this:
+  a branch that _was_ merged reads "differs" once `main` evolves those files
+  (large deletion counts are the tell), so the script also accepts a merged PR
+  whose head SHA equals the branch tip. `NO_PR=1` skips the forge lookup and is
+  conservative by design. The idiom is scripted because every
+  hand-written form fails toward "safe to delete", silently: `git diff
 origin/main..<branch>` also reports everything `main` gained afterwards, and
   restricting to the branch's own files via `-- $files` stops word-splitting
   under zsh (an unquoted _variable_ is one word there, unlike an unquoted
