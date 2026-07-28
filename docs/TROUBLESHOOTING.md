@@ -839,6 +839,52 @@ that stage, but nothing else changed.
 
 ---
 
+### Tool-call shape blindness
+
+**Symptom.** A feature keyed on tool calls does nothing at runtime, throws
+nothing, and has passing tests. Telemetry that depends on it is silently empty
+or, worse, reports a clean value: `promptDetected` stuck at `false` marked
+stages that had begged for interactive input as clean passes for months.
+
+**Root cause.** The CLI delivers a tool call in one of two shapes:
+
+| Shape                           | Parser fields                     | Who emits it                                                             |
+| ------------------------------- | --------------------------------- | ------------------------------------------------------------------------ |
+| complete `assistant` message    | plural `toolUses[]`               | the Claude CLI — effectively **all** live traffic                        |
+| streaming `content_block_start` | singular `toolName` / `toolInput` | other adapters; needs `--include-partial-messages`, which we do not pass |
+
+Code written against the singular shape alone is not a bug that throws — it is
+a feature that never runs. That is the whole failure mode, and it is invisible
+in review because the branch reads perfectly.
+
+**Why it kept coming back.** The same dead branch was repaired three times
+(#151, #154/#155, #161/#295), each fix adding a plural-shape equivalent for the
+_one_ consumer that had been noticed. Nobody asked what else read it. #169
+found four more, including one (`resumeSessionWithResponse`) that no issue had
+ever named.
+
+**The rule.** Never read `parsed.toolName` / `parsed.toolInput` / `parsed.toolUses`
+directly. Call `collectToolCalls(parsed)` (`tokenParser.ts`), which flattens both
+shapes into one list of `{name, input, id}`. In `runStageSkillHeadless` every
+consumer lives inside the single `observeToolCall` body — add to that body, never
+a new shape-specific branch beside it.
+
+**Deduping is mandatory, not defensive.** A call can arrive in both shapes, so
+observation dedupes on `tool_use.id` (as the bash ring has since #156). Without
+it the AskUserQuestion counter advances twice per attempt and aborts at half its
+threshold — a stage killed for a loop it never entered.
+
+**Writing tests for this.** Build fixtures as **complete `assistant` messages**.
+Fixtures built from `content_block_start` are exactly what let this survive three
+fixes: they exercise a branch production never reaches, so the suite stays green
+while the feature is dead. Verify a new assertion **fails against the unfixed
+code** before trusting it — and note that a dedupe assertion can pass _vacuously_
+when the feature is dead (nothing observed is trivially "observed once"), so
+confirm it fails with dedupe disabled too. Give distinct calls distinct ids;
+`tool_${Date.now()}` collides within a millisecond, which the CLI never does.
+
+---
+
 ## Getting Help
 
 If you can't resolve an issue:
