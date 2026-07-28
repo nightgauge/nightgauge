@@ -81,13 +81,21 @@ branch/PR — never a side-channel memory store.
 - **Clean up on merge — branch and worktree, remote and local, every forge.** A
   merge is not finished until its branch and any worktree are gone on both
   sides. Squash merges need `git branch -D` (the squash commit is not the branch
-  tip, so `-d` refuses); confirm by content rather than ancestry — but **not**
-  with `git diff origin/main..<branch>`, which also reports every change `main`
-  gained afterwards and so marks any branch older than `main`'s tip as
-  unmerged. Compare only the files the branch actually touches:
-  `git diff --stat origin/main "<branch>" -- $(git diff --name-only origin/main..."<branch>")`
-  — empty output means the branch's content is already in `main` and it is safe
-  to delete. Skipping this is invisible once and compounding
+  tip, so `-d` refuses); confirm by content rather than ancestry. **Do not
+  hand-write the comparison — run `scripts/branch-merged-check.sh <branch>`**
+  (`--all` for every local branch). It exits `0` SAFE-DELETE / `1` KEEP / `2`
+  UNKNOWN, and only `0` authorizes deletion. Content alone cannot decide this:
+  a branch that _was_ merged reads "differs" once `main` evolves those files
+  (large deletion counts are the tell), so the script also accepts a merged PR
+  whose head SHA equals the branch tip. `NO_PR=1` skips the forge lookup and is
+  conservative by design. The idiom is scripted because every
+  hand-written form fails toward "safe to delete", silently: `git diff
+origin/main..<branch>` also reports everything `main` gained afterwards, and
+  restricting to the branch's own files via `-- $files` stops word-splitting
+  under zsh (an unquoted _variable_ is one word there, unlike an unquoted
+  command substitution) so the pathspec matches nothing and **every** branch
+  reads merged. An empty file list produces the same false "merged". Skipping
+  this is invisible once and compounding
   across a hundred merges — and after the fact you cannot cheaply tell a
   squash-merged branch from one that was never pushed. When the pipeline created
   the branch or worktree, the pipeline must remove it; the operator is never the

@@ -287,11 +287,43 @@ git worktree prune                 # drops registrations whose dirs are gone
 
 **Squash merges need `-D`, not `-d`.** A squash creates a new commit, so the
 branch tip is never an ancestor of `main` and `git branch -d` refuses it. Verify
-the content landed rather than trusting the ancestry check:
+the content landed rather than trusting the ancestry check — with the script,
+not by hand:
 
 ```bash
-git diff --stat origin/main..feat/my-feature   # empty ⇒ nothing unmerged
+scripts/branch-merged-check.sh feat/my-feature   # 0 SAFE-DELETE, 1 KEEP, 2 UNKNOWN
+scripts/branch-merged-check.sh --all             # sweep every local branch
+NO_PR=1 scripts/branch-merged-check.sh --all     # offline; conservative by design
 ```
+
+Only exit `0` authorizes a delete. `2` means undecidable, not safe. Every
+`SAFE-DELETE` cites its evidence — either identical content or the merged PR
+number — so the verdict is auditable rather than trusted.
+
+**Content alone cannot decide this retrospectively.** Comparing base-tip to
+branch-tip is exact _at merge time_, when base has not moved. Later it is not: a
+branch that was merged reads "differs" once base evolves those files. A branch
+merged via squash PR read `6 files changed, 6 insertions(+), 292 deletions(-)`
+sixteen days on. Large deletion counts mean base is ahead and the branch is
+stale, not that the branch holds work. The script therefore also accepts a
+merged PR whose **head SHA equals the branch tip** — proof the branch is
+precisely what merged, however far base has moved since.
+
+**Do not substitute a hand-written `git diff`.** Both obvious forms report
+"nothing unmerged" on branches that carry real work:
+
+- `git diff --stat origin/main..feat/x` (two-dot) also reports every change
+  `main` gained after the branch, so it is noisy for old branches — and its
+  three-dot cousin restricted to no paths is empty for the wrong reason.
+- Restricting to the branch's own files is correct, but
+  `files=$(git diff --name-only ...)` then `-- $files` **does not word-split in
+  zsh** — an unquoted parameter expansion stays a single word there, unlike an
+  unquoted command substitution. The list becomes one pathspec, matches nothing,
+  and every branch reads merged.
+- A branch whose file list is empty produces the same false "merged".
+
+All three fail toward deleting unmerged work, and all three look like a clean
+pass. That is why the check is a script with an explicit `UNKNOWN` verdict.
 
 **Why this is a standing rule.** Skipping it is invisible for one merge and
 compounding across a hundred. Accumulated local branches and worktrees make
