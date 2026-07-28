@@ -69,26 +69,61 @@ info "Tenant ............... $TENANT_NAME ($TENANT_ID)"
 info "Subscription ......... $SUBSCRIPTION_NAME ($SUBSCRIPTION_ID)"
 echo
 
-# The known dead end: an organization-tenant Entra token presented to a
-# PERSONALLY-owned publisher fails at publish with "corporate credentials
-# required". That was reported to vscode-vsce and closed as not planned. This
-# cannot be detected from Azure alone — the publisher's owner is the other half
-# of the comparison — so surface it rather than guess.
-if [ "$TENANT_NAME" = "Default Directory" ]; then
-  warn "Tenant is named 'Default Directory', which is what a personal Microsoft"
-  warn "account gets. If the 'nightgauge' publisher is also personally owned,"
-  warn "publishing with a federated identity will fail with 'corporate"
-  warn "credentials required' and there is no workaround today."
-  warn "Confirm the publisher owner at:"
-  warn "  https://marketplace.visualstudio.com/manage/publishers/nightgauge"
+# ── 1b. Is this a real tenant, or a directory auto-created for an MSA? ──────
+#
+# The known dead end: a federated identity from a directory that merely wraps a
+# personal Microsoft account, presented to a publisher owned by that same MSA,
+# fails at publish with "corporate credentials required". Reported to
+# vscode-vsce and closed as not planned.
+#
+# The tenant's DISPLAY NAME is not the tell. "Default Directory" is simply what
+# Azure names any new tenant, including legitimate ones. The decisive signals
+# are the signed-in user's UPN and the tenant's verified domains:
+#
+#   real tenant : upn=you@yourdomain.com          domains=[yourdomain.com, ...]
+#   MSA wrapper : upn=you_yourdomain.com#EXT#@... domains=[...onmicrosoft.com]
+#
+# `#EXT#` marks an external (guest) identity — the account is not a member of
+# the directory, so a token minted here does not represent the publisher's
+# owner. Verified domains confirm it: a directory that has never had a custom
+# domain verified only knows its own onmicrosoft.com.
+UPN="$(az ad signed-in-user show --query userPrincipalName --output tsv 2>/dev/null || echo "")"
+VERIFIED_DOMAINS="$(az rest --url https://graph.microsoft.com/v1.0/organization \
+  --query 'value[0].verifiedDomains[].name' --output tsv 2>/dev/null | tr '\n' ' ' || echo "")"
+
+info "Signed-in UPN ........ ${UPN:-<could not read>}"
+info "Verified domains ..... ${VERIFIED_DOMAINS:-<could not read>}"
+echo
+
+case "$UPN" in
+*'#EXT#'*)
+  warn "This directory does not own your identity: the UPN carries '#EXT#',"
+  warn "meaning you are a GUEST here, not a member. Azure created this"
+  warn "directory when you signed up with a personal Microsoft account."
+  warn ""
+  warn "A managed identity created here would present a token that does not"
+  warn "represent the owner of the 'nightgauge' publisher, and the publish"
+  warn "will fail with 'corporate credentials required'. There is no"
+  warn "workaround (closed upstream as not planned)."
+  warn ""
+  warn "To unblock, the publisher and the identity must live in the same real"
+  warn "tenant: verify your own custom domain on an Entra tenant,"
+  warn "create a MEMBER account there, and make that account an owner of the"
+  warn "publisher. Until then, publish with a global PAT (works until"
+  warn "2026-12-01, when Azure DevOps decommissions all of them)."
   echo
-fi
+  die "Refusing to provision an identity that cannot publish. Re-run once the UPN is a member of a tenant with a verified custom domain."
+  ;;
+esac
+
+ok "Identity is a member of this directory; federated publishing is viable."
+echo
 
 # ── 2. Resource group ───────────────────────────────────────────────────────
 if az group show --name "$AZ_RESOURCE_GROUP" >/dev/null 2>&1; then
   ok "Resource group '$AZ_RESOURCE_GROUP' already exists"
 else
-  info "Creating resource group '$AZ_RESOURCE_GROUP' in $AZ_LOCATION…"
+  info "Creating resource group '$AZ_RESOURCE_GROUP' in $AZ_LOCATION..."
   az group create --name "$AZ_RESOURCE_GROUP" --location "$AZ_LOCATION" --output none
   ok "Created resource group '$AZ_RESOURCE_GROUP'"
 fi
@@ -97,7 +132,7 @@ fi
 if az identity show --name "$AZ_IDENTITY_NAME" --resource-group "$AZ_RESOURCE_GROUP" >/dev/null 2>&1; then
   ok "Managed identity '$AZ_IDENTITY_NAME' already exists"
 else
-  info "Creating user-assigned managed identity '$AZ_IDENTITY_NAME'…"
+  info "Creating user-assigned managed identity '$AZ_IDENTITY_NAME'..."
   az identity create \
     --name "$AZ_IDENTITY_NAME" \
     --resource-group "$AZ_RESOURCE_GROUP" \
@@ -129,7 +164,7 @@ if az identity federated-credential show \
     die "Federated credential '$FED_NAME' exists but its subject is '$EXISTING_SUBJECT', not '$FED_SUBJECT'. Delete it and re-run."
   fi
 else
-  info "Creating federated credential '$FED_NAME' for $FED_SUBJECT…"
+  info "Creating federated credential '$FED_NAME' for $FED_SUBJECT..."
   az identity federated-credential create \
     --name "$FED_NAME" \
     --identity-name "$AZ_IDENTITY_NAME" \
