@@ -59,23 +59,33 @@ case "$1" in -h | --help) usage ;; esac
 BASE_DEFAULT="origin/main"
 
 # ---------------------------------------------------------------------------
-# Merged-PR index: "<headRefName>\t<headRefOid>" per merged PR, fetched once.
-# Empty when NO_PR=1, gh is missing, unauthenticated, or the remote is not a
-# forge we can query — in which case classification stays content-only.
+# PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>", fetched once for
+# open AND merged PRs. Open ones mark a branch in use; merged ones prove a
+# branch already landed. Empty when NO_PR=1, gh is missing, unauthenticated, or
+# the remote is not a forge we can query — classification stays content-only.
 # ---------------------------------------------------------------------------
 PR_INDEX=""
 build_pr_index() {
   [ "${NO_PR:-0}" = "1" ] && return 0
   command -v gh >/dev/null 2>&1 || return 0
-  PR_INDEX=$(gh pr list --state merged --limit 500 \
-    --json headRefName,headRefOid,number \
-    --jq '.[] | "\(.headRefName)\t\(.headRefOid)\t\(.number)"' 2>/dev/null) || PR_INDEX=""
+  PR_INDEX=$(gh pr list --state all --limit 500 \
+    --json state,headRefName,headRefOid,number \
+    --jq '.[] | select(.state=="OPEN" or .state=="MERGED")
+          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)"' 2>/dev/null) || PR_INDEX=""
+}
+
+# open_pr_for <branch> -> prints the PR number if an OPEN PR uses this branch
+open_pr_for() {
+  [ -n "$PR_INDEX" ] || return 1
+  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
+    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}'
 }
 
 # merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
 merged_pr_for() {
   [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" '$1==b {print $2 "\t" $3; found=1; exit} END{exit !found}'
+  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
+    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}'
 }
 
 # ---------------------------------------------------------------------------
@@ -91,6 +101,32 @@ classify() {
   if ! git rev-parse --verify --quiet "$base" >/dev/null; then
     echo "UNKNOWN      no such base ref: $base"
     return 2
+  fi
+
+  # A branch checked out in a worktree is IN USE, whatever its history says.
+  # This must be tested before any "safe" verdict: an in-flight pipeline run
+  # sits on a branch whose tip is still an ancestor of base until it commits,
+  # so the ancestor rule below would otherwise call a live run safe to delete.
+  # Its uncommitted work lives in the worktree and is invisible to every
+  # commit-based check here. git refuses the delete, but a tool that answers
+  # "safe" for work in progress is giving wrong advice regardless.
+  local wt
+  wt=$(git worktree list --porcelain 2>/dev/null \
+    | awk -v b="refs/heads/$branch" '
+        /^worktree /  { w = substr($0, 10) }
+        /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
+  if [ -n "$wt" ]; then
+    echo "KEEP         checked out in a worktree: $wt"
+    return 1
+  fi
+
+  # An OPEN PR means the branch is in use no matter what its content says.
+  # Deleting the head branch of an open PR closes that PR. Content cannot see
+  # this: a PR whose changes were already applied to base by another route
+  # compares identical and would otherwise read SAFE-DELETE.
+  if pr_num=$(open_pr_for "$branch"); then
+    echo "KEEP         open PR #$pr_num — deleting this branch would close it"
+    return 1
   fi
 
   # Cheapest positive case: the branch tip is already contained in base, so
