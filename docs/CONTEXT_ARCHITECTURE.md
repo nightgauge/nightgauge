@@ -556,7 +556,8 @@ issue #1608)
 | `schema_version`                           | string | Yes      | Schema version for compatibility (1.0–1.5 or 1.9)                                |
 | `issue_number`                             | number | Yes      | GitHub issue number                                                              |
 | `commit_sha`                               | string | Yes      | Git commit SHA after validated code is committed and pushed (v1.9+, issue #1608) |
-| `validation_status`                        | string | Yes      | Overall status: passed, failed, partial, skipped                                 |
+| `validation_status`                        | string | Yes      | Overall: passed, passed_unverified, failed, partial, skipped                     |
+| `unverified_deliverable`                   | object | No       | Evidence for passed_unverified (v2.5, #152)                                      |
 | `build`                                    | object | No       | Build verification results (v1.1+)                                               |
 | `build.ran`                                | bool   | Yes      | Whether build was run                                                            |
 | `build.passed`                             | bool   | Yes      | Whether build passed                                                             |

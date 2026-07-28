@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
@@ -445,6 +446,57 @@ func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int,
 		DefaultAction: attention.ExpireNoop,
 		ExpiresAt:     expiryFromNow(48 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline what to do differently on retry"},
+	})
+}
+
+// --- Producer 8: unexercised deliverable (run-scoped, Scheduler) -------------
+
+// raiseUnverifiedDeliverable surfaces a run that built a test suite it never
+// executed (#152).
+//
+// FYI severity, deliberately: nothing is blocked and the PR is still created.
+// The failure this closes was never "the pipeline let work through" — it was
+// that a run could merge with its own deliverable unexercised and produce no
+// signal anywhere an operator looks. The stage said so honestly, in prose,
+// inside a JSON artifact nobody reads unless already suspicious.
+//
+// The card carries the idle tier's own stated reason rather than a synthesised
+// remediation command. The pipeline does not know how to run a suite it could
+// not wire up, and inventing a command it never verified would be a second
+// confident-sounding claim about something that did not happen.
+func (s *Scheduler) raiseUnverifiedDeliverable(repo string, issue int, runID string, f deliverable.Finding) {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Issue #%d validated green and its PR was created, but %s\n\n",
+		issue, strings.ToLower(f.Summary())))
+	b.WriteString("Never executed:\n")
+	for _, p := range f.Paths() {
+		b.WriteString(fmt.Sprintf("- %s\n", p))
+	}
+	for _, t := range f.Tiers {
+		if reason := f.TierReasons[t]; reason != "" {
+			b.WriteString(fmt.Sprintf("\n%s tier: %s\n", t, reason))
+		}
+	}
+	b.WriteString("\nVerify the suite manually before relying on it. Each run that ships this way makes the next skip easier to justify and the eventual first execution larger.")
+
+	s.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("unverified-deliverable:%s#%d", repo, issue),
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("#%d shipped a test suite that never ran", issue),
+		Body:           b.String(),
+		Producer:       "unverified-deliverable",
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: "feature-validate",
+			Blocker: f.Summary(), TraceRef: runTraceRef(runID),
+		},
+		Options: []attention.Option{
+			noopOption("acknowledged", "Acknowledged"),
+			noopOption("will-verify", "Will verify manually"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     expiryFromNow(72 * time.Hour),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note how this suite should be wired up"},
 	})
 }
 
