@@ -64,6 +64,7 @@ import {
 } from "@nightgauge/sdk";
 import {
   parseStreamJsonLine,
+  collectToolCalls,
   extractTokenUsage,
   TokenAccumulator,
   LiveStageEstimator,
@@ -75,6 +76,7 @@ import {
   parseSessionLimitResetsAt,
   type ParsedTokenUsage,
   type RateLimitEventData,
+  type ToolCall,
 } from "./tokenParser";
 import { resolveConfigPathSync, logDeprecationWarning } from "./configPathResolver";
 import { readEffectiveConfigTextSync } from "./mergedConfigReader";
@@ -4660,6 +4662,97 @@ export function runStageSkillHeadless(
   let promptDetected = false;
   const MAX_CONSECUTIVE_ATTEMPTS = 3;
 
+  // ── One observation point for every tool call, whatever shape delivered it ──
+  //
+  // Tool calls arrive in two shapes: inside complete `assistant` messages (the
+  // plural `toolUses[]`, which is what the Claude CLI actually emits) and as
+  // streaming `content_block_start` events (the singular `toolName`/
+  // `toolInput`, which other adapters may emit). A consumer wired to only one
+  // shape is not a bug that throws — it is a feature that silently never runs.
+  //
+  // That is how #169 happened: `promptDetected`, the AskUserQuestion loop
+  // abort, `onToolUse` and the dashboard's `onToolCall` feed were all wired to
+  // the singular shape alone, so against the Claude CLI they never fired once.
+  // `promptDetected` is a correctness gate on stage success — stuck at `false`,
+  // it reports a stage that begged for input as a clean pass.
+  //
+  // The same dead branch was patched three times (#151, #154/#155, #161/#295),
+  // each time by giving one consumer a plural-shape equivalent and leaving the
+  // others behind. The divergence is the defect, not the branch — so there is
+  // now exactly one body, and both shapes call it.
+  //
+  // Returns true when the caller must abort the stage.
+  const seenToolUseIds = new Set<string>();
+  const observeToolCall = ({ name, input, id }: ToolCall): boolean => {
+    // A call delivered in BOTH shapes must be counted once. Without this the
+    // AskUserQuestion counter would advance twice per attempt and trip its
+    // abort at HALF the intended threshold — a stage killed for a loop it
+    // never entered. Calls carrying no id cannot be deduped, so they are
+    // processed as they arrive: double-counting an id-less call is a lesser
+    // harm than dropping it. Same rule the bash ring already uses (#156).
+    if (id !== undefined) {
+      if (seenToolUseIds.has(id)) return false;
+      seenToolUseIds.add(id);
+    }
+
+    // Loop bookkeeping runs BEFORE the observation callbacks so an aborting
+    // attempt is not also broadcast as ordinary tool activity — the ordering
+    // the singular path established and its tests pin.
+    if (name === "AskUserQuestion") {
+      // Any AskUserQuestion attempt in headless mode means the agent wanted
+      // input that can never be answered, so a clean exit is premature
+      // (#218, #697). This flag gates stage success; it must be set on the
+      // FIRST attempt, not only on the aborting one.
+      promptDetected = true;
+
+      const inputHash = JSON.stringify(input ?? {}).slice(0, 100);
+      if (lastToolCall?.name === "AskUserQuestion" && lastToolCall.inputHash === inputHash) {
+        consecutiveAttempts++;
+      } else {
+        consecutiveAttempts = 1;
+      }
+      lastToolCall = { name: "AskUserQuestion", inputHash };
+
+      if (consecutiveAttempts >= MAX_CONSECUTIVE_ATTEMPTS) return true;
+    } else {
+      lastToolCall = null;
+      consecutiveAttempts = 0;
+    }
+
+    // Deterministic phase inference (#3760): stages that don't self-report
+    // phase markers (feature-dev) advance from the tool calls they actually
+    // make. No-op for self-reporting stages; monotonic; real markers win.
+    const inferred = phaseInference.observeToolUse(name, input);
+    if (inferred) {
+      lastPhaseName = inferred.name;
+      traceRecorder.phaseTransition(stage, inferred);
+      callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
+    }
+
+    // Stage-exit forensics (#3605/#147): the matching tool_result's is_error
+    // flag later sets this entry's exit code, so a retro can answer "what was
+    // it doing when it died?" without grepping the full session log.
+    recentBashRing.observeToolUse(name, input, id);
+
+    callbacks?.onToolUse?.(name, input, id);
+    // Dashboard tool-call recording (#639, #1031).
+    callbacks?.onToolCall?.(name, input, id);
+
+    return false;
+  };
+
+  const abortForPromptLoop = (): void => {
+    const error = new Error(
+      `Stage aborted: Claude attempted AskUserQuestion ${consecutiveAttempts} times. ` +
+        `AskUserQuestion is not supported in headless pipeline mode.`
+    );
+
+    callbacks?.onStderr?.(`[skillRunner] Loop detected: ${error.message}\n`);
+    callbacks?.onError?.(error);
+    proc.kill("SIGTERM");
+    activeProcesses.delete(processKey);
+  };
+
   // Handle stdout - parse stream-json for token usage and tool_use blocks
   proc.stdout?.on("data", (data: Buffer) => {
     const text = data.toString();
@@ -4797,31 +4890,6 @@ export function runStageSkillHeadless(
         }
       }
 
-      // Deterministic phase inference from assistant-message tool calls (#3760).
-      // The CLI delivers tool_use inside complete `assistant` messages, so this
-      // is the primary signal for edit-heavy stages (feature-dev) that don't
-      // reliably emit phase markers. No-op for self-reporting stages; monotonic.
-      if (parsed?.toolUses) {
-        for (const { name, input, id } of parsed.toolUses) {
-          const inferred = phaseInference.observeToolUse(name, input);
-          if (inferred) {
-            lastPhaseName = inferred.name;
-            traceRecorder.phaseTransition(stage, inferred);
-            callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
-          }
-
-          // Stage-exit forensics (#147). The CLI delivers tool_use inside
-          // complete `assistant` messages — the plural shape handled here —
-          // while the singular `content_block_start` capture below fires only
-          // for the streaming shape. Both feed the same ring, which dedupes on
-          // the tool_use id so a call reported through both shapes occupies
-          // one slot rather than two (#156). The id also lets each entry carry
-          // its own exit code; when it is missing the exit stays unknown
-          // rather than being attributed from an unrelated call.
-          recentBashRing.observeToolUse(name, input, id);
-        }
-      }
-
       // Feed the runaway progress monitor from EVERY parsed tool call (Issue
       // #295). This runs off both the plural `toolUses[]` shape (the runtime
       // shape — complete `assistant` messages) and the singular
@@ -4878,87 +4946,22 @@ export function runStageSkillHeadless(
         callbacks?.onSessionId?.(capturedSessionId);
       }
 
-      // Loop detection for AskUserQuestion in headless mode (Issue #218)
-      // Detects when Claude repeatedly attempts the same blocked tool call
-      if (parsed?.toolName) {
-        const inputHash = JSON.stringify(parsed.toolInput ?? {}).slice(0, 100);
-
-        if (parsed.toolName === "AskUserQuestion") {
-          // Flag any AskUserQuestion attempt in headless mode (Issue #697)
-          promptDetected = true;
-
-          if (lastToolCall?.name === "AskUserQuestion" && lastToolCall?.inputHash === inputHash) {
-            consecutiveAttempts++;
-
-            if (consecutiveAttempts >= MAX_CONSECUTIVE_ATTEMPTS) {
-              const error = new Error(
-                `Stage aborted: Claude attempted AskUserQuestion ${consecutiveAttempts} times. ` +
-                  `AskUserQuestion is not supported in headless pipeline mode.`
-              );
-
-              callbacks?.onStderr?.(`[skillRunner] Loop detected: ${error.message}\n`);
-              callbacks?.onError?.(error);
-              proc.kill("SIGTERM");
-              activeProcesses.delete(processKey);
-              return;
-            }
-          } else {
-            consecutiveAttempts = 1;
-          }
-
-          lastToolCall = { name: "AskUserQuestion", inputHash };
-        } else {
-          // Reset on other tool calls
-          lastToolCall = null;
-          consecutiveAttempts = 0;
+      // Every tool call in this message, both delivery shapes flattened into
+      // one list and each observed exactly once (#169). Consumers live inside
+      // observeToolCall — do NOT add a shape-specific branch here.
+      //
+      // Placed after the usage/session handling above so the line that trips
+      // the abort is still fully accounted for before the process is killed:
+      // an aborting stage must not also lose that line's booked tokens.
+      let aborted = false;
+      for (const call of collectToolCalls(parsed)) {
+        if (observeToolCall(call)) {
+          abortForPromptLoop();
+          aborted = true;
+          break;
         }
       }
-
-      // Detect tool_use blocks for interactive tools like AskUserQuestion
-      // The toolName and toolInput are extracted by parseStreamJsonLine
-      if (parsed?.toolName) {
-        // Extract tool_use ID from the raw JSON for matching tool_result
-        let toolUseId: string | undefined;
-        try {
-          const rawParsed = JSON.parse(line.trim());
-          if (rawParsed.content_block?.id) {
-            toolUseId = rawParsed.content_block.id;
-          }
-        } catch {
-          // Ignore parse errors for ID extraction
-        }
-
-        callbacks?.onToolUse?.(parsed.toolName, parsed.toolInput, toolUseId);
-
-        // Fire onToolCall for Dashboard tool call recording (Issue #639, #1031)
-        callbacks?.onToolCall?.(parsed.toolName, parsed.toolInput, toolUseId);
-
-        // Progress-based runaway classification (file_change / commit /
-        // distinct_tool) is now centralized in recordToolCallProgress and
-        // driven above for BOTH the `content_block_start` (singular toolName)
-        // and complete-`assistant`-message (plural toolUses[]) shapes — see
-        // Issue #295. It is NOT duplicated here: this block runs only for the
-        // singular `content_block_start` shape, which recordToolCallProgress
-        // already classifies, so recording again would double-count the churn
-        // gauge for that shape.
-
-        // Deterministic phase inference (Issue #3760): for stages that don't
-        // reliably emit phase markers (feature-dev), advance phase progress from
-        // the tool calls the agent actually makes. No-op for self-reporting
-        // stages; monotonic; real markers always take precedence.
-        const inferred = phaseInference.observeToolUse(parsed.toolName, parsed.toolInput);
-        if (inferred) {
-          lastPhaseName = inferred.name;
-          callbacks?.onPhaseStart?.(stage, inferred.name, inferred.index, inferred.total);
-        }
-
-        // Stage-exit diagnostic capture (Issue #3605): record recent Bash
-        // commands (each truncated to 500 chars) so retros can answer "what was
-        // it doing when it died?" without grepping the full session log. The
-        // matching tool_result's `is_error` flag sets that entry's exit code so
-        // we know whether the command actually failed before the stage ended.
-        recentBashRing.observeToolUse(parsed.toolName, parsed.toolInput, toolUseId);
-      }
+      if (aborted) return;
 
       // Detect tool_result in user messages for telemetry backfill (Issue #1031)
       if (parsed?.toolResult) {
@@ -5607,17 +5610,14 @@ export function resumeSessionWithResponse(
         handle.sessionId = capturedSessionId;
         callbacks?.onSessionId?.(capturedSessionId);
       }
-      if (parsed?.toolName && callbacks?.onToolUse) {
-        let toolUseId: string | undefined;
-        try {
-          const rawParsed = JSON.parse(line.trim());
-          if (rawParsed.content_block?.id) {
-            toolUseId = rawParsed.content_block.id;
-          }
-        } catch {
-          // Ignore parse errors
+      // The resume path is the FIFTH consumer of the singular shape and was not
+      // named on #169 — it turned up by sweeping for remaining readers, the
+      // question none of the three prior fixes asked. Same normaliser, so it
+      // cannot drift from the others again.
+      if (callbacks?.onToolUse) {
+        for (const { name, input, id } of collectToolCalls(parsed)) {
+          callbacks.onToolUse(name, input, id);
         }
-        callbacks.onToolUse(parsed.toolName, parsed.toolInput, toolUseId);
       }
     }
   });

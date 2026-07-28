@@ -115,6 +115,20 @@ export interface RateLimitEventData {
 }
 
 /**
+ * One tool call, normalised away from the wire shape that delivered it.
+ *
+ * `id` is the `tool_use` id. It is optional because a malformed or synthesised
+ * block may carry none, and inventing one would let an unrelated `tool_result`
+ * bind to it. Consumers that dedupe must therefore treat "no id" as
+ * "not deduplicable" rather than as a key equal to some other absent id.
+ */
+export interface ToolCall {
+  name: string;
+  input: unknown;
+  id?: string;
+}
+
+/**
  * Parsed stream-json message
  */
 export interface ParsedStreamMessage {
@@ -141,6 +155,18 @@ export interface ParsedStreamMessage {
   toolName?: string;
   toolInput?: unknown;
   /**
+   * The `tool_use` id of the singular {@link toolName} call (#169).
+   *
+   * The plural shape has carried its id since #155; the singular shape did not,
+   * so callers that needed it re-parsed the raw stdout line a second time to
+   * dig out `content_block.id`. That left the two shapes non-interchangeable at
+   * exactly the point where they must be interchangeable: an id is the only key
+   * that can tell "the same call, reported twice" from "two calls". Exposed
+   * here so {@link collectToolCalls} can hand every consumer one uniform record
+   * whatever the wire shape was.
+   */
+  toolUseId?: string;
+  /**
    * All tool_use blocks in an assistant message, in document order (Issue #3760).
    * The Claude CLI delivers tool calls inside complete `assistant` messages
    * (not `content_block_start` events), so `toolName`/`toolInput` above — which
@@ -153,7 +179,7 @@ export interface ParsedStreamMessage {
    * because a malformed block must leave the exit unknown rather than let a
    * result bind to an unrelated call.
    */
-  toolUses?: { name: string; input: unknown; id?: string }[];
+  toolUses?: ToolCall[];
   /** Session ID for conversation resumption (Issue #118) */
   sessionId?: string;
   /** Tool result extracted from user messages (Issue #1031) */
@@ -338,6 +364,11 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
         type: "content_block_start",
         toolName: parsed.content_block.name,
         toolInput: parsed.content_block.input,
+        // Same rule as the plural shape: propagate a string id or none at all,
+        // never a coerced one (#155, #169).
+        ...(typeof parsed.content_block.id === "string"
+          ? { toolUseId: parsed.content_block.id }
+          : {}),
       };
     }
 
@@ -485,6 +516,47 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
     // Not valid JSON - might be plain text output
     return null;
   }
+}
+
+/**
+ * Flatten a parsed message's tool calls out of BOTH delivery shapes (#169).
+ *
+ * The CLI reports a tool call in one of two shapes and the choice is not the
+ * consumer's to make:
+ *
+ *   - a complete `assistant` message → the plural `toolUses[]`. This is what
+ *     the Claude CLI actually emits, i.e. effectively all live traffic.
+ *   - a streaming `content_block_start` event → the singular
+ *     `toolName`/`toolInput`/`toolUseId`. Other adapters emit this, so it is
+ *     handled rather than deleted (#295).
+ *
+ * Every consumer must see the call either way, and the way to guarantee that
+ * is to give them no shape to get wrong. Reading one shape directly is not a
+ * bug that throws — it is a feature that silently never runs, which is how
+ * `promptDetected` (a correctness gate on stage success), the AskUserQuestion
+ * loop abort, the dashboard tool-call feed and `onToolUse` all shipped dead
+ * against the Claude CLI. The same dead branch was patched three times (#151,
+ * #154/#155, #161/#295), each time by bolting a plural-shape equivalent onto
+ * ONE consumer and leaving the rest behind. The divergence was the defect, so
+ * the shapes are collapsed here, once, ahead of every consumer.
+ *
+ * Order is singular-then-plural, matching document order within a message.
+ */
+export function collectToolCalls(parsed: ParsedStreamMessage | null): ToolCall[] {
+  if (!parsed) return [];
+
+  const calls: ToolCall[] = [];
+  if (typeof parsed.toolName === "string" && parsed.toolName) {
+    calls.push({
+      name: parsed.toolName,
+      input: parsed.toolInput,
+      ...(parsed.toolUseId !== undefined ? { id: parsed.toolUseId } : {}),
+    });
+  }
+  for (const t of parsed.toolUses ?? []) {
+    calls.push(t);
+  }
+  return calls;
 }
 
 /**
