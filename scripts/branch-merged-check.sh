@@ -93,6 +93,23 @@ classify() {
     return 2
   fi
 
+  # A branch checked out in a worktree is IN USE, whatever its history says.
+  # This must be tested before any "safe" verdict: an in-flight pipeline run
+  # sits on a branch whose tip is still an ancestor of base until it commits,
+  # so the ancestor rule below would otherwise call a live run safe to delete.
+  # Its uncommitted work lives in the worktree and is invisible to every
+  # commit-based check here. git refuses the delete, but a tool that answers
+  # "safe" for work in progress is giving wrong advice regardless.
+  local wt
+  wt=$(git worktree list --porcelain 2>/dev/null \
+    | awk -v b="refs/heads/$branch" '
+        /^worktree /  { w = substr($0, 10) }
+        /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
+  if [ -n "$wt" ]; then
+    echo "KEEP         checked out in a worktree: $wt"
+    return 1
+  fi
+
   # Cheapest positive case: the branch tip is already contained in base, so
   # base has every commit it has. This is what `git branch -d` accepts, and it
   # is decisive on its own — no content comparison needed.
