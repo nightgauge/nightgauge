@@ -22,8 +22,9 @@ vitest.config.ts
 # pipeline context, retrospectives, and issue metadata from leaking into a VSIX.
 .nightgauge/**
 
-# Documentation (keep README for marketplace)
-CHANGELOG.md
+# Documentation: README.md, CHANGELOG.md and LICENSE are all packaged on
+# purpose — the Marketplace renders them as the Details, Changelog and License
+# tabs of the listing. Excluding CHANGELOG.md drops the Changelog tab entirely.
 
 # Node modules from sibling packages
 ../pattern-mining-sdk/**
