@@ -240,6 +240,136 @@ describe("WorktreeManager", () => {
     });
   });
 
+  describe("create — re-dispatch reuse (#135)", () => {
+    function mockUniqueCommits(count: number, branchExists = true) {
+      execFileAsyncMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "rev-parse" && args[1] === "--verify") {
+          return branchExists
+            ? Promise.resolve({ stdout: "abc123\n", stderr: "" })
+            : Promise.reject(new Error("unknown revision"));
+        }
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: `${count}\n`, stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+    }
+
+    it("reuses the worktree in place when it is already registered to the branch", async () => {
+      mockUniqueCommits(3);
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd === "git worktree list --porcelain") {
+          return Promise.resolve({
+            stdout: [
+              "worktree /repo/.worktrees/issue-42",
+              "HEAD def456",
+              "branch refs/heads/feat/42-test",
+              "",
+            ].join("\n"),
+            stderr: "",
+          });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+
+      const result = await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(result).toEqual({
+        path: "/repo/.worktrees/issue-42",
+        branch: "feat/42-test",
+        issueNumber: 42,
+        exists: true,
+      });
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.anything()
+      );
+      expect(
+        execAsyncMock.mock.calls.some(
+          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+        )
+      ).toBe(false);
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        expect.arrayContaining(["-b"]),
+        expect.anything()
+      );
+    });
+
+    it("resumes from the branch tip when the branch has unique commits but no registered worktree", async () => {
+      mockUniqueCommits(2);
+      execAsyncMock.mockResolvedValue({ stdout: "", stderr: "" }); // listActive: no worktrees registered
+
+      await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "add", "/repo/.worktrees/issue-42", "feat/42-test"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.anything()
+      );
+    });
+
+    it("follows the destructive stale-worktree path when the branch has zero unique commits", async () => {
+      mockUniqueCommits(0);
+
+      await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+    });
+
+    it("follows the destructive path unchanged when the branch does not exist at all", async () => {
+      mockUniqueCommits(0, /* branchExists */ false);
+
+      await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+    });
+
+    it("conflict-restart (deleteRemoteBranch) always takes the destructive path, even with unique commits", async () => {
+      mockUniqueCommits(5);
+
+      await manager.create(42, "feat/42-test", {
+        npmInstall: false,
+        deleteRemoteBranch: true,
+      });
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["push", "origin", "--delete", "feat/42-test"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+    });
+  });
+
   describe("cleanup", () => {
     it("removes worktree with force flag", async () => {
       await manager.cleanup(42);
