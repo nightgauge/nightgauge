@@ -819,6 +819,11 @@ func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 // global cooldown, and must set a SHORT (~5m) per-issue backoff so only that
 // issue waits while the rest of the queue keeps flowing.
 func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
+	// SafetyRails MUST be wired. Constructing the scheduler without it leaves
+	// as.safetyRails nil, so every `if as.safetyRails != nil` block is skipped
+	// and this test cannot observe the rails at all — which is exactly how the
+	// circuit breaker came to halt the fleet on transient 529s while this test
+	// stayed green.
 	as := &AutonomousScheduler{
 		config: AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
@@ -831,6 +836,7 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
 		retryBackoff:         map[string]time.Time{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3}),
 	}
 
 	before := time.Now()
@@ -871,6 +877,110 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 	}
 	if len(as.state.Failed) != 1 || as.state.Failed[0].Number != 481 {
 		t.Fatalf("expected 1 failed entry for #481, got %+v", as.state.Failed)
+	}
+	// MUST NOT feed the per-session circuit breaker. This is the assertion the
+	// original test could not make: the breaker is a SECOND halt mechanism,
+	// independent of the lifetime cap and the cascade tracker, and exempting
+	// only the first two still stops the whole fleet.
+	if got := as.safetyRails.State().ConsecutiveFailures; got != 0 {
+		t.Errorf("SafetyRails.ConsecutiveFailures = %d after api-overloaded, want 0 (transient is not evidence about our work)", got)
+	}
+}
+
+// TestTransientFailuresNeverTripTheCircuitBreaker is the regression test for the
+// live incident: three unrelated issues each hit one Anthropic 529, the breaker
+// counted all three as consecutive failures, tripped at its max of 3, and halted
+// every repo in the workspace — while each failure's own log line advertised
+// "no pause".
+//
+// The breaker exists to stop a pipeline that keeps breaking on its own work. A
+// provider outage is weather, not evidence, and must be invisible to it.
+func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
+	// Every kind whose handler documents itself as environmental, transient,
+	// recoverable, or a deferral. Each must leave the breaker untouched.
+	nonFaultKinds := []string{
+		TerminalKindApiOverloaded,
+		TerminalKindApiConnectionLost,
+		TerminalKindStallKill,
+		TerminalKindGitHubQuotaLow,
+		TerminalKindGitHubNetworkOutage,
+		TerminalKindRateLimitQuotaExhausted,
+		TerminalKindAdapterAuthFailed,
+		TerminalKindModelUnavailable,
+		TerminalKindWorktreeUncommitted,
+		TerminalKindBudgetCeiling,
+		TerminalKindBlockedDependency,
+		TerminalKindBranchForked,
+		TerminalKindPrMergeUnmerged,
+	}
+
+	for _, kind := range nonFaultKinds {
+		t.Run(kind, func(t *testing.T) {
+			rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
+			as := &AutonomousScheduler{
+				config:               AutonomousConfig{MaxConcurrent: 3},
+				state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
+				rescanCh:             make(chan struct{}, 16),
+				perIssueFailureCount: map[string]int{},
+				retryBackoff:         map[string]time.Time{},
+				safetyRails:          rails,
+			}
+
+			// Four distinct issues — more than CircuitBreakerMax — so a per-issue
+			// exemption alone would not save us. Only a breaker that ignores the
+			// kind entirely keeps the fleet running.
+			for i, num := range []int{501, 502, 503, 504} {
+				as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: num}}
+				as.onPipelineComplete("nightgauge/nightgauge", num, false, false, kind, "transient: "+kind)
+
+				if got := rails.State().ConsecutiveFailures; got != 0 {
+					t.Fatalf("after %d %s failure(s): ConsecutiveFailures = %d, want 0", i+1, kind, got)
+				}
+				if allowed, reason := rails.CheckBeforeEnqueue(0); !allowed {
+					t.Fatalf("after %d %s failure(s): dispatch blocked by rails (%s); the fleet must keep running", i+1, kind, reason)
+				}
+			}
+		})
+	}
+}
+
+// TestRealFailuresStillTripTheCircuitBreaker guards the other direction: the
+// exemption above must not disarm the breaker for genuine defects.
+func TestRealFailuresStillTripTheCircuitBreaker(t *testing.T) {
+	rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
+	for i := 0; i < 3; i++ {
+		rails.RecordCompletion(false, 0)
+	}
+	if allowed, reason := rails.CheckBeforeEnqueue(0); allowed {
+		t.Fatal("3 consecutive real failures did not trip the breaker; want tripped")
+	} else if reason == "" {
+		t.Error("breaker tripped without a reason")
+	}
+}
+
+// TestNonFaultOutcomeDoesNotLaunderAFailureCascade pins the "untouched, not
+// reset" semantics: an environmental blip in the middle of a real cascade must
+// not zero the counter, or real failures either side of one 529 would never add
+// up to a trip.
+func TestNonFaultOutcomeDoesNotLaunderAFailureCascade(t *testing.T) {
+	rails := NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
+
+	rails.RecordCompletion(false, 0) // real failure 1
+	rails.RecordCompletion(false, 0) // real failure 2
+	rails.RecordNonFaultOutcome(0)   // provider blip — must not reset
+	if got := rails.State().ConsecutiveFailures; got != 2 {
+		t.Fatalf("ConsecutiveFailures = %d after a non-fault outcome mid-cascade, want 2 (untouched, not reset)", got)
+	}
+
+	rails.RecordCompletion(false, 0) // real failure 3 — should trip
+	if allowed, _ := rails.CheckBeforeEnqueue(0); allowed {
+		t.Error("breaker did not trip on the 3rd real failure; a non-fault outcome must not launder a cascade")
+	}
+
+	// A genuine success still clears it.
+	rails.RecordCompletion(true, 0)
+	if got := rails.State().ConsecutiveFailures; got != 0 {
+		t.Errorf("ConsecutiveFailures = %d after success, want 0", got)
 	}
 }
 
