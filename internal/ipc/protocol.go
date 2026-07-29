@@ -1131,9 +1131,11 @@ type AutonomousClearIssueFailuresParams struct {
 }
 
 // AutonomousClearIssueFailuresResult reports how many issue counters were
-// cleared.
+// cleared, and whether the fleet-wide circuit breaker (a separate breaker
+// from the per-issue lifetime cap) is still tripped. #150.
 type AutonomousClearIssueFailuresResult struct {
-	Cleared int `json:"cleared"`
+	Cleared               int  `json:"cleared"`
+	CircuitBreakerTripped bool `json:"circuitBreakerTripped"`
 }
 
 // AutonomousClearQuotaCooldownParams has no fields — the clear is unconditional.

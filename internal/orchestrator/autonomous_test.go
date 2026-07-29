@@ -1196,7 +1196,7 @@ func TestClearIssueFailures(t *testing.T) {
 		perIssueFailureCount: map[string]int{"R#1": 2},
 		retryBackoff:         map[string]retryPlan{"R#1": {Until: time.Now().Add(time.Hour)}},
 	}
-	if n := as.ClearIssueFailures("R#1"); n != 1 {
+	if n, _ := as.ClearIssueFailures("R#1"); n != 1 {
 		t.Errorf("expected 1 cleared, got %d", n)
 	}
 	if _, ok := as.state.LifetimeIssueFailures["R#1"]; ok {
@@ -1205,7 +1205,7 @@ func TestClearIssueFailures(t *testing.T) {
 	if _, ok := as.perIssueFailureCount["R#1"]; ok {
 		t.Errorf("R#1 session count not cleared")
 	}
-	if n := as.ClearIssueFailures(""); n != 2 {
+	if n, _ := as.ClearIssueFailures(""); n != 2 {
 		t.Errorf("expected 2 cleared (R#2, R#3), got %d", n)
 	}
 	if len(as.state.LifetimeIssueFailures) != 0 {
@@ -3110,6 +3110,39 @@ func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// ClearIssueFailures resets the per-issue lifetime cap only; the fleet-wide
+// circuit breaker (SafetyRails.ConsecutiveFailures) is a separate breaker and
+// must be reported as still-tripped rather than silently cleared. #150.
+func TestClearIssueFailures_ReportsCircuitBreakerTrippedIndependently(t *testing.T) {
+	as := &AutonomousScheduler{
+		state: &AutonomousState{
+			LifetimeIssueFailures: map[string]int{"R#1": 2},
+		},
+		safetyRails: NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3}),
+	}
+	as.safetyRails.RecordCompletion(false, 0)
+	as.safetyRails.RecordCompletion(false, 0)
+	as.safetyRails.RecordCompletion(false, 0) // 3 consecutive failures trips the breaker
+
+	n, tripped := as.ClearIssueFailures("R#1")
+	if n != 1 {
+		t.Fatalf("expected 1 cleared, got %d", n)
+	}
+	if !tripped {
+		t.Error("expected circuitBreakerTripped=true — breaker was tripped and ClearIssueFailures must not silently clear it")
+	}
+	if as.safetyRails.State().ConsecutiveFailures != 3 {
+		t.Errorf("ClearIssueFailures must not touch ConsecutiveFailures, got %d", as.safetyRails.State().ConsecutiveFailures)
+	}
+
+	// Once the breaker itself is reset (its own explicit escape hatch),
+	// subsequent clears report untripped.
+	as.safetyRails.Reset()
+	if _, tripped := as.ClearIssueFailures(""); tripped {
+		t.Error("expected circuitBreakerTripped=false after SafetyRails.Reset()")
+	}
+}
+
 // Manual triage is the documented escape hatch, and it must be the only one.
 func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -3126,7 +3159,7 @@ func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
 		},
 	}
 
-	if n := as.ClearIssueFailures(key); n != 1 {
+	if n, _ := as.ClearIssueFailures(key); n != 1 {
 		t.Fatalf("ClearIssueFailures(%q) = %d, want 1", key, n)
 	}
 	if _, still := as.state.LifetimeIssueFailures[key]; still {
