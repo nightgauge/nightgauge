@@ -120,6 +120,45 @@ export class WorktreeManager {
       // Non-fatal — may be offline
     }
 
+    // Re-dispatch reuse decision (#135): a conflict-restart is an explicit
+    // discard signal and always takes the destructive path below. Otherwise,
+    // if the target branch already has commits ahead of origin/<baseBranch>,
+    // reuse it instead of destroying committed work on every retry.
+    if (!options?.deleteRemoteBranch) {
+      const hasUniqueCommits = await this.branchHasUniqueCommits(branchName, baseBranch);
+      if (hasUniqueCommits) {
+        if (await this.isWorktreeRegisteredToBranch(worktreePath, branchName)) {
+          // Worktree already checked out to this branch — nothing to do.
+          return {
+            path: worktreePath,
+            branch: branchName,
+            issueNumber,
+            exists: true,
+          };
+        }
+
+        // Branch has unique work but no worktree registered to it (e.g. the
+        // directory was removed externally) — resume from the branch tip
+        // instead of rebuilding from origin/<baseBranch>.
+        await fs.rm(worktreePath, { recursive: true, force: true }).catch(() => {});
+        await execAsync(`git worktree prune`, {
+          cwd: this.repoRoot,
+          timeout: 5_000,
+        }).catch(() => {
+          // Non-fatal
+        });
+        await execFileAsync("git", ["worktree", "add", worktreePath, branchName], {
+          cwd: this.repoRoot,
+          timeout: 30_000,
+        });
+
+        return this.finishCreate(worktreePath, branchName, issueNumber, baseBranch, {
+          shouldInstall,
+          installTimeout,
+        });
+      }
+    }
+
     // Clean up stale worktree/branch from a previous failed run.
     // Without this, `git worktree add -b` fails with "branch already exists"
     // or "path already exists" on retry after a crash.
@@ -170,6 +209,27 @@ export class WorktreeManager {
       ["worktree", "add", worktreePath, "-b", branchName, `origin/${baseBranch}`],
       { cwd: this.repoRoot, timeout: 30_000 }
     );
+
+    return this.finishCreate(worktreePath, branchName, issueNumber, baseBranch, {
+      shouldInstall,
+      installTimeout,
+    });
+  }
+
+  /**
+   * Shared post-creation steps (gitignore/config propagation, epic-branch
+   * merge, npm install, Flutter codegen) that run identically regardless of
+   * whether `create()` took the reuse or rebuild path — they only depend on
+   * `worktreePath` existing and being checked out.
+   */
+  private async finishCreate(
+    worktreePath: string,
+    branchName: string,
+    issueNumber: number,
+    baseBranch: string,
+    opts: { shouldInstall: boolean; installTimeout: number }
+  ): Promise<WorktreeInfo> {
+    const { shouldInstall, installTimeout } = opts;
 
     // Propagate the gitignored local config tier into the worktree. Tracked
     // files (including .nightgauge/config.yaml) arrive via the checkout,
@@ -384,6 +444,50 @@ export class WorktreeManager {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Check whether `branchName` exists locally and has commits ahead of
+   * `origin/<baseBranch>` — i.e. real work that a destructive rebuild would
+   * lose. Requires a prior `git fetch origin` (already run earlier in
+   * `create()`) for `origin/<baseBranch>` to be current.
+   */
+  private async branchHasUniqueCommits(branchName: string, baseBranch: string): Promise<boolean> {
+    try {
+      await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branchName}`], {
+        cwd: this.repoRoot,
+        timeout: 5_000,
+      });
+    } catch {
+      // Branch doesn't exist locally — nothing to reuse.
+      return false;
+    }
+
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["rev-list", "--count", `origin/${baseBranch}..${branchName}`],
+        { cwd: this.repoRoot, timeout: 5_000, encoding: "utf-8" }
+      );
+      return parseInt(stdout.trim(), 10) > 0;
+    } catch {
+      // Can't determine ahead-count (e.g. origin/<baseBranch> missing) —
+      // fall back to the safe, existing destructive path.
+      return false;
+    }
+  }
+
+  /**
+   * Check whether the worktree directory is already registered by git and
+   * checked out to `branchName` — mirrors the Go path's `os.Stat`
+   * short-circuit (`internal/execution/worktree.go`) for the TS pipeline.
+   */
+  private async isWorktreeRegisteredToBranch(
+    worktreePath: string,
+    branchName: string
+  ): Promise<boolean> {
+    const active = await this.listActive();
+    return active.some((w) => w.path === worktreePath && w.branch === branchName && w.exists);
   }
 
   /**
