@@ -162,6 +162,87 @@ func TestProducerBlockedByDeferralEmitsChoose(t *testing.T) {
 	assertSteerSet(t, r)
 }
 
+// TestProducerArchitectureApprovalEmitsApprove covers the card that replaces
+// the transient VSCode toast: before this producer, a gate whose entire purpose
+// is a human decision left no durable trace, so missing the toast meant the
+// issue sat sidelined with no visible way back in.
+func TestProducerArchitectureApprovalEmitsApprove(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseArchitectureApproval("octocat/acme", 900, "Voice session gateway",
+		"ARCHITECTURE APPROVAL REQUIRED — production-touching change")
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Kind != attention.KindApprove || r.Severity != attention.SeverityBlockingRun {
+		t.Errorf("kind/severity = %q/%q, want approve/blocking_run", r.Kind, r.Severity)
+	}
+	approve := r.FindOption("approve")
+	if approve == nil || r.FindOption("leave") == nil {
+		t.Fatal("expected approve + leave options")
+	}
+	if approve.Verb != attention.VerbIssueApproveArchitecture {
+		t.Errorf("approve verb = %q, want %q", approve.Verb, attention.VerbIssueApproveArchitecture)
+	}
+	// The label name must NOT ride in on args — the executor resolves it from
+	// config so a surface can only ever grant this one gate.
+	for _, k := range []string{"label", "labels", "labelName"} {
+		if _, ok := approve.Args[k]; ok {
+			t.Errorf("approve args carry %q — the label must be resolved daemon-side, not supplied by the surface", k)
+		}
+	}
+	assertSteerSet(t, r)
+}
+
+// TestArchitectureApprovalReHaltNeverGrowsTheInbox is the shape that matters in
+// production: the gate re-fires on every dispatch attempt, and the operator must
+// still end up with exactly one card.
+func TestArchitectureApprovalReHaltNeverGrowsTheInbox(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	for i := 0; i < 4; i++ {
+		as.raiseArchitectureApproval("octocat/acme", 900, "Voice session gateway",
+			"ARCHITECTURE APPROVAL REQUIRED — production-touching change")
+	}
+	if reqs := openRequests(t, as); len(reqs) != 1 {
+		t.Fatalf("got %d requests after 4 re-halts, want 1", len(reqs))
+	}
+}
+
+// TestArchitectureApprovalRetractsOnlyTheApprovedIssue covers approval granted
+// out-of-band (a human adds the label with gh and never touches the card). The
+// approved issue's card must clear while every other pending approval survives —
+// retracting the whole producer would silently drop decisions nobody made.
+func TestArchitectureApprovalRetractsOnlyTheApprovedIssue(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseArchitectureApproval("octocat/acme", 900, "Voice gateway", "gate: production-touching")
+	as.raiseArchitectureApproval("octocat/acme", 901, "QuestionSet contract", "gate: trade-off signals")
+	as.raiseArchitectureApproval("octocat/other", 12, "Storage ADR", "gate: irreversible")
+	if got := len(openRequests(t, as)); got != 3 {
+		t.Fatalf("setup: got %d cards, want 3", got)
+	}
+
+	as.retractArchitectureApproval("octocat/acme", 900)
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 2 {
+		t.Fatalf("got %d cards after retracting one, want 2", len(reqs))
+	}
+	for _, r := range reqs {
+		if r.IdempotencyKey == keyArchitectureApproval("octocat/acme", 900) {
+			t.Error("the approved issue's card survived — it should have been retracted")
+		}
+	}
+
+	// Retracting the last one empties the producer's inbox.
+	as.retractArchitectureApproval("octocat/acme", 901)
+	as.retractArchitectureApproval("octocat/other", 12)
+	if got := len(openRequests(t, as)); got != 0 {
+		t.Errorf("got %d cards after retracting all, want 0", got)
+	}
+}
+
 func TestProducerStuckEpicOffersEscalationVerb(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
 	as.raiseStuckEpic("octocat/acme", 100, "Auth epic", "3 open sub-issues, 0 eligible")

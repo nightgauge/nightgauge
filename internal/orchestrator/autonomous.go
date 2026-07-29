@@ -2822,6 +2822,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if as.state.LifetimeIssueFailures != nil {
 			delete(as.state.LifetimeIssueFailures, key)
 		}
+		// A run cannot complete while the architecture gate is blocking it, so
+		// success proves the approval landed — including approval granted
+		// out-of-band via the label, which never touches the card.
+		as.retractArchitectureApproval(repo, issue)
 		log.Printf("autonomous: completed %s#%d — triggering cascade re-scan + promotion", repo, issue)
 
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
@@ -3323,14 +3327,24 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				detail = "architecture approval required — a human must approve this decision before feature-dev proceeds"
 			}
 			as.recordFailureLocked(repo, issue, title, now, detail)
-			log.Printf("autonomous: %s#%d architecture-approval-required (human decision point — sidelined to In review, no lifetime-cap increment, queue continues) — %s",
+			log.Printf("autonomous: %s#%d architecture-approval-required (human decision point — sidelined to In review, no lifetime-cap increment, no consecutive-failure increment, queue continues) — %s",
 				repo, issue, detail)
-			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
-				safetySnap := as.safetyRails.State()
-				as.state.Safety = &safetySnap
-			}
+			// Deliberately NOT RecordCompletion(success=false): that increments
+			// SafetyRails.ConsecutiveFailures, a SECOND breaker independent of
+			// the cascade tracker. Exempting the lifetime cap and the cascade
+			// feed but not this one still stops the fleet — three issues queued
+			// behind one un-reviewed epic tripped `safety:rail-check` at max 3
+			// and halted every unrelated repo, which is the same whole-workspace
+			// stop by another route. A run awaiting a human is neither a success
+			// nor a failure for rail purposes, so the counter is left untouched
+			// rather than reset — a real failure before and after this halt must
+			// still add up.
 			as.persistStateLocked()
+			// The card is the way back in: the gate is deliberately exempt from
+			// auto_accept_stages, so nothing but a human resolving this will
+			// requeue the issue. Raised after persistState so the record and the
+			// card cannot disagree about the issue's state.
+			as.raiseArchitectureApproval(repo, issue, title, detail)
 			go as.moveIssueToInReview(repo, issue)
 			select {
 			case as.rescanCh <- struct{}{}:

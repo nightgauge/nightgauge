@@ -99,6 +99,41 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 	}
 }
 
+// TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail is the regression
+// for the SECOND breaker. Exempting the lifetime cap and the cascade tracker was
+// not enough: SafetyRails.ConsecutiveFailures is independent, and three issues
+// queued behind one un-reviewed epic tripped `safety:rail-check` at max 3,
+// halting every unrelated repo — the same whole-workspace stop by another route.
+//
+// Observed in production after the first fix shipped: #1181, #1182 and #1185 all
+// hit the gate, and the fleet stopped despite four other issues completing fine.
+func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
+	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+	as.state.LifetimeIssueFailures = map[string]int{}
+	as.perIssueFailureCount = map[string]int{}
+	as.retryBackoff = map[string]time.Time{}
+	// Wire real rails: the cascade fixture leaves them nil, and a skipped test
+	// would assert nothing about the breaker that actually stopped the fleet.
+	as.safetyRails = NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
+
+	before := as.safetyRails.State().ConsecutiveFailures
+
+	for i, num := range []int{900, 901, 902, 903} {
+		addRunning(as, "acme/platform", num, "awaiting architecture approval")
+		as.onPipelineComplete("acme/platform", num, false, false,
+			TerminalKindArchitectureApprovalRequired,
+			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		if got := as.safetyRails.State().ConsecutiveFailures; got != before {
+			t.Fatalf("after %d approval halt(s): ConsecutiveFailures = %d, want %d unchanged — "+
+				"a run awaiting a human is not a factory failure", i+1, got, before)
+		}
+	}
+
+	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
+		t.Errorf("status = %q after 4 approval halts, want the fleet still running", as.state.Status)
+	}
+}
+
 // TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies is the
 // defense-in-depth contract: an IPC caller that passes terminalFailureKind=""
 // but whose failureDetail carries the gate text must still route to the

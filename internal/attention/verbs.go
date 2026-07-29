@@ -48,6 +48,20 @@ const (
 	// model tier for the retry.
 	VerbRunRetryWithEscalation Verb = "run.retryWithEscalation"
 
+	// VerbIssueApproveArchitecture grants the architecture-approval gate
+	// (#4098/#4222) for one issue: it applies the configured approval label
+	// (default `approved:architecture`, idempotent — an existing label is
+	// reused, never duplicated), clears the issue's failure cooldown, and
+	// requeues it so the next run passes the gate instead of re-halting.
+	//
+	// This is the first verb that mutates labels. That is deliberate and
+	// bounded: the label name is not caller-supplied — it is resolved from
+	// pipeline.architecture_approval.approval_label on the daemon side — so a
+	// surface can request "approve THIS issue's architecture" and nothing else.
+	// It cannot name an arbitrary label, and the args carry only owner/repo/
+	// issue, which the producer already declared.
+	VerbIssueApproveArchitecture Verb = "issue.approveArchitecture"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -68,6 +82,7 @@ var registry = map[Verb]struct{}{
 	VerbIssueClose:                   {},
 	VerbBudgetRaiseCeiling:           {},
 	VerbRunRetryWithEscalation:       {},
+	VerbIssueApproveArchitecture:     {},
 	VerbNoop:                         {},
 }
 
