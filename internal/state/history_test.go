@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
 )
 
 func TestHistoryWriteAndRead(t *testing.T) {
@@ -367,6 +369,40 @@ func TestBuildV2Record_IssueBody(t *testing.T) {
 	long := hw.BuildV2Record(rs, true, "", V2RunInput{Body: strings.Repeat("x", v2RunBodyMax+500)}, now)
 	if got := len([]rune(long.Body)); got != v2RunBodyMax {
 		t.Errorf("clipped Body len = %d, want %d", got, v2RunBodyMax)
+	}
+}
+
+// TestBuildV2Record_ToolCallsSurviveIntoRecord verifies the run's aggregated
+// tool-call log threads verbatim from V2RunInput.ToolCalls onto
+// V2RunRecord.ToolCalls, and that RunID/Repo are populated on the same
+// record (Issue #144 AC #3/#4).
+func TestBuildV2Record_ToolCallsSurviveIntoRecord(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 144, "item-toolcalls")
+	rs.RunID = "01966b4c-0000-7000-a000-000000000144"
+
+	toolCalls := []diagnostics.ToolCallRecord{
+		{Tool: "Read", Target: "internal/state/history.go", Stage: "feature-dev", Timestamp: "2026-07-29T00:00:00Z"},
+		{Tool: "Edit", Target: "internal/state/history.go", Stage: "feature-dev", DurationMs: 42, Result: "ok"},
+		{Tool: "Bash", Target: "go build ./...", Stage: "feature-validate", Error: "exit 1"},
+	}
+
+	rec := hw.BuildV2Record(rs, true, "", V2RunInput{ToolCalls: toolCalls}, now)
+
+	if len(rec.ToolCalls) != len(toolCalls) {
+		t.Fatalf("ToolCalls len = %d, want %d", len(rec.ToolCalls), len(toolCalls))
+	}
+	for i, want := range toolCalls {
+		if rec.ToolCalls[i] != want {
+			t.Errorf("ToolCalls[%d] = %+v, want %+v", i, rec.ToolCalls[i], want)
+		}
+	}
+	if rec.RunID == "" {
+		t.Error("RunID should be non-empty")
+	}
+	if rec.Repo == "" {
+		t.Error("Repo should be non-empty")
 	}
 }
 

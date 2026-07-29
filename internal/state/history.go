@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/history"
 )
 
@@ -122,7 +123,13 @@ type V2RunRecord struct {
 	// grading engine (Issue #4173), when this run was graded. Absent for ordinary
 	// (ungraded) pipeline runs. Additive `omitempty`.
 	QualityScore *float64 `json:"quality_score,omitempty"`
-	RecordedAt   string   `json:"recorded_at"`
+	// ToolCalls is the run's aggregated per-tool call log (every tool_use/
+	// tool_result pair observed across all stages), forwarded from the TS
+	// SkillRunner via pipeline.stageResult and accumulated in RuntimeState.
+	// Issue #144 — restores tool-call visibility lost when the second
+	// (non-authoritative) TS-side history writer was removed in #143.
+	ToolCalls  []diagnostics.ToolCallRecord `json:"tool_calls,omitempty"`
+	RecordedAt string                       `json:"recorded_at"`
 }
 
 // RecoveryEvent is one Recovery Dialog interaction. Issue #3239.
@@ -438,6 +445,10 @@ type V2RunInput struct {
 	// ordinary runs — omitempty drops it on the wire. Callers derive it with
 	// orchestrator.OutcomeTypeForTerminalFailure(errMsg).
 	OutcomeType string
+	// ToolCalls is the run's aggregated per-tool call log (Issue #144), sourced
+	// from RuntimeState.ToolCalls at the call site. Copied verbatim onto
+	// V2RunRecord.ToolCalls by BuildV2Record.
+	ToolCalls []diagnostics.ToolCallRecord
 }
 
 // dirCoordinator serializes and de-duplicates run-record writes for a single
@@ -925,6 +936,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		OutcomeType:         input.OutcomeType,
 		PerformanceMode:     dominantPerformanceMode(stages),
 		RecordedAt:          now.Format(time.RFC3339),
+		ToolCalls:           input.ToolCalls,
 	}
 	// Set the canonical tries-until-green only when the run actually retried,
 	// escalated, or looped — a clean run omits it (readers default to 1). #4172.

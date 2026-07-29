@@ -25,6 +25,7 @@ import {
   type ErrorCategory,
   type RateLimitEventData,
   type RecentBashEntry,
+  type ToolCallLogEntry,
 } from "../utils/skillRunner";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
@@ -160,6 +161,12 @@ export interface StageResult {
   stopHookErrored?: boolean;
   /** Last 4 KB of stderr from the SkillRunner ring buffer. */
   stderrTail?: string;
+  /**
+   * The stage's bounded all-tools call log (Issue #144) — every tool_use/
+   * tool_result pair, not just Bash. Forwarded to Go via
+   * pipeline.stageResult for the authoritative history record.
+   */
+  toolCalls?: ToolCallLogEntry[];
 
   // ── #91 served-model attribution ─────────────────────────────────────────
 
@@ -467,6 +474,7 @@ export class SkillRunner {
               recentBash: result.recentBash,
               stopHookErrored: result.stopHookErrored,
               stderrTail: result.stderrTail,
+              toolCalls: result.toolCalls,
               // ── #91 served-model attribution forwarding ────────────
               servedModel: result.servedModel,
               refusalFallbackFrom: result.modelRefusalFallback?.originalModel,

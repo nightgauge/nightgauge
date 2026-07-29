@@ -433,6 +433,17 @@ export interface SkillRunResult {
    */
   stderrTail?: string;
   /**
+   * The stage's bounded all-tools call log (Issue #144) — every tool_use/
+   * tool_result pair observed in the stream, not just Bash. Superset of
+   * `recentBash`. Forwarded to Go via pipeline.stageResult so the
+   * Go-authoritative history record carries per-run tool-call visibility
+   * (restores what the deleted second TS history writer used to provide,
+   * #143, without reintroducing a second writer). Wire shape matches
+   * ToolCallRecordSchema exactly (snake_case `duration_ms`, ISO string
+   * timestamp) since this crosses the IPC boundary as JSON.
+   */
+  toolCalls?: ToolCallLogEntry[];
+  /**
    * The model that actually served the stage per the CLI stream — the LAST
    * model observed on system/init, assistant `message.model`, or a refusal
    * fallback event. Undefined when the stream carried no model info. The
@@ -1397,6 +1408,96 @@ export class RecentBashRing {
   get size(): number {
     return this.entries.length;
   }
+}
+
+/** How many tool calls the per-stage all-tools log retains (Issue #144). */
+export const TOOL_CALL_LOG_MAX_ENTRIES = 200;
+
+/**
+ * One observed tool_use/tool_result pair, in the wire shape the
+ * ToolCallRecordSchema expects on `pipeline.stageResult` and, ultimately, the
+ * persisted V2RunRecord.tool_calls array — snake_case `duration_ms`, ISO
+ * string timestamp — NOT the Dashboard's in-memory `Date`-typed
+ * `ToolCallEntry`. This crosses the IPC boundary as JSON, so it must match
+ * the schema exactly rather than the UI-local shape. (#144)
+ */
+export interface ToolCallLogEntry {
+  tool: string;
+  target?: string;
+  timestamp?: string;
+  duration_ms?: number;
+  result?: string;
+  error?: string;
+}
+
+/**
+ * Bounded, all-tools call log for a single stage (Issue #144).
+ *
+ * Same observe/correlate/bound shape as {@link RecentBashRing} but without
+ * the Bash-only filter — every tool_use/tool_result pair is captured, not
+ * just Bash. Restores the tool-call visibility that the deleted
+ * `Dashboard.writeBackupHistoryRecord` used to provide (#143), threaded
+ * instead through the existing Go-authoritative `pipeline.stageResult`
+ * channel rather than a second history writer.
+ */
+export class ToolCallLog {
+  private readonly entries: ToolCallLogEntry[] = [];
+  private readonly byId = new Map<string, ToolCallLogEntry>();
+
+  /** Record a tool_use for any tool. No-op for calls with no toolName. */
+  observeToolUse(toolName: string, toolInput: unknown, toolUseId?: string): void {
+    if (!toolName) return;
+    if (toolUseId !== undefined && this.byId.has(toolUseId)) return;
+
+    const entry: ToolCallLogEntry = {
+      tool: toolName,
+      target: extractToolTarget(toolInput),
+      timestamp: new Date().toISOString(),
+    };
+    this.entries.push(entry);
+    if (toolUseId !== undefined) this.byId.set(toolUseId, entry);
+
+    while (this.entries.length > TOOL_CALL_LOG_MAX_ENTRIES) {
+      const evicted = this.entries.shift();
+      if (!evicted) break;
+      for (const [id, candidate] of this.byId) {
+        if (candidate === evicted) {
+          this.byId.delete(id);
+          break;
+        }
+      }
+    }
+  }
+
+  /** Bind a tool_result's outcome to the tool call that produced it. */
+  observeToolResult(toolUseId: string, isError: boolean, resultText?: string): void {
+    const entry = this.byId.get(toolUseId);
+    if (!entry) return;
+    entry.error = isError ? resultText || "error" : undefined;
+    entry.result = !isError ? resultText : undefined;
+  }
+
+  /** Oldest-first copy for serialisation. */
+  snapshot(): ToolCallLogEntry[] {
+    return this.entries.map((e) => ({ ...e }));
+  }
+
+  get size(): number {
+    return this.entries.length;
+  }
+}
+
+/**
+ * Best-effort target extraction shared with the Dashboard's live tool-call
+ * feed (see `SkillRunner.ts`'s `onToolCall` target derivation) — file_path,
+ * then command (truncated), then pattern, else undefined.
+ */
+function extractToolTarget(toolInput: unknown): string | undefined {
+  const input = toolInput as Record<string, unknown> | undefined;
+  if (typeof input?.file_path === "string") return input.file_path;
+  if (typeof input?.command === "string") return (input.command as string).substring(0, 100);
+  if (typeof input?.pattern === "string") return input.pattern;
+  return undefined;
 }
 
 // Claude Code stream-json emits a terminal envelope `{type:"result", is_error, result, subtype}`
@@ -3699,6 +3800,12 @@ export function runStageSkillHeadless(
   // `lastBashCommand` / `lastBashExit` are derived from its final entry at
   // build time, so those two fields keep their exact pre-#156 meaning.
   const recentBashRing = new RecentBashRing();
+  // All-tools call log (Issue #144) — same bounded/correlated pattern as
+  // recentBashRing but without the Bash-only filter, forwarded through
+  // pipeline.stageResult so the Go-authoritative history record regains the
+  // per-run tool-call visibility lost when the second TS writer was removed
+  // (#143).
+  const toolCallLog = new ToolCallLog();
   let stopHookErrored = false;
   // 4 KB stderr ring buffer (Issue #3605). Existing OUTPUT_ERROR_TAIL_MAX_CHARS
   // is 50 KB and serves the V3 record. The narrower 4 KB ring is purpose-built
@@ -4733,6 +4840,8 @@ export function runStageSkillHeadless(
     // flag later sets this entry's exit code, so a retro can answer "what was
     // it doing when it died?" without grepping the full session log.
     recentBashRing.observeToolUse(name, input, id);
+    // All-tools call log (Issue #144) — every tool, not just Bash.
+    toolCallLog.observeToolUse(name, input, id);
 
     callbacks?.onToolUse?.(name, input, id);
     // Dashboard tool-call recording (#639, #1031).
@@ -4980,6 +5089,14 @@ export function runStageSkillHeadless(
         // by id rather than by recency means a result that arrives after a
         // newer command started still lands on its own entry (#156).
         recentBashRing.observeToolResult(parsed.toolResult.toolUseId, parsed.toolResult.isError);
+        // All-tools call log (Issue #144).
+        toolCallLog.observeToolResult(
+          parsed.toolResult.toolUseId,
+          parsed.toolResult.isError,
+          typeof parsed.toolResult.content === "string"
+            ? parsed.toolResult.content.substring(0, 200)
+            : undefined
+        );
       }
 
       // Stage-exit diagnostic capture (Issue #3605): detect stop-hook errors
@@ -5329,6 +5446,10 @@ export function runStageSkillHeadless(
       recentBash: recentBashRing.size > 0 ? recentBashRing.snapshot() : undefined,
       stopHookErrored: stopHookErrored || undefined,
       stderrTail: exitStderrTail || undefined,
+      // All-tools call log (Issue #144). Superset of recentBash — covers
+      // every tool, forwarded verbatim through pipeline.stageResult to the
+      // Go-authoritative history record.
+      toolCalls: toolCallLog.size > 0 ? toolCallLog.snapshot() : undefined,
       // ── #91 served-model attribution ───────────────────────────────────
       // Only forwarded when it diverges from the requested model, so alias
       // canonicalization (e.g. "opus" → "claude-opus-4-8") still flows but

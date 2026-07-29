@@ -58,6 +58,29 @@ type RecentBashEntry struct {
 	Exit *int   `json:"exit,omitempty"`
 }
 
+// ToolCallRecord is one observed tool_use/tool_result pair, as captured by
+// the TS SkillRunner's stream parser for every tool (not just Bash). It
+// mirrors the TS ToolCallRecordSchema wire shape
+// (packages/nightgauge-vscode/src/schemas/executionHistory.ts) minus the
+// `args`/`caller` fields, which no reader consumes yet and which would add
+// unnecessary wire surface. Issue #144.
+//
+// JSON tags use snake_case (`duration_ms`) rather than this package's usual
+// camelCase IPC convention: this type crosses two boundaries that must agree
+// with each other — the pipeline.stageResult IPC payload (TS→Go) AND the
+// persisted V2RunRecord.tool_calls JSONL that the Dashboard's
+// ToolCallRecordSchema reads back — so it uses the schema's canonical wire
+// shape throughout instead of translating case at either boundary.
+type ToolCallRecord struct {
+	Tool       string `json:"tool"`
+	Target     string `json:"target,omitempty"`
+	Stage      string `json:"stage,omitempty"`
+	Timestamp  string `json:"timestamp,omitempty"`
+	DurationMs int    `json:"duration_ms,omitempty"`
+	Result     string `json:"result,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
 // StageExitRecord is the structured forensic payload written at every stage
 // exit (success OR failure). Optional fields are `omitempty` so a record from
 // a healthy run stays terse, and a partial capture (e.g. signal never raised)
