@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Web UI Verification Gate (Phase 2.45) runtime** — the chained
+  `nightgauge-verify-ui` skill now drives the browser with the Playwright CLI
+  (`@playwright/cli` via Bash) instead of the Playwright MCP server; the gate's
+  detect → start → drive → gate → teardown contract is unchanged.
+
 ## [1.18.0]
 
 ### Added

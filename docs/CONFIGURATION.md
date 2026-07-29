@@ -1499,12 +1499,12 @@ pipeline:
   stages:
     feature-dev:
       mcp_tools:
-        - mcp__playwright__*
+        - mcp__postgres__*
         - mcp__sentry__get_issue
     feature-validate:
       mcp_tools:
-        - mcp__playwright__browser_click
-        - mcp__playwright__browser_snapshot
+        - mcp__github__get_pull_request
+        - mcp__github__create_issue
 ```
 
 **Used by:**
@@ -2386,10 +2386,10 @@ pipeline:
       - mcp__sentry__capture_error
     stages:
       feature-dev:
-        - mcp__playwright__browser_navigate
-        - mcp__playwright__browser_snapshot
+        - mcp__postgres__query
+        - mcp__postgres__describe_table
       feature-validate:
-        - mcp__playwright__*
+        - mcp__github__*
 ```
 
 **Difference from `pipeline.stages.{stage}.mcp_tools`:** The older

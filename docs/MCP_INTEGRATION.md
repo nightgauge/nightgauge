@@ -193,33 +193,33 @@ allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion mcp__filesyst
 
 Each pipeline stage runs as an isolated subagent with its own `allowed-tools`
 list. This means you can grant MCP tools selectively — for example, allowing
-browser automation only during `feature-validate`, or database access only
-during `feature-dev`.
+database access only during `feature-dev`, or GitHub write access only during
+`pr-create`. (Browser automation is deliberately **not** MCP-based in this
+repo — see the note under Recipes below.)
 
 ### Stage-by-Stage Reference
 
-| Stage              | SKILL.md location                             | Common MCP additions          |
-| ------------------ | --------------------------------------------- | ----------------------------- |
-| `issue-pickup`     | `skills/nightgauge-issue-pickup/SKILL.md`     | project management tools      |
-| `feature-planning` | `skills/nightgauge-feature-planning/SKILL.md` | filesystem, docs search       |
-| `feature-dev`      | `skills/nightgauge-feature-dev/SKILL.md`      | filesystem, database, browser |
-| `feature-validate` | `skills/nightgauge-feature-validate/SKILL.md` | browser, test runners         |
-| `pr-create`        | `skills/nightgauge-pr-create/SKILL.md`        | GitHub, Slack notifications   |
-| `pr-merge`         | `skills/nightgauge-pr-merge/SKILL.md`         | GitHub, deployment hooks      |
+| Stage              | SKILL.md location                             | Common MCP additions        |
+| ------------------ | --------------------------------------------- | --------------------------- |
+| `issue-pickup`     | `skills/nightgauge-issue-pickup/SKILL.md`     | project management tools    |
+| `feature-planning` | `skills/nightgauge-feature-planning/SKILL.md` | filesystem, docs search     |
+| `feature-dev`      | `skills/nightgauge-feature-dev/SKILL.md`      | filesystem, database        |
+| `feature-validate` | `skills/nightgauge-feature-validate/SKILL.md` | test runners                |
+| `pr-create`        | `skills/nightgauge-pr-create/SKILL.md`        | GitHub, Slack notifications |
+| `pr-merge`         | `skills/nightgauge-pr-merge/SKILL.md`         | GitHub, deployment hooks    |
 
-### Example: Browser Automation in Validate Only
+### Example: Database Introspection in Feature-Dev Only
 
-In `skills/nightgauge-feature-validate/SKILL.md`:
+In `skills/nightgauge-feature-dev/SKILL.md`:
 
 ```yaml
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
-  mcp__playwright__browser_navigate mcp__playwright__browser_snapshot
-  mcp__playwright__browser_click
+  mcp__postgres__query mcp__postgres__describe_table
 ```
 
-All other stages keep their original `allowed-tools` list unchanged. The
-Playwright MCP server is started automatically by Claude CLI but only invocable
-by stages that list its tools.
+All other stages keep their original `allowed-tools` list unchanged. An MCP
+server configured in `.claude/settings.json` is started automatically by the
+Claude CLI but only invocable by stages that list its tools.
 
 ---
 
@@ -298,74 +298,19 @@ allowed-tools: Read Write Edit Glob Grep Bash Task mcp__github__create_issue
 
 ---
 
-### Playwright (`@playwright/mcp`)
+### Browser automation — Playwright CLI, not an MCP server
 
-Browser automation for E2E validation — navigate pages, take screenshots, click
-elements.
-
-**Install**
-
-```bash
-npm install -g @playwright/mcp
-npx playwright install chromium
-```
-
-**Configure in `.claude/settings.json`**
-
-```json
-{
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp", "--headless"]
-    }
-  }
-}
-```
-
-**Add to `feature-validate` SKILL.md only**
-
-```yaml
-allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
-  mcp__playwright__browser_navigate mcp__playwright__browser_snapshot
-  mcp__playwright__browser_click mcp__playwright__browser_fill_form
-  mcp__playwright__browser_take_screenshot
-```
-
-> **In this repo**, `feature-validate` does not carry Playwright tools
-> directly — it chains into `nightgauge-verify-ui` (Phase 2.45, #4193),
-> which owns the full `browser_*` tool set in its own `allowed-tools`. Add
-> Playwright tools straight to a stage's frontmatter only if you are wiring a
-> new, standalone browser-driven gate that isn't going through that skill.
-
-#### Console errors and Core Web Vitals (#4193)
-
-Two more Playwright MCP tools matter for gating on runtime behavior, not just
-DOM state:
-
-- `mcp__playwright__browser_console_messages` — returns console messages at a
-  given severity (`error`/`warning`/`info`/`debug`), scoped to **since the
-  last navigation** by default (`all: true` widens to the whole session).
-  Calling it twice with no navigation in between returns the _same_
-  accumulating list both times — to detect "a new error just from this step,"
-  diff the returned list against what you already captured, don't assume the
-  tool resets on each call.
-- `mcp__playwright__browser_evaluate` — runs arbitrary JS in the page and
-  returns the result (Promises are awaited). Verified empirically (#4193):
-  calling `performance.getEntriesByType('largest-contentful-paint')` or
-  `('layout-shift')` directly logs a `Deprecated API for given entry type`
-  console **warning** on every call — noise that would itself corrupt a
-  console-error diff. Use a buffered `PerformanceObserver` instead:
-  ```js
-  new Promise((resolve) => {
-    const obs = new PerformanceObserver((list) => resolve(list.getEntries()));
-    obs.observe({ type: "largest-contentful-paint", buffered: true });
-  });
-  ```
-  This returns the same entries with zero console noise — confirmed against a
-  live page during this issue's implementation. See
-  [skills/nightgauge-verify-ui/SKILL.md](../skills/nightgauge-verify-ui/SKILL.md)
-  Phase 2.5 for the full LCP/CLS measurement snippet.
+Browser automation in this repo is **not** MCP-based. The
+`nightgauge-verify-ui` skill (chained from `feature-validate` Phase 2.45)
+drives a persistent headless browser with the Playwright CLI
+([`@playwright/cli`](https://www.npmjs.com/package/@playwright/cli)) through
+plain Bash — `open` / `goto` / `click` / `fill` / `snapshot` / `screenshot` /
+`console` / `eval` / `close` — so no MCP server config and no
+`mcp__playwright__*` entries in any stage's `allowed-tools` are needed. See
+[skills/nightgauge-verify-ui/SKILL.md](../skills/nightgauge-verify-ui/SKILL.md)
+for the flow-driving mechanics, including the console-error baseline pattern
+(`console error` then `console error --clear` per step) and the Core Web
+Vitals `PerformanceObserver` snippet (#4193).
 
 ---
 
@@ -483,8 +428,8 @@ mcp__<server-name>__<tool-name>
 ```
 
 Where `<server-name>` is the key from your `mcpServers` config (e.g.,
-`filesystem`, `playwright`, `github`) and `<tool-name>` is the tool exposed by
-that server (e.g., `read_file`, `browser_navigate`, `create_pull_request`).
+`filesystem`, `postgres`, `github`) and `<tool-name>` is the tool exposed by
+that server (e.g., `read_file`, `query`, `create_pull_request`).
 
 To discover exact tool names for any server:
 
@@ -529,7 +474,7 @@ The server is not running or not configured. Check:
 ### Tool not in `allowed-tools`
 
 ```
-Tool mcp__playwright__browser_navigate is not in the allowed-tools list
+Tool mcp__github__create_issue is not in the allowed-tools list
 ```
 
 Add the tool name to the `allowed-tools` frontmatter in the relevant SKILL.md.
