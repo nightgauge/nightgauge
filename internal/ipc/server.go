@@ -3740,6 +3740,13 @@ func (s *Server) registerMethods() {
 			reason = "no reason provided"
 		}
 		s.autonomousScheduler.Pause(reason, triggeredBy)
+		// #148: a haltQueueOnSlotFailure pause is a terminal failure that
+		// needs a human decision, not just a status flip — raise the proper
+		// Action Center card so the operator sees why the fleet stopped
+		// instead of a misleading "Fleet idle" card one scan cycle later.
+		if triggeredBy == "haltQueueOnSlotFailure" && p.Repo != "" && p.IssueNumber != 0 {
+			s.autonomousScheduler.RaiseTerminalFailure(p.Repo, p.IssueNumber, p.Stage, p.TerminalKind, p.CostUsd)
+		}
 		return s.autonomousScheduler.Status(), nil
 	}
 

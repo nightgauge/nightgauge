@@ -164,11 +164,18 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
     await manager.settleForTest(3239);
 
     expect(mockAutonomousPause).toHaveBeenCalledTimes(1);
-    const [reason, triggeredBy] = mockAutonomousPause.mock.calls[0];
+    const [reason, triggeredBy, repo, issueNumber, stage] = mockAutonomousPause.mock.calls[0];
     expect(reason).toContain("haltQueueOnSlotFailure");
     expect(reason).toContain("3239");
     expect(reason).toContain("pr-merge");
     expect(triggeredBy).toBe("haltQueueOnSlotFailure");
+    // #148: structured fields must ride along so the Go-side pause handler
+    // can raise a proper terminal-failure Action Center card instead of the
+    // operator learning of the halt from a misleading "Fleet idle" card one
+    // scan cycle later.
+    expect(issueNumber).toBe(3239);
+    expect(stage).toBe("pr-merge");
+    expect(typeof repo).toBe("string");
   });
 
   it("does not call autonomousPause when Go autonomous is not running", async () => {

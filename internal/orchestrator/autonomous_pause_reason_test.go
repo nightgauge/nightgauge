@@ -224,3 +224,32 @@ func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
 		t.Error("PausedAt: want non-empty even when reason/triggeredBy were empty")
 	}
 }
+
+// TestShouldSuppressFleetIdle covers #148: the "Fleet idle — N promotable"
+// card must be suppressed ONLY for a haltQueueOnSlotFailure pause — a queue
+// halted on a real failure is not the same fact as an empty queue. Every
+// other pause (user-requested, a safety-rail trip, etc.) still gets the
+// honest fleet-idle card if the queue also happens to be empty; the guard
+// must not swallow every pause, only this specific one.
+func TestShouldSuppressFleetIdle(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      string
+		triggeredBy string
+		want        bool
+	}{
+		{"paused for haltQueueOnSlotFailure", "paused", "haltQueueOnSlotFailure", true},
+		{"paused by user", "paused", "user", false},
+		{"paused by safety rail", "paused", "safety:rate-limit", false},
+		{"paused with empty triggeredBy", "paused", "", false},
+		{"running with stale haltQueueOnSlotFailure tag", "running", "haltQueueOnSlotFailure", false},
+		{"safety_tripped, not paused", "safety_tripped", "haltQueueOnSlotFailure", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldSuppressFleetIdle(tc.status, tc.triggeredBy); got != tc.want {
+				t.Errorf("shouldSuppressFleetIdle(%q, %q) = %v, want %v", tc.status, tc.triggeredBy, got, tc.want)
+			}
+		})
+	}
+}

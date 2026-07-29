@@ -42,6 +42,7 @@ const (
 	producerOwnerActionHandoff  = "owner-action-handoff"
 	producerStuckEpic           = "watchdog-stuck-epic"
 	producerArchitectureApprove = "architecture-approval"
+	producerTerminalFailure     = "terminal-failure"
 )
 
 // keyWorkExhaustion is the fleet-idle condition's sticky identity. There is one
@@ -64,6 +65,12 @@ func keyStuckEpic(repo string, epic int) string {
 
 func keyArchitectureApproval(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerArchitectureApprove, repo, issue)
+}
+
+// keyTerminalFailure builds the sticky (producer, idempotency_key) identity
+// for the per-issue terminal-failure halt card (#148).
+func keyTerminalFailure(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerTerminalFailure, repo, issue)
 }
 
 // isBranchProtectionPunt reports whether a pr-merge punt reason is a
@@ -442,6 +449,134 @@ func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue in
 		observed = append(observed, r.IdempotencyKey)
 	}
 	as.autoResolveAttention(producerArchitectureApprove, observed)
+}
+
+// --- Producer 9: terminal failure halt (per-issue, fleet-blocking) ----------
+
+// RaiseTerminalFailure surfaces the terminal stage failure that caused
+// haltQueueOnSlotFailure to pause the whole fleet (#148).
+//
+// Before this, the pause recorded only PauseReason/PauseTriggeredBy on
+// AutonomousState — no card at all. One idle-scan cycle later
+// raiseWorkExhaustion fired a misleading "Fleet idle — N promotable" over the
+// top of it: a halted queue satisfies remaining==0 && running==0 exactly like
+// an empty one, so the operator's only card actively recommended the wrong
+// action.
+//
+// blocking_fleet, not blocking_run: haltQueueOnSlotFailure stops the whole
+// queue, not just this one issue. Exported so the IPC autonomous.pause
+// handler (internal/ipc/server.go) can raise it right after Pause() succeeds,
+// carrying whatever structured fields ConcurrentPipelineManager.
+// haltQueueOnSlotFailure had in scope at the call site.
+//
+// stage/terminalKind/costUSD degrade gracefully when empty/zero — the
+// terminating-stage cost plumbing (#146) has not landed on main yet, so the
+// card must not block on it.
+func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stage, terminalKind string, costUSD float64) {
+	if as == nil {
+		return
+	}
+	if stage == "" {
+		stage = "unknown"
+	}
+	if terminalKind == "" {
+		terminalKind = "unknown"
+	}
+
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	as.mu.Lock()
+	lifetimeFails := 0
+	if as.state != nil && as.state.LifetimeIssueFailures != nil {
+		lifetimeFails = as.state.LifetimeIssueFailures[key]
+	}
+	as.mu.Unlock()
+	attemptsRemaining := MaxLifetimeFailuresPerIssue - lifetimeFails
+	if attemptsRemaining < 0 {
+		attemptsRemaining = 0
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted the whole fleet — nothing else dispatches until this is resolved.\n\n", issue, stage, terminalKind))
+	if costUSD > 0 {
+		b.WriteString(fmt.Sprintf("Cost so far: $%.2f.\n\n", costUSD))
+	}
+	if attemptsRemaining > 0 {
+		b.WriteString(fmt.Sprintf("%d attempt(s) remain before the lifetime failure cap (%d) permanently blocks this issue.\n\n", attemptsRemaining, MaxLifetimeFailuresPerIssue))
+	} else {
+		b.WriteString(fmt.Sprintf("The lifetime failure cap (%d) has been reached — no further automatic retries will be accepted for this issue.\n\n", MaxLifetimeFailuresPerIssue))
+	}
+	b.WriteString("Retry clears the failure cooldown and re-runs the whole pipeline from issue-pickup — it re-derives work already committed to the branch, it does not resume mid-pipeline. Park leaves the fleet paused for manual triage.")
+
+	options := []attention.Option{
+		{ID: "retry", Label: "Retry", Verb: attention.VerbAutonomousClearIssueFailures,
+			Args: map[string]any{"key": key, "then": "autonomous.resume"}, Style: attention.StylePrimary},
+	}
+	if attemptsRemaining > 0 {
+		options = append(options, attention.Option{
+			ID: "retry-escalate", Label: "Retry with escalation", Verb: attention.VerbRunRetryWithEscalation,
+			Args: map[string]any{"key": key, "issueNumber": issue, "then": "autonomous.resume"}, Style: attention.StyleDefault,
+		})
+	}
+	options = append(options, noopOption("park", "Park — leave paused for manual triage"))
+
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyTerminalFailure(repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingFleet,
+		Title:          fmt.Sprintf("Fleet halted — #%d failed at %s", issue, stage),
+		Body:           b.String(),
+		Producer:       producerTerminalFailure,
+		Context:        attention.Context{Repo: repo, Issue: issue, Stage: stage, CostSoFarUSD: costUSD, Blocker: terminalKind},
+		Standing:       true,
+		// Material state: which issue, which stage, which terminal kind. No
+		// cost and no timestamp — cost moves as the run's own estimate
+		// refines and a moving fingerprint would re-alert every cycle
+		// (docs/ATTENTION_PRODUCERS.md invariant 2).
+		Fingerprint:   fmt.Sprintf("issue:%s#%d stage:%s kind:%s", repo, issue, stage, terminalKind),
+		Options:       options,
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what to fix before retrying"},
+	})
+}
+
+// reconcileTerminalFailureCards re-evaluates the terminal-failure halt
+// condition on the idle-scan cycle (#148). RaiseTerminalFailure fires once,
+// from the IPC pause handler, with fields this cycle has no way to
+// re-derive — so instead of re-raising every cycle, this keeps every open
+// terminal-failure card alive for as long as the fleet is still paused for
+// that reason, and retracts all of them the instant it is not (Resume()
+// cleared the pause, or a human resumed some other way). Mirrors the
+// standing-producer auto-resolve contract (docs/ATTENTION_PRODUCERS.md)
+// without needing AutonomousState to carry the raise-time fields again.
+//
+// Fail-open: a list error leaves existing cards untouched rather than
+// retracting them — invariant 1, "I could not look" is never "nothing is
+// wrong".
+func (as *AutonomousScheduler) reconcileTerminalFailureCards() {
+	if as == nil || as.attention == nil {
+		return
+	}
+	as.mu.Lock()
+	stillHalted := as.state != nil && as.state.Status == "paused" && as.state.PauseTriggeredBy == "haltQueueOnSlotFailure"
+	as.mu.Unlock()
+
+	if !stillHalted {
+		as.autoResolveAttention(producerTerminalFailure, nil)
+		return
+	}
+	reqs, err := as.attention.List(attention.ListFilter{})
+	if err != nil {
+		log.Printf("attention: list %q failed (fail-open): %v", producerTerminalFailure, err)
+		return
+	}
+	observed := make([]string, 0, len(reqs))
+	for _, r := range reqs {
+		if r.Producer == producerTerminalFailure {
+			observed = append(observed, r.IdempotencyKey)
+		}
+	}
+	as.autoResolveAttention(producerTerminalFailure, observed)
 }
 
 // --- Producer 8: watchdog / stuck-epic (per-epic) ----------------------------
