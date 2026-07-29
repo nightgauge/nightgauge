@@ -1103,6 +1103,19 @@ export class OutputWindowState {
   }
 
   /**
+   * Get the most recent entry written to a specific slot's stream (for
+   * per-slot separator detection). Falls back to null for slots with no
+   * entries yet. Issue #157.
+   */
+  getPreviousEntryForSlot(slotIndex: number): OutputEntry | null {
+    const buf = this.perSlotBuffers.get(slotIndex);
+    if (!buf || buf.length === 0) {
+      return null;
+    }
+    return buf[buf.length - 1];
+  }
+
+  /**
    * Get entries for a specific stage
    */
   getEntriesForStage(stage: PipelineStage): OutputEntry[] {
