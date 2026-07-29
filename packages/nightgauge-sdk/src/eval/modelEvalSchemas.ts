@@ -100,7 +100,7 @@ export const TokenRatesSchema = z
 export type TokenRates = z.infer<typeof TokenRatesSchema>;
 
 /**
- * Factual runtime properties of a model (#76).
+ * Factual runtime properties of a model (#77).
  *
  * Strictly things the provider documents and a reader could verify — no
  * judgment, no instructions. Behavioral GUIDANCE lives in skill overlays
@@ -160,7 +160,7 @@ export const ModelDescriptorSchema = z
     /** Research-preview model — excluded from default catalog/UI listings. */
     research_preview: z.boolean().optional(),
     /**
-     * Factual, vendor-documented runtime properties (#76). Optional — a model
+     * Factual, vendor-documented runtime properties (#77). Optional — a model
      * without it behaves exactly as before, and local models have no registry
      * entry at all. Facts only: never prose, never instructions.
      */

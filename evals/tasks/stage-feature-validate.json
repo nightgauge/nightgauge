@@ -1,6 +1,6 @@
 {
   "id": "stage-feature-validate",
-  "title": "Act as the feature-validate stage over a post-dev repository (#76 proxy)",
+  "title": "Act as the feature-validate stage over a post-dev repository (lean-variant proxy)",
   "job_class": "testing",
   "target_stages": ["feature-validate"],
   "difficulty": "medium",

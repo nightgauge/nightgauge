@@ -314,9 +314,10 @@ printf '<!-- phase:start name="self-assessment" index=22 total=23 stage="feature
 <!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->
 
 <!--
-  LEAN VARIANT (issue #76) — evals/skill-variants experiment.
-  Source: skills/nightgauge-feature-validate/SKILL.md — 581 lines.
-  Lean:   this file — 321 lines (55% of source).
-  Inventory: 23/23 phase markers, 6/6 shared includes, exit contract x2,
-  spike gate, gate-metric emissions preserved.
+  LEAN REWRITE — adopted 2026-07-13 on a measured composite-score win
+  (+1.8 Sonnet 5 / +1.6 Opus 4.8, no deterministic-check regressions),
+  replacing a 581-line predecessor at 55% of its size.
+  Measurement and decision rule: evals/skill-variants/feature-validate/README.md
+  Inventory preserved across the rewrite: 23/23 phase markers, 6/6 shared
+  includes, exit contract x2, spike gate, gate-metric emissions.
 -->

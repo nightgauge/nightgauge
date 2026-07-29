@@ -1,5 +1,8 @@
 /**
- * Issue #76 — pool the lean-variant A/B repetitions and print the decision table.
+ * Pool the lean feature-validate A/B repetitions and print the decision table.
+ *
+ * The `76-` prefix is the experiment's original tracker number, kept as a
+ * stable filename convention — it is not `nightgauge/nightgauge#76`.
  *
  * Reads every .nightgauge/model-evals/76-lean-r*.jsonl, concatenates the
  * ModelEvalRecords, and runs computeVariantDeltas over the pooled set (the
