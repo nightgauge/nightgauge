@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -545,5 +546,196 @@ func TestSatisfyRulesets_EmptyBlockers(t *testing.T) {
 	}
 	if len(resolved) != 0 {
 		t.Errorf("resolved = %v, want empty for empty blockers input", resolved)
+	}
+}
+
+// --- Bypass-aware blocker classification ---
+
+// rulesetPRResponse is a minimal OPEN PR on main, reused by the bypass tests.
+const rulesetPRResponse = `{"data":{"repository":{"pullRequest":{
+	"id":"PR_NODE_BYPASS",
+	"number":9,
+	"title":"Bypass PR",
+	"body":"",
+	"state":"OPEN",
+	"headRefName":"feat/bypass",
+	"baseRefName":"main",
+	"url":"https://github.com/o/r/pull/9",
+	"mergeable":"MERGEABLE",
+	"isDraft":false,
+	"reviewDecision":"",
+	"additions":0,"deletions":0,
+	"labels":{"nodes":[]},
+	"commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}
+}}}}`
+
+// bypassTestServer dispatches by path so the ruleset-detail lookup is
+// distinguishable from the branch-rules lookup. rulesetStatus/rulesetBody
+// control the /rulesets/{id} response.
+func bypassTestServer(t *testing.T, rules []branchRule, rulesetStatus int, rulesetBody string) *httptest.Server {
+	t.Helper()
+	rulesResp, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatalf("marshal rules: %v", err)
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/rulesets/"):
+			w.WriteHeader(rulesetStatus)
+			_, _ = w.Write([]byte(rulesetBody))
+		case strings.Contains(r.URL.Path, "/rules/branches/"):
+			_, _ = w.Write(rulesResp)
+		default:
+			_, _ = w.Write([]byte(rulesetPRResponse))
+		}
+	}))
+}
+
+// TestCheckRulesets_BypassableRuleIsNotABlocker is the regression for the
+// defect that killed a real run: the rules endpoint reports what is configured
+// on the branch, not what binds the caller. A required-review rule on a ruleset
+// the merging identity can bypass was reported as a hard blocker, and the
+// orchestrator promotes a hard blocker to a NON-RETRYABLE terminal failure —
+// so the run died, and spent the issue's lifetime budget, over a merge that
+// would have succeeded.
+func TestCheckRulesets_BypassableRuleIsNotABlocker(t *testing.T) {
+	srv := bypassTestServer(t,
+		[]branchRule{{
+			Type:      "pull_request",
+			RulesetID: 4242,
+			Parameters: &struct {
+				RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+				RequiredStatusChecks         []struct {
+					Context string `json:"context"`
+				} `json:"required_status_checks"`
+			}{RequiredApprovingReviewCount: 1},
+		}},
+		http.StatusOK,
+		`{"name":"main-branch-protection","current_user_can_bypass":"pull_requests_only"}`,
+	)
+	defer srv.Close()
+
+	svc := newRulesetServiceForTest(NewClientWithURL("test-token", srv.URL))
+	result, err := svc.CheckRulesets(context.Background(), "o", "r", 9)
+	if err != nil {
+		t.Fatalf("CheckRulesets: %v", err)
+	}
+
+	if len(result.Blockers) != 0 {
+		t.Errorf("Blockers = %v, want empty — the identity can bypass this ruleset", result.Blockers)
+	}
+	if !result.AllowedToMerge {
+		t.Error("AllowedToMerge = false, want true — a bypassable rule must not read as a hard block")
+	}
+	if len(result.BypassedRules) != 1 || result.BypassedRules[0] != "required_pull_request_reviews" {
+		t.Errorf("BypassedRules = %v, want [required_pull_request_reviews]", result.BypassedRules)
+	}
+	// Detection must still report it: "not binding on me" is not "not present".
+	if len(result.DetectedRules) != 1 || result.DetectedRules[0] != "required_pull_request_reviews" {
+		t.Errorf("DetectedRules = %v, want the rule still reported as detected", result.DetectedRules)
+	}
+}
+
+// TestCheckRulesets_NonBypassableRuleStillBlocks pins the other direction: when
+// GitHub says the caller can never bypass, the rule must keep blocking. A fix
+// that made everything bypassable would trade a false block for a false green.
+func TestCheckRulesets_NonBypassableRuleStillBlocks(t *testing.T) {
+	srv := bypassTestServer(t,
+		[]branchRule{{Type: "copilot_code_review", RulesetID: 77}},
+		http.StatusOK,
+		`{"name":"strict","current_user_can_bypass":"never"}`,
+	)
+	defer srv.Close()
+
+	svc := newRulesetServiceForTest(NewClientWithURL("test-token", srv.URL))
+	result, err := svc.CheckRulesets(context.Background(), "o", "r", 9)
+	if err != nil {
+		t.Fatalf("CheckRulesets: %v", err)
+	}
+
+	if len(result.Blockers) != 1 || result.Blockers[0] != "copilot_code_review" {
+		t.Errorf("Blockers = %v, want [copilot_code_review]", result.Blockers)
+	}
+	if result.AllowedToMerge {
+		t.Error("AllowedToMerge = true, want false — caller can never bypass this ruleset")
+	}
+	if len(result.BypassedRules) != 0 {
+		t.Errorf("BypassedRules = %v, want empty", result.BypassedRules)
+	}
+}
+
+// TestCheckRulesets_UnreadableRulesetKeepsBlocking asserts the conservative
+// direction on error: an unreadable ruleset is not evidence of a bypass, so the
+// rule keeps blocking — and the reason is surfaced in the message rather than
+// swallowed, since the same credentials just read the rules endpoint.
+func TestCheckRulesets_UnreadableRulesetKeepsBlocking(t *testing.T) {
+	srv := bypassTestServer(t,
+		[]branchRule{{Type: "copilot_code_review", RulesetID: 5}},
+		http.StatusForbidden,
+		`{"message":"Forbidden"}`,
+	)
+	defer srv.Close()
+
+	svc := newRulesetServiceForTest(NewClientWithURL("test-token", srv.URL))
+	result, err := svc.CheckRulesets(context.Background(), "o", "r", 9)
+	if err != nil {
+		t.Fatalf("CheckRulesets should not hard-fail when a ruleset is unreadable: %v", err)
+	}
+
+	if result.AllowedToMerge {
+		t.Error("AllowedToMerge = true, want false — an unreadable ruleset must not be assumed bypassable")
+	}
+	if !strings.Contains(result.Message, "bypass undetermined") {
+		t.Errorf("Message = %q, want it to surface that bypass could not be determined", result.Message)
+	}
+}
+
+// TestCheckRulesets_BypassResolvedOncePerRuleset guards the N+1: two rules from
+// one ruleset must cost one ruleset lookup, not two.
+func TestCheckRulesets_BypassResolvedOncePerRuleset(t *testing.T) {
+	rules := []branchRule{
+		{Type: "copilot_code_review", RulesetID: 31},
+		{Type: "pull_request", RulesetID: 31, Parameters: &struct {
+			RequiredApprovingReviewCount int `json:"required_approving_review_count"`
+			RequiredStatusChecks         []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		}{RequiredApprovingReviewCount: 2}},
+	}
+	rulesResp, err := json.Marshal(rules)
+	if err != nil {
+		t.Fatalf("marshal rules: %v", err)
+	}
+
+	var rulesetLookups int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/rulesets/"):
+			rulesetLookups++
+			_, _ = w.Write([]byte(`{"current_user_can_bypass":"always"}`))
+		case strings.Contains(r.URL.Path, "/rules/branches/"):
+			_, _ = w.Write(rulesResp)
+		default:
+			_, _ = w.Write([]byte(rulesetPRResponse))
+		}
+	}))
+	defer srv.Close()
+
+	svc := newRulesetServiceForTest(NewClientWithURL("test-token", srv.URL))
+	result, err := svc.CheckRulesets(context.Background(), "o", "r", 9)
+	if err != nil {
+		t.Fatalf("CheckRulesets: %v", err)
+	}
+
+	if rulesetLookups != 1 {
+		t.Errorf("ruleset lookups = %d, want 1 — bypass is per-ruleset and must be cached", rulesetLookups)
+	}
+	if !result.AllowedToMerge || len(result.Blockers) != 0 {
+		t.Errorf("AllowedToMerge=%v Blockers=%v, want merge allowed with no blockers", result.AllowedToMerge, result.Blockers)
+	}
+	if len(result.BypassedRules) != 2 {
+		t.Errorf("BypassedRules = %v, want both rules reported as bypassed", result.BypassedRules)
 	}
 }
