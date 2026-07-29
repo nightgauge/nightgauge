@@ -1075,6 +1075,24 @@ type AutonomousPauseParams struct {
 	// TriggeredBy is a structured tag identifying the caller, e.g. "user",
 	// "haltQueueOnSlotFailure", "safety:rate-limit".
 	TriggeredBy string `json:"triggeredBy,omitempty"`
+
+	// The fields below are additive (#148): populated only by the
+	// haltQueueOnSlotFailure call site so the pause can raise a proper
+	// terminal-failure Action Center card instead of leaving the operator to
+	// learn about the halt from a misleading "Fleet idle" card one scan cycle
+	// later. Every other caller keeps passing {reason, triggeredBy} only.
+
+	// Repo is "owner/name" for the issue that failed terminally.
+	Repo string `json:"repo,omitempty"`
+	// IssueNumber is the issue whose terminal failure triggered the halt.
+	IssueNumber int `json:"issueNumber,omitempty"`
+	// Stage is the pipeline stage that failed (e.g. "feature-dev").
+	Stage string `json:"stage,omitempty"`
+	// TerminalKind is the classified terminal failure kind.
+	TerminalKind string `json:"terminalKind,omitempty"`
+	// CostUsd is the run's estimated spend so far; omitted/zero degrades
+	// gracefully (the terminating-stage cost plumbing of #146 has not landed).
+	CostUsd float64 `json:"costUsd,omitempty"`
 }
 
 // AutonomousCompleteParams notifies the autonomous scheduler that a dispatched

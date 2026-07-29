@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,4 +422,142 @@ func TestProducerAuthFailureEmitsProvideInput(t *testing.T) {
 		t.Error("login-and-retry option must bind autonomous.clearIssueFailures")
 	}
 	assertSteerSet(t, r)
+}
+
+// --- Producer 9: terminal failure halt (#148) --------------------------------
+
+func TestProducerTerminalFailureEmitsUnblockBlockingFleet(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.RaiseTerminalFailure("octocat/acme", 42, "feature-dev", "validation_error", 3.25)
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Kind != attention.KindUnblock || r.Severity != attention.SeverityBlockingFleet {
+		t.Errorf("kind/severity = %q/%q, want unblock/blocking_fleet", r.Kind, r.Severity)
+	}
+	if !r.Standing {
+		t.Error("terminal-failure card must be Standing")
+	}
+	if r.Fingerprint == "" {
+		t.Error("standing card must declare a fingerprint")
+	}
+	retry := r.FindOption("retry")
+	if retry == nil || retry.Verb != attention.VerbAutonomousClearIssueFailures {
+		t.Error("retry option must bind autonomous.clearIssueFailures")
+	}
+	escalate := r.FindOption("retry-escalate")
+	if escalate == nil || escalate.Verb != attention.VerbRunRetryWithEscalation {
+		t.Error("retry-escalate option must bind run.retryWithEscalation when attempts remain")
+	}
+	park := r.FindOption("park")
+	if park == nil || park.Verb != attention.VerbNoop {
+		t.Error("park option must bind the noop verb")
+	}
+	if r.Context.Repo != "octocat/acme" || r.Context.Issue != 42 || r.Context.Stage != "feature-dev" {
+		t.Errorf("context = %+v, want repo/issue/stage populated", r.Context)
+	}
+	if r.Context.CostSoFarUSD != 3.25 {
+		t.Errorf("CostSoFarUSD = %v, want 3.25", r.Context.CostSoFarUSD)
+	}
+	assertSteerSet(t, r)
+}
+
+// TestProducerTerminalFailureDegradesGracefullyWithoutCost covers #146 not
+// having landed yet: an omitted/zero cost must not block the card, and the
+// body must not claim a spend that was never observed.
+func TestProducerTerminalFailureDegradesGracefullyWithoutCost(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.RaiseTerminalFailure("octocat/acme", 43, "pr-merge", "", 0)
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Context.CostSoFarUSD != 0 {
+		t.Errorf("CostSoFarUSD = %v, want 0", r.Context.CostSoFarUSD)
+	}
+	if strings.Contains(r.Body, "Cost so far") {
+		t.Error("body must not claim a cost figure when none was observed")
+	}
+	if r.Context.Stage != "pr-merge" {
+		t.Errorf("Stage = %q, want pr-merge", r.Context.Stage)
+	}
+}
+
+// TestProducerTerminalFailureNoEscalationWhenCapReached covers the lifetime
+// failure cap: once LifetimeIssueFailures reaches MaxLifetimeFailuresPerIssue,
+// offering "retry with escalation" would be dishonest — the next dispatch is
+// refused regardless, so only Retry and Park remain.
+func TestProducerTerminalFailureNoEscalationWhenCapReached(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.mu.Lock()
+	as.state.LifetimeIssueFailures = map[string]int{"octocat/acme#44": MaxLifetimeFailuresPerIssue}
+	as.mu.Unlock()
+
+	as.RaiseTerminalFailure("octocat/acme", 44, "feature-validate", "gate_failure", 0)
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.FindOption("retry-escalate") != nil {
+		t.Error("retry-escalate must not be offered once the lifetime failure cap is reached")
+	}
+	if r.FindOption("retry") == nil || r.FindOption("park") == nil {
+		t.Error("retry and park must still be offered")
+	}
+}
+
+// TestTerminalFailureReHaltNeverGrowsTheInbox mirrors
+// TestArchitectureApprovalReHaltNeverGrowsTheInbox: repeated raises for the
+// same issue collapse onto one card via the idempotency key.
+func TestTerminalFailureReHaltNeverGrowsTheInbox(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	for i := 0; i < 3; i++ {
+		as.RaiseTerminalFailure("octocat/acme", 45, "feature-dev", "validation_error", 1.0)
+	}
+	if reqs := openRequests(t, as); len(reqs) != 1 {
+		t.Fatalf("got %d requests after 3 re-halts, want 1", len(reqs))
+	}
+}
+
+// TestReconcileTerminalFailureCardsRetractsOnceResumed exercises the idle-scan
+// reconciliation loop directly (#148): the card raised at pause time must
+// survive every reconcile call while still halted for that reason, and must
+// be gone the instant Resume() clears the pause.
+func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.state.Status = "running"
+	as.Pause("haltQueueOnSlotFailure: issue #46 failed at feature-dev", "haltQueueOnSlotFailure")
+	as.RaiseTerminalFailure("octocat/acme", 46, "feature-dev", "validation_error", 2.0)
+
+	// Still halted: repeated reconciles must not retract the card.
+	as.reconcileTerminalFailureCards()
+	as.reconcileTerminalFailureCards()
+	if reqs := openRequests(t, as); len(reqs) != 1 {
+		t.Fatalf("card retracted while still halted: got %d requests, want 1", len(reqs))
+	}
+
+	// perIssueFailureCount/retryBackoff/etc. are required by Resume()'s reset
+	// logic elsewhere in the scheduler; nil maps here are fine since Resume()
+	// only ranges over them.
+	as.perIssueFailureCount = map[string]int{}
+	as.retryBackoff = map[string]time.Time{}
+	as.conflictRestartCount = map[string]int{}
+	as.refinementCooldown = map[string]time.Time{}
+	as.refinementFailures = map[string]int{}
+	as.Resume()
+	as.reconcileTerminalFailureCards()
+
+	reqs := openRequests(t, as)
+	for _, r := range reqs {
+		if r.Producer == producerTerminalFailure {
+			t.Errorf("terminal-failure card survived Resume(): %+v", r)
+		}
+	}
 }

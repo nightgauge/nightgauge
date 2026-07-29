@@ -2031,29 +2031,46 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	runningCount := len(as.state.Running)
 	as.mu.Unlock()
 
+	as.mu.Lock()
+	haltedForTerminalFailure := shouldSuppressFleetIdle(as.state.Status, as.state.PauseTriggeredBy)
+	as.mu.Unlock()
+
 	if remaining == 0 && runningCount == 0 {
 		log.Printf("autonomous: idle — no candidates or running pipelines, will re-scan next cycle")
 		// No-silent-stall watchdog (#4073): an idle cycle is exactly when an epic
 		// with open-but-blocked sub-issues and a silently-failed merge looks
 		// identical to "done". Surface any such epic with the blocking reason.
 		as.surfaceStuckEpics(ctx, graph)
-		// Action Center work-exhaustion producer (ADR 015 §F #1): the fleet is
-		// idle with nothing dispatchable — the motivating incident. Raise a
-		// fleet-scoped card so the operator can re-scan/promote from any surface
-		// instead of learning of it from a bare one-way "stopped" notice.
-		as.mu.Lock()
-		promotable := 0
-		for _, n := range as.state.LastRejectionReasons {
-			promotable += n
+		// #148: a queue halted on a terminal stage failure is NOT the same
+		// fact as an empty queue — both satisfy remaining==0 && running==0,
+		// but "N promotable, go add work" is false while the scheduler paused
+		// itself on purpose. The terminal-failure card (raised at pause time
+		// by the IPC handler) is the card that belongs here instead.
+		if haltedForTerminalFailure {
+			as.retractWorkExhaustion()
+		} else {
+			// Action Center work-exhaustion producer (ADR 015 §F #1): the fleet is
+			// idle with nothing dispatchable — the motivating incident. Raise a
+			// fleet-scoped card so the operator can re-scan/promote from any surface
+			// instead of learning of it from a bare one-way "stopped" notice.
+			as.mu.Lock()
+			promotable := 0
+			for _, n := range as.state.LastRejectionReasons {
+				promotable += n
+			}
+			as.mu.Unlock()
+			as.raiseWorkExhaustion(promotable)
 		}
-		as.mu.Unlock()
-		as.raiseWorkExhaustion(promotable)
 	} else {
 		// The fleet has work again. Idleness is a STANDING condition (#108), so
 		// the card is retracted rather than left to age out of its own TTL —
 		// this branch IS the successful observation that it is no longer true.
 		as.retractWorkExhaustion()
 	}
+
+	// #148: keep the terminal-failure card(s) alive while still halted for
+	// that reason, and retract them the instant the pause clears.
+	as.reconcileTerminalFailureCards()
 
 	// Action Center expiry sweep (ADR 015 §C): piggyback the periodic scan so no
 	// DecisionRequest lingers past its expires_at.
@@ -2063,6 +2080,18 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	if as.onCycleComplete != nil {
 		as.onCycleComplete()
 	}
+}
+
+// shouldSuppressFleetIdle reports whether the "Fleet idle — N promotable"
+// card should be suppressed in favor of the terminal-failure card (#148). A
+// halted queue and an empty queue both satisfy remaining==0 && running==0,
+// but "N promotable, go add work" is false while the scheduler paused itself
+// on purpose — so the guard must be specific to the haltQueueOnSlotFailure
+// pause, never every pause (a user-requested pause, a safety-rail trip, etc.
+// still get the honest "nothing to do" fleet-idle card if the queue happens
+// to also be empty).
+func shouldSuppressFleetIdle(status, pauseTriggeredBy string) bool {
+	return status == "paused" && pauseTriggeredBy == "haltQueueOnSlotFailure"
 }
 
 // CandidateItem is a prioritized item ready for dispatch.

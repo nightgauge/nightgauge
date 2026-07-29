@@ -1828,9 +1828,24 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         const status = await ipc.autonomousStatus();
         if (status.status === "running") {
           const failedStage = pipelineResult?.failedStage ?? "unknown";
+          // #148: pass structured fields through so the Go-side pause handler
+          // can raise a proper terminal-failure Action Center card instead of
+          // leaving the halt's cause undiscoverable until a misleading
+          // "Fleet idle" card fires one scan cycle later. None of the
+          // classified suppression branches above matched by this point, so
+          // this is a genuine, unclassified terminal failure. costUsd is
+          // best-effort (#146's terminating-stage cost plumbing hasn't
+          // landed) and degrades to omitted/zero on the card.
+          const pauseSlotState = await slot.stateService.getState().catch(() => null);
+          const pauseCostUsd = pauseSlotState?.tokens?.estimated_cost_usd ?? 0;
           await ipc.autonomousPause(
             `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`,
-            "haltQueueOnSlotFailure"
+            "haltQueueOnSlotFailure",
+            slot.repo ?? "",
+            slot.issueNumber,
+            failedStage,
+            "unclassified",
+            pauseCostUsd
           );
           autonomousPaused = true;
           this.logger.info("Autonomous mode paused after slot failure", {
