@@ -133,11 +133,15 @@ export class OutputWindow implements vscode.Disposable {
    */
   private activeQuestion: ActiveQuestionState | null = null;
 
+  /** Sentinel key for output not attributed to a concurrent slot (Issue #157). */
+  private static readonly NO_SLOT = -1;
+
   /**
-   * Current active tool indicator ID (Issue #170)
-   * Used to auto-complete previous indicator when new content arrives
+   * Current active tool indicator ID (Issue #170), keyed by slot index
+   * (Issue #157 — was a single scalar shared across concurrent slots).
+   * Used to auto-complete previous indicator when new content arrives.
    */
-  private currentActiveToolId: string | null = null;
+  private currentActiveToolId: Map<number, string | null> = new Map();
 
   /**
    * Last known pipeline running state (Issue #431)
@@ -146,17 +150,24 @@ export class OutputWindow implements vscode.Disposable {
   private lastPipelineRunning: boolean = false;
 
   /**
-   * Track whether the last appended line was blank (Issue #794)
-   * Used to collapse consecutive blank lines in output
+   * Track whether the last appended line was blank (Issue #794), keyed by
+   * slot index (Issue #157 — was a single scalar shared across concurrent
+   * slots). Used to collapse consecutive blank lines in output.
    */
-  private lastLineWasBlank: boolean = false;
+  private lastLineWasBlank: Map<number, boolean> = new Map();
 
   /**
-   * Buffer for consecutive reasoning lines (Issue #796)
-   * Flushed as a single collapsible entry when a substantive line arrives,
-   * a stage completes, or the output is cleared.
+   * Buffer for consecutive reasoning lines (Issue #796), keyed by slot
+   * index (Issue #157 — was a single scalar shared across concurrent
+   * slots). Flushed as a single collapsible entry when a substantive line
+   * arrives, a stage completes, or the output is cleared.
    */
-  private reasoningBuffer: string[] = [];
+  private reasoningBuffer: Map<number, string[]> = new Map();
+
+  /** Resolve the map key for a call's slot attribution (Issue #157). */
+  private slotKey(slotIndex?: number): number {
+    return slotIndex ?? OutputWindow.NO_SLOT;
+  }
 
   // Log replay state (Issue #1352)
   private hasReplayed = false;
@@ -732,24 +743,27 @@ export class OutputWindow implements vscode.Disposable {
    * as expandable details. No-op if buffer is empty.
    *
    * @param stage - Optional pipeline stage for context
+   * @param slotKey - The slot key (from {@link slotKey}) whose buffer to flush (Issue #157)
    */
-  private flushReasoningBuffer(stage?: PipelineStage): void {
-    if (this.reasoningBuffer.length === 0) {
+  private flushReasoningBuffer(stage: PipelineStage | undefined, slotKey: number): void {
+    const buffered = this.reasoningBuffer.get(slotKey);
+    if (!buffered || buffered.length === 0) {
       return;
     }
 
-    const count = this.reasoningBuffer.length;
+    const count = buffered.length;
     const summary = `▶ ${count} reasoning step${count !== 1 ? "s" : ""}`;
-    const details = this.reasoningBuffer.join("\n");
+    const details = buffered.join("\n");
 
     const entry = this.state.addEntry(summary, "info", stage, {
       collapsible: true,
       details,
+      slotIndex: slotKey !== OutputWindow.NO_SLOT ? slotKey : undefined,
     });
 
     this.postEntryToWebview(entry);
 
-    this.reasoningBuffer = [];
+    this.reasoningBuffer.set(slotKey, []);
   }
 
   /**
@@ -804,23 +818,30 @@ export class OutputWindow implements vscode.Disposable {
     // Collapse runs of 2+ blank lines within multi-line text to at most one
     text = text.replace(/\n{3,}/g, "\n\n");
 
+    // Resolve the per-slot state key once for this call (Issue #157) —
+    // routes blank-line suppression, reasoning buffering, and separator
+    // detection through the calling slot instead of shared global state.
+    const slotKey = this.slotKey(options?.slotIndex);
+
     // Suppress blank-only entries that follow another blank entry
     const isBlank = text.trim().length === 0;
-    if (isBlank && this.lastLineWasBlank) {
+    if (isBlank && this.lastLineWasBlank.get(slotKey)) {
       return;
     }
-    this.lastLineWasBlank = isBlank;
+    this.lastLineWasBlank.set(slotKey, isBlank);
 
     // Detect and buffer reasoning lines (Issue #796)
     // Check after ANSI stripping and blank normalization, before content type detection
     if (!isBlank && !options?.collapsible && isReasoningLine(text)) {
-      this.reasoningBuffer.push(text);
+      const buf = this.reasoningBuffer.get(slotKey) ?? [];
+      buf.push(text);
+      this.reasoningBuffer.set(slotKey, buf);
       return;
     }
 
     // Flush any buffered reasoning before adding a substantive line
-    if (!isBlank && this.reasoningBuffer.length > 0) {
-      this.flushReasoningBuffer(stage);
+    if (!isBlank && (this.reasoningBuffer.get(slotKey)?.length ?? 0) > 0) {
+      this.flushReasoningBuffer(stage, slotKey);
     }
 
     // Filter based on verbose level
@@ -837,7 +858,10 @@ export class OutputWindow implements vscode.Disposable {
       options?.slotIndex !== undefined
         ? (this.state.getSlotIssueNumber(options.slotIndex) ?? this.state.getIssueNumber())
         : this.state.getIssueNumber();
-    const previousEntry = this.state.getPreviousEntry();
+    const previousEntry =
+      options?.slotIndex !== undefined
+        ? this.state.getPreviousEntryForSlot(options.slotIndex)
+        : this.state.getPreviousEntry();
 
     if (
       issueNumber !== undefined &&
@@ -944,11 +968,15 @@ export class OutputWindow implements vscode.Disposable {
    *
    * @param toolData Structured tool call data from ToolCallIndicator
    * @param stage Optional pipeline stage for context
+   * @param slotIndex Optional slot index for concurrent pipeline routing (Issue #157)
    */
-  logToolIndicator(toolData: ToolCallData, stage?: PipelineStage): void {
+  logToolIndicator(toolData: ToolCallData, stage?: PipelineStage, slotIndex?: number): void {
+    const slotKey = this.slotKey(slotIndex);
+
     // Mark previous indicator as complete before adding new one (Issue #170)
-    if (this.currentActiveToolId) {
-      this.markToolComplete(this.currentActiveToolId);
+    const activeId = this.currentActiveToolId.get(slotKey);
+    if (activeId) {
+      this.markToolComplete(activeId);
     }
 
     // Add to aggregation for summary
@@ -962,6 +990,7 @@ export class OutputWindow implements vscode.Disposable {
       this.appendLine(formatToolIndicator(toolData), "tool", stage, {
         collapsible: !!details,
         details,
+        slotIndex,
       });
     }
 
@@ -979,7 +1008,7 @@ export class OutputWindow implements vscode.Disposable {
     }
 
     // Track new indicator as active (Issue #170)
-    this.currentActiveToolId = toolData.id;
+    this.currentActiveToolId.set(slotKey, toolData.id);
   }
 
   /**
@@ -998,12 +1027,17 @@ export class OutputWindow implements vscode.Disposable {
    *
    * Called when a stage completes to display aggregate tool usage.
    * Also marks the final active tool indicator as complete (Issue #170).
+   *
+   * @param slotIndex Optional slot index for concurrent pipeline routing (Issue #157)
    */
-  showToolSummary(): void {
+  showToolSummary(slotIndex?: number): void {
+    const slotKey = this.slotKey(slotIndex);
+
     // Mark final indicator as complete when stage ends (Issue #170)
-    if (this.currentActiveToolId) {
-      this.markToolComplete(this.currentActiveToolId);
-      this.currentActiveToolId = null;
+    const activeId = this.currentActiveToolId.get(slotKey);
+    if (activeId) {
+      this.markToolComplete(activeId);
+      this.currentActiveToolId.set(slotKey, null);
     }
 
     const summary = this.state.getToolSummary();
@@ -1030,7 +1064,7 @@ export class OutputWindow implements vscode.Disposable {
   updateStageStatus(stage: PipelineStage, status: StageStatus): void {
     // Flush reasoning buffer on stage completion (Issue #796)
     if (status === "complete" || status === "error" || status === "skipped") {
-      this.flushReasoningBuffer(stage);
+      this.flushReasoningBuffer(stage, OutputWindow.NO_SLOT);
     }
 
     // When a stage starts (or restarts), clear its previous output
@@ -1422,6 +1456,9 @@ export class OutputWindow implements vscode.Disposable {
     const activeSlot = this.state.getActiveSlotIndex();
     if (activeSlot !== null) {
       this.state.clearSlot(activeSlot);
+      this.currentActiveToolId.delete(activeSlot);
+      this.lastLineWasBlank.delete(activeSlot);
+      this.reasoningBuffer.delete(activeSlot);
       if (this.panel) {
         this.panel.webview.postMessage(createClearMessage());
       }
@@ -1437,9 +1474,9 @@ export class OutputWindow implements vscode.Disposable {
   clear(): void {
     this.hasReplayed = false; // Allow replay for next issue (Issue #1352)
     this.state.clear();
-    this.currentActiveToolId = null; // Reset tool indicator tracking (Issue #170)
-    this.lastLineWasBlank = false; // Reset blank line tracking (Issue #794)
-    this.reasoningBuffer = []; // Reset reasoning buffer (Issue #796)
+    this.currentActiveToolId.clear(); // Reset tool indicator tracking (Issue #170)
+    this.lastLineWasBlank.clear(); // Reset blank line tracking (Issue #794)
+    this.reasoningBuffer.clear(); // Reset reasoning buffer (Issue #796)
     if (this.panel) {
       this.panel.webview.postMessage(createClearMessage());
     }
