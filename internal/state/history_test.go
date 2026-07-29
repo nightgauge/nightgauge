@@ -811,6 +811,121 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 	}
 }
 
+// TestBuildV2Record_TerminatingStageTokensSurvive verifies that a stage which
+// crashed before reaching CompleteStage/CompleteStageWithCost still gets a
+// matching tokens.per_stage entry (and is included in estimated_cost_usd),
+// sourced from RuntimeState.TerminatingStageTokens (Issue #146).
+func TestBuildV2Record_TerminatingStageTokensSurvive(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-terminating")
+
+	// Simulate a normally-completed first stage.
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStageWithCost(0, 5000, 2000, 1500, 0.03)
+
+	// Simulate the terminating stage: it never reached CompleteStage (crash
+	// before that call), but its ground-truth tokens were captured via the
+	// same path writeStageExitRecord uses.
+	rs.BeginStage(StageFeatureDev)
+	rs.SetStageError(StageFeatureDev, "runaway_progress: stage killed")
+	rs.RecordTerminatingStageTokens(StageFeatureDev, 20000, 8000, 6000, 0.45)
+	rs.Stage = StageFeatureDev
+
+	record := hw.BuildV2Record(rs, false, "runaway_progress: stage killed", V2RunInput{}, now)
+
+	stageName := string(StageFeatureDev)
+	detail, ok := record.Stages[stageName]
+	if !ok || detail.Status != "failed" {
+		t.Fatalf("Stages[%q] = %+v, ok=%v; want failed status", stageName, detail, ok)
+	}
+
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q; want synthesized entry from TerminatingStageTokens", stageName)
+	}
+	if tok.CostUSD != 0.45 {
+		t.Errorf("PerStage[%q].CostUSD = %f, want 0.45", stageName, tok.CostUSD)
+	}
+	wantInput := 20000 - 6000
+	if tok.Input != wantInput {
+		t.Errorf("PerStage[%q].Input = %d, want %d", stageName, tok.Input, wantInput)
+	}
+	if tok.Output != 8000 {
+		t.Errorf("PerStage[%q].Output = %d, want 8000", stageName, tok.Output)
+	}
+	if tok.CacheRead != 6000 {
+		t.Errorf("PerStage[%q].CacheRead = %d, want 6000", stageName, tok.CacheRead)
+	}
+
+	wantCost := 0.03 + 0.45
+	if record.Tokens.EstimatedCostUSD < wantCost-0.0001 || record.Tokens.EstimatedCostUSD > wantCost+0.0001 {
+		t.Errorf("EstimatedCostUSD = %f, want ~%f (includes terminating stage's cost)", record.Tokens.EstimatedCostUSD, wantCost)
+	}
+}
+
+// TestBuildV2Record_BacktrackedStageAccumulates pins the sharp edge created by
+// sourcing run totals from the per-stage map: that map is keyed by stage name,
+// but CompletedStages is an append-only slice in which one stage legitimately
+// appears twice when the retry/backtrack engine rewinds to it. If the map is
+// assigned rather than accumulated, the earlier attempt's spend vanishes from
+// BOTH tokens.per_stage and estimated_cost_usd — biasing calibration low on
+// precisely the runs that cost the most, which is the defect Issue #146 exists
+// to remove.
+func TestBuildV2Record_BacktrackedStageAccumulates(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-backtrack")
+
+	// feature-dev runs, feature-validate rejects the work, and the backtrack
+	// engine rewinds to feature-dev — which then runs a second time.
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 10000, 4000, 3000, 0.20)
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(0, 2000, 500, 1000, 0.02)
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 12000, 5000, 4000, 0.25)
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	devName := string(StageFeatureDev)
+	tok, ok := record.Tokens.PerStage[devName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", devName)
+	}
+
+	// Both attempts, summed — not just the last. CompleteStageWithCost takes
+	// NON-cached input and folds cache_read in itself, so the per-stage Input
+	// here is simply the two non-cached figures added together.
+	if wantInput := 10000 + 12000; tok.Input != wantInput {
+		t.Errorf("PerStage[%q].Input = %d, want %d (both attempts)", devName, tok.Input, wantInput)
+	}
+	if tok.Output != 4000+5000 {
+		t.Errorf("PerStage[%q].Output = %d, want %d (both attempts)", devName, tok.Output, 4000+5000)
+	}
+	if tok.CacheRead != 3000+4000 {
+		t.Errorf("PerStage[%q].CacheRead = %d, want %d (both attempts)", devName, tok.CacheRead, 3000+4000)
+	}
+	if wantStageCost := 0.20 + 0.25; tok.CostUSD < wantStageCost-0.0001 || tok.CostUSD > wantStageCost+0.0001 {
+		t.Errorf("PerStage[%q].CostUSD = %f, want ~%f (both attempts) — the first attempt's spend was dropped", devName, tok.CostUSD, wantStageCost)
+	}
+
+	// The cache hit rate must describe the whole stage, not its final attempt.
+	if tok.CacheHitRate == nil {
+		t.Fatalf("PerStage[%q].CacheHitRate = nil, want a rate over the accumulated totals", devName)
+	}
+	wantRate := float64(3000+4000) / float64((10000+12000)+(3000+4000))
+	if *tok.CacheHitRate < wantRate-0.0001 || *tok.CacheHitRate > wantRate+0.0001 {
+		t.Errorf("PerStage[%q].CacheHitRate = %f, want ~%f", devName, *tok.CacheHitRate, wantRate)
+	}
+
+	// Run total covers every attempt of every stage.
+	wantTotal := 0.20 + 0.02 + 0.25
+	if record.Tokens.EstimatedCostUSD < wantTotal-0.0001 || record.Tokens.EstimatedCostUSD > wantTotal+0.0001 {
+		t.Errorf("EstimatedCostUSD = %f, want ~%f — a backtracked run must not under-report", record.Tokens.EstimatedCostUSD, wantTotal)
+	}
+}
+
 func TestExtractSizeFromLabels(t *testing.T) {
 	tests := []struct {
 		name   string

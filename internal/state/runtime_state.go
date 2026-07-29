@@ -184,6 +184,18 @@ type RuntimeState struct {
 	// V2StageDetail.RecoveryAttempts. Older state files omit this map; readers
 	// default to nil/empty.
 	StageRecoveryAttempts map[string][]RecoveryAttempt `json:"stageRecoveryAttempts,omitempty"`
+
+	// TerminatingStageTokens captures the ground-truth token/cost data for a
+	// stage that failed before reaching CompleteStage/CompleteStageWithCost
+	// (Issue #146). Keyed by stage name, set from the same
+	// inputTokens/outputTokens/cacheReadTokens/actualCostUsd locals already
+	// passed to writeStageExitRecord on the failure path. BuildV2Record's
+	// failed-stage synthesis branch reads this map to populate the missing
+	// tokens.per_stage entry for a stage that is present in `stages` but
+	// absent from CompletedStages, mirroring StageOutputTails/ToolCalls
+	// (#3001, #144) — data recorded independently of CompletedStages so it
+	// survives the stage never completing normally.
+	TerminatingStageTokens map[string]StageResult `json:"terminatingStageTokens,omitempty"`
 }
 
 // StageOutputBufferLineLimit caps each captured tail at this many lines
@@ -519,6 +531,26 @@ func (rs *RuntimeState) RecordStageOutputTail(stage PipelineStage, raw string) {
 		rs.StageOutputTails = make(map[string]string)
 	}
 	rs.StageOutputTails[string(stage)] = tail
+}
+
+// RecordTerminatingStageTokens stores the ground-truth token/cost data for a
+// stage on the failure path, so BuildV2Record's synthesis branch can populate
+// tokens.per_stage even when the stage never reached CompleteStage (Issue
+// #146). A multi-attempt run's most recent record for a stage wins.
+func (rs *RuntimeState) RecordTerminatingStageTokens(stage PipelineStage, inputTokens, outputTokens, cacheReadTokens int, actualCostUsd float64) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.TerminatingStageTokens == nil {
+		rs.TerminatingStageTokens = make(map[string]StageResult)
+	}
+	rs.TerminatingStageTokens[string(stage)] = StageResult{
+		Stage:        stage,
+		ExitCode:     -1,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		CacheRead:    cacheReadTokens,
+		CostUSD:      actualCostUsd,
+	}
 }
 
 // RecordToolCalls appends a stage's tool-call log onto the run-level
@@ -1063,6 +1095,12 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 			copied := make([]RecoveryAttempt, len(v))
 			copy(copied, v)
 			snap.StageRecoveryAttempts[k] = copied
+		}
+	}
+	if len(rs.TerminatingStageTokens) > 0 {
+		snap.TerminatingStageTokens = make(map[string]StageResult, len(rs.TerminatingStageTokens))
+		for k, v := range rs.TerminatingStageTokens {
+			snap.TerminatingStageTokens[k] = v
 		}
 	}
 	return snap

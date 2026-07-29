@@ -646,16 +646,19 @@ func (hw *HistoryWriter) seedSeenLocked(c *dirCoordinator) {
 	}
 }
 
-// computeAccumulatedTokens sums token metrics across all completed stages.
-// Using per-stage data as the source of truth ensures interim records (written
-// after a partial pipeline) show correct accumulated totals instead of reading
-// from global accumulators that may not yet reflect all completed stages.
-func computeAccumulatedTokens(stages []StageResult) (input, output, cacheRead int, costUSD float64) {
-	for _, s := range stages {
-		input += s.InputTokens // combined: actual input + cache read
-		output += s.OutputTokens
-		cacheRead += s.CacheRead
-		costUSD += s.CostUSD
+// computeAccumulatedTokens sums token metrics across the final per-stage
+// token map — including any stage entries synthesized on the failure path
+// (Issue #146) — rather than snap.CompletedStages, so totals and per-stage
+// entries can never diverge. Using per-stage data as the source of truth
+// ensures interim records (written after a partial pipeline) show correct
+// accumulated totals instead of reading from global accumulators that may not
+// yet reflect all completed stages.
+func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead int, costUSD float64) {
+	for _, t := range perStageTokens {
+		input += t.Input + t.CacheRead // Input is non-cached; combined matches StageResult.InputTokens semantics
+		output += t.Output
+		cacheRead += t.CacheRead
+		costUSD += t.CostUSD
 	}
 	return
 }
@@ -743,14 +746,6 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 
 		stages[stageName] = detail
 
-		// Compute per-stage cache hit rate: cache_read / (input + cache_read)
-		// sr.InputTokens is the combined value (actual input + cache_read).
-		var cacheHitRate *float64
-		if sr.InputTokens > 0 {
-			rate := float64(sr.CacheRead) / float64(sr.InputTokens)
-			cacheHitRate = &rate
-		}
-
 		// Issue #3224: prefer per-stage adapter recorded by the resolver
 		// (#3221), falling back to the run-level default when absent. Empty
 		// string is left as-is so omitempty drops the key on the wire.
@@ -759,15 +754,34 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			stageAdapter = input.DefaultAdapter
 		}
 
-		perStageTokens[stageName] = V2StageTokens{
-			Input:         sr.InputTokens - sr.CacheRead, // actual non-cached input tokens
-			Output:        sr.OutputTokens,
-			CacheRead:     sr.CacheRead,
-			CacheCreation: 0, // not tracked per stage — only available at run level via execution stream
-			CostUSD:       sr.CostUSD,
-			CacheHitRate:  cacheHitRate,
-			Adapter:       stageAdapter,
+		// ACCUMULATE, never assign. CompletedStages is an append-only slice and
+		// one stage can land in it more than once: the retry/backtrack engine
+		// rewinds to an earlier stage (scheduler.go, "Evaluate backtrack
+		// signals"), and completeStageInternal's dedup guard only suppresses a
+		// repeat with an identical StageStart — a genuine second attempt gets a
+		// fresh StageStart and appends. Assigning into a map keyed by stage name
+		// would keep only the final attempt, and since the run totals are now
+		// summed from THIS map, every earlier attempt's spend would disappear
+		// from estimated_cost_usd — reintroducing the bias-calibration-low
+		// defect this issue exists to remove, on exactly the expensive runs
+		// (the ones that had to backtrack) where accuracy matters most.
+		acc := perStageTokens[stageName]
+		acc.Input += sr.InputTokens - sr.CacheRead // actual non-cached input tokens
+		acc.Output += sr.OutputTokens
+		acc.CacheRead += sr.CacheRead
+		acc.CacheCreation = 0 // not tracked per stage — only available at run level via execution stream
+		acc.CostUSD += sr.CostUSD
+		acc.Adapter = stageAdapter
+
+		// Cache hit rate: cache_read / (input + cache_read), recomputed from the
+		// accumulated totals so it describes the stage as a whole rather than
+		// only its last attempt.
+		if combined := acc.Input + acc.CacheRead; combined > 0 {
+			rate := float64(acc.CacheRead) / float64(combined)
+			acc.CacheHitRate = &rate
 		}
+
+		perStageTokens[stageName] = acc
 	}
 
 	for _, skipped := range snap.SkippedStages {
@@ -794,6 +808,31 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 					PerformanceMode: snap.StageModes[stageName],
 					ExecutionPath:   snap.StageExecutionPaths[stageName],
 					PuntReason:      snap.StagePuntReasons[stageName],
+				}
+
+				// Synthesize the matching perStageTokens entry from the
+				// terminating stage's ground-truth token/cost data (Issue
+				// #146) so tokens.per_stage and tokens.estimated_cost_usd
+				// aren't silently missing this stage's spend.
+				if sr, ok := snap.TerminatingStageTokens[stageName]; ok {
+					var cacheHitRate *float64
+					if sr.InputTokens > 0 {
+						rate := float64(sr.CacheRead) / float64(sr.InputTokens)
+						cacheHitRate = &rate
+					}
+					stageAdapter := snap.StageAdapters[stageName]
+					if stageAdapter == "" {
+						stageAdapter = input.DefaultAdapter
+					}
+					perStageTokens[stageName] = V2StageTokens{
+						Input:         sr.InputTokens - sr.CacheRead,
+						Output:        sr.OutputTokens,
+						CacheRead:     sr.CacheRead,
+						CacheCreation: 0,
+						CostUSD:       sr.CostUSD,
+						CacheHitRate:  cacheHitRate,
+						Adapter:       stageAdapter,
+					}
 				}
 			}
 		}
@@ -886,7 +925,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	// Compute token totals from per-stage data rather than global accumulators.
 	// This ensures interim records (written mid-pipeline after N completed stages)
 	// always reflect the correct accumulated values for those N stages.
-	accInput, accOutput, accCacheRead, accCostUSD := computeAccumulatedTokens(snap.CompletedStages)
+	accInput, accOutput, accCacheRead, accCostUSD := computeAccumulatedTokens(perStageTokens)
 
 	// Bump schema_version to "3" when V3-only fields are populated (Issue #3001).
 	schemaVersion := "2"

@@ -3739,6 +3739,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// failed runs make the next post-mortem debuggable in 30 seconds
 		// instead of an hour. Best-effort — a write failure logs but never
 		// blocks pipeline progress. See docs/STAGE_EXIT_DIAGNOSTIC.md.
+		// Record the terminating stage's ground-truth token/cost data on the
+		// failure path (Issue #146) — so BuildV2Record's failed-stage synthesis
+		// branch can populate tokens.per_stage even when this stage never
+		// reaches CompleteStage/CompleteStageWithCost above (e.g. a terminal
+		// kill before the run loop returns here). Success already flows
+		// through CompletedStages normally; recording it unconditionally would
+		// let a stale synthesized entry mask a real per-stage bug there.
+		if exitCode != 0 || err != nil {
+			runtime.RecordTerminatingStageTokens(stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
+		}
+
 		prStateAtExit := detMergePRState
 		s.writeStageExitRecord(item, stage, runtime, result, exitCode, err,
 			actualCostUsd, servedModel, inputTokens, outputTokens, cacheReadTokens,
