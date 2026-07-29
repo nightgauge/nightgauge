@@ -223,33 +223,8 @@ describe("clearFailedIssues Command", () => {
     expect(mockService.clearFailed).not.toHaveBeenCalled();
   });
 
-  it("should clear Go scheduler failures and offer Resume Autonomous", async () => {
-    mockAutonomousClearIssueFailures.mockResolvedValue({ cleared: 1 });
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
-
-    registerClearFailedIssuesCommand(mockContext);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(mockService.clearFailed).toHaveBeenCalled();
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      "Cleared 1 failed issue. Autonomous can now be resumed.",
-      "Resume Autonomous"
-    );
-  });
-
-  it("should execute autonomousResume when Resume Autonomous is clicked", async () => {
-    mockAutonomousClearIssueFailures.mockResolvedValue({ cleared: 1 });
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue("Resume Autonomous" as any);
-
-    registerClearFailedIssuesCommand(mockContext);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.autonomousResume");
-  });
+  // Coverage for the Go-scheduler-cleared / circuit-breaker-tripped paths
+  // moved to the dedicated tests/commands/clearFailedIssues.test.ts (#150).
 
   it("should clear VSCode history without resume offer when IPC unavailable", async () => {
     mockService.getFailed.mockReturnValue([{ issueNumber: 1 }, { issueNumber: 2 }]);
@@ -262,23 +237,6 @@ describe("clearFailedIssues Command", () => {
 
     expect(mockService.clearFailed).toHaveBeenCalled();
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith("Cleared 2 failed issues.");
-  });
-
-  it("should clear both sources and count them together", async () => {
-    mockService.getFailed.mockReturnValue([{ issueNumber: 1 }]);
-    mockAutonomousClearIssueFailures.mockResolvedValue({ cleared: 2 });
-    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
-
-    registerClearFailedIssuesCommand(mockContext);
-    const handler = getLastHandler();
-
-    await handler();
-
-    expect(mockService.clearFailed).toHaveBeenCalled();
-    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      "Cleared 3 failed issues. Autonomous can now be resumed.",
-      "Resume Autonomous"
-    );
   });
 });
 

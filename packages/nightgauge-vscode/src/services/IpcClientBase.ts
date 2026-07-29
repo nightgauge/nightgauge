@@ -838,10 +838,13 @@ export interface PipelineMaxConcurrentResult {
 
 /**
  * Result from autonomous.clearIssueFailures — number of per-issue lifetime
- * failure counters cleared (#3020).
+ * failure counters cleared (#3020), and whether the fleet-wide circuit
+ * breaker (a separate breaker from the per-issue lifetime cap) is still
+ * tripped (#150).
  */
 export interface AutonomousClearIssueFailuresResult {
   cleared: number;
+  circuitBreakerTripped: boolean;
 }
 
 /**

@@ -1656,24 +1656,35 @@ func (as *AutonomousScheduler) QuotaCooldownSnapshot() (until, reason string, ac
 // ClearIssueFailures resets the lifetime failure counter for a single issue
 // (or all issues if key == ""). Used by the IPC handler that the VSCode UI
 // invokes when the user manually triages a chronically-failing issue. Returns
-// the number of issues whose counters were cleared.
+// the number of issues whose counters were cleared, plus whether the
+// fleet-wide circuit breaker (SafetyRails.ConsecutiveFailures) is still
+// tripped.
 //
 // #3020 — without this, the per-issue terminal-failure cap would permanently
 // lock out a fixed issue with no escape hatch short of editing state.json.
-func (as *AutonomousScheduler) ClearIssueFailures(key string) int {
+//
+// This deliberately does NOT touch SafetyRails.ConsecutiveFailures — the
+// per-issue lifetime cap and the fleet-wide circuit breaker are separate
+// breakers for separate failure modes (a single chronically-failing issue vs.
+// a cascade across the fleet), and the circuit breaker already has its own
+// explicit reset path (SafetyRails.Reset(), wired to autonomousResume). #150.
+func (as *AutonomousScheduler) ClearIssueFailures(key string) (cleared int, circuitBreakerTripped bool) {
 	as.mu.Lock()
 	defer as.mu.Unlock()
+	if as.safetyRails != nil {
+		circuitBreakerTripped = as.safetyRails.IsTripped()
+	}
 	if as.state.LifetimeIssueFailures == nil {
-		return 0
+		return 0, circuitBreakerTripped
 	}
 	if key == "" {
 		n := len(as.state.LifetimeIssueFailures)
 		as.state.LifetimeIssueFailures = make(map[string]int)
 		as.persistStateLocked()
-		return n
+		return n, circuitBreakerTripped
 	}
 	if _, ok := as.state.LifetimeIssueFailures[key]; !ok {
-		return 0
+		return 0, circuitBreakerTripped
 	}
 	delete(as.state.LifetimeIssueFailures, key)
 	// Also clear any session-level backoff so the cleared issue can dispatch
@@ -1685,7 +1696,7 @@ func (as *AutonomousScheduler) ClearIssueFailures(key string) int {
 		delete(as.retryBackoff, key)
 	}
 	as.persistStateLocked()
-	return 1
+	return 1, circuitBreakerTripped
 }
 
 // logIncompleteGraph logs a WARNING when the graph's dropped item count exceeds

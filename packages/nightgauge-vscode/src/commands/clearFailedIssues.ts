@@ -25,12 +25,16 @@ export function registerClearFailedIssuesCommand(
       const vscodeFailedCount = service.getFailed().length;
 
       // Clear Go scheduler lifetime failure counters (the safety:lifetime-failure-cap
-      // source). Returns how many issue counters were cleared. Falls back to 0 when
-      // the Go binary is not running (IPC unavailable).
+      // source). Returns how many issue counters were cleared, plus whether the
+      // separate fleet-wide circuit breaker (SafetyRails.ConsecutiveFailures) is
+      // still tripped. Falls back to "not cleared, not tripped" when the Go binary
+      // is not running (IPC unavailable).
       let goCleared = 0;
+      let circuitBreakerTripped = false;
       try {
         const result = await IpcClient.getInstance().autonomousClearIssueFailures();
         goCleared = result.cleared;
+        circuitBreakerTripped = result.circuitBreakerTripped;
       } catch {
         // Go binary not running — only VSCode history can be cleared.
       }
@@ -46,13 +50,25 @@ export function registerClearFailedIssuesCommand(
       const label = `Cleared ${total} failed issue${total !== 1 ? "s" : ""}.`;
 
       if (goCleared > 0) {
-        // Autonomous was safety-tripped by lifetime failures — offer to resume.
-        const action = await vscode.window.showInformationMessage(
-          label + " Autonomous can now be resumed.",
-          "Resume Autonomous"
-        );
-        if (action === "Resume Autonomous") {
-          await vscode.commands.executeCommand("nightgauge.autonomousResume");
+        // The per-issue lifetime retry budget was reset. The fleet-wide circuit
+        // breaker (consecutive-failure count) is a separate breaker and is NOT
+        // touched by this command — only offer "Resume Autonomous" when it is
+        // actually still tripped, instead of unconditionally.
+        if (circuitBreakerTripped) {
+          const action = await vscode.window.showInformationMessage(
+            label +
+              " Reset their lifetime retry budget. The fleet-wide circuit breaker " +
+              "(consecutive-failure count) is still tripped — resume autonomous to clear it.",
+            "Resume Autonomous"
+          );
+          if (action === "Resume Autonomous") {
+            await vscode.commands.executeCommand("nightgauge.autonomousResume");
+          }
+        } else {
+          vscode.window.showInformationMessage(
+            label +
+              " Reset their lifetime retry budget. The fleet-wide circuit breaker is separate and was not tripped."
+          );
         }
       } else {
         vscode.window.showInformationMessage(label);

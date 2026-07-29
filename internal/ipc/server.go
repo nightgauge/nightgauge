@@ -3887,8 +3887,8 @@ func (s *Server) registerMethods() {
 		if len(params) > 0 {
 			_ = json.Unmarshal(params, &p) // best-effort; empty key = clear all
 		}
-		cleared := s.autonomousScheduler.ClearIssueFailures(p.Key)
-		return AutonomousClearIssueFailuresResult{Cleared: cleared}, nil
+		cleared, tripped := s.autonomousScheduler.ClearIssueFailures(p.Key)
+		return AutonomousClearIssueFailuresResult{Cleared: cleared, CircuitBreakerTripped: tripped}, nil
 	}
 
 	//ipc:method autonomousClearQuotaCooldown params:AutonomousClearQuotaCooldownParams result:AutonomousClearQuotaCooldownResult
