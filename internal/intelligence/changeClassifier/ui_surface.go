@@ -21,9 +21,9 @@ import (
 func DefaultUIBearingRepos() map[string][]string {
 	return map[string][]string{
 		"acme-dashboard": {"src/**", "public/**", "index.html", "*.css"},
-		"acmeweb":                  {"src/**", "public/**", "*.css"},
-		"acme-site":                 {"layouts/**", "static/**", "content/**", "data/**", "*.html"},
-		"acme-mobile":   {"lib/**/*.dart", "web/**"},
+		"acmeweb":        {"src/**", "public/**", "*.css"},
+		"acme-site":      {"layouts/**", "static/**", "content/**", "data/**", "*.html"},
+		"acme-mobile":    {"lib/**/*.dart", "web/**"},
 	}
 }
 

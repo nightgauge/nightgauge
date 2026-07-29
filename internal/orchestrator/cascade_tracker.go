@@ -83,9 +83,9 @@ type CascadeTracker struct {
 	threshold int
 	window    time.Duration
 
-	mu       sync.Mutex
-	entries  []CascadeFailureEntry
-	tripped  bool
+	mu        sync.Mutex
+	entries   []CascadeFailureEntry
+	tripped   bool
 	trippedAt time.Time
 }
 
@@ -235,9 +235,10 @@ func (c *CascadeTracker) pruneLocked(now time.Time) {
 // on PauseReason. Caller must hold c.mu.
 //
 // Format:
-//   "cascading-failures: 3 pipeline failures in the last 30m0s
-//    (owner/repo#100: stall_kill; owner/repo#101: network_unavailable;
-//    owner/repo#102: stop_hook_dropped_commit). Manual triage required."
+//
+//	"cascading-failures: 3 pipeline failures in the last 30m0s
+//	 (owner/repo#100: stall_kill; owner/repo#101: network_unavailable;
+//	 owner/repo#102: stop_hook_dropped_commit). Manual triage required."
 //
 // The closing "Manual triage required" sentence is deliberate — every
 // status-bar / Discord / log reader sees the same operator-facing nudge

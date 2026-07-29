@@ -133,7 +133,7 @@ func (m *multiOrgTokenResolver) SuppressGHWarning() bool {
 func TestIntegration_MultiOrgTokenResolution(t *testing.T) {
 	orgTokens := map[string]string{
 		"nightgauge": "ghp_acme_token_xyz",
-		"OtherOrg": "ghp_other_token_abc",
+		"OtherOrg":   "ghp_other_token_abc",
 	}
 
 	resolver := &multiOrgTokenResolver{orgTokens: orgTokens}

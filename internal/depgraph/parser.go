@@ -22,18 +22,18 @@ type CrossRepoRef struct {
 // DefaultRepoAliases maps short names used in issue bodies to full GitHub
 // repo names. Callers may extend or override these.
 var DefaultRepoAliases = map[string]string{
-	"platform":                           "acme/platform",
-	"acme-platform":           "acme/platform",
-	"flutter":                            "acme/mobile",
-	"acme-mobile":            "acme/mobile",
-	"angular":                            "acme/dashboard",
-	"acme-dashboard":          "acme/dashboard",
-	"core":                               "nightgauge/nightgauge",
-	"nightgauge":                    "nightgauge/nightgauge",
-	"nightgauge/nightgauge":           "nightgauge/nightgauge",
-	"acme/platform":  "acme/platform",
-	"acme/mobile":   "acme/mobile",
-	"acme/dashboard": "acme/dashboard",
+	"platform":              "acme/platform",
+	"acme-platform":         "acme/platform",
+	"flutter":               "acme/mobile",
+	"acme-mobile":           "acme/mobile",
+	"angular":               "acme/dashboard",
+	"acme-dashboard":        "acme/dashboard",
+	"core":                  "nightgauge/nightgauge",
+	"nightgauge":            "nightgauge/nightgauge",
+	"nightgauge/nightgauge": "nightgauge/nightgauge",
+	"acme/platform":         "acme/platform",
+	"acme/mobile":           "acme/mobile",
+	"acme/dashboard":        "acme/dashboard",
 }
 
 // Compiled regex patterns for parsing cross-repo references.

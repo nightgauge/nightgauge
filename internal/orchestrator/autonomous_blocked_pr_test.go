@@ -79,12 +79,12 @@ func TestRefreshBlockedReadyPRs_MarksOnlyBlocked(t *testing.T) {
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
 	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
-		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "Ready"},                                     // BLOCKED PR → marked
-		"O/app#2": {Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "Ready"},                                     // CLEAN PR → not marked
-		"O/app#3": {Repo: "O/app", Number: 3, State: "OPEN", BoardStatus: "Ready"},                                     // DIRTY PR → not marked (in-review reconcile's job)
-		"O/app#4": {Repo: "O/app", Number: 4, State: "OPEN", BoardStatus: "Ready"},                                     // no open PR → not marked
-		"O/app#5": {Repo: "O/app", Number: 5, State: "OPEN", BoardStatus: "In review"},                                 // BLOCKED PR but NOT dispatchable → not marked
-		"O/app#6": {Repo: "O/app", Number: 6, State: "OPEN", BoardStatus: "Ready", Labels: []string{"type:epic"}},      // epic → not marked
+		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "Ready"},                                // BLOCKED PR → marked
+		"O/app#2": {Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "Ready"},                                // CLEAN PR → not marked
+		"O/app#3": {Repo: "O/app", Number: 3, State: "OPEN", BoardStatus: "Ready"},                                // DIRTY PR → not marked (in-review reconcile's job)
+		"O/app#4": {Repo: "O/app", Number: 4, State: "OPEN", BoardStatus: "Ready"},                                // no open PR → not marked
+		"O/app#5": {Repo: "O/app", Number: 5, State: "OPEN", BoardStatus: "In review"},                            // BLOCKED PR but NOT dispatchable → not marked
+		"O/app#6": {Repo: "O/app", Number: 6, State: "OPEN", BoardStatus: "Ready", Labels: []string{"type:epic"}}, // epic → not marked
 	}}
 
 	as.refreshBlockedReadyPRs(context.Background(), g)

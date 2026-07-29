@@ -18,7 +18,7 @@ func TestStageGate_BlockedForgeMutationsInAnalysisStages(t *testing.T) {
 		"glab mr merge 7",
 		"nightgauge forge pr create --title x --head feat/1 --base main",
 		"nightgauge forge pr merge 5 --squash",
-		`GH_TOKEN=abc gh pr merge 4143 --squash`,    // env-prefixed still caught
+		`GH_TOKEN=abc gh pr merge 4143 --squash`,       // env-prefixed still caught
 		`bash -c "gh pr create --title x --base main"`, // wrapper-expanded still caught
 	}
 	for _, stage := range stages {
@@ -95,7 +95,7 @@ func TestStageGate_NonFencedStagesAndContextsAllowEverything(t *testing.T) {
 		{"pr-merge", "gh pr merge 5 --squash"},
 		{"feature-dev", "git commit -m 'feat: x'"},
 		{"feature-dev", "gh pr create --title x"},
-		{"", "gh pr merge 5 --squash"},        // interactive / non-pipeline
+		{"", "gh pr merge 5 --squash"},         // interactive / non-pipeline
 		{"some-future-stage", "gh pr merge 5"}, // unknown stage → no-op
 	}
 	for _, c := range cases {
@@ -118,8 +118,8 @@ func TestStageGate_AdminMergeBypassBlockedInEveryPipelineStage(t *testing.T) {
 		"gh pr merge 276 --squash --admin --delete-branch",
 		"gh pr merge 276 --auto",
 		"glab mr merge 7 --auto",
-		`GH_TOKEN=abc gh pr merge 276 --admin`,        // env-prefixed still caught
-		`bash -c "gh pr merge 276 --squash --admin"`,  // wrapper-expanded still caught
+		`GH_TOKEN=abc gh pr merge 276 --admin`,       // env-prefixed still caught
+		`bash -c "gh pr merge 276 --squash --admin"`, // wrapper-expanded still caught
 	}
 	for _, stage := range stages {
 		for _, cmd := range blocked {

@@ -6,16 +6,16 @@ import (
 
 // StageStats holds aggregate statistics for a (repo, stage, size_label) group.
 type StageStats struct {
-	Repo      string  `json:"repo"`
-	Stage     string  `json:"stage"`
-	SizeLabel string  `json:"size_label"`
-	N         int     `json:"n"`          // total records in group
-	OkN       int     `json:"ok_n"`       // successful records
-	P50Cost   float64 `json:"p50_cost"`
-	P75Cost   float64 `json:"p75_cost"`
-	P95Cost   float64 `json:"p95_cost"`
-	MedianDurMs int64 `json:"median_dur_ms"`
-	OkRate    float64 `json:"ok_rate"`    // successful / total
+	Repo        string  `json:"repo"`
+	Stage       string  `json:"stage"`
+	SizeLabel   string  `json:"size_label"`
+	N           int     `json:"n"`    // total records in group
+	OkN         int     `json:"ok_n"` // successful records
+	P50Cost     float64 `json:"p50_cost"`
+	P75Cost     float64 `json:"p75_cost"`
+	P95Cost     float64 `json:"p95_cost"`
+	MedianDurMs int64   `json:"median_dur_ms"`
+	OkRate      float64 `json:"ok_rate"` // successful / total
 }
 
 // groupKey identifies a (repo, stage, size_label) aggregate bucket.

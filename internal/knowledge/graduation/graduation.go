@@ -62,12 +62,12 @@ type Result struct {
 // signalSet captures the booleans and counts that feed scoreADR. Held in a
 // struct so the scoring rubric is one self-contained switch.
 type signalSet struct {
-	RecallHitsDistinct  int
-	GeneralLanguage     bool
-	PatternLanguage     bool
-	FilledConsequences  bool
-	AlreadyGraduated    bool
-	IssueSpecificTitle  bool
+	RecallHitsDistinct int
+	GeneralLanguage    bool
+	PatternLanguage    bool
+	FilledConsequences bool
+	AlreadyGraduated   bool
+	IssueSpecificTitle bool
 }
 
 // filePathRe finds `packages/`, `internal/`, or `src/` style paths inside an

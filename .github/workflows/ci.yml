@@ -45,6 +45,14 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      - name: Gofmt
+        run: |
+          UNFORMATTED="$(gofmt -l ./internal ./cmd)"
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
       - name: Test
         run: go test ./... -count=1
 

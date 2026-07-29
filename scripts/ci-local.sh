@@ -54,6 +54,8 @@ echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
 if [ -f go.mod ]; then
   run_step "go build ./..." go build ./...
   run_step "go test ./... -count=1" go test ./... -count=1
+  run_step "gofmt -l ./internal ./cmd" \
+    bash -c '! gofmt -l ./internal ./cmd | grep .'
 fi
 
 # 2. Generated files must be in sync

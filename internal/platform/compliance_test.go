@@ -52,14 +52,14 @@ func TestComplianceService_ListReports(t *testing.T) {
 			jsonResponse(w, ComplianceReportsPage{
 				Reports: []ComplianceReportEntry{
 					{
-						ID:         "rpt-2",
-						ReportType: "iso27001",
-						Status:     "ready",
-						StartDate:  "2026-01-01",
-						EndDate:    "2026-03-31",
-						Format:     "pdf",
+						ID:          "rpt-2",
+						ReportType:  "iso27001",
+						Status:      "ready",
+						StartDate:   "2026-01-01",
+						EndDate:     "2026-03-31",
+						Format:      "pdf",
 						DownloadURL: "https://example.com/rpt-2.pdf",
-						CreatedAt:  "2026-05-01T00:00:00Z",
+						CreatedAt:   "2026-05-01T00:00:00Z",
 					},
 				},
 				HasMore: false,

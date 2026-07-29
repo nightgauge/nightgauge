@@ -132,11 +132,11 @@ func VersionConsistency(_ context.Context, opts VersionConsistencyOptions) (*Ver
 
 // versionSkipDirs mirrors the skip list used across other docs commands.
 var versionSkipDirs = map[string]struct{}{
-	"node_modules":     {},
-	".git":             {},
-	"dist":             {},
-	"build":            {},
-	".nightgauge": {},
+	"node_modules": {},
+	".git":         {},
+	"dist":         {},
+	"build":        {},
+	".nightgauge":  {},
 }
 
 // detectProjectType determines the project type and returns:
