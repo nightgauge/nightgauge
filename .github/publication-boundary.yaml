@@ -269,10 +269,17 @@ deny:
     class: PRIVATE
     except:
       - "docs/spikes/README.md"
+      - "docs/spikes/183-context-engineering-claude-5.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
-      Nightgauge company's historical spike corpus.
+      Nightgauge company's historical spike corpus. Spike #183 (rightsizing
+      injected context for Claude 5 skills) is reviewed and excepted: it
+      analyzes only the corpus already public under skills/** (line counts,
+      ADR references, eval variant names) with no COGS, pricing, customer
+      data, or unreleased roadmap material, and the spike-materialize stage
+      (docs/SPIKE_CONTRACT.md) requires the artifact to remain at this path
+      to file its follow-up issues.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
