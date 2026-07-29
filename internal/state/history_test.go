@@ -811,6 +811,59 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 	}
 }
 
+// TestBuildV2Record_TerminatingStageTokensSurvive verifies that a stage which
+// crashed before reaching CompleteStage/CompleteStageWithCost still gets a
+// matching tokens.per_stage entry (and is included in estimated_cost_usd),
+// sourced from RuntimeState.TerminatingStageTokens (Issue #146).
+func TestBuildV2Record_TerminatingStageTokensSurvive(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-terminating")
+
+	// Simulate a normally-completed first stage.
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStageWithCost(0, 5000, 2000, 1500, 0.03)
+
+	// Simulate the terminating stage: it never reached CompleteStage (crash
+	// before that call), but its ground-truth tokens were captured via the
+	// same path writeStageExitRecord uses.
+	rs.BeginStage(StageFeatureDev)
+	rs.SetStageError(StageFeatureDev, "runaway_progress: stage killed")
+	rs.RecordTerminatingStageTokens(StageFeatureDev, 20000, 8000, 6000, 0.45)
+	rs.Stage = StageFeatureDev
+
+	record := hw.BuildV2Record(rs, false, "runaway_progress: stage killed", V2RunInput{}, now)
+
+	stageName := string(StageFeatureDev)
+	detail, ok := record.Stages[stageName]
+	if !ok || detail.Status != "failed" {
+		t.Fatalf("Stages[%q] = %+v, ok=%v; want failed status", stageName, detail, ok)
+	}
+
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q; want synthesized entry from TerminatingStageTokens", stageName)
+	}
+	if tok.CostUSD != 0.45 {
+		t.Errorf("PerStage[%q].CostUSD = %f, want 0.45", stageName, tok.CostUSD)
+	}
+	wantInput := 20000 - 6000
+	if tok.Input != wantInput {
+		t.Errorf("PerStage[%q].Input = %d, want %d", stageName, tok.Input, wantInput)
+	}
+	if tok.Output != 8000 {
+		t.Errorf("PerStage[%q].Output = %d, want 8000", stageName, tok.Output)
+	}
+	if tok.CacheRead != 6000 {
+		t.Errorf("PerStage[%q].CacheRead = %d, want 6000", stageName, tok.CacheRead)
+	}
+
+	wantCost := 0.03 + 0.45
+	if record.Tokens.EstimatedCostUSD < wantCost-0.0001 || record.Tokens.EstimatedCostUSD > wantCost+0.0001 {
+		t.Errorf("EstimatedCostUSD = %f, want ~%f (includes terminating stage's cost)", record.Tokens.EstimatedCostUSD, wantCost)
+	}
+}
+
 func TestExtractSizeFromLabels(t *testing.T) {
 	tests := []struct {
 		name   string

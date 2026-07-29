@@ -646,16 +646,19 @@ func (hw *HistoryWriter) seedSeenLocked(c *dirCoordinator) {
 	}
 }
 
-// computeAccumulatedTokens sums token metrics across all completed stages.
-// Using per-stage data as the source of truth ensures interim records (written
-// after a partial pipeline) show correct accumulated totals instead of reading
-// from global accumulators that may not yet reflect all completed stages.
-func computeAccumulatedTokens(stages []StageResult) (input, output, cacheRead int, costUSD float64) {
-	for _, s := range stages {
-		input += s.InputTokens // combined: actual input + cache read
-		output += s.OutputTokens
-		cacheRead += s.CacheRead
-		costUSD += s.CostUSD
+// computeAccumulatedTokens sums token metrics across the final per-stage
+// token map — including any stage entries synthesized on the failure path
+// (Issue #146) — rather than snap.CompletedStages, so totals and per-stage
+// entries can never diverge. Using per-stage data as the source of truth
+// ensures interim records (written after a partial pipeline) show correct
+// accumulated totals instead of reading from global accumulators that may not
+// yet reflect all completed stages.
+func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead int, costUSD float64) {
+	for _, t := range perStageTokens {
+		input += t.Input + t.CacheRead // Input is non-cached; combined matches StageResult.InputTokens semantics
+		output += t.Output
+		cacheRead += t.CacheRead
+		costUSD += t.CostUSD
 	}
 	return
 }
@@ -795,6 +798,31 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 					ExecutionPath:   snap.StageExecutionPaths[stageName],
 					PuntReason:      snap.StagePuntReasons[stageName],
 				}
+
+				// Synthesize the matching perStageTokens entry from the
+				// terminating stage's ground-truth token/cost data (Issue
+				// #146) so tokens.per_stage and tokens.estimated_cost_usd
+				// aren't silently missing this stage's spend.
+				if sr, ok := snap.TerminatingStageTokens[stageName]; ok {
+					var cacheHitRate *float64
+					if sr.InputTokens > 0 {
+						rate := float64(sr.CacheRead) / float64(sr.InputTokens)
+						cacheHitRate = &rate
+					}
+					stageAdapter := snap.StageAdapters[stageName]
+					if stageAdapter == "" {
+						stageAdapter = input.DefaultAdapter
+					}
+					perStageTokens[stageName] = V2StageTokens{
+						Input:         sr.InputTokens - sr.CacheRead,
+						Output:        sr.OutputTokens,
+						CacheRead:     sr.CacheRead,
+						CacheCreation: 0,
+						CostUSD:       sr.CostUSD,
+						CacheHitRate:  cacheHitRate,
+						Adapter:       stageAdapter,
+					}
+				}
 			}
 		}
 	}
@@ -886,7 +914,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	// Compute token totals from per-stage data rather than global accumulators.
 	// This ensures interim records (written mid-pipeline after N completed stages)
 	// always reflect the correct accumulated values for those N stages.
-	accInput, accOutput, accCacheRead, accCostUSD := computeAccumulatedTokens(snap.CompletedStages)
+	accInput, accOutput, accCacheRead, accCostUSD := computeAccumulatedTokens(perStageTokens)
 
 	// Bump schema_version to "3" when V3-only fields are populated (Issue #3001).
 	schemaVersion := "2"
