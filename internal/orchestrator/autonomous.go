@@ -3298,6 +3298,47 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// 2026-07-11), and the pause stopped every unrelated Ready issue.
 		// Once the blocker clears, merge the open PR (or move the issue
 		// back to Ready to re-run pr-merge).
+		// Architecture-approval gate halt (#4098/#4222) — a deliberate,
+		// human-owned decision point, not a failure. The gate stops the run
+		// BEFORE feature-dev and says so explicitly ("This is NOT a failure").
+		//
+		// Same shape as pr-merge-unmerged below: sideline the ISSUE, not the
+		// factory. No LifetimeIssueFailures increment, no cascade feed (a human
+		// decision says nothing about the health of the pipeline), no pause —
+		// every other Ready issue keeps flowing. The board moves to "In review",
+		// which is both the truthful state and what the TS-side #4222 handler
+		// always claimed happened; it never did, because this kind never
+		// reached the Go scheduler and the generic path reverted the issue to
+		// Ready instead.
+		//
+		// Critically, NO revert to Ready: re-dispatching walks straight back
+		// into a gate only a human can open, burning a full planning stage
+		// (~$5 / ~13 min per cycle, observed in a production autonomous run)
+		// until the lifetime cap trips the whole scheduler. Human approval — the
+		// `approved:architecture` label or an approval file — is the way back
+		// in, and moving the issue to Ready re-queues it.
+		if terminalFailureKind == TerminalKindArchitectureApprovalRequired {
+			detail := failureDetail
+			if detail == "" {
+				detail = "architecture approval required — a human must approve this decision before feature-dev proceeds"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail)
+			log.Printf("autonomous: %s#%d architecture-approval-required (human decision point — sidelined to In review, no lifetime-cap increment, queue continues) — %s",
+				repo, issue, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordCompletion(success, 0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			go as.moveIssueToInReview(repo, issue)
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
 		if terminalFailureKind == TerminalKindPrMergeUnmerged {
 			detail := failureDetail
 			if detail == "" {
