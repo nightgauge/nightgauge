@@ -1,4 +1,12 @@
-# #76 — Lean feature-validate: the variant and its measurement
+# Lean feature-validate: the variant and its measurement
+
+> **Note on issue numbers.** This experiment ran before the public repo was
+> initialized and cites its original tracker number (`#76`) in the artifact
+> names below (`76-lean-r*.jsonl`, `scripts/pool-76-deltas.ts`). Those are
+> retained as a stable filename convention for re-measurement. They do **not**
+> refer to `nightgauge/nightgauge#76`, which is an unrelated
+> thinking/effort-interlock fix. This README is the source of truth for the
+> measurement.
 
 > **OUTCOME (2026-07-13): ADOPTED.** Five live repetitions (20 cells,
 > `76-lean-r1..r5.jsonl`, pooled via `scripts/pool-76-deltas.ts`):
@@ -18,7 +26,7 @@
 > directory (see git history for the pre-adoption copy). The task, fixture,
 > and variant below remain in place for re-measurement.
 
-Issue #76 tests Anthropic's claim that over-prescriptive skills degrade
+This experiment tests Anthropic's claim that over-prescriptive skills degrade
 frontier-model output, against the repo's deliberate counter-position
 (`.claude/rules/skills.md`: the six pipeline stages "stay railroaded on
 purpose"). Nothing ships on judgment — the lean text is adopted only on a
@@ -102,5 +110,5 @@ bucket.
   lean arm on BOTH routed tiers, with no deterministic-check regressions.
 - **Reject** on a tie or loss: keep the railroading, record the pooled
   numbers in the spike doc and `.claude/rules/skills.md` (the rule keeps its
-  exemption, now with a measurement behind it), and close #76 as a
+  exemption, now with a measurement behind it), and record it as a
   successful negative result.

@@ -114,12 +114,14 @@ headless stages (`issue-pickup`, `feature-planning`, `feature-dev`,
 verbatim: byte-pinned phase markers, `_shared` includes at contracted
 positions, exit-contract checks, and gate-metric emissions. But
 step-by-step prose that restates default competent behavior is NOT part of
-the contract and should be cut. Issue #76 measured this on
-`feature-validate` (5-rep live A/B, sonnet/opus): the lean rewrite (~55% of
-the original) scored **+1.8 composite on Sonnet 5 and +1.6 on Opus 4.8**
-with zero deterministic-check regressions, at ~20–40% lower cost and
-latency. When editing a stage skill, preserve every contracted element
-byte-for-byte and write everything else outcome-oriented.
+the contract and should be cut. This was measured on `feature-validate`
+(5-rep live A/B, sonnet/opus): the lean rewrite (~55% of the original)
+scored **+1.8 composite on Sonnet 5 and +1.6 on Opus 4.8** with zero
+deterministic-check regressions, at ~20–40% lower cost and latency — full
+pooled table and decision rule in
+[evals/skill-variants/feature-validate/README.md](../../evals/skill-variants/feature-validate/README.md).
+When editing a stage skill, preserve every contracted element byte-for-byte
+and write everything else outcome-oriented.
 
 ## Context Handoff
 
