@@ -165,6 +165,10 @@ type StageRunResult struct {
 	StopHookErrored bool
 	// StderrTail is the last 4 KB of stderr from the SkillRunner ring buffer.
 	StderrTail string
+	// ToolCalls is the stage's bounded all-tools call log, forwarded
+	// verbatim from TS via pipeline.stageResult. Superset of RecentBash —
+	// covers every tool, not just Bash. (Issue #144)
+	ToolCalls []diagnostics.ToolCallRecord
 
 	// ── #3666 follow-up: budget-kill + shipped-partially via IPC ────────
 	// BudgetExceeded is true when the BudgetEnforcer killed this stage.
@@ -3419,6 +3423,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if result.LastOutputLines != "" {
 				runtime.RecordStageOutputTail(stage, result.LastOutputLines)
 			}
+			// Accumulate this stage's all-tools call log onto the run-level
+			// ToolCalls slice so recordV2History can attach it to the
+			// authoritative V2RunRecord (Issue #144).
+			if len(result.ToolCalls) > 0 {
+				runtime.RecordToolCalls(stage, result.ToolCalls)
+			}
 		}
 
 		// #91 served-model attribution: the claude CLI can silently retry a
@@ -5333,6 +5343,7 @@ func (s *Scheduler) recordV2History(
 		StageOutputTails:       snap.StageOutputTails,
 		StageFailureCategories: stageFailureCategories,
 		OutcomeType:            OutcomeTypeForTerminalFailure(errMsg),
+		ToolCalls:              snap.ToolCalls,
 	}
 
 	// Build ONCE, write, and push the SAME record. The telemetry push used to

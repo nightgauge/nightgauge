@@ -124,6 +124,14 @@ type StageResultParams struct {
 	// buffer. Persisted verbatim to the exit-record's `stderr_tail`. (#3605)
 	StderrTail string `json:"stderrTail,omitempty"`
 
+	// ToolCalls is the stage's bounded all-tools call log (every tool_use/
+	// tool_result pair observed by the TS SkillRunner, capped at 200
+	// entries), forwarded verbatim so the Go scheduler can persist it onto
+	// the authoritative V2RunRecord. Same "TS has first-hand knowledge"
+	// category of field as LastBashCommand/RecentBash above, generalized
+	// from Bash-only to all tools. (Issue #144)
+	ToolCalls []diagnostics.ToolCallRecord `json:"toolCalls,omitempty"`
+
 	// ── #3666 follow-up: budget-kill + shipped-partially via IPC ────────
 	// Pre-#3666 the budget-kill signal lived only in a budget-overrun-{N}.json
 	// file on disk. That contract assumes Go and TS agree on the file's

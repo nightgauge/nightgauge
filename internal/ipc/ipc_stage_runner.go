@@ -178,6 +178,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			RecentBash:          result.RecentBash,
 			StopHookErrored:     result.StopHookErrored,
 			StderrTail:          result.StderrTail,
+			ToolCalls:           result.ToolCalls,
 			// #3666 follow-up: budget-kill + shipped-partially via IPC.
 			// Replaces the budget-overrun-{N}.json disk contract, which
 			// silently broke for multi-repo workspaces (Go couldn't locate

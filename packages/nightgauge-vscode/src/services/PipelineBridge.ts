@@ -520,6 +520,7 @@ export class PipelineBridge {
         recentBash: result.recentBash,
         stopHookErrored: result.stopHookErrored,
         stderrTail: result.stderrTail,
+        toolCalls: result.toolCalls,
         // #3666 follow-up: budget-kill + shipped-partially signal forwarded
         // via IPC. Replaces the budget-overrun-{N}.json disk contract that
         // silently broke for multi-repo workspaces (Go couldn't locate the
@@ -595,6 +596,7 @@ export class PipelineBridge {
         recentBash: result?.recentBash,
         stopHookErrored: result?.stopHookErrored,
         stderrTail: result?.stderrTail,
+        toolCalls: result?.toolCalls,
       });
     }
   }

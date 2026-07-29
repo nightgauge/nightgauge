@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
@@ -102,6 +103,12 @@ type RuntimeState struct {
 	// tail for the failed stage is copied into the V3 RunRecord so operators
 	// can diagnose without re-running.
 	StageOutputTails map[string]string `json:"stageOutputTails,omitempty"`
+
+	// ToolCalls accumulates the bounded all-tools call log forwarded from
+	// each stage's StageRunResult (Issue #144), in stage-completion order.
+	// Not persisted with the rest of RuntimeState — copied onto the V2
+	// history record's ToolCalls field at run completion via Snapshot().
+	ToolCalls []diagnostics.ToolCallRecord `json:"toolCalls,omitempty"`
 
 	// StageModes captures the performance mode resolved at each stage's start
 	// (Issue #3215). Keys are stage names; values are one of
@@ -512,6 +519,24 @@ func (rs *RuntimeState) RecordStageOutputTail(stage PipelineStage, raw string) {
 		rs.StageOutputTails = make(map[string]string)
 	}
 	rs.StageOutputTails[string(stage)] = tail
+}
+
+// RecordToolCalls appends a stage's tool-call log onto the run-level
+// accumulator (Issue #144). Entries missing a Stage tag are tagged with the
+// given stage so the aggregated ToolCalls slice on the history record
+// remains attributable even if the TS side omits it.
+func (rs *RuntimeState) RecordToolCalls(stage PipelineStage, calls []diagnostics.ToolCallRecord) {
+	if len(calls) == 0 {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for _, c := range calls {
+		if c.Stage == "" {
+			c.Stage = string(stage)
+		}
+		rs.ToolCalls = append(rs.ToolCalls, c)
+	}
 }
 
 // RecordStageMode records the performance mode active at the start of a stage
@@ -977,6 +1002,10 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		for k, v := range rs.StageOutputTails {
 			snap.StageOutputTails[k] = v
 		}
+	}
+	if len(rs.ToolCalls) > 0 {
+		snap.ToolCalls = make([]diagnostics.ToolCallRecord, len(rs.ToolCalls))
+		copy(snap.ToolCalls, rs.ToolCalls)
 	}
 	if len(rs.StageModes) > 0 {
 		snap.StageModes = make(map[string]string, len(rs.StageModes))
