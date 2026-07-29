@@ -1282,7 +1282,7 @@ export const PipelineConfigSchema = z.object({
    *       - mcp__sentry__capture_error
    *     stages:
    *       feature-dev:
-   *         - mcp__playwright__browser_navigate
+   *         - mcp__postgres__query
    * ```
    *
    * @see Issue #1726 - Add pipeline.mcp-tools config for user-level MCP tool control

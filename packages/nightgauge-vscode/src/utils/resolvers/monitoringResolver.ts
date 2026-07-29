@@ -2881,7 +2881,7 @@ export function getAlertingConfig(workspaceRoot?: string): AlertingConfig {
  *   stages:
  *     feature-dev:
  *       mcp_tools:
- *         - mcp__playwright__*
+ *         - mcp__postgres__*
  *         - mcp__sentry__get_issue
  * ```
  *
