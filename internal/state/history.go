@@ -746,14 +746,6 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 
 		stages[stageName] = detail
 
-		// Compute per-stage cache hit rate: cache_read / (input + cache_read)
-		// sr.InputTokens is the combined value (actual input + cache_read).
-		var cacheHitRate *float64
-		if sr.InputTokens > 0 {
-			rate := float64(sr.CacheRead) / float64(sr.InputTokens)
-			cacheHitRate = &rate
-		}
-
 		// Issue #3224: prefer per-stage adapter recorded by the resolver
 		// (#3221), falling back to the run-level default when absent. Empty
 		// string is left as-is so omitempty drops the key on the wire.
@@ -762,15 +754,34 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			stageAdapter = input.DefaultAdapter
 		}
 
-		perStageTokens[stageName] = V2StageTokens{
-			Input:         sr.InputTokens - sr.CacheRead, // actual non-cached input tokens
-			Output:        sr.OutputTokens,
-			CacheRead:     sr.CacheRead,
-			CacheCreation: 0, // not tracked per stage — only available at run level via execution stream
-			CostUSD:       sr.CostUSD,
-			CacheHitRate:  cacheHitRate,
-			Adapter:       stageAdapter,
+		// ACCUMULATE, never assign. CompletedStages is an append-only slice and
+		// one stage can land in it more than once: the retry/backtrack engine
+		// rewinds to an earlier stage (scheduler.go, "Evaluate backtrack
+		// signals"), and completeStageInternal's dedup guard only suppresses a
+		// repeat with an identical StageStart — a genuine second attempt gets a
+		// fresh StageStart and appends. Assigning into a map keyed by stage name
+		// would keep only the final attempt, and since the run totals are now
+		// summed from THIS map, every earlier attempt's spend would disappear
+		// from estimated_cost_usd — reintroducing the bias-calibration-low
+		// defect this issue exists to remove, on exactly the expensive runs
+		// (the ones that had to backtrack) where accuracy matters most.
+		acc := perStageTokens[stageName]
+		acc.Input += sr.InputTokens - sr.CacheRead // actual non-cached input tokens
+		acc.Output += sr.OutputTokens
+		acc.CacheRead += sr.CacheRead
+		acc.CacheCreation = 0 // not tracked per stage — only available at run level via execution stream
+		acc.CostUSD += sr.CostUSD
+		acc.Adapter = stageAdapter
+
+		// Cache hit rate: cache_read / (input + cache_read), recomputed from the
+		// accumulated totals so it describes the stage as a whole rather than
+		// only its last attempt.
+		if combined := acc.Input + acc.CacheRead; combined > 0 {
+			rate := float64(acc.CacheRead) / float64(combined)
+			acc.CacheHitRate = &rate
 		}
+
+		perStageTokens[stageName] = acc
 	}
 
 	for _, skipped := range snap.SkippedStages {
