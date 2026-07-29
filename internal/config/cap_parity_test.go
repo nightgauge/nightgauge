@@ -9,11 +9,12 @@ import "testing"
 // concurrency resolution have drifted. Fix the resolver that changed.
 //
 // Fixture A:
-//   concurrency:
-//     workspace_max: 4
-//     per_repo_max: 2
-//     repository_overrides:
-//       flutter: 3
+//
+//	concurrency:
+//	  workspace_max: 4
+//	  per_repo_max: 2
+//	  repository_overrides:
+//	    flutter: 3
 func TestCapForRepoParity_FixtureA(t *testing.T) {
 	cfg := &Config{
 		Concurrency: &ConcurrencyConfig{
@@ -46,7 +47,8 @@ func TestCapForRepoParity_FixtureA(t *testing.T) {
 // TestCapForRepoParity_FixtureB mirrors concurrency-parity.test.ts FixtureB.
 //
 // Fixture B — defaults only (neither workspace_max nor per_repo_max set):
-//   concurrency: {}
+//
+//	concurrency: {}
 func TestCapForRepoParity_FixtureB(t *testing.T) {
 	cfg := &Config{Concurrency: &ConcurrencyConfig{}}
 	rc := ResolveConcurrency(cfg)

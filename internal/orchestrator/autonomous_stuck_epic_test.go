@@ -88,9 +88,9 @@ func TestStuckEpics_RecoveringSub_NotStuck(t *testing.T) {
 		}, nil)
 
 	got := stuckEpicsFromGraph(g, stuckEpicScanOpts{
-		now:        time.Unix(1_700_000_000, 0),
-		runningSet: map[string]bool{},
-		isRecovering: func(_ string, n int) bool { return n == 143 }, // #143 mid-recovery
+		now:           time.Unix(1_700_000_000, 0),
+		runningSet:    map[string]bool{},
+		isRecovering:  func(_ string, n int) bool { return n == 143 }, // #143 mid-recovery
 		failureReason: noReason,
 	})
 	if len(got) != 0 {
@@ -464,7 +464,7 @@ func TestAlertStuckEpics_NoCooldownOnFailure(t *testing.T) {
 		t.Fatalf("failed delivery must not arm the cooldown, got %v", as.alertedStuckEpics)
 	}
 
-	atomic.StoreInt32(&fail, 0)              // server now succeeds
+	atomic.StoreInt32(&fail, 0) // server now succeeds
 	as.alertStuckEpics(context.Background(), epics)
 	if _, ok := as.alertedStuckEpics["o/r#142"]; !ok {
 		t.Error("successful delivery must arm the cooldown")

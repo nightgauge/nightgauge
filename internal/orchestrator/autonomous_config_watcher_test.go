@@ -134,7 +134,7 @@ autonomous:
 
 	got := reloader.lastCall()
 	want := map[string]bool{
-		"nightgauge/nightgauge":      true,
+		"nightgauge/nightgauge":     true,
 		"nightgauge/acme-mobile":    true,
 		"nightgauge/acme-dashboard": true,
 	}

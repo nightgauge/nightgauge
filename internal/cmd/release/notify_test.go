@@ -242,7 +242,6 @@ func TestNotifyFindings_TransportFailureDoesNotLeakWebhookURL(t *testing.T) {
 	}
 }
 
-
 func TestNotifyFindings_PermanentStatusNotRetried(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

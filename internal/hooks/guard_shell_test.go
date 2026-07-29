@@ -56,8 +56,8 @@ func TestGuardShell(t *testing.T) {
 		// debugging hooks. The silent-default subtest below covers the new
 		// default.
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                          "/nonexistent",
-			"HOME":                          t.TempDir(),
+			"PATH":                     "/nonexistent",
+			"HOME":                     t.TempDir(),
 			"NIGHTGAUGE_HOOK_BLOCKING": "false",
 			"NIGHTGAUGE_HOOK_SILENT":   "false",
 		}, t.TempDir())
@@ -78,8 +78,8 @@ func TestGuardShell(t *testing.T) {
 		home := t.TempDir()
 		logFile := filepath.Join(home, "hook-warnings.log")
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                          "/nonexistent",
-			"HOME":                          home,
+			"PATH":                     "/nonexistent",
+			"HOME":                     home,
 			"NIGHTGAUGE_HOOK_BLOCKING": "false",
 			"NIGHTGAUGE_HOOK_LOG":      logFile,
 		}, t.TempDir())
@@ -106,8 +106,8 @@ func TestGuardShell(t *testing.T) {
 
 	t.Run("missing binary, blocking → exit 1 with error", func(t *testing.T) {
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                          "/nonexistent",
-			"HOME":                          t.TempDir(),
+			"PATH":                     "/nonexistent",
+			"HOME":                     t.TempDir(),
 			"NIGHTGAUGE_HOOK_BLOCKING": "true",
 		}, t.TempDir())
 		if code != 1 {
@@ -127,8 +127,8 @@ func TestGuardShell(t *testing.T) {
 		home := t.TempDir()
 		logFile := filepath.Join(home, "hook-warnings.log")
 		stdout, stderr, code := runGuard(t, guardPath, map[string]string{
-			"PATH":                          "/nonexistent",
-			"HOME":                          home,
+			"PATH":                     "/nonexistent",
+			"HOME":                     home,
 			"NIGHTGAUGE_HOOK_BLOCKING": "true",
 			"NIGHTGAUGE_HOOK_SILENT":   "true",
 			"NIGHTGAUGE_HOOK_LOG":      logFile,

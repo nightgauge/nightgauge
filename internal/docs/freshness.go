@@ -64,11 +64,11 @@ const dateLayout = "2006-01-02"
 
 // freshnessSkipDirs mirrors the skip list used across other docs commands.
 var freshnessSkipDirs = map[string]struct{}{
-	"node_modules":     {},
-	".git":             {},
-	"dist":             {},
-	"build":            {},
-	".nightgauge": {},
+	"node_modules": {},
+	".git":         {},
+	"dist":         {},
+	"build":        {},
+	".nightgauge":  {},
 }
 
 // CheckFreshness detects markdown files whose "Updated:" metadata lags behind

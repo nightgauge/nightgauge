@@ -367,7 +367,7 @@ func TestParseCopilotStreamLinePremiumRequests(t *testing.T) {
 	}{
 		{"Usage: Total usage est: 3 Premium requests", 3},
 		{"Total usage est: 0 Premium requests", 0},
-		{"1 premium request", 1},         // singular, bare
+		{"1 premium request", 1},                     // singular, bare
 		{"Total usage est: 2.4 Premium requests", 2}, // fractional rounds
 	}
 	for _, tc := range cases {

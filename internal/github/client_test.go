@@ -333,7 +333,7 @@ func TestResolveTokenChain_OwnerScopedUser(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghp_ambient")
 	resolver := &stubOwnerUserResolver{
 		usersByOwner: map[string]string{
-			"nightgauge":            "octocat",
+			"nightgauge":     "octocat",
 			"Acme-Community": "acmebot",
 		},
 	}

@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 	gogit "github.com/go-git/go-git/v5"
+	gitpkg "github.com/nightgauge/nightgauge/internal/git"
 )
 
 // TestBranchCreateDetachedHead verifies that branch-create succeeds when HEAD

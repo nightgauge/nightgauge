@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 	"github.com/nightgauge/nightgauge/internal/knowledge/workspace"
 	"github.com/nightgauge/nightgauge/internal/pipeline"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -205,10 +205,10 @@ func knowledgeReindexCmd() *cobra.Command {
 
 			if outputJSON {
 				type result struct {
-					IndexPath string `json:"index_path"`
-					Entries   int    `json:"entries"`
-					BuiltAt   string `json:"built_at"`
-					DurationMs int64 `json:"duration_ms"`
+					IndexPath  string `json:"index_path"`
+					Entries    int    `json:"entries"`
+					BuiltAt    string `json:"built_at"`
+					DurationMs int64  `json:"duration_ms"`
 				}
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")

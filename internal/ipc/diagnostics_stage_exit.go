@@ -62,26 +62,26 @@ func makeDiagnosticsRecordStageExitHandler(srv *Server) Handler {
 // TerminalKind empty AND included an ErrorText to classify.
 func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitRecord {
 	rec := diagnostics.StageExitRecord{
-		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
-		Repo:            p.Repo,
-		Issue:           p.IssueNumber,
-		Stage:           p.Stage,
-		SessionID:       p.SessionID,
-		RunID:           p.RunID,
-		Success:         p.Success,
-		ExitCode:        p.ExitCode,
-		Signal:          p.Signal,
-		SignalSource:    p.SignalSource,
+		Timestamp:    time.Now().UTC().Format(time.RFC3339Nano),
+		Repo:         p.Repo,
+		Issue:        p.IssueNumber,
+		Stage:        p.Stage,
+		SessionID:    p.SessionID,
+		RunID:        p.RunID,
+		Success:      p.Success,
+		ExitCode:     p.ExitCode,
+		Signal:       p.Signal,
+		SignalSource: p.SignalSource,
 		// #161: which configured limit fired and what it was set to. Carried
 		// verbatim so `jq 'select(.kill_ceiling=="nx-stall-multiple")'` finds
 		// the same kills from either dispatch path.
 		KillCeiling:      p.KillCeiling,
 		KillCeilingValue: p.KillCeilingValue,
 		TerminalKind:     p.TerminalKind,
-		ElapsedMs:       p.ElapsedMs,
-		IdleMsAtExit:    p.IdleMsAtExit,
-		LastBashCommand: p.LastBashCommand,
-		LastBashExit:    p.LastBashExit,
+		ElapsedMs:        p.ElapsedMs,
+		IdleMsAtExit:     p.IdleMsAtExit,
+		LastBashCommand:  p.LastBashCommand,
+		LastBashExit:     p.LastBashExit,
 		// Bounded here as well as on the Go-scheduler path (#156) so neither
 		// dispatch path can write an unbounded command history.
 		RecentBash:      diagnostics.BoundRecentBash(p.RecentBash),

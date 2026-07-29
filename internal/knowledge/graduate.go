@@ -199,10 +199,10 @@ func extractADRFields(body string, block *ADRBlock) {
 		return
 	}
 	type match struct {
-		name  string
+		name   string
 		inline string
-		start int
-		end   int
+		start  int
+		end    int
 	}
 	matches := make([]match, 0, len(indices))
 	for i, idx := range indices {

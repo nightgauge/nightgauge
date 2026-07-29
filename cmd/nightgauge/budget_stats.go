@@ -21,11 +21,11 @@ import (
 // duration + ok_rate — either as a human-readable table or JSON.
 func budgetStatsCmd() *cobra.Command {
 	var (
-		workdir    string
-		filterRepo string
+		workdir     string
+		filterRepo  string
 		filterStage string
-		jsonOutput bool
-		limitDays  int
+		jsonOutput  bool
+		limitDays   int
 	)
 	cmd := &cobra.Command{
 		Use:   "budget-stats",

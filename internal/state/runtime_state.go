@@ -40,7 +40,7 @@ type RuntimeState struct {
 	// doing without leaving the dashboard. Empty when no issue body was resolved.
 	Body   string `json:"body,omitempty"`
 	Branch string `json:"branch,omitempty"`
-	RunID       string `json:"runId,omitempty"` // UUID v7 from runstate, threaded into all PipelineEvent emissions (#3557)
+	RunID  string `json:"runId,omitempty"` // UUID v7 from runstate, threaded into all PipelineEvent emissions (#3557)
 
 	// Current stage
 	Stage      PipelineStage `json:"stage"`

@@ -46,12 +46,12 @@ type StageFailure struct {
 
 // RecoveryResult is the outcome of one RecoveryAction.Execute call.
 type RecoveryResult struct {
-	Recovered bool
-	Action    string // canonical id (matches RecoveryAction.Name())
-	Reason    string
-	Evidence  []string
-	CostUSD   float64 // ~0 for deterministic actions
-	FollowUp   string // "stage can resume" | "issue requires human triage" | "no action"
+	Recovered  bool
+	Action     string // canonical id (matches RecoveryAction.Name())
+	Reason     string
+	Evidence   []string
+	CostUSD    float64 // ~0 for deterministic actions
+	FollowUp   string  // "stage can resume" | "issue requires human triage" | "no action"
 	DurationMs int64
 }
 
