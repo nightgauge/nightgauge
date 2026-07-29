@@ -2939,7 +2939,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -2975,7 +2975,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3023,7 +3023,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// Short-circuit: skip the rest of the failure-recording path
 			// so safety rails / persist / re-scan don't double-fire below.
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3056,7 +3056,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3098,7 +3098,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3138,7 +3138,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3170,7 +3170,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3202,7 +3202,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3239,7 +3239,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			default:
 			}
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3263,7 +3263,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d pipeline-start-failure:issue-closed — already closed, moving board to Done (no lifetime-cap increment)",
 				repo, issue)
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3299,7 +3299,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d branch-forked (unrecoverable by retry — left for human triage, queue continues) — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}
@@ -3358,7 +3358,12 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.recordFailureLocked(repo, issue, title, now, detail)
 			log.Printf("autonomous: %s#%d architecture-approval-required (human decision point — sidelined to In review, no lifetime-cap increment, no consecutive-failure increment, queue continues) — %s",
 				repo, issue, detail)
-			// Deliberately NOT RecordCompletion(success=false): that increments
+			// Deliberately NOT RecordCompletion(success=false) — the reasoning
+			// below is what RecordNonFaultOutcome now generalises for every
+			// environmental/transient/deferral kind. This branch skips the rails
+			// entirely rather than calling it, which is equivalent: both leave
+			// the counter untouched, and there are no tokens to account for.
+			// RecordCompletion increments
 			// SafetyRails.ConsecutiveFailures, a SECOND breaker independent of
 			// the cascade tracker. Exempting the lifetime cap and the cascade
 			// feed but not this one still stops the fleet — three issues queued
@@ -3391,7 +3396,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d pr-merge-unmerged (externally blocked — sidelined to In review, queue continues) — %s",
 				repo, issue, detail)
 			if as.safetyRails != nil {
-				as.safetyRails.RecordCompletion(success, 0)
+				as.safetyRails.RecordNonFaultOutcome(0)
 				safetySnap := as.safetyRails.State()
 				as.state.Safety = &safetySnap
 			}

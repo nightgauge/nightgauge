@@ -152,6 +152,10 @@ func (sr *SafetyRails) RecordPipelineStart() {
 // RecordCompletion updates state after a pipeline run completes.
 // A successful completion resets the consecutive failure counter.
 // A failure increments it.
+//
+// Call this ONLY for outcomes that are evidence about our own work. For
+// environmental, transient, or deferral outcomes use RecordNonFaultOutcome —
+// see its doc comment for why the distinction is load-bearing.
 func (sr *SafetyRails) RecordCompletion(success bool, tokensUsed int64) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
@@ -161,6 +165,31 @@ func (sr *SafetyRails) RecordCompletion(success bool, tokensUsed int64) {
 	} else {
 		sr.state.ConsecutiveFailures++
 	}
+}
+
+// RecordNonFaultOutcome accounts for a run that ended for reasons that are not
+// evidence of a defect in our code, our issue, or our pipeline: a provider 529,
+// a transport drop, a depleted API quota, a GitHub outage, a stall-kill, a
+// budget ceiling, a preserved-work recovery commit, or a dependency deferral.
+// It updates token accounting and deliberately leaves ConsecutiveFailures
+// UNTOUCHED.
+//
+// The circuit breaker exists to stop a pipeline that keeps breaking on its own
+// work. A provider being overloaded is not that, and counting it halted the
+// entire fleet on exactly the outcomes whose own handlers advertise "no pause"
+// and "no per-session circuit-breaker count". Three unrelated issues hitting
+// one Anthropic 529 apiece was enough to trip a breaker sized for three
+// consecutive REAL failures — the pipeline stopping itself over weather.
+//
+// Untouched, not reset: an environmental blip in the middle of a genuine
+// failure cascade must not launder the counter, or two real failures either
+// side of one 529 would read as "first failure" and the breaker would never
+// trip when it should. Non-fault outcomes are invisible to the breaker in both
+// directions.
+func (sr *SafetyRails) RecordNonFaultOutcome(tokensUsed int64) {
+	sr.mu.Lock()
+	defer sr.mu.Unlock()
+	sr.state.TokensUsed += tokensUsed
 }
 
 // RecordEpicComplete triggers a checkpoint pause if EpicCheckpoint is enabled.
