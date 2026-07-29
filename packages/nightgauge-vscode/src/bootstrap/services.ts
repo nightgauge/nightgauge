@@ -83,6 +83,7 @@ import { QueryService } from "../services/QueryService";
 import { SavedQueriesService } from "../services/SavedQueriesService";
 import { getInitialExecutionMode } from "../utils/incrediConfig";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
+import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../utils/failureComment";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
 import { ensureGitignore } from "../utils/ensureGitignore";
@@ -1651,6 +1652,20 @@ export async function initializeServices(
             // the generic subagent_crash path that would pause the queue and
             // count three burst false-negatives toward the cascade breaker.
             terminalFailureKind = "adapter_auth_failed";
+          } else if (errMsg.includes(ARCHITECTURE_APPROVAL_REQUIRED_MARKER)) {
+            // #4098/#4222: the architecture-approval gate halted the run before
+            // feature-dev because a human must approve a high-impact decision.
+            // The TS layer already treats this as an actionable pause (see
+            // failureComment.ts and ConcurrentPipelineManager), but the Go
+            // scheduler never heard about it — so it bucketed a deliberate
+            // human gate into subagent_crash, counted it toward the lifetime
+            // failure cap, and reverted the issue to Ready, re-dispatching it
+            // into a gate only a human can open (~$5/attempt, and the second
+            // attempt trips the whole scheduler). Forward the explicit kind so
+            // Go routes it to the architecture_approval_required path:
+            // board → In review, NO lifetime-cap increment, NO cascade feed,
+            // NO pause, and no automatic re-dispatch.
+            terminalFailureKind = "architecture_approval_required";
           }
           // #3431: forward the raw failure text so the autonomous
           // scheduler can extract `resetsAt=<unix>` from the

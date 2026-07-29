@@ -265,6 +265,34 @@ const (
 	// does not re-dispatch: an automatic retry is precisely the loop this kind
 	// exists to stop.
 	TerminalKindBranchForked = "branch_forked"
+	// TerminalKindArchitectureApprovalRequired is set when the architecture-
+	// approval gate (#4098/#4222) halts a run BEFORE feature-dev because the
+	// issue is a high-impact, human-owned decision: ≥2 trade-off signals or a
+	// risk_high routing verdict, with no `approved:architecture` label and no
+	// approval file. The gate's own message says "This is NOT a failure" — the
+	// pipeline stopped on purpose, exactly as designed.
+	//
+	// Pre-fix it had no matcher and fell through to the generic
+	// subagent_crash fallback, which is wrong three times over: it labelled a
+	// deliberate human gate a process death, it counted toward
+	// LifetimeIssueFailures, and it reverted the board to Ready so the
+	// scheduler re-dispatched into a gate only a human can open. Observed in a
+	// production autonomous run: ~$5 and ~13 minutes per attempt to rediscover
+	// the same "a human must decide this", with the SECOND attempt due to hit
+	// MaxLifetimeFailuresPerIssue and trip the whole scheduler to
+	// safety_tripped — a full workspace stop caused by a safety feature
+	// working correctly.
+	//
+	// Routed like TerminalKindPrMergeUnmerged (sideline the issue, not the
+	// factory): NO LifetimeIssueFailures increment, NO cascade feed (a human
+	// decision point says nothing about the health of the factory), NO pause,
+	// and the board moves to "In review" — the truthful state, and what the
+	// #4222 handler always claimed happened but never did, because the kind
+	// never reached the Go scheduler. Deliberately does NOT revert to Ready:
+	// as with TerminalKindBranchForked, an automatic retry is precisely the
+	// loop this kind exists to stop. The way back in is human approval (label
+	// or approval file), which re-queues the issue.
+	TerminalKindArchitectureApprovalRequired = "architecture_approval_required"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error
@@ -376,6 +404,25 @@ func ClassifyTerminalKind(errorText string) string {
 	if strings.Contains(t, "[blocked-dependency]") ||
 		strings.Contains(t, "blocked_dependency") {
 		return TerminalKindBlockedDependency
+	}
+
+	// Architecture-approval gate halt (#4098/#4222). The run stopped BEFORE
+	// feature-dev because a human must approve a high-impact decision. NOT a
+	// failure — the gate says so in its own message. Matched here, alongside
+	// the other deliberate-halt kinds and before the generic heuristics, so
+	// neither the "pipeline-start-failure" wrapper nor the "exit"/"halt"
+	// substrings bucket it into subagent_crash. Emitted by
+	// HeadlessOrchestrator.verifyArchitectureApproval; the sentinel is the
+	// human-readable ARCHITECTURE_APPROVAL_REQUIRED_MARKER text rather than a
+	// bracketed marker, so match that (the marker is already load-bearing in
+	// failureComment.ts and ConcurrentPipelineManager.ts — changing it would
+	// break the TS approval-pause rendering). The bracketed and underscore
+	// forms are also matched so a future emitter change and the NotifyComplete
+	// defense-in-depth reclassify both land on the same kind.
+	if strings.Contains(t, "architecture approval required") ||
+		strings.Contains(t, "[architecture-approval-required]") ||
+		strings.Contains(t, "architecture_approval_required") {
+		return TerminalKindArchitectureApprovalRequired
 	}
 
 	// GitHub API quota too low at the pipeline-start preflight (Issue #3896).
