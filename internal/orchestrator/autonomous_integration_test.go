@@ -45,7 +45,7 @@ func newTestHarness(t *testing.T, cfg AutonomousConfig, graphProvider testGraphP
 		stopCh:               make(chan struct{}, 1),
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 	}
 
 	// Wire up safety rails
@@ -748,7 +748,7 @@ func TestIntegration_StateRecovery(t *testing.T) {
 		config:               AutonomousConfig{MaxConcurrent: 3},
 		workspaceRoot:        tmpDir,
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		state: &AutonomousState{
 			Status:    "running",
 			StartedAt: "2026-01-15T10:00:00Z",

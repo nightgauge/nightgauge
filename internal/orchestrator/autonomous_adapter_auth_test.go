@@ -25,7 +25,7 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	before := time.Now()
 	// Four burst false-negatives across repos — one more than the cascade
@@ -62,7 +62,7 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 		if got := as.perIssueFailureCount[key]; got != 0 {
 			t.Errorf("perIssueFailureCount[%q] = %d, want 0", key, got)
 		}
-		retryAt, ok := as.retryBackoff[key]
+		retryAt, ok := retryDeadline(as, key)
 		if !ok {
 			t.Fatalf("expected retryBackoff[%q] to be set after adapter-auth-failed", key)
 		}
@@ -92,7 +92,7 @@ func TestNotifyComplete_EmptyKindAdapterAuthDetail_RoutesTransient(t *testing.T)
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	as.NotifyComplete("acme/infra", 162, false, false, "",
@@ -105,7 +105,7 @@ func TestNotifyComplete_EmptyKindAdapterAuthDetail_RoutesTransient(t *testing.T)
 	if as.state.Status == "paused" || as.state.Status == "safety_tripped" {
 		t.Errorf("autonomous paused; want still running (reclassified transient)")
 	}
-	if _, ok := as.retryBackoff[key]; !ok {
+	if _, ok := retryDeadline(as, key); !ok {
 		t.Errorf("expected retryBackoff[%q] after reclassification", key)
 	}
 }

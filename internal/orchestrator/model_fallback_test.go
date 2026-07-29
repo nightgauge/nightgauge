@@ -179,7 +179,7 @@ func TestOnPipelineComplete_ModelUnavailable_EnvironmentalNoPause(t *testing.T) 
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -194,7 +194,7 @@ func TestOnPipelineComplete_ModelUnavailable_EnvironmentalNoPause(t *testing.T) 
 	if as.state.Status == "paused" {
 		t.Errorf("autonomous paused after model_unavailable; want still running")
 	}
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after model_unavailable", key)
 	}

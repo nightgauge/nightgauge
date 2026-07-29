@@ -779,6 +779,30 @@ export interface AutonomousStatusResult {
    * Absent when no warnings exist (omitempty on the Go side).
    */
   configWarnings?: { severity: string; kind: string; message: string }[];
+  /**
+   * Issue #195 — issues that failed and are waiting out a backoff before
+   * re-dispatch, soonest deadline first. Absent when nothing is waiting.
+   *
+   * Render these. A run in backoff is otherwise INVISIBLE: it leaves `running`,
+   * its board item flips back to Ready, and a new run appears minutes later
+   * with nothing in between. That is indistinguishable from an idle queue, so
+   * an operator watching a fleet recover from a provider outage sees a stalled
+   * one and starts intervening in a system that was already healing.
+   */
+  pendingRetries?: {
+    repo: string;
+    number: number;
+    title?: string;
+    /** RFC3339. Derive the countdown from this, not from a server-computed
+     * "seconds remaining" — the latter freezes between state pushes. */
+    retryAfter: string;
+    /** Terminal failure kind, e.g. `api_overloaded`. Lets the UI show a
+     * provider blip differently from a defect in our own work. */
+    kind?: string;
+    reason?: string;
+    /** Consecutive retry count for this issue. */
+    attempts: number;
+  }[];
 }
 
 /** One open sub-issue holding a stalled epic back, and why (#4073). */

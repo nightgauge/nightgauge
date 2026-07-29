@@ -319,7 +319,7 @@ func (as *AutonomousScheduler) detectStuckEpics(graph *depgraph.Graph) []StuckEp
 func (as *AutonomousScheduler) isIssueActivelyRecovering(repo string, number int) bool {
 	key := fmt.Sprintf("%s#%d", repo, number)
 	as.mu.Lock()
-	if t, ok := as.retryBackoff[key]; ok && t.After(time.Now()) {
+	if plan, ok := as.retryBackoff[key]; ok && plan.Until.After(time.Now()) {
 		as.mu.Unlock()
 		return true
 	}

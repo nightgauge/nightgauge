@@ -232,7 +232,7 @@ func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
 	as := &AutonomousScheduler{
 		state:                    &AutonomousState{},
 		config:                   AutonomousConfig{StuckEpicDetectionEnabled: true},
-		retryBackoff:             map[string]time.Time{"o/r#143": time.Now().Add(2 * time.Minute)},
+		retryBackoff:             map[string]retryPlan{"o/r#143": {Until: time.Now().Add(2 * time.Minute)}},
 		inReviewRecoveryAttempts: map[string]int{},
 		conflictRestartCount:     map[string]int{},
 		stuckEpicHistoryFn:       func(string, int) (*state.V2RunRecord, bool) { return nil, false },
@@ -243,7 +243,7 @@ func TestDetectStuckEpics_RetryBackoffExcludes(t *testing.T) {
 	}
 
 	// Expire the backoff → now genuinely stuck.
-	as.retryBackoff["o/r#143"] = time.Now().Add(-time.Minute)
+	as.retryBackoff["o/r#143"] = retryPlan{Until: time.Now().Add(-time.Minute)}
 	if got := as.detectStuckEpics(g); len(got) != 1 {
 		t.Fatalf("expired backoff → epic must be stuck, got %d", len(got))
 	}
@@ -259,7 +259,7 @@ func TestDetectStuckEpics_HistoryRecoveryExcludes(t *testing.T) {
 	as := &AutonomousScheduler{
 		state:                    &AutonomousState{},
 		config:                   AutonomousConfig{StuckEpicDetectionEnabled: true},
-		retryBackoff:             map[string]time.Time{},
+		retryBackoff:             map[string]retryPlan{},
 		inReviewRecoveryAttempts: map[string]int{},
 		conflictRestartCount:     map[string]int{},
 		stuckEpicHistoryFn: func(_ string, n int) (*state.V2RunRecord, bool) {

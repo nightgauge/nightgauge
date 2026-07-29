@@ -28,7 +28,7 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -51,7 +51,7 @@ func TestOnPipelineComplete_ApiConnectionLost_TransientNoPause(t *testing.T) {
 		t.Errorf("QuotaCooldownUntil = %q after api-connection-lost, want empty (per-issue backoff only)",
 			as.state.QuotaCooldownUntil)
 	}
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after api-connection-lost", key)
 	}
@@ -88,7 +88,7 @@ func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *te
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -116,7 +116,7 @@ func TestOnPipelineComplete_GitHubNetworkOutage_ShortGlobalCooldownNoPause(t *te
 		t.Errorf("haltQueueOnSlotFailure pause landed despite active network-outage cooldown; #3444 guard should decline it")
 	}
 	// Per-issue backoff matches the cooldown window.
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after github-network-outage", key)
 	}
@@ -146,7 +146,7 @@ func TestNotifyComplete_EmptyKindSocketCloseDetail_RoutesTransient(t *testing.T)
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	as.NotifyComplete("nightgauge/acmeapp-infra", 78, false, false, "",
@@ -159,7 +159,7 @@ func TestNotifyComplete_EmptyKindSocketCloseDetail_RoutesTransient(t *testing.T)
 	if as.state.Status == "paused" {
 		t.Errorf("autonomous paused; want still running (reclassified transient)")
 	}
-	if _, ok := as.retryBackoff[key]; !ok {
+	if _, ok := retryDeadline(as, key); !ok {
 		t.Errorf("expected retryBackoff[%q] after reclassification", key)
 	}
 }

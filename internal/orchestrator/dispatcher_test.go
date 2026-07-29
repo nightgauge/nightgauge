@@ -230,7 +230,7 @@ func TestAutonomousScheduler_SetDispatcher_RoutesThrough(t *testing.T) {
 	as := &AutonomousScheduler{
 		dispatcher:           mock,
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 		state:                &AutonomousState{},
 		stopCh:               make(chan struct{}, 1),
@@ -261,7 +261,7 @@ func TestAutonomousScheduler_SetDispatcher_NoDispatcherUsesLegacy(t *testing.T) 
 			legacyCalled = true
 		},
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 		state:                &AutonomousState{},
 		stopCh:               make(chan struct{}, 1),
