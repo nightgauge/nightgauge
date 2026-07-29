@@ -38,9 +38,10 @@ import (
 // stopped being observed — and a literal in two places is a name waiting to
 // drift.
 const (
-	producerWorkExhaustion     = "work-exhaustion"
-	producerOwnerActionHandoff = "owner-action-handoff"
-	producerStuckEpic          = "watchdog-stuck-epic"
+	producerWorkExhaustion      = "work-exhaustion"
+	producerOwnerActionHandoff  = "owner-action-handoff"
+	producerStuckEpic           = "watchdog-stuck-epic"
+	producerArchitectureApprove = "architecture-approval"
 )
 
 // keyWorkExhaustion is the fleet-idle condition's sticky identity. There is one
@@ -59,6 +60,10 @@ func keyOwnerActionHandoff(repo string, issue int) string {
 
 func keyStuckEpic(repo string, epic int) string {
 	return fmt.Sprintf("stuck-epic:%s#%d", repo, epic)
+}
+
+func keyArchitectureApproval(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerArchitectureApprove, repo, issue)
 }
 
 // isBranchProtectionPunt reports whether a pr-merge punt reason is a
@@ -359,6 +364,84 @@ func (as *AutonomousScheduler) raiseBlockedByDeferral(repo string, issue int, ti
 		ExpiresAt:     expiryFromNow(72 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note why to requeue now, or why it should stay deferred"},
 	})
+}
+
+// --- Producer 7b: architecture-approval gate (per-issue) ---------------------
+
+// raiseArchitectureApproval surfaces an issue the architecture-approval gate
+// (#4098/#4222) halted before feature-dev because a high-impact decision needs
+// human sign-off.
+//
+// Standing: the condition holds until a human approves — the gate re-raises it
+// on every dispatch. The idempotency key is per-issue and carries no timestamp,
+// cost, or attempt counter, so repeated halts collapse onto one card instead of
+// stacking. That is what makes it safe to raise from the failure path.
+//
+// Before #180 this had no card at all: the halt was recorded as a crash and the
+// only human-visible affordance was a transient VSCode toast, which is gone the
+// moment it is dismissed or missed. A gate whose entire purpose is a human
+// decision has to survive until the human makes it.
+func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int, title, detail string) {
+	owner, name := splitRepo(repo)
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyArchitectureApproval(repo, issue),
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Architecture approval required — #%d", issue),
+		Body: fmt.Sprintf("%s\n\nApproving applies the architecture-approval label and requeues the issue; "+
+			"the next run passes the gate and proceeds to feature-dev. "+
+			"Leaving it parks the issue in In review — nothing re-dispatches it and the rest of the queue keeps flowing.",
+			detail),
+		Producer: producerArchitectureApprove,
+		Standing: true,
+		// The condition is binary — the issue is either approved or it is not —
+		// so the fingerprint is constant. That is deliberate: it alerts once and
+		// stays muted until a human resolves it, instead of re-alerting on every
+		// dispatch that re-hits the gate.
+		Fingerprint: "awaiting:architecture-approval",
+		Context:     attention.Context{Repo: repo, Issue: issue},
+		Options: []attention.Option{
+			{ID: "approve", Label: "Approve & re-queue", Verb: attention.VerbIssueApproveArchitecture,
+				Args:  map[string]any{"owner": owner, "repo": name, "issueNumber": issue, "title": title},
+				Style: attention.StyleDefault},
+			noopOption("leave", "Leave for review"),
+		},
+		DefaultAction: "leave",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this architecture is approved, or what needs to change first"},
+	})
+}
+
+// retractArchitectureApproval clears one issue's approval card once the gate is
+// demonstrably satisfied — the issue ran to completion, which it cannot do while
+// the gate is still blocking it.
+//
+// This covers approval granted OUT of band: a human who adds the label with gh
+// (or writes the approval file) never touches the card, and without this it
+// would sit in the inbox indefinitely — the exact "notification that never
+// clears" failure this producer is supposed to avoid, not reproduce.
+//
+// AutoResolveUnobserved retracts whatever is NOT in the observed set, so the
+// observed set is every other open card of this producer. Listing is a local
+// store read, not a forge call, so this costs no API budget.
+func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue int) {
+	if as == nil || as.attention == nil {
+		return
+	}
+	target := keyArchitectureApproval(repo, issue)
+	reqs, err := as.attention.List(attention.ListFilter{})
+	if err != nil {
+		log.Printf("attention: retract %q list failed (fail-open): %v", producerArchitectureApprove, err)
+		return
+	}
+	observed := make([]string, 0, len(reqs))
+	for _, r := range reqs {
+		if r.Producer != producerArchitectureApprove || r.IdempotencyKey == target {
+			continue
+		}
+		observed = append(observed, r.IdempotencyKey)
+	}
+	as.autoResolveAttention(producerArchitectureApprove, observed)
 }
 
 // --- Producer 8: watchdog / stuck-epic (per-epic) ----------------------------

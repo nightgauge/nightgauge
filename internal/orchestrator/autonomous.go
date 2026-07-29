@@ -2822,6 +2822,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if as.state.LifetimeIssueFailures != nil {
 			delete(as.state.LifetimeIssueFailures, key)
 		}
+		// A run cannot complete while the architecture gate is blocking it, so
+		// success proves the approval landed — including approval granted
+		// out-of-band via the label, which never touches the card.
+		as.retractArchitectureApproval(repo, issue)
 		log.Printf("autonomous: completed %s#%d — triggering cascade re-scan + promotion", repo, issue)
 
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
@@ -3331,6 +3335,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
+			// The card is the way back in: the gate is deliberately exempt from
+			// auto_accept_stages, so nothing but a human resolving this will
+			// requeue the issue. Raised after persistState so the record and the
+			// card cannot disagree about the issue's state.
+			as.raiseArchitectureApproval(repo, issue, title, detail)
 			go as.moveIssueToInReview(repo, issue)
 			select {
 			case as.rescanCh <- struct{}{}:

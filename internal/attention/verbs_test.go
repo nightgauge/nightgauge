@@ -6,7 +6,8 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	registered := []string{
 		VerbQueueAdd, VerbIssueRemoveBlockedBy, VerbAutonomousResume, VerbAutonomousRescan,
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
-		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation, VerbNoop,
+		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
+		VerbIssueApproveArchitecture, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -17,8 +18,17 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	if !IsRegisteredVerb(VerbBudgetRaiseCeiling) || !IsRegisteredVerb(VerbRunRetryWithEscalation) {
 		t.Error("the two new E1 verbs must be registered")
 	}
-	// Anything not on the allowlist is rejected — the security boundary.
-	for _, v := range []string{"rm", "shell.exec", "queue.remove", "", "budget.raise"} {
+	// The architecture-approval verb is the first that mutates labels; it must
+	// be registry-gated like any other, never special-cased.
+	if !IsRegisteredVerb(VerbIssueApproveArchitecture) {
+		t.Error("issue.approveArchitecture must be registered")
+	}
+	// Anything not on the allowlist is rejected — the security boundary. The
+	// near-miss spellings of the approval verb must NOT resolve: the executor
+	// resolves the label name from config, so a surface cannot reach a
+	// generic label-mutating verb even by guessing a plausible name.
+	for _, v := range []string{"rm", "shell.exec", "queue.remove", "", "budget.raise",
+		"issue.addLabel", "issue.approveArchitecture ", "issue.approve"} {
 		if IsRegisteredVerb(v) {
 			t.Errorf("verb %q must NOT be registered", v)
 		}

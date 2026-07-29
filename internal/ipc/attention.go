@@ -14,6 +14,7 @@ import (
 	"log"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/config"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -263,6 +264,9 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		}
 		return gh.NewProjectService(c, owner, 0, gh.OwnerTypeUser).RemoveBlockedByNumber(ctx, owner, name, issue, blocker)
 
+	case attention.VerbIssueApproveArchitecture:
+		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
+
 	case attention.VerbProjectSyncStatus:
 		// Not producer-emitted in E1; the extension surface (#325) supplies full
 		// project config for this path. Kept registry-gated for future use.
@@ -303,6 +307,61 @@ func (s *Server) closeIssueBestEffort(ctx context.Context, owner, repo string, n
 		return fmt.Errorf("fetch issue #%d: %w", number, err)
 	}
 	return svc.CloseIssue(ctx, iss.NodeID)
+}
+
+// approveArchitecture grants the architecture-approval gate for one issue.
+//
+// The gate (#4098/#4222) reads approval evidence out-of-band — the approval
+// label on the issue, or an approval file — precisely so it is exempt from
+// human_in_the_loop.auto_accept_stages. This is the label path, executed by the
+// single Go writer so the Action Center can offer it as a one-click option
+// rather than leaving the operator to run gh by hand.
+//
+// The label NAME is resolved from config here, never from opt.Args: the verb
+// can only ever grant this specific gate, and a surface cannot smuggle an
+// arbitrary label onto an arbitrary issue. Label creation is idempotent
+// (LabelService.Create returns an existing label untouched), which matters
+// because a repo that has never gated before has no such label yet.
+//
+// After labelling, the issue is requeued through the same tail as the other
+// override verbs — the gate is only re-evaluated on the next run, so approving
+// without requeuing would leave the issue sidelined in "In review" forever.
+func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name string, issue int) error {
+	if owner == "" || name == "" || issue == 0 {
+		return fmt.Errorf("issue.approveArchitecture: owner/repo/issueNumber required")
+	}
+
+	label := config.DefaultArchitectureApprovalLabel
+	if cfg, err := config.Load(s.workspaceRoot); err == nil && cfg != nil {
+		if resolved := cfg.Pipeline.ResolveArchitectureApprovalLabel(); resolved != "" {
+			label = resolved
+		}
+	}
+
+	c, err := s.resolveClientForRequest(ctx, "", owner, name)
+	if err != nil {
+		return err
+	}
+
+	lbl, err := gh.NewLabelService(c, owner, name).Create(ctx, label,
+		"Human-approved architectural decision — architecture gate passes", "0e8a16")
+	if err != nil {
+		return fmt.Errorf("resolve approval label %q in %s/%s: %w", label, owner, name, err)
+	}
+
+	svc := gh.NewIssueService(c)
+	iss, err := svc.GetIssue(ctx, owner, name, issue)
+	if err != nil {
+		return fmt.Errorf("fetch issue #%d: %w", issue, err)
+	}
+	if err := svc.AddLabels(ctx, iss.NodeID, []string{lbl.ID}); err != nil {
+		return fmt.Errorf("apply %q to #%d: %w", label, issue, err)
+	}
+
+	log.Printf("attention: architecture approval granted for %s#%d (label %q) — clearing cooldown and requeuing",
+		repo, issue, label)
+	s.redispatchAfterOverride(key, repo, issue)
+	return nil
 }
 
 // --- small arg helpers (opt.Args round-trips through JSON: numbers are float64) ---
