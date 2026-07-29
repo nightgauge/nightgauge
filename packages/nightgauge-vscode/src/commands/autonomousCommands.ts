@@ -397,6 +397,14 @@ function reconcileAutonomousBadge(
     running?: { length?: number } | unknown[];
     remaining?: number;
     quotaCooldownUntil?: string;
+    pendingRetries?: {
+      repo: string;
+      number: number;
+      retryAfter: string;
+      kind?: string;
+      reason?: string;
+      attempts: number;
+    }[];
   },
   logger: Logger
 ): void {
@@ -414,9 +422,20 @@ function reconcileAutonomousBadge(
       const cooldownDeadline = parseFutureCooldown(result.quotaCooldownUntil);
       if (cooldownDeadline) {
         sb.showAutonomousCooldown(cooldownDeadline);
-      } else {
-        sb.showAutonomousRunning(runningCount, remaining);
+        break;
       }
+      // Issue #195 — nothing running but issues waiting out a retry backoff is
+      // NOT an idle queue, and "0 running, N remaining" says it is. Only claim
+      // the badge when no run is actually in flight: a live run is the more
+      // informative thing to show, and a backoff on a second issue does not
+      // make the fleet idle.
+      const waiting = pendingRetriesInFuture(result.pendingRetries);
+      if (runningCount === 0 && waiting.length > 0) {
+        const soonest = waiting[0];
+        sb.showAutonomousRetrying(soonest.retry, soonest.until, waiting.length - 1);
+        break;
+      }
+      sb.showAutonomousRunning(runningCount, remaining);
       break;
     }
     case "paused":
@@ -434,6 +453,55 @@ function reconcileAutonomousBadge(
       return;
   }
   setAutonomousContextKeys(result.status);
+}
+
+/** One pending retry whose deadline is still ahead of us. */
+export interface FuturePendingRetry {
+  retry: { repo: string; number: number; kind?: string; reason?: string; attempts: number };
+  until: Date;
+}
+
+/**
+ * Filter the scheduler's pending-retry list to entries still in the future and
+ * order them soonest-first. Issue #195.
+ *
+ * The Go side already excludes expired entries at projection time, but the
+ * snapshot the UI holds ages between pushes — a deadline that was 20s away when
+ * the state arrived is in the past by the next tick. Re-checking here keeps the
+ * badge from announcing a retry that is already due, which would be its own
+ * small lie.
+ */
+export function pendingRetriesInFuture(
+  pending:
+    | {
+        repo: string;
+        number: number;
+        retryAfter: string;
+        kind?: string;
+        reason?: string;
+        attempts: number;
+      }[]
+    | undefined,
+  now: Date = new Date()
+): FuturePendingRetry[] {
+  if (!pending?.length) return [];
+  const out: FuturePendingRetry[] = [];
+  for (const p of pending) {
+    const until = new Date(p.retryAfter);
+    if (Number.isNaN(until.getTime()) || until.getTime() <= now.getTime()) continue;
+    out.push({
+      retry: {
+        repo: p.repo,
+        number: p.number,
+        kind: p.kind,
+        reason: p.reason,
+        attempts: p.attempts,
+      },
+      until,
+    });
+  }
+  out.sort((a, b) => a.until.getTime() - b.until.getTime());
+  return out;
 }
 
 /**

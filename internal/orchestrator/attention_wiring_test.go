@@ -547,7 +547,7 @@ func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
 	// logic elsewhere in the scheduler; nil maps here are fine since Resume()
 	// only ranges over them.
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 	as.conflictRestartCount = map[string]int{}
 	as.refinementCooldown = map[string]time.Time{}
 	as.refinementFailures = map[string]int{}

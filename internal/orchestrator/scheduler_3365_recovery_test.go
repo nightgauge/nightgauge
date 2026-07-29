@@ -436,7 +436,7 @@ func TestOnPipelineComplete_RecoverableKinds_NoLifetimeCap(t *testing.T) {
 				},
 				rescanCh:             make(chan struct{}, 1),
 				perIssueFailureCount: map[string]int{},
-				retryBackoff:         map[string]time.Time{},
+				retryBackoff:         map[string]retryPlan{},
 			}
 
 			before := time.Now()
@@ -450,7 +450,7 @@ func TestOnPipelineComplete_RecoverableKinds_NoLifetimeCap(t *testing.T) {
 			if got := as.perIssueFailureCount[key]; got != 0 {
 				t.Errorf("perIssueFailureCount[%q] = %d after %s, want 0", key, got, kind)
 			}
-			retryAt, ok := as.retryBackoff[key]
+			retryAt, ok := retryDeadline(as, key)
 			if !ok {
 				t.Fatalf("expected retryBackoff[%q] to be set after %s", key, kind)
 			}

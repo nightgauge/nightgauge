@@ -266,7 +266,7 @@ func TestOnPipelineComplete_CascadeTripsAndPauses(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		cascadeTracker:       NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute}),
 	}
 
@@ -319,7 +319,7 @@ func TestOnPipelineComplete_TwoFailuresPlusOneOutsideWindow_NoTrip(t *testing.T)
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		cascadeTracker:       tracker,
 	}
 
@@ -354,7 +354,7 @@ func TestOnPipelineComplete_StallKillDoesNotFeedCascade(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		cascadeTracker:       NewCascadeTracker(CascadeTrackerConfig{Threshold: 3, Window: 30 * time.Minute}),
 	}
 
@@ -386,7 +386,7 @@ func TestResume_ClearsCascadeBreaker(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		conflictRestartCount: map[string]int{},
 		refinementCooldown:   map[string]time.Time{},
 		refinementFailures:   map[string]int{},

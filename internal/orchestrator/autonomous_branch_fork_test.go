@@ -25,7 +25,7 @@ func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	cases := []struct {
 		repo string
@@ -58,7 +58,7 @@ func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *
 		if got := as.perIssueFailureCount[key]; got != 0 {
 			t.Errorf("perIssueFailureCount[%q] = %d, want 0", key, got)
 		}
-		if _, ok := as.retryBackoff[key]; ok {
+		if _, ok := retryDeadline(as, key); ok {
 			t.Errorf("retryBackoff[%q] was set — no retry can clear a fork, so scheduling one is the defect", key)
 		}
 	}
@@ -77,7 +77,7 @@ func TestNotifyComplete_EmptyKindBranchForkedDetail_Reclassifies(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	addRunning(as, "nightgauge/nightgauge", 163, "push rejected")
 	as.NotifyComplete("nightgauge/nightgauge", 163, false, false,
@@ -88,7 +88,7 @@ func TestNotifyComplete_EmptyKindBranchForkedDetail_Reclassifies(t *testing.T) {
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
 		t.Errorf("LifetimeIssueFailures[%q] = %d, want 0 — the raw rejection must reclassify to branch_forked", key, got)
 	}
-	if _, ok := as.retryBackoff[key]; ok {
+	if _, ok := retryDeadline(as, key); ok {
 		t.Errorf("retryBackoff[%q] was set — the reclassified fork must not be queued for retry", key)
 	}
 }

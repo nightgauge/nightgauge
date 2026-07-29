@@ -579,7 +579,7 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 		rescanCh:             make(chan struct{}, 1),
 		conflictRestartCount: map[string]int{},
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	key := "R#80"
@@ -592,7 +592,7 @@ func TestOnPipelineComplete_LegacyConflictRestart_BoundedThenTrueFailure(t *test
 			t.Fatalf("attempt %d: conflictRestartCount=%d, want %d", i, got, i)
 		}
 		// Backoff scheduled, issue not yet a terminal failure.
-		if _, ok := as.retryBackoff[key]; !ok {
+		if _, ok := retryDeadline(as, key); !ok {
 			t.Errorf("attempt %d: expected a short retry backoff", i)
 		}
 	}
@@ -633,7 +633,7 @@ func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -657,7 +657,7 @@ func TestOnPipelineComplete_StreamIdleTimeout_LongBackoff(t *testing.T) {
 	// Backoff must be ~1 hour (the streamIdleTimeoutBackoff constant), not
 	// the default exponential backoff for first-failure (which would be much
 	// shorter and re-fire under the same rate-limit conditions).
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set", key)
 	}
@@ -701,7 +701,7 @@ func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -716,7 +716,7 @@ func TestOnPipelineComplete_RateLimitQuotaExhausted_LongBackoff(t *testing.T) {
 	if got := as.perIssueFailureCount[key]; got != 0 {
 		t.Errorf("perIssueFailureCount[%q] = %d after rate-limit-quota-exhausted, want 0", key, got)
 	}
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set", key)
 	}
@@ -759,7 +759,7 @@ func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -782,7 +782,7 @@ func TestOnPipelineComplete_StallKill_NoLifetimeCap(t *testing.T) {
 	// Backoff must be ~30 minutes (stallKillBackoff), not the default
 	// exponential backoff (2 min for first failure) that would re-fire too
 	// quickly under the same conditions.
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after stall-kill", key)
 	}
@@ -835,7 +835,7 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3}),
 	}
 
@@ -860,7 +860,7 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 		t.Errorf("QuotaCooldownUntil = %q after api-overloaded, want empty (no global cooldown)", as.state.QuotaCooldownUntil)
 	}
 	// Short ~5m backoff (apiOverloadedBackoff), not the 30m/1h infra backoffs.
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after api-overloaded", key)
 	}
@@ -922,7 +922,7 @@ func TestTransientFailuresNeverTripTheCircuitBreaker(t *testing.T) {
 				state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
 				rescanCh:             make(chan struct{}, 16),
 				perIssueFailureCount: map[string]int{},
-				retryBackoff:         map[string]time.Time{},
+				retryBackoff:         map[string]retryPlan{},
 				safetyRails:          rails,
 			}
 
@@ -997,7 +997,7 @@ func TestOnPipelineComplete_StallKill_RepeatedDoesNotBlockIssue(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	key := "nightgauge/nightgauge#42"
@@ -1038,7 +1038,7 @@ func TestNotifyComplete_EmptyKindButQuotaMarkerInDetail_AppliesCooldown(t *testi
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	// Real production failure-detail text observed in the 2026-05-10 incident.
@@ -1076,7 +1076,7 @@ func TestNotifyComplete_EmptyKindAndNoMarker_FallsThroughToGeneric(t *testing.T)
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	// Generic failure detail that ClassifyTerminalKind cannot match.
@@ -1116,7 +1116,7 @@ func TestOnPipelineComplete_OtherFailures_StillIncrementLifetime(t *testing.T) {
 				},
 				rescanCh:             make(chan struct{}, 1),
 				perIssueFailureCount: map[string]int{},
-				retryBackoff:         map[string]time.Time{},
+				retryBackoff:         map[string]retryPlan{},
 			}
 
 			as.onPipelineComplete("R", 5, false, false, kind, "")
@@ -1144,7 +1144,7 @@ func TestLifetimeIssueFailures_PersistAcrossResume(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 	// Two failures of the same issue.
 	as.state.Running = []RunningItem{{Repo: "R", Number: 42}}
@@ -1194,7 +1194,7 @@ func TestClearIssueFailures(t *testing.T) {
 			LifetimeIssueFailures: map[string]int{"R#1": 2, "R#2": 5, "R#3": 1},
 		},
 		perIssueFailureCount: map[string]int{"R#1": 2},
-		retryBackoff:         map[string]time.Time{"R#1": time.Now().Add(time.Hour)},
+		retryBackoff:         map[string]retryPlan{"R#1": {Until: time.Now().Add(time.Hour)}},
 	}
 	if n := as.ClearIssueFailures("R#1"); n != 1 {
 		t.Errorf("expected 1 cleared, got %d", n)
@@ -2295,9 +2295,9 @@ func TestFilterRepos_PrunesPersistedState(t *testing.T) {
 		"Org/alpha#10": 2,
 		"Org/beta#20":  1,
 	}
-	as.retryBackoff = map[string]time.Time{
-		"Org/alpha#10": time.Now().Add(5 * time.Minute),
-		"Org/beta#20":  time.Now().Add(10 * time.Minute),
+	as.retryBackoff = map[string]retryPlan{
+		"Org/alpha#10": {Until: time.Now().Add(5 * time.Minute)},
+		"Org/beta#20":  {Until: time.Now().Add(10 * time.Minute)},
 	}
 	as.conflictRestartCount = map[string]int{
 		"Org/gamma#30": 1,
@@ -2321,7 +2321,7 @@ func TestFilterRepos_PrunesPersistedState(t *testing.T) {
 	if _, ok := as.perIssueFailureCount["Org/beta#20"]; ok {
 		t.Error("expected beta backoff entry to be pruned from perIssueFailureCount")
 	}
-	if _, ok := as.retryBackoff["Org/beta#20"]; ok {
+	if _, ok := retryDeadline(as, "Org/beta#20"); ok {
 		t.Error("expected beta entry to be pruned from retryBackoff")
 	}
 	if _, ok := as.conflictRestartCount["Org/gamma#30"]; ok {
@@ -2788,7 +2788,7 @@ func TestRefinementState_PrunedByFilterRepos(t *testing.T) {
 			"O/remove#3": 2,
 		},
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 	}
 
@@ -3490,7 +3490,7 @@ func TestStopSignalsRefinementGoroutine(t *testing.T) {
 		stopRefinementCh:     make(chan struct{}, 1),
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 		refinementCooldown:   make(map[string]time.Time),
 		refinementFailures:   make(map[string]int),
@@ -3530,7 +3530,7 @@ func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 		stopRefinementCh:     make(chan struct{}, 1),
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 		refinementCooldown:   make(map[string]time.Time),
 		refinementFailures:   make(map[string]int),
@@ -3939,7 +3939,7 @@ func TestOnPipelineComplete_QuotaExhausted_SetsGlobalCooldown(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	resetsAt := time.Now().Add(3 * time.Hour).Unix()
@@ -3979,7 +3979,7 @@ func TestOnPipelineComplete_QuotaExhausted_NoHintUsesFloor(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -4004,7 +4004,7 @@ func TestRunCycle_SuspendsDispatchDuringQuotaCooldown(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		onDispatch: func(_ string, _ string, _ int, _ string) {
 			dispatched++
 		},
@@ -4035,7 +4035,7 @@ func TestRunCycle_ResumesAfterQuotaCooldownExpires(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	active, _ := as.quotaCooldownActiveLocked()
@@ -4136,7 +4136,7 @@ func TestRunCycle_CooldownEmitsRejectionReason(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 	as.runCycle(context.Background())
 
@@ -4168,7 +4168,7 @@ func TestRunCycle_GraphCacheHit(t *testing.T) {
 		state:                &AutonomousState{Status: "running"},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
 		buildCalls++
@@ -4197,7 +4197,7 @@ func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
 		state:                &AutonomousState{Status: "running"},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
 		buildCalls++
@@ -4229,7 +4229,7 @@ func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	as.onPipelineComplete("nightgauge/nightgauge", 3661, false, false,
@@ -4248,7 +4248,7 @@ func TestOnPipelineComplete_IssueClosed_NoLifetimeIncrement(t *testing.T) {
 			key, got)
 	}
 	// No retry backoff — the issue is closed, not retryable.
-	if _, ok := as.retryBackoff[key]; ok {
+	if _, ok := retryDeadline(as, key); ok {
 		t.Errorf("expected no retryBackoff for issue-closed, but one was set")
 	}
 	// Slot must be freed.
@@ -4272,7 +4272,7 @@ func TestOnPipelineComplete_IssueClosed_NoCircuitBreaker(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		// cascadeTracker intentionally nil — a nil tracker means no cascade
 		// counting happens; if the issue-closed branch incorrectly falls
 		// through to the generic failure path it would panic on nil dereference
@@ -4315,7 +4315,7 @@ func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 	}
 
 	before := time.Now()
@@ -4345,7 +4345,7 @@ func TestOnPipelineComplete_BlockedDependency_NonFailure(t *testing.T) {
 	}
 	// Issue stays eligible: a modest (~5m) backoff is set so it re-dispatches
 	// later rather than being parked forever or hot-looping.
-	retryAt, ok := as.retryBackoff[key]
+	retryAt, ok := retryDeadline(as, key)
 	if !ok {
 		t.Fatalf("expected retryBackoff[%q] to be set after blocked-dependency (issue stays eligible)", key)
 	}
@@ -4378,7 +4378,7 @@ func TestOnPipelineComplete_BlockedDependency_NoCircuitBreaker(t *testing.T) {
 		},
 		rescanCh:             make(chan struct{}, 1),
 		perIssueFailureCount: map[string]int{},
-		retryBackoff:         map[string]time.Time{},
+		retryBackoff:         map[string]retryPlan{},
 		// cascadeTracker intentionally nil.
 	}
 
@@ -4719,4 +4719,152 @@ func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
 	if resolved != nil {
 		t.Errorf("expected nil map when issueSvc is nil, got %+v", resolved)
 	}
+}
+
+// TestPendingRetriesAreVisibleInExportedState is the regression test for #195:
+// a run waiting out a backoff must be distinguishable from an idle queue. The
+// deadline used to live only in an unexported map and a log line, so the UI
+// rendered a recovering fleet as a stalled one.
+func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
+	dir := t.TempDir()
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 3},
+		state: &AutonomousState{
+			Status:                "running",
+			Running:               []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135, Title: "worktree reuse"}},
+			LifetimeIssueFailures: map[string]int{},
+		},
+		rescanCh:             make(chan struct{}, 8),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3}),
+		workspaceRoot:        dir,
+	}
+
+	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
+		TerminalKindApiOverloaded, "API Error: Overloaded")
+
+	as.mu.Lock()
+	pending := as.state.PendingRetries
+	as.mu.Unlock()
+
+	if len(pending) != 1 {
+		t.Fatalf("PendingRetries = %d entries, want 1 — a waiting run must be visible", len(pending))
+	}
+	p := pending[0]
+	if p.Repo != "nightgauge/nightgauge" || p.Number != 135 {
+		t.Errorf("PendingRetry identity = %s#%d, want nightgauge/nightgauge#135", p.Repo, p.Number)
+	}
+	if p.Kind != TerminalKindApiOverloaded {
+		t.Errorf("Kind = %q, want %q — the UI must tell weather from a defect", p.Kind, TerminalKindApiOverloaded)
+	}
+	if p.Reason == "" {
+		t.Error("Reason is empty; a deadline with no reason is what made this invisible")
+	}
+	if p.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1", p.Attempts)
+	}
+	retryAt, err := time.Parse(time.RFC3339, p.RetryAfter)
+	if err != nil {
+		t.Fatalf("RetryAfter %q is not RFC3339: %v", p.RetryAfter, err)
+	}
+	if !retryAt.After(time.Now()) {
+		t.Errorf("RetryAfter %v is not in the future", retryAt)
+	}
+
+	// A second consecutive transient failure must accumulate, not reset — this
+	// is the counter #194 needs to bound an unbounded loop.
+	as.mu.Lock()
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135, Title: "worktree reuse"}}
+	as.mu.Unlock()
+	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
+		TerminalKindApiOverloaded, "API Error: Overloaded")
+
+	as.mu.Lock()
+	pending = as.state.PendingRetries
+	as.mu.Unlock()
+	if len(pending) != 1 {
+		t.Fatalf("PendingRetries = %d, want 1 (same issue, not a duplicate)", len(pending))
+	}
+	if pending[0].Attempts != 2 {
+		t.Errorf("Attempts = %d after 2 consecutive transient failures, want 2", pending[0].Attempts)
+	}
+}
+
+// TestPendingRetriesExcludeExpiredAndSortByDeadline pins the projection rules:
+// an elapsed deadline means eligible-now (not waiting), and output order is
+// stable despite randomized map iteration.
+func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
+	now := time.Now()
+	as := &AutonomousScheduler{
+		state: &AutonomousState{
+			Failed: []FailedItem{{Repo: "o/r", Number: 2, Title: "second"}},
+		},
+		retryBackoff: map[string]retryPlan{
+			"o/r#1": {Until: now.Add(-time.Minute), Kind: "api_overloaded"}, // expired
+			"o/r#2": {Until: now.Add(10 * time.Minute), Kind: "stall_kill", Attempts: 3},
+			"o/r#3": {Until: now.Add(2 * time.Minute), Kind: "api_overloaded", Attempts: 1},
+		},
+	}
+
+	got := as.pendingRetriesLocked()
+	if len(got) != 2 {
+		t.Fatalf("got %d pending retries, want 2 (the expired one must be excluded)", len(got))
+	}
+	if got[0].Number != 3 || got[1].Number != 2 {
+		t.Errorf("order = [#%d #%d], want [#3 #2] (soonest deadline first)", got[0].Number, got[1].Number)
+	}
+	if got[1].Title != "second" {
+		t.Errorf("Title = %q, want %q (resolved from the failure record)", got[1].Title, "second")
+	}
+	if got[1].Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", got[1].Attempts)
+	}
+
+	// Empty and all-expired both project to nil so `omitempty` drops the key.
+	as.retryBackoff = map[string]retryPlan{"o/r#1": {Until: now.Add(-time.Hour)}}
+	if got := as.pendingRetriesLocked(); got != nil {
+		t.Errorf("all-expired projected to %v, want nil", got)
+	}
+}
+
+// TestPendingRetryClearsOnSuccess proves the entry does not outlive the wait.
+func TestPendingRetryClearsOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	as := &AutonomousScheduler{
+		config:               AutonomousConfig{MaxConcurrent: 3},
+		state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},
+		rescanCh:             make(chan struct{}, 8),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3}),
+		workspaceRoot:        dir,
+	}
+
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135}}
+	as.onPipelineComplete("nightgauge/nightgauge", 135, false, false,
+		TerminalKindApiOverloaded, "API Error: Overloaded")
+	as.mu.Lock()
+	n := len(as.state.PendingRetries)
+	as.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected 1 pending retry after the failure, got %d", n)
+	}
+
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 135}}
+	as.onPipelineComplete("nightgauge/nightgauge", 135, true, false, "", "")
+
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if len(as.state.PendingRetries) != 0 {
+		t.Errorf("PendingRetries = %v after success, want empty", as.state.PendingRetries)
+	}
+}
+
+// retryDeadline reads just the deadline out of a retryPlan, keeping the many
+// existing backoff assertions expressed in terms of a time.Time (#195 changed
+// retryBackoff's value from a bare time to a plan carrying the reason too).
+func retryDeadline(as *AutonomousScheduler, key string) (time.Time, bool) {
+	p, ok := as.retryBackoff[key]
+	return p.Until, ok
 }

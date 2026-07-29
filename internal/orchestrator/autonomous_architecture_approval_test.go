@@ -27,7 +27,7 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	detail := "ARCHITECTURE APPROVAL REQUIRED — issue #900 is a high-impact decision " +
 		"that must be human-approved before feature-dev implements it."
@@ -61,7 +61,7 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 		if got := as.perIssueFailureCount[key]; got != 0 {
 			t.Errorf("perIssueFailureCount[%q] = %d, want 0", key, got)
 		}
-		if _, ok := as.retryBackoff[key]; ok {
+		if _, ok := retryDeadline(as, key); ok {
 			t.Errorf("retryBackoff[%q] was set — no retry can grant approval, so scheduling one is the defect", key)
 		}
 	}
@@ -78,7 +78,7 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	const repo, issue = "acme/platform", 900
 	key := fmt.Sprintf("%s#%d", repo, issue)
@@ -111,7 +111,7 @@ func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 	// Wire real rails: the cascade fixture leaves them nil, and a skipped test
 	// would assert nothing about the breaker that actually stopped the fleet.
 	as.safetyRails = NewSafetyRails(SafetyConfig{CircuitBreakerMax: 3})
@@ -144,7 +144,7 @@ func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	as.state.LifetimeIssueFailures = map[string]int{}
 	as.perIssueFailureCount = map[string]int{}
-	as.retryBackoff = map[string]time.Time{}
+	as.retryBackoff = map[string]retryPlan{}
 
 	addRunning(as, "acme/platform", 900, "awaiting approval")
 	as.NotifyComplete("acme/platform", 900, false, false,
@@ -156,7 +156,7 @@ func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
 		t.Errorf("LifetimeIssueFailures[%q] = %d, want 0 — the raw gate text must reclassify to architecture_approval_required", key, got)
 	}
-	if _, ok := as.retryBackoff[key]; ok {
+	if _, ok := retryDeadline(as, key); ok {
 		t.Errorf("retryBackoff[%q] was set — the reclassified halt must not be queued for retry", key)
 	}
 }

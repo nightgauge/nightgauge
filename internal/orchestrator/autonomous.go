@@ -276,6 +276,19 @@ type AutonomousState struct {
 	QuotaCooldownUntil  string `json:"quotaCooldownUntil,omitempty"`
 	QuotaCooldownReason string `json:"quotaCooldownReason,omitempty"`
 
+	// PendingRetries lists issues that failed and are waiting out a backoff
+	// before re-dispatch, newest deadline last. Projected from the scheduler's
+	// in-memory retryBackoff on every persist.
+	//
+	// This exists because a run in backoff was previously INVISIBLE: the
+	// deadline lived only in an unexported map and a log line, so the UI could
+	// not distinguish "recovering from a provider outage" from "idle, nothing
+	// to do". An operator watching a self-healing fleet saw a stalled one and
+	// reasonably started intervening. Only entries whose deadline is still in
+	// the future appear — an expired entry means eligible-now, not waiting.
+	// Issue #195.
+	PendingRetries []PendingRetry `json:"pendingRetries,omitempty"`
+
 	// ConfigWarnings holds config-coherence warnings produced at Run() startup.
 	// Cleared and re-generated on each Run() call. Persisted so
 	// `autonomous status` can surface them after the fact.
@@ -332,6 +345,64 @@ const stallKillBackoff = 30 * time.Minute
 // applied: only the affected issue waits while the rest of the queue keeps
 // flowing. Issue #3835 (WS4).
 const apiOverloadedBackoff = 5 * time.Minute
+
+// PendingRetry is the exported, operator-facing view of one waiting issue. It
+// is the wire form of retryPlan, carrying everything a UI needs to render
+// "Retrying in 4:12 — provider overloaded (attempt 2)" without consulting the
+// scheduler.
+type PendingRetry struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
+	Title  string `json:"title,omitempty"`
+	// RetryAfter is RFC3339. The UI derives its countdown from this rather than
+	// a server-computed "seconds remaining", so the display stays truthful
+	// between state pushes instead of freezing at the last snapshot.
+	RetryAfter string `json:"retryAfter"`
+	// Kind is the terminal failure kind (e.g. api_overloaded). Lets the UI show
+	// a provider blip differently from a defect in our own work.
+	Kind string `json:"kind,omitempty"`
+	// Reason is the operator-facing phrasing of Kind.
+	Reason string `json:"reason,omitempty"`
+	// Attempts is the consecutive retry count for this issue.
+	Attempts int `json:"attempts"`
+}
+
+// retryPlan is one issue's pending retry: when it may run again, and why it is
+// waiting. The "why" is not decoration — a bare deadline is what made a run in
+// backoff indistinguishable from an idle queue, so an operator watching a
+// provider outage saw a stalled fleet rather than a recovering one (#195).
+type retryPlan struct {
+	// Until is the earliest time the issue may be re-dispatched.
+	Until time.Time
+	// Kind is the terminal failure kind that caused the wait (e.g.
+	// api_overloaded), so the UI can distinguish weather from a real defect.
+	Kind string
+	// Reason is the operator-facing phrasing of Kind.
+	Reason string
+	// Attempts counts consecutive retries for this issue. It survives
+	// re-dispatch (the entry is removed only on success or manual triage), so
+	// it is a true consecutive count — and it is the counter #194 needs to
+	// escalate backoff and stop an unbounded loop.
+	Attempts int
+}
+
+// scheduleRetryLocked is the single writer for retryBackoff. It owns the nil-map
+// guard that was previously copy-pasted at all eleven call sites and, more
+// importantly, makes it impossible to record a deadline without also recording
+// the reason the operator needs to see.
+//
+// Caller must hold as.mu.
+func (as *AutonomousScheduler) scheduleRetryLocked(key, kind, reason string, until time.Time) {
+	if as.retryBackoff == nil {
+		as.retryBackoff = make(map[string]retryPlan)
+	}
+	as.retryBackoff[key] = retryPlan{
+		Until:    until,
+		Kind:     kind,
+		Reason:   reason,
+		Attempts: as.retryBackoff[key].Attempts + 1,
+	}
+}
 
 // blockedDependencyBackoff is the modest per-issue backoff applied when a
 // dispatched issue is deferred because its blockedBy dependencies are still
@@ -614,10 +685,15 @@ type AutonomousScheduler struct {
 	// Key: "repo#number" (e.g. "acme/mobile#152")
 	perIssueFailureCount map[string]int
 
-	// retryBackoff holds the earliest time each failed issue may be retried.
-	// Key: "repo#number". Cleared on Resume() so explicit user action bypasses
-	// the backoff. Not persisted — resets to zero on server restart.
-	retryBackoff map[string]time.Time
+	// retryBackoff holds the earliest time each failed issue may be retried, and
+	// why it is waiting. Key: "repo#number". Cleared on Resume() so explicit user
+	// action bypasses the backoff. Not persisted — resets to zero on server
+	// restart — but projected into AutonomousState.PendingRetries on every
+	// persist so the UI can render the wait (#195).
+	//
+	// Write ONLY through scheduleRetryLocked: a deadline with no reason attached
+	// is what made a retrying run indistinguishable from an idle one.
+	retryBackoff map[string]retryPlan
 
 	// conflictRestartCount tracks how many times each issue hit the legacy
 	// fresh-branch conflict-restart path. As of #4072 the primary conflict path
@@ -784,7 +860,7 @@ func NewAutonomousScheduler(
 		stopRefinementCh:     make(chan struct{}, 1),
 		rescanCh:             make(chan struct{}, 1), // buffered so sends never block
 		perIssueFailureCount: make(map[string]int),
-		retryBackoff:         make(map[string]time.Time),
+		retryBackoff:         make(map[string]retryPlan),
 		conflictRestartCount: make(map[string]int),
 		refinementSem:        make(chan struct{}, refinementSlots),
 		refinementCooldown:   make(map[string]time.Time),
@@ -1510,7 +1586,7 @@ func (as *AutonomousScheduler) Resume() {
 		// Clear per-issue backoff and conflict restart counts so the user's
 		// explicit resume bypasses all cooldowns.
 		as.perIssueFailureCount = make(map[string]int)
-		as.retryBackoff = make(map[string]time.Time)
+		as.retryBackoff = make(map[string]retryPlan)
 		as.conflictRestartCount = make(map[string]int)
 		as.refinementCooldown = make(map[string]time.Time)
 		as.refinementFailures = make(map[string]int)
@@ -2341,7 +2417,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// Snapshot backoff map under the lock so we don't hold it during the loop.
 	backoffSnapshot := make(map[string]time.Time, len(as.retryBackoff))
 	for k, v := range as.retryBackoff {
-		backoffSnapshot[k] = v
+		backoffSnapshot[k] = v.Until
 	}
 	// Capture the "open PR is BLOCKED" set (refreshed on fresh builds by
 	// refreshBlockedReadyPRs). The map is replaced wholesale, never mutated in
@@ -2887,11 +2963,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				// once the TypeScript layer creates a fresh branch from current main.
 				as.recordFailureLocked(repo, issue, title, now,
 					fmt.Sprintf("conflict restart #%d — fresh branch will be created", restartNum))
-				if as.retryBackoff == nil {
-					as.retryBackoff = make(map[string]time.Time)
-				}
 				// Short backoff: 30s so the fresh branch is ready before the next scan.
-				as.retryBackoff[key] = time.Now().Add(30 * time.Second)
+				as.scheduleRetryLocked(key, "conflict_restart",
+					fmt.Sprintf("branch collision — fresh branch will be created (restart #%d)", restartNum),
+					time.Now().Add(30*time.Second))
 				log.Printf("autonomous: conflict restart #%d/%d for %s — skipping circuit breaker, retry in 30s",
 					restartNum, MaxConflictRestarts, key)
 				// Skip circuit-breaker increment — fall through to re-scan.
@@ -2925,10 +3000,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			as.recordFailureLocked(repo, issue, title, now,
 				"github-quota-low (GitHub API) — environmental, will retry after bucket reset")
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = resetAt
+			as.scheduleRetryLocked(key, terminalFailureKind,
+				"GitHub API quota low — waiting for the rate-limit bucket to reset", resetAt)
 			as.applyGitHubQuotaCooldownLocked(resetAt, "pipeline-start preflight: bucket below headroom")
 			log.Printf("autonomous: github-quota-low for %s — environmental, retry after %s (no lifetime-cap increment)",
 				key, resetAt.UTC().Format(time.RFC3339))
@@ -2961,10 +3034,8 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			resetAt := time.Now().Add(githubNetworkOutageCooldown)
 			as.recordFailureLocked(repo, issue, title, now,
 				"github-network-outage (api.github.com unreachable) — environmental, will retry after cooldown")
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = resetAt
+			as.scheduleRetryLocked(key, terminalFailureKind,
+				"api.github.com unreachable — network outage", resetAt)
 			as.applyGitHubQuotaCooldownLocked(resetAt, "pipeline-start preflight: api.github.com unreachable (network outage)")
 			log.Printf("autonomous: github-network-outage for %s — environmental, retry after %s (no lifetime-cap increment, no pause)",
 				key, resetAt.UTC().Format(time.RFC3339))
@@ -3002,10 +3073,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			as.recordFailureLocked(repo, issue, title, now,
 				fmt.Sprintf("%s (Anthropic API) — environmental, will retry after 1h", label))
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(streamIdleTimeoutBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(streamIdleTimeoutBackoff))
 			// #3431: GLOBAL cooldown derived from the failure-text resetsAt
 			// hint when present (preferred — runs until the actual bucket
 			// reset), or the streamIdleTimeoutBackoff floor as a fallback.
@@ -3043,10 +3111,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if terminalFailureKind == TerminalKindStallKill {
 			as.recordFailureLocked(repo, issue, title, now,
 				"stall-killed (transient) — will retry after backoff")
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(stallKillBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, "stage stalled and was killed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
@@ -3085,10 +3150,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			as.recordFailureLocked(repo, issue, title, now,
 				label+" — will retry after backoff")
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(apiOverloadedBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(apiOverloadedBackoff))
 			log.Printf("autonomous: %s for %s — transient, retry in %v (no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, apiOverloadedBackoff)
 			as.persistStateLocked()
@@ -3125,10 +3187,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			as.recordFailureLocked(repo, issue, title, now,
 				"adapter-auth-failed (retryable infra) — will retry after backoff — "+detail)
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(stallKillBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, "adapter auth pre-flight failed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
@@ -3157,10 +3216,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		if terminalFailureKind == TerminalKindModelUnavailable {
 			as.recordFailureLocked(repo, issue, title, now,
 				"model unavailable on plan (downgrade ladder exhausted) — will retry after backoff")
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(streamIdleTimeoutBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, "model unavailable from the provider", time.Now().Add(streamIdleTimeoutBackoff))
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
@@ -3189,10 +3245,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			terminalFailureKind == TerminalKindBudgetCeiling {
 			as.recordFailureLocked(repo, issue, title, now,
 				fmt.Sprintf("%s (recoverable) — will retry after backoff", terminalFailureKind))
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(stallKillBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, "recoverable — work was preserved", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
 			as.persistStateLocked()
@@ -3226,10 +3279,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				detail = "blocked-dependency deferral — blockedBy dependencies still open"
 			}
 			as.recordFailureLocked(repo, issue, title, now, detail)
-			if as.retryBackoff == nil {
-				as.retryBackoff = make(map[string]time.Time)
-			}
-			as.retryBackoff[key] = time.Now().Add(blockedDependencyBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, detail, time.Now().Add(blockedDependencyBackoff))
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
 			as.persistStateLocked()
@@ -3452,11 +3502,11 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.perIssueFailureCount = make(map[string]int)
 		}
 		if as.retryBackoff == nil {
-			as.retryBackoff = make(map[string]time.Time)
+			as.retryBackoff = make(map[string]retryPlan)
 		}
 		as.perIssueFailureCount[key]++
 		backoff := issueBackoffDuration(as.perIssueFailureCount[key])
-		as.retryBackoff[key] = time.Now().Add(backoff)
+		as.scheduleRetryLocked(key, terminalFailureKind, failureDetail, time.Now().Add(backoff))
 
 		// #3020: Increment the lifetime (cross-session) failure count. This
 		// survives Resume(), so a chronically-failing issue cannot be retried
@@ -4250,10 +4300,83 @@ func (as *AutonomousScheduler) persistState() {
 }
 
 // persistStateLocked writes state to disk. Caller must hold as.mu.
+// pendingRetriesLocked projects retryBackoff into its exported form, keeping
+// only entries still in the future and ordering them by deadline so the
+// soonest-to-run is first and the serialized output is stable across writes
+// (Go map iteration is randomized; an unsorted slice would churn the state file
+// and any diff of it).
+//
+// Caller must hold as.mu.
+func (as *AutonomousScheduler) pendingRetriesLocked() []PendingRetry {
+	if len(as.retryBackoff) == 0 {
+		return nil
+	}
+	// Titles are not carried on retryPlan — they live on the failure record the
+	// same handler just wrote. Index them once rather than scanning per entry.
+	titles := make(map[string]string, len(as.state.Failed))
+	for _, f := range as.state.Failed {
+		titles[fmt.Sprintf("%s#%d", f.Repo, f.Number)] = f.Title
+	}
+
+	now := time.Now()
+	out := make([]PendingRetry, 0, len(as.retryBackoff))
+	for key, plan := range as.retryBackoff {
+		if !plan.Until.After(now) {
+			continue // expired: eligible now, not waiting
+		}
+		repo, number, ok := splitRepoIssueKey(key)
+		if !ok {
+			continue
+		}
+		out = append(out, PendingRetry{
+			Repo:       repo,
+			Number:     number,
+			Title:      titles[key],
+			RetryAfter: plan.Until.UTC().Format(time.RFC3339),
+			Kind:       plan.Kind,
+			Reason:     plan.Reason,
+			Attempts:   plan.Attempts,
+		})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RetryAfter != out[j].RetryAfter {
+			return out[i].RetryAfter < out[j].RetryAfter
+		}
+		if out[i].Repo != out[j].Repo {
+			return out[i].Repo < out[j].Repo
+		}
+		return out[i].Number < out[j].Number
+	})
+	return out
+}
+
+// splitRepoIssueKey parses the "owner/repo#number" key used throughout the
+// scheduler's in-memory maps.
+func splitRepoIssueKey(key string) (repo string, number int, ok bool) {
+	i := strings.LastIndex(key, "#")
+	if i <= 0 || i == len(key)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(key[i+1:])
+	if err != nil {
+		return "", 0, false
+	}
+	return key[:i], n, true
+}
+
 func (as *AutonomousScheduler) persistStateLocked() {
 	if as.workspaceRoot == "" {
 		return
 	}
+	// Project the in-memory backoff map onto the exported state before every
+	// write, so "this issue is waiting, and why" reaches the UI on the same
+	// state push that removed it from Running (#195). Rebuilt from scratch each
+	// time rather than mutated, so a retry that dispatched or an issue that was
+	// cleared simply stops appearing.
+	as.state.PendingRetries = as.pendingRetriesLocked()
 	data, err := json.MarshalIndent(as.state, "", "  ")
 	if err != nil {
 		log.Printf("autonomous: failed to marshal state: %v", err)

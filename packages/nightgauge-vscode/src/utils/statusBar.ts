@@ -608,6 +608,45 @@ export class StatusBarManager {
   }
 
   /**
+   * Show that the queue is waiting out a retry backoff after a transient
+   * failure. Issue #195.
+   *
+   * Without this the badge reads "Autonomous: 0 running, N remaining" — which
+   * is what an idle queue looks like — so a fleet recovering from a provider
+   * outage was indistinguishable from a stuck one, and the reasonable operator
+   * response was to start intervening in a system that was already healing.
+   *
+   * Logically still running, like the cooldown badge: dispatch resumes on its
+   * own when the deadline expires. The UI just stops lying about why nothing
+   * is moving.
+   */
+  showAutonomousRetrying(
+    retry: { repo: string; number: number; kind?: string; reason?: string; attempts: number },
+    until: Date,
+    alsoWaiting: number,
+    now: Date = new Date()
+  ): void {
+    this.state = "running";
+    this.currentStage = null;
+
+    const remaining = formatCooldownRemaining(until, now);
+    const others = alsoWaiting > 0 ? ` +${alsoWaiting}` : "";
+    const attemptSuffix = retry.attempts > 1 ? ` (attempt ${retry.attempts})` : "";
+    this.item.text = `$(sync) Autonomous: retrying #${retry.number} in ${remaining}${others}`;
+    this.item.tooltip =
+      `Autonomous mode: waiting to retry after a transient failure.\n` +
+      `${retry.repo}#${retry.number}${attemptSuffix}\n` +
+      `${retry.reason || retry.kind || "transient failure"}\n` +
+      `Retries ${until.toISOString()} (${remaining} remaining).\n` +
+      (alsoWaiting > 0 ? `${alsoWaiting} other issue(s) also waiting.\n` : "") +
+      `Nothing is stuck — dispatch resumes automatically.\n` +
+      `Click for status.`;
+    this.item.backgroundColor = STATUS_COLORS.paused;
+    this.item.command = "nightgauge.autonomousStatus";
+    vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", true);
+  }
+
+  /**
    * Show autonomous mode paused state
    *
    * Displays a pause indicator. Clicking resumes autonomous mode.
