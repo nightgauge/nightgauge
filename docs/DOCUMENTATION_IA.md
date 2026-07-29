@@ -38,8 +38,20 @@ publication review before being committed.
 
 `.github/publication-boundary.yaml` is fail-closed: every tracked path must be
 classified. It also assigns stricter content rules to paths likely to contain
-planning or private implementation details. Passing the automated check is
-necessary but does not replace human publication review.
+planning or private implementation details — path allowlisting, a regex
+`forbidden_content` denylist, and a hashed `forbidden_tokens` denylist all
+live in this one config. Passing the automated check is necessary but does
+not replace human publication review.
+
+The guard's own fail-closed regression suite
+(`scripts/test-publication-boundary.sh`) runs both in CI
+(`.github/workflows/publication-boundary.yml`) and locally via
+`scripts/ci-local.sh`, so a weakened rule (e.g. a deleted denylist entry)
+surfaces before a push, not only after CI rejects it.
+
+Note this scan covers the tracked **tree** only — GitHub issue and epic
+bodies are not in the tree, so nothing mechanical catches private content
+written there; see `CLAUDE.md`'s Public-Repo Content Hygiene section.
 
 When uncertain, document the public contract here and keep the business or
 private implementation rationale internal.

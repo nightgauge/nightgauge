@@ -81,6 +81,12 @@ if [ -f scripts/publication-boundary-check.py ]; then
   run_step "publication boundary" python3 scripts/publication-boundary-check.py
 fi
 
+# 5b. Publication boundary self-test — proves the guard still fails closed
+#     (mirrors .github/workflows/publication-boundary.yml's second step).
+if [ -f scripts/test-publication-boundary.sh ]; then
+  run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
