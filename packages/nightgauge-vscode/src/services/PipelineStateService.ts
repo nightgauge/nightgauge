@@ -267,6 +267,15 @@ export interface PipelineStateTokens {
   cacheRead?: number;
   cacheCreation?: number;
   cost_usd?: number;
+  /**
+   * INVARIANT: `total_input` is the COMBINED input denominator — raw
+   * (non-cached) input tokens PLUS `total_cache_read` — matching the Go
+   * scheduler convention (CompleteStageWithCost). It is never an alias of
+   * `input` alone. Consumers (e.g. DiscordService's cache-hit-rate display)
+   * divide `total_cache_read / total_input` and rely on this being the
+   * "billed-as-input without caching" total, not just the live input
+   * accumulator. Violating this invariant renders hit rates >100%. See #193.
+   */
   total_input?: number;
   total_output?: number;
   total_cache_read?: number;
@@ -1212,10 +1221,14 @@ export class PipelineStateService implements vscode.Disposable {
     this._lastState.tokens.input = (this._lastState.tokens.input ?? 0) + (update.inputTokens ?? 0);
     this._lastState.tokens.output =
       (this._lastState.tokens.output ?? 0) + (update.outputTokens ?? 0);
-    this._lastState.tokens.total_input = this._lastState.tokens.input;
     this._lastState.tokens.total_output = this._lastState.tokens.output;
     this._lastState.tokens.total_cache_read =
       (this._lastState.tokens.total_cache_read ?? 0) + (update.cacheReadTokens ?? 0);
+    // total_input follows the Go scheduler convention: COMBINED (raw input +
+    // cache reads), not an alias of the non-cached input accumulator. See
+    // DiscordService's cache-hit-rate denominator comment and #193.
+    this._lastState.tokens.total_input =
+      this._lastState.tokens.input + this._lastState.tokens.total_cache_read;
     this._lastState.tokens.total_cache_creation =
       (this._lastState.tokens.total_cache_creation ?? 0) + (update.cacheCreationTokens ?? 0);
     this._lastState.tokens.estimated_cost_usd =
@@ -1793,10 +1806,14 @@ export class PipelineStateService implements vscode.Disposable {
               (this._lastState.tokens.input ?? 0) + (d.inputTokens ?? 0);
             this._lastState.tokens.output =
               (this._lastState.tokens.output ?? 0) + (d.outputTokens ?? 0);
-            this._lastState.tokens.total_input = this._lastState.tokens.input;
             this._lastState.tokens.total_output = this._lastState.tokens.output;
             this._lastState.tokens.total_cache_read =
               (this._lastState.tokens.total_cache_read ?? 0) + (d.cacheReadTokens ?? 0);
+            // total_input follows the Go scheduler convention: COMBINED (raw
+            // input + cache reads), not an alias of the non-cached input
+            // accumulator. See DiscordService's cache-hit-rate comment and #193.
+            this._lastState.tokens.total_input =
+              this._lastState.tokens.input + this._lastState.tokens.total_cache_read;
             this._lastState.tokens.total_cache_creation =
               (this._lastState.tokens.total_cache_creation ?? 0) + (d.cacheCreationTokens ?? 0);
             this._lastState.tokens.estimated_cost_usd =

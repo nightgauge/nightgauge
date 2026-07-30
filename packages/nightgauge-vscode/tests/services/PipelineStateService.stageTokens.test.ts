@@ -118,8 +118,8 @@ describe("PipelineStateService — stage.complete token propagation", () => {
       model: "claude-sonnet-4-6",
     });
 
-    // Totals must be updated
-    expect(state!.tokens!.total_input).toBe(50000);
+    // Totals must be updated. total_input is COMBINED (input + cache_read).
+    expect(state!.tokens!.total_input).toBe(90000);
     expect(state!.tokens!.total_output).toBe(5000);
     expect(state!.tokens!.estimated_cost_usd).toBe(0.4734);
   });
@@ -161,8 +161,9 @@ describe("PipelineStateService — stage.complete token propagation", () => {
     expect(state!.tokens!.per_stage!["issue-pickup"]!.cost_usd).toBe(0.1);
     expect(state!.tokens!.per_stage!["feature-planning"]!.cost_usd).toBe(0.47);
 
-    // Totals should be cumulative
-    expect(state!.tokens!.total_input).toBe(70000);
+    // Totals should be cumulative. total_input is COMBINED (input + cache_read):
+    // (20000+50000) + (15000+40000) = 125000.
+    expect(state!.tokens!.total_input).toBe(125000);
     expect(state!.tokens!.total_output).toBe(7000);
     expect(state!.tokens!.estimated_cost_usd).toBeCloseTo(0.57);
   });
@@ -246,7 +247,8 @@ describe("PipelineStateService — updateTokens (HeadlessOrchestrator path)", ()
       cache_read: 15000,
       cache_creation: 0,
     });
-    expect(state!.tokens!.total_input).toBe(20000);
+    // total_input is COMBINED (input + cache_read): 20000 + 15000 = 35000.
+    expect(state!.tokens!.total_input).toBe(35000);
     expect(state!.tokens!.total_output).toBe(3000);
     expect(state!.tokens!.total_cache_creation).toBe(0);
     expect(state!.tokens!.estimated_cost_usd).toBe(0.15);
@@ -277,6 +279,7 @@ describe("PipelineStateService — updateTokens (HeadlessOrchestrator path)", ()
     expect(featureDev.output).toBe(1500);
     expect(featureDev.cost_usd).toBeCloseTo(0.15);
     expect(featureDev.cache_read).toBe(0);
+    // No cache reads in this scenario, so combined total_input equals raw input.
     expect(state!.tokens!.total_input).toBe(15000);
     expect(state!.tokens!.total_output).toBe(1500);
     expect(state!.tokens!.estimated_cost_usd).toBeCloseTo(0.15);
@@ -365,8 +368,9 @@ describe("PipelineStateService — pipeline.complete merges with stage.complete 
     expect(dev!.cache_read).toBe(11000000);
     expect(dev!.cache_creation).toBe(350000);
 
-    // total_input/total_output must fall back to stage.complete accumulated values (not 0)
-    expect(state!.tokens!.total_input).toBe(500);
+    // total_input/total_output must fall back to stage.complete accumulated values (not 0).
+    // total_input is COMBINED (input + cache_read): 500 + 11000000 = 11000500.
+    expect(state!.tokens!.total_input).toBe(11000500);
     expect(state!.tokens!.total_output).toBe(30000);
     expect(state!.tokens!.total_cache_read).toBe(11000000);
     expect(state!.tokens!.total_cache_creation).toBe(350000);
