@@ -3689,6 +3689,20 @@ describe("extractStreamJsonError — session-limit normalization (#3792)", () =>
     expect(msg).not.toContain("[rate-limit-quota-exhausted]");
     expect(msg).toContain("2 tests failed");
   });
+
+  it("does not prepend a 'success:' prefix when subtype is the CLI quirk value (#194)", () => {
+    const line = JSON.stringify({
+      type: "result",
+      is_error: true,
+      subtype: "success",
+      result: "API Error: Overloaded",
+    });
+    const outcome = extractStreamJsonError(line);
+    expect(outcome.kind).toBe("error");
+    const msg = outcome.kind === "error" ? outcome.error.message : "";
+    expect(msg).toBe("API Error: Overloaded");
+    expect(msg).not.toContain("success:");
+  });
 });
 
 describe("rate_limit_event in stream processing (Issue #2573)", () => {

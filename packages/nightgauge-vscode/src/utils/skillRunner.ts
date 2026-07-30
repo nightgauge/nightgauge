@@ -1525,8 +1525,13 @@ export function extractStreamJsonError(stdoutText: string): StreamJsonOutcome {
           : typeof subtype === "string" && subtype.trim().length > 0
             ? subtype.trim()
             : "Stream-json result envelope reported is_error without a message";
+      // The Claude CLI can emit subtype:"success" on an is_error:true envelope
+      // (a CLI quirk, not a real success signal) — never let it prefix the
+      // message as if it were an informative subtype. #194.
       const message =
-        typeof subtype === "string" && subtype !== base ? `${subtype}: ${base}` : base;
+        typeof subtype === "string" && subtype !== base && subtype !== "success"
+          ? `${subtype}: ${base}`
+          : base;
       // Anthropic session/usage limits arrive here as a normal is_error result
       // (e.g. "success: You've hit your session limit · resets 10:30am
       // (America/Denver)"), NOT as a structured rate_limit_event. Normalize
