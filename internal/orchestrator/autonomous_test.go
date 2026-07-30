@@ -887,6 +887,155 @@ func TestOnPipelineComplete_ApiOverloaded_TransientNoPause(t *testing.T) {
 	}
 }
 
+// TestApiOverloadedBackoffFor_EscalatesAndCaps verifies #194 AC1: backoff
+// doubles per consecutive attempt and is capped at apiOverloadedBackoffCap.
+func TestApiOverloadedBackoffFor_EscalatesAndCaps(t *testing.T) {
+	cases := []struct {
+		attempts int
+		want     time.Duration
+	}{
+		{0, apiOverloadedBackoff},
+		{1, 2 * apiOverloadedBackoff},
+		{2, 4 * apiOverloadedBackoff},
+		{3, apiOverloadedBackoffCap},
+		{10, apiOverloadedBackoffCap},
+		{100, apiOverloadedBackoffCap},
+	}
+	for _, tc := range cases {
+		if got := apiOverloadedBackoffFor(tc.attempts); got != tc.want {
+			t.Errorf("apiOverloadedBackoffFor(%d) = %v, want %v", tc.attempts, got, tc.want)
+		}
+	}
+}
+
+// TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures
+// verifies #194 AC1: repeated TerminalKindApiOverloaded failures on the same
+// issue produce strictly increasing backoff durations up to the cap, and NEVER
+// increment the lifetime failure cap regardless of how many consecutive
+// attempts have occurred (#194 AC3).
+func TestOnPipelineComplete_ApiOverloaded_EscalatesAcrossConsecutiveFailures(t *testing.T) {
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 3},
+		state: &AutonomousState{
+			Status:                "running",
+			LifetimeIssueFailures: map[string]int{},
+		},
+		rescanCh:             make(chan struct{}, 1),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 100}),
+	}
+
+	key := "nightgauge/nightgauge#481"
+	var lastWait time.Duration
+
+	for attempt := 0; attempt < apiOverloadedMaxAttempts; attempt++ {
+		as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
+		before := time.Now()
+		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+
+		retryAt, ok := retryDeadline(as, key)
+		if !ok {
+			t.Fatalf("attempt %d: expected retryBackoff[%q] to be set (below ceiling)", attempt, key)
+		}
+		wait := retryAt.Sub(before)
+		if attempt > 0 && wait <= lastWait/2 {
+			t.Errorf("attempt %d: backoff %v did not escalate from prior %v", attempt, wait, lastWait)
+		}
+		lastWait = wait
+
+		if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+			t.Errorf("attempt %d: LifetimeIssueFailures[%q] = %d, want 0 (transient failures never count)", attempt, key, got)
+		}
+	}
+
+	if lastWait > apiOverloadedBackoffCap+time.Second {
+		t.Errorf("final backoff %v exceeded cap %v", lastWait, apiOverloadedBackoffCap)
+	}
+}
+
+// TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeCap
+// verifies #194 AC2/AC3: once apiOverloadedMaxAttempts consecutive transient
+// failures have occurred, the scheduler stops scheduling a retry (the key
+// drops out of retryBackoff / PendingRetry) but still does NOT increment
+// LifetimeIssueFailures — a sustained provider outage is never the issue's
+// fault, per ADR-001.
+func TestOnPipelineComplete_ApiOverloaded_CeilingStopsRedispatchWithoutLifetimeCap(t *testing.T) {
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 3},
+		state: &AutonomousState{
+			Status:                "running",
+			LifetimeIssueFailures: map[string]int{},
+		},
+		rescanCh:             make(chan struct{}, 1),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 100}),
+	}
+
+	key := "nightgauge/nightgauge#481"
+
+	// Drive apiOverloadedMaxAttempts consecutive failures (attempts 0..N-1
+	// each schedule a retry and increment Attempts).
+	for i := 0; i < apiOverloadedMaxAttempts; i++ {
+		as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
+		as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+	}
+	if _, ok := retryDeadline(as, key); !ok {
+		t.Fatalf("expected retryBackoff[%q] still set after %d attempts (ceiling not yet exceeded)", key, apiOverloadedMaxAttempts)
+	}
+
+	// The (apiOverloadedMaxAttempts+1)-th failure exceeds the ceiling.
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
+	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+
+	if _, ok := retryDeadline(as, key); ok {
+		t.Errorf("expected retryBackoff[%q] to be cleared once ceiling exceeded (stop re-dispatching)", key)
+	}
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("LifetimeIssueFailures[%q] = %d after ceiling exceeded, want 0 (never a fault)", key, got)
+	}
+	if as.state.Status == "paused" {
+		t.Errorf("autonomous paused after ceiling exceeded; want still running")
+	}
+	if got := as.safetyRails.State().ConsecutiveFailures; got != 0 {
+		t.Errorf("SafetyRails.ConsecutiveFailures = %d after ceiling exceeded, want 0", got)
+	}
+}
+
+// TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff verifies #194 AC4:
+// a successful pipeline run for an issue clears its retryBackoff entry (and
+// therefore its Attempts counter) for the next cycle. This asserts the
+// existing onPipelineComplete(success=true) deletion path rather than adding
+// new production code, per the PRD's assumption that AC4 is already satisfied.
+func TestOnPipelineComplete_ApiOverloaded_SuccessResetsBackoff(t *testing.T) {
+	as := &AutonomousScheduler{
+		config: AutonomousConfig{MaxConcurrent: 3},
+		state: &AutonomousState{
+			Status:                "running",
+			LifetimeIssueFailures: map[string]int{},
+		},
+		rescanCh:             make(chan struct{}, 1),
+		perIssueFailureCount: map[string]int{},
+		retryBackoff:         map[string]retryPlan{},
+		safetyRails:          NewSafetyRails(SafetyConfig{CircuitBreakerMax: 100}),
+	}
+
+	key := "nightgauge/nightgauge#481"
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
+	as.onPipelineComplete("nightgauge/nightgauge", 481, false, false, TerminalKindApiOverloaded, "API Error: Overloaded")
+	if _, ok := retryDeadline(as, key); !ok {
+		t.Fatalf("expected retryBackoff[%q] to be set after transient failure", key)
+	}
+
+	as.state.Running = []RunningItem{{Repo: "nightgauge/nightgauge", Number: 481, Title: "Sustained outage"}}
+	as.onPipelineComplete("nightgauge/nightgauge", 481, true, false, "", "")
+
+	if _, ok := retryDeadline(as, key); ok {
+		t.Errorf("expected retryBackoff[%q] to be cleared after a successful run", key)
+	}
+}
+
 // TestTransientFailuresNeverTripTheCircuitBreaker is the regression test for the
 // live incident: three unrelated issues each hit one Anthropic 529, the breaker
 // counted all three as consecutive failures, tripped at its max of 3, and halted

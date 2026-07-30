@@ -346,6 +346,39 @@ const stallKillBackoff = 30 * time.Minute
 // flowing. Issue #3835 (WS4).
 const apiOverloadedBackoff = 5 * time.Minute
 
+// apiOverloadedBackoffCap bounds the escalating backoff computed by
+// apiOverloadedBackoffFor. 30 minutes is 6x the base backoff and stays well
+// below the ~4h quota-cooldown window used elsewhere in this file for
+// genuinely resource-exhausted states — a sustained 529 outage still gets
+// bounded, frequent-enough retries. Issue #194.
+const apiOverloadedBackoffCap = 30 * time.Minute
+
+// apiOverloadedMaxAttempts bounds consecutive transient-failure retries
+// (TerminalKindApiOverloaded / TerminalKindApiConnectionLost) on the same
+// issue before the scheduler stops re-dispatching it. At the cap this is
+// roughly 4 hours of escalating backoff — matching the order of magnitude of
+// the existing quota-cooldown window. Exceeding it does NOT increment
+// LifetimeIssueFailures (a sustained provider outage is never the issue's
+// fault); it only stops re-dispatch until an operator or Auto-Triage clears
+// it. Issue #194.
+const apiOverloadedMaxAttempts = 8
+
+// apiOverloadedBackoffFor computes the escalating backoff for the given
+// number of PRIOR consecutive transient failures (i.e. retryPlan.Attempts
+// before this call), doubling per attempt and capped at
+// apiOverloadedBackoffCap. attempts=0 (first failure) yields the base 5m
+// backoff so a brief blip still recovers quickly. Issue #194.
+func apiOverloadedBackoffFor(attempts int) time.Duration {
+	if attempts < 0 {
+		attempts = 0
+	}
+	backoff := apiOverloadedBackoff << attempts
+	if backoff <= 0 || backoff > apiOverloadedBackoffCap {
+		return apiOverloadedBackoffCap
+	}
+	return backoff
+}
+
 // PendingRetry is the exported, operator-facing view of one waiting issue. It
 // is the wire form of retryPlan, carrying everything a UI needs to render
 // "Retrying in 4:12 — provider overloaded (attempt 2)" without consulting the
@@ -3167,11 +3200,42 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			if terminalFailureKind == TerminalKindApiConnectionLost {
 				label = "api-connection-lost (Anthropic transport drop, transient)"
 			}
+			priorAttempts := as.retryBackoff[key].Attempts
+			if priorAttempts >= apiOverloadedMaxAttempts {
+				// Sustained outage: stop re-dispatching, but per AC3/ADR-001 this
+				// must NOT fall through to the generic failure path — a provider
+				// outage is never the issue's fault, no matter how many
+				// consecutive times it recurs. Deliberately do not call
+				// scheduleRetryLocked so the key drops out of retryBackoff /
+				// PendingRetry — that absence is the "stopped re-dispatching"
+				// signal the dashboard already renders correctly.
+				as.recordFailureLocked(repo, issue, title, now,
+					label+fmt.Sprintf(" — exceeded %d consecutive transient failures, pausing re-dispatch (no lifetime-cap increment)", apiOverloadedMaxAttempts))
+				log.Printf("autonomous: %s for %s exceeded %d consecutive transient failures — pausing re-dispatch, no lifetime-cap increment",
+					terminalFailureKind, key, apiOverloadedMaxAttempts)
+				if as.retryBackoff != nil {
+					delete(as.retryBackoff, key)
+				}
+				as.persistStateLocked()
+				go as.revertFailedIssueStatus(repo, issue)
+				select {
+				case as.rescanCh <- struct{}{}:
+				default:
+				}
+				if as.safetyRails != nil {
+					as.safetyRails.RecordNonFaultOutcome(0)
+					safetySnap := as.safetyRails.State()
+					as.state.Safety = &safetySnap
+				}
+				as.persistStateLocked()
+				return
+			}
+			backoff := apiOverloadedBackoffFor(priorAttempts)
 			as.recordFailureLocked(repo, issue, title, now,
 				label+" — will retry after backoff")
-			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(apiOverloadedBackoff))
-			log.Printf("autonomous: %s for %s — transient, retry in %v (no lifetime-cap increment, no pause)",
-				terminalFailureKind, key, apiOverloadedBackoff)
+			as.scheduleRetryLocked(key, terminalFailureKind, label, time.Now().Add(backoff))
+			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
+				terminalFailureKind, key, backoff, priorAttempts+1)
 			as.persistStateLocked()
 			go as.revertFailedIssueStatus(repo, issue)
 			select {
