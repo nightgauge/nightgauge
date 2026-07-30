@@ -161,8 +161,9 @@ describe("Token/Cost end-to-end flow integration", () => {
     expect(state!.tokens!.per_stage!["feature-planning"]!.input).toBe(45000);
     expect(state!.tokens!.per_stage!["feature-dev"]!.input).toBe(120000);
 
-    // Totals are cumulative sums
-    expect(state!.tokens!.total_input).toBe(15000 + 45000 + 120000); // 180000
+    // Totals are cumulative sums. total_input is COMBINED (input + cache_read):
+    // (15000+45000+120000) + (10000+35000+90000) = 180000 + 135000 = 315000.
+    expect(state!.tokens!.total_input).toBe(15000 + 45000 + 120000 + 10000 + 35000 + 90000); // 315000
     expect(state!.tokens!.total_output).toBe(2000 + 8000 + 25000); // 35000
     expect(state!.tokens!.estimated_cost_usd).toBeCloseTo(
       0.08 + 0.42 + 1.85 // 2.35
@@ -197,7 +198,8 @@ describe("Token/Cost end-to-end flow integration", () => {
     // currentState.tokens.total_output
     // currentState.tokens.total_cache_read
     // currentState.tokens.estimated_cost_usd
-    expect(tokens.total_input).toBe(50000);
+    // total_input is COMBINED (input + cache_read): 50000 + 40000 = 90000.
+    expect(tokens.total_input).toBe(90000);
     expect(tokens.total_output).toBe(8000);
     expect(tokens.total_cache_read).toBe(40000);
     expect(tokens.estimated_cost_usd).toBe(0.65);
@@ -214,7 +216,7 @@ describe("Token/Cost end-to-end flow integration", () => {
       cacheCreationTokens: tokens.total_cache_creation ?? 0,
       costUsd: tokens.estimated_cost_usd ?? 0,
     };
-    expect(tokenUsage.inputTokens).toBe(50000);
+    expect(tokenUsage.inputTokens).toBe(90000);
     expect(tokenUsage.outputTokens).toBe(8000);
     expect(tokenUsage.cacheReadTokens).toBe(40000);
     expect(tokenUsage.costUsd).toBe(0.65);
@@ -264,8 +266,9 @@ describe("Token/Cost end-to-end flow integration", () => {
     const state = await svc.getState();
     const tokens = state!.tokens!;
 
-    // Deltas should have accumulated
-    expect(tokens.total_input).toBe(55000);
+    // Deltas should have accumulated. total_input is COMBINED (input + cache_read):
+    // (30000+25000) + (20000+18000) = 55000 + 38000 = 93000.
+    expect(tokens.total_input).toBe(93000);
     expect(tokens.total_output).toBe(9000);
     expect(tokens.total_cache_read).toBe(38000);
     expect(tokens.estimated_cost_usd).toBeCloseTo(0.63);
@@ -303,8 +306,9 @@ describe("Token/Cost end-to-end flow integration", () => {
 
     const state = await svc.getState();
 
-    // Both paths should contribute to totals
-    expect(state!.tokens!.total_input).toBe(60000);
+    // Both paths should contribute to totals. total_input is COMBINED
+    // (input + cache_read): (20000+40000) + (15000+30000) = 60000 + 45000 = 105000.
+    expect(state!.tokens!.total_input).toBe(105000);
     expect(state!.tokens!.total_output).toBe(9000);
     expect(state!.tokens!.estimated_cost_usd).toBeCloseTo(0.57);
 
@@ -443,7 +447,8 @@ describe("Token/Cost end-to-end flow integration", () => {
 
     expect(events).toHaveLength(1);
     const state = await svc.getState();
-    expect(state!.tokens!.total_input).toBe(100000);
+    // total_input is COMBINED (input + cache_read): 100000 + 80000 = 180000.
+    expect(state!.tokens!.total_input).toBe(180000);
     expect(state!.tokens!.estimated_cost_usd).toBe(1.5);
   });
 });
