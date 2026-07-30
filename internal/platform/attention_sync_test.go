@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -53,6 +54,59 @@ func sampleRequest(id string, state attention.State) attention.DecisionRequest {
 		ExpiresAt:     time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano),
 		DefaultAction: "keep-paused",
 		Lifecycle:     attention.Lifecycle{State: state},
+	}
+}
+
+// echoAcceptAll is a faithful stub of a fully-accepting `PUT
+// /v1/attention/sync`: it echoes every request it received back in `items`.
+//
+// Echoing matters. `items` is the acknowledgement set (#214) — a stub that
+// returns `items:[]` while claiming success models a server that accepted
+// nothing, which is exactly the state the client must now refuse to watermark.
+// The previous stub did that and passed only because the client ignored the
+// field, which is how the bug survived its own test.
+func echoAcceptAll(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Requests []attention.DecisionRequest `json:"requests"`
+	}
+	raw, _ := io.ReadAll(r.Body)
+	_ = json.Unmarshal(raw, &body)
+	w.Header().Set("Content-Type", "application/json")
+	resp, _ := json.Marshal(map[string]any{
+		"synced":   len(body.Requests),
+		"items":    body.Requests,
+		"rejected": []any{},
+	})
+	_, _ = w.Write(resp)
+}
+
+// echoRejecting is the partial-acceptance stub: it mirrors every card EXCEPT
+// the ids in reject, which it reports in `rejected` — the real endpoint's
+// per-item validation isolation, which returns 200 either way.
+func echoRejecting(reject map[string]string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Requests []attention.DecisionRequest `json:"requests"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+
+		items := make([]attention.DecisionRequest, 0, len(body.Requests))
+		rejected := make([]map[string]string, 0)
+		for _, req := range body.Requests {
+			if reason, skip := reject[req.ID]; skip {
+				rejected = append(rejected, map[string]string{"id": req.ID, "reason": reason})
+				continue
+			}
+			items = append(items, req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		resp, _ := json.Marshal(map[string]any{
+			"synced":   len(items),
+			"items":    items,
+			"rejected": rejected,
+		})
+		_, _ = w.Write(resp)
 	}
 }
 
@@ -207,8 +261,7 @@ func TestAttentionSync_WatermarkSkipsUnchanged(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"synced":1,"items":[]}`))
+		echoAcceptAll(w, r)
 	}))
 	defer srv.Close()
 
@@ -282,3 +335,162 @@ func TestAttentionSync_NilClientNoOp(t *testing.T) {
 }
 
 func ptr(r attention.DecisionRequest) *attention.DecisionRequest { return &r }
+
+// TestAttentionSync_UnacknowledgedStaysDirty is the #214 regression.
+//
+// The endpoint validates per item: a card it refuses is skipped and the call
+// still returns 200. Watermarking on the status rather than the acknowledgement
+// set told this service the card was mirrored, which disarmed the 30-second
+// reconciliation sweep — the one mechanism that would have re-sent it. That is
+// how every auto_resolved card stayed invisible on the dashboard for months
+// while both sides reported success.
+func TestAttentionSync_UnacknowledgedStaysDirty(t *testing.T) {
+	const acceptedID = "dr_01912d3e-7f4a-7b1e-8c2a-00000000000a"
+	const rejectedID = "dr_01912d3e-7f4a-7b1e-8c2a-00000000000b"
+
+	var pushes int32
+	sawRejected := make(chan int, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&pushes, 1)
+		raw, _ := io.ReadAll(r.Body)
+		var body struct {
+			Requests []attention.DecisionRequest `json:"requests"`
+		}
+		_ = json.Unmarshal(raw, &body)
+		n := 0
+		for _, req := range body.Requests {
+			if req.ID == rejectedID {
+				n++
+			}
+		}
+		sawRejected <- n
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		echoRejecting(map[string]string{
+			rejectedID: "lifecycle.state: unrecognized value",
+		})(w, r)
+	}))
+	defer srv.Close()
+
+	svc := NewAttentionSyncService(onlineClient(t, srv.URL))
+	lister := &fakeLister{}
+	lister.set([]attention.DecisionRequest{
+		sampleRequest(acceptedID, attention.StateOpen),
+		sampleRequest(rejectedID, attention.StateOpen),
+	})
+
+	for i := 1; i <= 3; i++ {
+		if err := svc.SyncAll(context.Background(), lister); err != nil {
+			t.Fatalf("SyncAll #%d: %v", i, err)
+		}
+	}
+
+	// Three sweeps, three pushes: the rejected card keeps the batch dirty.
+	if got := atomic.LoadInt32(&pushes); got != 3 {
+		t.Fatalf("pushes = %d, want 3 — an unacknowledged card must be retried every sweep", got)
+	}
+	close(sawRejected)
+	for n := range sawRejected {
+		if n != 1 {
+			t.Fatalf("a sweep carried %d copies of the rejected card, want 1", n)
+		}
+	}
+
+	// The accepted card must NOT be re-sent — only the rejected one stays dirty.
+	svc.mu.Lock()
+	_, acceptedWatermarked := svc.watermark[acceptedID]
+	_, rejectedWatermarked := svc.watermark[rejectedID]
+	misses := svc.unacked[rejectedID]
+	svc.mu.Unlock()
+
+	if !acceptedWatermarked {
+		t.Error("accepted card was not watermarked — it will be re-pushed forever")
+	}
+	if rejectedWatermarked {
+		t.Error("rejected card was watermarked: the sweep can never recover it (this is #214)")
+	}
+	if misses != 3 {
+		t.Errorf("unacked[%s] = %d, want 3 — repeated rejection must be counted, not silent", rejectedID, misses)
+	}
+}
+
+// TestAttentionSync_UnparseableBodyFallsBackToStatus pins the fail-safe
+// direction. "Cannot tell what was accepted" must not collapse into "nothing
+// was accepted": that would re-push the entire dirty set every 30 seconds
+// forever. A stale card is recoverable; a permanent push storm against a server
+// we cannot parse is not an improvement.
+func TestAttentionSync_UnparseableBodyFallsBackToStatus(t *testing.T) {
+	var pushes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&pushes, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`<!doctype html><html>gateway</html>`))
+	}))
+	defer srv.Close()
+
+	svc := NewAttentionSyncService(onlineClient(t, srv.URL))
+	lister := &fakeLister{}
+	lister.set([]attention.DecisionRequest{
+		sampleRequest("dr_01912d3e-7f4a-7b1e-8c2a-00000000000c", attention.StateOpen),
+	})
+
+	for i := 0; i < 3; i++ {
+		if err := svc.SyncAll(context.Background(), lister); err != nil {
+			t.Fatalf("SyncAll #%d: %v", i, err)
+		}
+	}
+
+	if got := atomic.LoadInt32(&pushes); got != 1 {
+		t.Fatalf("pushes = %d, want 1 — an unreadable 2xx body must not spin the sweep", got)
+	}
+}
+
+// TestAttentionSync_RecoversOnceServerAccepts is the end state the operator
+// sees: once the mirror is upgraded to understand the state, the card the sweep
+// kept retrying lands, and stops being retried. This is the half that makes the
+// retry loop terminate rather than run forever.
+func TestAttentionSync_RecoversOnceServerAccepts(t *testing.T) {
+	const id = "dr_01912d3e-7f4a-7b1e-8c2a-00000000000d"
+
+	var accept atomic.Bool
+	var pushes int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&pushes, 1)
+		if accept.Load() {
+			echoAcceptAll(w, r)
+			return
+		}
+		echoRejecting(map[string]string{id: "lifecycle.state: unrecognized value"})(w, r)
+	}))
+	defer srv.Close()
+
+	svc := NewAttentionSyncService(onlineClient(t, srv.URL))
+	lister := &fakeLister{}
+	lister.set([]attention.DecisionRequest{sampleRequest(id, attention.StateAutoResolved)})
+
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll (rejecting): %v", err)
+	}
+
+	// Server is upgraded and now accepts the state.
+	accept.Store(true)
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll (accepting): %v", err)
+	}
+	if err := svc.SyncAll(context.Background(), lister); err != nil {
+		t.Fatalf("SyncAll (settled): %v", err)
+	}
+
+	if got := atomic.LoadInt32(&pushes); got != 2 {
+		t.Fatalf("pushes = %d, want 2 — the card should settle once accepted", got)
+	}
+	svc.mu.Lock()
+	_, watermarked := svc.watermark[id]
+	misses := svc.unacked[id]
+	svc.mu.Unlock()
+	if !watermarked {
+		t.Error("card was accepted but not watermarked")
+	}
+	if misses != 0 {
+		t.Errorf("unacked[%s] = %d after acceptance, want 0", id, misses)
+	}
+}
