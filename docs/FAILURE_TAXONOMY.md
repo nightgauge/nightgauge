@@ -331,6 +331,37 @@ share the terminal kind. `worktree_uncommitted` and `budget_ceiling_hit` are
 autonomous scheduler does not increment `LifetimeIssueFailures` for them and the
 Go scheduler skips the board-status revert — the issue is re-dispatchable.
 
+### Gate-Sourced Structured Terminal Kind (Issue #9)
+
+Everything above describes `ClassifyTerminalKind`'s **prose classification**
+path: lowercase-and-substring-match the synthesized failure text. That path
+is still the fallback, but stage post-condition gates
+(`internal/orchestrator/gates/`, see `docs/STAGE_GATES.md`) now optionally
+carry a structured `TerminalKind` directly on `GateResult` /
+`StageGateResult`, set at the point the gate detects the failure rather than
+re-derived downstream from prose. When a gate ran and set one, callers
+(`internal/orchestrator/scheduler.go`, `internal/ipc/server.go`,
+`internal/orchestrator/scheduler_exit_record.go`, `internal/orchestrator/
+autonomous.go`) call `orchestrator.ResolveTerminalKind(gateRan,
+gateResult.TerminalKind, errorText)` instead of `ClassifyTerminalKind`
+directly — it prefers the gate's structured kind and only falls back to prose
+classification when the gate didn't run, or ran but left `TerminalKind`
+empty (including every historical `StageGateResult` record persisted before
+the field existed; it's `omitempty`/optional).
+
+This closes a real, previously-silent mismatch: several gates emit JSON-parse
+failures worded `"...is not valid JSON"` (`issue-pickup`, `feature-planning`,
+`feature-dev`) or `"unparseable JSON"` (`pr-create`, `pr-merge`), but
+`ClassifyTerminalKind` only matched the literal substring `"invalid json"` —
+none of the actual gate Reason strings contained it, so every JSON-parse gate
+failure fell through to the generic `subagent_crash` bucket instead of
+`validation_error`. The matcher itself is now also fixed to catch both real
+phrasings, so the prose-fallback path is correct too (this matters for
+historical records with no `terminal_kind` to prefer). The TypeScript SDK
+mirrors both the matcher fix and the precedence rule as `classifyTerminalKind`
+/ `resolveTerminalKind` in
+`packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`.
+
 ### Relationship to `failure_category`
 
 | Terminal Kind                | Typical `failure_category` (heuristic)                                                      |

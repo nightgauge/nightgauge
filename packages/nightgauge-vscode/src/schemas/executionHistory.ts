@@ -143,6 +143,14 @@ export const StageGateResultSchema = z.object({
    * Absent on pre-#3267 records.
    */
   kind: z.enum(["ok", "no_op", "fail"]).optional(),
+  /**
+   * Structured terminal-kind constant (Issue #9), e.g. "validation_error".
+   * Set only on some "fail" results whose failure shape maps cleanly onto an
+   * existing TerminalKind* constant; absent otherwise and on all pre-#9
+   * records. Readers fall back to prose classification via
+   * classifyTerminalKind/resolveTerminalKind when absent.
+   */
+  terminal_kind: z.string().optional(),
 });
 export type StageGateResult = z.infer<typeof StageGateResultSchema>;
 

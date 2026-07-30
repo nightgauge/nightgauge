@@ -17,6 +17,7 @@ import {
   AnyOutcomeRecordSchema,
   ToolCallRecordSchema,
   HistoryStageTokenUsageSchema,
+  StageGateResultSchema,
 } from "../../src/schemas/executionHistory";
 import { PipelineStateSchema, validatePipelineState } from "../../src/schemas/pipelineState";
 
@@ -933,6 +934,35 @@ describe("ExecutionHistory Schemas", () => {
       });
       expect(result.success).toBe(true);
       expect(result.data?.outcome_type).toBe("verify-and-close");
+    });
+  });
+
+  describe("StageGateResultSchema — terminal_kind (Issue #9)", () => {
+    const base = {
+      gate_name: "issue-pickup",
+      passed: false,
+      reason: "issue context file is not valid JSON",
+      timestamp: "2026-05-07T00:00:00Z",
+      kind: "fail" as const,
+    };
+
+    it("accepts a record with terminal_kind present", () => {
+      const result = StageGateResultSchema.safeParse({
+        ...base,
+        terminal_kind: "validation_error",
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.terminal_kind).toBe("validation_error");
+      }
+    });
+
+    it("accepts a legacy record with terminal_kind absent (backward compat)", () => {
+      const result = StageGateResultSchema.safeParse(base);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.terminal_kind).toBeUndefined();
+      }
     });
   });
 });

@@ -69,6 +69,44 @@ promise — stamps `premature turn end: stage exited 0 with no state change
 `pr_merge_unmerged` classification, #3691); `KindFail` keeps the original
 `stage gate failed: <reason>` text.
 
+### TerminalKind (Issue #9)
+
+`Kind` (`ok`/`no_op`/`fail`) discriminates outcome _shape_. `GateResult` also
+carries an optional, finer-grained `TerminalKind string` field naming the
+specific `TerminalKind*` constant (from `internal/orchestrator/
+failure_handler.go`) that the failure maps onto — e.g. a JSON-parse failure
+sets `TerminalKind: TerminalKindValidationError`. Before this field existed,
+the terminal kind was always re-derived downstream by lowercasing and
+substring-matching the synthesized error text via `ClassifyTerminalKind` —
+fragile by construction, and it silently mis-bucketed the JSON-parse-failure
+gates (`"...is not valid JSON"`, `"unparseable JSON"`) into the generic
+subagent-crash kind because the classifier only matched the literal
+substring `"invalid json"` (now fixed to also match both real phrasings).
+
+Rules for gate authors:
+
+- Only set `TerminalKind` on `KindFail` returns whose failure shape maps
+  cleanly onto an **existing** `TerminalKind*` constant. Do not invent new
+  constants for this — the taxonomy in `failure_handler.go` is canonical.
+- Leave `TerminalKind` empty (`""`) when no clean constant applies, or on any
+  `KindOK`/`KindNoOp` return — those already classify structurally via `Kind`
+  alone (see above) and don't need a terminal kind.
+- `gates.GateResult.TerminalKind` is duplicated as `gates.TerminalKindValidationError`
+  etc. rather than importing `internal/orchestrator`'s constants directly —
+  `orchestrator` imports `gates`, so the reverse import would cycle. Keep the
+  two sets of constants in sync by hand.
+
+Consumers should call `orchestrator.ResolveTerminalKind(gateRan,
+gateResult.TerminalKind, errorText)` instead of calling
+`ClassifyTerminalKind` directly whenever a `gates.GateResult` is in scope.
+`ResolveTerminalKind` prefers the gate's structured kind when present and
+falls back to prose classification of `errorText` otherwise — including for
+every historical `StageGateResult` record persisted before `terminal_kind`
+existed on the type (the field is `omitempty`/optional on both the Go struct
+and the TypeScript `StageGateResultSchema` mirror). The TypeScript SDK
+mirrors this precedence as `resolveTerminalKind` in
+`packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`.
+
 ## Persistence
 
 Gate results land in `V2StageDetail.gate_results []StageGateResult` on the

@@ -76,4 +76,25 @@ func TestFeaturePlanningGate_SkillSaidSuccessButPlanEmpty(t *testing.T) {
 	if gr.Passed {
 		t.Fatalf("expected fail when plan_file is zero bytes")
 	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (KindNoOp falls back to prose)", gr.TerminalKind)
+	}
+}
+
+func TestFeaturePlanningGate_Fail_InvalidJSON(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "planning-42.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gr := FeaturePlanningGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail on malformed JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
+	}
 }

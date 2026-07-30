@@ -2735,7 +2735,15 @@ func (s *Server) registerMethods() {
 					// fall back to the most generic kind when the error text is
 					// unclassifiable so the record still distinguishes "failed"
 					// from "complete" in dashboards that group by terminal kind.
-					kind := orchestrator.ClassifyTerminalKind(errMsg)
+					// Prefer the failing stage's gate-sourced structured kind
+					// over prose classification of errMsg (Issue #9).
+					gateRan := false
+					gateTerminalKind := ""
+					if gateResults := snap.StageGateResults[string(snap.Stage)]; len(gateResults) > 0 {
+						gateRan = true
+						gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
+					}
+					kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
 					if kind == "" {
 						kind = orchestrator.TerminalKindSubagentCrash
 					}

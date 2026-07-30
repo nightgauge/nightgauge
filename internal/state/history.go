@@ -334,6 +334,12 @@ type StageGateResult struct {
 	// Passed: true → "ok", false → "fail" (i.e. legacy records cannot
 	// produce a "skill-no-op" outcome retroactively without a backfill).
 	Kind string `json:"kind,omitempty"`
+	// TerminalKind optionally carries a structured TerminalKind* constant
+	// (Issue #9) for KindFail results whose failure shape maps cleanly onto
+	// an existing constant. Empty on legacy records and on results with no
+	// clean mapping — readers fall back to prose classification via
+	// ClassifyTerminalKind/ResolveTerminalKind.
+	TerminalKind string `json:"terminal_kind,omitempty"`
 }
 
 // Anomaly is a per-stage anomaly record (Issue #3267) appended to

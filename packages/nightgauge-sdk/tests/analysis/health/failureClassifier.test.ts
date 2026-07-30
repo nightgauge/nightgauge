@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyFailureCategory,
   classifyTerminalKind,
+  resolveTerminalKind,
   FAILURE_CATEGORY_WEIGHTS,
   type FailureCategory,
 } from "../../../src/analysis/health/failureClassifier.js";
@@ -252,6 +253,39 @@ describe("classifyTerminalKind — validation_failed (#326)", () => {
   });
 });
 
+describe("classifyTerminalKind — validation_error JSON-phrasing regression (#9)", () => {
+  it("matches the issue-pickup / feature-planning / feature-dev gate phrasing", () => {
+    expect(classifyTerminalKind("issue context file is not valid JSON")).toBe("validation_error");
+    expect(classifyTerminalKind("planning context is not valid JSON")).toBe("validation_error");
+    expect(classifyTerminalKind("dev context is not valid JSON")).toBe("validation_error");
+  });
+
+  it("matches the pr-create / pr-merge gate 'unparseable JSON' phrasing", () => {
+    expect(classifyTerminalKind("gh pr view returned unparseable JSON")).toBe("validation_error");
+    expect(classifyTerminalKind("unparseable JSON: unexpected token")).toBe("validation_error");
+  });
+});
+
+describe("resolveTerminalKind — gate-sourced precedence (#9)", () => {
+  it("prefers the gate's structured terminal kind when the gate ran and set one", () => {
+    expect(resolveTerminalKind(true, "validation_error", "subagent crash: exit 1")).toBe(
+      "validation_error"
+    );
+  });
+
+  it("falls back to prose classification when the gate ran but left it empty", () => {
+    expect(resolveTerminalKind(true, undefined, "exit 1: subprocess died")).toBe("subagent_crash");
+  });
+
+  it("falls back to prose classification unconditionally when no gate ran", () => {
+    // gateTerminalKind is populated here to prove it's ignored when gateRan
+    // is false — a stale/unrelated value must never leak through.
+    expect(resolveTerminalKind(false, "validation_error", "exit 1: subprocess died")).toBe(
+      "subagent_crash"
+    );
+  });
+});
+
 describe("classifyFailureCategory — validation_failed is organic (the default), not infrastructure/agent (#326)", () => {
   it("classifies the marker as organic (1.0 weight) — a true implementation failure", () => {
     expect(
@@ -404,6 +438,9 @@ describe("classifyFailureCategory — infrastructure", () => {
     ["EACCES: permission denied", "eacces"],
     ["EPERM: operation not permitted", "eperm"],
     ["Invalid JSON in planning-42.json", "invalid json"],
+    // Issue #9 — gates actually emit these phrasings, not "invalid json".
+    ["issue context file is not valid JSON", "not valid json"],
+    ["gh pr view returned unparseable JSON", "unparseable json"],
     ["Extension lifecycle error during activation", "extension lifecycle"],
     ["Failed to read context from disk", "failed to read"],
     ["Cannot read properties of undefined", "cannot read"],

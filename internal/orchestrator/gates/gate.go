@@ -53,6 +53,20 @@ const (
 	KindFail Kind = "fail"
 )
 
+// TerminalKindValidationError mirrors
+// orchestrator.TerminalKindValidationError (Issue #9). Duplicated here
+// (rather than imported) because `orchestrator` imports this `gates`
+// package, so the reverse import would create a cycle. The two constants
+// MUST stay in sync — see ResolveTerminalKind's doc comment in
+// failure_handler.go.
+const TerminalKindValidationError = "validation_error"
+
+// TerminalKindValidationFailed mirrors orchestrator.TerminalKindValidationFailed
+// (Issue #9) for the same import-cycle reason as TerminalKindValidationError
+// above. Set when feature-validate's own quality-gate results (not JSON
+// parsing) fail — a distinct case from TerminalKindValidationError.
+const TerminalKindValidationFailed = "validation_failed"
+
 // GateResult is the in-process value returned by a StageGate.Verify call.
 // The scheduler copies this into a state.StageGateResult before persisting.
 type GateResult struct {
@@ -65,19 +79,29 @@ type GateResult struct {
 	// Kind discriminates passed vs no-op vs hard-fail (Issue #3267).
 	// See the Kind type doc for the full state machine.
 	Kind Kind
+	// TerminalKind optionally carries a structured TerminalKind* constant
+	// (see failure_handler.go) for KindFail results whose failure shape maps
+	// cleanly onto an existing constant (e.g. JSON parse failure ->
+	// TerminalKindValidationError). Empty means "no gate-specific terminal
+	// kind" — the caller falls back to prose classification via
+	// ClassifyTerminalKind/ResolveTerminalKind (Issue #9). Always empty on
+	// KindOK/KindNoOp results, which already classify structurally via Kind
+	// alone.
+	TerminalKind string
 }
 
 // ToStageGateResult copies the in-process GateResult into the persisted
 // state.StageGateResult shape.
 func (gr GateResult) ToStageGateResult() state.StageGateResult {
 	return state.StageGateResult{
-		GateName:   gr.GateName,
-		Passed:     gr.Passed,
-		Reason:     gr.Reason,
-		Evidence:   append([]string(nil), gr.Evidence...),
-		DurationMs: gr.DurationMs,
-		Timestamp:  gr.Timestamp,
-		Kind:       string(gr.Kind),
+		GateName:     gr.GateName,
+		Passed:       gr.Passed,
+		Reason:       gr.Reason,
+		Evidence:     append([]string(nil), gr.Evidence...),
+		DurationMs:   gr.DurationMs,
+		Timestamp:    gr.Timestamp,
+		Kind:         string(gr.Kind),
+		TerminalKind: gr.TerminalKind,
 	}
 }
 
@@ -185,15 +209,28 @@ func timed(name string, fn func() (bool, string, []string)) GateResult {
 // "real error" (KindFail) call this directly. The classifier's
 // `skill-no-op` outcome is driven entirely by KindNoOp results.
 func timedKind(name string, fn func() (bool, string, []string, Kind)) GateResult {
+	return timedKindTerminal(name, func() (bool, string, []string, Kind, string) {
+		passed, reason, evidence, kind := fn()
+		return passed, reason, evidence, kind, ""
+	})
+}
+
+// timedKindTerminal is the TerminalKind-aware variant of timedKind (Issue
+// #9). Gates that can map a failure onto an existing TerminalKind* constant
+// (see failure_handler.go) call this directly, passing the constant as the
+// fifth return value; "" leaves TerminalKind unset so callers fall back to
+// prose classification.
+func timedKindTerminal(name string, fn func() (bool, string, []string, Kind, string)) GateResult {
 	start := time.Now()
-	passed, reason, evidence, kind := fn()
+	passed, reason, evidence, kind, terminalKind := fn()
 	return GateResult{
-		GateName:   name,
-		Passed:     passed,
-		Reason:     reason,
-		Evidence:   evidence,
-		DurationMs: time.Since(start).Milliseconds(),
-		Timestamp:  nowUTC(),
-		Kind:       kind,
+		GateName:     name,
+		Passed:       passed,
+		Reason:       reason,
+		Evidence:     evidence,
+		DurationMs:   time.Since(start).Milliseconds(),
+		Timestamp:    nowUTC(),
+		Kind:         kind,
+		TerminalKind: terminalKind,
 	}
 }

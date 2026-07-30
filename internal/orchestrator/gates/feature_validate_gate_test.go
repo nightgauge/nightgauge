@@ -67,6 +67,9 @@ func TestFeatureValidateGate_Fail_OneCatch(t *testing.T) {
 	if gr.Passed {
 		t.Fatalf("expected fail when any gate is catch")
 	}
+	if gr.TerminalKind != TerminalKindValidationFailed {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationFailed)
+	}
 }
 
 // TestFeatureValidateGate_SkillSaidSuccessButNoMetrics covers the canonical
@@ -77,6 +80,9 @@ func TestFeatureValidateGate_SkillSaidSuccessButNoMetrics(t *testing.T) {
 	gr := FeatureValidateGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail when no gate-metrics records exist")
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (KindNoOp falls back to prose)", gr.TerminalKind)
 	}
 }
 

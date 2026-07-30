@@ -2,6 +2,7 @@ package gates
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -43,6 +44,27 @@ func TestFeatureDevGate_Fail_BuildFailed(t *testing.T) {
 	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail when build_verification.status=failed")
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (no clean constant match)", gr.TerminalKind)
+	}
+}
+
+func TestFeatureDevGate_Fail_InvalidJSON(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dev-42.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail on malformed JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
 	}
 }
 

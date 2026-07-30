@@ -53,16 +53,16 @@ const (
 
 // Verify implements StageGate.
 func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace string) GateResult {
-	return timedKind("pr-create", func() (bool, string, []string, Kind) {
+	return timedKindTerminal("pr-create", func() (bool, string, []string, Kind, string) {
 		ctxPath := contextFilePath(workspace, "pr", issueNumber)
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return false, "pr context file missing", []string{
 					fmt.Sprintf("expected %s", ctxPath),
-				}, KindNoOp
+				}, KindNoOp, ""
 			}
-			return false, "failed to read pr context file", []string{err.Error()}, KindFail
+			return false, "failed to read pr context file", []string{err.Error()}, KindFail, ""
 		}
 
 		var prCtx struct {
@@ -70,12 +70,12 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 			PrUrl    string `json:"pr_url"`
 		}
 		if err := json.Unmarshal(data, &prCtx); err != nil {
-			return false, "pr context is not valid JSON", []string{err.Error()}, KindFail
+			return false, "pr context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
 		}
 		if prCtx.PrNumber == 0 {
 			return false, "pr context missing pr_number", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindNoOp
+			}, KindNoOp, ""
 		}
 
 		repoSlug := repoSlugFromPRURL(prCtx.PrUrl)
@@ -84,7 +84,7 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 		// `gh pr view` consumes.
 		restOutcome, restDetail := prStateViaREST(ctx, repoSlug, prCtx.PrNumber)
 		if res, ok := classifyPrCreateOutcome(restOutcome, restDetail, prCtx.PrNumber, "REST"); ok {
-			return res.passed, res.reason, res.evidence, res.kind
+			return res.passed, res.reason, res.evidence, res.kind, res.terminalKind
 		}
 
 		// Secondary: legacy `gh pr view` (GraphQL). Covers an empty repo slug
@@ -92,7 +92,7 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 		// GraphQL is reachable.
 		ghOutcome, ghDetail := prStateViaGraphQL(ctx, repoSlug, prCtx.PrNumber)
 		if res, ok := classifyPrCreateOutcome(ghOutcome, ghDetail, prCtx.PrNumber, "gh pr view"); ok {
-			return res.passed, res.reason, res.evidence, res.kind
+			return res.passed, res.reason, res.evidence, res.kind, res.terminalKind
 		}
 
 		// Both transports were inconclusive. A rate-limit on either is
@@ -102,22 +102,30 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 				fmt.Sprintf("pr=%d", prCtx.PrNumber),
 				fmt.Sprintf("rest=%s", truncate(restDetail, 120)),
 				fmt.Sprintf("graphql=%s", truncate(ghDetail, 120)),
-			}, KindOK
+			}, KindOK, ""
+		}
+		// Both transports errored (not rate-limited). If either failed
+		// because the JSON they returned didn't parse, that's a validation
+		// error, not a generic transport fault — surface it structurally.
+		terminalKind := ""
+		if strings.Contains(restDetail, "unparseable JSON") || strings.Contains(ghDetail, "unparseable JSON") {
+			terminalKind = TerminalKindValidationError
 		}
 		return false, "PR verification failed over both REST and GraphQL", []string{
 			fmt.Sprintf("pr=%d", prCtx.PrNumber),
 			fmt.Sprintf("rest=%s", truncate(restDetail, 120)),
 			fmt.Sprintf("graphql=%s", truncate(ghDetail, 120)),
-		}, KindFail
+		}, KindFail, terminalKind
 	})
 }
 
 // prCreateRes is a fully-formed gate conclusion for one transport.
 type prCreateRes struct {
-	passed   bool
-	reason   string
-	evidence []string
-	kind     Kind
+	passed       bool
+	reason       string
+	evidence     []string
+	kind         Kind
+	terminalKind string
 }
 
 // classifyPrCreateOutcome maps a single transport's outcome to a terminal gate
@@ -127,22 +135,37 @@ type prCreateRes struct {
 func classifyPrCreateOutcome(outcome prVerifyOutcome, detail string, prNumber int, via string) (prCreateRes, bool) {
 	switch outcome {
 	case prVerifyOpen:
-		return prCreateRes{true, fmt.Sprintf("PR is OPEN with the recorded number (verified via %s)", via), []string{
-			fmt.Sprintf("pr=%d", prNumber),
-		}, KindOK}, true
+		return prCreateRes{
+			passed: true,
+			reason: fmt.Sprintf("PR is OPEN with the recorded number (verified via %s)", via),
+			evidence: []string{
+				fmt.Sprintf("pr=%d", prNumber),
+			},
+			kind: KindOK,
+		}, true
 	case prVerifyNotOpen:
-		return prCreateRes{false, "PR is not OPEN", []string{
-			fmt.Sprintf("pr=%d state=%s (via %s)", prNumber, detail, via),
-		}, KindNoOp}, true
+		return prCreateRes{
+			passed: false,
+			reason: "PR is not OPEN",
+			evidence: []string{
+				fmt.Sprintf("pr=%d state=%s (via %s)", prNumber, detail, via),
+			},
+			kind: KindNoOp,
+		}, true
 	case prVerifyAbsent:
 		// A definitive 404 — the recorded PR does not exist. This is a genuine
 		// error (KindFail), not KindNoOp: the gate's KindNoOp signal is reserved
 		// for "missing pr_number" and "PR exists but not open" (matches the
 		// pre-REST behavior where an unresolvable PR failed the gh lookup →
 		// KindFail, and the synthetic skill-no-op regression guard).
-		return prCreateRes{false, "no PR exists for the recorded pr_number", []string{
-			fmt.Sprintf("pr=%d (%s via %s)", prNumber, detail, via),
-		}, KindFail}, true
+		return prCreateRes{
+			passed: false,
+			reason: "no PR exists for the recorded pr_number",
+			evidence: []string{
+				fmt.Sprintf("pr=%d (%s via %s)", prNumber, detail, via),
+			},
+			kind: KindFail,
+		}, true
 	default: // prVerifyRateLimited, prVerifyError
 		return prCreateRes{}, false
 	}

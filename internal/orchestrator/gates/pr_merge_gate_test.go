@@ -3,6 +3,7 @@ package gates
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -186,5 +187,47 @@ func TestPrMergeGate_RateLimit_LocalGitFallback_GitFails(t *testing.T) {
 	gr := PrMergeGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail when both gh and local git fail")
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (no clean constant match)", gr.TerminalKind)
+	}
+}
+
+func TestPrMergeGate_Fail_InvalidJSON(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pr-42.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gr := PrMergeGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail on malformed JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
+	}
+}
+
+// TestPrMergeGate_Fail_GhReturnsUnparseableJSON proves the "gh pr view
+// returned unparseable JSON" phrasing carries a structured
+// TerminalKindValidationError (Issue #9's named mismatch).
+func TestPrMergeGate_Fail_GhReturnsUnparseableJSON(t *testing.T) {
+	ws := t.TempDir()
+	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+		"pr_number": 100,
+	})
+	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("not json"), nil
+	})
+
+	gr := PrMergeGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail when gh returns unparseable JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
 	}
 }

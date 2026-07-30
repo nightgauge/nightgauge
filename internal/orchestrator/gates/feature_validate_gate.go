@@ -23,17 +23,17 @@ func (FeatureValidateGate) Name() string { return "feature-validate" }
 
 // Verify implements StageGate.
 func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace string) GateResult {
-	return timedKind("feature-validate", func() (bool, string, []string, Kind) {
+	return timedKindTerminal("feature-validate", func() (bool, string, []string, Kind, string) {
 		results, err := state.ReadGateMetricsForIssue(workspace, issueNumber)
 		if err != nil {
-			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail
+			return false, "failed to read gate-metrics.jsonl", []string{err.Error()}, KindFail, ""
 		}
 		if len(results) == 0 {
 			// validate skill said success but never wrote any quality-gate
 			// records — no-op (the skill skipped the work).
 			return false, "no quality-gate results recorded", []string{
 				"feature-validate skill did not emit any gate-metrics records",
-			}, KindNoOp
+			}, KindNoOp, ""
 		}
 		var failed []string
 		for _, r := range results {
@@ -43,14 +43,14 @@ func (FeatureValidateGate) Verify(_ context.Context, issueNumber int, workspace 
 		}
 		if len(failed) > 0 {
 			// Real quality-gate failure — work happened and produced a failing result.
-			return false, "quality gates did not all pass", failed, KindFail
+			return false, "quality gates did not all pass", failed, KindFail, TerminalKindValidationFailed
 		}
 
 		details := []string{fmt.Sprintf("gates=%d", len(results))}
 		if summary := markUnexercisedDeliverable(issueNumber, workspace); summary != "" {
 			details = append(details, summary)
 		}
-		return true, "all quality gates passed", details, KindOK
+		return true, "all quality gates passed", details, KindOK, ""
 	})
 }
 
