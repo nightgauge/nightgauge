@@ -972,7 +972,15 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 			snap := runtime.Snapshot()
 			if snap.Stage != "" {
 				if errMsg, ok := snap.StageErrors[string(snap.Stage)]; ok {
-					terminalKind = ClassifyTerminalKind(errMsg)
+					// Prefer the failing stage's gate-sourced structured kind
+					// over prose classification of errMsg (Issue #9).
+					gateRan := false
+					gateTerminalKind := ""
+					if grs := snap.StageGateResults[string(snap.Stage)]; len(grs) > 0 {
+						gateRan = true
+						gateTerminalKind = grs[len(grs)-1].TerminalKind
+					}
+					terminalKind = ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
 					failureDetail = errMsg
 				}
 			}

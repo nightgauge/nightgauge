@@ -581,6 +581,8 @@ func ClassifyTerminalKind(errorText string) string {
 	// producer, validateStageOutput, runs exclusively on exit-0 paths.)
 	if strings.Contains(t, "schema validation") ||
 		strings.Contains(t, "invalid json") ||
+		strings.Contains(t, "not valid json") ||
+		strings.Contains(t, "unparseable json") ||
 		strings.Contains(t, "missing prerequisite") {
 		return TerminalKindValidationError
 	}
@@ -651,6 +653,18 @@ func ClassifyTerminalKind(errorText string) string {
 	}
 
 	return ""
+}
+
+// ResolveTerminalKind prefers a gate-sourced structured terminal kind over
+// prose classification of the synthesized error text (Issue #9). Falls
+// back to ClassifyTerminalKind for non-gate failures and for gate
+// failures that didn't set a structured kind (including all historical
+// records persisted before this field existed).
+func ResolveTerminalKind(gateRan bool, gateTerminalKind string, errorText string) string {
+	if gateRan && gateTerminalKind != "" {
+		return gateTerminalKind
+	}
+	return ClassifyTerminalKind(errorText)
 }
 
 // OutcomeTypeForTerminalFailure maps a terminal failure's error text to a

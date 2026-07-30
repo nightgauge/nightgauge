@@ -3766,7 +3766,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				CostUSD:   actualCostUsd,
 			}
 			if !exitPayload.Success && err != nil {
-				exitPayload.TerminalKind = ClassifyTerminalKind(err.Error())
+				exitPayload.TerminalKind = ResolveTerminalKind(gateRan, gateRes.TerminalKind, err.Error())
 			}
 			if gateRan {
 				exitPayload.GateKind = string(gateRes.Kind)
@@ -3968,7 +3968,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if err != nil {
 				stallErrMsg = err.Error()
 			}
-			isStallKill := ClassifyTerminalKind(stallErrMsg) == TerminalKindStallKill
+			isStallKill := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg) == TerminalKindStallKill
 			isCostCapKill := HasCostCapKillMarker(stallErrMsg)
 			if isStallKill && !isCostCapKill {
 				// Issue #3542: budget-aware model escalation. When a stall-kill
@@ -4111,7 +4111,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					Reason:         "",
 					Evidence:       nil,
 					StageError:     stageErrText,
-					TerminalKind:   ClassifyTerminalKind(stageErrText),
+					TerminalKind:   ResolveTerminalKind(gateRan, gateRes.TerminalKind, stageErrText),
 					PRNumber:       loadPRNumberForRecovery(recoveryWS, item.Number),
 					Workspace:      recoveryWS,
 					IssueNumber:    item.Number,
@@ -4251,7 +4251,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if err != nil {
 				failText = err.Error()
 			}
-			modelRejected := ClassifyTerminalKind(failText) == TerminalKindModelUnavailable
+			modelRejected := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText) == TerminalKindModelUnavailable
 			if modelRejected {
 				if dg := s.retryEngine.EvaluateDowngrade(model); dg.ShouldDowngrade {
 					s.retryEngine.RecordDowngrade(model, dg.NewTier)

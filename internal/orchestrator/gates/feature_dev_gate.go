@@ -34,16 +34,16 @@ func (FeatureDevGate) Name() string { return "feature-dev" }
 
 // Verify implements StageGate.
 func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace string) GateResult {
-	return timedKind("feature-dev", func() (bool, string, []string, Kind) {
+	return timedKindTerminal("feature-dev", func() (bool, string, []string, Kind, string) {
 		ctxPath := contextFilePath(workspace, "dev", issueNumber)
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return false, "dev context file missing", []string{
 					fmt.Sprintf("expected %s", ctxPath),
-				}, KindNoOp
+				}, KindNoOp, ""
 			}
-			return false, "failed to read dev context file", []string{err.Error()}, KindFail
+			return false, "failed to read dev context file", []string{err.Error()}, KindFail, ""
 		}
 
 		var devCtx struct {
@@ -61,7 +61,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			} `json:"tests_status"`
 		}
 		if err := json.Unmarshal(data, &devCtx); err != nil {
-			return false, "dev context is not valid JSON", []string{err.Error()}, KindFail
+			return false, "dev context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
 		}
 
 		fileTouches := len(devCtx.FilesChanged.Created) +
@@ -71,7 +71,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// The dev skill said success but recorded zero file changes — no-op.
 			return false, "dev context records zero file changes", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindNoOp
+			}, KindNoOp, ""
 		}
 
 		if devCtx.BuildVerification == nil {
@@ -79,7 +79,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// gap the Claude-only Stop hook used to cover on one adapter (#55).
 			return false, "dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail
+			}, KindFail, ""
 		}
 
 		if devCtx.BuildVerification.Ran &&
@@ -87,7 +87,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// Build failure is a real fault, not a no-op — work happened, it broke.
 			return false, "dev context records build_verification.status=failed", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail
+			}, KindFail, ""
 		}
 
 		if devCtx.TestsStatus != nil && devCtx.TestsStatus.Failed != nil &&
@@ -95,7 +95,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			return false, "dev context records failing tests", []string{
 				fmt.Sprintf("file: %s", ctxPath),
 				fmt.Sprintf("tests_status.failed=%d", *devCtx.TestsStatus.Failed),
-			}, KindFail
+			}, KindFail, ""
 		}
 
 		return true, "dev context records file changes, a recorded build verification, and no failing tests", []string{
@@ -104,6 +104,6 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 				len(devCtx.FilesChanged.Modified),
 				len(devCtx.FilesChanged.Deleted),
 				devCtx.BuildVerification.Status),
-		}, KindOK
+		}, KindOK, ""
 	})
 }

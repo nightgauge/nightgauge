@@ -20,12 +20,18 @@ func TestIssuePickupGate_Pass(t *testing.T) {
 	if gr.GateName != "issue-pickup" {
 		t.Errorf("GateName = %q", gr.GateName)
 	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty on pass", gr.TerminalKind)
+	}
 }
 
 func TestIssuePickupGate_Fail_ContextMissing(t *testing.T) {
 	gr := IssuePickupGate{}.Verify(context.Background(), 42, t.TempDir())
 	if gr.Passed {
 		t.Fatalf("expected fail when context missing")
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (KindNoOp falls back to prose)", gr.TerminalKind)
 	}
 }
 
@@ -60,5 +66,8 @@ func TestIssuePickupGate_Fail_InvalidJSON(t *testing.T) {
 	gr := IssuePickupGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail on malformed JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
 	}
 }

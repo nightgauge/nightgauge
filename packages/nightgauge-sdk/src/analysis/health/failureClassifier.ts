@@ -73,6 +73,8 @@ export function classifyFailureCategory(
     t.includes("eacces") ||
     t.includes("eperm") ||
     t.includes("invalid json") ||
+    t.includes("not valid json") ||
+    t.includes("unparseable json") ||
     t.includes("extension lifecycle") ||
     t.includes("failed to read") ||
     t.includes("cannot read") ||
@@ -269,6 +271,8 @@ export function classifyTerminalKind(
   if (
     t.includes("schema validation") ||
     t.includes("invalid json") ||
+    t.includes("not valid json") ||
+    t.includes("unparseable json") ||
     t.includes("missing prerequisite")
   ) {
     return "validation_error";
@@ -375,6 +379,25 @@ export function classifyTerminalKind(
   }
 
   return undefined;
+}
+
+/**
+ * Prefers a gate-sourced structured terminal kind over prose classification
+ * of the synthesized error text (Issue #9). Mirrors Go's
+ * `ResolveTerminalKind` in `internal/orchestrator/failure_handler.go`. Falls
+ * back to `classifyTerminalKind` for non-gate failures and for gate failures
+ * that didn't set a structured kind (including all historical records
+ * persisted before `terminal_kind` existed on `StageGateResult`).
+ */
+export function resolveTerminalKind(
+  gateRan: boolean,
+  gateTerminalKind: string | undefined,
+  errorText: string | undefined
+): TerminalFailureKind | undefined {
+  if (gateRan && gateTerminalKind) {
+    return gateTerminalKind as TerminalFailureKind;
+  }
+  return classifyTerminalKind(errorText);
 }
 
 /**

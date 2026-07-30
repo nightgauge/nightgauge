@@ -109,7 +109,11 @@ func buildStageExitRecordFromIPC(p RecordStageExitParams) diagnostics.StageExitR
 
 	// Classify terminal kind from error text when TS didn't pre-classify.
 	// Mirrors the Go-scheduler fallback so the two write paths produce the
-	// same `terminal_kind` for equivalent failure shapes.
+	// same `terminal_kind` for equivalent failure shapes. Not routed through
+	// ResolveTerminalKind (Issue #9): RecordStageExitParams carries GateKind
+	// but no structured gate terminal-kind field — the TS dispatch path never
+	// has a gates.GateResult in scope to read one from, so there is nothing
+	// for ResolveTerminalKind's gate-preference branch to prefer here.
 	if rec.TerminalKind == "" && p.ErrorText != "" {
 		rec.TerminalKind = orchestrator.ClassifyTerminalKind(p.ErrorText)
 	}

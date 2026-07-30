@@ -34,16 +34,16 @@ func (PrMergeGate) Name() string { return "pr-merge" }
 
 // Verify implements StageGate.
 func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string) GateResult {
-	return timedKind("pr-merge", func() (bool, string, []string, Kind) {
+	return timedKindTerminal("pr-merge", func() (bool, string, []string, Kind, string) {
 		ctxPath := contextFilePath(workspace, "pr", issueNumber)
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return false, "pr context file missing", []string{
 					fmt.Sprintf("expected %s", ctxPath),
-				}, KindNoOp
+				}, KindNoOp, ""
 			}
-			return false, "failed to read pr context file", []string{err.Error()}, KindFail
+			return false, "failed to read pr context file", []string{err.Error()}, KindFail, ""
 		}
 
 		var prCtx struct {
@@ -51,12 +51,12 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 			PrUrl    string `json:"pr_url"`
 		}
 		if err := json.Unmarshal(data, &prCtx); err != nil {
-			return false, "pr context is not valid JSON", []string{err.Error()}, KindFail
+			return false, "pr context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
 		}
 		if prCtx.PrNumber == 0 {
 			return false, "pr context missing pr_number", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindNoOp
+			}, KindNoOp, ""
 		}
 
 		// Pin --repo from pr_url so the check targets the right repo in a
@@ -97,7 +97,7 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 				ReviewDecision   string `json:"reviewDecision"`
 			}
 			if err := json.Unmarshal(ghOut, &ghResp); err != nil {
-				return false, "gh pr view returned unparseable JSON", []string{err.Error()}, KindFail
+				return false, "gh pr view returned unparseable JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
 			}
 			if ghResp.State != "MERGED" {
 				// pr-merge skill said success but the PR is still OPEN/CLOSED
@@ -114,11 +114,11 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 						fmt.Sprintf("mergeStateStatus=%s", ghResp.MergeStateStatus),
 						fmt.Sprintf("mergeable=%s", ghResp.Mergeable),
 						fmt.Sprintf("reviewDecision=%s", ghResp.ReviewDecision),
-					}, KindNoOp
+					}, KindNoOp, ""
 			}
 			return true, "PR is MERGED", []string{
 				fmt.Sprintf("pr=%d", prCtx.PrNumber),
-			}, KindOK
+			}, KindOK, ""
 		}
 
 		// gh failed or rate-limited — fall back to local git verification.
@@ -137,12 +137,12 @@ func (PrMergeGate) Verify(ctx context.Context, issueNumber int, workspace string
 				[]string{
 					fmt.Sprintf("pr=%d", prCtx.PrNumber),
 					fmt.Sprintf("gh_failure=%s", truncate(failureReason, 200)),
-				}, evidence...), KindOK
+				}, evidence...), KindOK, ""
 		}
 		return false, "gh pr view failed after retries and local git fallback found no merge commit", []string{
 			fmt.Sprintf("pr=%d", prCtx.PrNumber),
 			fmt.Sprintf("gh_failure=%s", truncate(failureReason, 200)),
-		}, KindFail
+		}, KindFail, ""
 	})
 }
 

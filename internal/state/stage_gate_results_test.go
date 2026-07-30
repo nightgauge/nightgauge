@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +128,59 @@ func TestV2StageDetail_GateResults_BackwardsCompatRead(t *testing.T) {
 	stage := rec.Stages["issue-pickup"]
 	if stage.GateResults != nil {
 		t.Errorf("expected nil GateResults on legacy record, got %#v", stage.GateResults)
+	}
+}
+
+// TestStageGateResult_TerminalKind_BackwardsCompatRead verifies the Issue #9
+// additive field: an old persisted StageGateResult with no `terminal_kind`
+// key decodes cleanly to an empty string, never an error, and a record that
+// does carry it round-trips the value unchanged.
+func TestStageGateResult_TerminalKind_BackwardsCompatRead(t *testing.T) {
+	old := []byte(`{
+        "gate_name": "issue-pickup",
+        "passed": false,
+        "reason": "issue context file is not valid JSON",
+        "timestamp": "2026-05-07T00:00:00Z",
+        "kind": "fail"
+    }`)
+	var gr StageGateResult
+	if err := json.Unmarshal(old, &gr); err != nil {
+		t.Fatalf("legacy StageGateResult failed to parse: %v", err)
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("expected empty TerminalKind on legacy record, got %q", gr.TerminalKind)
+	}
+
+	withKind := []byte(`{
+        "gate_name": "issue-pickup",
+        "passed": false,
+        "reason": "issue context file is not valid JSON",
+        "timestamp": "2026-05-07T00:00:00Z",
+        "kind": "fail",
+        "terminal_kind": "validation_error"
+    }`)
+	var gr2 StageGateResult
+	if err := json.Unmarshal(withKind, &gr2); err != nil {
+		t.Fatalf("record with terminal_kind failed to parse: %v", err)
+	}
+	if gr2.TerminalKind != "validation_error" {
+		t.Errorf("TerminalKind = %q, want %q", gr2.TerminalKind, "validation_error")
+	}
+
+	// Round-trip: marshal then unmarshal preserves the value, and an empty
+	// TerminalKind is omitted from the JSON (omitempty).
+	data, err := json.Marshal(gr2)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"terminal_kind":"validation_error"`) {
+		t.Errorf("marshaled record missing terminal_kind: %s", data)
+	}
+	emptyData, err := json.Marshal(gr)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(emptyData), "terminal_kind") {
+		t.Errorf("empty TerminalKind should be omitted via omitempty: %s", emptyData)
 	}
 }

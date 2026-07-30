@@ -92,11 +92,32 @@ func (s *Scheduler) writeStageExitRecord(
 		SizeLabel:                 sizeLabel,
 	}
 
+	// Snapshot the stage's post-condition gate outcome (Issue #3863). The
+	// scheduler appends the gate result to runtime.StageGateResults before this
+	// write runs (both the success-path gate and the #3835 terminal-stage
+	// reconcile path), so the latest entry for this stage is the one that
+	// decided the exit. Recording its Kind here makes a "no_op" gate — the skill
+	// exited 0 but produced no state change (e.g. pr-merge that never merged /
+	// pr_number null) — a distinct, greppable forensic signal in the daily file,
+	// separate from a generic failure.
+	gateRan := false
+	gateTerminalKind := ""
+	if snap != nil && snap.StageGateResults != nil {
+		if grs := snap.StageGateResults[string(stage)]; len(grs) > 0 {
+			latest := grs[len(grs)-1]
+			rec.GateKind = latest.Kind
+			rec.GateReason = latest.Reason
+			gateRan = true
+			gateTerminalKind = latest.TerminalKind
+		}
+	}
+
 	// Classify terminal kind from whichever error text we have. stageErr is
 	// the most reliable source (it's what the orchestrator already classifies
 	// against for the V3 record). Fall back to the runtime's per-stage error
 	// map for IPC-mode failures where stageErr was nil but the SkillRunner
-	// surfaced the kill marker via SetStageError (#3207).
+	// surfaced the kill marker via SetStageError (#3207). Prefers the gate's
+	// structured terminal kind over prose classification (Issue #9).
 	if !success {
 		errText := ""
 		if stageErr != nil {
@@ -106,23 +127,7 @@ func (s *Scheduler) writeStageExitRecord(
 			errText = snap.StageErrors[string(stage)]
 		}
 		if errText != "" {
-			rec.TerminalKind = ClassifyTerminalKind(errText)
-		}
-	}
-
-	// Snapshot the stage's post-condition gate outcome (Issue #3863). The
-	// scheduler appends the gate result to runtime.StageGateResults before this
-	// write runs (both the success-path gate and the #3835 terminal-stage
-	// reconcile path), so the latest entry for this stage is the one that
-	// decided the exit. Recording its Kind here makes a "no_op" gate — the skill
-	// exited 0 but produced no state change (e.g. pr-merge that never merged /
-	// pr_number null) — a distinct, greppable forensic signal in the daily file,
-	// separate from a generic failure.
-	if snap != nil && snap.StageGateResults != nil {
-		if grs := snap.StageGateResults[string(stage)]; len(grs) > 0 {
-			latest := grs[len(grs)-1]
-			rec.GateKind = latest.Kind
-			rec.GateReason = latest.Reason
+			rec.TerminalKind = ResolveTerminalKind(gateRan, gateTerminalKind, errText)
 		}
 	}
 

@@ -334,6 +334,21 @@ func TestClassifyTerminalKind(t *testing.T) {
 			"pipeline halted: validation_failed (quality gates did not pass)",
 			TerminalKindValidationFailed,
 		},
+		// Issue #9 — the "invalid json" classifier bug: gates actually emit
+		// "is not valid JSON" / "unparseable JSON", neither of which
+		// contained the old literal "invalid json" substring, so these fell
+		// through to the generic subagent-crash bucket instead of
+		// validation_error. Regression coverage for the fixed matcher.
+		{
+			"gate_json_not_valid_phrasing",
+			"issue context file is not valid JSON",
+			TerminalKindValidationError,
+		},
+		{
+			"gate_json_unparseable_phrasing",
+			"gh pr view returned unparseable JSON",
+			TerminalKindValidationError,
+		},
 		{"unclassifiable", "something brand new and weird", ""},
 	}
 	for _, tc := range tests {
@@ -341,6 +356,57 @@ func TestClassifyTerminalKind(t *testing.T) {
 			got := ClassifyTerminalKind(tc.err)
 			if got != tc.want {
 				t.Errorf("ClassifyTerminalKind(%q) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveTerminalKind covers the three-way precedence rule introduced by
+// Issue #9: a gate-sourced structured kind wins when present; otherwise fall
+// back to prose classification, whether or not a gate ran at all.
+func TestResolveTerminalKind(t *testing.T) {
+	tests := []struct {
+		name             string
+		gateRan          bool
+		gateTerminalKind string
+		errorText        string
+		want             string
+	}{
+		{
+			name:             "gate_ran_structured_kind_set_wins",
+			gateRan:          true,
+			gateTerminalKind: TerminalKindValidationError,
+			errorText:        "subagent crash: exit 1",
+			want:             TerminalKindValidationError,
+		},
+		{
+			name:             "gate_ran_structured_kind_empty_falls_back_to_prose",
+			gateRan:          true,
+			gateTerminalKind: "",
+			errorText:        "exit 1: subprocess died",
+			want:             TerminalKindSubagentCrash,
+		},
+		{
+			name:             "gate_did_not_run_falls_back_unconditionally",
+			gateRan:          false,
+			gateTerminalKind: TerminalKindValidationError, // must be ignored — gate didn't run
+			errorText:        "exit 1: subprocess died",
+			want:             TerminalKindSubagentCrash,
+		},
+		{
+			name:             "gate_did_not_run_no_error_text",
+			gateRan:          false,
+			gateTerminalKind: "",
+			errorText:        "",
+			want:             "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ResolveTerminalKind(tc.gateRan, tc.gateTerminalKind, tc.errorText)
+			if got != tc.want {
+				t.Errorf("ResolveTerminalKind(%v, %q, %q) = %q, want %q",
+					tc.gateRan, tc.gateTerminalKind, tc.errorText, got, tc.want)
 			}
 		})
 	}

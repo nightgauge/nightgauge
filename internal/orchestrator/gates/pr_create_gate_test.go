@@ -3,6 +3,7 @@ package gates
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -234,6 +235,50 @@ func TestPrCreateGate_RestReportsAbsent_Fail(t *testing.T) {
 	}
 	if gr.Kind != KindFail {
 		t.Errorf("expected KindFail for a definitively absent PR, got %q", gr.Kind)
+	}
+	if gr.TerminalKind != "" {
+		t.Errorf("TerminalKind = %q, want empty (a 404 is not a JSON parse failure)", gr.TerminalKind)
+	}
+}
+
+func TestPrCreateGate_Fail_InvalidJSON(t *testing.T) {
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pr-42.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	gr := PrCreateGate{}.Verify(context.Background(), 42, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail on malformed JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
+	}
+}
+
+// TestPrCreateGate_BothTransportsUnparseableJSON_TerminalKindValidationError
+// proves the "unparseable JSON" phrasing (the actual substring the transport
+// returns) maps to a structured validation_error terminal kind even though
+// the final synthesized Reason doesn't mention JSON at all.
+func TestPrCreateGate_BothTransportsUnparseableJSON_TerminalKindValidationError(t *testing.T) {
+	ws := t.TempDir()
+	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+		"pr_number": 112,
+		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
+	})
+	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return []byte("not json"), nil
+	})
+
+	gr := PrCreateGate{}.Verify(context.Background(), 99, ws)
+	if gr.Passed {
+		t.Fatalf("expected fail when both transports return unparseable JSON")
+	}
+	if gr.TerminalKind != TerminalKindValidationError {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindValidationError)
 	}
 }
 
