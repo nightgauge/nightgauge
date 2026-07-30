@@ -3,7 +3,7 @@
  */
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, vi } from "vitest";
+import { vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config/schema";
 
 // Hermetic config tiers: resolver reads merge the machine tier
@@ -22,9 +22,9 @@ process.env.NIGHTGAUGE_CONFIG_HOME ??= path.join(os.tmpdir(), "nightgauge-tests-
 // exercises the gate (the #4044 regression test) deletes this for its case.
 process.env.NIGHTGAUGE_SKIP_AUTH_PREFLIGHT = "1";
 
-afterEach(() => {
-  process.env.VITEST = "true";
-});
+// Note: vitest itself sets `process.env.VITEST = "true"` before any test
+// module code runs (see vitest's cli-api chunk), so re-asserting it here on
+// every afterEach was redundant and has been removed (#173).
 
 // Create a shared mock ConfigBridge instance
 export const mockConfigBridgeInstance = {

@@ -1993,7 +1993,14 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   private getTimeoutMs(): number {
     const config = vscode.workspace.getConfiguration("nightgauge.backend");
-    return config.get<number>("timeoutSeconds", 30) * 1000;
+    // `config.get` is contractually typed to fall back to the provided
+    // default, but VS Code's real API (and lightweight test mocks that stub
+    // `get` without an implementation) can still hand back `undefined` for an
+    // unset key. A non-finite value here becomes a ~1ms timer per Node's
+    // setTimeout(NaN) semantics, firing the reject callback almost
+    // immediately (#173) — validate before it reaches setTimeout.
+    const timeoutSeconds = config.get<number>("timeoutSeconds", 30);
+    return Number.isFinite(timeoutSeconds) ? (timeoutSeconds as number) * 1000 : 30_000;
   }
 
   protected log(message: string): void {

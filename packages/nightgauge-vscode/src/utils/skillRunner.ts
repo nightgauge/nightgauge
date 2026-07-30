@@ -2455,7 +2455,7 @@ const loadedUnderVitest = process.env.VITEST === "true";
  * forwards an `onUserConsoleLog` RPC from the worker to the main process; that
  * volume races the worker's environment teardown, surfacing intermittently as
  * `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending`
- * (Issue #263). Suppressing these lines under the vitest worker removes the
+ * (Issue #173). Suppressing these lines under the vitest worker removes the
  * RPC pressure at its source for every current and future caller. Production
  * (extension host, where `VITEST` is unset) logs exactly as before.
  */
