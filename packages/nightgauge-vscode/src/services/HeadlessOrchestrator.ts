@@ -51,6 +51,7 @@ import {
   OPTIONAL_CONTEXT_STAGES,
 } from "../orchestrator/context/ContextAssembler";
 import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
+import { WorktreeManager } from "../utils/WorktreeManager";
 
 const execAsync = promisify(exec);
 import {
@@ -1031,6 +1032,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private mainRepoRoot: string | undefined;
   /**
+   * Worktree lifecycle manager for the completion-funnel cleanup call (#106).
+   * Lazily constructed against getPersistentRoot() the first time it's needed
+   * — mainRepoRoot is not guaranteed set at HeadlessOrchestrator construction
+   * time, matching how other repo-rooted utilities in this class defer root
+   * resolution.
+   */
+  private worktreeManager: WorktreeManager | undefined;
+  /**
    * Cross-repo override — when set, all `gh issue view` calls use `--repo`
    * flag instead of relying on CWD-based repo detection. Required for
    * multi-repo pipelines where the worktree belongs to repo A but the issue
@@ -1233,7 +1242,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * routes through here so the live Pipelines view always transitions the run
    * out of 'running'. Telemetry is fire-and-forget and never blocks the run.
    */
-  private firePipelineComplete(result: PipelineRunResult): void {
+  private firePipelineComplete(result: PipelineRunResult, issueNumber?: number): void {
     this.eventDispatcher.onPipelineComplete(result);
     // #297/#309: flatten the per-stage execution-path decisions accumulated
     // across the run into plain records for the IPC wire, so the Go
@@ -1269,6 +1278,91 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       });
     } catch {
       /* telemetry is best-effort; the run outcome is recorded regardless */
+    }
+
+    // Worktree/branch cleanup on every terminal outcome — success, failure,
+    // blocked — not only success (#106). A `deferred: true` run is NOT
+    // terminal in the product sense (the issue stays eligible for a later
+    // requeue via the blockedBy-close path), so its worktree must survive
+    // for the resumed run — skip cleanup for it. Local branch deletion is
+    // only ever attempted when the PR is forge-confirmed merged
+    // (prMergedGroundTruth); WorktreeManager.cleanup's own content-diff
+    // guard is the actual safety gate against deleting an unmerged branch.
+    // Mirrors the try/catch immediately above — cleanup must never throw out
+    // of the completion funnel.
+    if (issueNumber !== undefined && result.deferred !== true) {
+      try {
+        void this.getWorktreeManager()
+          .cleanup(issueNumber, this.prMergedGroundTruth === true)
+          .catch((err) => {
+            console.warn(
+              `[HeadlessOrchestrator] worktree cleanup failed for issue #${issueNumber}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+      } catch (err) {
+        console.warn(
+          `[HeadlessOrchestrator] worktree cleanup threw for issue #${issueNumber}: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+    }
+  }
+
+  /**
+   * Lazily construct the WorktreeManager against the persistent repo root
+   * (survives worktree cleanup itself, mirroring getPersistentRoot's other
+   * consumers).
+   */
+  private getWorktreeManager(): WorktreeManager {
+    if (!this.worktreeManager) {
+      this.worktreeManager = new WorktreeManager(this.getPersistentRoot());
+    }
+    return this.worktreeManager;
+  }
+
+  /**
+   * Startup reconcile sweep for the TS side (#106, Requirement 5). Shells out
+   * to the existing `nightgauge worktree sweep --json` CLI
+   * (cmd/nightgauge/worktree.go) rather than reimplementing the
+   * content-diff/skip-reason reclamation logic in TypeScript — this mirrors
+   * the Go non-autonomous scheduler's own startup sweep
+   * (Scheduler.sweepMergedWorktrees) added in the same issue. Best-effort:
+   * a missing binary or a failed sweep is logged and does not block startup.
+   */
+  async runStartupWorktreeSweep(): Promise<void> {
+    try {
+      const cwd = this.getPersistentRoot();
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Startup worktree sweep skipped — nightgauge binary not resolved");
+        return;
+      }
+      const { stdout } = await execFileAsync(binary, ["worktree", "sweep", "--json"], {
+        encoding: "utf-8",
+        cwd,
+        timeout: 30_000,
+      });
+      const result = JSON.parse(stdout.toString()) as {
+        reclaimed?: Array<{ path: string; branch: string; issueNumber: number }>;
+        errors?: string[];
+      };
+      for (const wt of result.reclaimed ?? []) {
+        this.logger.info(
+          `worktree-reconcile: reclaimed ${wt.path} (branch ${wt.branch}, issue #${wt.issueNumber})`
+        );
+      }
+      if (result.errors?.length) {
+        this.logger.warn(`worktree-reconcile: ${result.errors.length} removal failure(s)`, {
+          errors: result.errors,
+        });
+      }
+    } catch (err) {
+      this.logger.debug("Startup worktree sweep failed — continuing", {
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -8232,7 +8326,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const epicResult = await this.handleEpicIssue(issueNumber, startTime);
 
       // Notify pipeline complete callback so UI updates
-      this.firePipelineComplete(epicResult);
+      this.firePipelineComplete(epicResult, issueNumber);
 
       // Notify queue service for auto-start of next issue
       if (this.queueService) {
@@ -8280,7 +8374,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       );
 
       // Notify pipeline complete callback so UI updates
-      this.firePipelineComplete(closedResult);
+      this.firePipelineComplete(closedResult, issueNumber);
 
       // Notify queue service for auto-start of next issue
       if (this.queueService) {
@@ -8337,7 +8431,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `(transient; resetInSec=${retryAfterSec})\n`
       );
 
-      this.firePipelineComplete(quotaResult);
+      this.firePipelineComplete(quotaResult, issueNumber);
 
       if (this.queueService) {
         this.handleQueueAutoStart(quotaResult.success, issueNumber);
@@ -8387,7 +8481,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `(transient; retryInSec=${retryAfterSec})\n`
       );
 
-      this.firePipelineComplete(outageResult);
+      this.firePipelineComplete(outageResult, issueNumber);
 
       if (this.queueService) {
         this.handleQueueAutoStart(outageResult.success, issueNumber);
@@ -8425,7 +8519,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `(isAuthenticated=${authCheck.isAuthenticated}, hasRequiredScopes=${authCheck.hasRequiredScopes})\n`
       );
 
-      this.firePipelineComplete(authResult);
+      this.firePipelineComplete(authResult, issueNumber);
 
       if (this.queueService) {
         this.handleQueueAutoStart(authResult.success, issueNumber);
@@ -8522,7 +8616,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `[pipeline-start-failure] adapter-auth-failed: ${adapterList}\n${errorMessage}\n`
         );
 
-        this.firePipelineComplete(preflightResult);
+        this.firePipelineComplete(preflightResult, issueNumber);
 
         if (this.queueService) {
           this.handleQueueAutoStart(preflightResult.success, issueNumber);
@@ -8654,7 +8748,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 `ratio=${(preFlightResult.ceilingRatio * 100).toFixed(0)}%\n`
             );
 
-            this.firePipelineComplete(cancelResult);
+            this.firePipelineComplete(cancelResult, issueNumber);
 
             if (this.queueService) {
               this.handleQueueAutoStart(cancelResult.success, issueNumber);
@@ -9149,7 +9243,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               outcomeType: "deferred",
             };
 
-            this.firePipelineComplete(deferredResult);
+            this.firePipelineComplete(deferredResult, issueNumber);
             if (this.queueService) {
               this.handleQueueAutoStart(deferredResult.success, issueNumber);
             }
@@ -10992,7 +11086,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       budgetExceeded,
     };
 
-    this.firePipelineComplete(result);
+    this.firePipelineComplete(result, issueNumber);
 
     // Notify queue service of pipeline completion for auto-start
     if (this.queueService) {

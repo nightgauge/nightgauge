@@ -1957,6 +1957,50 @@ func (s *Scheduler) loadQueue() {
 
 	s.recoverOrchestratorCrash()
 	s.reconcileOrphanedComposeProjects()
+	s.sweepMergedWorktrees()
+}
+
+// sweepMergedWorktrees reclaims pipeline-created worktrees whose branch is
+// already fully represented on the default branch. Mirrors
+// (*AutonomousScheduler).sweepMergedWorktrees (autonomous_worktree_sweep.go)
+// for the non-autonomous Go entry point (a plain `nightgauge run` / scheduler
+// invocation outside the autonomous loop), which otherwise has no
+// startup/reconcile sweep at all (#106). Runs once at scheduler startup,
+// alongside reconcileOrphanedComposeProjects. Best-effort: a per-repo failure
+// is logged and the worktrees stay for the next reconcile.
+func (s *Scheduler) sweepMergedWorktrees() {
+	roots := s.repoScanRoots()
+	if len(roots) == 0 {
+		return
+	}
+
+	s.mu.Lock()
+	active := make(map[int]bool, len(s.queue))
+	for _, item := range s.queue {
+		active[item.IssueNumber] = true
+	}
+	s.mu.Unlock()
+	for issue := range s.activeWorktreeIssues() {
+		active[issue] = true
+	}
+
+	for _, root := range roots {
+		res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
+			RepoRoot:     root,
+			ActiveIssues: active,
+		})
+		if err != nil {
+			log.Printf("worktree-reconcile: sweep %s: %v", root, err)
+			continue
+		}
+		for _, wt := range res.Reclaimed {
+			log.Printf("worktree-reconcile: reclaimed %s (branch %s, issue #%d — content already on %s)",
+				wt.Path, wt.Branch, wt.IssueNumber, res.BaseRef)
+		}
+		if len(res.Errors) > 0 {
+			log.Printf("worktree-reconcile: %s: %d removal failure(s): %v", root, len(res.Errors), res.Errors)
+		}
+	}
 }
 
 // reconcileOrphanedComposeProjects tears down per-issue docker compose
@@ -2796,7 +2840,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if branchName := resolveFeatureBranch(runtime, workspaceRoot, item.Number); branchName != "" && s.execMgr != nil {
 			switch {
 			case pipelineSuccess:
-				if err := s.execMgr.CleanupBranch(branchName); err != nil {
+				// Content-diff gate before any local branch delete (#106): even
+				// on the success path, never hand CleanupBranch's unconditional
+				// `git branch -D` a branch that isn't actually merged into the
+				// default branch — reuses the same squash-merge-safe check the
+				// worktree reclamation sweep relies on.
+				if err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName); err != nil {
 					log.Printf("#%d: branch cleanup failed for %s: %v", item.Number, branchName, err)
 				} else {
 					log.Printf("#%d: cleaned up feature branch %s", item.Number, branchName)
@@ -2817,6 +2866,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					log.Printf("#%d: orphaned-push reclamation declined — %s", item.Number, res.Reason)
 				}
 				_ = s.execMgr.CleanupLocalBranch(branchName)
+			}
+		}
+
+		// Remove the worktree for every terminal outcome — merged, failed,
+		// abandoned/discarded — not only on success (#106). CleanupWorktree
+		// itself preserves a worktree with uncommitted tracked changes (logs
+		// SkipDirty and returns without removing), so a failed run a developer
+		// still needs to inspect is never silently destroyed here.
+		if s.execMgr != nil {
+			if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
+				log.Printf("#%d: worktree cleanup failed: %v", item.Number, err)
 			}
 		}
 
