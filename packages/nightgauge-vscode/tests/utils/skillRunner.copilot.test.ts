@@ -165,31 +165,12 @@ import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
 // `runStageSkillHeadless` is callback-based rather than promise-returning, so
 // every test below dispatches it fire-and-forget and asserts on `spawn`
 // synchronously. Its internal async work keeps writing operator diagnostics
-// after the test has returned, and a `console.log` that lands once the file has
-// finished closes vitest's worker RPC mid-call:
-//
-//   EnvironmentTeardownError: [vitest-worker]: Closing rpc while
-//   "onUserConsoleLog" was pending
-//
-// That fails the run with every assertion green and no `×` marker, so it reads
-// as an unattributable flake. Silence the diagnostics for the file — same
-// convention as skillRunner.adapterPerfMode.test.ts, whose "repeated dispatches
-// quiesce operator diagnostics before Vitest teardown" case hit this first.
-let consoleSpies: Array<{ mockRestore: () => void }> = [];
-
-beforeEach(() => {
-  consoleSpies = [
-    vi.spyOn(console, "log").mockImplementation(() => undefined),
-    vi.spyOn(console, "warn").mockImplementation(() => undefined),
-    vi.spyOn(console, "error").mockImplementation(() => undefined),
-  ];
-});
-
-afterEach(() => {
-  // Restore only these spies — `vi.restoreAllMocks()` would also tear down the
-  // module mocks the suites re-arm in their own hooks.
-  for (const spy of consoleSpies) spy.mockRestore();
-});
+// after the test has returned, which used to race vitest's worker RPC
+// teardown (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog"
+// was pending`). That race is now closed at the source: every reachable
+// `console.log`/`warn`/`error` call site in skillRunner.ts is routed through
+// a vitest-guarded diagnostic shim (Issue #173), so no per-file console spy
+// is needed here.
 
 // ---------------------------------------------------------------------------
 // getCopilotModel — unit tests

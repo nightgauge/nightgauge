@@ -1126,7 +1126,7 @@ export function resolveModel(
       // Low confidence → fall through to default
     } catch (error) {
       // AutoModelSelector failure → fall through to default (graceful degradation)
-      console.error(`[skillRunner] AutoModelSelector failed for stage ${stage}:`, error);
+      errorStageDiagnostic(`[skillRunner] AutoModelSelector failed for stage ${stage}:`, error);
     }
   }
 
@@ -2279,7 +2279,7 @@ function loadAutoAcceptConfigSync(
     }
   } catch (error) {
     // Fail-safe: if config loading fails, don't enable auto-accept
-    console.error("Failed to load auto-accept config:", error);
+    errorStageDiagnostic("Failed to load auto-accept config:", error);
   }
 
   return env;
@@ -2442,6 +2442,11 @@ function resolveBinaryDiscoveryEnv(): Record<string, string> {
 
 const loadedUnderVitest = process.env.VITEST === "true";
 
+// Mirrors DEFAULT_STALL_PAUSE_TIMEOUT_MS in monitoringResolver.ts — the safe
+// fallback when getAutonomousStallConfig() returns a non-finite/non-positive
+// pauseTimeoutMs (Issue #173).
+const DEFAULT_STALL_PAUSE_TIMEOUT_FALLBACK_MS = 30 * 60 * 1000; // 30 minutes
+
 /**
  * Emit a per-stage-run observability line to the extension-host console.
  *
@@ -2464,6 +2469,31 @@ function logStageDiagnostic(message: string): void {
     return;
   }
   console.log(message);
+}
+
+/**
+ * Vitest-guarded counterpart of {@link logStageDiagnostic} for `console.warn`/
+ * `console.error` call sites reachable from `runStageSkillHeadless`/
+ * `runStageSkillInteractive`. Fire-and-forget async continuations (spawn
+ * `exit`/timer callbacks not awaited by tests) can still be in flight after a
+ * test file's vitest worker environment starts tearing down; any unsuppressed
+ * `console.*` call from that continuation races the teardown and surfaces as
+ * `EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+ * pending` (Issue #173, generalizing the #263 fix). Production (extension
+ * host, where `VITEST` is unset) logs exactly as before.
+ */
+function warnStageDiagnostic(message: string, ...args: unknown[]): void {
+  if (loadedUnderVitest || process.env.VITEST === "true") {
+    return;
+  }
+  console.warn(message, ...args);
+}
+
+function errorStageDiagnostic(message: string, ...args: unknown[]): void {
+  if (loadedUnderVitest || process.env.VITEST === "true") {
+    return;
+  }
+  console.error(message, ...args);
 }
 
 /**
@@ -3752,6 +3782,25 @@ export function runStageSkillHeadless(
   // Autonomous mode escalation config (Issue #2656)
   const autonomousStallCfg = autonomousMode ? getAutonomousStallConfig(workspaceRoot) : undefined;
   const escalationEnabled = autonomousMode && autonomousStallCfg?.escalationEnabled !== false;
+  // Validated pause-timeout duration for the auto-abort timer below. A raw
+  // `pauseTimeoutMs` read that is missing, zero, negative,
+  // or NaN (e.g. from a misconfigured/mocked config) schedules a setTimeout
+  // that fires immediately, compounding the teardown race (Issue #173). Fall
+  // back to the documented default and surface the misconfiguration loudly
+  // rather than silently producing a same-tick timer fire.
+  const rawPauseTimeoutMs = autonomousStallCfg?.pauseTimeoutMs;
+  const pauseTimeoutMs =
+    typeof rawPauseTimeoutMs === "number" &&
+    Number.isFinite(rawPauseTimeoutMs) &&
+    rawPauseTimeoutMs > 0
+      ? rawPauseTimeoutMs
+      : DEFAULT_STALL_PAUSE_TIMEOUT_FALLBACK_MS;
+  if (escalationEnabled && pauseTimeoutMs !== rawPauseTimeoutMs) {
+    warnStageDiagnostic(
+      `[skillRunner] Invalid autonomous stall pause_timeout (${String(rawPauseTimeoutMs)}) for ${stage}; ` +
+        `falling back to ${DEFAULT_STALL_PAUSE_TIMEOUT_FALLBACK_MS / 1000}s.`
+    );
+  }
   // Extreme stall threshold: max_observed × 3 or stall_threshold × 10 (whichever is available)
   const extremeThresholdMs = escalationEnabled
     ? calibratedData && calibratedData.warnSec > 0 && !calibratedData.isColdStart
@@ -3774,7 +3823,7 @@ export function runStageSkillHeadless(
   if (escalationEnabled) {
     logStageDiagnostic(
       `[skillRunner] Autonomous escalation enabled for ${stage}: ` +
-        `extreme=${extremeThresholdMs / 1000}s, pause_timeout=${autonomousStallCfg!.pauseTimeoutMs / 1000}s`
+        `extreme=${extremeThresholdMs / 1000}s, pause_timeout=${pauseTimeoutMs / 1000}s`
     );
   }
 
@@ -4196,7 +4245,7 @@ export function runStageSkillHeadless(
             stage,
             elapsed_ms: elapsed,
             threshold_ms: extremeThresholdMs,
-            timeout_ms: autonomousStallCfg!.pauseTimeoutMs,
+            timeout_ms: pauseTimeoutMs,
           };
 
           // Auto-abort timer
@@ -4214,7 +4263,7 @@ export function runStageSkillHeadless(
               stallEvents.push(autoAbortEvent);
               callbacks?.onStallEvent?.(autoAbortEvent);
               callbacks?.onStderr?.(
-                `[skillRunner] Auto-abort: no user response within ${formatElapsed(autonomousStallCfg!.pauseTimeoutMs)}. Killing process.\n`
+                `[skillRunner] Auto-abort: no user response within ${formatElapsed(pauseTimeoutMs)}. Killing process.\n`
               );
               proc.kill("SIGTERM");
               setTimeout(() => {
@@ -4228,7 +4277,7 @@ export function runStageSkillHeadless(
                 }
               }, 5000);
             }
-          }, autonomousStallCfg!.pauseTimeoutMs);
+          }, pauseTimeoutMs);
 
           // Ask user for resolution (non-blocking — the interval is already cleared)
           void callbacks
@@ -5867,7 +5916,7 @@ export function getActiveInteractiveProcess(): SkillProcessHandle | null {
  * @deprecated Use resumeSessionWithResponse() for AskUserQuestion responses
  */
 export function sendInputToActiveProcess(input: string): boolean {
-  console.warn(
+  warnStageDiagnostic(
     "[skillRunner] sendInputToActiveProcess is deprecated. " +
       "Use resumeSessionWithResponse() with session_id for follow-up messages. " +
       `Attempted input: "${input.substring(0, 50)}..."`
@@ -6435,7 +6484,7 @@ export function runStageSkillInteractive(
 export function writeToInteractiveProcess(handle: SkillProcessHandle, message: string): boolean {
   // Validate this is an interactive process
   if (!handle.isInteractive) {
-    console.warn(
+    warnStageDiagnostic(
       "[skillRunner] writeToInteractiveProcess called on non-interactive process. " +
         "Use runStageSkillInteractive() to create an interactive process."
     );
