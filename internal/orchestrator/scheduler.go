@@ -2343,14 +2343,27 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 }
 
 // hasUncommittedWork returns true when the worktree has staged, unstaged, or
-// untracked files — indicating work that was done but never committed. Uses a
-// git subprocess (not go-git) for reliability in worktree subdirectories,
-// consistent with the recovery-action shell-out pattern. Issue #3542.
+// untracked DELIVERABLE files — indicating work that was done but never
+// committed. Uses a git subprocess (not go-git) for reliability in worktree
+// subdirectories, consistent with the recovery-action shell-out pattern.
+// Issue #3542.
+//
+// Bookkeeping directories are excluded (#202). Every run writes
+// `.nightgauge/pipeline/*.json` and most write `.nightgauge/attention/*.json`;
+// this repo gitignores the former but not the latter, and a consumer repo may
+// ignore neither. Counting them made the pipeline's own exhaust answer "was
+// work lost?" — which has two costs, both silent. The recovery commit swept
+// pipeline state into the user's branch via `git add -A`, and, worse, ANY
+// failure with an unset terminal kind got reclassified as
+// worktree_uncommitted: a kind that means "recovered, not a failure" and so
+// skips the LifetimeIssueFailures increment and the board revert. A real
+// defect laundered into a non-event by a JSON file the pipeline wrote itself.
 func hasUncommittedWork(worktreePath string) bool {
 	if worktreePath == "" {
 		return false
 	}
-	out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").Output()
+	args := append([]string{"-C", worktreePath, "status", "--porcelain", "--"}, ci.DeliverablePathspec()...)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
 		return false
 	}
@@ -2390,6 +2403,21 @@ func recoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	}
 	if err := exec.Command("git", "-C", worktreePath, "add", "-A").Run(); err != nil {
 		return fmt.Errorf("git add: %w", err)
+	}
+	// Unstage bookkeeping (#202). `git add -A` alone swept the run's own
+	// `.nightgauge/` state into the recovery commit and pushed it to the issue
+	// branch, so a rescue meant to preserve the user's work also published
+	// pipeline exhaust into their PR.
+	//
+	// Unstaged afterwards rather than excluded via `add`'s pathspec: naming a
+	// gitignored directory in an exclude pathspec makes `git add` exit 1
+	// ("paths are ignored by one of your .gitignore files"), which would turn
+	// this rescue into a hard failure in every repo that DOES ignore
+	// `.nightgauge` — the #3365 case this function exists for. `git reset`
+	// exits 0 whether the path is ignored, untracked, or absent.
+	resetArgs := append([]string{"-C", worktreePath, "reset", "-q", "--"}, ci.BookkeepingDirs...)
+	if err := exec.Command("git", resetArgs...).Run(); err != nil {
+		log.Printf("#%d: unstaging bookkeeping before recovery commit failed (non-fatal): %v", issueNumber, err)
 	}
 	msg := fmt.Sprintf("feat(#%d): [auto-recovery] %s work recovered after stop-hook failure", issueNumber, stage)
 	if err := exec.Command("git", "-C", worktreePath, "commit", "-m", msg).Run(); err != nil {

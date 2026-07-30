@@ -136,6 +136,31 @@ describe("classifyTerminalKind — premature_turn_end (#74)", () => {
   });
 });
 
+describe("classifyTerminalKind — dev_produced_no_changes (#202)", () => {
+  // The exact string the scheduler produces: the gate reason, marker and all,
+  // wrapped in the KindNoOp "premature turn end" envelope.
+  const wrapped =
+    "premature turn end: stage exited 0 with no state change (gate no-op): " +
+    "[dev-produced-no-changes] dev reported file changes but produced none in the stage workspace " +
+    "— the working tree is clean and the branch is level with its base";
+
+  it("beats the premature_turn_end wrapper it is nested inside", () => {
+    expect(classifyTerminalKind(wrapped)).toBe("dev_produced_no_changes");
+  });
+
+  it("classifies as agent — the stage's delegation behavior, not the environment", () => {
+    expect(classifyFailureCategory(wrapped, "feature-dev")).toBe("agent");
+  });
+
+  it("leaves a generic gate no-op as premature_turn_end", () => {
+    expect(
+      classifyTerminalKind(
+        "premature turn end: stage exited 0 with no state change (gate no-op): plan_file does not exist"
+      )
+    ).toBe("premature_turn_end");
+  });
+});
+
 describe("classifyTerminalKind — adapter_auth_failed (#312)", () => {
   it("classifies a burst probe TIMEOUT as adapter_auth_failed, NOT subagent_crash", () => {
     // The real burst false-negative message from HeadlessOrchestrator. It

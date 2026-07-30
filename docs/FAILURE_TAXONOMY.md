@@ -233,6 +233,7 @@ record may carry both fields, neither, or only one.
 | `github_network_outage`      | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                         |
 | `model_unavailable`          | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                 |
 | `premature_turn_end`         | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                  |
+| `dev_produced_no_changes`    | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)      |
 | `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra |
 | `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope       |
 | `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                  |
@@ -316,6 +317,33 @@ toward `LifetimeIssueFailures`, feeds the cascade breaker like any other
 real failure) — only its reported kind and reliability weight differ from
 `subagent_crash`; see the category table below.
 
+`dev_produced_no_changes` (Issue #202) reads like `no_changes_produced` and
+means close to its opposite. Keep them apart:
+
+|                       | `no_changes_produced` (#317)       | `dev_produced_no_changes` (#202)   |
+| --------------------- | ---------------------------------- | ---------------------------------- |
+| Was there work to do? | No — a human-only issue            | Yes                                |
+| Did the stage do it?  | Correctly did nothing              | Yes, in full                       |
+| What is wrong         | It was dispatched at all           | The pipeline cannot see the result |
+| Raised by             | pr-create's deterministic fallback | feature-dev's post-condition gate  |
+
+Both weigh `agent` (0.5), so the difference is not cost — it is triage. #202
+spent 31 minutes and $3.16 writing five files, then reported nothing because
+the stage had delegated to a subagent running under **worktree isolation**
+(`.claude/worktrees/agent-<id>`). The pipeline reads only
+`.worktrees/issue-<n>`, so the implementation was invisible to every later
+stage and would have been destroyed by the next worktree sweep. Filing that as
+"there was nothing to do" would send the reader looking at issue eligibility
+instead of at a stranded deliverable.
+
+The gate reason names the sibling worktree still holding the work, so the
+failure record is enough to recover from. Emitted with the stable
+`[dev-produced-no-changes]` marker and matched BEFORE `premature_turn_end` in
+both classifiers: the scheduler wraps every `KindNoOp` gate reason in a
+`premature turn end:` envelope, so without that ordering the broader kind
+swallows the narrower one on every text-classified path while the gate path
+reports it — the two disagreeing about one failure.
+
 `adapter_auth_failed` (Issue #312) is a **retryable-infra** kind. The
 pipeline-start auth gate probes each adapter's `claude auth status`; under a
 concurrent dispatch burst (autonomous restart fanning out N runs in seconds)
@@ -379,6 +407,7 @@ mirrors both the matcher fix and the precedence rule as `classifyTerminalKind`
 | `github_network_outage`      | `infrastructure` — local network/transport, not the issue                                   |
 | `model_unavailable`          | `infrastructure` — plan/limit environment, not the issue                                    |
 | `premature_turn_end`         | `agent` — the agent's turn-ending behavior, not the issue                                   |
+| `dev_produced_no_changes`    | `agent` — the stage's delegation/turn-ending behavior, not the issue                        |
 | `adapter_auth_failed`        | `infrastructure` — probe starvation / credential state, not the issue                       |
 | `no_changes_produced`        | `agent` — planning/scope failure (dispatch-eligibility gap), not the model's implementation |
 | `validation_failed`          | `organic` — true implementation failure caught by feature-validate's own quality gate       |
@@ -419,6 +448,7 @@ export const TerminalFailureKindSchema = z.enum([
   "github_network_outage", // Issue #4002
   "model_unavailable", // Issue #42
   "premature_turn_end", // Issue #74
+  "dev_produced_no_changes", // Issue #202
   "adapter_auth_failed", // Issue #312
   "no_changes_produced", // Issue #317
   "validation_failed", // Issue #326

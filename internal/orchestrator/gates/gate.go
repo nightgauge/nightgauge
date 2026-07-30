@@ -67,6 +67,12 @@ const TerminalKindValidationError = "validation_error"
 // parsing) fail — a distinct case from TerminalKindValidationError.
 const TerminalKindValidationFailed = "validation_failed"
 
+// TerminalKindDevProducedNoChanges mirrors
+// orchestrator.TerminalKindDevProducedNoChanges (Issue #202) for the same
+// import-cycle reason as the two constants above. Set when feature-dev's gate
+// finds the stage workspace empty despite the skill reporting changes.
+const TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
+
 // GateResult is the in-process value returned by a StageGate.Verify call.
 // The scheduler copies this into a state.StageGateResult before persisting.
 type GateResult struct {

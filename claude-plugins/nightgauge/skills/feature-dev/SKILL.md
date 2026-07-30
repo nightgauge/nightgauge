@@ -182,6 +182,12 @@ schema documentation.
 - **Never report success when a check failed (#2779).** Swallowing a failed
   build/test ships a broken change to pr-create where CI blocks the merge — fail
   loudly with the output instead.
+- **Leave the changes on disk in THIS worktree (#202).** The gate now verifies
+  with git, not with your `files_changed` report: a clean workspace whose branch
+  is level with base fails the stage as `dev_produced_no_changes` no matter what
+  the context file says. Both ways to trip it look like success from inside the
+  stage — delegating the implementation to a worktree-isolated subagent, or
+  ending the turn while a background command is still running.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
