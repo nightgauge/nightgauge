@@ -9,6 +9,26 @@ export default defineConfig({
     // runner load even when their assertions are healthy; retain a bounded
     // timeout while avoiding false failures and cascading shared-state errors.
     testTimeout: 15_000,
+    // #173 — kill the `onUserConsoleLog` RPC at its source rather than racing
+    // it. By default vitest intercepts console output in the worker and
+    // forwards each line to the main process over RPC so it can attribute the
+    // line to a test file. Across ~11,000 tests that is a very high-volume
+    // channel, and a line emitted close to a worker's teardown leaves an RPC
+    // in flight when the environment closes:
+    //
+    //   EnvironmentTeardownError: [vitest-worker]: Closing rpc while
+    //   "onUserConsoleLog" was pending
+    //
+    // Zero failing assertions, non-zero exit. Widening `teardownTimeout` was
+    // tried first and measured at 3/10 runs still failing — it bounds how long
+    // teardown HOOKS may take, not how long an in-flight RPC has to drain, so
+    // it never addressed this. With interception off, console output goes
+    // straight to the terminal (unattributed to a test file, but not lost) and
+    // the RPC that races teardown is never created.
+    disableConsoleIntercept: true,
+    // Retained as a safety margin for a suite this size — slow teardown hooks
+    // under runner load are a real (separate) failure mode. NOT the #173 fix.
+    teardownTimeout: 10_000,
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/playwright/**", "tests/e2e-playwright/**"],
     setupFiles: ["tests/setup.ts"],

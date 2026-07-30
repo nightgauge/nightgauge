@@ -883,6 +883,68 @@ when the feature is dead (nothing observed is trivially "observed once"), so
 confirm it fails with dedupe disabled too. Give distinct calls distinct ids;
 `tool_${Date.now()}` collides within a millisecond, which the CLI never does.
 
+### `bash scripts/ci-local.sh` exits 1 with every vscode test passing (#173)
+
+**Symptom:** `npx vitest run` (or `ci-local.sh`) intermittently exits non-zero
+in `packages/nightgauge-vscode` even though the summary shows every test
+passing (e.g. `11136 passed | 9 skipped`, 0 assertion failures). The real
+failure is buried above the summary:
+
+```
+(node:PID) TimeoutNaNWarning: NaN is not a number.
+Timeout duration was set to 1.
+...
+EnvironmentTeardownError: [vitest-worker]: Closing rpc while
+"onUserConsoleLog" was pending
+```
+
+**Root cause:** `IpcClientBase.getTimeoutMs()`
+(`src/services/IpcClientBase.ts`) read
+`vscode.workspace.getConfiguration("nightgauge.backend").get<number>("timeoutSeconds", 30)`
+and multiplied the result by `1000` with no validation. The lightweight
+`vscode` module mock most unit tests load (`tests/setup.ts`) stubs
+`getConfiguration` as `() => ({ get: vi.fn() })` — a bare `vi.fn()` with no
+implementation returns `undefined` regardless of the default argument a real
+`WorkspaceConfiguration.get` would honor. `undefined * 1000` is `NaN`, and
+Node's `setTimeout`/`setInterval` treat a non-finite duration as `1` — the
+timer (an IPC request timeout, e.g. for `config.getHealthThresholds`) fires
+almost immediately. When that fires after the owning test's `afterEach` has
+already run and torn down mocks/timers, its `console.log`/reject path forwards
+an `onUserConsoleLog` RPC that races the vitest worker's environment teardown,
+producing the `EnvironmentTeardownError` — nondeterministically, since it
+depends on exact timing.
+
+**These are two independent bugs**, and only fixing both makes the suite green.
+
+**Fix 1 — the NaN timer.** `getTimeoutMs()` now validates with
+`Number.isFinite(...)` before multiplying, falling back to the documented 30s
+default — matching the pattern already used by
+`AttentionSweepService.readSweepConfig()` and
+`TelemetryConsentService.getUploadIntervalMinutes()`. If this recurs with a
+_different_ NaN-producing timer, the fix is the same shape: validate the
+duration with `Number.isFinite()` before it reaches `setTimeout`/`setInterval`,
+right at the config/env read site.
+
+**Fix 2 — the teardown race.** Removing the NaN timer alone left the suite
+failing **3 runs in 10** (measured over 10 consecutive full-suite runs). The
+`onUserConsoleLog` RPC is high-volume across ~11,000 tests and any line emitted
+near a worker's teardown can still be in flight when the environment closes —
+the NaN timer was one way to reach that state, not the only one.
+
+Widening `teardownTimeout` does **not** fix it. That option bounds how long
+teardown _hooks_ may run; it does not give an in-flight RPC longer to drain.
+Measured with `teardownTimeout: 10_000` and no other change: still 3/10.
+
+The fix is to stop creating the RPC: `disableConsoleIntercept: true` in
+`vitest.config.ts`. Console output then goes straight to the terminal instead
+of being forwarded to the main process for per-test attribution. Measured
+after: **10/10 clean, 0 teardown errors**. The trade-off is that console lines
+are no longer labelled with the test file that emitted them — they are still
+printed, both stdout and stderr.
+
+The general lesson: when a symptom is "an RPC was pending at teardown", widening
+the teardown window treats the timing, not the cause. Remove the traffic.
+
 ---
 
 ## Getting Help
