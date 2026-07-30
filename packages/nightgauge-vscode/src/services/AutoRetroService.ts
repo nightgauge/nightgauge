@@ -254,6 +254,21 @@ interface ExtractorInput {
   text: string;
   sourcesAnalyzed: string[];
   failedStage: string;
+  /**
+   * The orchestrator's terminal failure reason ALONE (#3926's source 0),
+   * unconcatenated — not the whole corpus.
+   *
+   * Extractors that decide "what killed this run" must match against this and
+   * nothing else. `text` splices the authoritative verdict together with the
+   * agent's entire session transcript, and in a codebase whose subject matter
+   * IS pipeline failure handling, that transcript quotes our own taxonomy back
+   * at us. Issue #134 was classified `cost-cap` (severity high, "increase the
+   * cap or fix the loop") because the planning agent had read
+   * `docs/FAILURE_TAXONOMY.md:50` — the row containing the literal phrase
+   * `cost cap exceeded` — while the real failure was a premature turn end and
+   * no cost cap is even configured for that stage.
+   */
+  terminalReason: string;
 }
 
 /**
@@ -351,10 +366,17 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
   },
   // skillRunner cost-cap-exceeded log line.
   ({ text }) => {
-    if (
-      /\[cost-cap-exceeded\]\s+Stage\s+\S+\s+terminated/i.test(text) ||
-      /cost cap exceeded/i.test(text)
-    ) {
+    // Structured marker ONLY (#134). The bare phrase `cost cap exceeded` was
+    // also accepted here, matched against a corpus that includes the agent's
+    // whole session transcript. In a repo whose subject matter is pipeline
+    // failure handling, that transcript quotes our own taxonomy: issue #134's
+    // planning agent read `docs/FAILURE_TAXONOMY.md:50` — the row containing
+    // that exact phrase — and the retro reported `cost-cap`, severity high,
+    // recommending "increase the cap (pipeline.stage_cost_caps)" for a stage
+    // that has no cap configured. The real failure was a premature turn end.
+    // A classifier that reads the agent's reading material cannot be trusted
+    // to name a cause; only the emitted marker means the cap actually fired.
+    if (/\[cost-cap-exceeded\]\s+Stage\s+\S+\s+terminated/i.test(text)) {
       return {
         category: "cost-cap",
         evidence: "Per-stage cost cap fired before budget enforcer could grace-out",
@@ -449,6 +471,32 @@ const SIGNAL_EXTRACTORS: Array<(input: ExtractorInput) => StructuredSignal | nul
       };
     }
     return null;
+  },
+  // #134 — `skill-no-op` for ANY stage, from the orchestrator's own verdict.
+  //
+  // The stage exited 0 and its post-condition gate reported KindNoOp, so the
+  // orchestrator stamped `premature turn end: ... (gate no-op): <gate reason>`.
+  // That string is a deterministic contract, not prose scraped from a log.
+  //
+  // Matched against `terminalReason` ALONE — never the joined corpus — so the
+  // agent's transcript cannot fabricate or suppress it.
+  //
+  // Placed before the pr-merge/pr-create branch below, which returns null for
+  // every other stage. That gap opened the moment #210 wired the issue-pickup,
+  // feature-planning, and feature-dev gates into the TS path: those three
+  // started emitting no-ops that no extractor could name, so a real
+  // `premature_turn_end` fell through to keyword matching and was reported as
+  // a cost cap that is not even configured.
+  ({ terminalReason, failedStage }) => {
+    if (!/premature turn end/i.test(terminalReason)) return null;
+    const gateReason = terminalReason.match(/\(gate no-op\)\s*:\s*(.+)$/i)?.[1]?.trim();
+    return {
+      category: "skill-no-op",
+      evidence: gateReason
+        ? `${failedStage} exited 0 but its post-condition gate found no state change: ${gateReason}`
+        : `${failedStage} exited 0 without producing the stage's expected output (premature turn end)`,
+      severityHint: "high",
+    };
   },
   // #3275 / #3926 — `skill-no-op`: the stage's LLM path reported success but
   // the deterministic post-condition gate found the work never landed. Covers
@@ -737,7 +785,12 @@ export class AutoRetroService {
     failedStage: string,
     logger: Logger,
     failureReason?: string
-  ): Promise<{ text: string; sourcesAnalyzed: string[]; lines: TaggedLine[] }> {
+  ): Promise<{
+    text: string;
+    sourcesAnalyzed: string[];
+    lines: TaggedLine[];
+    terminalReason: string;
+  }> {
     const parts: string[] = [];
     const sourcesAnalyzed: string[] = [];
     const lines: TaggedLine[] = [];
@@ -862,7 +915,12 @@ export class AutoRetroService {
       logger.info("Auto-retro: no evidence sources found, using unknown category", { issueNumber });
     }
 
-    return { text: parts.join("\n"), sourcesAnalyzed, lines };
+    return {
+      text: parts.join("\n"),
+      sourcesAnalyzed,
+      lines,
+      terminalReason: failureReason?.trim() ?? "",
+    };
   }
 
   /**
@@ -957,7 +1015,12 @@ export class AutoRetroService {
    *   primary cause first, then secondary findings highest-severity first.
    */
   static classifyFailure(
-    evidence: { text: string; sourcesAnalyzed: string[]; lines?: TaggedLine[] },
+    evidence: {
+      text: string;
+      sourcesAnalyzed: string[];
+      lines?: TaggedLine[];
+      terminalReason?: string;
+    },
     failedStage: string
   ): RetroFinding[] {
     const text = evidence.text;
@@ -969,6 +1032,7 @@ export class AutoRetroService {
       text,
       sourcesAnalyzed: evidence.sourcesAnalyzed,
       failedStage,
+      terminalReason: evidence.terminalReason ?? "",
     };
     for (const extractor of SIGNAL_EXTRACTORS) {
       const signal = extractor(extractorInput);

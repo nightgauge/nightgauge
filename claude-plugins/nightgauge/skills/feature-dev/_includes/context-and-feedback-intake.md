@@ -13,28 +13,73 @@ Detection), and Phase 0.7 (Feedback Context Check).
 
 ## Phase 0: Read Planning Context
 
-Extract issue number from branch. Load
-`.nightgauge/pipeline/planning-{N}.json`. Parse `PLAN_FILE`, `APPROACH`,
-`FILES_TO_CREATE`, `FILES_TO_MODIFY`. Signal stage start via Go binary:
-`project move-status`. If context file missing, exit 1 with error listing
-pipeline order.
+Extract issue number from branch. Determine the resolved input context type
+from the "## Invocation Context" block appended below this skill's body — the
+orchestrator (`internal/execution/skill.go` `BuildPrompt`, #49) already walked
+past any skipped upstream stages and knows whether feature-dev's real
+prerequisite is `planning-{N}.json` or `issue-{N}.json`. Signal stage start via
+Go binary: `project move-status`.
+
+- **`Input context type` is `planning`, or the line is absent** (older
+  orchestrator build) — normal case. Load `.nightgauge/pipeline/planning-{N}.json`.
+  Parse `PLAN_FILE`, `APPROACH`, `FILES_TO_CREATE`, `FILES_TO_MODIFY`. If the
+  file is missing, exit 1 — feature-planning ran (it was not skipped) and
+  failed to write its output, which is a real upstream failure.
+- **`Input context type` is `issue`** — fast-tracked case (#4126/#4129).
+  `feature-planning` was intentionally skipped by routing, so
+  `planning-{N}.json` legitimately does not exist. Load
+  `.nightgauge/pipeline/issue-{N}.json` instead and derive the brief directly
+  from its `.requirements`:
+  - `APPROACH="fast-tracked"` (distinct from `verify-and-close`)
+  - `PLAN_FILE=""` (no plan `.md` was produced — skipped by design)
+  - `FILES_TO_CREATE=[]`, `FILES_TO_MODIFY=[]` (derive scope from
+    `.requirements.acceptance_criteria` / `.requirements.technical_notes`
+    yourself, the same way feature-planning would have)
+  - Print a note that feature-planning was intentionally skipped for this
+    fast-tracked run, so the issue's acceptance criteria and technical notes
+    are the authoritative brief.
+  - Do **not** exit 1 — this is the documented, intended path.
+
+Set `INPUT_CONTEXT_TYPE` to the value read from that line before running the
+block below (default `planning` if the line is absent).
 
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
-CONTEXT_FILE=".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json"
 
-if [ ! -f "$CONTEXT_FILE" ]; then
-  echo "ERROR: Missing context file: $CONTEXT_FILE"
-  echo "Run pipeline in order: /nightgauge-issue-pickup -> /nightgauge-feature-planning -> /nightgauge-feature-dev"
-  exit 1
+# INPUT_CONTEXT_TYPE was set above by reading this prompt's own Invocation
+# Context block — substitute the value here before running.
+if [ "$INPUT_CONTEXT_TYPE" = "issue" ]; then
+  # Fast-tracked (#4126/#4129): feature-planning was intentionally skipped —
+  # issue-{N}.json is the real, and only, prerequisite context.
+  CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "ERROR: Missing context file: $CONTEXT_FILE"
+    echo "Orchestrator declared input context type 'issue' but issue-${ISSUE_NUMBER}.json is absent."
+    exit 1
+  fi
+  echo "NOTE: feature-planning was intentionally skipped for this fast-tracked run (#4126/#4129)."
+  echo "Deriving the implementation brief from issue-${ISSUE_NUMBER}.json's acceptance criteria and technical notes."
+  PLAN_FILE=""
+  APPROACH="fast-tracked"
+  FILES_TO_CREATE="[]"
+  FILES_TO_MODIFY="[]"
+  FILES_TO_READ=$(jq -r '.requirements.technical_notes | @json' "$CONTEXT_FILE" 2>/dev/null)
+else
+  CONTEXT_FILE=".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json"
+
+  if [ ! -f "$CONTEXT_FILE" ]; then
+    echo "ERROR: Missing context file: $CONTEXT_FILE"
+    echo "Run pipeline in order: /nightgauge-issue-pickup -> /nightgauge-feature-planning -> /nightgauge-feature-dev"
+    exit 1
+  fi
+
+  PLAN_FILE=$(jq -r '.plan_file' "$CONTEXT_FILE")
+  APPROACH=$(jq -r '.approach' "$CONTEXT_FILE")
+  FILES_TO_CREATE=$(jq -r '.files_to_create | @json' "$CONTEXT_FILE")
+  FILES_TO_MODIFY=$(jq -r '.files_to_modify | @json' "$CONTEXT_FILE")
+  FILES_TO_READ=$(jq -r '.files_to_read | @json' "$CONTEXT_FILE" 2>/dev/null)
 fi
-
-PLAN_FILE=$(jq -r '.plan_file' "$CONTEXT_FILE")
-APPROACH=$(jq -r '.approach' "$CONTEXT_FILE")
-FILES_TO_CREATE=$(jq -r '.files_to_create | @json' "$CONTEXT_FILE")
-FILES_TO_MODIFY=$(jq -r '.files_to_modify | @json' "$CONTEXT_FILE")
-FILES_TO_READ=$(jq -r '.files_to_read | @json' "$CONTEXT_FILE" 2>/dev/null)
 
 # Go binary: project move-status
 BINARY="${NIGHTGAUGE_BIN:-}"

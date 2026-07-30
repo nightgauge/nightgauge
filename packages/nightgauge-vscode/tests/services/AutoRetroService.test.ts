@@ -344,6 +344,63 @@ describe("AutoRetroService", () => {
   // ===========================================================================
 
   describe("classifyFailure (unit)", () => {
+    // #134 verbatim reproduction. feature-planning exited 0, its newly-wired
+    // post-condition gate (#210) reported KindNoOp, and the orchestrator
+    // stamped the terminal reason below. The planning agent had spent the run
+    // reading docs/FAILURE_TAXONOMY.md — whose line 50 is the table row
+    // "| `cost cap exceeded` | Stage killed by `pipeline.stage_cost_caps` |" —
+    // so that phrase appears in the session log as the agent's own READING
+    // MATERIAL. Pre-fix the retro reported `cost-cap`, severity high, and
+    // recommended raising a cap that is not configured for this stage.
+    it("classifies a premature turn end as skill-no-op, not cost-cap, when the agent read the taxonomy doc (#134)", () => {
+      const terminalReason =
+        "premature turn end: stage exited 0 with no state change (gate no-op): plan_file does not exist";
+      const sessionLog = [
+        "50\t| `cost cap exceeded`          | Stage killed by `pipeline.stage_cost_caps` (Issue #3002)",
+        "Reading docs/FAILURE_TAXONOMY.md",
+      ].join("\n");
+
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: [terminalReason, sessionLog].join("\n"),
+          sourcesAnalyzed: ["terminal_reason", "session_log"],
+          terminalReason,
+        },
+        "feature-planning"
+      );
+
+      expect(findings[0].category).toBe("skill-no-op");
+      expect(findings.map((f) => f.category)).not.toContain("cost-cap");
+      // The verdict must name what was actually missing.
+      expect(findings[0].evidence.join(" ")).toContain("plan_file does not exist");
+    });
+
+    // The structured marker is the ONLY thing that means the cap fired. This is
+    // what skillRunner actually emits at kill time.
+    it("still classifies cost-cap from the emitted marker", () => {
+      const findings = AutoRetroService.classifyFailure(
+        {
+          text: "[cost-cap-exceeded] Stage feature-dev terminated at $10.42",
+          sourcesAnalyzed: ["session_log"],
+        },
+        "feature-dev"
+      );
+      expect(findings.map((f) => f.category)).toContain("cost-cap");
+    });
+
+    // The gate framework emits no-ops for all six stages since #210; the
+    // classifier previously only understood pr-merge and pr-create.
+    it("names a premature turn end on every stage, not just the PR stages", () => {
+      for (const stage of ["issue-pickup", "feature-planning", "feature-dev"]) {
+        const terminalReason = `premature turn end: stage exited 0 with no state change (gate no-op): output missing for ${stage}`;
+        const findings = AutoRetroService.classifyFailure(
+          { text: terminalReason, sourcesAnalyzed: ["terminal_reason"], terminalReason },
+          stage
+        );
+        expect(findings[0].category, `stage ${stage} was not classified`).toBe("skill-no-op");
+      }
+    });
+
     it('returns "budget-exceeded" for "token limit" pattern', () => {
       const findings = AutoRetroService.classifyFailure(
         {
