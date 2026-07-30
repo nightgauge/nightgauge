@@ -186,6 +186,55 @@ truth. The deterministic merge fallback (Issue #3259) and
 `escalateUnverifiedMerge` paths stay in TS because they consume gh fields
 the gate doesn't expose (`mergeable`, `mergeStateStatus`).
 
+### Reachability from the extension path (Issue #210)
+
+All six registered gates are invoked from the extension's legacy TS pipeline
+loop (`HeadlessOrchestrator.runPipeline()`), not just the three that had
+dedicated `verifyPost*State` methods:
+
+- `pr-merge`, `feature-validate`, `pr-create` keep their existing dedicated
+  methods (`verifyPostMergeState`, `verifyPostValidateState` +
+  `deriveUnexercisedDeliverable`, `verifyPostCreateState`) — each has bespoke
+  retry/fallback logic (merge retry, unexercised-deliverable derivation,
+  deterministic create fallback) that a generic gate call would not
+  replicate.
+- `issue-pickup`, `feature-planning`, `feature-dev` run through one shared
+  helper, `runPostConditionGate(stage, issueNumber)`, called at the single
+  point every stage passes through after context validation/recovery and
+  before any stage-specific side effects. A `KindNoOp` result is mapped onto
+  the same `premature turn end: stage exited 0 with no state change (gate
+no-op): <reason>` text the Go scheduler synthesizes
+  (`internal/orchestrator/scheduler.go`), so `ClassifyTerminalKind` /
+  `ResolveTerminalKind` classify identically regardless of which
+  orchestration path produced the failure.
+
+Every one of the six `execFileAsync(binary, ["gate", "verify", ...])` call
+sites in `HeadlessOrchestrator.ts` passes `--record` (see below) so the
+result lands in the run record's `stageGateResults` map — previously only
+the in-process Go scheduler loop persisted gate results; the TS path never
+did, even for the three already-wired gates.
+
+A completion-time guard, `logGateNotInvoked`, runs after the stage loop ends:
+for every completed, non-bookend stage with a registered gate
+(`PIPELINE_STAGE_GATE_STAGES` in `HeadlessOrchestrator.ts`), it confirms the
+persisted run record has at least one recorded result for that stage. A
+completed gated stage with zero recorded results logs a structured
+`[gate-not-invoked] stage=<stage> issue=<N>` line via `onStderr` — a
+non-fatal signal on first landing, not a hard pipeline failure, so a
+legitimate future NoOp/skipped stage cannot become a false failure.
+
+### `--record`: persisting a gate result from outside the Go scheduler
+
+`nightgauge gate verify <stage> <N> --record` additionally appends the
+`GateResult` onto the run record via
+`internal/state.AppendStageGateResultToDisk`, which loads
+`{workdir}/.nightgauge/pipeline/runtime-{N}.json` (falling back to a fresh
+`RuntimeState` when absent), appends through the same
+`RuntimeState.AppendStageGateResult` the in-process scheduler loop uses, and
+persists via `RuntimeState.Persist` — the same file the scheduler itself
+writes to. The flag defaults to `false` and is purely additive: it does not
+change the `0`/`1`/`2` exit-code contract.
+
 ## Disabling specific gates
 
 Set `NIGHTGAUGE_DISABLE_GATES=<comma-separated stage names>` to remove

@@ -771,6 +771,25 @@ func (rs *RuntimeState) AppendStageGateResult(stage PipelineStage, result StageG
 	rs.StageGateResults[key] = append(rs.StageGateResults[key], result)
 }
 
+// AppendStageGateResultToDisk persists a stage post-condition gate result for
+// a run driven from outside the in-process scheduler (Issue #210) — the
+// `nightgauge gate verify --record` CLI seam the TypeScript
+// HeadlessOrchestrator uses. It loads the existing persisted runtime state
+// for (stateDir, issueNumber) when present (falling back to a fresh
+// RuntimeState so a gate call before any stage has persisted still records),
+// appends the result via the same AppendStageGateResult used by the
+// in-process scheduler loop (internal/orchestrator/scheduler.go), and writes
+// it back atomically via Persist. This keeps a single append code path
+// regardless of which orchestration side calls it.
+func AppendStageGateResultToDisk(stateDir string, issueNumber int, stage PipelineStage, result StageGateResult) error {
+	rs, err := LoadPersistedState(stateDir, issueNumber)
+	if err != nil {
+		rs = NewRuntimeState("", issueNumber, "")
+	}
+	rs.AppendStageGateResult(stage, result)
+	return rs.Persist(stateDir)
+}
+
 // AppendStageAnomaly records an anomaly observed during stage execution
 // (Issue #3267). Multiple anomalies per stage are supported (a stage could
 // trip more than one detector in the future).
