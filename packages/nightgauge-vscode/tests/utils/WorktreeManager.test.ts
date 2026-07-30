@@ -436,7 +436,7 @@ describe("WorktreeManager", () => {
       warn.mockRestore();
     });
 
-    it("deletes branch when deleteBranch is true", async () => {
+    it("deletes branch when deleteBranch is true and content-diff confirms merged", async () => {
       execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) => {
         if (args.includes("--show-current")) {
           return Promise.resolve({ stdout: "feat/42-test\n", stderr: "" });
@@ -451,6 +451,62 @@ describe("WorktreeManager", () => {
         ["branch", "-D", "feat/42-test"],
         expect.objectContaining({ cwd: repoRoot })
       );
+    });
+
+    // #106 — a worktree with real work in progress must never be
+    // force-removed, regardless of terminal outcome.
+    it("preserves the worktree and skips removal when it has uncommitted changes", async () => {
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("git status --porcelain")) {
+          return Promise.resolve({ stdout: " M some-file.ts\n", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await manager.cleanup(42);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("preserving worktree for issue #42")
+      );
+      expect(execAsyncMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("worktree remove"),
+        expect.anything()
+      );
+      warn.mockRestore();
+    });
+
+    // #106 — an unmerged branch must never be deleted, even when
+    // deleteBranch is requested.
+    it("does not delete the branch when the content-diff check reports unmerged content", async () => {
+      execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args.includes("--show-current")) {
+          return Promise.resolve({ stdout: "feat/42-test\n", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("git diff --stat")) {
+          return Promise.resolve({ stdout: "1 file changed\n", stderr: "" });
+        }
+        if (cmd.includes("git rev-list --count")) {
+          return Promise.resolve({ stdout: "3\n", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await manager.cleanup(42, true);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("not deleting branch feat/42-test")
+      );
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.anything()
+      );
+      warn.mockRestore();
     });
 
     // Issue #3050 — worktree teardown must remove the per-issue docker

@@ -219,6 +219,17 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	repoRoot := m.repoRoot(repo)
 	projectName := fmt.Sprintf("issue-%d", issueNumber)
 
+	// Preserve a worktree with uncommitted tracked changes rather than
+	// destroying work a developer may still need to inspect — a terminal
+	// state (including failure) is called unconditionally, and this is the
+	// only guard standing between that and data loss. Missing/removed
+	// worktrees read as "not dirty" (nothing to lose) and fall through to
+	// the idempotent removal below.
+	if dirty, err := hasUncommittedChanges(worktreeDir); err == nil && dirty {
+		log.Printf("worktree teardown: preserving %s (issue #%d) — %s", worktreeDir, issueNumber, SkipDirty)
+		return nil
+	}
+
 	// Soft-fail: docker may not be installed (dev machines without docker)
 	// or the daemon may be down. Either case must not block worktree
 	// removal — log a one-line WARN and continue.
@@ -319,6 +330,74 @@ func (m *Manager) CleanupBranch(branchName string) error {
 
 	// Delete local branch + prune stale remote-tracking refs
 	return m.CleanupLocalBranch(branchName)
+}
+
+// CleanupBranchIfMerged deletes branchName's local ref only when its content
+// is already fully represented on the repo's default branch, using the same
+// content-diff check the worktree reclamation sweep relies on (mergedIntoBase
+// in worktree_sweep.go) rather than an ancestry check — this project squash-
+// merges, so `git merge-base --is-ancestor` false-negatives on every merged
+// branch (see docs/GO_BINARY.md#worktree-reclamation-issue-110).
+//
+// Soft-fail throughout: an unresolvable default branch, a failed content-diff
+// check, an unmerged branch, or a branch with no commits of its own all just
+// log and return nil without deleting — this must never fail the caller's run.
+func (m *Manager) CleanupBranchIfMerged(repo, branchName string) error {
+	if branchName == "" || branchName == "main" || branchName == "master" {
+		return nil
+	}
+	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
+		return nil
+	}
+	return m.CleanupLocalBranch(branchName)
+}
+
+// branchMergedIntoDefault reports whether branchName's content is already
+// fully represented on repo's default branch, logging (never erroring) the
+// same skip vocabulary the worktree reclamation sweep uses. Shared by
+// CleanupBranchIfMerged (local-only delete) and the scheduler's success-path
+// remote+local delete — both must clear the same content-diff gate before
+// touching a branch (#106).
+func (m *Manager) branchMergedIntoDefault(repo, branchName string) bool {
+	repoRoot := m.repoRoot(repo)
+
+	defaultBranch := detectDefaultBranch(repoRoot)
+	baseRef, err := resolveBaseRef(repoRoot, defaultBranch)
+	if err != nil {
+		log.Printf("[WARN] branch cleanup: resolve base ref for %s failed: %v — leaving %s in place", repoRoot, err, branchName)
+		return false
+	}
+
+	merged, hasOwnCommits, err := mergedIntoBase(repoRoot, baseRef, branchName)
+	if err != nil {
+		log.Printf("[WARN] branch cleanup: content-diff check for %s against %s failed: %v — leaving branch in place", branchName, baseRef, err)
+		return false
+	}
+	if !hasOwnCommits {
+		log.Printf("branch cleanup: %s has no commits of its own — leaving in place (%s)", branchName, SkipNoOwnCommits)
+		return false
+	}
+	if !merged {
+		log.Printf("branch cleanup: %s carries unmerged content vs %s — leaving in place (%s)", branchName, baseRef, SkipUnmergedContent)
+		return false
+	}
+	return true
+}
+
+// CleanupBranchAndRemoteIfMerged is CleanupBranch (local + remote delete)
+// gated by the same content-diff merged check as CleanupBranchIfMerged. Used
+// by the scheduler's shipped-run path (#106): pipelineSuccess already implies
+// the PR merged, but this gate is the load-bearing safety net rather than
+// trusting outcome classification alone before an irreversible `git branch -D`
+// / `git push --delete`.
+func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) error {
+	if branchName == "" || branchName == "main" || branchName == "master" {
+		return nil
+	}
+	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
+		return nil
+	}
+	return m.CleanupBranch(branchName)
 }
 
 // CleanupMergedBranches removes local branches whose remote tracking branch

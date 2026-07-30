@@ -1107,6 +1107,11 @@ export async function initializeServices(
   const headlessOrchestrator = new HeadlessOrchestrator(pipelineStateService ?? null, logger);
   context.subscriptions.push(headlessOrchestrator);
 
+  // Startup reconcile sweep (#106, Requirement 5): reclaim worktrees left
+  // behind by a prior crash (window reload, kill) that never reached the
+  // completion-funnel cleanup. Fire-and-forget — must never block activation.
+  void headlessOrchestrator.runStartupWorktreeSweep();
+
   // Connect HeadlessOrchestrator to RepositoryContextLoader if available
   if (repositoryContextLoader) {
     headlessOrchestrator.setContextLoader(repositoryContextLoader);

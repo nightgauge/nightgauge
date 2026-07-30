@@ -313,13 +313,129 @@ export class WorktreeManager {
   }
 
   /**
+   * Check whether worktreePath has modified, staged, or untracked tracked
+   * changes. Mirrors the Go side's `hasUncommittedChanges`
+   * (internal/execution/worktree_sweep.go) so both languages preserve a
+   * worktree with real work in progress rather than force-removing it.
+   */
+  private async hasUncommittedChanges(worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execAsync("git status --porcelain", {
+        cwd: worktreePath,
+        timeout: 10_000,
+      });
+      return stdout.trim().length > 0;
+    } catch {
+      // Can't tell — treat as dirty so we never destroy something we
+      // couldn't inspect.
+      return true;
+    }
+  }
+
+  /**
+   * Content-diff merge check mirroring the Go side's `mergedIntoBase`
+   * (internal/execution/worktree_sweep.go): `git diff --stat baseRef..branch`
+   * empty means the branch's content is already fully represented on
+   * baseRef, which stays correct across squash merges where an ancestry
+   * check (`merge-base --is-ancestor`) would false-negative.
+   */
+  private async isMergedIntoBase(
+    branch: string,
+    baseRef: string
+  ): Promise<{ merged: boolean; hasOwnCommits: boolean }> {
+    try {
+      const { stdout: countOut } = await execAsync(`git rev-list --count "${baseRef}..${branch}"`, {
+        cwd: this.repoRoot,
+        timeout: 10_000,
+      });
+      const hasOwnCommits = countOut.trim() !== "0";
+
+      const { stdout: diffOut } = await execAsync(`git diff --stat "${baseRef}..${branch}"`, {
+        cwd: this.repoRoot,
+        timeout: 10_000,
+      });
+      return { merged: diffOut.trim() === "", hasOwnCommits };
+    } catch {
+      // Can't tell — treat as not-merged so we never delete an unmerged branch.
+      return { merged: false, hasOwnCommits: false };
+    }
+  }
+
+  /**
+   * Resolve the ref branches are compared against, preferring the remote
+   * tracking ref (mirrors the Go side's `resolveBaseRef`).
+   */
+  private async resolveBaseRef(defaultBranch: string): Promise<string> {
+    try {
+      await execFileAsync(
+        "git",
+        ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${defaultBranch}`],
+        {
+          cwd: this.repoRoot,
+          timeout: 5_000,
+        }
+      );
+      return `origin/${defaultBranch}`;
+    } catch {
+      return defaultBranch;
+    }
+  }
+
+  /**
+   * Detect the repo's default branch (mirrors the Go side's
+   * `detectDefaultBranch`): origin/HEAD first, then whichever of main/master
+   * exists locally or on origin.
+   */
+  private async detectDefaultBranch(): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+        { cwd: this.repoRoot, timeout: 5_000, encoding: "utf-8" }
+      );
+      const name = stdout.trim().replace(/^origin\//, "");
+      if (name) return name;
+    } catch {
+      // fall through to main/master probing
+    }
+    for (const candidate of ["main", "master"]) {
+      try {
+        await execFileAsync(
+          "git",
+          ["rev-parse", "--verify", "--quiet", `refs/heads/${candidate}`],
+          {
+            cwd: this.repoRoot,
+            timeout: 5_000,
+          }
+        );
+        return candidate;
+      } catch {
+        // try next candidate
+      }
+    }
+    return "main";
+  }
+
+  /**
    * Remove a worktree and optionally delete the branch
+   *
+   * A worktree with uncommitted tracked changes is preserved (logged, not
+   * removed). When deleteBranch is requested, the branch is only deleted
+   * after a content-diff check confirms it is already merged into the
+   * default branch — an unmerged branch is never deleted (#106).
    *
    * @param issueNumber - The issue number whose worktree to remove
    * @param deleteBranch - Whether to also delete the local branch (default: false)
    */
   async cleanup(issueNumber: number, deleteBranch?: boolean): Promise<void> {
     const worktreePath = this.getWorktreePath(issueNumber);
+
+    if (await this.hasUncommittedChanges(worktreePath)) {
+      console.warn(
+        `[WorktreeManager] preserving worktree for issue #${issueNumber} — uncommitted tracked changes`
+      );
+      return;
+    }
 
     // Tear down the per-issue docker compose stack BEFORE removing the
     // worktree. Soft-fail by design — when docker is missing or the daemon
@@ -373,15 +489,26 @@ export class WorktreeManager {
       }
     }
 
-    // Delete the branch if requested and worktree was cleaned up
+    // Delete the branch if requested and worktree was cleaned up — but only
+    // once a content-diff check confirms it is actually merged (#106). Never
+    // delete on an inconclusive check.
     if (deleteBranch && branchName) {
-      try {
-        await execFileAsync("git", ["branch", "-D", branchName], {
-          cwd: this.repoRoot,
-          timeout: 5_000,
-        });
-      } catch {
-        // Non-fatal — branch may not exist or be checked out elsewhere
+      const defaultBranch = await this.detectDefaultBranch();
+      const baseRef = await this.resolveBaseRef(defaultBranch);
+      const { merged, hasOwnCommits } = await this.isMergedIntoBase(branchName, baseRef);
+      if (!merged || !hasOwnCommits) {
+        console.warn(
+          `[WorktreeManager] not deleting branch ${branchName} for issue #${issueNumber} — unmerged content vs ${baseRef}`
+        );
+      } else {
+        try {
+          await execFileAsync("git", ["branch", "-D", branchName], {
+            cwd: this.repoRoot,
+            timeout: 5_000,
+          });
+        } catch {
+          // Non-fatal — branch may not exist or be checked out elsewhere
+        }
       }
     }
   }
