@@ -176,6 +176,24 @@ const (
 	// first in ClassifyTerminalKind. Agent-class for weighted reliability
 	// scoring (the behavior is the agent's, not the environment's).
 	TerminalKindPrematureTurnEnd = "premature_turn_end"
+	// TerminalKindDevProducedNoChanges is set when feature-dev's gate finds the
+	// stage workspace empty — clean working tree, branch level with its base —
+	// while the dev context reports files changed. A narrower, better-named
+	// TerminalKindPrematureTurnEnd: the gate's Kind is still KindNoOp, but the
+	// verdict names WHAT was missing instead of only that something was.
+	//
+	// Distinct from TerminalKindNoChangesProduced, which means the opposite in
+	// a way that matters for triage: that kind says the issue genuinely had no
+	// code to write (a dispatch-eligibility gap — a human-only task was
+	// dispatched, and producing nothing was correct). This kind says the issue
+	// had work, the stage did it, and the pipeline cannot see it. Bucketing
+	// #202 as no_changes_produced would have read as "nothing to do here" for
+	// a run that spent 31 minutes writing five files.
+	//
+	// Classified `agent` (0.5 weight) alongside premature_turn_end: this is
+	// the stage's own turn-ending/delegation behavior, not the environment and
+	// not the issue. Issue #202.
+	TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
 	// TerminalKindBlockedDependency is set when the autonomous scheduler
 	// dispatches an issue whose blockedBy dependencies are still OPEN — the
 	// pipeline defers the run before any AI stages do work. This is a
@@ -483,6 +501,16 @@ func ClassifyTerminalKind(errorText string) string {
 	// winning for its own no-op shape, and BEFORE the generic
 	// validation/exit heuristics so an embedded gate reason that mentions
 	// context files doesn't bucket into validation_error.
+	// Dev produced no changes (#202) — a NARROWER premature turn end, so it
+	// MUST be matched first: the scheduler wraps every KindNoOp gate reason
+	// into a "premature turn end:" error string, which means the block below
+	// would otherwise swallow this kind on every text-classified path and only
+	// the gate path would ever report it.
+	if strings.Contains(t, "[dev-produced-no-changes]") ||
+		strings.Contains(t, "dev_produced_no_changes") {
+		return TerminalKindDevProducedNoChanges
+	}
+
 	if strings.Contains(t, "premature turn end") ||
 		strings.Contains(t, "premature_turn_end") ||
 		strings.Contains(t, "exited 0 but did not write expected output context") {

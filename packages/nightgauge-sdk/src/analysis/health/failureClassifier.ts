@@ -56,9 +56,18 @@ export function classifyFailureCategory(
   // infrastructure block because the embedded gate reason usually names the
   // missing context file, which would otherwise bucket this as
   // infrastructure (0.05) and hide an agent behavior failure (0.5).
+  //
+  // dev_produced_no_changes (#202) rides the same branch: it is a narrower
+  // premature turn end (feature-dev delegated the work into a worktree the
+  // pipeline never reads) and carries the same `agent` weight. Its marker is
+  // listed explicitly rather than relying on the "premature turn end" wrapper,
+  // so the classification survives any caller that records only the gate
+  // reason.
   if (
     t.includes("premature turn end") ||
     t.includes("premature_turn_end") ||
+    t.includes("[dev-produced-no-changes]") ||
+    t.includes("dev_produced_no_changes") ||
     t.includes("exited 0 but did not write expected output context")
   ) {
     return "agent";
@@ -204,6 +213,7 @@ export type TerminalFailureKind =
   | "github_network_outage" // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
   | "model_unavailable" // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
+  | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
@@ -243,6 +253,16 @@ export function classifyTerminalKind(
     t.includes("budget ceiling")
   ) {
     return "budget_exceeded";
+  }
+
+  // Dev produced no changes (#202) — a NARROWER premature turn end, so it must
+  // be matched first. The Go scheduler wraps every no-op gate reason in a
+  // "premature turn end:" string, so the block below would otherwise swallow
+  // this kind and the dashboards would never show it, while the Go gate path
+  // reported it. Two classifiers disagreeing about one failure is how a kind
+  // stops being trustworthy.
+  if (t.includes("[dev-produced-no-changes]") || t.includes("dev_produced_no_changes")) {
+    return "dev_produced_no_changes";
   }
 
   // Premature turn end (#74): the stage exited 0 but produced no state

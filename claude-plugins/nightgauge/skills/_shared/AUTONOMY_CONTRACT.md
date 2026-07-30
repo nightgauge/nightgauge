@@ -19,3 +19,17 @@ were available is the same failure.
   stage's output contract is satisfied (its context file and phase markers
   are written) or you are genuinely blocked — and a genuine block is reported
   as an explicit failure, never as an open question.
+- **Never end a turn with background work outstanding.** There is no "await
+  and resume" — your turn ending IS stage completion, and the pipeline
+  advances immediately. If you started something in the background, block on
+  it and read its result before you finish. "I'll wait for that to complete
+  rather than poll, and pick the pipeline back up once it lands" is not a
+  handoff; it is the stage reporting success on work it never saw (#202).
+- **Work only inside the worktree you were given.** Never delegate the
+  stage's implementation to a subagent running under worktree isolation, and
+  never `cd` outside your workspace to edit files. Only your own worktree is
+  read by later stages: on #202 a subagent wrote the entire fix into
+  `.claude/worktrees/agent-<id>`, so the stage passed, the branch stayed
+  empty, and the work was invisible to every stage after it. A gate now fails
+  the stage when this happens — but the run is dead either way, so do the work
+  where you stand.

@@ -87,6 +87,43 @@ func FailOpenResult(reason string) ClassifyResult {
 // fetched remote.
 var DefaultDiffBases = []string{"origin/main", "main"}
 
+// BookkeepingDirs are the agent/pipeline state directories that a run always
+// writes and that are never part of the deliverable: stage context files land
+// in `.nightgauge/pipeline/`, attention cards in `.nightgauge/attention/`, and
+// adapters scribble in `.claude/`.
+//
+// Whether these show up in `git status` is a per-repo accident — this repo
+// ignores `.nightgauge/pipeline` (nested `.nightgauge/.gitignore`) but NOT
+// `.nightgauge/attention`, and a consumer repo may ignore neither. Any check
+// that asks "did this run produce work?" must therefore exclude them
+// explicitly rather than rely on the repo's ignore rules, or the pipeline's own
+// exhaust answers the question for it. Issue #202.
+var BookkeepingDirs = []string{".nightgauge", ".claude"}
+
+// DeliverablePathspec is the `git` pathspec limiting an operation to the
+// deliverable: everything except BookkeepingDirs. The leading "." is required —
+// a pathspec list containing only exclusions matches nothing, which would
+// silently invert every caller.
+func DeliverablePathspec() []string {
+	spec := make([]string, 0, len(BookkeepingDirs)+1)
+	spec = append(spec, ".")
+	for _, dir := range BookkeepingDirs {
+		spec = append(spec, ":(exclude)"+dir)
+	}
+	return spec
+}
+
+// IsBookkeepingPath reports whether a path is agent/pipeline state rather than
+// deliverable content, for callers holding a file list instead of running git.
+func IsBookkeepingPath(path string) bool {
+	for _, dir := range BookkeepingDirs {
+		if path == dir || strings.HasPrefix(path, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // ChangedFilesAgainstDefaultBase lists the files changed on the checked-out
 // branch relative to the first of DefaultDiffBases that resolves.
 //
@@ -99,14 +136,30 @@ var DefaultDiffBases = []string{"origin/main", "main"}
 // copies of "which ref is the base" is precisely how one caller ends up
 // comparing against something the other does not.
 func ChangedFilesAgainstDefaultBase(workdir string) []string {
+	files, _ := ChangedFilesAgainstDefaultBaseResolved(workdir)
+	return files
+}
+
+// ChangedFilesAgainstDefaultBaseResolved is ChangedFilesAgainstDefaultBase with
+// the collapsed distinction restored: resolved reports whether a base ref was
+// found at all, so "the diff is empty" can be told apart from "the diff could
+// not be computed". Both return (nil, ...) — only the flag separates them.
+//
+// The plain variant is right for callers whose conservative answer is "no
+// diff". It is exactly wrong for a caller that ACCUSES on an empty diff: the
+// feature-dev ground-truth gate (#202) fails a stage that produced nothing, so
+// for it an unresolvable base must mean "cannot verify, pass" rather than
+// "verified empty, fail". Collapsing the two there would fail every dev stage
+// in any repo whose default branch is not main.
+func ChangedFilesAgainstDefaultBaseResolved(workdir string) (files []string, resolved bool) {
 	for _, base := range DefaultDiffBases {
 		files, err := ChangedFilesFromGit(workdir, base, "HEAD")
 		if err != nil {
 			continue
 		}
-		return files
+		return files, true
 	}
-	return nil
+	return nil, false
 }
 
 // ChangedFilesFromGit returns the files changed between base and head via

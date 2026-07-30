@@ -125,18 +125,46 @@ version is **not** bumped.
 
 ## The six default gates
 
-| Stage              | Gate (Go)             | What it checks                                                        |
-| ------------------ | --------------------- | --------------------------------------------------------------------- |
-| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch      |
-| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`       |
-| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok |
-| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"`     |
-| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN      |
-| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                              |
+| Stage              | Gate (Go)             | What it checks                                                                                                          |
+| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `issue-pickup`     | `IssuePickupGate`     | `pipeline/issue-{N}.json` exists, parses, names a feature branch                                                        |
+| `feature-planning` | `FeaturePlanningGate` | `pipeline/planning-{N}.json` references a non-empty `plan_file`                                                         |
+| `feature-dev`      | `FeatureDevGate`      | `pipeline/dev-{N}.json` records ≥1 file change, build_verification ok — **and git agrees the workspace changed** (#202) |
+| `feature-validate` | `FeatureValidateGate` | every `gate-metrics.jsonl` quality-gate record `result == "pass"`                                                       |
+| `pr-create`        | `PrCreateGate`        | `pipeline/pr-{N}.json` records `pr_number`; `gh pr view` is OPEN                                                        |
+| `pr-merge`         | `PrMergeGate`         | `gh pr view` reports `state == "MERGED"`                                                                                |
 
 Gates that call `gh` use a 3-attempt, 1-second-backoff internal retry to
 absorb transient API failures (rate-limit, transient 5xx) before reporting
 `passed: false`.
+
+### Self-report vs ground truth (#202)
+
+Most of the table reads a context file — which is the **skill's report of
+itself**, not evidence. A stage can describe its work perfectly honestly and
+still have performed it somewhere no later stage will look, and the gate will
+pass it. That is what happened on #202: `feature-dev` truthfully listed five
+changed files, but a worktree-isolated subagent had written them into
+`.claude/worktrees/agent-<id>` rather than the run's `.worktrees/issue-<n>`,
+and `feature-validate` spent another $0.87 rediscovering it.
+
+`FeatureDevGate` therefore ends with a git check the skill cannot influence:
+the workspace must hold uncommitted changes, or the branch must carry commits
+its base lacks. Two rules make it safe to run after the money is spent:
+
+- **Fail open on anything unverifiable.** Not a git repo, or no base ref
+  resolves (`origin/main` → `main`) → the gate passes. "Cannot verify" must
+  never become "verified empty", or every dev stage in a repo whose default
+  branch is not `main` fails and the safety rails halt the queue.
+- **Bookkeeping is not the deliverable.** `.nightgauge/` and `.claude/` are
+  excluded (`ci.BookkeepingDirs`). Whether they show in `git status` is a
+  per-repo accident — this repo ignores `.nightgauge/pipeline` but not
+  `.nightgauge/attention` — so counting them would let the run's own exhaust
+  answer "did this produce work?" and quietly disable the gate.
+
+When it fails it reports `dev_produced_no_changes` and names any sibling
+worktree still holding uncommitted work, so the stranded implementation can be
+recovered from the failure record instead of by hand.
 
 ## CLI seam — `nightgauge gate verify`
 
