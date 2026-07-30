@@ -45,11 +45,34 @@ type attentionSyncBody struct {
 	Requests  []attention.DecisionRequest `json:"requests"`
 }
 
-// attentionSyncResponse mirrors the platform's 200 body — {synced, items}.
+// attentionSyncResponse mirrors the platform's 200 body — {synced, items,
+// rejected}.
+//
+// `Items` is the ACKNOWLEDGEMENT SET, not decoration: the endpoint accepts a
+// batch per-item, so a card that fails server-side validation is skipped and
+// the call still returns 200. Only ids echoed here were actually mirrored.
+//
+// `Rejected` is the explicit complement, added platform-side alongside #214.
+// It stays optional — a server that predates it simply omits the field and the
+// items-diff below still identifies the same ids.
 type attentionSyncResponse struct {
-	Synced int                         `json:"synced"`
-	Items  []attention.DecisionRequest `json:"items"`
+	Synced   int                         `json:"synced"`
+	Items    []attention.DecisionRequest `json:"items"`
+	Rejected []attentionSyncRejection    `json:"rejected"`
 }
+
+// attentionSyncRejection is one server-side skip, echoed so the client can name
+// the card in a log instead of reporting a phantom success.
+type attentionSyncRejection struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// unackedWarnThreshold is how many consecutive sweeps an id may go
+// unacknowledged before we log about it. One miss is a blip — a transient
+// server-side error, a card edited mid-flight. Repeated misses are a contract
+// mismatch, and the whole point of #214 is that those must not be silent.
+const unackedWarnThreshold = 3
 
 // AttentionLister is the read side of the attention store the uploader sweeps.
 // *attention.Store satisfies it.
@@ -66,6 +89,7 @@ type AttentionSyncService struct {
 	agentID    string            // platform-assigned agent id; empty = mirror-only (agent_id omitted)
 	generation uint64            // bumped on every agent-id change; guards stale watermark writes
 	watermark  map[string]string // request id -> last-synced content fingerprint
+	unacked    map[string]int    // request id -> consecutive sweeps sent but not acknowledged
 }
 
 // NewAttentionSyncService creates a sync service bound to the platform client.
@@ -84,6 +108,7 @@ func NewAttentionSyncService(client *Client) *AttentionSyncService {
 		client:    client,
 		machineID: machineID,
 		watermark: make(map[string]string),
+		unacked:   make(map[string]int),
 	}
 }
 
@@ -253,25 +278,96 @@ func (s *AttentionSyncService) pushBatch(ctx context.Context, reqs []attention.D
 		return fmt.Errorf("attention sync: server returned %d", resp.StatusCode)
 	}
 
-	// A 2xx confirms the mirror accepted the batch. Advance the watermark for
-	// every request we sent (the response echoes them, but success alone is
-	// sufficient — the endpoint is idempotent by id). Skip the advance if the
-	// agent id changed mid-flight (SetAgentID bumped the generation and cleared
-	// the map): this batch carried the OLD id, so leaving it unwatermarked lets
-	// the next sweep re-push it under the new agent id (FK backfill), rather than
-	// re-populating the just-cleared watermark with a stale entry.
+	// A 2xx does NOT mean the batch was accepted (#214). The endpoint validates
+	// per item: a card it rejects is skipped and the call still returns 200. The
+	// echoed `items` is the acknowledgement set, and watermarking anything
+	// absent from it tells this service a card is mirrored when it was thrown
+	// away — which disarms the 30-second reconciliation sweep, the one mechanism
+	// that would have corrected it. That is how every `auto_resolved` card went
+	// missing for months while both sides reported success.
+	var parsed attentionSyncResponse
+	acked, parseOK := acknowledgedIDs(respBody, &parsed)
+
 	s.mu.Lock()
+	// Skip the advance if the agent id changed mid-flight (SetAgentID bumped the
+	// generation and cleared the map): this batch carried the OLD id, so leaving
+	// it unwatermarked lets the next sweep re-push it under the new agent id (FK
+	// backfill), rather than re-populating the just-cleared watermark with a
+	// stale entry.
 	if s.generation == gen {
 		for _, r := range reqs {
-			s.watermark[r.ID] = fingerprint(r)
+			if !parseOK || acked[r.ID] {
+				s.watermark[r.ID] = fingerprint(r)
+				delete(s.unacked, r.ID)
+				continue
+			}
+			// Sent, 2xx, not echoed: leave it dirty so the next sweep retries.
+			s.unacked[r.ID]++
 		}
 	}
+	stuck := s.stuckIDsLocked(reqs, acked, parsed.Rejected, parseOK)
 	s.mu.Unlock()
 
-	// Best-effort parse for observability; a parse failure does not undo the sync.
-	var parsed attentionSyncResponse
-	_ = json.Unmarshal(respBody, &parsed)
+	if !parseOK {
+		// Unparseable body on a 2xx. Fall back to trusting the status — a
+		// re-push storm every 30s is a worse failure than a stale card, and an
+		// unreadable response means something is wrong that this service cannot
+		// reason about. Loud, because it silently disables the guard above.
+		log.Printf("attention sync: 2xx with an unreadable body — cannot confirm which cards were mirrored; assuming all %d accepted", len(reqs))
+	}
+	for _, msg := range stuck {
+		log.Printf("attention sync: %s", msg)
+	}
 	return nil
+}
+
+// acknowledgedIDs decodes the response and returns the set of ids the server
+// confirmed it mirrored. ok=false means the body could not be read as a sync
+// response at all, which callers must treat as "cannot tell" rather than
+// "nothing was accepted" — the latter would re-push the whole set forever.
+func acknowledgedIDs(body []byte, out *attentionSyncResponse) (map[string]bool, bool) {
+	if err := json.Unmarshal(body, out); err != nil {
+		return nil, false
+	}
+	acked := make(map[string]bool, len(out.Items))
+	for _, item := range out.Items {
+		acked[item.ID] = true
+	}
+	return acked, true
+}
+
+// stuckIDsLocked builds the log lines for ids the server has now declined
+// unackedWarnThreshold times running. Repeated non-acknowledgement is a
+// contract mismatch — a lifecycle state, field shape, or schema version this
+// client emits and the mirror refuses — and it is invisible from the server
+// side too, because there it looks like one warn line per sweep forever.
+//
+// Caller holds s.mu.
+func (s *AttentionSyncService) stuckIDsLocked(reqs []attention.DecisionRequest, acked map[string]bool, rejections []attentionSyncRejection, parseOK bool) []string {
+	if !parseOK {
+		return nil
+	}
+	reason := make(map[string]string, len(rejections))
+	for _, rej := range rejections {
+		reason[rej.ID] = rej.Reason
+	}
+	var msgs []string
+	for _, r := range reqs {
+		if acked[r.ID] {
+			continue
+		}
+		n := s.unacked[r.ID]
+		if n < unackedWarnThreshold || n%unackedWarnThreshold != 0 {
+			continue
+		}
+		msg := fmt.Sprintf("card %s (state=%s) rejected by the mirror on %d consecutive sweeps — it is NOT visible on any remote surface",
+			r.ID, r.Lifecycle.State, n)
+		if why := reason[r.ID]; why != "" {
+			msg += ": " + why
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs
 }
 
 // online reports whether a push should be attempted. A nil client (no platform
