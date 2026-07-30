@@ -644,7 +644,18 @@ export class PipelineStateService implements vscode.Disposable {
       stages,
       started_at: goState.startedAt || this._lastState?.started_at || new Date().toISOString(),
       tokens: {
-        input: goState.inputTokens ?? 0,
+        // `goState.inputTokens` is COMBINED (raw + cache read) — see
+        // runtime_state.go: `InputTokens int // combined: actual input + cache
+        // read`. `input` is the NON-CACHED accumulator, so subtract the cache
+        // reads back out here.
+        //
+        // #193 fixed `total_input` to be `input + total_cache_read`, which is
+        // right — but left this writer seeding `input` with the COMBINED value.
+        // Interleaved (snapshot rebuild, then a token delta) that formula then
+        // added the cache reads a second time: hit rates stopped exceeding
+        // 100% and started silently UNDER-reporting instead. One field, one
+        // unit, in both writers, or the arithmetic downstream cannot be right.
+        input: Math.max(0, (goState.inputTokens ?? 0) - (goState.cacheReadTokens ?? 0)),
         output: goState.outputTokens ?? 0,
         total_input: goState.inputTokens ?? 0,
         total_output: goState.outputTokens ?? 0,
