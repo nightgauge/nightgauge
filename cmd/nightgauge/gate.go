@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -92,6 +93,7 @@ func gateVerifyCmd() *cobra.Command {
 		workdir    string
 		outputJSON bool
 		timeoutSec int
+		record     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "verify <stage> <issue-number>",
@@ -141,15 +143,33 @@ func gateVerifyCmd() *cobra.Command {
 
 			result := gate.Verify(ctx, issueNumber, workspace)
 
+			// Issue #210: persist the gate result onto the run record for
+			// orchestration paths that call this CLI seam rather than the
+			// in-process Go scheduler loop (HeadlessOrchestrator.ts). The
+			// scheduler's own in-process append (scheduler.go) is unaffected —
+			// this only adds a second writer for the --record-flagged path.
+			// Additive and best-effort: a persistence failure is logged but
+			// never changes the gate's pass/fail exit-code contract.
+			if record {
+				stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+				if recErr := state.AppendStageGateResultToDisk(
+					stateDir, issueNumber, state.PipelineStage(stageName), result.ToStageGateResult(),
+				); recErr != nil {
+					fmt.Fprintf(os.Stderr, "gate verify --record: failed to persist gate result: %v\n", recErr)
+				}
+			}
+
 			if outputJSON {
 				payload := gateVerifyJSON{
-					Stage:      stageName,
-					GateName:   result.GateName,
-					Passed:     result.Passed,
-					Reason:     result.Reason,
-					Evidence:   result.Evidence,
-					DurationMs: result.DurationMs,
-					Timestamp:  result.Timestamp,
+					Stage:        stageName,
+					GateName:     result.GateName,
+					Passed:       result.Passed,
+					Reason:       result.Reason,
+					Evidence:     result.Evidence,
+					DurationMs:   result.DurationMs,
+					Timestamp:    result.Timestamp,
+					Kind:         string(result.Kind),
+					TerminalKind: result.TerminalKind,
 				}
 				data, mErr := json.Marshal(payload)
 				if mErr != nil {
@@ -170,19 +190,23 @@ func gateVerifyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 60, "Gate timeout in seconds (0 = no timeout)")
+	cmd.Flags().BoolVar(&record, "record", false,
+		"Persist the gate result onto the run record's stageGateResults map (Issue #210)")
 	return cmd
 }
 
 // gateVerifyJSON is the exact shape parsed by the TypeScript shim. Keep
 // stable — its consumers are external (HeadlessOrchestrator).
 type gateVerifyJSON struct {
-	Stage      string   `json:"stage"`
-	GateName   string   `json:"gate_name"`
-	Passed     bool     `json:"passed"`
-	Reason     string   `json:"reason"`
-	Evidence   []string `json:"evidence,omitempty"`
-	DurationMs int64    `json:"duration_ms"`
-	Timestamp  string   `json:"timestamp"`
+	Stage        string   `json:"stage"`
+	GateName     string   `json:"gate_name"`
+	Passed       bool     `json:"passed"`
+	Reason       string   `json:"reason"`
+	Evidence     []string `json:"evidence,omitempty"`
+	DurationMs   int64    `json:"duration_ms"`
+	Timestamp    string   `json:"timestamp"`
+	Kind         string   `json:"kind,omitempty"`
+	TerminalKind string   `json:"terminal_kind,omitempty"`
 }
 
 func parseIssueNumberArg(s string) (int, error) {

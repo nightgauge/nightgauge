@@ -473,6 +473,23 @@ const STAGE_ORDER: PipelineStage[] = [
 ];
 
 /**
+ * Stages with a registered, non-NoOp post-condition gate (Issue #210).
+ * Mirrors `internal/orchestrator/gates/registry.go`'s `Default()` map, minus
+ * the bookend stages (`pipeline-start`, `pipeline-finish`), which have no
+ * gate registered at all. Used by the completion-time
+ * `logGateNotInvoked` guard to know which completed stages are expected to
+ * have produced a gate result.
+ */
+const PIPELINE_STAGE_GATE_STAGES: PipelineStage[] = [
+  "issue-pickup",
+  "feature-planning",
+  "feature-dev",
+  "feature-validate",
+  "pr-create",
+  "pr-merge",
+];
+
+/**
  * Skill-based stages that run through Claude CLI
  * Excludes bookend stages which are executed synchronously
  */
@@ -1744,6 +1761,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--json",
             "--timeout",
             "60",
+            "--record",
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
         );
@@ -2252,6 +2270,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "--json",
           "--timeout",
           "60",
+          "--record",
         ],
         { encoding: "utf-8", cwd, timeout: 90_000 }
       );
@@ -2478,6 +2497,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             "--json",
             "--timeout",
             "60",
+            "--record",
           ],
           { encoding: "utf-8", cwd, timeout: 90_000 }
         );
@@ -2570,6 +2590,126 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     } catch (err) {
       this.logger.warn("Post-create verification failed with unexpected error, continuing", {
         issueNumber,
+        error: err,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Generic stage post-condition gate (Issue #210). Wires the three gates the
+   * extension's legacy TS pipeline loop never invoked — `issue-pickup`,
+   * `feature-planning`, `feature-dev` — through the same CLI seam the three
+   * dedicated methods above already use (`verifyPostCreateState`,
+   * `verifyPostMergeState`, `verifyPostValidateState`). Those three stages
+   * have no bespoke retry/fallback logic, so one shared generic call replaces
+   * three more near-identical dedicated methods.
+   *
+   * Always passes `--record` so the result lands in the run record's
+   * `stageGateResults` map (Go: `internal/state.AppendStageGateResultToDisk`)
+   * — previously only the in-process Go scheduler loop persisted gate
+   * results; this TS path never did, even for the three already-wired gates.
+   *
+   * Returns null when the gate passed OR could not be run (binary
+   * unresolved, unparseable output) — matches the existing stance of the
+   * three dedicated methods: an unverifiable run is not treated as a gate
+   * failure. On a genuine gate failure, returns an Error whose message is
+   * prefixed to match the scheduler's synthesized `KindNoOp` text
+   * (`internal/orchestrator/scheduler.go`) so `ClassifyTerminalKind`/
+   * `ResolveTerminalKind` classify identically regardless of which
+   * orchestration path produced the failure.
+   */
+  private async runPostConditionGate(
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<Error | null> {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+
+      const resolver = BinaryResolver.fromVSCode();
+      const binary = await resolver.resolve();
+      if (!binary) {
+        this.logger.warn(
+          "Post-condition gate: nightgauge binary not resolved — skipping deterministic gate",
+          { issueNumber, stage }
+        );
+        return null;
+      }
+
+      let gateResult: {
+        passed: boolean;
+        reason: string;
+        gate_name?: string;
+        evidence?: string[];
+        kind?: string;
+      } | null = null;
+      let binaryError: unknown = null;
+      try {
+        const { stdout } = await execFileAsync(
+          binary,
+          [
+            "gate",
+            "verify",
+            stage,
+            String(issueNumber),
+            "--workdir",
+            cwd,
+            "--json",
+            "--timeout",
+            "60",
+            "--record",
+          ],
+          { encoding: "utf-8", cwd, timeout: 90_000 }
+        );
+        gateResult = JSON.parse(stdout);
+      } catch (err) {
+        const e = err as { stdout?: string; code?: number };
+        // Exit code 2 with stdout = gate ran and reported passed=false.
+        if (e.stdout && e.code === 2) {
+          try {
+            gateResult = JSON.parse(e.stdout);
+          } catch {
+            binaryError = err;
+          }
+        } else {
+          binaryError = err;
+        }
+      }
+
+      if (!gateResult) {
+        this.logger.error(
+          "Post-condition gate: gate binary produced no parseable result — skipping",
+          { issueNumber, stage, error: binaryError }
+        );
+        return null;
+      }
+
+      if (gateResult.passed) {
+        this.logger.info("Post-condition gate passed", {
+          issueNumber,
+          stage,
+          gateName: gateResult.gate_name,
+        });
+        return null;
+      }
+
+      this.logger.error("Post-condition gate FAILED", {
+        issueNumber,
+        stage,
+        gateReason: gateResult.reason,
+        evidence: gateResult.evidence,
+      });
+
+      if (gateResult.kind === "no_op") {
+        return new Error(
+          `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
+        );
+      }
+      return new Error(`stage gate failed: ${gateResult.reason}`);
+    } catch (err) {
+      this.logger.warn("Post-condition gate failed with unexpected error, continuing", {
+        issueNumber,
+        stage,
         error: err,
       });
       return null;
@@ -6302,51 +6442,105 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Read the persisted stage_gate_results map for an in-flight pipeline.
+   * Read the persisted stageGateResults map for a run, keyed by stage name.
    *
-   * The Go scheduler writes runtime state to `pipeline/state.json` after each
-   * stage. The TS-side legacy path doesn't yet write this map, so this helper
-   * returns an empty array when the file is missing or the field is absent —
-   * the classifier falls through to the legacy heuristics in that case.
-   * Exposed as a method so subclasses / tests can override the read path.
+   * The Go scheduler (in-process) and `nightgauge gate verify --record` (this
+   * TS path, Issue #210) both persist through
+   * `internal/state.RuntimeState.Persist`, which writes
+   * `{workspace}/.nightgauge/pipeline/runtime-{issueNumber}.json`. Returns an
+   * empty map when the file is missing or the field is absent — callers fall
+   * through to their own legacy heuristics in that case. Exposed as a method
+   * so subclasses / tests can override the read path.
+   */
+  private readStageGateResultsMapForRun(
+    issueNumber: number
+  ): Record<
+    string,
+    Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }>
+  > {
+    try {
+      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
+      const statePath = path.join(cwd, ".nightgauge", "pipeline", `runtime-${issueNumber}.json`);
+      if (!fs.existsSync(statePath)) return {};
+      const stateBlob = JSON.parse(fs.readFileSync(statePath, "utf-8"));
+      const map = stateBlob?.stageGateResults;
+      if (!map || typeof map !== "object") return {};
+
+      // Issue #3267: only the runtime state restricted to this issue matters.
+      const blobIssue = stateBlob?.issueNumber;
+      if (typeof blobIssue === "number" && blobIssue !== issueNumber) {
+        return {};
+      }
+
+      const out: Record<
+        string,
+        Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }>
+      > = {};
+      for (const stageKey of Object.keys(map)) {
+        const arr = map[stageKey];
+        if (!Array.isArray(arr)) continue;
+        out[stageKey] = arr
+          .filter(
+            (entry): entry is Record<string, unknown> =>
+              !!entry && typeof entry === "object" && typeof entry.passed === "boolean"
+          )
+          .map((entry) => ({
+            kind: typeof entry.kind === "string" ? entry.kind : undefined,
+            passed: entry.passed as boolean,
+            gate_name: typeof entry.gate_name === "string" ? entry.gate_name : undefined,
+            reason: typeof entry.reason === "string" ? entry.reason : undefined,
+          }));
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Read the persisted stage_gate_results for a run as a flat array (all
+   * stages combined). Thin wrapper over `readStageGateResultsMapForRun` kept
+   * for the `classifyPipelineOutcome` no-op scan, which does not care which
+   * stage produced a `kind: "no_op"` result.
    */
   private readStageGateResultsForRun(
     issueNumber: number
   ): Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }> {
+    return Object.values(this.readStageGateResultsMapForRun(issueNumber)).flat();
+  }
+
+  /**
+   * Completion-time "gate never invoked" guard (Issue #210). For every
+   * completed, non-bookend stage in `PIPELINE_STAGE_GATE_STAGES` (the set of
+   * stages with a registered, non-NoOp gate in
+   * `internal/orchestrator/gates/registry.go`'s `Default()`), confirm the
+   * persisted run record has at least one recorded gate result for that
+   * stage. A completed gated stage with zero recorded results is exactly the
+   * silent-invocation-gap this issue reports (three of six gates never ran in
+   * the mode the extension operates in) — log a structured, greppable
+   * `[gate-not-invoked]` line via `onStderr` so it is visible in the run's
+   * diagnostic trail, matching the `[blocked-dependency]`-style marker
+   * convention. Non-fatal: this starts as a logged signal, not a hard
+   * pipeline failure (see PLAN.md Risks — a legitimate future NoOp/skipped
+   * stage must not become a false failure).
+   */
+  private logGateNotInvoked(issueNumber: number, completedStages: PipelineStage[]): void {
     try {
-      const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
-      const statePath = path.join(cwd, ".nightgauge", "pipeline", "state.json");
-      if (!fs.existsSync(statePath)) return [];
-      const stateBlob = JSON.parse(fs.readFileSync(statePath, "utf-8"));
-      const map = stateBlob?.stageGateResults;
-      if (!map || typeof map !== "object") return [];
-      const out: Array<{ kind?: string; passed: boolean; gate_name?: string; reason?: string }> =
-        [];
-      for (const stageKey of Object.keys(map)) {
-        const arr = map[stageKey];
-        if (!Array.isArray(arr)) continue;
-        for (const entry of arr) {
-          if (entry && typeof entry === "object" && typeof entry.passed === "boolean") {
-            out.push({
-              kind: typeof entry.kind === "string" ? entry.kind : undefined,
-              passed: entry.passed,
-              gate_name: typeof entry.gate_name === "string" ? entry.gate_name : undefined,
-              reason: typeof entry.reason === "string" ? entry.reason : undefined,
-            });
-          }
+      const resultsByStage = this.readStageGateResultsMapForRun(issueNumber);
+      for (const stage of completedStages) {
+        if (!PIPELINE_STAGE_GATE_STAGES.includes(stage)) continue;
+        const results = resultsByStage[stage];
+        if (!results || results.length === 0) {
+          const message = `[gate-not-invoked] stage=${stage} issue=${issueNumber} — stage completed with a registered gate but no recorded gate result was found for this run`;
+          this.logger.error(message, { issueNumber, stage });
+          this.eventDispatcher.onStderr(stage, `${message}\n`);
         }
       }
-      // Issue #3267: only the runtime state.json restricted to this issue
-      // matters. The Go scheduler writes per-issue state under pipeline/<N>/
-      // historically, so guard against cross-issue contamination by also
-      // checking issueNumber from the blob when present.
-      const blobIssue = stateBlob?.issueNumber;
-      if (typeof blobIssue === "number" && blobIssue !== issueNumber) {
-        return [];
-      }
-      return out;
-    } catch {
-      return [];
+    } catch (err) {
+      this.logger.warn("Failed to evaluate gate-not-invoked guard", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -9678,6 +9872,44 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
 
         // ===================================================================
+        // GENERIC STAGE POST-CONDITION GATE (Issue #210): issue-pickup,
+        // feature-planning, and feature-dev have registered, unit-tested
+        // StageGate implementations that this legacy TS pipeline loop never
+        // invoked — pr-create, pr-merge, and feature-validate keep their own
+        // dedicated verifyPost*State calls above/below and are excluded here
+        // so neither path runs a stage's gate twice. Runs immediately after
+        // context validation/recovery and before any stage-specific side
+        // effects (branch recovery, routing decision load) so a gate failure
+        // short-circuits before those run — matching how the three
+        // already-gated stages already behave.
+        // ===================================================================
+        if (
+          !failedStage &&
+          (stage === "issue-pickup" || stage === "feature-planning" || stage === "feature-dev")
+        ) {
+          const gateError = await this.runPostConditionGate(stage, issueNumber);
+          if (gateError) {
+            this.logger.error(
+              "Post-condition gate failed — failing stage instead of recording false success",
+              { issueNumber, stage, error: gateError.message }
+            );
+            if (this.stateService) {
+              try {
+                await this.stateService.failStage(stage, gateError.message);
+              } catch {
+                // Non-critical — the break below still fails the pipeline.
+              }
+            }
+            failedStage = stage;
+            error = gateError;
+            if (earlySpinnerFired) {
+              this.eventDispatcher.onStageError(stage, gateError);
+            }
+            break;
+          }
+        }
+
+        // ===================================================================
         // DETERMINISTIC EPIC BASE_BRANCH ENFORCEMENT
         // After issue-pickup succeeds (whether by subagent or fallback),
         // verify that sub-issues of an epic target the epic branch, not main.
@@ -10545,6 +10777,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         });
       }
     }
+
+    // Issue #210: completion-time "gate never invoked" guard. A registered,
+    // non-NoOp stage gate that never produced a recorded result for a
+    // completed, non-bookend stage is exactly the silent-invocation-gap this
+    // issue reports — log a structured, greppable signal rather than staying
+    // silent. Non-fatal on first landing (see PLAN.md Risks) so a legitimate
+    // future NoOp/skipped stage cannot turn into a false pipeline failure.
+    this.logGateNotInvoked(issueNumber, completedStages);
 
     // Post-pipeline analysis (Issue #943) + self-check (Issue #1045)
     // Run whenever at least one real stage executed (success or failure).

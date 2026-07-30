@@ -7,6 +7,61 @@ import (
 	"time"
 )
 
+// TestAppendStageGateResultToDisk verifies the CLI/IPC persistence seam
+// (Issue #210): `nightgauge gate verify --record` uses this to append a gate
+// result onto the run record for the TypeScript HeadlessOrchestrator path,
+// which never runs in-process alongside the Go scheduler and so cannot call
+// RuntimeState.AppendStageGateResult directly.
+func TestAppendStageGateResultToDisk(t *testing.T) {
+	stateDir := t.TempDir()
+
+	if err := AppendStageGateResultToDisk(stateDir, 210, StageFeatureDev, StageGateResult{
+		GateName: "feature-dev",
+		Passed:   true,
+		Reason:   "workspace has changes",
+		Kind:     "ok",
+	}); err != nil {
+		t.Fatalf("AppendStageGateResultToDisk (first write): %v", err)
+	}
+
+	rs, err := LoadPersistedState(stateDir, 210)
+	if err != nil {
+		t.Fatalf("LoadPersistedState: %v", err)
+	}
+	got := rs.StageGateResultsFor(StageFeatureDev)
+	if len(got) != 1 || !got[0].Passed || got[0].GateName != "feature-dev" {
+		t.Fatalf("StageGateResultsFor(feature-dev) = %#v", got)
+	}
+
+	// A second append for a different stage on the same run must accumulate
+	// rather than clobber the first — this is the multi-call-site path all
+	// six HeadlessOrchestrator.ts gate invocations exercise across one run.
+	if err := AppendStageGateResultToDisk(stateDir, 210, StageIssuePickup, StageGateResult{
+		GateName: "issue-pickup",
+		Passed:   false,
+		Reason:   "no branch created",
+		Kind:     "no_op",
+	}); err != nil {
+		t.Fatalf("AppendStageGateResultToDisk (second write): %v", err)
+	}
+
+	rs2, err := LoadPersistedState(stateDir, 210)
+	if err != nil {
+		t.Fatalf("LoadPersistedState (after second write): %v", err)
+	}
+	if rs2.IssueNumber != 210 {
+		t.Errorf("IssueNumber = %d, want 210", rs2.IssueNumber)
+	}
+	devResults := rs2.StageGateResultsFor(StageFeatureDev)
+	if len(devResults) != 1 || !devResults[0].Passed {
+		t.Fatalf("feature-dev result lost after second write: %#v", devResults)
+	}
+	pickupResults := rs2.StageGateResultsFor(StageIssuePickup)
+	if len(pickupResults) != 1 || pickupResults[0].Passed || pickupResults[0].Kind != "no_op" {
+		t.Fatalf("issue-pickup result wrong: %#v", pickupResults)
+	}
+}
+
 // TestRuntimeState_AppendStageGateResult verifies the per-stage append/read
 // path used by the orchestrator scheduler (Issue #3266).
 func TestRuntimeState_AppendStageGateResult(t *testing.T) {

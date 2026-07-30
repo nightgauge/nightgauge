@@ -61,7 +61,23 @@ vi.mock("child_process", async () => {
 
   // promisify(execFile) — used by preCheckIssue and other gh/git calls
   const execFileMock: any = vi.fn();
-  execFileMock[kCustom] = () => Promise.resolve({ stdout: issueJson, stderr: "" });
+  execFileMock[kCustom] = (_cmd: string, args?: string[]) => {
+    // Issue #210: feature-planning now also runs the generic
+    // `gate verify --record` post-condition check. Report a pass so this
+    // suite's context-handoff assertions aren't tripped by the unrelated gate
+    // wiring — the dummy issue-fixture JSON below has no `passed` field and
+    // would otherwise parse as a failing gate result. Matched on args alone
+    // (not the resolved binary path) since BinaryResolver's own probing in
+    // this mocked environment can itself route through the generic exec/
+    // execFile mocks above and return unrelated fixture text as "cmd".
+    if (args?.[0] === "gate" && args?.[1] === "verify") {
+      return Promise.resolve({
+        stdout: JSON.stringify({ passed: true, reason: "ok", gate_name: args[2] }),
+        stderr: "",
+      });
+    }
+    return Promise.resolve({ stdout: issueJson, stderr: "" });
+  };
 
   return {
     ...actual,
