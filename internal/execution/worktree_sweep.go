@@ -199,6 +199,48 @@ func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef 
 	return "", num
 }
 
+// BranchAheadInfo reports whether a branch carries committed, unmerged work
+// with no uncommitted changes on top — the state a killed stage can leave
+// behind after it committed but before pr-create ran (#191).
+type BranchAheadInfo struct {
+	HasOwnCommits bool
+	Clean         bool // no uncommitted/untracked changes
+	AheadOfBase   bool // mergedIntoBase reports content not yet on base
+}
+
+// DetectBranchAhead inspects worktreePath (a live git checkout) against
+// baseRef using the same content-diff logic worktree reclamation relies on
+// (mergedIntoBase) — see docs/GO_BINARY.md#worktree-reclamation-issue-110 for
+// why ancestry checks are unsafe here (squash merges).
+func DetectBranchAhead(worktreePath, branch, baseRef string) (BranchAheadInfo, error) {
+	merged, hasOwnCommits, err := mergedIntoBase(worktreePath, baseRef, branch)
+	if err != nil {
+		return BranchAheadInfo{}, err
+	}
+	dirty, err := hasUncommittedChanges(worktreePath)
+	if err != nil {
+		return BranchAheadInfo{}, err
+	}
+	return BranchAheadInfo{
+		HasOwnCommits: hasOwnCommits,
+		Clean:         !dirty,
+		AheadOfBase:   hasOwnCommits && !merged,
+	}, nil
+}
+
+// ResolveBaseRef exposes resolveBaseRef for callers outside this package (the
+// abandoned-commit recovery action) that need to resolve origin/<default>
+// themselves when the issue context carries no base ref (#191).
+func ResolveBaseRef(repoRoot, defaultBranch string) (string, error) {
+	return resolveBaseRef(repoRoot, defaultBranch)
+}
+
+// DetectDefaultBranch exposes detectDefaultBranch for the same callers as
+// ResolveBaseRef (#191).
+func DetectDefaultBranch(repoRoot string) string {
+	return detectDefaultBranch(repoRoot)
+}
+
 // mergedIntoBase reports whether branch has commits of its own (hasOwnCommits)
 // and whether the content of those commits is already fully represented in
 // baseRef (merged).

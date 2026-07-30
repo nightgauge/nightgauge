@@ -311,6 +311,16 @@ const (
 	// loop this kind exists to stop. The way back in is human approval (label
 	// or approval file), which re-queues the issue.
 	TerminalKindArchitectureApprovalRequired = "architecture_approval_required"
+	// TerminalKindAbandonedCommit marks a stage killed/crashed after it
+	// committed valid, unmerged work but before pr-create ran (#191). Distinct
+	// from TerminalKindWorktreeUncommitted (#3542, which covers *uncommitted*
+	// work preserved via a recovery commit) — here the work is already a clean
+	// commit on the branch; the gap is that nothing created a PR from it. Not
+	// derived by ClassifyTerminalKind from error text — it is set by the
+	// AbandonedCommitRecoverable recovery action itself when it fires and
+	// cannot fully self-heal via the deterministic PRCreateRunner, mirroring
+	// how gate-sourced kinds override ResolveTerminalKind.
+	TerminalKindAbandonedCommit = "abandoned_commit"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error

@@ -53,6 +53,15 @@ type RecoveryResult struct {
 	CostUSD    float64 // ~0 for deterministic actions
 	FollowUp   string  // "stage can resume" | "issue requires human triage" | "no action"
 	DurationMs int64
+	// BacktrackTargetStage, when set alongside FollowUp ==
+	// FollowUpStageCanResume, tells the scheduler to rewind directly to this
+	// stage without going through the feedback-file signal mechanism
+	// conflict-recovery-loop uses. This is the mechanism
+	// abandoned-commit-recoverable (#191) uses to resume mid-pipeline at
+	// pr-create: unlike the conflict-recovery loop it is not a repeated,
+	// bounded edge, so a one-shot direct rewind is sufficient — Matches()
+	// excludes the target stage, so this action cannot re-fire and loop.
+	BacktrackTargetStage string
 }
 
 // FollowUp constants — free-form strings are also allowed; these name the

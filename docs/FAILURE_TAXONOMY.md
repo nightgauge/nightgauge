@@ -216,28 +216,29 @@ record may carry both fields, neither, or only one.
 
 ### Values
 
-| Kind                         | Meaning                                                                                                                                          |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `stall_kill`                 | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                             |
-| `budget_exceeded`            | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                         |
-| `validation_error`           | Context schema validation failed terminally (e.g., missing output context for the stage)                                                         |
-| `subagent_crash`             | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                              |
-| `orchestrator_crash`         | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                  |
-| `network_unavailable`        | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                  |
-| `stream_idle_timeout`        | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                               |
-| `rate_limit_quota_exhausted` | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                           |
-| `worktree_uncommitted`       | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                          |
-| `budget_ceiling_hit`         | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                  |
-| `github_quota_low`           | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                        |
-| `api_connection_lost`        | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                    |
-| `github_network_outage`      | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                         |
-| `model_unavailable`          | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                 |
-| `premature_turn_end`         | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                  |
-| `dev_produced_no_changes`    | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)      |
-| `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra |
-| `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope       |
-| `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                  |
-| `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action     |
+| Kind                         | Meaning                                                                                                                                                                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stall_kill`                 | Subagent exceeded `stall_kill_multiplier × stall_thresholds` and was forcibly killed                                                                                                                                                |
+| `budget_exceeded`            | Pipeline-level or per-stage **token** budget ceiling tripped (with grace buffer applied)                                                                                                                                            |
+| `validation_error`           | Context schema validation failed terminally (e.g., missing output context for the stage)                                                                                                                                            |
+| `subagent_crash`             | Subagent process exited non-zero with no recovery path (model escalation exhausted)                                                                                                                                                 |
+| `orchestrator_crash`         | Orchestrator process died mid-stage; record synthesized on next startup from a stale `current-run.json` sidecar                                                                                                                     |
+| `network_unavailable`        | Extended GitHub connectivity loss aborted the run (Issue #3296) — environmental                                                                                                                                                     |
+| `stream_idle_timeout`        | Anthropic API closed a streaming response mid-flight (Issue #3398) — environmental                                                                                                                                                  |
+| `rate_limit_quota_exhausted` | Idle stall fired while the rate-limit bucket was drained (Issue #3386) — environmental                                                                                                                                              |
+| `worktree_uncommitted`       | Failure **recovered**: uncommitted work was auto-committed before cleanup (Issue #3542)                                                                                                                                             |
+| `budget_ceiling_hit`         | The USD pipeline budget ceiling killed a running stage (Issue #3542) — real spend, not a defect                                                                                                                                     |
+| `github_quota_low`           | GitHub API rate-limit bucket below headroom at the pipeline-start preflight (Issue #3896) — environmental                                                                                                                           |
+| `api_connection_lost`        | Anthropic API transport drop mid-stage (socket close / DNS blip; Issue #4002) — environmental                                                                                                                                       |
+| `github_network_outage`      | api.github.com unreachable at the pipeline-start preflight (Issue #4002) — environmental                                                                                                                                            |
+| `model_unavailable`          | API rejected the selected model: not on plan / unknown ID / model usage cap (Issue #42) — triggers tier fallback                                                                                                                    |
+| `premature_turn_end`         | Stage exited 0 but produced no state change — the agent ended its turn on a promise (Issue #74)                                                                                                                                     |
+| `dev_produced_no_changes`    | feature-dev's gate found the stage workspace empty despite a truthful dev context — work landed where the pipeline never reads (Issue #202)                                                                                         |
+| `adapter_auth_failed`        | Pipeline-start adapter auth gate refused to launch: probe timed out after retry, or the adapter CLI is logged out (Issue #312) — retryable infra                                                                                    |
+| `no_changes_produced`        | pr-create's deterministic fallback confirmed zero commits ahead of base — genuinely nothing to open a PR for (Issue #317) — planning/scope                                                                                          |
+| `validation_failed`          | feature-validate honestly failed its quality gates (`validation_status="failed"`) — organic implementation failure (Issue #326)                                                                                                     |
+| `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                        |
+| `abandoned_commit`           | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191) |
 
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so

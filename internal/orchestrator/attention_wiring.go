@@ -497,6 +497,9 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Issue #%d failed terminally at %s (%s) and halted the whole fleet — nothing else dispatches until this is resolved.\n\n", issue, stage, terminalKind))
+	if terminalKind == TerminalKindAbandonedCommit {
+		b.WriteString("A recovery attempt already found committed, unmerged work on this branch (clean tree, ahead of base) but could not resume automatically. The commit is still there — retry will resume at pr-create rather than re-deriving the work from scratch.\n\n")
+	}
 	if costUSD > 0 {
 		b.WriteString(fmt.Sprintf("Cost so far: $%.2f.\n\n", costUSD))
 	}
