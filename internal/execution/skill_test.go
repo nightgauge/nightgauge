@@ -137,7 +137,7 @@ func TestRewriteSkillRelativePaths(t *testing.T) {
 func TestBuildPrompt_SkillDirRewritesAndAnnotates(t *testing.T) {
 	prompt := BuildPrompt(state.StageFeatureDev,
 		"Read `skills/nightgauge-feature-dev/_includes/plan.md` now.",
-		7, "/abs/skills/nightgauge-feature-dev")
+		7, "/abs/skills/nightgauge-feature-dev", "", "")
 	if !strings.Contains(prompt, "/abs/skills/nightgauge-feature-dev/_includes/plan.md") {
 		t.Errorf("read directive not rewritten: %s", prompt)
 	}
@@ -147,7 +147,8 @@ func TestBuildPrompt_SkillDirRewritesAndAnnotates(t *testing.T) {
 }
 
 func TestBuildPrompt(t *testing.T) {
-	prompt := BuildPrompt(state.StageFeatureDev, "# Do the feature dev", 1234, "")
+	prompt := BuildPrompt(state.StageFeatureDev, "# Do the feature dev", 1234, "",
+		"planning", ".nightgauge/pipeline/planning-1234.json")
 
 	if !strings.Contains(prompt, "#1234") {
 		t.Error("prompt should contain issue number")
@@ -161,6 +162,12 @@ func TestBuildPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "# Do the feature dev") {
 		t.Error("prompt should contain skill content")
 	}
+	if !strings.Contains(prompt, "Input context type**: planning") {
+		t.Error("prompt should surface the resolved input context type")
+	}
+	if !strings.Contains(prompt, ".nightgauge/pipeline/planning-1234.json") {
+		t.Error("prompt should surface the resolved input context file")
+	}
 
 	// Stable-prefix-first ordering (#3805): the skill body must precede the
 	// variable invocation context block so it forms the cacheable prefix.
@@ -168,6 +175,21 @@ func TestBuildPrompt(t *testing.T) {
 	ctxIdx := strings.Index(prompt, "## Invocation Context")
 	if skillIdx < 0 || ctxIdx < 0 || skillIdx > ctxIdx {
 		t.Error("skill content must precede invocation context (stable-prefix-first, #3805)")
+	}
+}
+
+func TestBuildPrompt_FastTracked(t *testing.T) {
+	prompt := BuildPrompt(state.StageFeatureDev, "# Do the feature dev", 48, "",
+		"issue", ".nightgauge/pipeline/issue-48.json")
+
+	if !strings.Contains(prompt, "Input context type**: issue") {
+		t.Error("prompt should surface fast-tracked input context type")
+	}
+	if !strings.Contains(prompt, ".nightgauge/pipeline/issue-48.json") {
+		t.Error("prompt should surface the issue context file, not a planning path")
+	}
+	if strings.Contains(prompt, "planning-48.json") {
+		t.Error("prompt should not reference a planning context file when fast-tracked")
 	}
 }
 

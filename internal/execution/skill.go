@@ -100,7 +100,7 @@ func ReadSkillFile(skillPath string) (*SkillData, error) {
 // SKILL.md: skill-relative read directives are rewritten against it so they
 // resolve from cross-repo worktrees (#196). The rewrite is host-constant per
 // stage, so the body stays byte-identical across issues (cache-safe).
-func BuildPrompt(stage state.PipelineStage, skillContent string, issueNumber int, skillDir string) string {
+func BuildPrompt(stage state.PipelineStage, skillContent string, issueNumber int, skillDir string, effectiveContextType string, contextFile string) string {
 	var sb strings.Builder
 
 	// Stable skill body first — forms the cacheable prefix (#3805).
@@ -116,6 +116,12 @@ func BuildPrompt(stage state.PipelineStage, skillContent string, issueNumber int
 	sb.WriteString("- **Mode**: headless (non-interactive pipeline execution)\n")
 	sb.WriteString(fmt.Sprintf("- **Issue**: #%d\n", issueNumber))
 	sb.WriteString(fmt.Sprintf("- **Stage**: %s\n", stage))
+	if effectiveContextType != "" {
+		sb.WriteString(fmt.Sprintf("- **Input context type**: %s\n", effectiveContextType))
+	}
+	if contextFile != "" {
+		sb.WriteString(fmt.Sprintf("- **Input context file**: %s\n", contextFile))
+	}
 	if skillDir != "" {
 		sb.WriteString(fmt.Sprintf("- **Skill directory**: %s — supporting files (_includes/, _shared/) live here, NOT under the current working directory; never scan the filesystem for them (#196)\n", skillDir))
 	}

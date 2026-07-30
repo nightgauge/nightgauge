@@ -3054,11 +3054,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// skipped (docs-only skips planning + validate) its context was never
 		// written, so consume the nearest upstream stage that actually ran. Check
 		// in the worktree where the stage executed, not the main root.
-		if ctxType, ok := effectivePrereqContextType(stage, runtime); ok {
-			ctxPath := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, ctxType)
+		prereqCtxType, prereqCtxOK := effectivePrereqContextType(stage, runtime)
+		if prereqCtxOK {
+			ctxPath := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, prereqCtxType)
 			if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
 				log.Printf("#%d: stage %s prerequisite missing: %s context (resolved skip-aware)",
-					item.Number, stage, ctxType)
+					item.Number, stage, prereqCtxType)
 				return // Pipeline failed — missing prerequisite
 			}
 		}
@@ -3133,10 +3134,26 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
+		// Determine context file paths (skip-aware input; worktree-rooted).
+		// Reuses prereqCtxType/prereqCtxOK computed above (#49) — the same
+		// effectivePrereqContextType result feeds both the prerequisite gate
+		// and the prompt's Invocation Context block.
+		ws := stageWorkspace(runtime, workspaceRoot)
+		var contextFile string
+		if prereqCtxOK {
+			contextFile = stagecontext.ContextPath(ws, item.Number, prereqCtxType)
+		}
+
 		// Build prompt for stdin delivery. The absolute skill dir rewrites
 		// skill-relative read directives so they resolve from cross-repo
-		// worktrees (#196).
-		prompt := execution.BuildPrompt(stage, skillData.Content, item.Number, filepath.Dir(skillData.Path))
+		// worktrees (#196). effectiveContextType/contextFile (#49) surface the
+		// skip-aware prerequisite resolution to the skill body so fast-tracked
+		// feature-dev knows to read issue-{N}.json instead of planning-{N}.json.
+		effectiveContextType := ""
+		if prereqCtxOK {
+			effectiveContextType = string(prereqCtxType)
+		}
+		prompt := execution.BuildPrompt(stage, skillData.Content, item.Number, filepath.Dir(skillData.Path), effectiveContextType, contextFile)
 
 		// Epic project-memory forward injection (#4096): for a sub-issue that
 		// belongs to an epic, append the bounded, semi-trusted context that
@@ -3150,12 +3167,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// Determine context file paths (skip-aware input; worktree-rooted).
-		ws := stageWorkspace(runtime, workspaceRoot)
-		var contextFile string
-		if ctxType, ok := effectivePrereqContextType(stage, runtime); ok {
-			contextFile = stagecontext.ContextPath(ws, item.Number, ctxType)
-		}
+		// Determine output context file path (worktree-rooted). contextFile
+		// (input) was already resolved above alongside effectiveContextType.
 		var outputFile string
 		if ctxType, ok := stageOutputContextType[stage]; ok {
 			outputFile = stagecontext.ContextPath(ws, item.Number, ctxType)
