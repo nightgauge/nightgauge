@@ -286,6 +286,63 @@ func TestCleanupWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
 	}
 }
 
+func TestDetectBranchAhead_AheadAndClean(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(191, "fix/191-abandoned")
+	f.commitIn(wt, "fix.txt", "committed but no pr yet\n")
+
+	info, err := DetectBranchAhead(wt, "fix/191-abandoned", "origin/main")
+	if err != nil {
+		t.Fatalf("DetectBranchAhead: %v", err)
+	}
+	if !info.HasOwnCommits || !info.Clean || !info.AheadOfBase {
+		t.Fatalf("expected HasOwnCommits=true Clean=true AheadOfBase=true, got %+v", info)
+	}
+}
+
+func TestDetectBranchAhead_AheadAndDirty(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(192, "fix/192-dirty")
+	f.commitIn(wt, "fix.txt", "committed\n")
+	writeFile(t, filepath.Join(wt, "scratch.txt"), "uncommitted\n")
+
+	info, err := DetectBranchAhead(wt, "fix/192-dirty", "origin/main")
+	if err != nil {
+		t.Fatalf("DetectBranchAhead: %v", err)
+	}
+	if !info.HasOwnCommits || info.Clean || !info.AheadOfBase {
+		t.Fatalf("expected HasOwnCommits=true Clean=false AheadOfBase=true, got %+v", info)
+	}
+}
+
+func TestDetectBranchAhead_NoOwnCommits(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(193, "fix/193-fresh")
+
+	info, err := DetectBranchAhead(wt, "fix/193-fresh", "origin/main")
+	if err != nil {
+		t.Fatalf("DetectBranchAhead: %v", err)
+	}
+	if info.HasOwnCommits || !info.Clean || info.AheadOfBase {
+		t.Fatalf("expected HasOwnCommits=false Clean=true AheadOfBase=false, got %+v", info)
+	}
+}
+
+func TestDetectBranchAhead_SquashMergedContentNotAhead(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(194, "fix/194-merged")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("fix/194-merged")
+
+	info, err := DetectBranchAhead(wt, "fix/194-merged", "origin/main")
+	if err != nil {
+		t.Fatalf("DetectBranchAhead: %v", err)
+	}
+	if !info.HasOwnCommits || !info.Clean || info.AheadOfBase {
+		t.Fatalf("squash-merged content must not read as ahead of base, got %+v", info)
+	}
+}
+
 func TestParseWorktreeList(t *testing.T) {
 	out := strings.Join([]string{
 		"worktree /repo",

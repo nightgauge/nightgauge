@@ -150,6 +150,33 @@ func TestDefaultRegistry_BehindRoutesToBranchOutOfDate(t *testing.T) {
 	}
 }
 
+// TestDefaultRegistry_IncludesAbandonedCommitRecoverable locks #191: the new
+// action must be present in Default()'s slice, registered before
+// skill-exited-without-creating-pr (readability grouping; the two are
+// mutually exclusive by stage so order doesn't affect matching).
+func TestDefaultRegistry_IncludesAbandonedCommitRecoverable(t *testing.T) {
+	reg := Default("", nil, nil)
+
+	abandonedIdx, skillExitedIdx := -1, -1
+	for i, a := range reg.Actions() {
+		switch a.Name() {
+		case "abandoned-commit-recoverable":
+			abandonedIdx = i
+		case "skill-exited-without-creating-pr":
+			skillExitedIdx = i
+		}
+	}
+	if abandonedIdx == -1 {
+		t.Fatal("abandoned-commit-recoverable must be registered in Default()")
+	}
+	if skillExitedIdx == -1 {
+		t.Fatal("skill-exited-without-creating-pr must be registered in Default()")
+	}
+	if abandonedIdx > skillExitedIdx {
+		t.Errorf("abandoned-commit-recoverable (idx %d) must be registered before skill-exited-without-creating-pr (idx %d)", abandonedIdx, skillExitedIdx)
+	}
+}
+
 // TestDefaultRegistry_PlainNoOpRoutesToSkillExited confirms the ordering change
 // did not steal the generic case: a plain unflipped PR (no BEHIND/DIRTY token)
 // still falls through to skill-exited-without-merging.

@@ -4,7 +4,7 @@ import (
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
-// Default builds the canonical FailureRecovery registry with all eight actions
+// Default builds the canonical FailureRecovery registry with all nine actions
 // registered in priority order. The order is load-bearing: when two
 // predicates overlap (e.g. SkillExitedWithoutMerging and StallKilledOnPRMerge
 // both match a pr-merge KindNoOp with PR>0 — but the latter additionally
@@ -53,6 +53,15 @@ func Default(workspaceRoot string, prMergeRunner pmstages.PRMergeRunner, prCreat
 		// just punted on BEHIND). #4071.
 		NewBranchOutOfDate(prMergeRunner),
 		NewSkillExitedWithoutMerging(prMergeRunner),
+		// AbandonedCommitRecoverable fires for stages upstream of pr-create
+		// (feature-dev, feature-validate) that were killed after committing
+		// valid, unmerged work — placed immediately before
+		// SkillExitedWithoutCreatingPR since both share the runner and the
+		// "did pr-create actually happen" theme. Their Matches predicates are
+		// mutually exclusive by stage (this one explicitly excludes
+		// StagePRCreate/StagePRMerge), so ordering between the two doesn't
+		// affect which fires — only readability (#191).
+		NewAbandonedCommitRecoverable(prCreateRunner),
 		NewSkillExitedWithoutCreatingPR(prCreateRunner),
 		NewCICheckTransientlyFailed(),
 		NewStaleProjectStatus(),

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -4213,6 +4214,36 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					// the target stage instead of falling through to terminal.
 					// The LLM work happens in the rewound stage, keeping the
 					// recovery action itself deterministic.
+					if result.FollowUp == recovery.FollowUpStageCanResume && result.BacktrackTargetStage != "" {
+						// A deterministic action set BacktrackTargetStage directly on
+						// the result (abandoned-commit-recoverable, #191) — resume at
+						// that stage without going through the feedback-file signal
+						// mechanism conflict-recovery-loop uses. This is a one-shot
+						// rewind: the target stage's Matches() predicate excludes
+						// itself, so the action cannot re-fire and loop, unlike the
+						// conflict-recovery edge below which is a deliberately-repeated
+						// bounded loop.
+						targetStage := state.PipelineStage(result.BacktrackTargetStage)
+						s.retryEngine.RecordBacktrack(string(stage), result.BacktrackTargetStage, result.Action)
+						tracer.Emit(trace.KindBacktrack, string(stage), trace.BacktrackPayload{
+							FromStage:   string(stage),
+							TargetStage: result.BacktrackTargetStage,
+							SignalType:  result.Action,
+							Rationale:   result.Reason,
+							Trigger:     "recovery_resume",
+						})
+						log.Printf("#%d: recovery %s — resuming %s → %s",
+							item.Number, result.Action, stage, result.BacktrackTargetStage)
+						err = nil
+						exitCode = 0
+						for i, st := range stages {
+							if st == targetStage {
+								stageIdx = i
+								break
+							}
+						}
+						continue // Re-run from the target stage
+					}
 					if result.FollowUp == recovery.FollowUpStageCanResume {
 						// A deterministic action declined to recover the stage in
 						// place but set up a backward rewind by emitting a feedback
@@ -4267,6 +4298,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					}
 					log.Printf("#%d: stage %s recovery action %s declined (%s) — falling through",
 						item.Number, stage, result.Action, result.Reason)
+					// abandoned-commit-recoverable (#191) matched AND found the
+					// branch ahead-of-base with a clean tree — but could
+					// neither self-heal via the deterministic runner nor set
+					// up a backtrack (e.g. no live workspace to resume into).
+					// Stamp the richer kind so triage sees "work exists on the
+					// branch" instead of a generic crash. Guarded on the
+					// ahead_of_base evidence marker so a bare Matches() hit
+					// with nothing actually ahead of base (declined with no
+					// evidence) doesn't misreport as this kind.
+					if result.Action == "abandoned-commit-recoverable" && slices.Contains(result.Evidence, "ahead_of_base=true") {
+						terminalFailureKind = TerminalKindAbandonedCommit
+					}
 				}
 			}
 
