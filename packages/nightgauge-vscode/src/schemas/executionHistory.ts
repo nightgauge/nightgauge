@@ -344,6 +344,8 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `github_network_outage` — api.github.com unreachable at pipeline-start; transient, short global cooldown (#4002)
  *  - `premature_turn_end` — stage exited 0 but its post-condition gate reported no state change; agent ended its turn on a promise (#74)
  *  - `dev_produced_no_changes` — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite the dev context reporting changed files; work was done somewhere the pipeline never reads (#202)
+ *  - `dev_handoff_missing` — the inverse: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived (#223)
+ *  - `containment_breach` — the write-containment check found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else in the chain marks it failed (#129, classified in #230)
  *  - `adapter_auth_failed` — pipeline-start adapter auth gate refused to launch (probe timed out after retry, or logged out); retryable infra, no cascade/lifetime-cap (#312)
  *  - `no_changes_produced` — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for, e.g. a dispatched human-only issue (#317)
  *  - `validation_failed` — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash (#326)
@@ -374,6 +376,8 @@ export const TerminalFailureKindSchema = z.enum([
   "model_unavailable", // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
   "premature_turn_end", // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   "dev_produced_no_changes", // Issue #202 — feature-dev's gate found the stage workspace empty despite a truthful dev context; work landed where the pipeline never reads
+  "dev_handoff_missing", // Issue #223 — the inverse of the above: the dev context is absent or empty and git finds the changed files in the workspace; the stage did the work and ended without writing its handoff
+  "containment_breach", // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
   "adapter_auth_failed", // Issue #312 — adapter auth pre-flight refused to launch (probe timed out after retry, or logged out); retryable infra
   "no_changes_produced", // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure

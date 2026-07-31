@@ -194,6 +194,24 @@ func TestClassifyTerminalKind(t *testing.T) {
 			"API Error: socket hang up",
 			TerminalKindApiConnectionLost,
 		},
+		// Issue #230 — a write-containment breach. The stage exits 0 and reports
+		// success (it did work, just in a repository it does not own), so
+		// nothing else in the chain marks it failed. Unclassified, this reached
+		// an issue's lifetime failure cap and halted the fleet while telling the
+		// operator only "unclassified" — with a manifest on disk naming the
+		// repository, every escaped path, and a restorable patch.
+		{
+			"containment_breach_marker",
+			"[stage:worktree-containment] Stage feature-planning wrote outside its worktree into 1 repository/repositories it does not own.",
+			TerminalKindContainmentBreach,
+		},
+		// Must beat premature_turn_end, which would otherwise claim a clean
+		// exit-0 breach and describe entirely the wrong problem.
+		{
+			"containment_breach_beats_premature_turn_end",
+			"premature turn end: stage exited 0 with no state change (gate no-op): [stage:worktree-containment] wrote outside its worktree",
+			TerminalKindContainmentBreach,
+		},
 		// Issue #227 — the verbatim string from a transport drop that killed two
 		// concurrent runs in two repositories in the same instant, one at
 		// pr-create with $21.54 already spent. It matched

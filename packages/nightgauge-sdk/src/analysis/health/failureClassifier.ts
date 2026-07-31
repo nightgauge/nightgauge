@@ -70,6 +70,10 @@ export function classifyFailureCategory(
     t.includes("dev_produced_no_changes") ||
     t.includes("[dev-handoff-missing]") ||
     t.includes("dev_handoff_missing") ||
+    // Leaving the assigned worktree is the stage's own behavior, not the
+    // environment and not the issue's code (#230).
+    t.includes("[stage:worktree-containment]") ||
+    t.includes("containment_breach") ||
     t.includes("exited 0 but did not write expected output context")
   ) {
     return "agent";
@@ -226,6 +230,7 @@ export type TerminalFailureKind =
   | "model_unavailable" // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
+  | "containment_breach" // Issue #230 — the write-containment check (#129) found the stage wrote into a repository it does not own; it exits 0 and reports success, so nothing else marks it failed
   | "dev_handoff_missing" // Issue #223 — the inverse of the above: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
@@ -274,6 +279,14 @@ export function classifyTerminalKind(
   // this kind and the dashboards would never show it, while the Go gate path
   // reported it. Two classifiers disagreeing about one failure is how a kind
   // stops being trustworthy.
+  // Write-containment breach (#129, classified in #230). Matched before the
+  // stage-behavior kinds below because a breaching stage usually also exits 0
+  // cleanly, and premature_turn_end would otherwise claim it and describe the
+  // wrong problem.
+  if (t.includes("[stage:worktree-containment]") || t.includes("containment_breach")) {
+    return "containment_breach";
+  }
+
   if (t.includes("[dev-produced-no-changes]") || t.includes("dev_produced_no_changes")) {
     return "dev_produced_no_changes";
   }

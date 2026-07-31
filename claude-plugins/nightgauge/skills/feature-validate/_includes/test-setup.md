@@ -14,14 +14,46 @@ Procedural detail for **Phase 1 (Detect Testing Environment)** and **Phase 1.8
 
 **PURPOSE**: Identify available testing frameworks and project type.
 
-### Step 1.1: Detect Test Frameworks
+### Step 1.1: Detect Test Frameworks and Select `$TEST_CMD`
 
-Scan project manifests to detect frameworks and project type:
+Use the Go binary for deterministic test-command selection (Issue #221):
 
-- **package.json**: Check for playwright, cypress, vitest, jest. Detect
-  `vscode-extension` (engines.vscode) or `cli` (bin field).
-- **pyproject.toml**: Check for pytest, behave.
-- **go.mod**: go-test is available.
+```bash
+TESTCMD_DETECT=$(nightgauge scan testcmd --json --workdir . 2>/dev/null || echo '{"command":"","source":"","framework":"","warnings":[]}')
+TEST_CMD=$(echo "$TESTCMD_DETECT" | jq -r '.command' 2>/dev/null || echo "")
+TEST_CMD_SOURCE=$(echo "$TESTCMD_DETECT" | jq -r '.source' 2>/dev/null || echo "")
+UNIT_TEST_FRAMEWORK=$(echo "$TESTCMD_DETECT" | jq -r '.framework' 2>/dev/null || echo "")
+```
+
+`$TEST_CMD` is what every later phase invokes (`build-and-tests.md:307,437,440`)
+— this is the only place it is assigned. The binary applies this precedence,
+**preferring the repo's declared command over an inferred framework binary**:
+
+1. **nodejs**: `package.json` `scripts.test` → `<pm> test`, where `<pm>` is
+   chosen from the detected lockfile (npm/yarn/pnpm/bun). This is why a repo
+   whose test framework is driven by a build-tool wrapper (Angular's
+   `@angular/build:unit-test` via `ng test`, Nx executors) still runs
+   correctly: the dependency scan alone would have picked `npx vitest run` and
+   silently skipped the wrapper's generated setup, failing every test in the
+   harness even though the code is fine.
+2. **python**: `pyproject.toml` `[tool.poetry.scripts]` `test` entry
+   (`poetry run test`), then a configured tox environment (`tox`).
+3. **Makefile** `test:` target (`make test`), any ecosystem.
+4. **go**: `go test ./...` when `go.mod` is present.
+5. Only when none of the above are declared does it fall back to the
+   dependency-detected framework binary (`source: "framework_fallback"`,
+   e.g. `npx vitest`, `npx jest`, `pytest`, `go test ./...`).
+
+`UNIT_TEST_FRAMEWORK` (field `.framework`) is still populated for output
+parsing and targeted per-file reruns — it must NOT be used to choose the
+entrypoint; that is exactly the bug `$TEST_CMD` selection above fixes. It also
+detects `vscode-extension` (engines.vscode) or `cli` (bin field) project type
+via the existing `package.json` read.
+
+When the binary is unavailable, fall back to the previous manual scan: check
+`package.json` for playwright/cypress/vitest/jest, `pyproject.toml` for
+pytest/behave, and `go.mod` for go-test — but this loses the `scripts.test` /
+`tox` / `Makefile` precedence above, so treat it as a degraded mode only.
 
 ### Step 1.2: Check for E2E Test Configuration
 
