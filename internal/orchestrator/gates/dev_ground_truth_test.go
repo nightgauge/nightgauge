@@ -172,6 +172,86 @@ func TestFeatureDevGate_GroundTruth_BookkeepingOnlyFails(t *testing.T) {
 	}
 }
 
+// devContextDeleted writes a dev-{N}.json whose files_changed.deleted is
+// exactly `deleted` and whose created/modified are empty — the shape a stage
+// produces when its entire deliverable is removing bookkeeping paths (#237).
+func devContextDeleted(t *testing.T, ws string, issue int, deleted []string) {
+	t.Helper()
+	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)), map[string]any{
+		"files_changed": map[string]any{
+			"created":  []string{},
+			"modified": []string{},
+			"deleted":  deleted,
+		},
+		"build_verification": map[string]any{"ran": true, "status": "passed"},
+	})
+}
+
+// TestFeatureDevGate_GroundTruth_BookkeepingDeliverablePasses is #237's fix
+// case: an issue whose entire deliverable is a change under .nightgauge/,
+// which the default exclusion-scoped probe can never see.
+func TestFeatureDevGate_GroundTruth_BookkeepingDeliverablePasses(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "dev-1.json"), "{}\n")
+	git(t, ws, "add", ".nightgauge/pipeline/dev-1.json")
+	git(t, ws, "commit", "-m", "add tracked bookkeeping file")
+	git(t, ws, "rm", "--cached", ".nightgauge/pipeline/dev-1.json")
+
+	devContextDeleted(t, ws, 42, []string{".nightgauge/pipeline/dev-1.json"})
+
+	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
+
+	if !gr.Passed {
+		t.Fatalf("expected pass: declared bookkeeping deletion matches git; reason=%q evidence=%v", gr.Reason, gr.Evidence)
+	}
+	joined := strings.Join(gr.Evidence, "\n")
+	if !strings.Contains(joined, "deliverable=bookkeeping") {
+		t.Errorf("evidence does not record the bookkeeping mode:\n%s", joined)
+	}
+}
+
+// TestFeatureDevGate_GroundTruth_UndeclaredBookkeepingStillFails is the #202
+// regression guard: a dev context that declares a bookkeeping path it never
+// actually touched must still fail — widening must not become a way to
+// self-certify an empty run.
+func TestFeatureDevGate_GroundTruth_UndeclaredBookkeepingStillFails(t *testing.T) {
+	ws := gitRepo(t)
+	devContextDeleted(t, ws, 42, []string{".nightgauge/pipeline/never-touched.json"})
+
+	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
+
+	if gr.Passed {
+		t.Fatalf("expected fail: declared bookkeeping path was never actually touched; evidence=%v", gr.Evidence)
+	}
+	if gr.TerminalKind != TerminalKindDevProducedNoChanges {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindDevProducedNoChanges)
+	}
+}
+
+// TestFeatureDevGate_GroundTruth_MismatchedBookkeepingDeclarationFails covers
+// the case where the workspace DOES have real bookkeeping changes, but the dev
+// context declares different, unrelated bookkeeping paths that were never
+// touched — the widening must be scoped to what was declared, not to the whole
+// bookkeeping tree.
+func TestFeatureDevGate_GroundTruth_MismatchedBookkeepingDeclarationFails(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "actual.json"), "{}\n")
+	git(t, ws, "add", ".nightgauge/pipeline/actual.json")
+	git(t, ws, "commit", "-m", "add tracked bookkeeping file")
+	git(t, ws, "rm", "--cached", ".nightgauge/pipeline/actual.json")
+
+	devContextDeleted(t, ws, 42, []string{".nightgauge/pipeline/unrelated.json"})
+
+	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
+
+	if gr.Passed {
+		t.Fatalf("expected fail: declared paths do not match the actual bookkeeping change; evidence=%v", gr.Evidence)
+	}
+	if gr.TerminalKind != TerminalKindDevProducedNoChanges {
+		t.Errorf("TerminalKind = %q, want %q", gr.TerminalKind, TerminalKindDevProducedNoChanges)
+	}
+}
+
 // TestFeatureDevGate_GroundTruth_NonRepoPassesOpen pins the fail-open
 // direction. This gate runs after a stage has already spent real money, and a
 // false accusation costs a full re-run — and, through the safety rails, can

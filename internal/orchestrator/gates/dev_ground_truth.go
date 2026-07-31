@@ -56,6 +56,32 @@ type devWorkState struct {
 	// this one is empty — the #202 signature. Diagnostic only; it never
 	// changes the verdict, it explains it.
 	Stranded []string
+	// Mode records which probe produced this verdict: "standard" (the
+	// default exclusion-scoped check) or "bookkeeping" (#237 — the declared
+	// deliverable is entirely under BookkeepingDirs, so the probe was
+	// re-scoped to exactly those declared paths). Empty when HasWork is
+	// false or the standard path answered.
+	Mode string
+	// DeclaredCount and ConfirmedCount are populated only when Mode ==
+	// "bookkeeping": how many paths the stage declared, and how many of them
+	// git confirmed as actually changed.
+	DeclaredCount  int
+	ConfirmedCount int
+}
+
+// allBookkeeping reports whether files is non-empty and every entry is a
+// bookkeeping path. Used to decide whether the ground-truth probe should
+// widen its scope to the stage's declared deliverable (#237).
+func allBookkeeping(files []string) bool {
+	if len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		if !ci.IsBookkeepingPath(f) {
+			return false
+		}
+	}
+	return true
 }
 
 // maxFilesReported caps how many changed paths a gate verdict names, for the
@@ -102,7 +128,7 @@ func capped(files []string) []string {
 // Fail-open on every uncertainty. This runs on the success path of a stage
 // that just spent real money; a false accusation costs a re-run and, via the
 // safety rails, potentially the whole queue.
-func inspectDevWork(workspace string) devWorkState {
+func inspectDevWork(workspace string, declared []string) devWorkState {
 	status, err := gitOutput(workspace, statusArgs()...)
 	if err != nil {
 		// Not a git repo, or git is unusable here. Cannot verify.
@@ -115,6 +141,31 @@ func inspectDevWork(workspace string) devWorkState {
 			HasWork:    true,
 			Files:      capped(paths),
 			FileCount:  len(paths),
+		}
+	}
+
+	// #237: the stage's declared deliverable is entirely bookkeeping paths
+	// (e.g. untracking .nightgauge/pipeline from the index). The default
+	// exclusion above can never see that work, so re-scope the status check
+	// to exactly the declared paths — no exclusion pathspec — instead of
+	// relaxing the default exclusion globally. Scoping to what the stage
+	// itself declared (not the whole bookkeeping tree) keeps the #202
+	// self-certification risk from reapplying: a stage cannot pass by
+	// silently declaring paths it never touched, because the scoped status
+	// must still come back non-empty.
+	if allBookkeeping(declared) {
+		bkStatus, err := gitOutput(workspace, append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, declared...)...)
+		if err == nil && strings.TrimSpace(bkStatus) != "" {
+			paths := statusPaths(bkStatus)
+			return devWorkState{
+				Determined:     true,
+				HasWork:        true,
+				Files:          capped(paths),
+				FileCount:      len(paths),
+				Mode:           "bookkeeping",
+				DeclaredCount:  len(declared),
+				ConfirmedCount: len(paths),
+			}
 		}
 	}
 
@@ -185,7 +236,7 @@ type devHandoffVerdict struct {
 // caller's original no-op verdict intact. Fail-open, like every other
 // ground-truth check here: this runs after the money is spent.
 func devHandoffMissing(workspace, contextCondition, ctxPath string) devHandoffVerdict {
-	work := inspectDevWork(workspace)
+	work := inspectDevWork(workspace, nil)
 	if !work.Determined || !work.HasWork {
 		return devHandoffVerdict{}
 	}
