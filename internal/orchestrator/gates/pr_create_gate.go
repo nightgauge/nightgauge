@@ -70,7 +70,8 @@ func (PrCreateGate) Verify(ctx context.Context, issueNumber int, workspace strin
 			PrUrl    string `json:"pr_url"`
 		}
 		if err := json.Unmarshal(data, &prCtx); err != nil {
-			return false, "pr context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
+			reason, ev := describeDecodeFailure("pr context", err)
+			return false, reason, ev, KindFail, TerminalKindValidationError
 		}
 		if prCtx.PrNumber == 0 {
 			return false, "pr context missing pr_number", []string{

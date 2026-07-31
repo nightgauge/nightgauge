@@ -36,7 +36,8 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 			PlanFile string `json:"plan_file"`
 		}
 		if err := json.Unmarshal(data, &planCtx); err != nil {
-			return false, "planning context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
+			reason, ev := describeDecodeFailure("planning context", err)
+			return false, reason, ev, KindFail, TerminalKindValidationError
 		}
 		if planCtx.PlanFile == "" {
 			return false, "planning context missing plan_file", []string{

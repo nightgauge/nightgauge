@@ -41,7 +41,8 @@ func (IssuePickupGate) Verify(_ context.Context, issueNumber int, workspace stri
 			IssueNumber int    `json:"issue_number"`
 		}
 		if err := json.Unmarshal(data, &ctx); err != nil {
-			return false, "issue context file is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
+			reason, ev := describeDecodeFailure("issue context file", err)
+			return false, reason, ev, KindFail, TerminalKindValidationError
 		}
 		if ctx.Branch == "" {
 			// Context exists but the actionable post-state (the branch) is
