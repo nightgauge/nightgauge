@@ -211,6 +211,23 @@ const (
 	// Classified `agent` (0.5 weight) alongside premature_turn_end: ending a
 	// turn without writing the handoff is the stage's own behavior. Issue #223.
 	TerminalKindDevHandoffMissing = "dev_handoff_missing"
+	// TerminalKindContainmentBreach is set when the write-containment check
+	// (#129) finds a stage wrote into a repository it does not own. The stage
+	// exits 0 and reports success — it did work, just not where the pipeline
+	// can use it — so nothing else in the chain marks it failed.
+	//
+	// #230: this had no kind at all. The breach forced success=false in
+	// skillRunner and stopped there, so the record carried an empty
+	// terminal_kind, the Action Center card read `blocker: "unclassified"`,
+	// and the operator was never told which repository had been written into —
+	// while a manifest on disk named the repo, every escaped path, and a
+	// restorable patch. One breach reached an issue's lifetime failure cap and
+	// halted the fleet with no actionable reason.
+	//
+	// Classified `agent` (0.5 weight) alongside premature_turn_end and
+	// dev_handoff_missing: leaving the assigned worktree is the stage's own
+	// behavior, not the environment and not the issue.
+	TerminalKindContainmentBreach = "containment_breach"
 	// TerminalKindBlockedDependency is set when the autonomous scheduler
 	// dispatches an issue whose blockedBy dependencies are still OPEN — the
 	// pipeline defers the run before any AI stages do work. This is a
@@ -553,6 +570,19 @@ func ClassifyTerminalKind(errorText string) string {
 	// winning for its own no-op shape, and BEFORE the generic
 	// validation/exit heuristics so an embedded gate reason that mentions
 	// context files doesn't bucket into validation_error.
+	// Write-containment breach (#129, classified in #230). The marker is
+	// emitted by the TS worktreeContainment check as
+	// `[stage:worktree-containment]`; the reason text it carries already names
+	// the target repository, every escaped path, and the preserved patch, so
+	// once the kind resolves the operator gets the whole picture for free.
+	// Matched before the stage-behavior block below because a breaching stage
+	// usually ALSO exits 0 cleanly, and premature_turn_end would otherwise
+	// claim it and describe the wrong problem.
+	if strings.Contains(t, "[stage:worktree-containment]") ||
+		strings.Contains(t, "containment_breach") {
+		return TerminalKindContainmentBreach
+	}
+
 	// Dev produced no changes (#202) — a NARROWER premature turn end, so it
 	// MUST be matched first: the scheduler wraps every KindNoOp gate reason
 	// into a "premature turn end:" error string, which means the block below

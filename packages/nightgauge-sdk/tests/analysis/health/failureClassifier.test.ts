@@ -161,6 +161,32 @@ describe("classifyTerminalKind — dev_produced_no_changes (#202)", () => {
   });
 });
 
+describe("classifyTerminalKind — containment_breach (#230)", () => {
+  // The real marker emitted by the worktree-containment check, with the
+  // shape of the reason it carries. The reason already names the target
+  // repository, every escaped path, and the preserved patch — the only thing
+  // that was missing is the kind, which is why it surfaced as "unclassified".
+  const breach =
+    "[stage:worktree-containment] Stage feature-planning wrote outside its worktree into " +
+    "1 repository/repositories it does not own.\n  other-repo (/path/to/other-repo) — 3 path(s):";
+
+  it("classifies the marker", () => {
+    expect(classifyTerminalKind(breach)).toBe("containment_breach");
+  });
+
+  it("beats premature_turn_end — a breaching stage also exits 0 cleanly", () => {
+    expect(
+      classifyTerminalKind(
+        `premature turn end: stage exited 0 with no state change (gate no-op): ${breach}`
+      )
+    ).toBe("containment_breach");
+  });
+
+  it("is agent-class — leaving the assigned worktree is the stage's own behavior", () => {
+    expect(classifyFailureCategory(breach, "feature-planning")).toBe("agent");
+  });
+});
+
 describe("classifyTerminalKind — api_connection_lost (#227)", () => {
   // The verbatim string from a transport drop that killed two concurrent runs
   // in two repositories in the same instant.
