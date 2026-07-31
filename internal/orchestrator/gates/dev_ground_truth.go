@@ -34,10 +34,52 @@ type devWorkState struct {
 	// HasWork is true when the workspace holds uncommitted changes or the
 	// branch carries commits its base does not.
 	HasWork bool
+	// Files names the deliverable paths git found, capped at
+	// maxFilesReported. Set only when HasWork is true.
+	//
+	// #223: an exoneration has to be legible. Telling an operator "the dev
+	// context is empty but git disagrees" is only marginally better than the
+	// old "zero file changes" — naming the files is what turns the verdict
+	// into something they can act on without opening the worktree.
+	Files []string
+	// FileCount is the true total, which may exceed len(Files).
+	FileCount int
 	// Stranded names sibling worktrees that DO hold uncommitted work while
 	// this one is empty — the #202 signature. Diagnostic only; it never
 	// changes the verdict, it explains it.
 	Stranded []string
+}
+
+// maxFilesReported caps how many changed paths a gate verdict names, for the
+// same reason as maxStrandedReported: the list is evidence, not a manifest.
+const maxFilesReported = 10
+
+// statusPaths extracts the deliverable paths from `git status --porcelain`
+// output. Porcelain v1 format is `XY <path>`, and a rename is
+// `XY <old> -> <new>` — the new path is the one that exists.
+func statusPaths(status string) []string {
+	var paths []string
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		p := strings.TrimSpace(line[3:])
+		if _, after, found := strings.Cut(p, " -> "); found {
+			p = after
+		}
+		if p = strings.Trim(p, `"`); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	return paths
+}
+
+// capped returns at most maxFilesReported entries.
+func capped(files []string) []string {
+	if len(files) > maxFilesReported {
+		return files[:maxFilesReported]
+	}
+	return files
 }
 
 // inspectDevWork derives ground truth for a feature-dev workspace.
@@ -59,7 +101,13 @@ func inspectDevWork(workspace string) devWorkState {
 		return devWorkState{}
 	}
 	if strings.TrimSpace(status) != "" {
-		return devWorkState{Determined: true, HasWork: true}
+		paths := statusPaths(status)
+		return devWorkState{
+			Determined: true,
+			HasWork:    true,
+			Files:      capped(paths),
+			FileCount:  len(paths),
+		}
 	}
 
 	// Clean tree. The branch may still carry commits — a stage that committed
@@ -70,9 +118,18 @@ func inspectDevWork(workspace string) devWorkState {
 		// anything?" is unanswerable. Cannot verify.
 		return devWorkState{}
 	}
+	var deliverable []string
 	for _, f := range committed {
 		if !ci.IsBookkeepingPath(f) {
-			return devWorkState{Determined: true, HasWork: true}
+			deliverable = append(deliverable, f)
+		}
+	}
+	if len(deliverable) > 0 {
+		return devWorkState{
+			Determined: true,
+			HasWork:    true,
+			Files:      capped(deliverable),
+			FileCount:  len(deliverable),
 		}
 	}
 
@@ -81,6 +138,53 @@ func inspectDevWork(workspace string) devWorkState {
 		HasWork:    false,
 		Stranded:   strandedWorktrees(workspace),
 	}
+}
+
+// devHandoffMissing asks git whether an absent or empty dev context is being
+// contradicted by the workspace, and if so builds the verdict.
+//
+// #223. #202 wired inspectDevWork as an additional FAILURE condition: it
+// catches a context that claims work the tree does not have. It was never
+// reachable on the paths where the context claims nothing, so git could convict
+// a lying context but never exonerate a missing one — the same question, asked
+// of the filesystem in only one direction.
+//
+// The verdict is deliberately KindFail, not KindNoOp. The scheduler wraps every
+// KindNoOp reason into "premature turn end: stage exited 0 with no state
+// change", and there WAS a state change; that wrapper is precisely the sentence
+// that sent an operator looking for work that was sitting on disk. A failure
+// that names the handoff as the missing artifact keeps the work in the frame.
+//
+// Returns ok=false when git cannot answer or found nothing, leaving the
+// caller's original no-op verdict intact. Fail-open, like every other
+// ground-truth check here: this runs after the money is spent.
+func devHandoffMissing(workspace, contextCondition, ctxPath string) (ok bool, reason string, evidence []string, kind Kind, terminalKind string) {
+	work := inspectDevWork(workspace)
+	if !work.Determined || !work.HasWork {
+		return false, "", nil, "", ""
+	}
+
+	evidence = []string{
+		fmt.Sprintf("workspace: %s", workspace),
+		fmt.Sprintf("context: %s (%s)", ctxPath, contextCondition),
+		fmt.Sprintf("git: %d changed deliverable file(s) present", work.FileCount),
+	}
+	for _, f := range work.Files {
+		evidence = append(evidence, "  "+f)
+	}
+	if work.FileCount > len(work.Files) {
+		evidence = append(evidence, fmt.Sprintf("  … and %d more", work.FileCount-len(work.Files)))
+	}
+	evidence = append(evidence,
+		"the work exists and must be preserved — a retry must not re-derive it from scratch")
+
+	// The `[dev-handoff-missing]` marker mirrors `[dev-produced-no-changes]`
+	// (#202) for the same reason: the text-based classifiers and the gate path
+	// must agree on the kind, or the dashboards learn to distrust it.
+	return true, fmt.Sprintf(
+		"[dev-handoff-missing] %s, but git finds %d changed file(s) in the stage workspace — the stage did the work and ended without writing its handoff",
+		contextCondition, work.FileCount,
+	), evidence, KindFail, TerminalKindDevHandoffMissing
 }
 
 // strandedWorktrees lists sibling worktrees of the same repository that hold

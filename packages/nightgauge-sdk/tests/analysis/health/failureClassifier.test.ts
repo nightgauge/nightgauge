@@ -161,6 +161,41 @@ describe("classifyTerminalKind — dev_produced_no_changes (#202)", () => {
   });
 });
 
+describe("classifyTerminalKind — dev_handoff_missing (#223)", () => {
+  // The gate emits KindFail for this one, so it is NOT wrapped in the
+  // "premature turn end" envelope — the whole point is that there WAS a state
+  // change. Both shapes are asserted because the reason travels through
+  // callers that record only the gate reason.
+  const bare =
+    "[dev-handoff-missing] dev context records zero file changes, but git finds 9 changed " +
+    "file(s) in the stage workspace — the stage did the work and ended without writing its handoff";
+  const wrapped = `stage gate failed: ${bare}`;
+
+  it("classifies the bare gate reason", () => {
+    expect(classifyTerminalKind(bare)).toBe("dev_handoff_missing");
+  });
+
+  it("classifies the wrapped form the orchestrator returns", () => {
+    expect(classifyTerminalKind(wrapped)).toBe("dev_handoff_missing");
+  });
+
+  it("does NOT collapse into dev_produced_no_changes — the two demand opposite recoveries", () => {
+    expect(classifyTerminalKind(bare)).not.toBe("dev_produced_no_changes");
+  });
+
+  it("survives the premature-turn-end envelope if a caller ever wraps it", () => {
+    expect(
+      classifyTerminalKind(
+        `premature turn end: stage exited 0 with no state change (gate no-op): ${bare}`
+      )
+    ).toBe("dev_handoff_missing");
+  });
+
+  it("classifies as agent — ending a turn without the handoff is the stage's behavior", () => {
+    expect(classifyFailureCategory(bare, "feature-dev")).toBe("agent");
+  });
+});
+
 describe("classifyTerminalKind — adapter_auth_failed (#312)", () => {
   it("classifies a burst probe TIMEOUT as adapter_auth_failed, NOT subagent_crash", () => {
     // The real burst false-negative message from HeadlessOrchestrator. It

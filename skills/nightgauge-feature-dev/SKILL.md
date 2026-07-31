@@ -187,6 +187,14 @@ schema documentation.
   the context file says. Both ways to trip it look like success from inside the
   stage — delegating the implementation to a worktree-isolated subagent, or
   ending the turn while a background command is still running.
+- **Never run the repo's full pre-submission suite here (#223).** `bash
+scripts/ci-local.sh` and its equivalents belong to feature-validate, which is
+  the stage that commits and pushes (#1608). CLAUDE.md's "MANDATORY before every
+  push" rule is scoped to pushing — you do not push. On #221 this stage spent
+  the back half of its budget backgrounding, losing, polling for, and killing
+  `ci-local.sh`, then ended its turn on `echo waiting-for-notification` having
+  written a correct implementation it never handed off. Verify what you changed;
+  the suite runs once, later, in the stage that owns it.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 

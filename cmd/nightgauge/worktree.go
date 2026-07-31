@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/spf13/cobra"
 )
 
@@ -18,7 +23,94 @@ func worktreeCmd() *cobra.Command {
 		Short: "Pipeline worktree reclamation",
 	}
 	cmd.AddCommand(worktreeSweepCmd())
+	cmd.AddCommand(worktreeRecoverCmd())
 	return cmd
+}
+
+// worktreeRecoverCmd exposes the scheduler's uncommitted-work rescue (#3542) to
+// any caller, which in practice means the extension's HeadlessOrchestrator
+// (#223). The rescue existed only as an in-process call on the Go scheduler's
+// failure path, so runs driven by the extension — most of them — had none: #221
+// left a complete, passing implementation uncommitted in its worktree, one
+// sweep away from deletion, while the halt card reported zero file changes.
+func worktreeRecoverCmd() *cobra.Command {
+	var (
+		worktree string
+		issue    int
+		stage    string
+		jsonOut  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "recover",
+		Short: "Commit a worktree's uncommitted work so a failed stage's output survives",
+		Long: `Stage everything in a pipeline worktree, commit it as an auto-recovery
+commit, and push. Bookkeeping directories (.nightgauge, .claude) are excluded so
+the rescue never publishes pipeline exhaust into the issue branch.
+
+Idempotent: a clean worktree is a no-op, reported as recovered=false. The push
+is best-effort — a push failure still leaves the recovery commit on the local
+branch, which is what actually prevents the work being lost.`,
+		SilenceUsage: true,
+		Example: `  nightgauge worktree recover --worktree .worktrees/issue-221 --issue 221 --stage feature-dev
+  nightgauge worktree recover --worktree .worktrees/issue-221 --issue 221 --stage feature-dev --json`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if worktree == "" {
+				return fmt.Errorf("--worktree is required")
+			}
+			if issue <= 0 {
+				return fmt.Errorf("--issue is required and must be positive")
+			}
+			if stage == "" {
+				stage = "unknown"
+			}
+
+			dirty, err := worktreeHasChanges(worktree)
+			if err != nil {
+				return fmt.Errorf("inspect %s: %w", worktree, err)
+			}
+			if !dirty {
+				return emitRecoverResult(cmd, jsonOut, false, "worktree is clean — nothing to recover")
+			}
+
+			if err := orchestrator.RecoverUncommittedWork(worktree, issue, stage); err != nil {
+				return fmt.Errorf("recover %s: %w", worktree, err)
+			}
+			return emitRecoverResult(cmd, jsonOut, true,
+				fmt.Sprintf("committed uncommitted %s work on #%d", stage, issue))
+		},
+	}
+
+	cmd.Flags().StringVar(&worktree, "worktree", "", "Path to the pipeline worktree (required)")
+	cmd.Flags().IntVar(&issue, "issue", 0, "Issue number the worktree belongs to (required)")
+	cmd.Flags().StringVar(&stage, "stage", "", "Stage whose work is being recovered (recorded in the commit message)")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output the result as JSON")
+	return cmd
+}
+
+// worktreeHasChanges reports whether the worktree holds deliverable changes.
+// Bookkeeping is excluded for the same reason RecoverUncommittedWork unstages
+// it: a worktree whose only diff is the run's own state files has produced
+// nothing, and treating that as recoverable would create an empty commit on
+// every failed stage.
+func worktreeHasChanges(path string) (bool, error) {
+	args := append([]string{"-C", path, "status", "--porcelain", "--"}, ci.DeliverablePathspec()...)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+func emitRecoverResult(cmd *cobra.Command, jsonOut, recovered bool, message string) error {
+	if jsonOut {
+		return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{
+			"recovered": recovered,
+			"message":   message,
+		})
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), message)
+	return nil
 }
 
 func worktreeSweepCmd() *cobra.Command {

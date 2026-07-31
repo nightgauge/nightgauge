@@ -166,11 +166,22 @@ fi
 
 ### Step 4.2: Run Test Suite
 
+Scope the run to what you changed. The repo's full pre-submission suite
+(`scripts/ci-local.sh` here, its equivalent elsewhere) is **feature-validate's**
+job — that is the stage that commits and pushes (#1608), and running it twice
+doubles the cost of every issue.
+
 ```bash
 # Get test command from CLAUDE.md, package.json, or common locations
 npm test
 # or: pytest, dotnet test, etc.
 ```
+
+If a command exceeds a couple of minutes, that is the signal you have reached
+for the wrong one — narrow it to the touched package or path rather than
+backgrounding it. A backgrounded suite you then wait on is how #221 ended its
+turn on `echo waiting-for-notification` with a finished implementation it never
+handed off.
 
 ### Step 4.3: Check Coverage
 

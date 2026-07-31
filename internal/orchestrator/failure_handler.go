@@ -194,6 +194,23 @@ const (
 	// the stage's own turn-ending/delegation behavior, not the environment and
 	// not the issue. Issue #202.
 	TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
+	// TerminalKindDevHandoffMissing is the exact inverse of
+	// DevProducedNoChanges: the dev context is absent or reports nothing, and
+	// git finds the changed files sitting in the stage workspace. The stage did
+	// the work and ended before writing its handoff.
+	//
+	// Kept distinct because the recovery is opposite. DevProducedNoChanges
+	// means there is nothing to salvage and a retry must redo the work.
+	// This kind means the work EXISTS: it has to be committed to the branch
+	// before anything sweeps the worktree, and a retry must build on it. In
+	// #221 the two were conflated — the gate reported "dev context records zero
+	// file changes" over a tree holding 206 insertions across 7 files plus a
+	// new package, and the halt card told the operator the stage had produced
+	// nothing. One worktree sweep from destroying $7.40 of passing code.
+	//
+	// Classified `agent` (0.5 weight) alongside premature_turn_end: ending a
+	// turn without writing the handoff is the stage's own behavior. Issue #223.
+	TerminalKindDevHandoffMissing = "dev_handoff_missing"
 	// TerminalKindBlockedDependency is set when the autonomous scheduler
 	// dispatches an issue whose blockedBy dependencies are still OPEN — the
 	// pipeline defers the run before any AI stages do work. This is a
@@ -519,6 +536,15 @@ func ClassifyTerminalKind(errorText string) string {
 	if strings.Contains(t, "[dev-produced-no-changes]") ||
 		strings.Contains(t, "dev_produced_no_changes") {
 		return TerminalKindDevProducedNoChanges
+	}
+
+	// Dev handoff missing (#223) — the inverse kind, matched here for the same
+	// reason and with the same urgency: it must beat the generic "premature
+	// turn end" block below, because the gate reason it carries is embedded in
+	// exactly that wrapper on some paths.
+	if strings.Contains(t, "[dev-handoff-missing]") ||
+		strings.Contains(t, "dev_handoff_missing") {
+		return TerminalKindDevHandoffMissing
 	}
 
 	if strings.Contains(t, "premature turn end") ||

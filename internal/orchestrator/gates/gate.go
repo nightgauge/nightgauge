@@ -73,6 +73,14 @@ const TerminalKindValidationFailed = "validation_failed"
 // finds the stage workspace empty despite the skill reporting changes.
 const TerminalKindDevProducedNoChanges = "dev_produced_no_changes"
 
+// TerminalKindDevHandoffMissing mirrors
+// orchestrator.TerminalKindDevHandoffMissing (Issue #223) for the same
+// import-cycle reason. The exact inverse of DevProducedNoChanges: the dev
+// context is absent or reports nothing, and git says the work is right there.
+// The distinction is not cosmetic — it decides whether a retry re-derives from
+// scratch or builds on what exists.
+const TerminalKindDevHandoffMissing = "dev_handoff_missing"
+
 // GateResult is the in-process value returned by a StageGate.Verify call.
 // The scheduler copies this into a state.StageGateResult before persisting.
 type GateResult struct {

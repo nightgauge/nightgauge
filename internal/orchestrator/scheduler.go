@@ -2437,12 +2437,18 @@ func onlyManagedAgentsChange(worktreePath string) bool {
 	return codexprovision.IsOnlyManagedSteeringChange(string(committed), string(working))
 }
 
-// recoverUncommittedWork stages all changes, creates a recovery commit, and
+// RecoverUncommittedWork stages all changes, creates a recovery commit, and
 // pushes it to origin. Best-effort and non-fatal: a failed push logs a warning
 // but the local recovery commit is still preserved on the worktree. Returns an
 // error only when staging or committing fails (the work is then still on disk
 // for manual recovery). Issue #3542.
-func recoverUncommittedWork(worktreePath string, issueNumber int, stage string) error {
+//
+// Exported for `nightgauge worktree recover` (#223). Until then this lived only
+// on the Go scheduler's failure path, so a run driven by the extension's
+// HeadlessOrchestrator — which is most of them — had no recovery at all. #221
+// ended with a finished implementation sitting uncommitted in a worktree
+// precisely because nothing on that path could reach this function.
+func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) error {
 	if worktreePath == "" {
 		return fmt.Errorf("worktreePath is empty")
 	}
@@ -2699,7 +2705,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if worktreePath != "" && hasUncommittedWork(worktreePath) {
 				log.Printf("#%d: failure cleanup: uncommitted work detected in worktree — attempting recovery",
 					item.Number)
-				if recErr := recoverUncommittedWork(worktreePath, item.Number, string(preSnap.Stage)); recErr != nil {
+				if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(preSnap.Stage)); recErr != nil {
 					log.Printf("#%d: uncommitted work recovery failed: %v — worktree preserved at %s",
 						item.Number, recErr, worktreePath)
 				} else {
@@ -4559,7 +4565,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				if worktreePath != "" && hasUncommittedWork(worktreePath) {
 					log.Printf("#%d: stop hook signaled incomplete tasks — recovering uncommitted feature-dev work",
 						item.Number)
-					if recErr := recoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
+					if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
 						log.Printf("#%d: stop-hook fallback commit failed: %v — worktree preserved at %s",
 							item.Number, recErr, worktreePath)
 					} else {
