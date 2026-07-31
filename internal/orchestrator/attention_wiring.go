@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +45,19 @@ const (
 	producerArchitectureApprove = "architecture-approval"
 	producerTerminalFailure     = "terminal-failure"
 )
+
+// producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
+// producer (#177), but unlike the four above it is scoped to (repo, tier),
+// not to the fleet or one issue — a validate run only ever observes one
+// repo's tiers per invocation, never the producer's complete condition set.
+// See raiseUnverifiedDeliverableStreak / resolveUnverifiedDeliverableStreak.
+const producerUnverifiedDeliverableStreak = "unverified-deliverable-streak"
+
+// keyUnverifiedDeliverableStreak builds the sticky (producer, idempotency_key)
+// identity for a per-(repo, tier) consecutive-skip streak.
+func keyUnverifiedDeliverableStreak(repo string, tier deliverable.Tier) string {
+	return fmt.Sprintf("%s:%s:%s", producerUnverifiedDeliverableStreak, repo, tier)
+}
 
 // keyWorkExhaustion is the fleet-idle condition's sticky identity. There is one
 // fleet, so there is one key.
@@ -719,6 +733,104 @@ func (s *Scheduler) raiseUnverifiedDeliverable(repo string, issue int, runID str
 		ExpiresAt:     expiryFromNow(72 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note how this suite should be wired up"},
 	})
+}
+
+// --- Producer 8b: unverified-deliverable streak (standing, run-scoped) ------
+
+// raiseUnverifiedDeliverableStreak surfaces consecutive occurrences of the
+// same idle tier for the same repo (#177). raiseUnverifiedDeliverable already
+// cards each occurrence individually; this producer is what makes the
+// PATTERN visible — three consecutive skips of the same tier read as three
+// unrelated one-off FYI cards today, and the precedent argument ("the
+// identical gap shipped last time too") gets stronger every occurrence while
+// the signal an operator sees stays flat.
+//
+// Standing, keyed per (repo, tier): the streak count is read out of the prior
+// card's own Fingerprint, incremented, and re-raised — Store.Raise's
+// dedup-by-key folds this into the existing card rather than creating a new
+// one, escalating Severity as the count climbs. Escalation is severity-only
+// and caps at blocking_run: nothing in a growing streak justifies blocking
+// the fleet (#152 deliberately chose not to block; a gate that blocks
+// legitimate work gets routed around).
+func (s *Scheduler) raiseUnverifiedDeliverableStreak(repo string, tier deliverable.Tier, issue int, runID, reason string) {
+	key := keyUnverifiedDeliverableStreak(repo, tier)
+	next := 1
+	if s.attention != nil {
+		if reqs, err := s.attention.List(attention.ListFilter{Repo: repo}); err == nil {
+			for _, r := range reqs {
+				if r.Producer == producerUnverifiedDeliverableStreak && r.IdempotencyKey == key {
+					if n, perr := strconv.Atoi(strings.TrimPrefix(r.Fingerprint, "streak:")); perr == nil {
+						next = n + 1
+					}
+					break
+				}
+			}
+		} else {
+			log.Printf("attention: list %q failed (fail-open): %v", producerUnverifiedDeliverableStreak, err)
+		}
+	}
+
+	severity := attention.SeverityFYI
+	if next >= 3 {
+		severity = attention.SeverityBlockingRun
+	}
+
+	body := fmt.Sprintf("The %s tier has now shipped unexecuted %d consecutive time(s) for %s — most recently on #%d.\n\n",
+		tier, next, repo, issue)
+	if reason != "" {
+		body += fmt.Sprintf("Latest reason: %s\n\n", reason)
+	}
+	body += "Each consecutive skip makes the precedent argument for the next one stronger while this card's severity is the only thing tracking that. It clears the moment this tier actually executes for any issue in this repo."
+
+	s.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: key,
+		Kind:           attention.KindApprove,
+		Severity:       severity,
+		Title:          fmt.Sprintf("%s tier unexecuted %d consecutive time(s) — %s", tier, next, repo),
+		Body:           body,
+		Producer:       producerUnverifiedDeliverableStreak,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: "feature-validate",
+			Blocker: reason, TraceRef: runTraceRef(runID),
+		},
+		Standing: true,
+		// The streak count is the material state (docs/ATTENTION_PRODUCERS.md
+		// invariant 2): it only advances on a genuinely new occurrence, never
+		// on its own with elapsed time. A changed fingerprint re-alerts; an
+		// unchanged one (the same run re-processed, which should not happen)
+		// refreshes silently.
+		Fingerprint: fmt.Sprintf("streak:%d", next),
+		Options: []attention.Option{
+			noopOption("acknowledged", "Acknowledged"),
+			noopOption("will-verify", "Will verify manually"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note how this tier should be wired up"},
+	})
+}
+
+// resolveUnverifiedDeliverableStreak resets one (repo, tier) streak the
+// moment that tier actually executes for an issue in the repo.
+//
+// A targeted single-key retract, not autoResolveAttention /
+// AutoResolveUnobserved: those assume the caller just observed the
+// producer's ENTIRE condition set, which holds for a fleet-wide producer like
+// work-exhaustion but not here — one issue's validate run only ever observes
+// one repo's tiers, never every repo the producer has open cards for.
+func (s *Scheduler) resolveUnverifiedDeliverableStreak(repo string, tier deliverable.Tier) {
+	if s == nil || s.attention == nil {
+		return
+	}
+	key := keyUnverifiedDeliverableStreak(repo, tier)
+	resolved, err := s.attention.AutoResolveKey(producerUnverifiedDeliverableStreak, key)
+	if err != nil {
+		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producerUnverifiedDeliverableStreak, err)
+		return
+	}
+	if resolved {
+		log.Printf("attention: retracted %q streak card for %s (%s tier executed)", producerUnverifiedDeliverableStreak, repo, tier)
+	}
 }
 
 // --- Producer 7: definitive auth failure (run-scoped, Scheduler) -------------
