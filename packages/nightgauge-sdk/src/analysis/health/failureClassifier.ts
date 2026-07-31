@@ -68,6 +68,8 @@ export function classifyFailureCategory(
     t.includes("premature_turn_end") ||
     t.includes("[dev-produced-no-changes]") ||
     t.includes("dev_produced_no_changes") ||
+    t.includes("[dev-handoff-missing]") ||
+    t.includes("dev_handoff_missing") ||
     t.includes("exited 0 but did not write expected output context")
   ) {
     return "agent";
@@ -214,6 +216,7 @@ export type TerminalFailureKind =
   | "model_unavailable" // Issue #42 — API rejected the selected model (not on plan / unknown / model usage cap); triggers tier-downgrade fallback
   | "premature_turn_end" // Issue #74 — stage exited 0 but its gate reported no state change (agent ended its turn on a promise)
   | "dev_produced_no_changes" // Issue #202 — feature-dev's gate found the stage workspace empty (clean tree, branch level with base) despite a truthful dev context; the work landed where the pipeline never reads
+  | "dev_handoff_missing" // Issue #223 — the inverse of the above: the dev context is absent or empty and git finds the changed files right there; the stage did the work and ended without writing its handoff, so the work must be preserved rather than re-derived
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
@@ -263,6 +266,13 @@ export function classifyTerminalKind(
   // stops being trustworthy.
   if (t.includes("[dev-produced-no-changes]") || t.includes("dev_produced_no_changes")) {
     return "dev_produced_no_changes";
+  }
+
+  // Dev handoff missing (#223) — the inverse kind, matched here for the same
+  // precedence reason. Distinguishing the two is what tells a triager whether
+  // there is anything on disk worth saving before the next worktree sweep.
+  if (t.includes("[dev-handoff-missing]") || t.includes("dev_handoff_missing")) {
+    return "dev_handoff_missing";
   }
 
   // Premature turn end (#74): the stage exited 0 but produced no state

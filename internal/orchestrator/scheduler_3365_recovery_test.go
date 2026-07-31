@@ -195,8 +195,8 @@ func TestHasUncommittedWork_IgnoresOnlyGeneratedCodexSteering(t *testing.T) {
 // canonical message, and that the function errors gracefully on a bad path.
 func TestRecoverUncommittedWork(t *testing.T) {
 	// Bad path — no git repo, empty path.
-	if err := recoverUncommittedWork("", 3542, "feature-dev"); err == nil {
-		t.Error("recoverUncommittedWork(\"\", ...) = nil, want error")
+	if err := RecoverUncommittedWork("", 3542, "feature-dev"); err == nil {
+		t.Error("RecoverUncommittedWork(\"\", ...) = nil, want error")
 	}
 
 	dir := t.TempDir()
@@ -207,12 +207,12 @@ func TestRecoverUncommittedWork(t *testing.T) {
 
 	// No remote configured — push will fail, but that is non-fatal and the
 	// local recovery commit must still be created.
-	if err := recoverUncommittedWork(dir, 3542, "feature-dev"); err != nil {
-		t.Fatalf("recoverUncommittedWork on a real repo = %v, want nil", err)
+	if err := RecoverUncommittedWork(dir, 3542, "feature-dev"); err != nil {
+		t.Fatalf("RecoverUncommittedWork on a real repo = %v, want nil", err)
 	}
 
 	if hasUncommittedWork(dir) {
-		t.Error("worktree still dirty after recoverUncommittedWork")
+		t.Error("worktree still dirty after RecoverUncommittedWork")
 	}
 	subjects := gitLog(t, dir)
 	if len(subjects) == 0 {
@@ -652,7 +652,7 @@ func TestScheduler3365Recovery(t *testing.T) {
 	foundRecovery := false
 	for _, sub := range subjects {
 		// Assert both the recovery marker AND the issue number — proves the
-		// issue number is threaded through to recoverUncommittedWork.
+		// issue number is threaded through to RecoverUncommittedWork.
 		if strings.Contains(sub, "feat(#8365):") &&
 			strings.Contains(sub, "[auto-recovery] feature-dev work recovered") {
 			foundRecovery = true

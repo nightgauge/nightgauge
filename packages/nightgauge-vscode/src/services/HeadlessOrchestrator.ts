@@ -2736,6 +2736,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         gate_name?: string;
         evidence?: string[];
         kind?: string;
+        terminal_kind?: string;
       } | null = null;
       let binaryError: unknown = null;
       try {
@@ -2794,6 +2795,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         evidence: gateResult.evidence,
       });
 
+      // #223: the gate found work on disk that the stage never handed off.
+      // Commit it before returning, because returning is what halts the fleet
+      // and hands the worktree to the next sweep. The Go scheduler has done
+      // this since #3542; this path never could, which is why #221's finished
+      // implementation sat uncommitted while its halt card said "zero file
+      // changes". Best-effort by construction — a failed rescue must not
+      // replace the gate's diagnosis with a rescue error.
+      if (gateResult.terminal_kind === "dev_handoff_missing") {
+        await this.recoverStrandedWork(binary, cwd, issueNumber, stage);
+      }
+
       if (gateResult.kind === "no_op") {
         return new Error(
           `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
@@ -2807,6 +2819,66 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         error: err,
       });
       return null;
+    }
+  }
+
+  /**
+   * Commits work a stage produced but never handed off, so a halt does not
+   * become a deletion (#223).
+   *
+   * Delegates to `nightgauge worktree recover`, which wraps the same
+   * `RecoverUncommittedWork` the Go scheduler has used since #3542 — one
+   * implementation, so the bookkeeping exclusion and the best-effort push
+   * behave identically on both execution paths. Duplicating it in TypeScript is
+   * how the two would drift.
+   *
+   * Never throws. The caller is on the failure path already; a rescue that
+   * fails must leave the gate's own diagnosis intact rather than masking it.
+   */
+  private async recoverStrandedWork(
+    binary: string,
+    cwd: string,
+    issueNumber: number,
+    stage: PipelineStage
+  ): Promise<void> {
+    // The worktree, NOT `cwd`. The gate is invoked with
+    // `pinnedWorkspaceRoot ?? getWorkingDirectory()`, and pinnedWorkspaceRoot
+    // is the repository root — recovering there would commit against main
+    // instead of the issue branch. getWorkingDirectory() already prefers
+    // worktreeOverride, so it is the correct fallback.
+    const worktree = this.worktreeOverride ?? this.getWorkingDirectory();
+    try {
+      const { stdout } = await execFileAsync(
+        binary,
+        [
+          "worktree",
+          "recover",
+          "--worktree",
+          worktree,
+          "--issue",
+          String(issueNumber),
+          "--stage",
+          stage,
+          "--json",
+        ],
+        { encoding: "utf-8", cwd, timeout: 60_000 }
+      );
+      const result = JSON.parse(stdout) as { recovered?: boolean; message?: string };
+      if (result.recovered) {
+        this.logger.info("Stranded stage work committed to the issue branch", {
+          issueNumber,
+          stage,
+          worktree,
+          message: result.message,
+        });
+      } else {
+        this.logger.info("No stranded work to recover", { issueNumber, stage, worktree });
+      }
+    } catch (err) {
+      this.logger.error(
+        "Failed to recover stranded stage work — it is still on disk in the worktree",
+        { issueNumber, stage, worktree, error: err }
+      );
     }
   }
 

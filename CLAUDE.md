@@ -161,6 +161,13 @@ VSCode tests → SDK tests → Prettier → ESLint), or run them all at once wit
 `bash scripts/ci-local.sh`, before every `git push`. Do NOT mark work as
 complete until all checks pass.
 
+**This rule binds whoever pushes — not every stage that touches code.** In the
+pipeline that is `feature-validate` (and any interactive session about to push).
+`feature-dev` does not commit or push (#1608); it verifies what it changed and
+hands off. A stage that runs the full suite anyway spends its whole budget on a
+job the next stage will redo — #221 lost a completed implementation that way,
+babysitting `ci-local.sh` until it ran out of turn.
+
 ### Security
 
 See **[standards/security.md](standards/security.md)** for complete

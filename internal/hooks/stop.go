@@ -58,7 +58,7 @@ func EvaluateStop(workdir string) StopResult {
 		// that the stop hook blocked session exit. When this fires, the
 		// Claude agent may keep working (or be killed mid-cleanup) with
 		// uncommitted work — the scheduler reads this sentinel post-stage
-		// and runs recoverUncommittedWork() to preserve the work.
+		// and runs RecoverUncommittedWork() to preserve the work.
 		writeStopHookSentinel(workdir, result)
 		return result
 	}
@@ -141,7 +141,7 @@ func EvaluateStopHookOutput(workdir string) ([]byte, error) {
 	}
 	// Block stop with reason. The sentinel file (written inside EvaluateStop)
 	// remains the load-bearing signal for the Go scheduler's
-	// recoverUncommittedWork path; this stdout block is purely for the agent.
+	// RecoverUncommittedWork path; this stdout block is purely for the agent.
 	payload := struct {
 		Decision string `json:"decision"`
 		Reason   string `json:"reason"`

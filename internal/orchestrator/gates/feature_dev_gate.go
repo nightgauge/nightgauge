@@ -47,6 +47,13 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
 			if os.IsNotExist(err) {
+				// #223: ask git BEFORE calling this a no-op. A stage that did
+				// the work and died before writing its handoff looks identical
+				// here to a stage that did nothing, and the two demand opposite
+				// recoveries.
+				if ok, reason, evidence, kind, tk := devHandoffMissing(workspace, "dev context file missing", ctxPath); ok {
+					return false, reason, evidence, kind, tk
+				}
 				return false, "dev context file missing", []string{
 					fmt.Sprintf("expected %s", ctxPath),
 				}, KindNoOp, ""
@@ -76,6 +83,14 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			len(devCtx.FilesChanged.Modified) +
 			len(devCtx.FilesChanged.Deleted)
 		if fileTouches == 0 {
+			// #223: same question as the missing-context path above. #221's
+			// feature-dev wrote 206 insertions across 7 files plus a new
+			// package, ended its turn on `echo waiting-for-notification`
+			// without writing its handoff, and this check reported "zero file
+			// changes" to an operator staring at a worktree full of them.
+			if ok, reason, evidence, kind, tk := devHandoffMissing(workspace, "dev context records zero file changes", ctxPath); ok {
+				return false, reason, evidence, kind, tk
+			}
 			// The dev skill said success but recorded zero file changes — no-op.
 			return false, "dev context records zero file changes", []string{
 				fmt.Sprintf("file: %s", ctxPath),
