@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	e2epkg "github.com/nightgauge/nightgauge/internal/e2e"
 	"github.com/spf13/cobra"
@@ -83,6 +84,7 @@ func e2eRunCmd() *cobra.Command {
 		outputJSON bool
 		workdir    string
 		framework  string
+		timeout    time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -92,7 +94,8 @@ func e2eRunCmd() *cobra.Command {
 		Example: `  nightgauge e2e run
   nightgauge e2e run --json
   nightgauge e2e run --framework playwright --json
-  nightgauge e2e run --workdir /path/to/project --json`,
+  nightgauge e2e run --workdir /path/to/project --json
+  nightgauge e2e run --timeout 5m --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if workdir == "" {
 				wd, err := os.Getwd()
@@ -102,13 +105,26 @@ func e2eRunCmd() *cobra.Command {
 				workdir = wd
 			}
 
-			result, err := e2epkg.RunE2E(cmd.Context(), workdir, framework)
+			result, err := e2epkg.RunE2E(cmd.Context(), workdir, framework, timeout)
+
+			// AC1: --json must write a valid JSON object on every path, including
+			// an unexpected Go error (e.g. detection I/O failure) — print first,
+			// then decide the process exit/error below (#234).
+			if outputJSON {
+				if jsonErr := printJSON(result); jsonErr != nil {
+					return fmt.Errorf("e2e run: print json: %w", jsonErr)
+				}
+			}
+
 			if err != nil {
 				return fmt.Errorf("e2e run: %w", err)
 			}
 
 			if outputJSON {
-				return printJSON(result)
+				if result.Status == "failed" || result.Status == "timeout" {
+					return fmt.Errorf("e2e tests %s", result.Status)
+				}
+				return nil
 			}
 
 			if !result.Ran {
@@ -119,8 +135,8 @@ func e2eRunCmd() *cobra.Command {
 			if result.Output != "" {
 				fmt.Print(result.Output)
 			}
-			if result.Status == "failed" {
-				return fmt.Errorf("e2e tests failed")
+			if result.Status == "failed" || result.Status == "timeout" {
+				return fmt.Errorf("e2e tests %s", result.Status)
 			}
 			return nil
 		},
@@ -129,5 +145,6 @@ func e2eRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")
 	cmd.Flags().StringVar(&framework, "framework", "", "E2E framework to use (playwright|cypress|vitest|jest|go); auto-detected if omitted")
+	cmd.Flags().DurationVar(&timeout, "timeout", e2epkg.DefaultE2ETimeout, "Timeout for the e2e subprocess before it is killed")
 	return cmd
 }
