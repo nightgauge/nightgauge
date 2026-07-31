@@ -16,6 +16,18 @@ import {
 
 // ── classifyTerminalKind ───────────────────────────────────────────────────────
 
+describe("classifyTerminalKind — api_overloaded ordering (#229 AC #4)", () => {
+  it("classifies the canonical overloaded message", () => {
+    expect(classifyTerminalKind("API Error: Overloaded")).toBe("api_overloaded");
+  });
+
+  it("is matched BEFORE api_connection_lost when an error string contains both patterns", () => {
+    expect(classifyTerminalKind("API Error: Overloaded - connection closed mid-response")).toBe(
+      "api_overloaded"
+    );
+  });
+});
+
 describe("classifyTerminalKind — github_quota_low (#3896)", () => {
   it("matches the pipeline-start marker", () => {
     expect(

@@ -382,6 +382,14 @@ export const TerminalFailureKindSchema = z.enum([
   "no_changes_produced", // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for
   "validation_failed", // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure
   "branch_forked", // Issue #163 — branch diverged from its remote; pushes rejected non-fast-forward, unrecoverable by retry
+  "runaway_progress", // Issue #3783 — progress-based runaway monitor fired; treated like stall_kill
+  "pr_merge_unmerged", // Issue #3691 — pr-merge exited cleanly but the PR was not actually merged
+  "blocked_dependency", // Issue #305 — scheduler dispatched an issue whose blockedBy dependencies are still open; non-failure deferral
+  "architecture_approval_required", // Issue #4098/#4222 — architecture-approval gate halted the run before feature-dev for a human-owned decision
+  "validation_inconclusive", // Issue #221 — feature-validate's unit-test tier ran but executed zero tests
+  // Declared-but-unmatched, mirroring Go: set structurally (a gate/evidence
+  // override), never derived from error text.
+  "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 
