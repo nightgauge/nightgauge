@@ -45,6 +45,13 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
     /socket connection was closed/i.test(errMsg) ||
     /socket hang up/i.test(errMsg) ||
     /api_connection_lost/i.test(errMsg) ||
+    // #227: `API Error: Connection closed mid-response` matched none of the
+    // three above and this function returned false, so the blip took the
+    // full halt path — queue paused, lifetime failure charged to two issues
+    // that had done nothing wrong. skillRunner now stamps the
+    // `[api_connection_lost]` marker from the envelope's terminal_reason so
+    // the third pattern catches it; this keeps the raw wording covered too.
+    /api error[\s\S]*connection closed/i.test(errMsg) ||
     /github-network-outage/i.test(errMsg) ||
     /github_network_outage/i.test(errMsg)
   );

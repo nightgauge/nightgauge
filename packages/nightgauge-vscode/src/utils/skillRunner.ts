@@ -1500,6 +1500,34 @@ function extractToolTarget(toolInput: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * Reports whether the CLI's result envelope blames the API layer rather than
+ * the agent's work.
+ *
+ * Reads the structured `terminal_reason` field instead of pattern-matching the
+ * human-readable `result` string. #227: `ClassifyTerminalKind`'s allowlist
+ * covered `socket connection was closed`, `connection reset`, and `connection
+ * refused`; the live failure said **`Connection closed mid-response`**. Missing
+ * by one word cost $21.54, halted the fleet, and charged a lifetime failure to
+ * two unrelated issues in two repos that were merely the runs in flight when
+ * the socket dropped.
+ *
+ * Enumerating phrasings cannot be made complete — the next wording change
+ * reopens the same hole at the same price. The envelope already states the
+ * category, so read that.
+ *
+ * Deliberately broad: every `api_error` is environmental by construction (the
+ * request reached the API layer and the API layer is what failed), so the right
+ * default is the transient path — short backoff, no queue pause, no lifetime
+ * increment. A genuinely permanent API error costs one retry before surfacing,
+ * which is strictly cheaper than halting the fleet on a blip. More specific
+ * transient kinds still win: `api_overloaded` is matched before
+ * `api_connection_lost` in both classifiers.
+ */
+function isApiTransportFailure(envelope: Record<string, unknown>): boolean {
+  return envelope["terminal_reason"] === "api_error";
+}
+
 // Claude Code stream-json emits a terminal envelope `{type:"result", is_error, result, subtype}`
 // when the CLI exits. When is_error is true, `result` carries the real cause. When it is false
 // the CLI succeeded at the protocol level even if the process returned non-zero (e.g. wrapper
@@ -1545,6 +1573,16 @@ export function extractStreamJsonError(stdoutText: string): StreamJsonOutcome {
         return {
           kind: "error",
           error: new Error(`[rate-limit-quota-exhausted] ${message};${resetSuffix}`),
+        };
+      }
+      // Same normalization for an API-layer failure (#227). The envelope states
+      // the category in `terminal_reason`; stamping the canonical kind token
+      // here means both downstream classifiers recognise it without either one
+      // having to guess from the prose.
+      if (isApiTransportFailure(parsed)) {
+        return {
+          kind: "error",
+          error: new Error(`[api_connection_lost] ${message}`),
         };
       }
       return { kind: "error", error: new Error(message) };

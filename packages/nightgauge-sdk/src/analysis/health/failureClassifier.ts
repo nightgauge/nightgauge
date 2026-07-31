@@ -118,7 +118,17 @@ export function classifyFailureCategory(
     // Matched before the "timeout"/"api error" agent block so a timed-out
     // probe still lands here. Issue #312.
     t.includes("[adapter-auth-failed]") ||
-    t.includes("adapter_auth_failed")
+    t.includes("adapter_auth_failed") ||
+    // Anthropic API transport drop (#4002, wording widened in #227). Matched
+    // here for the same reason as adapter-auth above: the bare `api error`
+    // pattern in the agent block below would otherwise claim it, scoring an
+    // Anthropic socket drop at the 0.5 agent weight instead of 0.05
+    // infrastructure. A dropped connection is not the agent's behavior — the
+    // run had no say in it — and letting it depress the agent reliability
+    // score makes the dogfooding metric describe Anthropic's uptime rather
+    // than the pipeline's.
+    t.includes("api_connection_lost") ||
+    (t.includes("api error") && t.includes("connection closed"))
   ) {
     return "infrastructure";
   }
@@ -330,10 +340,17 @@ export function classifyTerminalKind(
   // close / hang up during a local network blip. Matched before the
   // subagent_crash fallback so a seconds-long blip isn't misread as a
   // process death.
+  // #227 added `connection closed`: the live failure read `API Error:
+  // Connection closed mid-response`, which matched none of the three patterns
+  // above — `socket connection was closed` needs the `socket` prefix — and fell
+  // through to subagent_crash. Gated on `api error` so an unrelated stage error
+  // mentioning a closed connection (a failing integration test, say) does not
+  // get excused as a transport blip.
   if (
     t.includes("socket connection was closed") ||
     t.includes("socket hang up") ||
-    t.includes("api_connection_lost")
+    t.includes("api_connection_lost") ||
+    (t.includes("api error") && t.includes("connection closed"))
   ) {
     return "api_connection_lost";
   }
