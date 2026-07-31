@@ -134,7 +134,9 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 		// main. feature-validate then spent another $0.87 to discover that,
 		// and reported it as its own `validation_failed`. Total $5.33 for zero
 		// output, attributed to the wrong stage.
-		if work := inspectDevWork(workspace); work.Determined && !work.HasWork {
+		declared := append(append(append([]string{}, devCtx.FilesChanged.Created...), devCtx.FilesChanged.Modified...), devCtx.FilesChanged.Deleted...)
+		work := inspectDevWork(workspace, declared)
+		if work.Determined && !work.HasWork {
 			evidence := []string{
 				fmt.Sprintf("workspace: %s", workspace),
 				fmt.Sprintf("dev context claims created=%d modified=%d deleted=%d",
@@ -157,12 +159,16 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			return false, "[dev-produced-no-changes] dev reported file changes but produced none in the stage workspace — the working tree is clean and the branch is level with its base", evidence, KindNoOp, TerminalKindDevProducedNoChanges, nil, 0
 		}
 
-		return true, "dev context records file changes, a recorded build verification, and no failing tests", []string{
+		passEvidence := []string{
 			fmt.Sprintf("created=%d modified=%d deleted=%d build=%s",
 				len(devCtx.FilesChanged.Created),
 				len(devCtx.FilesChanged.Modified),
 				len(devCtx.FilesChanged.Deleted),
 				devCtx.BuildVerification.Status),
-		}, KindOK, "", nil, 0
+		}
+		if work.Mode == "bookkeeping" {
+			passEvidence = append(passEvidence, fmt.Sprintf("deliverable=bookkeeping declared=%d confirmed=%d", work.DeclaredCount, work.ConfirmedCount))
+		}
+		return true, "dev context records file changes, a recorded build verification, and no failing tests", passEvidence, KindOK, "", nil, 0
 	})
 }
