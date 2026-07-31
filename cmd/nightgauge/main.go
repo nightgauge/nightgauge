@@ -9839,6 +9839,7 @@ func scanCmd() *cobra.Command {
 	}
 	cmd.AddCommand(scanDepsCmd())
 	cmd.AddCommand(scanEcosystemCmd())
+	cmd.AddCommand(scanTestCmdCmd())
 	cmd.AddCommand(scanSecretsCmd())
 	cmd.AddCommand(scanDebtCmd())
 	cmd.AddCommand(scanTestsCmd())
@@ -10026,6 +10027,86 @@ func printScanEcosystemHuman(r *scan.EcosystemScanResult) {
 				fmt.Printf("    %-7s %s\n", name, lf)
 			}
 		}
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+}
+
+func scanTestCmdCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		workdir    string
+	)
+	cmd := &cobra.Command{
+		Use:   "testcmd",
+		Short: "Select a repo's declared test command, preferring it over an inferred framework binary",
+		Long: `Determine the test command --workdir declares, in this precedence order:
+
+  1. nodejs:  package.json "scripts.test" (command: "<pm> test", pm chosen
+              from the detected lockfile — npm/yarn/pnpm/bun)
+  2. python:  pyproject.toml "[tool.poetry.scripts]" test entry
+              ("poetry run test"), then a configured tox environment ("tox")
+  3. Makefile "test:" target ("make test"), any ecosystem
+  4. go:      "go test ./..." when go.mod is present
+  5. framework fallback: the framework detected from dependencies (nodejs
+     playwright/cypress/vitest/jest/mocha, or python pytest), invoked
+     directly (e.g. "npx vitest")
+
+Framework detection (field "framework") is retained for output parsing and
+targeted reruns only — it is never used to choose the entrypoint when a
+declared command (source != "framework_fallback") exists (Issue #221).
+
+Schema version 1 — field names (v, workdir, command, source, package_manager,
+framework, warnings) are stable. Skills parse output via jq paths; any
+breaking change requires bumping v.
+
+The verb is non-fatal by design — unreadable/malformed manifests are recorded
+in warnings[] rather than causing the scan to fail.
+
+Exit codes:
+  0  scan completed
+  2  hard error (e.g. unresolvable workdir, internal failure)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := scan.SelectTestCommand(cmd.Context(), scan.TestCommandOptions{
+				Workdir: workdir,
+			})
+			if err != nil {
+				return err
+			}
+
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printScanTestCmdHuman(result)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Directory to scan (default: current working directory)")
+	return cmd
+}
+
+// printScanTestCmdHuman renders the test-command-selection result in a
+// compact human-readable form mirroring the scan ecosystem layout.
+func printScanTestCmdHuman(r *scan.TestCommandResult) {
+	fmt.Printf("nightgauge scan testcmd — schema v%d\n", r.V)
+	fmt.Printf("workdir: %s\n\n", r.Workdir)
+	if r.Command == "" {
+		fmt.Println("  command: (none determined)")
+	} else {
+		fmt.Printf("  command: %s\n", r.Command)
+		fmt.Printf("  source:  %s\n", r.Source)
+	}
+	if r.PackageManager != "" {
+		fmt.Printf("  package_manager: %s\n", r.PackageManager)
+	}
+	if r.Framework != "" {
+		fmt.Printf("  framework: %s\n", r.Framework)
 	}
 	for _, w := range r.Warnings {
 		fmt.Printf("  ! %s\n", w)

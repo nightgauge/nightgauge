@@ -38,6 +38,15 @@ Determine validation status, construct JSON, and validate:
 VALIDATION_STATUS="passed"
 if [ "${BUILD_RAN:-false}" = "true" ] && [ "${BUILD_PASSED:-false}" = "false" ]; then
   VALIDATION_STATUS="failed"
+elif [ "${UNIT_TESTS_RAN:-false}" = "true" ] && [ "${UNIT_TESTS_RUN_COUNT:-0}" -eq 0 ]; then
+  # #221: a suite that executed zero tests is NOT the same as a suite that ran
+  # and failed — it usually means the test command was wrong for this repo
+  # (or the change genuinely added no tests), not a code defect. Reporting it
+  # as "failed" burns a lifetime-failure increment and can trip the fleet's
+  # safety circuit breaker for a purely environmental misconfiguration.
+  # Checked BEFORE the failed-tests branch below so a zero-test run never
+  # falls into it (UNIT_TESTS_PASSED is vacuously true when nothing ran).
+  VALIDATION_STATUS="inconclusive"
 elif [ "${UNIT_TESTS_RAN:-false}" = "true" ] && [ "${UNIT_TESTS_PASSED:-false}" = "false" ]; then
   VALIDATION_STATUS="failed"
 elif [ "${E2E_RAN:-false}" = "true" ] && [ "${E2E_PASSED:-false}" = "false" ] && [ "${E2E_SKIPPED:-false}" = "false" ]; then
@@ -118,7 +127,7 @@ jq -n \
   --arg min_dur_warning "${MINIMUM_DURATION_WARNING:-}" \
   --arg created_at "$TIMESTAMP" \
   '{
-    schema_version: "2.5",
+    schema_version: "2.6",
     issue_number: $issue_number,
     commit_sha: $commit_sha,
     validation_status: $validation_status,

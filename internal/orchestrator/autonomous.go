@@ -3346,6 +3346,35 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// Issue #221: a feature-validate run whose unit-test tier executed
+		// zero tests is usually an environmental misconfiguration (wrong test
+		// command for this repo), not a code defect. Treat it like
+		// worktree_uncommitted/budget_ceiling_hit above: fixed backoff, no
+		// LifetimeIssueFailures increment, no per-session circuit-breaker
+		// count. revertFailedIssueStatus still runs so the board returns to
+		// Ready and the issue can be re-dispatched (a corrected test command,
+		// or a subsequent commit that adds tests, resolves it on retry).
+		if terminalFailureKind == TerminalKindValidationInconclusive {
+			as.recordFailureLocked(repo, issue, title, now,
+				"validation_inconclusive (zero tests run, recoverable) — will retry after backoff")
+			as.scheduleRetryLocked(key, terminalFailureKind, "zero-test run — recoverable", time.Now().Add(stallKillBackoff))
+			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
+				key, stallKillBackoff)
+			as.persistStateLocked()
+			go as.revertFailedIssueStatus(repo, issue)
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			return
+		}
+
 		// Issue #305: blocked-dependency deferral is a NON-FAILURE. The
 		// scheduler dispatched an issue whose blockedBy dependencies are still
 		// open, so the pipeline deferred before any AI stages ran — the issue
