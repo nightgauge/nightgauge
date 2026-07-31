@@ -133,6 +133,59 @@ func TestAttentionResolveCLI(t *testing.T) {
 	}
 }
 
+// TestAttentionResolveCLI_NoDaemonLeavesCardOpen is the AC's named test: with
+// no daemon reachable, resolving an option bound to a daemon-only verb must
+// exit non-zero, name the verb and its retryability, and leave the request
+// open on disk (#235).
+func TestAttentionResolveCLI_NoDaemonLeavesCardOpen(t *testing.T) {
+	dir := t.TempDir()
+	store := attention.New(dir)
+	id, err := attention.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	if _, err := store.Raise(attention.DecisionRequest{
+		ID:             id,
+		IdempotencyKey: "k1",
+		Kind:           attention.KindChoose,
+		Severity:       attention.SeverityFYI,
+		Title:          "Choose",
+		Producer:       "test",
+		Context:        attention.Context{Repo: "octocat/acme", Issue: 3},
+		Options: []attention.Option{
+			{ID: "clear", Label: "Clear failures", Verb: attention.VerbAutonomousClearIssueFailures},
+		},
+		DefaultAction: "clear",
+	}); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+
+	cmd := attentionResolveCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{id, "--option", "clear", "--actor", "octocat", "--workdir", dir})
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("expected non-zero exit when the verb requires the daemon")
+	}
+	if !strings.Contains(err.Error(), "autonomous.clearIssueFailures") {
+		t.Errorf("error does not name the failed verb: %v", err)
+	}
+	if !strings.Contains(err.Error(), "retryable") {
+		t.Errorf("error does not state retryability: %v", err)
+	}
+
+	got, found, gerr := attention.New(dir).Get(id)
+	if gerr != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, gerr)
+	}
+	if got.Lifecycle.State != attention.StateOpen {
+		t.Errorf("state = %q, want open (card must stay pending)", got.Lifecycle.State)
+	}
+	if got.Lifecycle.Resolved != nil {
+		t.Error("resolved record set despite verb failure")
+	}
+}
+
 func TestAttentionResolveRejectsUndeclaredOption(t *testing.T) {
 	dir := t.TempDir()
 	id := seedRequest(t, dir, "k1", "Choose", attention.SeverityFYI)

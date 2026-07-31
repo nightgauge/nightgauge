@@ -346,7 +346,6 @@ func (r storeResolver) ApplyRelayedResolve(ctx context.Context, id, opt, actor, 
 	return AttentionResolveOutcome{
 		Applied:         !res.AlreadyResolved,
 		AlreadyResolved: res.AlreadyResolved,
-		VerbErr:         res.VerbErr,
 	}, nil
 }
 

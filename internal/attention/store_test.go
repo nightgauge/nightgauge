@@ -492,6 +492,40 @@ func TestResolveRejectsUnknownOption(t *testing.T) {
 	}
 }
 
+func TestResolveLeavesRequestUntouchedWhenVerbFails(t *testing.T) {
+	s := New(t.TempDir())
+	id := mustID(t)
+	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	exec := &spyExecutor{err: &VerbExecutionError{Verb: "go", Retryable: true, Err: fmt.Errorf("no daemon reachable")}}
+	if _, err := s.Resolve(context.Background(), id, "go", "octocat", "", "", exec); err == nil {
+		t.Fatal("expected Resolve to return an error when the verb fails")
+	}
+	if got := exec.count.Load(); got != 1 {
+		t.Errorf("verb executed %d times, want exactly 1", got)
+	}
+	got, _, err := s.Get(id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Lifecycle.State != StateOpen {
+		t.Errorf("state = %q after failed verb, want open", got.Lifecycle.State)
+	}
+	if got.Lifecycle.Resolved != nil {
+		t.Error("resolved record set despite failed verb")
+	}
+	entries, err := s.ReadJournal()
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	for _, e := range entries {
+		if e.Action == ActionResolved {
+			t.Errorf("journal contains ActionResolved despite failed verb: %+v", e)
+		}
+	}
+}
+
 func TestAcknowledgeIsNonBlocking(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)

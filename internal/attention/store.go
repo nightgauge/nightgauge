@@ -443,20 +443,32 @@ func (s *Store) Acknowledge(id, actor string) (*DecisionRequest, error) {
 	return req, nil
 }
 
-// ResolveResult carries the outcome of a Resolve so the caller can surface verb
-// and steer errors without the store importing those subsystems.
+// ResolveResult carries the outcome of a Resolve so the caller can surface
+// steer errors without the store importing those subsystems.
 type ResolveResult struct {
 	Request         *DecisionRequest
 	Option          Option
 	AlreadyResolved bool // the request was already terminal — resolve was a no-op
-	VerbErr         error
 	SteerErr        error
 }
 
-// Resolve applies a resolution once (terminal-state CAS), persists it, then
-// executes the option's registered verb OUTSIDE the store lock (ADR-015 §D). A
-// replayed resolve on an already-terminal request is a safe no-op. An unknown
-// option or unregistered verb is rejected WITHOUT transitioning (ADR-015 §J).
+// Resolve applies a resolution once (terminal-state CAS): it executes the
+// option's registered verb WHILE STILL HOLDING the store lock, and persists
+// the resolved transition only if the verb succeeds (ADR-015 §D). This
+// serializes all resolves for one repo's request directory for the duration
+// of the verb call — a deliberate trade-off, since resolutions are
+// human-paced, not a hot path, and the alternative (a per-request lock, or
+// re-validating a torn CAS after re-acquiring the lock post-verb) is
+// meaningfully more complex for no observed concurrency problem. It also
+// keeps exactly-once verb execution: a losing concurrent resolve never gets
+// past the terminal-state check, so it never runs the verb at all.
+//
+// A replayed resolve on an already-terminal request is a safe no-op. An
+// unknown option or unregistered verb is rejected WITHOUT transitioning
+// (ADR-015 §J). If the verb fails, Resolve returns the error (typically a
+// *VerbExecutionError) and leaves the request untouched on disk — no
+// mutation, no persist, no journal entry — so the card stays open and a
+// retry after the underlying condition clears hits the same code path fresh.
 func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, note string, exec VerbExecutor) (ResolveResult, error) {
 	mu := lockFor(s.dir)
 	mu.Lock()
@@ -474,6 +486,12 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	if err != nil {
 		mu.Unlock()
 		return ResolveResult{}, err
+	}
+	if exec != nil {
+		if verr := exec.ExecuteVerb(ctx, req, opt); verr != nil {
+			mu.Unlock()
+			return ResolveResult{}, verr
+		}
 	}
 	at := s.nowUTC().Format(tsLayout)
 	req.Lifecycle.State = StateResolved
@@ -498,18 +516,14 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 	}, req)
 	mu.Unlock()
 
-	// Side effects run OUTSIDE the lock: verb execution and the steer write may
-	// touch GitHub / the scheduler / a different store, and must not hold the
-	// per-dir mutex.
+	// The steer write runs OUTSIDE the lock: it may touch GitHub / the
+	// scheduler / a different store, and must not hold the per-dir mutex.
 	res := ResolveResult{Request: req, Option: opt}
 	s.listenerMu.Lock()
 	steer := s.steerWriter
 	s.listenerMu.Unlock()
 	if steerText != "" && steer != nil {
 		res.SteerErr = steer(req, steerText)
-	}
-	if exec != nil {
-		res.VerbErr = exec.ExecuteVerb(ctx, req, opt)
 	}
 	return res, nil
 }
