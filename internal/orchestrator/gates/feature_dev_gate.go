@@ -135,6 +135,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 		// and reported it as its own `validation_failed`. Total $5.33 for zero
 		// output, attributed to the wrong stage.
 		declared := append(append(append([]string{}, devCtx.FilesChanged.Created...), devCtx.FilesChanged.Modified...), devCtx.FilesChanged.Deleted...)
+		declared = withoutOwnHandoff(declared, issueNumber)
 		work := inspectDevWork(workspace, declared)
 		if work.Determined && !work.HasWork {
 			evidence := []string{
