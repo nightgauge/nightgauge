@@ -38,6 +38,13 @@ export {
   type CalibrationMode,
 } from "./CalibrationService.js";
 
+export {
+  StageModelCalibrationService,
+  type StageModelCalibrationTable,
+  type StageModelBucketCalibration,
+  type StageModelCalibrationInput,
+} from "./StageModelCalibrationService.js";
+
 // Public API: scaffoldForIssue, create, read, update, list, search, generateIndex, pruneEmpty, generateSlug, isSubstantive
 // @internal (not public API, but exported for testability): generatePRD, generateDecisionsTemplate, contentIsSubstantive
 export {

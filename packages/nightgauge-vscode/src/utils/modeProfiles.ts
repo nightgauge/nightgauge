@@ -31,7 +31,7 @@
  * @see docs/PERFORMANCE_MODES.md
  * @see Issue #3009
  */
-import type { PipelineStage } from "@nightgauge/sdk";
+import type { ModelEnvelope, PipelineStage } from "@nightgauge/sdk";
 import { resolveModelForAdapter } from "@nightgauge/sdk";
 import type { ClaudeEffort, DefaultModel } from "./incrediConfig";
 import type { ExecutionAdapter } from "./resolvers/modelResolver";
@@ -195,6 +195,22 @@ export const DEFAULT_MODE_ENVELOPE: ModeEnvelope = { floor: "haiku", ceiling: "o
  */
 export function getModeEnvelope(mode: PerformanceMode): ModeEnvelope {
   return MODE_PROFILES[mode].envelope ?? DEFAULT_MODE_ENVELOPE;
+}
+
+/**
+ * Convert a mode's `ModeEnvelope` (vscode-side) to the SDK's `ModelEnvelope`
+ * shape consumed by `AutoModelSelector.selectModel()` /
+ * `estimatePipelineCost()`. Tier names line up 1:1 (`DefaultModel` /
+ * `ModelTier` share the haiku < sonnet < opus < fable ordering), so this is a
+ * pure field pick — no new mapping table.
+ *
+ * @since Issue #142 - threads the run's actual performance mode into the
+ *   pre-run cost estimator so the estimated model tier matches the tier the
+ *   run will actually serve.
+ */
+export function toModelEnvelope(mode: PerformanceMode): ModelEnvelope {
+  const { floor, ceiling } = getModeEnvelope(mode);
+  return { floor: floor as ModelEnvelope["floor"], ceiling: ceiling as ModelEnvelope["ceiling"] };
 }
 
 /**

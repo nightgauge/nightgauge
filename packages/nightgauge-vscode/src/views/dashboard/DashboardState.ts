@@ -3306,27 +3306,35 @@ export class DashboardState {
     metadata: import("@nightgauge/sdk").IssueMetadata,
     skipStages?: string[]
   ): Promise<import("@nightgauge/sdk").PipelineCostEstimate> {
-    const { AutoModelSelector, CalibrationService } = await import("@nightgauge/sdk");
+    const { AutoModelSelector, StageModelCalibrationService } = await import("@nightgauge/sdk");
     const { getStageModelsMatrix } = await import("../../utils/incrediConfig");
+    const { toModelEnvelope } = await import("../../utils/modeProfiles");
     const stageMatrix = getStageModelsMatrix(this.workspaceRoot);
     const selector = new AutoModelSelector(
       stageMatrix
         ? { stageMatrix: stageMatrix as AutoModelSelectorConfig["stageMatrix"] }
         : undefined
     );
-    const calibration = this.workspaceRoot
-      ? await CalibrationService.load(CalibrationService.getDefaultPath(this.workspaceRoot))
+    const stageModelCalibration = this.workspaceRoot
+      ? await StageModelCalibrationService.load(
+          StageModelCalibrationService.getDefaultPath(this.workspaceRoot)
+        )
       : null;
-    // Issue #3216: pre-run cost estimate consults the active performance mode
-    // bucket so per-mode calibration baselines (efficiency / elevated / maximum)
-    // drive the displayed estimate. Falls back to elevated when the active
-    // mode bucket is empty.
-    let mode: import("@nightgauge/sdk").CalibrationMode = "elevated";
+    // Issue #142: pre-run cost estimate threads the active performance mode
+    // as a routing envelope so the estimated model tier matches the tier the
+    // run will actually serve, and each stage calibrates independently
+    // against its own (stage, model) history instead of a whole-run rescale.
+    let mode: import("../../utils/modeProfiles").PerformanceMode = "elevated";
     if (this.workspaceRoot) {
       const { getPerformanceMode } = await import("../../utils/resolvers/monitoringResolver");
       mode = getPerformanceMode(this.workspaceRoot);
     }
-    this.costEstimate = selector.estimatePipelineCost(metadata, skipStages, calibration, mode);
+    this.costEstimate = selector.estimatePipelineCost(
+      metadata,
+      skipStages,
+      stageModelCalibration,
+      toModelEnvelope(mode)
+    );
     return this.costEstimate;
   }
 

@@ -49,6 +49,41 @@ Builds calibration tables from pipeline outcome history. Maps size buckets (XS,
 S, M, L, XL) to observed cost/duration/token distributions, improving future
 size estimates.
 
+### Per-(Stage, Model) Cost Calibration (Issue #142)
+
+**File**: `packages/nightgauge-sdk/src/services/StageModelCalibrationService.ts`
+
+The `(mode, size)` calibration above corrects the whole-run cost estimate but
+does not distinguish _which stage_ drove the actual cost — `AutoModelSelector`
+used to rescale every stage's static baseline by a single whole-run scale
+factor, which preserved the (often wrong) relative shape of `TOKEN_BASELINES`
+and produced near-zero rank correlation between estimated and actual per-stage
+cost. `StageModelCalibrationService` buckets observed cost and token usage by
+`(stage, model)` instead — e.g. `(feature-dev, sonnet)`, `(pr-create, haiku)` —
+from each completed run's `tokens.per_stage` history, mirroring
+`CalibrationService`'s percentile math and atomic-write pattern.
+
+`AutoModelSelector.estimatePipelineCost()` looks up the exact `(stage,
+selected-model)` cell for every non-skipped stage and, once a cell has ≥5
+samples, uses its observed p75 cost in place of the static
+`TOKEN_BASELINES` figure for that stage only — no cross-model fallback (a
+different model's cost distribution is not a meaningful default) and no
+special-casing for high-variance cells (e.g. `feature-dev` at mid-tier models):
+each cell reports its own honest p75, and the existing budget-ceiling gate
+(`budgetIntelligence.ts`) continues to own tail-risk enforcement. Stages
+without enough history still fall back to `TOKEN_BASELINES`, so the estimate
+improves stage-by-stage as history accumulates rather than waiting for every
+stage to calibrate at once.
+
+The estimator also now selects each stage's model against the run's actual
+performance-mode envelope (`modeProfiles.toModelEnvelope()`) rather than
+always defaulting to the Elevated envelope, so the estimated tier matches the
+tier the run will actually serve.
+
+`PostPipelineAnalyzer` rebuilds and persists
+`.nightgauge/pipeline/stage-model-calibration.json` after every completed run,
+parallel to the existing `(mode, size)` calibration table update.
+
 ### Survival Calibration (Issues #4152/#4153)
 
 **Files**: `internal/github/outcome_survival.go` (Go),
@@ -281,6 +316,7 @@ Generate prioritized improvement proposals
 | `.nightgauge/gate-metrics.jsonl`                        | Gate invocation records                                      |
 | `.nightgauge/skill-effectiveness.jsonl`                 | Skill change effectiveness                                   |
 | `.nightgauge/calibration.json`                          | Size estimate calibration                                    |
+| `.nightgauge/pipeline/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |
 | `.nightgauge/pipeline/assessments/<stage>-<issue>.json` | Per-stage friction records (written only on friction)        |
 | `.nightgauge/pipeline/proposals/retro-epic-<N>.json`    | SkillImprovementProposal records from retro runs             |
 | `.nightgauge/pipeline/continuous-improvement-*.json`    | Periodic continuous improvement review reports               |

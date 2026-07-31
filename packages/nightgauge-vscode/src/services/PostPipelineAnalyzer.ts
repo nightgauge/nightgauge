@@ -481,6 +481,45 @@ export class PostPipelineAnalyzer {
         });
       }
 
+      // Per-(stage, model) calibration table update (non-critical) — Issue #142.
+      // Flattens each completed run's per-stage token usage into one
+      // (stage, model) observation per stage, so AutoModelSelector.estimatePipelineCost()
+      // can calibrate each stage independently instead of rescaling a single
+      // whole-run total.
+      try {
+        const { StageModelCalibrationService } = await import("@nightgauge/sdk");
+        const runRecords = rawRecords.filter(
+          (r) => r.record_type === "run" && r.outcome === "complete"
+        ) as ExecutionHistoryRunRecordV2[];
+
+        const stageModelInputs = runRecords.flatMap((r) =>
+          Object.entries(r.tokens.per_stage ?? {})
+            .filter(([, usage]) => usage.model)
+            .map(([stage, usage]) => ({
+              stage,
+              model: usage.model as string,
+              cost_usd: usage.cost_usd,
+              input_tokens: usage.input + usage.cache_read + usage.cache_creation,
+              output_tokens: usage.output,
+            }))
+        );
+
+        if (stageModelInputs.length > 0) {
+          const table = StageModelCalibrationService.buildFromHistory(stageModelInputs);
+          const tablePath = StageModelCalibrationService.getDefaultPath(workspaceRoot);
+          await StageModelCalibrationService.save(tablePath, table);
+          logger.info("Stage-model calibration table updated", {
+            issueNumber,
+            totalRecords: table.total_records_analyzed,
+            stages: Object.keys(table.buckets),
+          });
+        }
+      } catch (err) {
+        logger.debug("Stage-model calibration table update skipped", {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
       // V4 workflow-orchestration calibration (non-critical) — Issue #3915.
       // Fold the canonical schemaVersion-4 WorkflowEvent journals into the
       // WORKFLOW-level learning signal (judge-rejection rate, fan-out

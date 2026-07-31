@@ -11387,16 +11387,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               let estimatedCostUsd = 0;
               let estimatedPerStageCosts: Record<string, number> = {};
               try {
-                const { AutoModelSelector, CalibrationService } = await import("@nightgauge/sdk");
+                const { AutoModelSelector, StageModelCalibrationService } =
+                  await import("@nightgauge/sdk");
                 const { getPerformanceMode } =
                   await import("../utils/resolvers/monitoringResolver");
+                const { toModelEnvelope } = await import("../utils/modeProfiles");
                 const selector = new AutoModelSelector();
                 const issueMetadataForEstimate = this.loadIssueMetadata(issueNumber);
                 const persistentRoot = this.getPersistentRoot();
-                const calibrationPath = CalibrationService.getDefaultPath(persistentRoot);
-                const calibration = await CalibrationService.load(calibrationPath);
-                // Issue #3216: thread the active performance mode so the
-                // calibration lookup hits the correct (mode, size) bucket.
+                const calibrationPath = StageModelCalibrationService.getDefaultPath(persistentRoot);
+                const stageModelCalibration =
+                  await StageModelCalibrationService.load(calibrationPath);
+                // Issue #142: thread the active performance mode as a routing
+                // envelope so the estimated model tier matches the tier the
+                // run will actually serve.
                 const performanceMode = getPerformanceMode(persistentRoot);
                 const estimate = selector.estimatePipelineCost(
                   {
@@ -11404,8 +11408,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                     title: issueMetadataForEstimate?.title ?? `Issue #${issueNumber}`,
                   },
                   this.cachedRoutingTelemetry?.skip_stages ?? [],
-                  calibration,
-                  performanceMode
+                  stageModelCalibration,
+                  toModelEnvelope(performanceMode)
                 );
                 estimatedCostUsd = estimate.totalEstimatedCost;
                 estimatedPerStageCosts = Object.fromEntries(
