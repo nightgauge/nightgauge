@@ -124,11 +124,35 @@ func ValidateOption(req *DecisionRequest, optionID string) (Option, error) {
 // full executor; the CLI provides a subset. An executor MUST reject any verb it
 // cannot perform rather than silently succeed.
 //
-// The store calls ExecuteVerb AFTER it has applied and persisted the resolution
-// (CAS), so a verb failure is audited but never leaves the request half-open.
+// The store calls ExecuteVerb BEFORE it applies and persists the resolution
+// (CAS): a verb failure short-circuits Resolve's error return and the request
+// stays untouched — open, unpersisted, unjournaled — instead of being
+// silently consumed.
 type VerbExecutor interface {
 	ExecuteVerb(ctx context.Context, req *DecisionRequest, opt Option) error
 }
+
+// VerbExecutionError reports a verb that failed to apply. Retryable
+// distinguishes a transient condition the SAME surface can clear (e.g. the
+// daemon starts) from one it fundamentally cannot (e.g. this CLI process has
+// no code path for this verb at all).
+type VerbExecutionError struct {
+	Verb      string
+	Retryable bool
+	Err       error
+}
+
+// Error implements error.
+func (e *VerbExecutionError) Error() string {
+	how := "not retryable from this surface"
+	if e.Retryable {
+		how = "retryable — retry once the condition clears"
+	}
+	return fmt.Sprintf("verb %q failed (%s): %v", e.Verb, how, e.Err)
+}
+
+// Unwrap supports errors.Is/errors.As against the wrapped cause.
+func (e *VerbExecutionError) Unwrap() error { return e.Err }
 
 // NoopExecutor records resolutions without side effects. Used by read-only
 // surfaces and tests; every verb is a no-op (still registry-validated upstream).

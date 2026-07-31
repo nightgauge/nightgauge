@@ -26,8 +26,10 @@ type AttentionListResult struct {
 	Requests []attention.DecisionRequest `json:"requests"`
 }
 
-// AttentionResolveResult is the attention.resolve response. Ok is false when the
-// verb side-effect failed (the resolution itself still applied, once).
+// AttentionResolveResult is the attention.resolve response. Ok is always true
+// when the method returns without error — a verb failure now short-circuits
+// Resolve into a returned error before this handler ever builds a result, so
+// there is no longer a way to reach this struct with a failed verb.
 type AttentionResolveResult struct {
 	Ok              bool `json:"ok"`
 	AlreadyResolved bool `json:"alreadyResolved"`
@@ -93,10 +95,7 @@ func (s *Server) handleAttentionResolve(ctx context.Context, raw json.RawMessage
 	if res.SteerErr != nil {
 		log.Printf("attention.resolve: steer write failed id=%s (non-fatal): %v", p.ID, res.SteerErr)
 	}
-	if res.VerbErr != nil {
-		log.Printf("attention.resolve: verb execution failed id=%s option=%s: %v", p.ID, p.OptionID, res.VerbErr)
-	}
-	return AttentionResolveResult{Ok: res.VerbErr == nil, AlreadyResolved: res.AlreadyResolved}, nil
+	return AttentionResolveResult{Ok: true, AlreadyResolved: res.AlreadyResolved}, nil
 }
 
 // ApplyRelayedResolve applies a platform-relayed dashboard resolution through the
@@ -121,7 +120,6 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	return platform.AttentionResolveOutcome{
 		Applied:         !res.AlreadyResolved,
 		AlreadyResolved: res.AlreadyResolved,
-		VerbErr:         res.VerbErr,
 	}, nil
 }
 

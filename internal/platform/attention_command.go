@@ -50,9 +50,6 @@ type AttentionResolveOutcome struct {
 	// AlreadyResolved is true when the request was already terminal — the local
 	// resolution won and this command is a safe no-op (ADR 015 §D).
 	AlreadyResolved bool
-	// VerbErr is set when the resolution applied but the bound verb's side effect
-	// failed; the resolution itself is durable and audited (never rolled back).
-	VerbErr error
 }
 
 // AttentionResolver applies a relayed resolution through the attention store's
@@ -107,17 +104,17 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 	// Acknowledge in every case — the command is consumed exactly once.
 	c.acknowledge(ctx, cmd.ID)
 	if err != nil {
-		// Rejected client-side (defense in depth): the platform should have
-		// validated server-side, so a rejection here is logged and acked (as an
-		// error outcome) rather than retried into a redelivery loop (ADR 015 §J).
-		log.Printf("attention_resolve: rejected id=%s option=%s — acked as error: %v", p.RequestID, p.OptionID, err)
+		// Rejected client-side (defense in depth) or verb failed: the platform
+		// should have validated server-side, and a verb failure now short-circuits
+		// ApplyRelayedResolve into this same error return (no persisted mutation
+		// on either path), so a rejection here is logged and acked (as an error
+		// outcome) rather than retried into a redelivery loop (ADR 015 §J).
+		log.Printf("attention_resolve: rejected or verb failed id=%s option=%s — acked as error: %v", p.RequestID, p.OptionID, err)
 		return AttentionResolveOutcome{}, nil
 	}
 	switch {
 	case outcome.AlreadyResolved:
 		log.Printf("attention_resolve: id=%s already resolved locally — acked as already-resolved (local resolution wins)", p.RequestID)
-	case outcome.VerbErr != nil:
-		log.Printf("attention_resolve: id=%s applied + acked; verb side effect failed (audited, non-fatal): %v", p.RequestID, outcome.VerbErr)
 	default:
 		log.Printf("attention_resolve: id=%s option=%s applied + verb executed + acked", p.RequestID, p.OptionID)
 	}

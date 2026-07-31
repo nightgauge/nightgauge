@@ -262,9 +262,6 @@ func attentionResolveCmd() *cobra.Command {
 			if res.SteerErr != nil {
 				fmt.Fprintf(out, "  note: steer write failed: %v\n", res.SteerErr)
 			}
-			if res.VerbErr != nil {
-				fmt.Fprintf(out, "  note: %v\n", res.VerbErr)
-			}
 			return nil
 		},
 	}
@@ -293,15 +290,25 @@ func (e cliVerbExecutor) ExecuteVerb(_ context.Context, req *attention.DecisionR
 	case attention.VerbNoop:
 		return nil
 	case attention.VerbBudgetRaiseCeiling:
-		return orchestrator.WriteBudgetCeilingOverride(e.workspaceRoot, cliArgFloat(opt.Args, "ceilingUsd"), actor, "action-center (cli)")
+		if err := orchestrator.WriteBudgetCeilingOverride(e.workspaceRoot, cliArgFloat(opt.Args, "ceilingUsd"), actor, "action-center (cli)"); err != nil {
+			return &attention.VerbExecutionError{Verb: opt.Verb, Retryable: false, Err: err}
+		}
+		return nil
 	case attention.VerbRunRetryWithEscalation:
 		tier := cliArgString(opt.Args, "tier")
 		if tier == "" {
 			tier = "opus"
 		}
-		return orchestrator.WriteEscalationOverride(e.workspaceRoot, req.Context.Issue, tier, actor)
+		if err := orchestrator.WriteEscalationOverride(e.workspaceRoot, req.Context.Issue, tier, actor); err != nil {
+			return &attention.VerbExecutionError{Verb: opt.Verb, Retryable: false, Err: err}
+		}
+		return nil
 	default:
-		return fmt.Errorf("verb %q requires the running Nightgauge daemon or the VSCode extension — the resolution was recorded", opt.Verb)
+		return &attention.VerbExecutionError{
+			Verb:      opt.Verb,
+			Retryable: true,
+			Err:       fmt.Errorf("requires the running Nightgauge daemon or the VSCode extension"),
+		}
 	}
 }
 
