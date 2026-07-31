@@ -102,6 +102,15 @@ type GateResult struct {
 	// KindOK/KindNoOp results, which already classify structurally via Kind
 	// alone.
 	TerminalKind string
+	// Files and FileCount are populated only when a ground-truth check
+	// (devHandoffMissing) ran and found deliverable files — e.g. the
+	// dev_handoff_missing path. They are a CLI-JSON-only convenience for the
+	// immediate `nightgauge gate verify --json` caller (#134); the durable
+	// persisted record (state.StageGateResult) carries the same information
+	// only via Evidence, so these two representations can drift — do not add
+	// new logic that reads Files/FileCount from a persisted gate result.
+	Files     []string
+	FileCount int
 }
 
 // ToStageGateResult copies the in-process GateResult into the persisted
@@ -235,8 +244,18 @@ func timedKind(name string, fn func() (bool, string, []string, Kind)) GateResult
 // fifth return value; "" leaves TerminalKind unset so callers fall back to
 // prose classification.
 func timedKindTerminal(name string, fn func() (bool, string, []string, Kind, string)) GateResult {
+	return timedFull(name, func() (bool, string, []string, Kind, string, []string, int) {
+		passed, reason, evidence, kind, terminalKind := fn()
+		return passed, reason, evidence, kind, terminalKind, nil, 0
+	})
+}
+
+// timedFull is the Files/FileCount-aware variant (#134). Gates that surface
+// a devHandoffVerdict's Files/FileCount onto the CLI-JSON-only fields (see
+// GateResult's doc comment) call this directly instead of timedKindTerminal.
+func timedFull(name string, fn func() (bool, string, []string, Kind, string, []string, int)) GateResult {
 	start := time.Now()
-	passed, reason, evidence, kind, terminalKind := fn()
+	passed, reason, evidence, kind, terminalKind, files, fileCount := fn()
 	return GateResult{
 		GateName:     name,
 		Passed:       passed,
@@ -246,5 +265,7 @@ func timedKindTerminal(name string, fn func() (bool, string, []string, Kind, str
 		Timestamp:    nowUTC(),
 		Kind:         kind,
 		TerminalKind: terminalKind,
+		Files:        files,
+		FileCount:    fileCount,
 	}
 }

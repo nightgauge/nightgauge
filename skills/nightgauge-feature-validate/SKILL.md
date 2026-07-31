@@ -122,7 +122,7 @@ printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="fea
 printf '<!-- phase:start name="read-dev-context" index=1 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `.nightgauge/pipeline/dev-{N}.json`. Missing file → exit 1 listing the pipeline order.
+> **Read `skills/nightgauge-feature-validate/_includes/context-load.md` now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `.nightgauge/pipeline/dev-{N}.json`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
 
 ### Phase 0.5: Batch Dev Context Detection
 
