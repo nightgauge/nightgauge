@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "exit_code": 0
+  },
+  "sonnet": {
+    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "exit_code": 0
+  },
+  "opus": {
+    "text": "The dev-{N}.json handoff is missing, but ground truth from `nightgauge gate verify feature-dev` shows real changes on disk (internal/scan/testcmd.go, cmd/nightgauge/main.go). I proceed to validate against the working tree directly rather than treating the missing handoff as an empty branch.",
+    "exit_code": 0
+  }
+}

@@ -787,7 +787,7 @@ its changes but was killed before writing `dev-{N}.json`. Its own Phase 0
 consults `nightgauge gate verify feature-dev` and proceeds against the
 git-visible diff instead of exiting when git finds evidence of work. This is
 unrelated to the worktree-destruction failure mode above (re-dispatch still
-force-removes the worktree) — it only fixes the case where the *current*
+force-removes the worktree) — it only fixes the case where the _current_
 worktree is intact but the handoff file is missing.
 
 **If the kill predates #128** the changes may still be sitting in the worktree

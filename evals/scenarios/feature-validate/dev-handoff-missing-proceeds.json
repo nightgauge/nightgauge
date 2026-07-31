@@ -11,9 +11,14 @@
       "flags": "i"
     },
     {
-      "type": "not_matches_regex",
-      "pattern": "(no implementation work|nothing to validate)",
-      "flags": "i"
+      "type": "not_contains",
+      "value": "no implementation work",
+      "ignore_case": true
+    },
+    {
+      "type": "not_contains",
+      "value": "nothing to validate",
+      "ignore_case": true
     }
   ]
 }

@@ -1,0 +1,14 @@
+{
+  "haiku": {
+    "text": "The dev-{N}.json handoff is missing, and `nightgauge gate verify feature-dev` confirms a clean tree with no commits ahead of base — there is no git evidence of implementation work. This is not a malformed context file, it means feature-dev has not produced anything, so I exit rather than fabricate progress.",
+    "exit_code": 1
+  },
+  "sonnet": {
+    "text": "The dev-{N}.json handoff is missing, and `nightgauge gate verify feature-dev` confirms a clean tree with no commits ahead of base — there is no git evidence of implementation work. This is not a malformed context file, it means feature-dev has not produced anything, so I exit rather than fabricate progress.",
+    "exit_code": 1
+  },
+  "opus": {
+    "text": "The dev-{N}.json handoff is missing, and `nightgauge gate verify feature-dev` confirms a clean tree with no commits ahead of base — there is no git evidence of implementation work. This is not a malformed context file, it means feature-dev has not produced anything, so I exit rather than fabricate progress.",
+    "exit_code": 1
+  }
+}
