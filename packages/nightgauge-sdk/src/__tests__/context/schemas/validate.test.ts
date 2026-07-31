@@ -6,6 +6,19 @@ const minimalValidate = {
   issue_number: 42,
 };
 
+describe("ValidateContextSchema — validation_status", () => {
+  it("accepts the inconclusive status (#221 — zero-test run)", () => {
+    const result = ValidateContextSchema.safeParse({
+      ...minimalValidate,
+      validation_status: "inconclusive",
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.validation_status).toBe("inconclusive");
+    }
+  });
+});
+
 describe("ValidateContextSchema — preexisting_failures", () => {
   it("accepts empty preexisting_failures array", () => {
     const result = ValidateContextSchema.safeParse({

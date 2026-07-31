@@ -25,6 +25,7 @@ import { flexEnum, optionalString } from "./helpers.js";
  * - 2.3: Added mobile_mcp object for agent-driven mobile-mcp E2E results (issue #24)
  * - 2.4: Added verify_ui object for the browser-driven web UI verification gate (issue #4193)
  * - 2.5: Added passed_unverified status + unverified_deliverable block (issue #152)
+ * - 2.6: Added inconclusive validation_status for zero-test unit-test runs (issue #221)
  *
  * @see docs/CONTEXT_ARCHITECTURE.md for field documentation
  */
@@ -229,6 +230,14 @@ export const ValidateContextSchema = z
      * than trusting the skill's roll-up — the roll-up computes "passed unless
      * something actively failed", so a tier that never ran cannot lower it.
      *
+     * `inconclusive` (v2.6, #221) means the unit-test tier ran but executed
+     * zero tests — distinct from `failed` (ran and a test failed). Written by
+     * `context-and-board.md` Step 6.1 when `UNIT_TESTS_RUN_COUNT` is 0, ahead
+     * of the failed-tests check, so a zero-test run cannot fall into `failed`
+     * (a suite that ran nothing vacuously "passed"). Does not increment the
+     * lifetime failure counter — see `TerminalKindValidationInconclusive` in
+     * `internal/orchestrator/failure_handler.go`.
+     *
      * This value MUST stay in this enum. The `errorCategory` note below
      * describes what happens otherwise, and it applies verbatim here: a value
      * the writer emits but this enum omits fails the parse, and the signal is
@@ -241,6 +250,7 @@ export const ValidateContextSchema = z
       "failed",
       "partial",
       "skipped",
+      "inconclusive",
     ] as const).nullish(),
     /**
      * Explicit failure category for hard-gate failures (v2.1, Issue #3041).

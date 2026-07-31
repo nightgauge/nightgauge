@@ -280,6 +280,22 @@ const (
 	// not a tooling/runtime defect and not a planning/scope failure. Issue
 	// #326.
 	TerminalKindValidationFailed = "validation_failed"
+	// TerminalKindValidationInconclusive is set when feature-validate's unit-
+	// test tier RAN but executed zero tests: `validation_status:
+	// "inconclusive"` (context-and-board.md Step 6.1, ahead of the
+	// failed-tests check so a zero-test run can never fall into `failed` — a
+	// suite that ran nothing vacuously "passed" pre-fix). This is usually an
+	// environmental misconfiguration (the wrong test command for this repo)
+	// rather than a code defect, so unlike TerminalKindValidationFailed it
+	// does NOT increment LifetimeIssueFailures and does NOT feed the cascade
+	// circuit breaker — same recoverable treatment as
+	// TerminalKindWorktreeUncommitted / TerminalKindBudgetCeiling (#3542):
+	// fixed backoff, board → Ready so the issue is re-dispatched (a corrected
+	// test command, or a subsequent commit that adds tests, resolves it on
+	// retry). Emitted by HeadlessOrchestrator.verifyPostValidateState with the
+	// `[validation-inconclusive]` marker (mirrors the `[validation-failed]`
+	// marker pattern). Issue #221.
+	TerminalKindValidationInconclusive = "validation_inconclusive"
 	// TerminalKindBranchForked is set when the run's branch and its remote
 	// counterpart have diverged: the remote head is not reachable from the
 	// local tip, so every push from this worktree is rejected as
@@ -687,6 +703,15 @@ func ClassifyTerminalKind(errorText string) string {
 	if strings.Contains(t, "[validation-failed]") ||
 		strings.Contains(t, "validation_failed") {
 		return TerminalKindValidationFailed
+	}
+
+	// Feature-validate zero-test run (#221). Matched BEFORE the generic
+	// subagent-crash fallback for the same reason as validation_failed above;
+	// placed immediately after it to keep the two validation-status outcomes
+	// adjacent for readability.
+	if strings.Contains(t, "[validation-inconclusive]") ||
+		strings.Contains(t, "validation_inconclusive") {
+		return TerminalKindValidationInconclusive
 	}
 
 	// Branch forked from its remote (#163). Two entry points, one kind:
