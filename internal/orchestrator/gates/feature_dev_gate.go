@@ -42,7 +42,7 @@ func (FeatureDevGate) Name() string { return "feature-dev" }
 
 // Verify implements StageGate.
 func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace string) GateResult {
-	return timedKindTerminal("feature-dev", func() (bool, string, []string, Kind, string) {
+	return timedFull("feature-dev", func() (bool, string, []string, Kind, string, []string, int) {
 		ctxPath := contextFilePath(workspace, "dev", issueNumber)
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
@@ -51,14 +51,14 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 				// the work and died before writing its handoff looks identical
 				// here to a stage that did nothing, and the two demand opposite
 				// recoveries.
-				if ok, reason, evidence, kind, tk := devHandoffMissing(workspace, "dev context file missing", ctxPath); ok {
-					return false, reason, evidence, kind, tk
+				if v := devHandoffMissing(workspace, "dev context file missing", ctxPath); v.OK {
+					return false, v.Reason, v.Evidence, v.Kind, v.TerminalKind, v.Files, v.FileCount
 				}
 				return false, "dev context file missing", []string{
 					fmt.Sprintf("expected %s", ctxPath),
-				}, KindNoOp, ""
+				}, KindNoOp, "", nil, 0
 			}
-			return false, "failed to read dev context file", []string{err.Error()}, KindFail, ""
+			return false, "failed to read dev context file", []string{err.Error()}, KindFail, "", nil, 0
 		}
 
 		var devCtx struct {
@@ -76,7 +76,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			} `json:"tests_status"`
 		}
 		if err := json.Unmarshal(data, &devCtx); err != nil {
-			return false, "dev context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError
+			return false, "dev context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError, nil, 0
 		}
 
 		fileTouches := len(devCtx.FilesChanged.Created) +
@@ -88,13 +88,13 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// package, ended its turn on `echo waiting-for-notification`
 			// without writing its handoff, and this check reported "zero file
 			// changes" to an operator staring at a worktree full of them.
-			if ok, reason, evidence, kind, tk := devHandoffMissing(workspace, "dev context records zero file changes", ctxPath); ok {
-				return false, reason, evidence, kind, tk
+			if v := devHandoffMissing(workspace, "dev context records zero file changes", ctxPath); v.OK {
+				return false, v.Reason, v.Evidence, v.Kind, v.TerminalKind, v.Files, v.FileCount
 			}
 			// The dev skill said success but recorded zero file changes — no-op.
 			return false, "dev context records zero file changes", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindNoOp, ""
+			}, KindNoOp, "", nil, 0
 		}
 
 		if devCtx.BuildVerification == nil {
@@ -102,7 +102,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// gap the Claude-only Stop hook used to cover on one adapter (#55).
 			return false, "dev context lacks build_verification — the dev completion contract requires the verification step (nightgauge build run)", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail, ""
+			}, KindFail, "", nil, 0
 		}
 
 		if devCtx.BuildVerification.Ran &&
@@ -110,7 +110,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// Build failure is a real fault, not a no-op — work happened, it broke.
 			return false, "dev context records build_verification.status=failed", []string{
 				fmt.Sprintf("file: %s", ctxPath),
-			}, KindFail, ""
+			}, KindFail, "", nil, 0
 		}
 
 		if devCtx.TestsStatus != nil && devCtx.TestsStatus.Failed != nil &&
@@ -118,7 +118,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			return false, "dev context records failing tests", []string{
 				fmt.Sprintf("file: %s", ctxPath),
 				fmt.Sprintf("tests_status.failed=%d", *devCtx.TestsStatus.Failed),
-			}, KindFail, ""
+			}, KindFail, "", nil, 0
 		}
 
 		// Ground truth (#202). Every check above reads the skill's own report
@@ -154,7 +154,7 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			// it as premature_turn_end while the gate path reports
 			// dev_produced_no_changes. Two classifiers disagreeing about one
 			// failure is how a kind becomes untrustworthy in the dashboards.
-			return false, "[dev-produced-no-changes] dev reported file changes but produced none in the stage workspace — the working tree is clean and the branch is level with its base", evidence, KindNoOp, TerminalKindDevProducedNoChanges
+			return false, "[dev-produced-no-changes] dev reported file changes but produced none in the stage workspace — the working tree is clean and the branch is level with its base", evidence, KindNoOp, TerminalKindDevProducedNoChanges, nil, 0
 		}
 
 		return true, "dev context records file changes, a recorded build verification, and no failing tests", []string{
@@ -163,6 +163,6 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 				len(devCtx.FilesChanged.Modified),
 				len(devCtx.FilesChanged.Deleted),
 				devCtx.BuildVerification.Status),
-		}, KindOK, ""
+		}, KindOK, "", nil, 0
 	})
 }

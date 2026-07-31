@@ -781,6 +781,15 @@ Look for `[wip-preserved]` in the stage log to confirm the commit was written,
 or `[wip-preserve-skipped]` with the reason it was not (clean tree, protected
 branch, detached HEAD, or a git error such as a stale `index.lock`).
 
+**Note (#134):** as of #134, `feature-validate` itself no longer reports a
+false "no implementation work" in the mid-kill case where `feature-dev` wrote
+its changes but was killed before writing `dev-{N}.json`. Its own Phase 0
+consults `nightgauge gate verify feature-dev` and proceeds against the
+git-visible diff instead of exiting when git finds evidence of work. This is
+unrelated to the worktree-destruction failure mode above (re-dispatch still
+force-removes the worktree) — it only fixes the case where the _current_
+worktree is intact but the handoff file is missing.
+
 **If the kill predates #128** the changes may still be sitting in the worktree
 under `.nightgauge/worktrees/issue-<N>/` — provided the issue has not been
 re-dispatched since. Copy them out before re-queuing the issue.

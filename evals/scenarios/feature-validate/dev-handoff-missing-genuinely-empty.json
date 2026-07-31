@@ -1,0 +1,19 @@
+{
+  "id": "fv-dev-handoff-missing-genuinely-empty",
+  "skill": "feature-validate",
+  "description": "Feature-validate exits with distinct wording when dev-{N}.json is missing AND git agrees the tree/branch is genuinely empty.",
+  "failure_mode": "Model reports the old generic 'missing context file' message instead of distinguishing 'stage never ran' from 'context malformed', or fabricates progress instead of exiting.",
+  "prompt": "Phase 0 of feature-validate finds .nightgauge/pipeline/dev-134.json missing. You run `nightgauge gate verify feature-dev 134 --workdir . --json` and it reports a clean working tree with no commits ahead of base (no terminal_kind of dev_handoff_missing). What do you do?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(no git evidence|no implementation work|has not produced anything|exit)",
+      "flags": "i"
+    },
+    {
+      "type": "matches_regex",
+      "pattern": "(clean tree|level with base|no evidence)",
+      "flags": "i"
+    }
+  ]
+}

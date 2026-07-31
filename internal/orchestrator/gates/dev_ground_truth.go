@@ -163,16 +163,34 @@ func inspectDevWork(workspace string) devWorkState {
 // that sent an operator looking for work that was sitting on disk. A failure
 // that names the handoff as the missing artifact keeps the work in the frame.
 //
-// Returns ok=false when git cannot answer or found nothing, leaving the
+// devHandoffVerdict is the result of devHandoffMissing. A struct return
+// replaces what would otherwise be a 7-value tuple (#134 added Files/
+// FileCount on top of the existing 5) — past 5-6 returns the positional
+// tuple stops being readable at call sites.
+type devHandoffVerdict struct {
+	OK           bool
+	Reason       string
+	Evidence     []string
+	Kind         Kind
+	TerminalKind string
+	// Files and FileCount surface work.Files/work.FileCount so callers (the
+	// gate JSON CLI output) can hand the deliverable file list to a
+	// downstream consumer (feature-validate's Phase 0, #134) instead of only
+	// the human-readable Evidence strings.
+	Files     []string
+	FileCount int
+}
+
+// Returns OK=false when git cannot answer or found nothing, leaving the
 // caller's original no-op verdict intact. Fail-open, like every other
 // ground-truth check here: this runs after the money is spent.
-func devHandoffMissing(workspace, contextCondition, ctxPath string) (ok bool, reason string, evidence []string, kind Kind, terminalKind string) {
+func devHandoffMissing(workspace, contextCondition, ctxPath string) devHandoffVerdict {
 	work := inspectDevWork(workspace)
 	if !work.Determined || !work.HasWork {
-		return false, "", nil, "", ""
+		return devHandoffVerdict{}
 	}
 
-	evidence = []string{
+	evidence := []string{
 		fmt.Sprintf("workspace: %s", workspace),
 		fmt.Sprintf("context: %s (%s)", ctxPath, contextCondition),
 		fmt.Sprintf("git: %d changed deliverable file(s) present", work.FileCount),
@@ -189,10 +207,18 @@ func devHandoffMissing(workspace, contextCondition, ctxPath string) (ok bool, re
 	// The `[dev-handoff-missing]` marker mirrors `[dev-produced-no-changes]`
 	// (#202) for the same reason: the text-based classifiers and the gate path
 	// must agree on the kind, or the dashboards learn to distrust it.
-	return true, fmt.Sprintf(
-		"[dev-handoff-missing] %s, but git finds %d changed file(s) in the stage workspace — the stage did the work and ended without writing its handoff",
-		contextCondition, work.FileCount,
-	), evidence, KindFail, TerminalKindDevHandoffMissing
+	return devHandoffVerdict{
+		OK: true,
+		Reason: fmt.Sprintf(
+			"[dev-handoff-missing] %s, but git finds %d changed file(s) in the stage workspace — the stage did the work and ended without writing its handoff",
+			contextCondition, work.FileCount,
+		),
+		Evidence:     evidence,
+		Kind:         KindFail,
+		TerminalKind: TerminalKindDevHandoffMissing,
+		Files:        work.Files,
+		FileCount:    work.FileCount,
+	}
 }
 
 // strandedWorktrees lists sibling worktrees of the same repository that hold

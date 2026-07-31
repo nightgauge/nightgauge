@@ -170,6 +170,8 @@ func gateVerifyCmd() *cobra.Command {
 					Timestamp:    result.Timestamp,
 					Kind:         string(result.Kind),
 					TerminalKind: result.TerminalKind,
+					Files:        result.Files,
+					FileCount:    result.FileCount,
 				}
 				data, mErr := json.Marshal(payload)
 				if mErr != nil {
@@ -207,6 +209,11 @@ type gateVerifyJSON struct {
 	Timestamp    string   `json:"timestamp"`
 	Kind         string   `json:"kind,omitempty"`
 	TerminalKind string   `json:"terminal_kind,omitempty"`
+	// Files and FileCount are populated only on the dev_handoff_missing path
+	// (#134) — the deliverable paths git found in the stage workspace, so
+	// feature-validate can proceed against them when dev-{N}.json is missing.
+	Files     []string `json:"files,omitempty"`
+	FileCount int      `json:"file_count,omitempty"`
 }
 
 func parseIssueNumberArg(s string) (int, error) {

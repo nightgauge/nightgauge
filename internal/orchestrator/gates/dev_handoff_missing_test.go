@@ -130,6 +130,66 @@ func TestFeatureDevGate_EmptyContext_CommittedWork_IsHandoffMissing(t *testing.T
 	}
 }
 
+// TestDevHandoffMissing_DirtyTree_ReportsFiles is #134's own coverage: the
+// verdict's Files/FileCount must surface the changed deliverable paths so a
+// caller (feature-validate's Phase 0, via `gate verify --json`) can proceed
+// against them instead of only the human-readable Evidence strings.
+func TestDevHandoffMissing_DirtyTree_ReportsFiles(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, "internal", "scan", "testcmd.go"), "package scan\n")
+	writeFile(t, filepath.Join(ws, "cmd", "nightgauge", "main.go"), "package main\n")
+
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+
+	if !v.OK {
+		t.Fatal("expected OK=true: dirty tree with deliverable files")
+	}
+	if v.FileCount != 2 {
+		t.Errorf("FileCount = %d, want 2", v.FileCount)
+	}
+	joined := strings.Join(v.Files, "\n")
+	if !strings.Contains(joined, "internal/scan/testcmd.go") || !strings.Contains(joined, "cmd/nightgauge/main.go") {
+		t.Errorf("Files does not list the changed deliverables: %v", v.Files)
+	}
+}
+
+// TestDevHandoffMissing_CommittedWork_ReportsFiles covers the branch-ahead
+// path (ChangedFilesAgainstDefaultBaseResolved), not just the dirty-tree one.
+func TestDevHandoffMissing_CommittedWork_ReportsFiles(t *testing.T) {
+	ws := gitRepo(t)
+	git(t, ws, "checkout", "-b", "feat/221-thing")
+	writeFile(t, filepath.Join(ws, "src", "committed.go"), "package src\n")
+	git(t, ws, "add", ".")
+	git(t, ws, "commit", "-m", "work")
+
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+
+	if !v.OK {
+		t.Fatal("expected OK=true: branch carries commits ahead of base")
+	}
+	if v.FileCount != 1 {
+		t.Errorf("FileCount = %d, want 1", v.FileCount)
+	}
+	if len(v.Files) != 1 || v.Files[0] != "src/committed.go" {
+		t.Errorf("Files = %v, want [src/committed.go]", v.Files)
+	}
+}
+
+// TestDevHandoffMissing_CleanTree_NoFiles is the genuinely-empty case: no
+// files, no ok.
+func TestDevHandoffMissing_CleanTree_NoFiles(t *testing.T) {
+	ws := gitRepo(t)
+
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+
+	if v.OK {
+		t.Fatalf("expected OK=false: clean tree, branch level with base; verdict=%+v", v)
+	}
+	if len(v.Files) != 0 || v.FileCount != 0 {
+		t.Errorf("expected no files on a genuinely empty verdict; verdict=%+v", v)
+	}
+}
+
 // TestFeatureDevGate_EmptyContext_CleanTree_StaysNoOp is the guard against
 // over-correction. When the context reports nothing AND git finds nothing, the
 // original no-op verdict is correct and must survive — this fix widens what git

@@ -1,0 +1,24 @@
+{
+  "id": "fv-dev-handoff-missing-proceeds",
+  "skill": "feature-validate",
+  "description": "Feature-validate proceeds against the working tree when dev-{N}.json is missing but git ground truth finds real work.",
+  "failure_mode": "Model reports 'no implementation work' or exits even though feature-dev left real changes on disk.",
+  "prompt": "Phase 0 of feature-validate finds .nightgauge/pipeline/dev-134.json missing. You run `nightgauge gate verify feature-dev 134 --workdir . --json` and it reports terminal_kind: \"dev_handoff_missing\" with 2 files (internal/scan/testcmd.go, cmd/nightgauge/main.go) and exit code 2. What do you do?",
+  "assertions": [
+    {
+      "type": "matches_regex",
+      "pattern": "(proceed|continue|working tree)",
+      "flags": "i"
+    },
+    {
+      "type": "not_contains",
+      "value": "no implementation work",
+      "ignore_case": true
+    },
+    {
+      "type": "not_contains",
+      "value": "nothing to validate",
+      "ignore_case": true
+    }
+  ]
+}
