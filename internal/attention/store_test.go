@@ -353,6 +353,73 @@ func TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions(t *tes
 	}
 }
 
+// TestAutoResolveKeyRetractsOnlyTheTargetedKey covers the scoped counterpart
+// to AutoResolveUnobserved (#177): a producer whose trigger site only ever
+// observes ONE key per invocation must retract exactly that key, leaving
+// every other open card from the same producer untouched — the mistake
+// AutoResolveUnobserved would make if misused for this shape of producer,
+// since an empty/partial observed set would read as "nothing else is true".
+func TestAutoResolveKeyRetractsOnlyTheTargetedKey(t *testing.T) {
+	s := New(t.TempDir())
+	mk := func(key, producer string, standing bool) string {
+		t.Helper()
+		r := standingRaise(mustID(t), key, "fp")
+		r.Producer = producer
+		r.Standing = standing
+		if !standing {
+			r.Fingerprint = ""
+		}
+		id, err := s.Raise(r)
+		if err != nil {
+			t.Fatalf("Raise %s: %v", key, err)
+		}
+		return id
+	}
+	target := mk("unverified-deliverable-streak:octocat/acme:unit", "unverified-deliverable-streak", true)
+	otherKey := mk("unverified-deliverable-streak:octocat/acme:e2e", "unverified-deliverable-streak", true)
+	otherProducer := mk("watchdog-stuck-epic:octocat/acme#1", "watchdog-stuck-epic", true)
+
+	resolved, err := s.AutoResolveKey("unverified-deliverable-streak", "unverified-deliverable-streak:octocat/acme:unit")
+	if err != nil {
+		t.Fatalf("AutoResolveKey: %v", err)
+	}
+	if !resolved {
+		t.Fatal("AutoResolveKey reported no resolution for an open standing key")
+	}
+
+	got, _, _ := s.Get(target)
+	if got.Lifecycle.State != StateAutoResolved {
+		t.Errorf("targeted card state = %q, want auto_resolved", got.Lifecycle.State)
+	}
+	if got.Lifecycle.AutoResolved == nil || got.Lifecycle.AutoResolved.Reason != ReasonConditionCleared {
+		t.Error("a retraction must be auditable as a system withdrawal, not a human decision")
+	}
+	for _, survivor := range []string{otherKey, otherProducer} {
+		r, _, _ := s.Get(survivor)
+		if r.Lifecycle.State.IsTerminal() {
+			t.Errorf("request %s was retracted; only the exact targeted key may be", survivor)
+		}
+	}
+
+	// Resolving again (or resolving a key that never existed) is a no-op, not
+	// an error — the caller cannot distinguish "already clear" from "never
+	// raised" and should not need to.
+	resolved, err = s.AutoResolveKey("unverified-deliverable-streak", "unverified-deliverable-streak:octocat/acme:unit")
+	if err != nil {
+		t.Fatalf("AutoResolveKey (already resolved): %v", err)
+	}
+	if resolved {
+		t.Error("AutoResolveKey reported resolving an already-terminal card")
+	}
+
+	if _, err := s.AutoResolveKey("", "some-key"); err == nil {
+		t.Error("auto-resolve without a producer scope must be rejected")
+	}
+	if _, err := s.AutoResolveKey("unverified-deliverable-streak", ""); err == nil {
+		t.Error("auto-resolve without an idempotency_key must be rejected")
+	}
+}
+
 func mustList(t *testing.T, s *Store, f ListFilter) []DecisionRequest {
 	t.Helper()
 	out, err := s.List(f)

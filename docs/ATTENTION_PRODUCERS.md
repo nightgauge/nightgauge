@@ -229,6 +229,27 @@ that outlives its own TTL revives its card rather than minting a new one (#108).
 Set `Context.PR` when the request is about a pull request, so repo-scoped
 producers can dedupe against it.
 
+### Retracting when the trigger site only observes ONE key per invocation
+
+`autoResolveAttention` / `Store.AutoResolveUnobserved` assume the caller just
+evaluated the producer's **entire** condition set and passes the complete
+observed set as evidence of what still holds — correct for `work-exhaustion`,
+`owner-action-handoff`, and `watchdog-stuck-epic`, each of which re-scans
+every card the producer could have raised on every cycle.
+
+Some run-loop-scoped standing producers do not fit that shape: they only ever
+observe a single `(repo, ...)` slice per invocation, never the producer's
+whole condition set across every repo it has open cards for. Calling
+`AutoResolveUnobserved` from such a site would retract every OTHER open card
+of the same producer, mistaking "I did not look at it this time" for "I
+looked and it is fine now" — exactly what Invariant 1 exists to prevent.
+
+`unverified-deliverable-streak` (#177, per `(repo, tier)`) is this shape: one
+issue's validate run only ever resets the tiers it observed executing, never
+every repo's streaks. Use `Store.AutoResolveKey(producer, idempotencyKey)`
+instead — it retracts exactly the one targeted key, leaving every other open
+card from the same producer untouched.
+
 ## See also
 
 - [ADR 015 — DecisionRequests](decisions/015-decision-requests.md) — the contract

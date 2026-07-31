@@ -281,6 +281,48 @@ func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, 
 	return retracted, nil
 }
 
+// AutoResolveKey retracts the single open standing request for exactly one
+// (producer, idempotency_key) pair, if one exists.
+//
+// AutoResolveUnobserved assumes the caller just evaluated the producer's
+// ENTIRE condition set and passes the complete observed set as evidence of
+// what is still true — correct for a fleet-wide sweep like work-exhaustion,
+// wrong for a producer whose trigger site only ever observes a single key per
+// invocation (a run only ever validates one repo's tiers, never every repo the
+// producer has open cards for). Calling AutoResolveUnobserved from such a
+// site would retract every OTHER open card of the same producer, mistaking
+// "I did not look at it this time" for "I looked and it is fine now" —
+// exactly the failure invariant 1 exists to prevent. This is the scoped
+// counterpart for that shape of producer.
+func (s *Store) AutoResolveKey(producer, idempotencyKey string) (bool, error) {
+	if strings.TrimSpace(producer) == "" {
+		return false, fmt.Errorf("attention: auto-resolve requires a producer")
+	}
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return false, fmt.Errorf("attention: auto-resolve requires an idempotency_key")
+	}
+
+	mu := lockFor(s.dir)
+	mu.Lock()
+	defer mu.Unlock()
+
+	stored, err := s.scanLocked()
+	if err != nil {
+		return false, err
+	}
+	for _, rec := range stored {
+		req := rec.req
+		if !req.Standing || req.Lifecycle.State.IsTerminal() {
+			continue
+		}
+		if req.Producer != producer || req.IdempotencyKey != idempotencyKey {
+			continue
+		}
+		return s.autoResolveLocked(rec), nil
+	}
+	return false, nil
+}
+
 // autoResolveLocked retracts one open standing request because its condition
 // was no longer observed. Reports whether the transition was persisted — a
 // per-file write failure leaves the card exactly as it was rather than aborting

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/deliverable"
 )
 
 // newAttentionProducerScheduler builds a scheduler through the real constructor
@@ -559,5 +560,119 @@ func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
 		if r.Producer == producerTerminalFailure {
 			t.Errorf("terminal-failure card survived Resume(): %+v", r)
 		}
+	}
+}
+
+// --- Producer 8b: unverified-deliverable streak (#177) ----------------------
+
+func TestUnverifiedDeliverableStreakFirstOccurrenceRaisesFYIStreakOne(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "no framework detected")
+
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Producer != producerUnverifiedDeliverableStreak {
+		t.Errorf("producer = %q, want %q", r.Producer, producerUnverifiedDeliverableStreak)
+	}
+	if !r.Standing {
+		t.Error("streak card must be Standing")
+	}
+	if r.Fingerprint != "streak:1" {
+		t.Errorf("fingerprint = %q, want streak:1", r.Fingerprint)
+	}
+	if r.Severity != attention.SeverityFYI {
+		t.Errorf("severity = %q, want fyi at streak 1", r.Severity)
+	}
+	assertSteerSet(t, r)
+}
+
+// TestUnverifiedDeliverableStreakReoccurrenceUpdatesInPlace asserts a second
+// consecutive occurrence for the same (repo, tier) updates the existing card
+// rather than duplicating it, and escalates the fingerprint to streak:2 while
+// staying at FYI severity (escalation only crosses into blocking_run at 3+).
+func TestUnverifiedDeliverableStreakReoccurrenceUpdatesInPlace(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "no framework detected")
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 43, "run-2", "no framework detected")
+
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests after 2 occurrences, want 1 (in-place update): %+v", len(reqs), reqs)
+	}
+	r := reqs[0]
+	if r.Fingerprint != "streak:2" {
+		t.Errorf("fingerprint = %q, want streak:2", r.Fingerprint)
+	}
+	if r.Severity != attention.SeverityFYI {
+		t.Errorf("severity = %q, want fyi at streak 2", r.Severity)
+	}
+}
+
+// TestUnverifiedDeliverableStreakEscalatesAtThreeOccurrences asserts the
+// severity ladder crosses into blocking_run (never blocking_fleet) once the
+// streak reaches 3 consecutive occurrences.
+func TestUnverifiedDeliverableStreakEscalatesAtThreeOccurrences(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	for i, issue := range []int{42, 43, 44} {
+		s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierUnit, issue, fmt.Sprintf("run-%d", i), "reason")
+	}
+
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests after 3 occurrences, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Fingerprint != "streak:3" {
+		t.Errorf("fingerprint = %q, want streak:3", r.Fingerprint)
+	}
+	if r.Severity != attention.SeverityBlockingRun {
+		t.Errorf("severity = %q, want blocking_run at streak 3", r.Severity)
+	}
+}
+
+// TestUnverifiedDeliverableStreakResetsOnExecution asserts a tier executing
+// resets the streak: the next occurrence starts back at streak:1, not resumes
+// from where it left off.
+func TestUnverifiedDeliverableStreakResetsOnExecution(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration, 42, "run-1", "reason")
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration, 43, "run-2", "reason")
+
+	s.resolveUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration)
+
+	if reqs := openRunRequests(t, s); len(reqs) != 0 {
+		t.Fatalf("card survived resolveUnverifiedDeliverableStreak: got %d open requests, want 0", len(reqs))
+	}
+
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierIntegration, 44, "run-3", "reason")
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests after reset+re-raise, want 1", len(reqs))
+	}
+	if reqs[0].Fingerprint != "streak:1" {
+		t.Errorf("fingerprint after reset = %q, want streak:1 (not resumed)", reqs[0].Fingerprint)
+	}
+}
+
+// TestUnverifiedDeliverableStreakResolveIsScopedToOneTier asserts
+// resolveUnverifiedDeliverableStreak only retracts the (repo, tier) key it
+// was called with, leaving other open tiers' streak cards for the same repo
+// untouched — the exact mistake AutoResolveUnobserved would make here.
+func TestUnverifiedDeliverableStreakResolveIsScopedToOneTier(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierUnit, 42, "run-1", "reason")
+	s.raiseUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E, 42, "run-1", "reason")
+
+	s.resolveUnverifiedDeliverableStreak("octocat/acme", deliverable.TierUnit)
+
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d open requests, want 1 (e2e streak untouched)", len(reqs))
+	}
+	if reqs[0].IdempotencyKey != keyUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E) {
+		t.Errorf("surviving card key = %q, want the e2e streak card", reqs[0].IdempotencyKey)
 	}
 }

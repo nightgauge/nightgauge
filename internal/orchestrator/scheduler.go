@@ -3685,6 +3685,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 						if f := deliverable.FindingFromArtifact(doc); f.Detected() {
 							log.Printf("#%d: %s", item.Number, f.Summary())
 							s.raiseUnverifiedDeliverable(item.Repo, item.Number, runtime.RunID, f)
+							for _, t := range f.Tiers {
+								s.raiseUnverifiedDeliverableStreak(item.Repo, t, item.Number, runtime.RunID, f.TierReasons[t])
+							}
+						}
+						// A tier that DID run this issue resets its streak,
+						// independent of whether any tier was idle (#177) — the
+						// reset is "this tier executed", not "nothing was
+						// detected".
+						exec := deliverable.ExecutionFromArtifact(doc)
+						if exec.Unit {
+							s.resolveUnverifiedDeliverableStreak(item.Repo, deliverable.TierUnit)
+						}
+						if exec.Integration {
+							s.resolveUnverifiedDeliverableStreak(item.Repo, deliverable.TierIntegration)
+						}
+						if exec.E2E {
+							s.resolveUnverifiedDeliverableStreak(item.Repo, deliverable.TierE2E)
 						}
 					}
 				}
