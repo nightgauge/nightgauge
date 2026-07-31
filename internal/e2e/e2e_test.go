@@ -2,9 +2,15 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // --- DetectE2E tests ---
@@ -247,7 +253,7 @@ func TestDetectE2E_PlaywrightTakesPrecedenceOrder(t *testing.T) {
 
 func TestRunE2E_NoFramework_Skipped(t *testing.T) {
 	dir := t.TempDir()
-	result, err := RunE2E(context.Background(), dir, "")
+	result, err := RunE2E(context.Background(), dir, "", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -261,7 +267,7 @@ func TestRunE2E_NoFramework_Skipped(t *testing.T) {
 
 func TestRunE2E_UnknownFramework_Skipped(t *testing.T) {
 	dir := t.TempDir()
-	result, err := RunE2E(context.Background(), dir, "unknown-framework")
+	result, err := RunE2E(context.Background(), dir, "unknown-framework", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -270,6 +276,77 @@ func TestRunE2E_UnknownFramework_Skipped(t *testing.T) {
 	}
 	if result.Status != "skipped" {
 		t.Errorf("expected status=skipped, got %s", result.Status)
+	}
+}
+
+// --- runCmd timeout / streaming tests ---
+
+func TestRunCmd_Timeout_KillsProcessGroup(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+
+	// Forks a background child that outlives the parent shell, writing its
+	// PID to a file so the test can assert it does not survive the kill.
+	script := "echo $$ > /dev/null; (sleep 999 & echo $! > '" + pidFile + "'); sleep 999"
+
+	_, err := runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+	if !errors.Is(err, errE2ETimeout) {
+		t.Fatalf("expected errE2ETimeout, got %v", err)
+	}
+
+	// Give the killed child's PID a moment to be reaped by the OS if it were
+	// somehow still alive.
+	time.Sleep(300 * time.Millisecond)
+
+	pidBytes, readErr := os.ReadFile(pidFile)
+	if readErr != nil {
+		t.Fatalf("expected child pid file to be written: %v", readErr)
+	}
+	childPID, convErr := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if convErr != nil {
+		t.Fatalf("invalid child pid: %v", convErr)
+	}
+	if err := syscall.Kill(childPID, 0); err == nil {
+		t.Fatalf("expected child pid %d to be dead after process-group kill, but it is still alive", childPID)
+	}
+}
+
+func TestRunCmd_Timeout_PartialOutputCaptured(t *testing.T) {
+	dir := t.TempDir()
+	script := "echo before-timeout; sleep 999"
+
+	out, err := runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+	if !errors.Is(err, errE2ETimeout) {
+		t.Fatalf("expected errE2ETimeout, got %v", err)
+	}
+	if !strings.Contains(out, "before-timeout") {
+		t.Errorf("expected partial output to contain %q, got %q", "before-timeout", out)
+	}
+}
+
+func TestRunCmd_Success_ReturnsOutput(t *testing.T) {
+	dir := t.TempDir()
+	out, err := runCmd(context.Background(), dir, 5*time.Second, "echo", "hello")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "hello") {
+		t.Errorf("expected output to contain %q, got %q", "hello", out)
+	}
+}
+
+func TestRunCmd_NonZeroExit_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	_, err := runCmd(context.Background(), dir, 5*time.Second, "sh", "-c", "exit 1")
+	if err == nil {
+		t.Fatal("expected error for non-zero exit")
+	}
+	if errors.Is(err, errE2ETimeout) {
+		t.Error("non-zero exit must not be classified as timeout")
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Errorf("expected *exec.ExitError, got %T: %v", err, err)
 	}
 }
 

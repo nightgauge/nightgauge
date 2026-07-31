@@ -1,13 +1,21 @@
 package e2e
 
 import (
-	"bytes"
+	"bufio"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"time"
 )
+
+// errE2ETimeout is returned by runCmd when the subprocess is killed for
+// exceeding its timeout, so RunE2E can distinguish a timeout from a genuine
+// non-zero exit and map it to Status: "timeout" instead of "failed".
+var errE2ETimeout = errors.New("e2e: command timed out")
 
 // E2EDetectResult is the structured output of e2e framework detection.
 type E2EDetectResult struct {
@@ -21,12 +29,17 @@ type E2EDetectResult struct {
 // E2ERunResult is the structured output of an e2e test run.
 type E2ERunResult struct {
 	Ran       bool     `json:"ran"`
-	Status    string   `json:"status"` // "passed" | "failed" | "skipped"
+	Status    string   `json:"status"` // "passed" | "failed" | "skipped" | "timeout"
 	Framework string   `json:"framework"`
 	Commands  []string `json:"commands"`
 	Output    string   `json:"output"`
 	Timestamp string   `json:"timestamp"`
 }
+
+// DefaultE2ETimeout bounds an e2e subprocess run when the caller does not
+// supply an explicit timeout, so unattended pipeline runs never hang forever
+// on a stuck framework.
+const DefaultE2ETimeout = 10 * time.Minute
 
 // DetectE2E scans workdir for E2E test frameworks.
 // Detection order: Playwright > Cypress > Vitest > Jest > Go test.
@@ -80,10 +93,14 @@ func DetectE2E(_ context.Context, workdir string) (E2EDetectResult, error) {
 	return result, nil
 }
 
-// RunE2E executes the E2E test suite in workdir.
+// RunE2E executes the E2E test suite in workdir, bounded by timeout (a
+// non-positive timeout falls back to DefaultE2ETimeout).
 // If framework is non-empty it skips detection and uses the specified framework.
 // Detection order mirrors DetectE2E: first detected framework wins when auto-detecting.
-func RunE2E(ctx context.Context, workdir, framework string) (E2ERunResult, error) {
+func RunE2E(ctx context.Context, workdir, framework string, timeout time.Duration) (E2ERunResult, error) {
+	if timeout <= 0 {
+		timeout = DefaultE2ETimeout
+	}
 	ts := time.Now().UTC().Format(time.RFC3339)
 
 	if framework == "" {
@@ -112,11 +129,14 @@ func RunE2E(ctx context.Context, workdir, framework string) (E2ERunResult, error
 		commandStr += " " + a
 	}
 
-	out, err := runCmd(ctx, workdir, cmd, args...)
+	out, err := runCmd(ctx, workdir, timeout, cmd, args...)
 	ts = time.Now().UTC().Format(time.RFC3339)
 	status := "passed"
 	if err != nil {
 		status = "failed"
+		if errors.Is(err, errE2ETimeout) {
+			status = "timeout"
+		}
 	}
 
 	return E2ERunResult{
@@ -236,12 +256,73 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func runCmd(ctx context.Context, workdir string, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
+// runCmd runs name/args in workdir, bounded by timeout. Output is streamed
+// incrementally from stdout/stderr so a killed process still yields whatever
+// was captured before the kill (AC4), rather than the all-or-nothing
+// bytes.Buffer capture this replaced. On timeout the whole process group is
+// killed (AC3) — a plain cmd.Process.Kill() would only kill the immediate
+// npx/go process and leave framework child processes (e.g. a spawned
+// browser) orphaned.
+func runCmd(ctx context.Context, workdir string, timeout time.Duration, name string, args ...string) (string, error) {
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.Command(name, args...)
 	cmd.Dir = workdir
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-	err := cmd.Run()
-	return buf.String(), err
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	var mu sync.Mutex
+	var buf []byte
+	var wg sync.WaitGroup
+	stream := func(r *bufio.Scanner) {
+		defer wg.Done()
+		for r.Scan() {
+			mu.Lock()
+			buf = append(buf, r.Bytes()...)
+			buf = append(buf, '\n')
+			mu.Unlock()
+		}
+	}
+
+	wg.Add(2)
+	go stream(bufio.NewScanner(stdout))
+	go stream(bufio.NewScanner(stderr))
+
+	waitDone := make(chan error, 1)
+	go func() {
+		wg.Wait()
+		waitDone <- cmd.Wait()
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		mu.Lock()
+		out := string(buf)
+		mu.Unlock()
+		return out, waitErr
+	case <-execCtx.Done():
+		if pgid, pidErr := syscall.Getpgid(cmd.Process.Pid); pidErr == nil {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		} else {
+			_ = cmd.Process.Kill()
+		}
+		<-waitDone // reap the process; error is discarded — it's a kill artifact
+		mu.Lock()
+		out := string(buf)
+		mu.Unlock()
+		return out, errE2ETimeout
+	}
 }
