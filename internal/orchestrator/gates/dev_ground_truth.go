@@ -69,6 +69,35 @@ type devWorkState struct {
 	ConfirmedCount int
 }
 
+// withoutOwnHandoff drops the running stage's own dev-{N}.json from a declared
+// file list.
+//
+// The bookkeeping probe (#237) widens its scope to whatever the stage declared,
+// then confirms those paths against git. A stage's own handoff is a bookkeeping
+// path that is always present and always modified at the moment the gate runs —
+// every run writes it by definition — so declaring it alone satisfied both
+// halves and passed a run that produced nothing (#249). That is #202 reached
+// through a new door: the exclusion still stands, but a declaration naming the
+// exhaust routes around it.
+//
+// No legitimate deliverable is lost: a stage's handoff is never the work. Work
+// that untracks OTHER issues' context files — #237's motivating case — is
+// unaffected, since only the current issue's own path is dropped.
+//
+// This mirrors enforceValidateCommitContract on the TypeScript side, which
+// already strips .nightgauge/ from claimed files before judging them.
+func withoutOwnHandoff(files []string, issueNumber int) []string {
+	own := fmt.Sprintf(".nightgauge/pipeline/dev-%d.json", issueNumber)
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		if filepath.ToSlash(strings.TrimPrefix(filepath.Clean(f), "./")) == own {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
 // allBookkeeping reports whether files is non-empty and every entry is a
 // bookkeeping path. Used to decide whether the ground-truth probe should
 // widen its scope to the stage's declared deliverable (#237).

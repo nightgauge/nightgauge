@@ -336,3 +336,85 @@ func TestFeatureDevGate_GroundTruth_SelfNotReportedAsStranded(t *testing.T) {
 		t.Fatalf("the workspace reported itself as stranded: %v", got)
 	}
 }
+
+// A stage's own dev-{N}.json is never its deliverable. Declaring only that file
+// satisfied #237's bookkeeping probe on both halves — it is a bookkeeping path,
+// and git confirms it because the stage just wrote it — so a run that produced
+// nothing passed the gate reporting "declared=1 confirmed=1" (#249).
+//
+// This is #202 through a new door: the exclusion still stands, but a
+// declaration naming the pipeline's own exhaust routes around it.
+func TestFeatureDevGate_GroundTruth_OwnHandoffAloneIsNotWork(t *testing.T) {
+	ws := gitRepo(t)
+	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)), map[string]any{
+		"files_changed": map[string]any{
+			"created":  []string{".nightgauge/pipeline/dev-42.json"},
+			"modified": []string{},
+			"deleted":  []string{},
+		},
+		"build_verification": map[string]any{"ran": true, "status": "passed"},
+	})
+
+	gate, ok := LookupByStageName("feature-dev")
+	if !ok {
+		t.Fatal("no gate registered for feature-dev")
+	}
+	res := gate.Verify(context.Background(), 42, ws)
+
+	if res.Passed {
+		t.Fatalf("gate passed on a stage whose only declared deliverable is its own handoff: reason=%q evidence=%v", res.Reason, res.Evidence)
+	}
+}
+
+// The same filter must not disturb #237's motivating case: untracking ANOTHER
+// issue's context file is real work and still passes.
+func TestFeatureDevGate_GroundTruth_OtherIssuesHandoffIsStillWork(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "dev-1.json"), "{}\n")
+	git(t, ws, "add", ".nightgauge/pipeline/dev-1.json")
+	git(t, ws, "commit", "-m", "track dev-1")
+	git(t, ws, "rm", "--cached", ".nightgauge/pipeline/dev-1.json")
+	devContextDeleted(t, ws, 42, []string{".nightgauge/pipeline/dev-1.json"})
+
+	gate, ok := LookupByStageName("feature-dev")
+	if !ok {
+		t.Fatal("no gate registered for feature-dev")
+	}
+	res := gate.Verify(context.Background(), 42, ws)
+
+	if !res.Passed {
+		t.Fatalf("gate failed on a real bookkeeping deliverable: reason=%q evidence=%v", res.Reason, res.Evidence)
+	}
+}
+
+// A declaration mixing the stage's own handoff with real bookkeeping work is
+// judged on the real work alone.
+func TestFeatureDevGate_GroundTruth_OwnHandoffFilteredFromMixedDeclaration(t *testing.T) {
+	ws := gitRepo(t)
+	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "dev-1.json"), "{}\n")
+	git(t, ws, "add", ".nightgauge/pipeline/dev-1.json")
+	git(t, ws, "commit", "-m", "track dev-1")
+	git(t, ws, "rm", "--cached", ".nightgauge/pipeline/dev-1.json")
+	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)), map[string]any{
+		"files_changed": map[string]any{
+			"created":  []string{".nightgauge/pipeline/dev-42.json"},
+			"modified": []string{},
+			"deleted":  []string{".nightgauge/pipeline/dev-1.json"},
+		},
+		"build_verification": map[string]any{"ran": true, "status": "passed"},
+	})
+
+	gate, ok := LookupByStageName("feature-dev")
+	if !ok {
+		t.Fatal("no gate registered for feature-dev")
+	}
+	res := gate.Verify(context.Background(), 42, ws)
+
+	if !res.Passed {
+		t.Fatalf("gate failed despite a real bookkeeping deletion alongside the handoff: reason=%q evidence=%v", res.Reason, res.Evidence)
+	}
+	joined := strings.Join(res.Evidence, " ")
+	if !strings.Contains(joined, "declared=1") {
+		t.Errorf("evidence should report the filtered declaration (declared=1), got %v", res.Evidence)
+	}
+}
