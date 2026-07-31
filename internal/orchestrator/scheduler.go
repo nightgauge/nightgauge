@@ -1622,6 +1622,15 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 			continue
 		}
 
+		// Processing guard (Issue #232): items already dispatched are kept in
+		// s.queue (see below — they are no longer spliced out) so their
+		// in-flight state is visible to queueStatusLocked() and cloud sync.
+		// Skip them here so a later DequeueIndependent call doesn't
+		// re-dispatch a run that is already executing.
+		if item.Status == "processing" {
+			continue
+		}
+
 		// blockedBy guard: skip if blocked by any OPEN issue that is running, dequeued, or still in queue
 		if len(item.BlockedBy) > 0 {
 			blocked := false
@@ -1655,16 +1664,20 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		// after the first sub-issue completed. The blockedBy guard above already
 		// handles real intra-epic ordering via GitHub's blockedBy relationships.
 
+		item.Status = "processing"
 		dequeued = append(dequeued, item)
 		dequeuedNums[item.IssueNumber] = true
 		repoInFlight[item.Repo]++
 		toRemoveIdx = append(toRemoveIdx, i)
 	}
 
-	// Remove dequeued items from queue (reverse index order)
-	sort.Sort(sort.Reverse(sort.IntSlice(toRemoveIdx)))
+	// Mark dequeued items as "processing" in place instead of splicing them
+	// out (Issue #232). This keeps in-flight items visible in s.queue so
+	// queueStatusLocked() and cloud sync can report "processing" instead of
+	// "idle" while a fleet is running. completeQueueItemLocked removes them
+	// once the pipeline reaches a terminal state.
 	for _, idx := range toRemoveIdx {
-		s.queue = append(s.queue[:idx], s.queue[idx+1:]...)
+		s.queue[idx].Status = "processing"
 	}
 
 	if len(dequeued) > 0 {
@@ -1674,6 +1687,35 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 	}
 
 	return dequeued
+}
+
+// completeQueueItemLocked removes the matching "processing" queue item
+// (repo + issue number) once its pipeline run reaches a terminal state
+// (Issue #232). No-op when no such item exists — runs dispatched via the
+// autonomous board-scan path (RunPipelineForItem -> dispatchItem ->
+// runPipeline) never touch s.queue, so this only matters for items that came
+// through DequeueIndependent. Caller must hold s.mu.
+func (s *Scheduler) completeQueueItemLocked(repo string, issueNumber int) {
+	for i, item := range s.queue {
+		if item.Status != "processing" || item.IssueNumber != issueNumber || item.Repo != repo {
+			continue
+		}
+		s.queue = append(s.queue[:i], s.queue[i+1:]...)
+		s.recalculatePositions()
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+		return
+	}
+}
+
+// CompleteQueueItem is the exported, lock-acquiring wrapper around
+// completeQueueItemLocked. Called from runPipeline's terminal defer on every
+// exit path (success, failure, cancellation) so a dequeued item never lingers
+// in the queue as "processing" after its run ends. (Issue #232)
+func (s *Scheduler) CompleteQueueItem(repo string, issueNumber int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.completeQueueItemLocked(repo, issueNumber)
 }
 
 // ExcludeLabels returns the resolved set of human-only labels (#317) this
@@ -2164,6 +2206,16 @@ func (s *Scheduler) queueStatusLocked() string {
 	if len(s.queue) == 0 {
 		return "idle"
 	}
+	// Precedence (Issue #232): processing > paused > waiting > idle. A
+	// dispatched item stays in s.queue with Status == "processing" instead
+	// of being spliced out, so its presence must outrank "paused"/"waiting"
+	// — otherwise a running fleet still reads as idle/waiting on disk, in
+	// the VSCode tree, and via the cloud sync mirror.
+	for _, item := range s.queue {
+		if item.Status == "processing" {
+			return "processing"
+		}
+	}
 	for _, item := range s.queue {
 		if item.Status == "paused" {
 			return "paused"
@@ -2239,10 +2291,18 @@ func (s *Scheduler) emitQueueChangedUnlocked() {
 	go s.onQueueChanged(st)
 }
 
-// recalculatePositions renumbers queue items 1..N. Must be called with s.mu held.
+// recalculatePositions renumbers queue items 1..N over the items actually
+// waiting. "processing" items are skipped (Issue #232) so an in-flight item
+// doesn't occupy a position slot the UI reorder commands act on; its
+// Position is left at whatever it last held.
 func (s *Scheduler) recalculatePositions() {
+	pos := 1
 	for i := range s.queue {
-		s.queue[i].Position = i + 1
+		if s.queue[i].Status == "processing" {
+			continue
+		}
+		s.queue[i].Position = pos
+		pos++
 	}
 }
 
@@ -2733,6 +2793,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			TerminalFailureKind: terminalFailureKind,
 			TotalCostUSD:        snap.TotalCostUSD,
 		})
+
+		// Remove the item from the queue on every exit path — success,
+		// failure, cancellation. No-op when the run wasn't dispatched via
+		// DequeueIndependent (e.g. the autonomous board-scan path). (Issue #232)
+		s.CompleteQueueItem(item.Repo, item.Number)
 
 		if s.onPipelineComplete != nil {
 			s.onPipelineComplete(item.Repo, item.Number, snap, pipelineSuccess)
