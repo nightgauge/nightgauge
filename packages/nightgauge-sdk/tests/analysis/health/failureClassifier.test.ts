@@ -161,6 +161,34 @@ describe("classifyTerminalKind — dev_produced_no_changes (#202)", () => {
   });
 });
 
+describe("classifyTerminalKind — api_connection_lost (#227)", () => {
+  // The verbatim string from a transport drop that killed two concurrent runs
+  // in two repositories in the same instant.
+  const live = "API Error: Connection closed mid-response. The response above may be incomplete.";
+
+  it("classifies the live wording that matched nothing", () => {
+    expect(classifyTerminalKind(live)).toBe("api_connection_lost");
+  });
+
+  it("classifies the marker skillRunner stamps from terminal_reason", () => {
+    expect(classifyTerminalKind(`[api_connection_lost] ${live}`)).toBe("api_connection_lost");
+  });
+
+  // The bare `api error` pattern in the agent block used to claim this,
+  // scoring an Anthropic socket drop at the 0.5 agent weight. The run had no
+  // say in it, so it belongs at the 0.05 infrastructure weight — otherwise the
+  // agent reliability score is partly a measurement of Anthropic's uptime.
+  it("scores as infrastructure, not agent — the run had no say in it", () => {
+    expect(classifyFailureCategory(live, "pr-create")).toBe("infrastructure");
+  });
+
+  it("does NOT excuse an unrelated failure that mentions a closed connection", () => {
+    const unrelated = "validation failed: DatabasePool: connection closed while acquiring";
+    expect(classifyTerminalKind(unrelated)).not.toBe("api_connection_lost");
+    expect(classifyFailureCategory(unrelated, "feature-validate")).not.toBe("infrastructure");
+  });
+});
+
 describe("classifyTerminalKind — dev_handoff_missing (#223)", () => {
   // The gate emits KindFail for this one, so it is NOT wrapped in the
   // "premature turn end" envelope — the whole point is that there WAS a state

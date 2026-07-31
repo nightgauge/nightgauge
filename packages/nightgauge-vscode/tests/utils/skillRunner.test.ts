@@ -3660,6 +3660,70 @@ describe("classifyError (Issue #2573)", () => {
   });
 });
 
+describe("extractStreamJsonError — API transport normalization (#227)", () => {
+  // The verbatim envelope from a transport drop that killed two concurrent
+  // runs in two repositories in the same instant, one at pr-create with $21.54
+  // already spent. Neither was classified; the fleet halted and both issues
+  // were charged a lifetime failure for a socket they had no say in.
+  const liveEnvelope = {
+    type: "result",
+    is_error: true,
+    terminal_reason: "api_error",
+    result: "API Error: Connection closed mid-response. The response above may be incomplete.",
+  };
+
+  it("stamps the canonical kind marker from terminal_reason", () => {
+    const outcome = extractStreamJsonError(JSON.stringify(liveEnvelope));
+    expect(outcome.kind).toBe("error");
+    const msg = outcome.kind === "error" ? outcome.error.message : "";
+    // The marker is what makes isTransientNetworkFailureText match, which is
+    // what skips haltQueueOnSlotFailure. Without it the substring allowlists
+    // miss this wording entirely.
+    expect(msg).toContain("[api_connection_lost]");
+    expect(msg).toContain("Connection closed mid-response");
+  });
+
+  it("reads the structured field, not the prose — an unrecognised wording still normalizes", () => {
+    const outcome = extractStreamJsonError(
+      JSON.stringify({
+        type: "result",
+        is_error: true,
+        terminal_reason: "api_error",
+        result: "API Error: some phrasing nobody has written a pattern for yet",
+      })
+    );
+    const msg = outcome.kind === "error" ? outcome.error.message : "";
+    expect(msg).toContain("[api_connection_lost]");
+  });
+
+  it("leaves a genuine stage failure alone", () => {
+    const outcome = extractStreamJsonError(
+      JSON.stringify({
+        type: "result",
+        is_error: true,
+        result: "feature-validate: 2 tests failed",
+      })
+    );
+    const msg = outcome.kind === "error" ? outcome.error.message : "";
+    expect(msg).not.toContain("[api_connection_lost]");
+    expect(msg).toContain("2 tests failed");
+  });
+
+  it("does not claim a session limit — that has its own recovery path", () => {
+    const outcome = extractStreamJsonError(
+      JSON.stringify({
+        type: "result",
+        is_error: true,
+        subtype: "success",
+        result: "You've hit your session limit · resets 10:30am (America/Denver)",
+      })
+    );
+    const msg = outcome.kind === "error" ? outcome.error.message : "";
+    expect(msg).toContain("[rate-limit-quota-exhausted]");
+    expect(msg).not.toContain("[api_connection_lost]");
+  });
+});
+
 describe("extractStreamJsonError — session-limit normalization (#3792)", () => {
   it("rewrites an Anthropic session-limit result to the quota-exhausted marker with resetsAt", () => {
     const line = JSON.stringify({

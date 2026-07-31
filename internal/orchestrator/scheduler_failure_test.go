@@ -194,6 +194,34 @@ func TestClassifyTerminalKind(t *testing.T) {
 			"API Error: socket hang up",
 			TerminalKindApiConnectionLost,
 		},
+		// Issue #227 — the verbatim string from a transport drop that killed two
+		// concurrent runs in two repositories in the same instant, one at
+		// pr-create with $21.54 already spent. It matched
+		// nothing: `socket connection was closed` needs the `socket` prefix, and
+		// `connection reset`/`refused` are different verbs. Falling through cost
+		// a fleet halt and a lifetime failure on two blameless issues.
+		{
+			"api_connection_lost_mid_response",
+			"API Error: Connection closed mid-response. The response above may be incomplete.",
+			TerminalKindApiConnectionLost,
+		},
+		// The marker skillRunner now stamps from the envelope's terminal_reason.
+		{
+			"api_connection_lost_marker",
+			"[api_connection_lost] API Error: Connection closed mid-response. The response above may be incomplete.",
+			TerminalKindApiConnectionLost,
+		},
+		// An unrelated stage failure that merely mentions a closed connection
+		// must NOT be excused as a transport blip — that would silently disable
+		// the lifetime cap for a whole class of real defects. It falls through
+		// unclassified here, which is the pre-existing behavior for this text;
+		// what this case pins is that widening the transport matcher did not
+		// swallow it. The `api error` gate is what holds the line.
+		{
+			"integration_test_mentioning_connection_closed_is_not_transient",
+			"validation failed: 3 tests failed — DatabasePool: connection closed while acquiring",
+			"",
+		},
 		{
 			"api_connection_lost_dns",
 			"api error: getaddrinfo ENOTFOUND api.anthropic.com",

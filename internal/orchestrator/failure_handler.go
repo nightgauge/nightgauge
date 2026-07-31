@@ -402,7 +402,16 @@ func ClassifyTerminalKind(errorText string) string {
 				strings.Contains(t, "getaddrinfo") ||
 				strings.Contains(t, "fetch failed") ||
 				strings.Contains(t, "connection reset") ||
-				strings.Contains(t, "connection refused"))) {
+				strings.Contains(t, "connection refused") ||
+				// #227: the live wording. `socket connection was closed` above
+				// requires the `socket` prefix and `connection reset`/`refused`
+				// are different verbs, so `API Error: Connection closed
+				// mid-response` matched nothing and fell through to the
+				// code-fault heuristics — halting the fleet on a blip. The
+				// structural fix is upstream (skillRunner stamps the kind from
+				// the envelope's terminal_reason); this keeps the classifier
+				// honest for any producer that does not go through it.
+				strings.Contains(t, "connection closed"))) {
 		return TerminalKindApiConnectionLost
 	}
 
