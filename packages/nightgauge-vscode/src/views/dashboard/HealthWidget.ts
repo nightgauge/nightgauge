@@ -405,12 +405,15 @@ export class HealthWidgetService {
   ): Promise<ActiveAlert[]> {
     const alerts: ActiveAlert[] = [];
     try {
-      const { AutoModelSelector, CalibrationService } = await import("@nightgauge/sdk");
+      const { AutoModelSelector, StageModelCalibrationService } = await import("@nightgauge/sdk");
+      const { toModelEnvelope } = await import("../../utils/modeProfiles");
       const selector = new AutoModelSelector();
       const calibrationPath = this.workspacePath
-        ? CalibrationService.getDefaultPath(this.workspacePath)
+        ? StageModelCalibrationService.getDefaultPath(this.workspacePath)
         : null;
-      const calibration = calibrationPath ? await CalibrationService.load(calibrationPath) : null;
+      const stageModelCalibration = calibrationPath
+        ? await StageModelCalibrationService.load(calibrationPath)
+        : null;
       const history = this.dashboardState.getHistory().slice(0, 10);
 
       for (const run of history) {
@@ -427,16 +430,17 @@ export class HealthWidgetService {
           sizeLabel = "L";
         }
 
-        // Issue #3216: HealthWidget shows aggregate cost-anomaly history, so
-        // we explicitly read the `elevated` calibration bucket (the natural
-        // baseline) rather than the operator's currently-active mode. This
-        // matches today's behavior and keeps the alert calibration stable as
-        // operators toggle between modes.
+        // Issue #142 (was #3216): HealthWidget shows aggregate cost-anomaly
+        // history, so we explicitly use the `elevated` routing envelope (the
+        // natural baseline) rather than the operator's currently-active mode.
+        // This matches today's behavior and keeps the alert calibration
+        // stable as operators toggle between modes. Per-(stage, model)
+        // calibration is still consulted per stage.
         const estimate = selector.estimatePipelineCost(
           { labels: [`size:${sizeLabel}`], title: run.title },
           run.routing?.skippedStages ?? [],
-          calibration,
-          "elevated"
+          stageModelCalibration,
+          toModelEnvelope("elevated")
         );
         const expectedCost = estimate.totalEstimatedCost;
 

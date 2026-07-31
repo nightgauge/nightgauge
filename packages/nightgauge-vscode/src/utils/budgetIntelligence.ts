@@ -24,13 +24,14 @@
 import * as path from "path";
 import {
   AutoModelSelector,
-  CalibrationService,
+  StageModelCalibrationService,
   type IssueMetadata,
   type PipelineCostEstimate,
 } from "@nightgauge/sdk";
 import { ExecutionHistoryReader } from "./executionHistoryReader";
 import type { NormalizedRunRecord } from "./executionHistoryReader";
 import { p75 } from "./adaptiveBudgetLoader";
+import { toModelEnvelope } from "./modeProfiles";
 
 /**
  * Resolve the main repository root from a potential worktree path.
@@ -136,9 +137,9 @@ function calibrationCohortLabel(source: CalibrationSource, sizeLabel: string): s
 export interface EstimatorInputSnapshot {
   /** Issue labels/title as of pipeline start (labels defensively copied) */
   metadata: IssueMetadata;
-  /** Calibration table as of pipeline start (null when none on disk) */
-  calibration: Awaited<ReturnType<typeof CalibrationService.load>>;
-  /** Performance mode as of pipeline start (selects the calibration bucket) */
+  /** Per-(stage, model) calibration table as of pipeline start (null when none on disk) */
+  stageModelCalibration: Awaited<ReturnType<typeof StageModelCalibrationService.load>>;
+  /** Performance mode as of pipeline start (selects the model routing envelope) */
   mode: import("./modeProfiles").PerformanceMode;
   /** ISO timestamp — makes the estimate auditable ("under calibration as-of T") */
   capturedAt: string;
@@ -152,13 +153,13 @@ export async function captureEstimatorInputs(
   workspaceRoot: string
 ): Promise<EstimatorInputSnapshot> {
   const historyRoot = resolveMainRepoRoot(workspaceRoot);
-  const calibrationPath = CalibrationService.getDefaultPath(historyRoot);
-  const calibration = await CalibrationService.load(calibrationPath);
+  const calibrationPath = StageModelCalibrationService.getDefaultPath(historyRoot);
+  const stageModelCalibration = await StageModelCalibrationService.load(calibrationPath);
   const { getPerformanceMode } = await import("./resolvers/monitoringResolver");
   const mode = getPerformanceMode(historyRoot);
   return {
     metadata: { ...metadata, labels: [...(metadata.labels ?? [])] },
-    calibration,
+    stageModelCalibration,
     mode,
     capturedAt: new Date().toISOString(),
   };
@@ -231,8 +232,8 @@ export async function runPreFlightBudgetCheck(
   const estimate: PipelineCostEstimate = selector.estimatePipelineCost(
     snap.metadata,
     skipStages,
-    snap.calibration,
-    snap.mode
+    snap.stageModelCalibration,
+    toModelEnvelope(snap.mode)
   );
 
   // Step 2: Calibrate the static estimate against what runs like this have

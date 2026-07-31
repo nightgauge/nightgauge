@@ -20,8 +20,8 @@
  */
 
 import type { ComplexityModel, MatchedPattern } from "../context/schemas/complexity-model.js";
-import type { CalibrationMode, CalibrationTable } from "../services/CalibrationService.js";
-import { CalibrationService } from "../services/CalibrationService.js";
+import type { StageModelCalibrationTable } from "../services/StageModelCalibrationService.js";
+import { StageModelCalibrationService } from "../services/StageModelCalibrationService.js";
 import { DEFAULT_MODEL_COST_RATES } from "./types.js";
 
 /**
@@ -439,6 +439,12 @@ export interface StageCostEstimate {
   estimatedCost: number;
   confidence: number;
   skipped: boolean;
+  /**
+   * True when this stage's `estimatedCost` came from the observed
+   * `(stage, model)` p75 rather than the static `TOKEN_BASELINES` figure.
+   * @since Issue #142
+   */
+  calibrated: boolean;
 }
 
 /** Full pipeline cost estimate @since Issue #948 */
@@ -448,11 +454,13 @@ export interface PipelineCostEstimate {
   comparisonAllSonnet: number;
   complexity: ComplexityLabel;
   estimatedAt: string;
-  /** Whether calibration data was used instead of static baselines @since calibration integration */
+  /**
+   * True when at least one stage used its calibrated `(stage, model)` cell
+   * instead of the static baseline. @since Issue #142 (per-stage calibration
+   * replaced the whole-run proportional rescale)
+   */
   calibrationUsed?: boolean;
-  /** Number of historical samples backing the calibration estimate */
-  calibrationSampleCount?: number;
-  /** The static baseline estimate (always computed for comparison) */
+  /** The static TOKEN_BASELINES total, always computed for comparison */
   baselineEstimatedCost?: number;
 }
 
@@ -472,13 +480,18 @@ const PIPELINE_STAGES = [
 /**
  * Token baselines per stage × effort level.
  *
- * Calibrated from actual execution history (197 pipeline runs, Feb-Mar 2026).
- * `input` includes all billed input tokens (raw + cache_read + cache_creation).
- * `output` is billed output tokens. These are averages, not aspirational targets.
+ * Static fallback used when a `(stage, model)` cell in
+ * `StageModelCalibrationTable` has fewer than `MIN_CALIBRATION_SAMPLES`
+ * observations (see `estimatePipelineCost`) — per-stage calibration
+ * supersedes this table at runtime once enough samples exist for a cell,
+ * and refreshes automatically after every pipeline completion
+ * (`PostPipelineAnalyzer`). `input` includes all billed input tokens (raw +
+ * cache_read + cache_creation). `output` is billed output tokens.
  *
  * Effort mapping: low → XS/S sizes, medium → M, high → L/XL.
  *
- * @since Issue #948 (originally p90 guesses, recalibrated with real data)
+ * @since Issue #948 (originally p90 guesses, recalibrated with real data);
+ *   Issue #142 (per-stage calibration overrides these per (stage, model) cell)
  */
 type EffortBaseline = { input: number; output: number };
 type EffortBaselines = Record<ClaudeEffort, EffortBaseline>;
@@ -937,31 +950,38 @@ export class AutoModelSelector {
   /**
    * Estimate pipeline cost before execution using model selection + token baselines.
    *
-   * When a CalibrationTable is provided with sufficient samples (≥5) for the
-   * issue's size bucket, the calibration median replaces the static baseline
-   * total. Per-stage breakdown is proportionally scaled to match the calibrated
-   * total, preserving the relative stage weights from model selection.
+   * Each stage's `estimatedCost` is calibrated independently against the
+   * observed `(stage, model)` cell in `stageModelCalibration` — using the
+   * cell's p75 cost once it has ≥5 samples — rather than proportionally
+   * rescaling a single whole-run total. This keeps stages that already have
+   * history honest while stages with no history yet still fall back to the
+   * static `TOKEN_BASELINES` estimate.
    *
-   * Without calibration data (or with insufficient samples), falls back to
-   * the original TOKEN_BASELINES computation.
+   * `envelope` is passed into the internal `selectModel()` call so the
+   * estimated model tier matches the tier the run will actually serve
+   * (previously the estimator always selected against
+   * `DEFAULT_MODEL_ENVELOPE` regardless of the run's performance mode).
    *
    * @param metadata - Issue metadata for complexity assessment
    * @param skipStages - Stages to skip (e.g., from routing.skip_stages)
-   * @param calibration - Optional calibration table from execution history
+   * @param stageModelCalibration - Optional per-(stage, model) calibration table
+   * @param envelope - Performance-mode routing envelope used for model selection
    * @returns Pre-pipeline cost estimate with per-stage breakdown
-   * @since Issue #948, calibration integration
+   * @since Issue #948, calibration integration; Issue #142 per-stage calibration
    */
   estimatePipelineCost(
     metadata: IssueMetadata,
     skipStages?: string[],
-    calibration?: CalibrationTable | null,
-    mode: CalibrationMode = "elevated"
+    stageModelCalibration?: StageModelCalibrationTable | null,
+    envelope: ModelEnvelope = DEFAULT_MODEL_ENVELOPE
   ): PipelineCostEstimate {
     const skipSet = new Set(skipStages ?? []);
     const complexity = this.extractComplexity(metadata);
     const stages: StageCostEstimate[] = [];
     let totalCost = 0;
+    let baselineTotalCost = 0;
     let comparisonAllSonnet = 0;
+    let calibrationUsed = false;
 
     for (const stage of PIPELINE_STAGES) {
       if (skipSet.has(stage)) {
@@ -974,11 +994,12 @@ export class AutoModelSelector {
           estimatedCost: 0,
           confidence: 1.0,
           skipped: true,
+          calibrated: false,
         });
         continue;
       }
 
-      const modelResult = this.selectModel(stage, metadata);
+      const modelResult = this.selectModel(stage, metadata, undefined, undefined, envelope);
       const effortResult = this.deriveEffort(stage, metadata);
       const baseline = TOKEN_BASELINES[stage][effortResult.effort];
       const rates = DEFAULT_MODEL_COST_RATES[modelResult.model];
@@ -988,9 +1009,25 @@ export class AutoModelSelector {
       const rawInputFraction = 0.05; // ~5% of input is non-cached
       const effectiveInputRate =
         rawInputFraction * rates.inputPerMillion + (1 - rawInputFraction) * cacheReadRate;
-      const cost =
+      const baselineCost =
         (baseline.input * effectiveInputRate + baseline.output * rates.outputPerMillion) /
         1_000_000;
+      baselineTotalCost += baselineCost;
+
+      // Per-(stage, model) calibration: use the observed p75 once enough
+      // samples exist for this exact cell; no cross-model fallback (Issue #142).
+      let stageCost = baselineCost;
+      let stageCalibrated = false;
+      const { cell } = StageModelCalibrationService.lookupBucket(
+        stageModelCalibration,
+        stage,
+        modelResult.model
+      );
+      if (cell && cell.sample_count >= AutoModelSelector.MIN_CALIBRATION_SAMPLES) {
+        stageCost = cell.p75_cost_usd;
+        stageCalibrated = true;
+        calibrationUsed = true;
+      }
 
       stages.push({
         stage,
@@ -998,11 +1035,12 @@ export class AutoModelSelector {
         effort: effortResult.effort,
         estimatedInputTokens: baseline.input,
         estimatedOutputTokens: baseline.output,
-        estimatedCost: cost,
+        estimatedCost: stageCost,
         confidence: modelResult.confidence,
         skipped: false,
+        calibrated: stageCalibrated,
       });
-      totalCost += cost;
+      totalCost += stageCost;
 
       // All-sonnet comparison
       const sonnetRates = DEFAULT_MODEL_COST_RATES["sonnet"];
@@ -1017,38 +1055,6 @@ export class AutoModelSelector {
       comparisonAllSonnet += sonnetCost;
     }
 
-    // Check if calibration data should override the static baseline total
-    const baselineTotalCost = totalCost;
-    let calibrationUsed = false;
-    let calibrationSampleCount = 0;
-
-    if (calibration?.buckets && baselineTotalCost > 0) {
-      // Look up the (mode, size) cell with elevated fallback. Schema v2
-      // (Issue #3216) keys buckets by mode first; the elevated bucket is
-      // the natural baseline when the active mode lacks history.
-      const { cell: bucket } = CalibrationService.lookupBucket(calibration, mode, complexity);
-      if (
-        bucket &&
-        bucket.sample_count >= AutoModelSelector.MIN_CALIBRATION_SAMPLES &&
-        bucket.median_cost_usd > 0
-      ) {
-        const calibratedTotal = bucket.median_cost_usd;
-        calibrationUsed = true;
-        calibrationSampleCount = bucket.sample_count;
-
-        // Scale per-stage costs proportionally so they sum to the calibrated total.
-        // This preserves the relative stage cost distribution from model selection
-        // while adjusting the absolute values to match historical reality.
-        const scaleFactor = calibratedTotal / baselineTotalCost;
-        for (const stage of stages) {
-          if (!stage.skipped) {
-            stage.estimatedCost *= scaleFactor;
-          }
-        }
-        totalCost = calibratedTotal;
-      }
-    }
-
     return {
       stages,
       totalEstimatedCost: totalCost,
@@ -1056,8 +1062,7 @@ export class AutoModelSelector {
       complexity,
       estimatedAt: new Date().toISOString(),
       calibrationUsed,
-      calibrationSampleCount,
-      baselineEstimatedCost: calibrationUsed ? baselineTotalCost : undefined,
+      baselineEstimatedCost: baselineTotalCost,
     };
   }
 
