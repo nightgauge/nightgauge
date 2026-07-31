@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -674,5 +675,144 @@ func TestUnverifiedDeliverableStreakResolveIsScopedToOneTier(t *testing.T) {
 	}
 	if reqs[0].IdempotencyKey != keyUnverifiedDeliverableStreak("octocat/acme", deliverable.TierE2E) {
 		t.Errorf("surviving card key = %q, want the e2e streak card", reqs[0].IdempotencyKey)
+	}
+}
+
+// Acknowledging the streak card must not reset the streak (#243).
+//
+// #242 recovered the count by parsing the Fingerprint of an OPEN card, and
+// ListFilter excludes terminal requests by default — so resolving the card
+// sent the next occurrence back to streak:1. Because the card escalates to
+// blocking_run at 3 and both its options are noop verbs that resolve it, the
+// only action that unblocks a run was also the one that erased the evidence,
+// capping the count at 3 forever.
+func TestUnverifiedDeliverableStreakSurvivesAcknowledgement(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	repo, tier := "octocat/acme", deliverable.TierUnit
+
+	for i, issue := range []int{42, 43, 44} {
+		s.raiseUnverifiedDeliverableStreak(repo, tier, issue, fmt.Sprintf("run-%d", i), "reason")
+	}
+
+	reqs := openRunRequests(t, s)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	if _, err := s.attention.Resolve(
+		context.Background(), reqs[0].ID, "acknowledged", "operator", "", "", nil,
+	); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	// The tier still has not executed, so the fourth skip continues the streak.
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 45, "run-3", "reason")
+
+	key := keyUnverifiedDeliverableStreak(repo, tier)
+
+	// Assert the operator-visible observable first: the card must report the
+	// continued count, not restart. This is what made the defect self-defeating
+	// — at 3 the card blocks a run, and clearing it to proceed sent the next
+	// card back to streak:1, capping the count at the threshold forever.
+	var card *attention.DecisionRequest
+	for _, r := range openRunRequests(t, s) {
+		if r.IdempotencyKey == key {
+			c := r
+			card = &c
+			break
+		}
+	}
+	if card == nil {
+		t.Fatal("no open streak card after the fourth occurrence")
+	}
+	if card.Fingerprint != "streak:4" {
+		t.Errorf("card fingerprint = %q, want streak:4 (a re-raise after acknowledgement must continue, not restart)", card.Fingerprint)
+	}
+	if card.Severity != attention.SeverityBlockingRun {
+		t.Errorf("severity = %q, want blocking_run to persist past an acknowledgement at count 4", card.Severity)
+	}
+
+	if got := s.attention.StreakCount(key); got != 4 {
+		t.Errorf("streak after acknowledgement = %d, want 4 (acknowledging a card must not rewrite history)", got)
+	}
+}
+
+// An expired streak card must not reset the streak either (#243). Occurrences
+// spaced further apart than ExpiresAt are exactly the slow-burn case #177 cares
+// about, where cost accrues against N files before the first execution.
+func TestUnverifiedDeliverableStreakSurvivesCardExpiry(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	repo, tier := "octocat/acme", deliverable.TierE2E
+	key := keyUnverifiedDeliverableStreak(repo, tier)
+
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 42, "run-0", "reason")
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 43, "run-1", "reason")
+
+	// Simulate the card aging out: no open card remains, but the tier has still
+	// never executed.
+	for _, r := range openRunRequests(t, s) {
+		if r.IdempotencyKey == key {
+			if _, err := s.attention.Resolve(
+				context.Background(), r.ID, "acknowledged", "expiry", "", "", nil,
+			); err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+		}
+	}
+
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 44, "run-2", "reason")
+
+	if got := s.attention.StreakCount(key); got != 3 {
+		t.Fatalf("streak after card no longer open = %d, want 3", got)
+	}
+}
+
+// Executing the tier is the one thing that clears the count — and it must clear
+// it even when no card is open to retract, since the operator may already have
+// acknowledged it (#243).
+func TestUnverifiedDeliverableStreakResetsOnExecutionWithNoOpenCard(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	repo, tier := "octocat/acme", deliverable.TierUnit
+	key := keyUnverifiedDeliverableStreak(repo, tier)
+
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 42, "run-0", "reason")
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 43, "run-1", "reason")
+
+	for _, r := range openRunRequests(t, s) {
+		if r.IdempotencyKey == key {
+			if _, err := s.attention.Resolve(
+				context.Background(), r.ID, "acknowledged", "operator", "", "", nil,
+			); err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+		}
+	}
+
+	s.resolveUnverifiedDeliverableStreak(repo, tier)
+
+	if got := s.attention.StreakCount(key); got != 0 {
+		t.Fatalf("streak after execution = %d, want 0", got)
+	}
+	s.raiseUnverifiedDeliverableStreak(repo, tier, 44, "run-2", "reason")
+	if got := s.attention.StreakCount(key); got != 1 {
+		t.Fatalf("streak after execution then one skip = %d, want 1", got)
+	}
+}
+
+// One tier's streak must not disturb another's.
+func TestUnverifiedDeliverableStreakCountsAreScopedPerTier(t *testing.T) {
+	s := newAttentionProducerRunScheduler(t)
+	repo := "octocat/acme"
+
+	s.raiseUnverifiedDeliverableStreak(repo, deliverable.TierUnit, 42, "run-0", "reason")
+	s.raiseUnverifiedDeliverableStreak(repo, deliverable.TierUnit, 43, "run-1", "reason")
+	s.raiseUnverifiedDeliverableStreak(repo, deliverable.TierE2E, 44, "run-2", "reason")
+
+	s.resolveUnverifiedDeliverableStreak(repo, deliverable.TierUnit)
+
+	if got := s.attention.StreakCount(keyUnverifiedDeliverableStreak(repo, deliverable.TierUnit)); got != 0 {
+		t.Errorf("unit streak = %d, want 0 after execution", got)
+	}
+	if got := s.attention.StreakCount(keyUnverifiedDeliverableStreak(repo, deliverable.TierE2E)); got != 1 {
+		t.Errorf("e2e streak = %d, want 1 (untouched by the unit tier executing)", got)
 	}
 }
