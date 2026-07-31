@@ -76,7 +76,8 @@ func (FeatureDevGate) Verify(_ context.Context, issueNumber int, workspace strin
 			} `json:"tests_status"`
 		}
 		if err := json.Unmarshal(data, &devCtx); err != nil {
-			return false, "dev context is not valid JSON", []string{err.Error()}, KindFail, TerminalKindValidationError, nil, 0
+			reason, ev := describeDecodeFailure("dev context", err)
+			return false, reason, ev, KindFail, TerminalKindValidationError, nil, 0
 		}
 
 		fileTouches := len(devCtx.FilesChanged.Created) +
