@@ -202,6 +202,31 @@ func TestAttentionAckCLIKeepsTheCard(t *testing.T) {
 	}
 }
 
+// TestAttentionSweepRootCommand_BareConfigRepoStillRequiresFlag is a
+// regression test for #222: sweep run through the assembled root command
+// with a bare (no-slash) config.yaml defaultRepo and no --repo flag must
+// still fail with the required-flag message, not a confusing splitRepo
+// error deeper in the call chain. Built in isolation (attentionSweepCmd())
+// never exercises PersistentPreRunE and would miss a regression here.
+func TestAttentionSweepRootCommand_BareConfigRepoStillRequiresFlag(t *testing.T) {
+	dir := chdirTemp(t)
+	writeBareRepoConfig(t, dir)
+	withRegisteredProducer(t)
+
+	cmd := rootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"attention", "sweep", "--workdir", dir})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected --repo to still be required with only a bare config.yaml defaultRepo set")
+	}
+	if !strings.Contains(err.Error(), "--repo is required") {
+		t.Errorf("expected the required-flag message, got: %v", err)
+	}
+}
+
 func TestAttentionListMarksMutedCards(t *testing.T) {
 	dir := t.TempDir()
 	id := seedRequest(t, dir, "k-muted", "Fleet stopped", attention.SeverityBlockingFleet)

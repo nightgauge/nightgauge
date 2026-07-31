@@ -125,7 +125,7 @@ func baselineGateCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to evaluate (required)")
 	cmd.Flags().StringVar(&branch, "branch", "main", "Branch to check baseline runs against")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")
@@ -229,7 +229,7 @@ func baselineGatePromoteCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().StringVar(&branch, "branch", "main", "Branch to check baseline runs against")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")

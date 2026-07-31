@@ -2,11 +2,48 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 )
+
+// chdirTemp creates a temp workdir, chdirs into it, and restores the original
+// cwd on cleanup. Needed because config.Load reads os.Getwd(), not --workdir.
+func chdirTemp(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore chdir: %v", err)
+		}
+	})
+	return dir
+}
+
+// writeBareRepoConfig writes a .nightgauge/config.yaml with a bare (no-slash)
+// repo name, mirroring the shape #222's PersistentPreRunE back-fill used to
+// silently inject into owner/name-typed --repo flags.
+func writeBareRepoConfig(t *testing.T, dir string) {
+	t.Helper()
+	nightgaugeDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(nightgaugeDir, 0o755); err != nil {
+		t.Fatalf("mkdir .nightgauge: %v", err)
+	}
+	body := "owner: nightgauge\ndefaultRepo: nightgauge\n"
+	if err := os.WriteFile(filepath.Join(nightgaugeDir, "config.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+}
 
 func seedRequest(t *testing.T, dir, key, title string, sev attention.Severity) string {
 	t.Helper()
@@ -104,5 +141,79 @@ func TestAttentionResolveRejectsUndeclaredOption(t *testing.T) {
 	cmd.SetArgs([]string{id, "--option", "smuggled", "--workdir", dir})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected error for an undeclared option id")
+	}
+}
+
+// TestAttentionListRootCommand_IgnoresBareConfigRepo is a regression test for
+// #222: a bare (no-slash) config.yaml defaultRepo used to be silently
+// back-filled into attention list's owner/name-typed --repo flag by
+// PersistentPreRunE, filtering every card out and rendering "All clear". It
+// must go through the assembled root command — building attentionListCmd()
+// in isolation never exercises PersistentPreRunE and would miss this bug.
+func TestAttentionListRootCommand_IgnoresBareConfigRepo(t *testing.T) {
+	dir := chdirTemp(t)
+	writeBareRepoConfig(t, dir)
+	seedRequest(t, dir, "k1", "Fleet stopped", attention.SeverityBlockingFleet)
+
+	cmd := rootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"attention", "list", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "All clear") {
+		t.Errorf("bare config repo silently filtered out the card:\n%s", out)
+	}
+	if !strings.Contains(out, "Fleet stopped") {
+		t.Errorf("expected card title in output:\n%s", out)
+	}
+}
+
+// TestAttentionListRootCommand_ExplicitRepoStillFilters confirms AC 2: an
+// explicit --repo flag continues to filter, even through the root command's
+// PersistentPreRunE (Changed("repo") short-circuits the back-fill either way).
+func TestAttentionListRootCommand_ExplicitRepoStillFilters(t *testing.T) {
+	dir := chdirTemp(t)
+	writeBareRepoConfig(t, dir)
+	seedRequest(t, dir, "k1", "Fleet stopped", attention.SeverityBlockingFleet)
+
+	cmd := rootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"attention", "list", "--repo", "octocat/acme", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Fleet stopped") {
+		t.Errorf("explicit --repo filter should still match the seeded card:\n%s", buf.String())
+	}
+}
+
+// TestAttentionListRootCommand_FilteredToZero covers AC 4: a --repo filter
+// that matches nothing must name the filter and the fleet-wide total, not
+// print the bare "All clear" message used for a genuinely empty store.
+func TestAttentionListRootCommand_FilteredToZero(t *testing.T) {
+	dir := chdirTemp(t)
+	writeBareRepoConfig(t, dir)
+	seedRequest(t, dir, "k1", "Fleet stopped", attention.SeverityBlockingFleet)
+
+	cmd := rootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"attention", "list", "--repo", "octocat/unrelated", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "All clear") {
+		t.Errorf("filtered-to-zero must not print the bare all-clear message:\n%s", out)
+	}
+	if !strings.Contains(out, "octocat/unrelated") {
+		t.Errorf("expected the filter to be named in the output:\n%s", out)
+	}
+	if !strings.Contains(out, "1 total") {
+		t.Errorf("expected fleet-wide total in output:\n%s", out)
 	}
 }
