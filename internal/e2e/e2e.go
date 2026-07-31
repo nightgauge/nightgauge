@@ -1,9 +1,9 @@
 package e2e
 
 import (
-	"bufio"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -287,19 +287,30 @@ func runCmd(ctx context.Context, workdir string, timeout time.Duration, name str
 	var mu sync.Mutex
 	var buf []byte
 	var wg sync.WaitGroup
-	stream := func(r *bufio.Scanner) {
+	// Copy raw bytes rather than scanning lines. bufio.Scanner caps a single
+	// token at 64KB and reports the overflow only via Err(); a longer line
+	// would end the read loop, leave the pipe undrained, block the child on
+	// write, and surface as a timeout on a suite that actually passed (#238).
+	// Playwright emits such lines routinely (reporter JSON, long stack traces).
+	stream := func(r io.Reader) {
 		defer wg.Done()
-		for r.Scan() {
-			mu.Lock()
-			buf = append(buf, r.Bytes()...)
-			buf = append(buf, '\n')
-			mu.Unlock()
+		b := make([]byte, 32*1024)
+		for {
+			n, readErr := r.Read(b)
+			if n > 0 {
+				mu.Lock()
+				buf = append(buf, b[:n]...)
+				mu.Unlock()
+			}
+			if readErr != nil {
+				return
+			}
 		}
 	}
 
 	wg.Add(2)
-	go stream(bufio.NewScanner(stdout))
-	go stream(bufio.NewScanner(stderr))
+	go stream(stdout)
+	go stream(stderr)
 
 	waitDone := make(chan error, 1)
 	go func() {

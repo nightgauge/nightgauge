@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -390,4 +391,45 @@ func contains(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// A single output line larger than bufio.Scanner's 64KB token cap must not
+// stop the reader. When it did (#238), the pipe stopped being drained, the
+// child blocked on write, and a passing suite surfaced as a 10-minute timeout.
+func TestRunCmd_LongSingleLine_NotTruncatedOrTimedOut(t *testing.T) {
+	dir := t.TempDir()
+
+	const lineLen = 256 * 1024 // 4x bufio.MaxScanTokenSize
+	script := fmt.Sprintf(
+		`awk 'BEGIN { s=sprintf("%%%dsEND", ""); gsub(/ /, "x", s); print s }'`,
+		lineLen,
+	)
+
+	out, err := runCmd(context.Background(), dir, 30*time.Second, "sh", "-c", script)
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if errors.Is(err, errE2ETimeout) {
+		t.Fatal("a long line must not be reported as a timeout")
+	}
+	if len(out) < lineLen {
+		t.Errorf("output truncated: got %d bytes, want >= %d", len(out), lineLen)
+	}
+	if !strings.Contains(out, "END") {
+		t.Error("tail of the long line was lost — output was truncated mid-line")
+	}
+}
+
+// Output must be passed through byte-exact: no trailing newline synthesized for
+// output that lacks one, and no \r\n rewriting (#238).
+func TestRunCmd_OutputIsByteExact(t *testing.T) {
+	dir := t.TempDir()
+
+	out, err := runCmd(context.Background(), dir, 10*time.Second, "printf", "a\r\nb")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != "a\r\nb" {
+		t.Errorf("output not byte-exact: got %q, want %q", out, "a\r\nb")
+	}
 }
