@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -745,28 +744,29 @@ func (s *Scheduler) raiseUnverifiedDeliverable(repo string, issue int, runID str
 // identical gap shipped last time too") gets stronger every occurrence while
 // the signal an operator sees stays flat.
 //
-// Standing, keyed per (repo, tier): the streak count is read out of the prior
-// card's own Fingerprint, incremented, and re-raised — Store.Raise's
+// Standing, keyed per (repo, tier): the streak count is held in the store's
+// durable counter, incremented here, and rendered onto the card — Store.Raise's
 // dedup-by-key folds this into the existing card rather than creating a new
 // one, escalating Severity as the count climbs. Escalation is severity-only
 // and caps at blocking_run: nothing in a growing streak justifies blocking
 // the fleet (#152 deliberately chose not to block; a gate that blocks
 // legitimate work gets routed around).
+//
+// The count deliberately does not live on the card (#243). Reading it back out
+// of the prior card's Fingerprint made every path that ends a card's life a
+// silent reset — an operator acknowledging it, or ExpiresAt elapsing — so the
+// streak could never exceed the blocking_run threshold that prompted the
+// acknowledgement. A card may be dismissed; the fact it reports may not.
 func (s *Scheduler) raiseUnverifiedDeliverableStreak(repo string, tier deliverable.Tier, issue int, runID, reason string) {
 	key := keyUnverifiedDeliverableStreak(repo, tier)
 	next := 1
 	if s.attention != nil {
-		if reqs, err := s.attention.List(attention.ListFilter{Repo: repo}); err == nil {
-			for _, r := range reqs {
-				if r.Producer == producerUnverifiedDeliverableStreak && r.IdempotencyKey == key {
-					if n, perr := strconv.Atoi(strings.TrimPrefix(r.Fingerprint, "streak:")); perr == nil {
-						next = n + 1
-					}
-					break
-				}
-			}
-		} else {
-			log.Printf("attention: list %q failed (fail-open): %v", producerUnverifiedDeliverableStreak, err)
+		n, err := s.attention.IncrementStreak(key)
+		if err != nil {
+			log.Printf("attention: increment streak %q failed (fail-open): %v", key, err)
+		}
+		if n > 0 {
+			next = n
 		}
 	}
 
@@ -823,6 +823,17 @@ func (s *Scheduler) resolveUnverifiedDeliverableStreak(repo string, tier deliver
 		return
 	}
 	key := keyUnverifiedDeliverableStreak(repo, tier)
+
+	// Clear the durable count first, and unconditionally. An execution of the
+	// tier is the only thing that makes the streak untrue, and it does so
+	// whether or not a card is currently open — the operator may have already
+	// acknowledged it, or it may have expired. Gating the reset on a
+	// successful retract would leave the count standing in exactly those
+	// cases (#243).
+	if err := s.attention.ResetStreak(key); err != nil {
+		log.Printf("attention: reset streak %q failed (fail-open): %v", key, err)
+	}
+
 	resolved, err := s.attention.AutoResolveKey(producerUnverifiedDeliverableStreak, key)
 	if err != nil {
 		log.Printf("attention: auto-resolve %q failed (fail-open): %v", producerUnverifiedDeliverableStreak, err)
