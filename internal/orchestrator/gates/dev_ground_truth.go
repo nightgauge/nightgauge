@@ -19,8 +19,16 @@ const maxStrandedReported = 5
 // `.nightgauge/pipeline/`, so counting bookkeeping as work would make every
 // empty workspace look productive and silently disable this gate in any repo
 // that does not happen to gitignore it. See ci.BookkeepingDirs.
+// `--untracked-files=all` is load-bearing, not a preference. Porcelain's
+// default collapses untracked directories to a single `internal/` entry, so a
+// stage that created ten files in one new package reads as one changed path —
+// and the count and file list a gate reports become wrong in the direction that
+// understates the work. Worse, it is silently ambient: a machine with
+// `status.showUntrackedFiles=all` in its git config enumerates the files and
+// agrees with the assertion, while CI (default config) does not. Pinning it
+// here makes the answer independent of whoever's git is running (#223).
 func statusArgs() []string {
-	return append([]string{"status", "--porcelain", "--"}, ci.DeliverablePathspec()...)
+	return append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, ci.DeliverablePathspec()...)
 }
 
 // devWorkState is the answer to "did this stage actually produce anything?"

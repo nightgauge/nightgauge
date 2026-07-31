@@ -24,6 +24,13 @@ func gitRepo(t *testing.T) string {
 	git(t, dir, "checkout", "-b", "main")
 	git(t, dir, "config", "user.email", "gate-test@example.com")
 	git(t, dir, "config", "user.name", "Gate Test")
+	// Pin the CI default explicitly (#223). A developer machine with
+	// `status.showUntrackedFiles=all` set globally makes porcelain enumerate
+	// untracked files, while CI's default collapses them to a directory entry —
+	// so a gate asserting on file names passed locally and failed in CI. Setting
+	// the restrictive value here means the tests exercise the shape the fleet
+	// actually runs against, on every machine.
+	git(t, dir, "config", "status.showUntrackedFiles", "normal")
 	writeFile(t, filepath.Join(dir, "README.md"), "base\n")
 	git(t, dir, "add", ".")
 	git(t, dir, "commit", "-m", "base")
