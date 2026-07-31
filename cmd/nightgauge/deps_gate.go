@@ -107,7 +107,7 @@ func depsGateCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to evaluate (required)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().BoolVar(&pauseQueue, "pause-queue", true, "When deferred, pause/insert the queue item with kind=blocked_dependency")
@@ -152,7 +152,7 @@ func depsGatePromoteCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
 	return cmd
 }

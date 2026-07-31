@@ -86,7 +86,7 @@ func attentionListCmd() *cobra.Command {
 			if jsonOutput {
 				return json.NewEncoder(os.Stdout).Encode(reqs)
 			}
-			printAttentionTable(cmd, reqs)
+			printAttentionTable(cmd, reqs, repo, store, all)
 			return nil
 		},
 	}
@@ -97,9 +97,24 @@ func attentionListCmd() *cobra.Command {
 	return cmd
 }
 
-func printAttentionTable(cmd *cobra.Command, reqs []attention.DecisionRequest) {
+// printAttentionTable renders the decision-request list, or an all-clear
+// message when reqs is empty. repoFilter is the --repo value that produced
+// reqs (empty when no filter was applied) — used to tell a genuinely empty
+// store apart from a repo filter that matched nothing (#222): the latter
+// prints the filter and the true fleet-wide total instead of the bare
+// all-clear message, so an operator never mistakes "filtered to zero" for
+// "nothing pending anywhere".
+func printAttentionTable(cmd *cobra.Command, reqs []attention.DecisionRequest, repoFilter string, store *attention.Store, includeTerminal bool) {
 	if len(reqs) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "✓ All clear — no decisions pending.")
+		if repoFilter == "" {
+			fmt.Fprintln(cmd.OutOrStdout(), "✓ All clear — no decisions pending.")
+			return
+		}
+		total := 0
+		if all, err := store.List(attention.ListFilter{IncludeTerminal: includeTerminal}); err == nil {
+			total = len(all)
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "No pending decisions match --repo %q (%d total across all repos).\n", repoFilter, total)
 		return
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
