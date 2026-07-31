@@ -2401,6 +2401,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             `feature-validate so the failure is surfaced for retry/triage instead.`
         );
       }
+      if (status === "inconclusive") {
+        // Stable `[validation-inconclusive]` marker (#221), mirroring
+        // `[validation-failed]` above, so ClassifyTerminalKind records
+        // TerminalKindValidationInconclusive instead of falling through to
+        // the generic subagent_crash fallback — a zero-test run is an
+        // environmental misconfiguration, not a process crash.
+        return new Error(
+          `[validation-inconclusive] feature-validate reported validation_status="inconclusive" ` +
+            `(unit-test tier ran but executed zero tests). The validated code was intentionally ` +
+            `NOT committed or pushed. Halting at feature-validate so this is retried as a ` +
+            `recoverable, non-lifetime-counted outcome instead of advancing to pr-create.`
+        );
+      }
       return null;
     } catch (err) {
       // Unreadable/invalid context — fail open (do not block on a parse error;
