@@ -216,6 +216,8 @@ export type TerminalFailureKind =
   | "budget_exceeded"
   | "validation_error"
   | "subagent_crash"
+  // Declared-but-unmatched, mirroring Go: set structurally (a gate override),
+  // never derived from error text, so classifyTerminalKind has no matcher.
   | "orchestrator_crash"
   | "network_unavailable" // Issue #3296
   | "stream_idle_timeout" // Issue #3398
@@ -235,7 +237,54 @@ export type TerminalFailureKind =
   | "adapter_auth_failed" // Issue #312 — adapter auth pre-flight failed (probe timed out after retry, or definitively logged out); retryable infra
   | "no_changes_produced" // Issue #317 — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for (e.g. a dispatched human-only issue)
   | "validation_failed" // Issue #326 — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash
-  | "branch_forked"; // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
+  | "branch_forked" // Issue #163 — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it
+  | "runaway_progress" // Issue #3783 — the progress-based runaway monitor fired; treated like stall_kill (30m backoff, no lifetime-cap increment)
+  | "pr_merge_unmerged" // Issue #3691 — pr-merge's session exited cleanly but the PR was not actually merged
+  | "blocked_dependency" // Issue #305 — the autonomous scheduler dispatched an issue whose blockedBy dependencies are still open; a non-failure deferral
+  | "architecture_approval_required" // Issue #4098/#4222 — the architecture-approval gate halted the run before feature-dev for a human-owned decision
+  | "validation_inconclusive" // Issue #221 — feature-validate's unit-test tier ran but executed zero tests; usually an environmental misconfiguration
+  // Declared-but-unmatched, mirroring Go: set by the recovery action from
+  // structured evidence, never derived from error text, so
+  // classifyTerminalKind has no matcher for it either.
+  | "abandoned_commit"; // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
+
+/**
+ * Every `TerminalFailureKind` union member, in declaration order. TS union
+ * types have no runtime representation, so this array is the enumerable
+ * source the parity test diffs against Go's `TerminalKind*` constants.
+ */
+export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
+  "stall_kill",
+  "budget_exceeded",
+  "validation_error",
+  "subagent_crash",
+  "orchestrator_crash",
+  "network_unavailable",
+  "stream_idle_timeout",
+  "rate_limit_quota_exhausted",
+  "worktree_uncommitted",
+  "budget_ceiling_hit",
+  "issue_closed",
+  "api_overloaded",
+  "github_quota_low",
+  "api_connection_lost",
+  "github_network_outage",
+  "model_unavailable",
+  "premature_turn_end",
+  "dev_produced_no_changes",
+  "containment_breach",
+  "dev_handoff_missing",
+  "adapter_auth_failed",
+  "no_changes_produced",
+  "validation_failed",
+  "branch_forked",
+  "runaway_progress",
+  "pr_merge_unmerged",
+  "blocked_dependency",
+  "architecture_approval_required",
+  "validation_inconclusive",
+  "abandoned_commit",
+];
 
 /**
  * Classify the *kind* of terminal failure from an error message.
@@ -252,6 +301,31 @@ export function classifyTerminalKind(
 ): TerminalFailureKind | undefined {
   if (!errorText) return undefined;
   const t = errorText.toLowerCase();
+
+  // Network-unavailable abort (Issue #3296). Matched first, mirroring Go —
+  // the cancellation message shouldn't accidentally match a generic
+  // "exit"/"stall" pattern below.
+  if (t.includes("network unavailable: extended github connectivity loss")) {
+    return "network_unavailable";
+  }
+
+  // Stream idle timeout from Anthropic API (Issue #3398). Matched before the
+  // generic stall-kill heuristics — the literal "timeout" substring would
+  // otherwise be claimed by them.
+  if (t.includes("stream idle timeout")) {
+    return "stream_idle_timeout";
+  }
+
+  // Rate-limit quota exhausted (Issue #3386). Matched before the generic
+  // stall-kill heuristics — the kill reason includes "idle"/"stall"
+  // substrings and would otherwise bucket into stall_kill.
+  if (
+    t.includes("[rate-limit-quota-exhausted]") ||
+    t.includes("rate-limit-quota-exhausted") ||
+    t.includes("rate_limit_quota_exhausted")
+  ) {
+    return "rate_limit_quota_exhausted";
+  }
 
   // Stall-kill: heuristics aligned with classifyFailureCategory's "agent" bucket.
   if (
@@ -271,6 +345,23 @@ export function classifyTerminalKind(
     t.includes("budget ceiling")
   ) {
     return "budget_exceeded";
+  }
+
+  // Progress-based runaway kill (Issue #3783). Treated as transient stall —
+  // matched before the generic buckets above/below would otherwise claim it.
+  if (t.includes("[runaway-progress-exceeded]") || t.includes("runaway-progress-exceeded")) {
+    return "runaway_progress";
+  }
+
+  // pr-merge "completed but PR not merged" diagnostic (Issue #3691). Matched
+  // BEFORE premature_turn_end so the richer diagnostic isn't accidentally
+  // bucketed into the generic no-op kind.
+  if (
+    t.includes("[pr-merge-unmerged") ||
+    t.includes("pr_merge_unmerged") ||
+    (t.includes("pr-merge reported success") && t.includes("is not merged"))
+  ) {
+    return "pr_merge_unmerged";
   }
 
   // Dev produced no changes (#202) — a NARROWER premature turn end, so it must
@@ -318,6 +409,48 @@ export function classifyTerminalKind(
     return "premature_turn_end";
   }
 
+  // Blocked-dependency deferral (Issue #305). NOT a failure — the autonomous
+  // scheduler dispatched an issue whose blockedBy dependencies are still
+  // open. Matched before the generic heuristics below.
+  if (t.includes("[blocked-dependency]") || t.includes("blocked_dependency")) {
+    return "blocked_dependency";
+  }
+
+  // Architecture-approval gate halt (#4098/#4222). NOT a failure — the run
+  // stopped before feature-dev because a human must approve a high-impact
+  // decision. Matched before the generic heuristics below.
+  if (
+    t.includes("architecture approval required") ||
+    t.includes("[architecture-approval-required]") ||
+    t.includes("architecture_approval_required")
+  ) {
+    return "architecture_approval_required";
+  }
+
+  // Worktree-uncommitted recovery (Issue #3542). Matched early so it isn't
+  // shadowed by the generic "exit"/stall heuristics below.
+  if (t.includes("worktree_uncommitted") || t.includes("stop_hook_uncommitted")) {
+    return "worktree_uncommitted";
+  }
+
+  // USD-based pipeline budget ceiling kill (Issue #3542). Matched before the
+  // generic budget_exceeded heuristic — "pipeline budget ceiling" lowercased
+  // contains the substring "budget ceiling" and would otherwise be claimed
+  // by it.
+  if (t.includes("budget_ceiling_hit") || t.includes("pipeline budget ceiling")) {
+    return "budget_ceiling_hit";
+  }
+
+  // Issue-closed non-failure (Issue #3661). Matched before the generic
+  // heuristics so the "exit" substring in the error text doesn't bucket
+  // this into subagent_crash.
+  if (
+    (t.includes("pipeline-start-failure") && t.includes("issue-closed")) ||
+    t.includes("issue_closed")
+  ) {
+    return "issue_closed";
+  }
+
   // Schema/validation failures — reuse the infrastructure-bucket heuristics.
   // (The "did not write expected output context" phrase moved to
   // premature_turn_end above — its only producer runs on exit-0 paths.)
@@ -347,6 +480,13 @@ export function classifyTerminalKind(
   // subagent_crash fallback so the marker is never mis-bucketed.
   if (t.includes("github-network-outage") || t.includes("github_network_outage")) {
     return "github_network_outage";
+  }
+
+  // API "Overloaded" (Anthropic 529) — a transient capacity blip (#3835 WS4).
+  // Matched BEFORE api_connection_lost so a momentary overload routes to its
+  // own kind instead of being swallowed by the transport-drop matcher.
+  if (t.includes("overloaded")) {
+    return "api_overloaded";
   }
 
   // Anthropic API transport drop (#4002) — the stream died on a socket
@@ -409,6 +549,14 @@ export function classifyTerminalKind(
   // "exit " heuristic would otherwise bucket this as a process death.
   if (t.includes("[validation-failed]") || t.includes("validation_failed")) {
     return "validation_failed";
+  }
+
+  // Feature-validate zero-test run (#221). Matched before the subagent_crash
+  // fallback for the same reason as validation_failed above; placed
+  // immediately after it to keep the two validation-status outcomes
+  // adjacent for readability.
+  if (t.includes("[validation-inconclusive]") || t.includes("validation_inconclusive")) {
+    return "validation_inconclusive";
   }
 
   // Branch forked from its remote (#163). Two entry points, one kind: the Go

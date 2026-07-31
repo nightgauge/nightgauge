@@ -161,6 +161,13 @@ func TestClassifyTerminalKind(t *testing.T) {
 			"stage feature-dev: api error: overloaded (529)",
 			TerminalKindApiOverloaded,
 		},
+		// Issue #229 AC #4 -- ordering: api_overloaded must be matched before
+		// api_connection_lost when an error string contains both patterns.
+		{
+			"api_overloaded_beats_api_connection_lost",
+			"API Error: Overloaded - connection closed mid-response",
+			TerminalKindApiOverloaded,
+		},
 		// Issue #3896 — GitHub API quota too low at pipeline-start. Both the
 		// explicit stderr marker and the error-text token (embedded so the Go
 		// fallback can re-classify failureDetail) must route to github_quota_low,
