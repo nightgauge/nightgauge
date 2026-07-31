@@ -20,6 +20,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -653,9 +654,15 @@ func TestDequeueIndependent(t *testing.T) {
 				}
 			}
 
-			// Check remaining
+			// Check remaining — items NOT dequeued this call still have their
+			// original (non-"processing") status. Dequeued items stay in
+			// s.queue too (Issue #232) but with Status == "processing", so
+			// they're excluded from "remaining" here and verified below.
 			var gotRemaining []int
 			for _, q := range s.queue {
+				if q.Status == "processing" {
+					continue
+				}
 				gotRemaining = append(gotRemaining, q.IssueNumber)
 			}
 			if len(gotRemaining) != len(tc.wantRemaining) {
@@ -667,7 +674,219 @@ func TestDequeueIndependent(t *testing.T) {
 					}
 				}
 			}
+
+			// Dequeued items are no longer spliced out of s.queue — they must
+			// still be present with Status == "processing" (Issue #232) so
+			// queueStatusLocked() and cloud sync can see them as in-flight.
+			for _, want := range tc.wantDequeued {
+				found := false
+				for _, q := range s.queue {
+					if q.IssueNumber == want {
+						found = true
+						if q.Status != "processing" {
+							t.Errorf("dequeued item #%d has Status=%q, want %q", want, q.Status, "processing")
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("dequeued item #%d missing from s.queue after dequeue", want)
+				}
+			}
 		})
+	}
+}
+
+// fakeTelemetry is a minimal telemetryService implementation that records
+// every SyncQueue call so tests can assert on the payload without a real
+// platform connection (Issue #232 AC5).
+type fakeTelemetry struct {
+	lastQueueSync []platform.QueueSyncItem
+}
+
+func (f *fakeTelemetry) EmitPipelineEvent(ctx context.Context, event platform.PipelineEvent) {}
+func (f *fakeTelemetry) PushPipelineRun(ctx context.Context, record state.V2RunRecord)       {}
+func (f *fakeTelemetry) SyncQueue(ctx context.Context, items []platform.QueueSyncItem) {
+	f.lastQueueSync = items
+}
+
+// TestDequeueIndependent_ProducesProcessingStatus pins the #232 fix at the
+// real DequeueIndependent boundary (AC3: dispatch through the real path, not
+// a hand-constructed QueueItem{Status: "processing"}). It asserts the queue
+// status reports "processing" while the item is in flight, the item is still
+// present in QueueList()/persisted queue-state.json, and completion clears it
+// back to idle. (AC1, AC2, AC3)
+func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
+	tmpDir := t.TempDir()
+	s := &Scheduler{
+		workspaceRoot: tmpDir,
+		repoRunning:   make(map[string]int),
+		mergeLocks:    make(map[string]*sync.Mutex),
+	}
+	s.QueueAddItem(QueueItem{Repo: "o/A", IssueNumber: 1, Title: "Work"})
+
+	if got := s.GetState().Status; got != "waiting" {
+		t.Fatalf("status before dequeue = %q, want %q", got, "waiting")
+	}
+
+	dequeued := s.DequeueIndependent(context.Background(), 1, nil)
+	if len(dequeued) != 1 {
+		t.Fatalf("dequeued %d items, want 1", len(dequeued))
+	}
+	if dequeued[0].Status != "processing" {
+		t.Errorf("dequeued item Status = %q, want %q", dequeued[0].Status, "processing")
+	}
+
+	state := s.GetState()
+	if state.Status != "processing" {
+		t.Errorf("queue status = %q, want %q", state.Status, "processing")
+	}
+	if len(state.Items) != 1 || state.Items[0].Status != "processing" {
+		t.Fatalf("QueueList after dequeue = %+v, want 1 item with Status=processing", state.Items)
+	}
+
+	// Persisted queue-state.json must also carry the in-flight item.
+	queueFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "queue-state.json")
+	data, err := os.ReadFile(queueFile)
+	if err != nil {
+		t.Fatalf("queue-state.json not found: %v", err)
+	}
+	var persisted QueueState
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("failed to parse persisted queue state: %v", err)
+	}
+	if persisted.Status != "processing" || len(persisted.Items) != 1 || persisted.Items[0].Status != "processing" {
+		t.Errorf("persisted queue state = %+v, want status=processing with 1 processing item", persisted)
+	}
+
+	// Completion removes the item and status reverts to idle.
+	s.CompleteQueueItem("o/A", 1)
+	final := s.GetState()
+	if final.Status != "idle" {
+		t.Errorf("status after completion = %q, want %q", final.Status, "idle")
+	}
+	if len(final.Items) != 0 {
+		t.Errorf("Items after completion = %+v, want empty", final.Items)
+	}
+}
+
+// TestQueueStatusLocked_Precedence pins the processing > paused > waiting >
+// idle precedence order explicitly (Issue #232 AC2).
+func TestQueueStatusLocked_Precedence(t *testing.T) {
+	pausedReason := QueuePausedReason{Kind: "upstream_failure"}
+
+	tests := []struct {
+		name  string
+		queue []QueueItem
+		want  string
+	}{
+		{name: "empty queue is idle", queue: nil, want: "idle"},
+		{
+			name:  "plain pending item is waiting",
+			queue: []QueueItem{{IssueNumber: 1, Status: "pending"}},
+			want:  "waiting",
+		},
+		{
+			name:  "paused item is paused",
+			queue: []QueueItem{{IssueNumber: 1, Status: "paused", PausedReason: &pausedReason}},
+			want:  "paused",
+		},
+		{
+			name: "processing outranks paused",
+			queue: []QueueItem{
+				{IssueNumber: 1, Status: "paused", PausedReason: &pausedReason},
+				{IssueNumber: 2, Status: "processing"},
+			},
+			want: "processing",
+		},
+		{
+			name: "processing outranks waiting",
+			queue: []QueueItem{
+				{IssueNumber: 1, Status: "pending"},
+				{IssueNumber: 2, Status: "processing"},
+			},
+			want: "processing",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
+			s.queue = tc.queue
+			if got := s.queueStatusLocked(); got != tc.want {
+				t.Errorf("queueStatusLocked() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecalculatePositions_SkipsProcessingItems pins step 2 of the plan:
+// pending-item positions stay 1..N over items actually waiting, skipping
+// in-flight "processing" items. (Issue #232)
+func TestRecalculatePositions_SkipsProcessingItems(t *testing.T) {
+	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
+	s.queue = []QueueItem{
+		{IssueNumber: 1, Status: "processing", Position: 1},
+		{IssueNumber: 2, Status: "pending", Position: 2},
+		{IssueNumber: 3, Status: "pending", Position: 3},
+	}
+	s.recalculatePositions()
+
+	if s.queue[1].Position != 1 {
+		t.Errorf("pending item #2 Position = %d, want 1", s.queue[1].Position)
+	}
+	if s.queue[2].Position != 2 {
+		t.Errorf("pending item #3 Position = %d, want 2", s.queue[2].Position)
+	}
+}
+
+// TestCompleteQueueItem_NoopWhenNotProcessing pins the "no matching item"
+// no-op branch (autonomous board-scan runs never touch s.queue). (Issue #232)
+func TestCompleteQueueItem_NoopWhenNotProcessing(t *testing.T) {
+	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
+	s.queue = []QueueItem{{IssueNumber: 1, Repo: "o/A", Status: "pending"}}
+	s.CompleteQueueItem("o/A", 1)
+	if len(s.queue) != 1 {
+		t.Errorf("queue = %+v, want unchanged pending item (no matching processing item)", s.queue)
+	}
+	s.CompleteQueueItem("o/A", 999)
+	if len(s.queue) != 1 {
+		t.Errorf("queue = %+v, want unchanged (no matching issue number)", s.queue)
+	}
+}
+
+// TestSyncQueueToCloudLocked_IncludesProcessingItem pins AC5: the cloud sync
+// payload distinguishes a running item ("processing") from an idle/pending
+// one once DequeueIndependent has marked it in flight.
+func TestSyncQueueToCloudLocked_IncludesProcessingItem(t *testing.T) {
+	fake := &fakeTelemetry{}
+	s := &Scheduler{
+		repoRunning:      make(map[string]int),
+		mergeLocks:       make(map[string]*sync.Mutex),
+		telemetrySvc:     fake,
+		telemetryEnabled: true,
+	}
+	s.queue = []QueueItem{
+		{IssueNumber: 1, Repo: "o/A", Status: "processing", Position: 1},
+		{IssueNumber: 2, Repo: "o/A", Status: "pending", Position: 2},
+	}
+
+	s.mu.Lock()
+	s.syncQueueToCloudLocked()
+	s.mu.Unlock()
+
+	if len(fake.lastQueueSync) != 2 {
+		t.Fatalf("synced %d items, want 2", len(fake.lastQueueSync))
+	}
+	byIssue := make(map[int]platform.QueueSyncItem, 2)
+	for _, it := range fake.lastQueueSync {
+		byIssue[it.IssueNumber] = it
+	}
+	if byIssue[1].Status != "processing" {
+		t.Errorf("synced item #1 Status = %q, want %q", byIssue[1].Status, "processing")
+	}
+	if byIssue[2].Status != "pending" {
+		t.Errorf("synced item #2 Status = %q, want %q", byIssue[2].Status, "pending")
 	}
 }
 
@@ -743,9 +962,12 @@ func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
 	if got[0].IssueNumber != 10 {
 		t.Errorf("dispatched issue %d, want 10 (FIFO position order)", got[0].IssueNumber)
 	}
-	// The second same-repo item must remain QUEUED, not dropped.
-	if len(s.queue) != 1 || s.queue[0].IssueNumber != 11 {
-		t.Errorf("remaining queue = %+v, want exactly [#11] still queued", s.queue)
+	// The second same-repo item must remain QUEUED (pending), not dropped.
+	// #10 also stays in s.queue (Issue #232) with Status == "processing"
+	// instead of being spliced out.
+	if len(s.queue) != 2 || s.queue[0].IssueNumber != 10 || s.queue[0].Status != "processing" ||
+		s.queue[1].IssueNumber != 11 {
+		t.Errorf("remaining queue = %+v, want [#10 processing, #11 queued]", s.queue)
 	}
 
 	// Cross-pass: a SECOND fill with #10 running must return nothing — the repo
@@ -757,11 +979,14 @@ func TestDequeueIndependent_3874_SameRepoBatchAndCrossPass(t *testing.T) {
 	if len(got2) != 0 {
 		t.Errorf("cross-pass dequeue = %d items, want 0 (repo at per-repo cap while #10 runs)", len(got2))
 	}
-	if len(s.queue) != 1 || s.queue[0].IssueNumber != 11 {
-		t.Errorf("after cross-pass, remaining queue = %+v, want [#11] still queued", s.queue)
+	if len(s.queue) != 2 || s.queue[0].IssueNumber != 10 || s.queue[0].Status != "processing" ||
+		s.queue[1].IssueNumber != 11 {
+		t.Errorf("after cross-pass, remaining queue = %+v, want [#10 processing, #11 queued]", s.queue)
 	}
 
-	// Once #10 finishes (nothing running), the held item is free to dispatch.
+	// #10 finishes — completion removes it from the queue, then the held
+	// item is free to dispatch on the next pass (nothing running).
+	s.CompleteQueueItem("o/A", 10)
 	got3 := s.DequeueIndependent(context.Background(), 3, nil)
 	if len(got3) != 1 || got3[0].IssueNumber != 11 {
 		t.Errorf("post-completion dequeue = %+v, want exactly [#11]", got3)
@@ -985,9 +1210,11 @@ func TestEnqueueEpic_PopulatesSubIssueBlockedBy(t *testing.T) {
 		t.Errorf("dequeued %v, want [200]", dequeuedNums)
 	}
 
-	// #300 should remain in queue
-	if len(s.queue) != 1 || s.queue[0].IssueNumber != 300 {
-		t.Errorf("remaining queue: %v, want [300]", s.queue)
+	// #300 remains queued as pending; #200 stays in s.queue too (Issue #232)
+	// but as Status == "processing" since it's now in flight.
+	if len(s.queue) != 2 || s.queue[0].IssueNumber != 200 || s.queue[0].Status != "processing" ||
+		s.queue[1].IssueNumber != 300 {
+		t.Errorf("remaining queue: %v, want [200 processing, 300 pending]", s.queue)
 	}
 }
 
