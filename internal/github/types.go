@@ -118,13 +118,14 @@ type projectItemNode struct {
 type projectItemContent struct {
 	TypeName    string `graphql:"__typename"`
 	IssueFields struct {
-		Number    graphql.Int
-		Title     graphql.String
-		State     graphql.String
-		URL       graphql.String
-		CreatedAt graphql.String
-		UpdatedAt graphql.String
-		Labels    struct {
+		Number            graphql.Int
+		Title             graphql.String
+		State             graphql.String
+		URL               graphql.String
+		CreatedAt         graphql.String
+		UpdatedAt         graphql.String
+		AuthorAssociation graphql.String `graphql:"authorAssociation"`
+		Labels            struct {
 			Nodes []labelNode
 		} `graphql:"labels(first: 8)"`
 		Repository struct {

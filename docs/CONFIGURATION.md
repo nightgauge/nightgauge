@@ -6365,6 +6365,10 @@ autonomous:
     - owner-action
   pickup_backlog: false # Dispatch Backlog items after all Ready items done (default: false)
   auto_actionable: false # Move auto-refined issues directly to Ready (default: false)
+  trusted_author_associations: # GitHub associations trusted for autonomous processing
+    - OWNER # (default: OWNER, MEMBER, COLLABORATOR)
+    - MEMBER
+    - COLLABORATOR
   refinement_enabled: true # Enable autonomous refinement scheduler (default: true)
   refinement_interval: 60s # Time between refinement scans, min 30s (default: 60s)
   refinement_max_concurrent: 1 # Max concurrent refinement operations, 1-3 (default: 1)
@@ -6523,6 +6527,37 @@ review (`false`).
 - **`true`**: Refined issues move directly to Ready and are dispatched by the
   autonomous scheduler on the next scan cycle. Use for high-trust workflows
   where refinement quality is well-established.
+
+### trusted_author_associations
+
+| Key                           | Type     | Default                               | Env Variable |
+| ----------------------------- | -------- | ------------------------------------- | ------------ |
+| `trusted_author_associations` | string[] | `["OWNER", "MEMBER", "COLLABORATOR"]` | (none)       |
+
+Overrides the set of GitHub `author_association` values trusted to reach
+autonomous refinement and dispatch (#270). A stranger's issue on a public repo
+has no privilege to reach these entry points purely because it landed on the
+board — the author-trust gate fails closed: an issue whose author is not in
+this set (or the default) is skipped at every gate (refinement candidate
+selection, Backlog→Ready promotion, and dispatch), and a `review_required`
+card is raised in the Action Center so a maintainer can review and manually
+promote it if the author should be trusted.
+
+When set, this list **fully replaces** the default set — it does not merge
+with it. Values are matched case-insensitively against GitHub's
+`author_association` enum: `OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`,
+`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, `MANNEQUIN`.
+
+```yaml
+autonomous:
+  # Also trust first-time contributors — only for repos with a strong
+  # review process downstream of the autonomous pipeline.
+  trusted_author_associations: ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]
+```
+
+**Why fail closed**: an empty, unknown, or future GitHub association value is
+always treated as untrusted — never soften this to fail-open. See
+[standards/security.md](../standards/security.md) for the full threat model.
 
 ### refinement_enabled
 

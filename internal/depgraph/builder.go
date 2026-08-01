@@ -390,14 +390,15 @@ func boardItemToNode(item *types.BoardItem, repoName string) *Node {
 		effectiveRepo = item.Repo
 	}
 	node := &Node{
-		Repo:        effectiveRepo,
-		Number:      item.Number,
-		Title:       item.Title,
-		State:       item.State,
-		BoardStatus: item.Status, // Project board status (Ready, Backlog, etc.)
-		Size:        string(item.Size),
-		Priority:    string(item.Priority),
-		Labels:      item.Labels,
+		Repo:              effectiveRepo,
+		Number:            item.Number,
+		Title:             item.Title,
+		State:             item.State,
+		BoardStatus:       item.Status, // Project board status (Ready, Backlog, etc.)
+		Size:              string(item.Size),
+		Priority:          string(item.Priority),
+		Labels:            item.Labels,
+		AuthorAssociation: item.AuthorAssociation,
 	}
 	if item.ParentNumber != 0 {
 		node.EpicNumber = item.ParentNumber

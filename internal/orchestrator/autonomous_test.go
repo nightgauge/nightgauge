@@ -409,33 +409,28 @@ func TestPrioritize_BoardStatusGating(t *testing.T) {
 	}
 	g := buildTestGraph(nodes, nil)
 
-	t.Run("default: only Ready and Todo dispatched", func(t *testing.T) {
+	t.Run("default: only Ready dispatched, Todo is not (#270)", func(t *testing.T) {
 		as := &AutonomousScheduler{
 			config: AutonomousConfig{MaxConcurrent: 10, PickupBacklog: false},
 			state:  &AutonomousState{},
 		}
 		candidates := as.prioritize(context.Background(), g)
-		if len(candidates) != 2 {
-			t.Fatalf("expected 2 candidates (Ready + Todo), got %d", len(candidates))
+		if len(candidates) != 1 {
+			t.Fatalf("expected 1 candidate (Ready only — Todo is no longer dispatchable per #270), got %d", len(candidates))
 		}
-		// Ready/Todo items only, sorted: Ready(#1) before Todo(#6) (both are "ready" status)
-		nums := make(map[int]bool)
-		for _, c := range candidates {
-			nums[c.Number] = true
-		}
-		if !nums[1] || !nums[6] {
-			t.Errorf("expected issues #1 and #6, got %v", candidates)
+		if candidates[0].Number != 1 {
+			t.Errorf("expected issue #1, got %v", candidates)
 		}
 	})
 
-	t.Run("pickup_backlog: Ready + Backlog dispatched", func(t *testing.T) {
+	t.Run("pickup_backlog: Ready + Backlog dispatched, Todo still excluded", func(t *testing.T) {
 		as := &AutonomousScheduler{
 			config: AutonomousConfig{MaxConcurrent: 10, PickupBacklog: true},
 			state:  &AutonomousState{},
 		}
 		candidates := as.prioritize(context.Background(), g)
-		if len(candidates) != 3 {
-			t.Fatalf("expected 3 candidates (Ready + Todo + Backlog), got %d", len(candidates))
+		if len(candidates) != 2 {
+			t.Fatalf("expected 2 candidates (Ready + Backlog — Todo excluded per #270), got %d", len(candidates))
 		}
 		// Ready items should sort before Backlog
 		if !isReadyStatus(candidates[0].BoardStatus) {

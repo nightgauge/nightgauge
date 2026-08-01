@@ -43,6 +43,7 @@ const (
 	producerStuckEpic           = "watchdog-stuck-epic"
 	producerArchitectureApprove = "architecture-approval"
 	producerTerminalFailure     = "terminal-failure"
+	producerUntrustedAuthor     = "author-trust-gate"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -429,6 +430,56 @@ func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int,
 		DefaultAction: "leave",
 		ExpiresAt:     standingExpiry(),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this architecture is approved, or what needs to change first"},
+	})
+}
+
+// keyUntrustedAuthorSkip builds the sticky (producer, idempotency_key)
+// identity for an untrusted-author skip card, keyed on repo#issue so
+// re-observation from either gate (refinement or triage-promotion) updates
+// the same card in place instead of spawning duplicates.
+func keyUntrustedAuthorSkip(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerUntrustedAuthor, repo, issue)
+}
+
+// raiseUntrustedAuthorSkip surfaces a review_required-equivalent card when the
+// author-trust gate (#270) skips an issue at refinement candidate selection or
+// Backlog→Ready promotion. Without this, an untrusted-author issue silently
+// disappears from autonomous consideration instead of being visible to a
+// maintainer who can review it and manually promote if the author should be
+// trusted. gateSite distinguishes which gate skipped it (e.g. "refinement",
+// "triage-promotion") for the card body.
+func (as *AutonomousScheduler) raiseUntrustedAuthorSkip(owner, repo string, issue int, title, authorAssociation, gateSite string) {
+	fullRepo := fmt.Sprintf("%s/%s", owner, repo)
+	assoc := authorAssociation
+	if assoc == "" {
+		assoc = "(none)"
+	}
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keyUntrustedAuthorSkip(fullRepo, issue),
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("Untrusted author skipped at %s — #%d", gateSite, issue),
+		Body: fmt.Sprintf("#%d (%q) was skipped by the author-trust gate at %s: author_association=%s is not in the "+
+			"trusted set (default OWNER/MEMBER/COLLABORATOR, or autonomous.trusted_author_associations). "+
+			"Review the issue; if the author should be trusted, either add their association to "+
+			"autonomous.trusted_author_associations or manually promote the issue's board status to Ready.",
+			issue, title, gateSite, assoc),
+		Producer: producerUntrustedAuthor,
+		Standing: true,
+		// Constant fingerprint: the gate's verdict for a given issue does not
+		// change cycle to cycle unless the author or config changes, so this
+		// alerts once and stays muted until a human resolves it.
+		Fingerprint: "skipped:untrusted-author",
+		Context:     attention.Context{Repo: fullRepo, Issue: issue, Blocker: fmt.Sprintf("author_association=%s", assoc)},
+		Options: []attention.Option{
+			{ID: "promote", Label: "Promote to Ready", Verb: attention.VerbProjectSyncStatus,
+				Args:  map[string]any{"owner": owner, "repo": repo, "issueNumber": issue, "status": "ready"},
+				Style: attention.StyleDefault},
+			noopOption("leave", "Leave skipped"),
+		},
+		DefaultAction: "leave",
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note why this author should (or should not) be trusted"},
 	})
 }
 

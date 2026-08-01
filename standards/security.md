@@ -220,6 +220,45 @@ sanitization:
 
 ---
 
+## Author Trust Boundary for the Autonomous Pipeline (#270)
+
+**GitHub issue authorship on a public repo is itself an untrusted-input
+vector.** Anyone can open an issue on a public repository — its title, body,
+and labels are attacker-controlled the same way file contents or a webhook
+payload are. Before #270, nothing in the autonomous pipeline's entry points
+(refinement candidate selection, Backlog→Ready promotion, dispatch) checked
+`author_association`, so a stranger's issue could reach:
+
+1. **Refinement** — attacker-controlled issue text handed directly to a model
+   via `runRefinementCycle`, with no author check.
+2. **Dispatch** — the same issue promoted to `Ready` and picked up for
+   autonomous pipeline execution, purely through configuration defaults
+   (`auto_actionable`, or GitHub's default board template status "Todo"/"To
+   Do" being incorrectly treated as dispatchable).
+
+**Mitigation**: a fail-closed author-trust gate (`isTrustedAuthor` in
+`internal/orchestrator/author_trust.go`) applied at every entry point:
+refinement candidate selection, the Backlog→Ready triage gate
+(`isTriagedAndUnblocked`), and dispatch (`PickNext`, defense-in-depth). Only
+`OWNER`, `MEMBER`, and `COLLABORATOR` associations are trusted by default —
+empty, unknown, or future GitHub association values (`CONTRIBUTOR`,
+`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, `MANNEQUIN`) are always
+untrusted. Skipped issues raise a `review_required` Action Center card rather
+than silently disappearing from consideration. See
+[docs/AUTONOMOUS_ORCHESTRATOR.md § Author Trust Gate](../docs/AUTONOMOUS_ORCHESTRATOR.md#author-trust-gate-270)
+and
+[docs/CONFIGURATION.md § trusted_author_associations](../docs/CONFIGURATION.md#trusted_author_associations)
+for configuration.
+
+**Rule for any future autonomous entry point**: if a code path can promote,
+refine, or dispatch a GitHub issue without a human having explicitly reviewed
+it first, it must consult `isTrustedAuthor` (or the board-status/triage gates
+that already wrap it) before acting. Never assume board status or label
+presence alone implies a trusted author — those signals can be set by GitHub
+automation (board auto-add) as easily as by a human triager.
+
+---
+
 ---
 
 ## Shell Command Execution Patterns

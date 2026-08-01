@@ -296,17 +296,19 @@ full details on each option.
 
 Five safety rails protect against runaway execution:
 
-| Rail                | Default                | Trigger                                                 | Effect                                    |
-| ------------------- | ---------------------- | ------------------------------------------------------- | ----------------------------------------- |
-| **Budget Ceiling**  | 500,000 tokens         | Total tokens spent exceeds ceiling                      | Scheduler stops with `budget_exhausted`   |
-| **Circuit Breaker** | 3 consecutive failures | N consecutive pipeline failures                         | Scheduler stops with `safety_tripped`     |
-| **Rate Limit**      | 20/hour                | Pipeline starts exceed threshold in sliding hour window | New enqueues blocked until window resets  |
-| **Epic Checkpoint** | Enabled                | All sub-issues of an epic complete                      | Scheduler pauses for human review         |
-| **Health Gate**     | Score >= 30            | Pipeline health score drops below threshold             | New enqueues blocked until score improves |
+| Rail                  | Default                   | Trigger                                                 | Effect                                                                               |
+| --------------------- | ------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **Budget Ceiling**    | 500,000 tokens            | Total tokens spent exceeds ceiling                      | Scheduler stops with `budget_exhausted`                                              |
+| **Circuit Breaker**   | 3 consecutive failures    | N consecutive pipeline failures                         | Scheduler stops with `safety_tripped`                                                |
+| **Rate Limit**        | 20/hour                   | Pipeline starts exceed threshold in sliding hour window | New enqueues blocked until window resets                                             |
+| **Epic Checkpoint**   | Enabled                   | All sub-issues of an epic complete                      | Scheduler pauses for human review                                                    |
+| **Health Gate**       | Score >= 30               | Pipeline health score drops below threshold             | New enqueues blocked until score improves                                            |
+| **Author Trust Gate** | OWNER/MEMBER/COLLABORATOR | Issue author is not in the trusted association set      | Skipped at refinement, promotion, and dispatch; `review_required` card raised (#270) |
 
 All rails are checked before each enqueue. Check priority order: budget >
-circuit breaker > rate limit > health gate > epic checkpoint. See
-[Safety Rails Reference](#safety-rails-reference) for configuration details.
+circuit breaker > rate limit > health gate > epic checkpoint > author trust.
+See [Safety Rails Reference](#safety-rails-reference) for configuration
+details.
 
 ### 6. State Persistence
 
@@ -643,6 +645,30 @@ Detection still surfaces via state and the CLI when no webhook is configured.
 - **Disable**: Set to `0`
 - **Note**: If no health score has been recorded yet (score = 0), the gate does
   NOT block
+
+### Author Trust Gate (#270)
+
+- **Config**: `autonomous.trusted_author_associations` — default
+  `["OWNER", "MEMBER", "COLLABORATOR"]`; a non-empty list fully replaces the
+  default set
+- **Trigger**: An issue's GitHub `author_association` is not in the trusted
+  set, at any of three entry points: refinement candidate selection
+  (`runRefinementCycle`), Backlog→Ready promotion (`isTriagedAndUnblocked`),
+  and final dispatch (`PickNext`, deliberately redundant defense-in-depth)
+- **Effect**: The issue is skipped at that gate and a `review_required`
+  Action Center card is raised so a maintainer can review and manually
+  promote it if the author should be trusted
+- **Fail-closed**: empty, unknown, or future `author_association` values
+  (e.g. `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`,
+  `MANNEQUIN`) are always untrusted — never soften this to fail-open
+- **Why**: nothing in the autonomous path previously checked author identity.
+  A stranger's issue on a public repo could reach refinement (exposing
+  attacker-controlled text to a model) and dispatch purely through
+  configuration defaults — see
+  [standards/security.md](../standards/security.md) for the full threat
+  model. `isReadyStatus` was also fixed to stop treating GitHub's default
+  board template status (`Todo` / `To Do`) as dispatchable, since it
+  collapsed the Backlog gate entirely; only `Ready` is dispatchable now.
 
 ### Discipline Gate (#4100)
 

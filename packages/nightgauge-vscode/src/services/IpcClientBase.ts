@@ -172,6 +172,9 @@ export interface BoardItem {
     state: string;
     repo?: string;
   }>;
+  /** GitHub author_association (OWNER, MEMBER, COLLABORATOR, NONE, ...). Used
+   * by the autonomous pipeline's author-trust gate (#270). */
+  authorAssociation?: string;
 }
 
 /** Per-status item counts from board.counts (matches Go StatusCounts). */

@@ -307,6 +307,12 @@ type AutonomousConfig struct {
 	// RefinementMaxConcurrent is the maximum number of concurrent refinement
 	// operations. Range: 1–3 (capped to prevent resource exhaustion). Default: 1.
 	RefinementMaxConcurrent int `yaml:"refinement_max_concurrent" json:"refinementMaxConcurrent,omitempty"`
+	// TrustedAuthorAssociations overrides the default set of GitHub
+	// author_association values ("OWNER", "MEMBER", "COLLABORATOR") that are
+	// trusted to reach autonomous refinement and dispatch (#270). When set,
+	// this list fully replaces the default set — it does not merge with it.
+	// Unset/empty → use the built-in default (OWNER/MEMBER/COLLABORATOR).
+	TrustedAuthorAssociations []string `yaml:"trusted_author_associations,omitempty" json:"trustedAuthorAssociations,omitempty"`
 	// StallEscalationEnabled enables progressive stall escalation in autonomous
 	// mode (Issue #2656). When true, autonomous pipelines escalate through 5
 	// levels instead of silently killing. Default: true.

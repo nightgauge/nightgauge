@@ -197,6 +197,7 @@ func (b *BoardService) nodeToItem(node projectItemNode) *types.BoardItem {
 		item.CreatedAt, _ = time.Parse(time.RFC3339, string(f.CreatedAt))
 		item.UpdatedAt, _ = time.Parse(time.RFC3339, string(f.UpdatedAt))
 		item.IsPR = false
+		item.AuthorAssociation = string(f.AuthorAssociation)
 		for _, l := range f.Labels.Nodes {
 			item.Labels = append(item.Labels, string(l.Name))
 		}

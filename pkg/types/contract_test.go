@@ -110,6 +110,7 @@ func TestBoardItemContractValues(t *testing.T) {
 		Blocking: []types.BlockingRef{
 			{NodeID: "I_block202", Number: 44, Title: "Add photo gallery view", State: "OPEN", Repo: "nightgauge/nightgauge"},
 		},
+		AuthorAssociation: "OWNER",
 	}
 
 	got, err := json.Marshal(item)

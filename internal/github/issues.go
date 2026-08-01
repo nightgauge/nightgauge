@@ -24,10 +24,11 @@ const (
 
 // UnrefinedIssue is a lightweight issue result for list-unrefined output.
 type UnrefinedIssue struct {
-	Number    int      `json:"number"`
-	Title     string   `json:"title"`
-	Labels    []string `json:"labels"`
-	CreatedAt string   `json:"created_at"`
+	Number            int      `json:"number"`
+	Title             string   `json:"title"`
+	Labels            []string `json:"labels"`
+	CreatedAt         string   `json:"created_at"`
+	AuthorAssociation string   `json:"author_association"`
 }
 
 // dependabotLabels is the set of labels applied by Dependabot to its issues and PRs.
@@ -765,10 +766,11 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 	// labels(first: 8) — caller filters by presence of label names; rare to
 	// have >8 labels on a single issue. See #3587 follow-up for rationale.
 	type issueNode struct {
-		Number    graphql.Int
-		Title     graphql.String
-		CreatedAt graphql.String
-		Labels    struct {
+		Number            graphql.Int
+		Title             graphql.String
+		CreatedAt         graphql.String
+		AuthorAssociation graphql.String `graphql:"authorAssociation"`
+		Labels            struct {
 			Nodes []labelNode
 		} `graphql:"labels(first: 8)"`
 	}
@@ -815,10 +817,11 @@ func (s *IssueService) ListIssuesExcludingLabels(ctx context.Context, owner, rep
 		}
 
 		results = append(results, UnrefinedIssue{
-			Number:    int(n.Number),
-			Title:     string(n.Title),
-			Labels:    labels,
-			CreatedAt: string(n.CreatedAt),
+			Number:            int(n.Number),
+			Title:             string(n.Title),
+			Labels:            labels,
+			CreatedAt:         string(n.CreatedAt),
+			AuthorAssociation: string(n.AuthorAssociation),
 		})
 
 		if limit > 0 && len(results) >= limit {

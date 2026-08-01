@@ -347,9 +347,10 @@ func TestStuckEpics_CrossRepoEligibleDoesNotSuppress(t *testing.T) {
 	}
 }
 
-// TestStuckEpics_TodoStatusDispatchable: a "Todo"/"To Do" sub is dispatchable per
-// the real gate, so the epic must NOT be flagged stuck (#4073 review).
-func TestStuckEpics_TodoStatusDispatchable(t *testing.T) {
+// TestStuckEpics_TodoStatusNotDispatchable: a "Todo"/"To Do" sub is no longer
+// dispatchable per the author-trust gate fix (#270) — only "Ready" is. The
+// epic must now be flagged stuck since its sole sub has no eligible work.
+func TestStuckEpics_TodoStatusNotDispatchable(t *testing.T) {
 	for _, status := range []string{"Todo", "To Do"} {
 		g := buildEpicGraph("In progress",
 			[]*depgraph.Node{{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: status}}, nil)
@@ -357,8 +358,8 @@ func TestStuckEpics_TodoStatusDispatchable(t *testing.T) {
 			now: time.Unix(1_700_000_000, 0), runningSet: map[string]bool{},
 			isRecovering: noRecovery, failureReason: noReason,
 		})
-		if len(got) != 0 {
-			t.Errorf("a %q sub is dispatchable → epic NOT stuck, got %+v", status, got)
+		if len(got) != 1 {
+			t.Errorf("a %q sub is NOT dispatchable (#270) → epic should be stuck, got %+v", status, got)
 		}
 	}
 }

@@ -56,6 +56,11 @@ type AutonomousConfig struct {
 	// AutoActionable controls whether auto-refined issues go to Ready (true) or Backlog (false).
 	AutoActionable bool
 
+	// TrustedAuthorAssociations overrides the default trusted set
+	// (OWNER/MEMBER/COLLABORATOR) used by the author-trust gate (#270).
+	// Empty → use the built-in default.
+	TrustedAuthorAssociations []string
+
 	// PerRepoMax is the default per-repository concurrency cap
 	// (concurrency.per_repo_max). 0 → 1 (serialize per repo). Applies to any
 	// repo without a RepositoryMaxConcurrent override.
@@ -2247,11 +2252,16 @@ func isWorkCompleteStatus(status string) bool {
 }
 
 // isReadyStatus returns true when the board status indicates the issue is
-// explicitly approved for pipeline dispatch. Case-insensitive match on
-// common "ready" variations (Ready, Todo, To Do).
+// explicitly approved for pipeline dispatch. Only "Ready" is dispatchable —
+// GitHub's default board template status ("Todo" / "To Do") is NOT treated
+// as approved for autonomous dispatch (#270): it collapses the Backlog gate,
+// since a stranger's issue can land in that column via board auto-add with
+// no triage step at all. Teams that want the default template's "Todo"
+// column to mean ready should promote explicitly via isTriagedAndUnblocked's
+// Backlog→Ready path, which enforces the author-trust and triage gates.
 func isReadyStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
-	return s == "ready" || s == "todo" || s == "to do"
+	return s == "ready"
 }
 
 // isBacklogStatus returns true for issues in the Backlog column. These are
@@ -3918,7 +3928,7 @@ func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
 // new rule promotes any Backlog item that meets the triage gate, which
 // matches what users expect when they land 12 P1 issues with `type:bug`
 // labels and no blockers and start autonomous.
-func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string) bool {
+func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, trustedAssociations []string) bool {
 	if node == nil || !strings.EqualFold(node.State, "OPEN") {
 		return false
 	}
@@ -3926,6 +3936,12 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 		return false
 	}
 	if node.Priority == "" {
+		return false
+	}
+	// Author-trust gate (#270): the sound existing Backlog->Ready gate must
+	// also fail closed on author identity — a triage label alone does not
+	// imply the author is trusted.
+	if !isTrustedAuthor(node.AuthorAssociation, trustedAssociations) {
 		return false
 	}
 	hasType := false
@@ -3977,7 +3993,12 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	promoted := 0
 
 	for _, node := range graph.Nodes {
-		if !isTriagedAndUnblocked(node, graph, adj) {
+		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" &&
+			!isTrustedAuthor(node.AuthorAssociation, as.config.TrustedAuthorAssociations) {
+			owner, repoName := splitOwnerRepo(node.Repo)
+			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
+		}
+		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
 			continue
 		}
 
@@ -4073,7 +4094,12 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(completedRepo string, com
 		}
 		// Triage gate is shared with promoteUnblockedOnStartup so the cascade
 		// path doesn't promote items that startup would refuse (#3253).
-		if !isTriagedAndUnblocked(node, graph, adj) {
+		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" &&
+			!isTrustedAuthor(node.AuthorAssociation, as.config.TrustedAuthorAssociations) {
+			owner, repoName := splitOwnerRepo(node.Repo)
+			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
+		}
+		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
 			continue
 		}
 
@@ -4892,6 +4918,16 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 
 		for i, candidate := range candidates {
 			key := fmt.Sprintf("%s#%d", fullRepo, candidate.Number)
+
+			// Author-trust gate (#270): a stranger's issue on a public repo
+			// must not reach refinement — attacker-controlled title/body text
+			// would otherwise be handed straight to the model. Fail closed.
+			if !isTrustedAuthor(candidate.AuthorAssociation, as.config.TrustedAuthorAssociations) {
+				log.Printf("[refinement] %s#%d: skipping — untrusted author (author_association=%q)",
+					fullRepo, candidate.Number, candidate.AuthorAssociation)
+				as.raiseUntrustedAuthorSkip(owner, repo, candidate.Number, candidate.Title, candidate.AuthorAssociation, "refinement")
+				continue
+			}
 
 			// Skip if already being refined
 			as.mu.Lock()

@@ -8894,18 +8894,21 @@ func autonomousRunCmd() *cobra.Command {
 			// Create the underlying scheduler
 			autoOnFailure := "ready"
 			autoExcludeLabels := config.DefaultExcludeLabels
+			var autoTrustedAuthorAssociations []string
 			if cfg != nil && cfg.Autonomous != nil {
 				autoOnFailure = cfg.Autonomous.ResolvedOnFailureStatus()
 				autoExcludeLabels = cfg.Autonomous.ResolvedExcludeLabels()
+				autoTrustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
 			}
 			sched := orchestrator.NewScheduler(client, orchestrator.SchedulerConfig{
-				Owner:           owner,
-				OwnerType:       getOwnerType(cmd),
-				ProjectNumber:   project,
-				MaxPerRepo:      maxSlots,
-				WorkspaceRoot:   workdir,
-				OnFailureStatus: autoOnFailure,
-				ExcludeLabels:   autoExcludeLabels,
+				Owner:                     owner,
+				OwnerType:                 getOwnerType(cmd),
+				ProjectNumber:             project,
+				MaxPerRepo:                maxSlots,
+				WorkspaceRoot:             workdir,
+				OnFailureStatus:           autoOnFailure,
+				ExcludeLabels:             autoExcludeLabels,
+				TrustedAuthorAssociations: autoTrustedAuthorAssociations,
 			})
 
 			// Create autonomous scheduler
@@ -8935,18 +8938,24 @@ func autonomousRunCmd() *cobra.Command {
 				}
 			}
 
+			var trustedAuthorAssociations []string
+			if cfg != nil && cfg.Autonomous != nil {
+				trustedAuthorAssociations = cfg.Autonomous.TrustedAuthorAssociations
+			}
+
 			autoCfg := orchestrator.AutonomousConfig{
-				ScanInterval:            interval,
-				MaxConcurrent:           maxSlots,
-				BudgetCeiling:           budget,
-				DebounceRepos:           true,
-				DryRun:                  dryRun,
-				PickupBacklog:           pickupBacklog,
-				RefinementEnabled:       refinementEnabled,
-				RefinementInterval:      refinementInterval,
-				RefinementMaxConcurrent: refinementMaxConcurrent,
-				RefinementCooldown:      5 * time.Minute,
-				AutoActionable:          autoActionable,
+				ScanInterval:              interval,
+				MaxConcurrent:             maxSlots,
+				BudgetCeiling:             budget,
+				DebounceRepos:             true,
+				DryRun:                    dryRun,
+				PickupBacklog:             pickupBacklog,
+				RefinementEnabled:         refinementEnabled,
+				RefinementInterval:        refinementInterval,
+				RefinementMaxConcurrent:   refinementMaxConcurrent,
+				RefinementCooldown:        5 * time.Minute,
+				AutoActionable:            autoActionable,
+				TrustedAuthorAssociations: trustedAuthorAssociations,
 				// Stuck-epic watchdog defaults; applyStuckEpicConfig refines from config.
 				StuckEpicDetectionEnabled: true,
 				StuckEpicReAlertAfter:     6 * time.Hour,
