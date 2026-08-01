@@ -513,6 +513,9 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 	if terminalKind == TerminalKindAbandonedCommit {
 		b.WriteString("A recovery attempt already found committed, unmerged work on this branch (clean tree, ahead of base) but could not resume automatically. The commit is still there — retry will resume at pr-create rather than re-deriving the work from scratch.\n\n")
 	}
+	if terminalKind == TerminalKindCommitOrphaned {
+		b.WriteString("A killed stage's commit landed off the expected feature branch (most likely a stray `temp-pre-push-<n>` branch left over from a SIGKILL mid pre-push validation) and self-heal could not check out the feature branch to recover it. The commit itself was NOT deleted — the worktree/branch cleanup guard preserves anything ahead of the base branch. Push the stranded branch and open a PR from it by hand before retrying; a plain Retry re-dispatches into a fresh worktree and re-derives the work from scratch instead of reusing the commit.\n\n")
+	}
 	if costUSD > 0 {
 		b.WriteString(fmt.Sprintf("Cost so far: $%.2f.\n\n", costUSD))
 	}

@@ -373,6 +373,35 @@ commit below. Do NOT commit first and format after.
 
 ### Step 5.1: Check for Uncommitted Changes
 
+> **Branch-identity guard (#266) — check BEFORE any of the below.** A stage
+> killed mid `nightgauge pre-push validate` bypasses pre_push.go's
+> restore-defer (a `defer` never runs on SIGKILL), which can leave HEAD
+> checked out on a stray `temp-pre-push-<n>` branch instead of the feature
+> branch this stage started on (`$BRANCH`, captured in Phase 0). Committing
+> without checking lands a valid implementation on a branch nobody expects and
+> the pipeline can't find. Verify before staging or committing anything:
+>
+> ```bash
+> CURRENT_BRANCH=$(git branch --show-current)
+> if [ "$CURRENT_BRANCH" != "$BRANCH" ]; then
+>   echo "Branch mismatch: HEAD is on $CURRENT_BRANCH, expected $BRANCH — recovering"
+>   if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
+>     git checkout "$BRANCH"
+>     echo "Recovered: checked out $BRANCH before committing"
+>     CURRENT_BRANCH="$BRANCH"
+>   else
+>     echo "[commit-orphaned] expected feature branch $BRANCH not found locally while HEAD is on $CURRENT_BRANCH — cannot self-heal"
+>     exit 1
+>   fi
+> fi
+> ```
+>
+> If the feature branch doesn't exist locally either, FAIL LOUDLY here — do
+> NOT commit onto `$CURRENT_BRANCH` anyway. A commit on the wrong branch that
+> nobody notices is worse than a stage that stops and says so; the
+> `[commit-orphaned]` marker classifies the run so cleanup preserves whatever
+> branch/worktree state exists instead of discarding it (#266).
+
 > **HARD RULE — never skip the commit based on `git log`.** feature-dev NEVER
 > commits (Issue #1608 — the commit lives HERE, in this phase). A
 > similarly-titled commit on the base branch belongs to a _previous issue_

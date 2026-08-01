@@ -350,6 +350,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `no_changes_produced` — pr-create's deterministic fallback confirmed zero commits ahead of base; genuinely nothing to open a PR for, e.g. a dispatched human-only issue (#317)
  *  - `validation_failed` — feature-validate honestly failed its quality gates (validation_status="failed"); organic implementation failure, not a subagent crash (#326)
  *  - `branch_forked` — the run's branch diverged from its remote (killed mid-push, or an operator pushed to it); every push is rejected non-fast-forward and no retry clears it (#163)
+ *  - `commit_orphaned` — a killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry, needs human action (#266)
  *
  * MUST stay in lockstep with the Go constants in
  * internal/orchestrator/failure_handler.go and the SDK `TerminalFailureKind`
@@ -390,6 +391,7 @@ export const TerminalFailureKindSchema = z.enum([
   // Declared-but-unmatched, mirroring Go: set structurally (a gate/evidence
   // override), never derived from error text.
   "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
+  "commit_orphaned", // Issue #266 — a killed stage's commit landed on the wrong branch and self-heal could not recover it; unrecoverable by retry
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 

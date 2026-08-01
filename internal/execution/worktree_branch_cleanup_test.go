@@ -80,6 +80,55 @@ func TestCleanupBranchIfMerged_KeepsBranchWithNoOwnCommits(t *testing.T) {
 	}
 }
 
+// TestCleanupLocalBranch_PreservesUnmergedBranch is a regression guard for
+// #266: the scheduler's failed-run cleanup calls CleanupLocalBranch
+// unconditionally (no PR case) — it must refuse to `git branch -D` a branch
+// carrying commits not yet on the default branch, independent of any
+// worktree's dirty state (a branch ref has no working tree of its own).
+func TestCleanupLocalBranch_PreservesUnmergedBranch(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(266, "feat/266-thing")
+	f.commitIn(wt, "feature.txt", "unpushed work\n")
+	// Not merged into main — no squashMergeToMain call.
+	run(t, f.root, "git", "worktree", "remove", wt, "--force")
+
+	m := newBranchCleanupManager(f.root)
+	if err := m.CleanupLocalBranch("owner/repo", "feat/266-thing"); err != nil {
+		t.Fatalf("CleanupLocalBranch: %v", err)
+	}
+
+	out, err := gitOutput(f.root, "branch", "--list", "feat/266-thing")
+	if err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	}
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("expected unmerged branch feat/266-thing to survive CleanupLocalBranch, but it was deleted")
+	}
+}
+
+// TestCleanupLocalBranch_DeletesMergedBranch asserts the guard does not
+// regress the existing behavior: a genuinely merged branch is still deleted.
+func TestCleanupLocalBranch_DeletesMergedBranch(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(268, "feat/268-thing")
+	f.commitIn(wt, "feature.txt", "merged work\n")
+	f.squashMergeToMain("feat/268-thing")
+	run(t, f.root, "git", "worktree", "remove", wt, "--force")
+
+	m := newBranchCleanupManager(f.root)
+	if err := m.CleanupLocalBranch("owner/repo", "feat/268-thing"); err != nil {
+		t.Fatalf("CleanupLocalBranch: %v", err)
+	}
+
+	out, err := gitOutput(f.root, "branch", "--list", "feat/268-thing")
+	if err != nil {
+		t.Fatalf("git branch --list: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected merged branch feat/268-thing to be deleted, still present: %q", out)
+	}
+}
+
 func TestCleanupWorktree_PreservesDirtyWorktree(t *testing.T) {
 	f := newSweepFixture(t)
 	m := newBranchCleanupManager(f.root)

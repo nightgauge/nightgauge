@@ -246,7 +246,8 @@ export type TerminalFailureKind =
   // Declared-but-unmatched, mirroring Go: set by the recovery action from
   // structured evidence, never derived from error text, so
   // classifyTerminalKind has no matcher for it either.
-  | "abandoned_commit"; // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
+  | "abandoned_commit" // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
+  | "commit_orphaned"; // Issue #266 — a killed stage's commit landed on the wrong branch (a stray temp-pre-push-<n> left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry
 
 /**
  * Every `TerminalFailureKind` union member, in declaration order. TS union
@@ -284,6 +285,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "architecture_approval_required",
   "validation_inconclusive",
   "abandoned_commit",
+  "commit_orphaned",
 ];
 
 /**
@@ -575,6 +577,16 @@ export function classifyTerminalKind(
     (t.includes("push rejected") && t.includes("fetch first"))
   ) {
     return "branch_forked";
+  }
+
+  // Commit stranded on the wrong branch after a SIGKILL bypassed the
+  // pre-push restore-defer (#266). Matched BEFORE the subagent_crash
+  // fallback for the same "exit " heuristic reason as the checks above.
+  // Emitted by feature-validate's Step 5.1 branch-identity guard when HEAD
+  // isn't on the issue's expected feature branch and self-heal can't
+  // recover it. Mirrors the Go matcher in failure_handler.go.
+  if (t.includes("[commit-orphaned]") || t.includes("commit_orphaned")) {
+    return "commit_orphaned";
   }
 
   // Process death / non-zero exit fallback.
