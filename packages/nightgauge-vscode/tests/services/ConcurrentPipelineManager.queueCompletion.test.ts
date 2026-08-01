@@ -102,8 +102,12 @@ function makeQueueItem(issueNumber: number) {
 
 function createControllableFactory() {
   const resolvers = new Map<number, (result: any) => void>();
+  const rejecters = new Map<number, (error: any) => void>();
   const factory = vi.fn().mockImplementation((_workDir: string, issueNumber: number) => {
-    const promise = new Promise((resolve) => resolvers.set(issueNumber, resolve));
+    const promise = new Promise((resolve, reject) => {
+      resolvers.set(issueNumber, resolve);
+      rejecters.set(issueNumber, reject);
+    });
     return {
       orchestrator: {
         setWorktreeOverride: vi.fn(),
@@ -129,6 +133,7 @@ function createControllableFactory() {
   return {
     factory,
     resolve: (issueNumber: number, result: any) => resolvers.get(issueNumber)?.(result),
+    reject: (issueNumber: number, error: any) => rejecters.get(issueNumber)?.(error),
   };
 }
 
@@ -216,12 +221,15 @@ describe("ConcurrentPipelineManager — queue completion on the extension path (
     expect(queueService.complete).toHaveBeenCalledWith(REPO, 241);
   });
 
-  // A throwing runPipeline is covered by the same `finally` these two tests
-  // pin — JS guarantees it runs on the exception path, so a dedicated test
-  // would assert the language, not this code. It is also untestable here
-  // without noise: `startSlot` ends in `void runPromise.finally(...)`, so a
-  // rejected run surfaces as an unhandled rejection that fails the vitest run.
-  // That is a real (pre-existing, unrelated) defect — tracked separately.
+  it("completes the dequeued item after a throwing run without an unhandled rejection", async () => {
+    const { manager, queueService, controllable } = makeManager([[makeQueueItem(242)]]);
+
+    await manager.fillSlots();
+    controllable.reject(242, new Error("boom"));
+    await manager.settleForTest(242);
+
+    expect(queueService.complete).toHaveBeenCalledWith(REPO, 242);
+  });
 
   it("completes a duplicate-skipped item (#188) — it was marked processing but never run", async () => {
     // maxConcurrent 2 so the occupied slot below still leaves capacity to
