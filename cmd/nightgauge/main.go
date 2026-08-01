@@ -9091,6 +9091,22 @@ func autonomousRunCmd() *cobra.Command {
 	return cmd
 }
 
+// autonomousStateIsStalled reports whether a persisted "running"/"paused"
+// status is stale — the PID recorded as the last writer is unset or no
+// longer alive. Shared by the human and --json output paths of `autonomous
+// status` so the two never disagree (Issue #274).
+func autonomousStateIsStalled(state orchestrator.AutonomousState) bool {
+	if state.Status != "running" && state.Status != "paused" {
+		return false
+	}
+	if state.PID <= 0 {
+		return true
+	}
+	// Signal 0 performs no-op error checking: it succeeds iff the process
+	// exists and is signalable by this user.
+	return syscall.Kill(state.PID, 0) != nil
+}
+
 func autonomousStatusCmd() *cobra.Command {
 	var outputJSON bool
 
@@ -9114,9 +9130,15 @@ func autonomousStatusCmd() *cobra.Command {
 				return fmt.Errorf("parse state: %w", err)
 			}
 
+			stalled := autonomousStateIsStalled(state)
+
 			// JSON output mode for scripting
 			if outputJSON {
-				out, _ := json.MarshalIndent(state, "", "  ")
+				type statusWithStalled struct {
+					orchestrator.AutonomousState
+					Stalled bool `json:"stalled"`
+				}
+				out, _ := json.MarshalIndent(statusWithStalled{AutonomousState: state, Stalled: stalled}, "", "  ")
 				fmt.Println(string(out))
 				return nil
 			}
@@ -9126,7 +9148,11 @@ func autonomousStatusCmd() *cobra.Command {
 			if len(statusDisplay) > 0 {
 				statusDisplay = strings.ToUpper(statusDisplay[:1]) + statusDisplay[1:]
 			}
-			fmt.Printf("Autonomous Mode: %s\n", statusDisplay)
+			if stalled {
+				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
+			} else {
+				fmt.Printf("Autonomous Mode: %s\n", statusDisplay)
+			}
 
 			if state.StartedAt != "" {
 				elapsed := formatElapsedSince(state.StartedAt)

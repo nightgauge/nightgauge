@@ -264,6 +264,21 @@ type AutonomousState struct {
 	PauseTriggeredBy string `json:"pauseTriggeredBy,omitempty"`
 	PausedAt         string `json:"pausedAt,omitempty"`
 
+	// PID is the OS process ID of the scheduler that last wrote this state
+	// while Status was "running". Set in Run() alongside StartedAt. Lets any
+	// reader — in-process or a separate `autonomous status` CLI invocation —
+	// independently verify whether the writer is still alive, rather than
+	// trusting a possibly-stale on-disk "running" status (Issue #274).
+	PID int `json:"pid,omitempty"`
+
+	// RestartedFromRunning is true when loadState() reconciled a persisted
+	// "running"/"paused" status to "stopped" because the process exited
+	// without a clean Stop()/complete() call. Run() clears it back to false.
+	// Distinguishes "we recovered from an ungraceful exit" (true) from "an
+	// operator or the scheduler itself stopped it deliberately" (false).
+	// Issue #274.
+	RestartedFromRunning bool `json:"restartedFromRunning,omitempty"`
+
 	// QuotaCooldownUntil is the ISO-8601 wall-clock time until which the
 	// scheduler must NOT dispatch any new pipeline runs because the upstream
 	// Anthropic 5-hour rate-limit bucket is known-exhausted. Set when any
@@ -973,10 +988,14 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	as.stopRequested = false
 	as.state.Status = "running"
 	as.state.StartedAt = time.Now().UTC().Format(time.RFC3339)
+	as.state.PID = os.Getpid()
 	// Clear stale pause provenance — a fresh Run is not a paused state.
 	as.state.PauseReason = ""
 	as.state.PauseTriggeredBy = ""
 	as.state.PausedAt = ""
+	// A fresh, explicit Run starts clean — any prior restart-reconcile no
+	// longer applies (Issue #274).
+	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
 	as.mu.Unlock()
 	as.persistState()
@@ -4589,8 +4608,11 @@ func (as *AutonomousScheduler) loadState() {
 	}
 	// Only restore non-terminal states as "stopped" (need explicit restart).
 	// Terminal states (complete, budget_exhausted, safety_tripped) are preserved as-is.
+	reconciledFromRunning := false
 	if loaded.Status == "running" || loaded.Status == "paused" {
 		loaded.Status = "stopped"
+		loaded.RestartedFromRunning = true
+		reconciledFromRunning = true
 	}
 	// Preserve stale Running items on load so RecoverOrphanedRunning can
 	// observe them and reset each board item to "Ready". Previously loadState
@@ -4618,6 +4640,16 @@ func (as *AutonomousScheduler) loadState() {
 	as.state = &loaded
 	log.Printf("autonomous: loaded state from disk (status=%s, completed=%d, failed=%d)",
 		loaded.Status, len(loaded.Completed), len(loaded.Failed))
+	// Flush the running/paused->stopped reconcile immediately rather than
+	// leaving it in memory only — otherwise a process that crashes again
+	// before the next scan cycle leaves state.json claiming "running"
+	// forever (Issue #274). loadState runs single-threaded during
+	// construction, before `as` is exposed to other goroutines, so no
+	// additional locking is needed here (consistent with the unguarded
+	// as.state assignment above).
+	if reconciledFromRunning {
+		as.persistStateLocked()
+	}
 }
 
 // recordFailureLocked appends a failure for a specific issue, deduplicating

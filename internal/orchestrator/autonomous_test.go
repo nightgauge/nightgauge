@@ -3359,6 +3359,145 @@ func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 	}
 }
 
+// Regression test for Issue #274: loadState previously reconciled a
+// persisted "running"/"paused" status to "stopped" only in memory, never
+// writing it back to disk. A process that crashed again before the next
+// scan cycle left state.json claiming "running" forever. Assert against the
+// on-disk file, not as.state, since the whole bug was an in-memory-only fix.
+func TestLoadState_PersistsRunningToStoppedReconcileToDisk(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	prior := AutonomousState{Status: "running", StartedAt: "2026-04-12T12:00:00Z"}
+	data, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	as := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	as.loadState()
+
+	onDisk, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var reread AutonomousState
+	if err := json.Unmarshal(onDisk, &reread); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if reread.Status != "stopped" {
+		t.Errorf("on-disk status = %q after loadState, want %q — reconcile was not flushed to disk", reread.Status, "stopped")
+	}
+	if !reread.RestartedFromRunning {
+		t.Error("on-disk restartedFromRunning = false, want true — restart-from-running must be distinguishable from a clean stop")
+	}
+}
+
+// Same reconcile-to-disk regression, but from a "paused" prior status.
+func TestLoadState_PersistsPausedToStoppedReconcileToDisk(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	prior := AutonomousState{Status: "paused", PauseReason: "user requested via UI"}
+	data, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	as := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	as.loadState()
+
+	onDisk, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var reread AutonomousState
+	if err := json.Unmarshal(onDisk, &reread); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if reread.Status != "stopped" {
+		t.Errorf("on-disk status = %q after loadState, want %q", reread.Status, "stopped")
+	}
+	if !reread.RestartedFromRunning {
+		t.Error("on-disk restartedFromRunning = false, want true for a paused->stopped reconcile")
+	}
+}
+
+// A clean stop (already "stopped" on disk) must never be mislabeled as a
+// restart recovery.
+func TestLoadState_CleanStopDoesNotSetRestartedFromRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	prior := AutonomousState{Status: "stopped"}
+	data, err := json.Marshal(prior)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	as := &AutonomousScheduler{workspaceRoot: tmpDir, state: &AutonomousState{}}
+	as.loadState()
+
+	if as.state.RestartedFromRunning {
+		t.Error("a state file that was already 'stopped' must not set RestartedFromRunning")
+	}
+}
+
+// Run() must record the current process's PID and clear any prior
+// restart-reconcile flag so a fresh explicit run starts clean (Issue #274).
+// Run() is bounded by an already-cancelled context and guarded by its own
+// panic recovery, and this test additionally bounds the call with a timeout
+// so a misbehaving dependency (nil GitHub client, etc.) cannot hang the
+// suite — only the synchronous state assignments at the top of Run() are
+// under test here.
+func TestRun_SetsPIDAndClearsRestartedFromRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+	as := &AutonomousScheduler{
+		workspaceRoot:    tmpDir,
+		state:            &AutonomousState{Status: "stopped", RestartedFromRunning: true},
+		config:           AutonomousConfig{MaxConcurrent: 0},
+		stopCh:           make(chan struct{}, 1),
+		stopRefinementCh: make(chan struct{}, 1),
+		rescanCh:         make(chan struct{}, 1),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // stop immediately after the initial state setup runs
+
+	done := make(chan struct{})
+	go func() {
+		_ = as.Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return within timeout")
+	}
+
+	if as.state.PID != os.Getpid() {
+		t.Errorf("state.PID = %d, want %d (os.Getpid())", as.state.PID, os.Getpid())
+	}
+	if as.state.RestartedFromRunning {
+		t.Error("Run() must clear RestartedFromRunning for a fresh explicit run")
+	}
+}
+
 func TestRecoverOrphanedRunning_ExportedWrapper(t *testing.T) {
 	// Covers the public entry point used by cmd/nightgauge serveCmd to
 	// trigger startup orphan recovery without requiring the user to click

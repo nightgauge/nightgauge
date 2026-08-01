@@ -323,7 +323,33 @@ The scheduler writes its full state to
 
 On restart, `running` and `paused` states are loaded as `stopped` (requiring
 explicit `autonomous run` to restart). Terminal states (`complete`,
-`budget_exhausted`, `safety_tripped`) are preserved as-is.
+`budget_exhausted`, `safety_tripped`) are preserved as-is. This reconcile is
+**persisted to disk immediately** when it happens, not deferred to the next
+scan cycle — a process that crashes again before completing its first cycle
+must not leave `state.json` claiming `"status": "running"` indefinitely
+(Issue #274).
+
+Two additional fields support detecting a stalled scheduler:
+
+- **`pid`** — the OS process ID of the scheduler that last wrote the file
+  while `status` was `"running"`. Set at the start of every `Run()`.
+- **`restartedFromRunning`** — `true` when the running/paused→stopped
+  reconcile above fired for the load that produced the current `stopped`
+  state; `false` for a clean, deliberate stop. This is what makes "we
+  recovered from an ungraceful exit" distinguishable from "an operator or the
+  scheduler itself stopped it" — both look identical as bare `"status":
+"stopped"` otherwise. `Run()` clears it back to `false` on the next
+  explicit start.
+
+`nightgauge autonomous status` uses `pid` to detect a **stalled** scheduler:
+if the on-disk status is `running` or `paused` but the recorded `pid` is
+unset or no longer alive (checked via a liveness signal), the CLI reports
+`Autonomous Mode: Stalled (pid <N> is not running)` instead of trusting the
+stale on-disk status. This is the safety net for the window between an
+ungraceful exit and any restart attempt, before a `loadState()` reconcile has
+had a chance to run. The `--json` output carries the same check as a
+`"stalled": true/false` field so scripting can detect it without a duplicate
+PID check — the human and JSON output paths share one liveness-check helper.
 
 ## Configuration
 
