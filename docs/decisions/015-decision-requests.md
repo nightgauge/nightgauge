@@ -317,6 +317,27 @@ Surface {
   `WorkflowTreeProvider` is the closest model. A count badge via the
   `TreeView.badge` API, toasts via `NotificationService`, and actions via
   `showQuickPick` (options) + `showInputBox` (steer).
+- **Standalone CLI (workspace-scoped Unix socket — #263).** A terminal
+  `nightgauge` process has no access to the VSCode extension's private stdio
+  pipe, so `nightgauge serve` additionally listens on a workspace-scoped Unix
+  socket (`.nightgauge/daemon.sock`, mode `0600`) alongside its stdio loop
+  (`internal/ipc/socket.go` `ListenSocket`), reusing the same
+  `Request`/`Response` envelope and method table — it is the same single
+  writer, a second entry point, not a second store. `attention resolve` (and
+  `show`'s executability check) dials that socket with a short timeout via a
+  minimal one-shot client (`internal/ipc/client.go` `DialClient`); when
+  reachable, the call routes through the daemon's full `Server.ExecuteVerb`
+  (every registered verb, matching the VSCode extension's path exactly). When
+  unreachable, `resolve` falls back to the CLI's local `cliVerbExecutor`,
+  which executes only the file-based subset (`noop`, `budget.raiseCeiling`,
+  `run.retryWithEscalation`, see `internal/attention.IsCLIExecutableVerb`) and
+  fails every other verb with a non-retryable, actionable error rather than
+  the misleading "requires the daemon" message that previously fired
+  unconditionally. No push/subscribe traffic rides this socket — it is
+  request/response only, matching the CLI's one-shot invocation; live updates
+  stay stdio/extension-only. Windows is unsupported (`net.Listen("unix", ...)`
+  is POSIX-only) and falls back to the pre-#263 "no daemon reachable" path,
+  which is not a regression.
 - **Dashboard (platform API + SSE push).** Contract-level endpoints the hosted
   platform implements:
 

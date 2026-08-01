@@ -38,6 +38,26 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 	}
 }
 
+func TestIsCLIExecutableVerb(t *testing.T) {
+	local := []string{VerbNoop, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation}
+	for _, v := range local {
+		if !IsCLIExecutableVerb(v) {
+			t.Errorf("verb %q should be CLI-executable (local 3-verb subset)", v)
+		}
+	}
+
+	daemonOnly := []string{
+		VerbQueueAdd, VerbIssueRemoveBlockedBy, VerbAutonomousResume, VerbAutonomousRescan,
+		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
+		VerbIssueClose, VerbIssueApproveArchitecture, "unregistered.verb",
+	}
+	for _, v := range daemonOnly {
+		if IsCLIExecutableVerb(v) {
+			t.Errorf("verb %q should NOT be CLI-executable without a daemon", v)
+		}
+	}
+}
+
 func TestValidateOptionRejectsUnknownAndUnregistered(t *testing.T) {
 	req := &DecisionRequest{
 		ID: "dr_x",

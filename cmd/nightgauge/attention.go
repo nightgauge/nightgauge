@@ -20,11 +20,33 @@ import (
 	"os"
 	"strconv"
 	"text/tabwriter"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/spf13/cobra"
 )
+
+// daemonDialTimeout bounds how long a CLI command waits to reach a co-located
+// `nightgauge serve` daemon before falling back to local execution. Short by
+// design (#263 plan): this is a same-host, same-filesystem Unix socket — no
+// daemon means the dial fails near-instantly (ENOENT/ECONNREFUSED), so this
+// timeout only bounds the genuinely-slow case and never makes an interactive
+// command feel hung.
+const daemonDialTimeout = 300 * time.Millisecond
+
+// dialDaemonProbe reports whether a `nightgauge serve` daemon is reachable
+// for workspace root. Used by both attentionResolveCmd (to route the call)
+// and printAttentionDetail (to annotate option executability).
+func dialDaemonProbe(ctx context.Context, root string) bool {
+	c, err := ipc.DialClient(ctx, ipc.DaemonSocketPath(root), daemonDialTimeout)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
 
 func attentionCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -169,7 +191,7 @@ func attentionShowCmd() *cobra.Command {
 			if jsonOutput {
 				return json.NewEncoder(os.Stdout).Encode(req)
 			}
-			printAttentionDetail(cmd, req)
+			printAttentionDetail(cmd, req, root)
 			return nil
 		},
 	}
@@ -178,8 +200,9 @@ func attentionShowCmd() *cobra.Command {
 	return cmd
 }
 
-func printAttentionDetail(cmd *cobra.Command, r *attention.DecisionRequest) {
+func printAttentionDetail(cmd *cobra.Command, r *attention.DecisionRequest, root string) {
 	out := cmd.OutOrStdout()
+	daemonReachable := dialDaemonProbe(context.Background(), root)
 	fmt.Fprintf(out, "%s  [%s · %s · %s]\n", r.Title, r.Severity, r.Kind, r.Lifecycle.State)
 	fmt.Fprintf(out, "  id:        %s\n", r.ID)
 	fmt.Fprintf(out, "  producer:  %s\n", r.Producer)
@@ -211,7 +234,12 @@ func printAttentionDetail(cmd *cobra.Command, r *attention.DecisionRequest) {
 	}
 	fmt.Fprintln(out, "\n  Options:")
 	for _, o := range r.Options {
-		fmt.Fprintf(out, "    %-16s %-28s → %s\n", o.ID, o.Label, o.Verb)
+		executable := daemonReachable || attention.IsCLIExecutableVerb(o.Verb)
+		if executable {
+			fmt.Fprintf(out, "    %-16s %-28s → %s\n", o.ID, o.Label, o.Verb)
+		} else {
+			fmt.Fprintf(out, "    %-16s %-28s → %s  — unavailable from this CLI: start the daemon with 'nightgauge serve' to enable\n", o.ID, o.Label, o.Verb)
+		}
 	}
 	if r.Lifecycle.Resolved != nil {
 		fmt.Fprintf(out, "\n  Resolved by %s at %s → %s\n", r.Lifecycle.Resolved.Actor, r.Lifecycle.Resolved.At, r.Lifecycle.Resolved.OptionID)
@@ -245,15 +273,46 @@ func attentionResolveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			out := cmd.OutOrStdout()
+
+			// Prefer a co-located daemon when reachable (#263): the daemon's
+			// handleAttentionResolve runs the FULL verb executor (all
+			// registered verbs, not just the CLI's 3-verb local subset), the
+			// same path the VSCode extension's click-to-resolve already uses.
+			ctx := context.Background()
+			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(root), daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var res ipc.AttentionResolveResult
+				callErr := client.Call(ctx, "attention.resolve", ipc.AttentionResolveParams{
+					ID:        args[0],
+					OptionID:  option,
+					Actor:     actor,
+					SteerText: steer,
+					Note:      note,
+				}, &res)
+				if callErr != nil {
+					// Transport succeeded but the daemon rejected the call
+					// (e.g. unknown option) — surface it unchanged, this is
+					// not a "no daemon" condition.
+					return callErr
+				}
+				if res.AlreadyResolved {
+					fmt.Fprintf(out, "Request %s was already resolved — no-op.\n", args[0])
+					return nil
+				}
+				fmt.Fprintf(out, "Resolved %s → %s\n", args[0], option)
+				return nil
+			}
+
+			// No daemon reachable — fall back to the local, file-based path.
 			store := attention.New(root)
 			store.SetSteerWriter(func(req *attention.DecisionRequest, steerText string) error {
 				return orchestrator.WriteOperatorSteer(root, req.Context.Issue, steerText, req.Context.Stage)
 			})
-			res, err := store.Resolve(context.Background(), args[0], option, actor, steer, note, cliVerbExecutor{workspaceRoot: root})
+			res, err := store.Resolve(ctx, args[0], option, actor, steer, note, cliVerbExecutor{workspaceRoot: root})
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
 			if res.AlreadyResolved {
 				fmt.Fprintf(out, "Request %s was already resolved — no-op.\n", args[0])
 				return nil
@@ -304,10 +363,21 @@ func (e cliVerbExecutor) ExecuteVerb(_ context.Context, req *attention.DecisionR
 		}
 		return nil
 	default:
+		// Reached only after attentionResolveCmd's daemon dial already
+		// failed (#263) — a genuinely different, retryable condition (e.g.
+		// the daemon restarting mid-connect) cannot be distinguished from
+		// "no daemon at all" here, so this defaults to the common,
+		// non-retryable case: no daemon is running for this workspace at
+		// all, and retrying the identical command without starting one
+		// cannot succeed.
 		return &attention.VerbExecutionError{
 			Verb:      opt.Verb,
-			Retryable: true,
-			Err:       fmt.Errorf("requires the running Nightgauge daemon or the VSCode extension"),
+			Retryable: false,
+			Err: fmt.Errorf(
+				"verb %q requires the Nightgauge daemon, and none is running for this workspace — "+
+					"start it with `nightgauge serve` (or open this workspace in the VSCode extension), then retry",
+				opt.Verb,
+			),
 		}
 	}
 }

@@ -2,13 +2,45 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
+
+// startTestDaemon starts a Server's socket listener rooted at dir, wired to
+// the same attention store dir (so requests raised via attention.New(dir)
+// are visible to the daemon-side resolve path). Returns once the socket is
+// dialable.
+func startTestDaemon(t *testing.T, dir string) {
+	t.Helper()
+	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), dir)
+	srv := ipc.NewServer(nil, ipc.WithAutonomousScheduler(as))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	sockPath := ipc.DaemonSocketPath(dir)
+	go func() {
+		_ = srv.ListenSocket(ctx, sockPath)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, err := ipc.DialClient(ctx, sockPath, 50*time.Millisecond); err == nil {
+			c.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("test daemon socket never became dialable")
+}
 
 // chdirTemp creates a temp workdir, chdirs into it, and restores the original
 // cwd on cleanup. Needed because config.Load reads os.Getwd(), not --workdir.
@@ -241,6 +273,126 @@ func TestAttentionListRootCommand_ExplicitRepoStillFilters(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "Fleet stopped") {
 		t.Errorf("explicit --repo filter should still match the seeded card:\n%s", buf.String())
+	}
+}
+
+// shortTempDir returns a short-path temp dir. Unix domain sockets have a
+// ~104-byte sun_path limit (macOS) — t.TempDir() embeds the full test name,
+// which is too long once ".nightgauge/daemon.sock" is appended for a test
+// with a long name. Used only by tests that dial a daemon socket.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ngsock")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// TestAttentionResolveCLI_RoutesThroughDaemon proves Step 3's routing (#263):
+// against a live daemon socket, a verb outside the CLI's local 3-verb subset
+// (VerbAutonomousClearIssueFailures) succeeds via the daemon path, where
+// TestAttentionResolveCLI_NoDaemonLeavesCardOpen shows the identical verb
+// fails without a daemon.
+func TestAttentionResolveCLI_RoutesThroughDaemon(t *testing.T) {
+	dir := shortTempDir(t)
+	startTestDaemon(t, dir)
+
+	store := attention.New(dir)
+	id, err := attention.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	if _, err := store.Raise(attention.DecisionRequest{
+		ID:             id,
+		IdempotencyKey: "daemon-route:1",
+		Kind:           attention.KindChoose,
+		Severity:       attention.SeverityFYI,
+		Title:          "Choose",
+		Producer:       "test",
+		Context:        attention.Context{Repo: "octocat/acme", Issue: 3},
+		Options: []attention.Option{
+			{ID: "clear", Label: "Clear failures", Verb: attention.VerbAutonomousClearIssueFailures},
+		},
+		DefaultAction: "clear",
+	}); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+
+	cmd := attentionResolveCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{id, "--option", "clear", "--actor", "octocat", "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Resolved") {
+		t.Errorf("resolve output missing confirmation: %q", buf.String())
+	}
+
+	got, found, gerr := attention.New(dir).Get(id)
+	if gerr != nil || !found {
+		t.Fatalf("Get: found=%v err=%v", found, gerr)
+	}
+	if got.Lifecycle.State != attention.StateResolved {
+		t.Errorf("state = %q, want resolved (daemon path should have executed the verb)", got.Lifecycle.State)
+	}
+}
+
+// TestAttentionShowCLI_AnnotatesUnavailableOptions covers Step 5 (#263):
+// without a daemon, a daemon-only-verb option is annotated as unavailable;
+// with a daemon reachable, no option is annotated.
+func TestAttentionShowCLI_AnnotatesUnavailableOptions(t *testing.T) {
+	dir := shortTempDir(t)
+	store := attention.New(dir)
+	id, err := attention.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	if _, err := store.Raise(attention.DecisionRequest{
+		ID:             id,
+		IdempotencyKey: "show-annotate:1",
+		Kind:           attention.KindChoose,
+		Severity:       attention.SeverityFYI,
+		Title:          "Choose",
+		Producer:       "test",
+		Options: []attention.Option{
+			{ID: "clear", Label: "Clear failures", Verb: attention.VerbAutonomousClearIssueFailures},
+			{ID: "noop", Label: "Do nothing", Verb: attention.VerbNoop},
+		},
+		DefaultAction: "clear",
+	}); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+
+	// No daemon: the daemon-only verb is annotated unavailable.
+	cmd := attentionShowCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{id, "--workdir", dir})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "unavailable from this CLI") {
+		t.Errorf("expected unavailable annotation with no daemon:\n%s", out)
+	}
+	if !strings.Contains(out, "nightgauge serve") {
+		t.Errorf("expected the fix command named in the annotation:\n%s", out)
+	}
+
+	// With a daemon reachable, no option is annotated.
+	startTestDaemon(t, dir)
+	cmd2 := attentionShowCmd()
+	var buf2 bytes.Buffer
+	cmd2.SetOut(&buf2)
+	cmd2.SetArgs([]string{id, "--workdir", dir})
+	if err := cmd2.Execute(); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(buf2.String(), "unavailable from this CLI") {
+		t.Errorf("no option should be annotated unavailable when a daemon is reachable:\n%s", buf2.String())
 	}
 }
 

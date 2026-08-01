@@ -92,6 +92,26 @@ func IsRegisteredVerb(v string) bool {
 	return ok
 }
 
+// cliExecutableVerbs is the subset of registered verbs a standalone CLI
+// process can execute without a daemon connection — the deterministic,
+// file-based verbs cliVerbExecutor implements directly
+// (cmd/nightgauge/attention.go). Every other registered verb needs the live
+// scheduler/GitHub clients only the daemon (or the VSCode extension's private
+// IPC connection) holds.
+var cliExecutableVerbs = map[Verb]struct{}{
+	VerbNoop:                   {},
+	VerbBudgetRaiseCeiling:     {},
+	VerbRunRetryWithEscalation: {},
+}
+
+// IsCLIExecutableVerb reports whether v can be executed by a standalone CLI
+// process with no daemon connection (attention show's executability
+// annotation, #263).
+func IsCLIExecutableVerb(v string) bool {
+	_, ok := cliExecutableVerbs[v]
+	return ok
+}
+
 // RegisteredVerbs returns the sorted allowlist, for diagnostics and tests.
 func RegisteredVerbs() []string {
 	out := make([]string, 0, len(registry))
