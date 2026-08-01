@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/spf13/cobra"
 )
@@ -260,6 +261,137 @@ func TestProjectSyncStatusRequiresArgs(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil {
 		t.Error("project sync-status without args should fail")
+	}
+}
+
+func TestResolveProjectNumber_ExplicitProjectWins(t *testing.T) {
+	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
+	got, err := resolveProjectNumber(cfg, true, 99, "nightgauge", "other-repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 99 {
+		t.Errorf("got %d, want 99 (explicit --project must win)", got)
+	}
+}
+
+func TestResolveProjectNumber_SameRepoUnchanged(t *testing.T) {
+	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge", ProjectNumber: 5}
+	got, err := resolveProjectNumber(cfg, false, 5, "nightgauge", "nightgauge")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 5 {
+		t.Errorf("got %d, want 5 (same-repo behavior unchanged)", got)
+	}
+}
+
+func TestResolveProjectNumber_CrossRepoMapped(t *testing.T) {
+	cfg := &config.Config{
+		Owner:       "nightgauge",
+		DefaultRepo: "nightgauge",
+		Autonomous: &config.AutonomousConfig{
+			Repositories: map[string]*config.RepositoryConfig{
+				"nightgauge/other-repo": {ProjectNumber: 6},
+			},
+		},
+	}
+	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 6 {
+		t.Errorf("got %d, want 6 (mapped cross-repo board)", got)
+	}
+}
+
+func TestResolveProjectNumber_CrossRepoMappedByShortName(t *testing.T) {
+	cfg := &config.Config{
+		Owner:       "nightgauge",
+		DefaultRepo: "nightgauge",
+		Autonomous: &config.AutonomousConfig{
+			Repositories: map[string]*config.RepositoryConfig{
+				"other-repo": {ProjectNumber: 7},
+			},
+		},
+	}
+	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 7 {
+		t.Errorf("got %d, want 7 (mapped by short repo name)", got)
+	}
+}
+
+func TestResolveProjectNumber_CrossRepoUnmapped(t *testing.T) {
+	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
+	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo")
+	if err == nil {
+		t.Fatal("expected error for unmapped cross-repo target")
+	}
+	if !strings.Contains(err.Error(), "project_number") || !strings.Contains(err.Error(), "nightgauge/unmapped-repo") {
+		t.Errorf("error should mention the repo and project_number, got: %v", err)
+	}
+}
+
+func TestResolveProjectNumber_NilAutonomousDoesNotPanic(t *testing.T) {
+	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
+	if cfg.Autonomous != nil {
+		t.Fatal("test setup invariant broken: Autonomous should be nil")
+	}
+	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo")
+	if err == nil {
+		t.Fatal("expected error, not a panic, for nil Autonomous config")
+	}
+}
+
+func TestResolveProjectNumber_DefaultRepoUnsetFallsThrough(t *testing.T) {
+	cfg := &config.Config{Owner: "nightgauge", ProjectNumber: 3}
+	got, err := resolveProjectNumber(cfg, false, 3, "nightgauge", "anything")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("got %d, want 3 (unset DefaultRepo must not demand a mapping)", got)
+	}
+}
+
+// TestProjectAddCrossRepoUnmapped_CommandLevel exercises the full `project
+// add` command against an unmapped cross-repo target and asserts a loud,
+// offline (network-free) failure rather than a silent fallback to the local
+// board (#262).
+func TestProjectAddCrossRepoUnmapped_CommandLevel(t *testing.T) {
+	dir := t.TempDir()
+	nightgaugeDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(nightgaugeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	configYAML := "owner: nightgauge\ndefaultRepo: nightgauge\n"
+	if err := os.WriteFile(filepath.Join(nightgaugeDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	origWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origWd) }()
+
+	cmd := rootCmd()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetArgs([]string{"project", "add", "42", "--repo", "nightgauge/unmapped-repo"})
+	err = cmd.Execute()
+	if err == nil {
+		t.Fatal("project add against an unmapped cross-repo target should fail")
+	}
+	if !strings.Contains(err.Error(), "project board mapping") {
+		t.Errorf("expected error mentioning 'project board mapping', got: %v", err)
 	}
 }
 

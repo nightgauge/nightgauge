@@ -6716,6 +6716,32 @@ autonomous:
 When `forge` is absent, the workspace default forge is used (the `github` key when present,
 otherwise the singleton GitHub adapter built from the legacy top-level fields).
 
+### Per-repo project board mapping
+
+`nightgauge project add` and `nightgauge project sync-status` resolve which
+GitHub Project V2 board to write to as follows: an explicit `--project` flag
+always wins; otherwise, when `--repo` names the same repository as this
+config's `defaultRepo` (or `defaultRepo` is unset), the board is the ambient
+`projectNumber` from this config as before. When `--repo` names a
+**different** repository (a cross-repo target in a multi-repo workspace), the
+board number MUST come from an explicit
+`autonomous.repositories.<name>.project_number` mapping:
+
+```yaml
+autonomous:
+  repositories:
+    other-repo:
+      project_number: 6
+```
+
+`<name>` may be the short repo name or the fully-qualified `owner/repo` form.
+A cross-repo `--repo` with no matching mapping fails loudly with a non-zero
+exit instead of silently writing to the local repo's board — this closes the
+gap where `project add 42 --repo owner/other-repo` used to write to the
+wrong board while printing a normal success message (#262). Both commands'
+success output names the board actually written to
+(`Added #42 to project board owner/6 (...)`).
+
 ### Validation
 
 Run `nightgauge config validate` to check forge configuration:
