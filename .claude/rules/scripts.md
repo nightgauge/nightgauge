@@ -61,8 +61,12 @@ The `/nightgauge:issue-create` skill encodes this discipline in Phase
 follow the same five-step contract:
 
 1. Score sub-issue content against `routing.patterns[].keywords`.
-2. Map `target_repo` → `target_project` via the workspace yaml's
-   `repositories[].project_number` (fallback: `gh project list`).
+2. Map `target_repo` → `target_project` via
+   `nightgauge project resolve --repo <target_repo> --json` — the single
+   authoritative repo→project resolver (#271). Never read
+   `repositories[].project_number` from the workspace yaml directly; that
+   field is not an independent authority and `nightgauge doctor` fails when
+   it disagrees with the runtime-resolved value.
 3. Create with `gh issue create --repo <target>` for cross-repo sub-issues;
    include `Part of <owner>/<repo>#<epic>` in the body.
 4. Sync with `nightgauge project add <num> --repo <target> --project

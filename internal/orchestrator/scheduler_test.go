@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
@@ -426,6 +427,73 @@ func TestSchedulerConfig(t *testing.T) {
 	}
 	if cfg.MaxPerRepo != 2 {
 		t.Errorf("MaxPerRepo = %d", cfg.MaxPerRepo)
+	}
+}
+
+// TestWarnProjectMappingMismatch verifies the scheduler startup check logs a
+// loud but non-fatal warning when the workspace manifest and the runtime-
+// resolved project number disagree for a repo (#271).
+func TestWarnProjectMappingMismatch(t *testing.T) {
+	dir := t.TempDir()
+	vscodeDir := filepath.Join(dir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir .vscode: %v", err)
+	}
+	manifest := `
+workspace:
+  name: test-workspace
+repositories:
+  - name: acme/platform
+    path: .
+    project_number: 1
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "nightgauge-workspace.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	cfg := &config.Config{
+		Owner:       "acme",
+		DefaultRepo: "web",
+		Autonomous: &config.AutonomousConfig{
+			Repositories: map[string]*config.RepositoryConfig{
+				"acme/platform": {ProjectNumber: 4},
+			},
+		},
+	}
+
+	var buf strings.Builder
+	prevOutput := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOutput)
+		log.SetFlags(prevFlags)
+	})
+
+	warnProjectMappingMismatch(cfg, dir)
+
+	got := buf.String()
+	if !strings.Contains(got, "WARN scheduler:") {
+		t.Errorf("expected a WARN scheduler: log line, got: %q", got)
+	}
+	if !strings.Contains(got, "workspace yaml says project 1") || !strings.Contains(got, "runtime config resolves to 4") {
+		t.Errorf("expected both project numbers named, got: %q", got)
+	}
+}
+
+// TestWarnProjectMappingMismatch_NilConfigNoop verifies the check is a no-op
+// (does not panic, logs nothing) when no runtime config was loaded.
+func TestWarnProjectMappingMismatch_NilConfigNoop(t *testing.T) {
+	var buf strings.Builder
+	prevOutput := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prevOutput) })
+
+	warnProjectMappingMismatch(nil, t.TempDir())
+
+	if buf.Len() != 0 {
+		t.Errorf("expected no log output for nil config, got: %q", buf.String())
 	}
 }
 

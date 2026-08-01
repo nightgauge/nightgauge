@@ -11,8 +11,11 @@ Every fix to the skill MUST keep these test cases passing.
 - `.vscode/nightgauge-workspace.yaml` exists with the four repos
   (`nightgauge`, `acme-platform`, `acme-mobile`,
   `acme-dashboard`) and the `web` / `mobile` routing patterns.
-- All repos are mapped to projects 1, 2, 3, 4 respectively via the
-  `project_number` field on each `repositories[]` entry.
+- All repos resolve to projects 1, 2, 3, 4 respectively via
+  `nightgauge project resolve --repo <owner>/<repo>` (backed by
+  `autonomous.repositories.<repo>.project_number` in `.nightgauge/config.yaml`)
+  — never via a `project_number` field on the workspace yaml's
+  `repositories[]` entries (#271).
 - The skill is invoked in non-interactive mode with `--auto-route` unless
   otherwise specified.
 
@@ -131,25 +134,73 @@ detect this and skip routing entirely.
 
 ---
 
-## TC-5: Project Number Discovery Fallback
+## TC-5: Project Number Resolved via the Single Resolver
 
-**Scenario**: Workspace yaml exists but a repo entry is missing
-`project_number`. Phase 2.4 must fall back to `gh project list` discovery.
+**Scenario**: `.vscode/nightgauge-workspace.yaml`'s `repositories[]` entries
+carry no `project_number` at all (#271 — the field is routing-manifest
+scaffolding input only, never an independent authority). Phase 2.4 must
+resolve every repo's project number by shelling out to
+`nightgauge project resolve --repo <owner>/<repo> --json`, once per distinct
+repo in the manifest.
 
 **Input**:
 
-- `.vscode/nightgauge-workspace.yaml` has `acme-dashboard`
-  WITHOUT `project_number`.
+- `.vscode/nightgauge-workspace.yaml` has `acme-dashboard` with no
+  `project_number` key.
+- `.nightgauge/config.yaml` maps
+  `autonomous.repositories."acme/acme-dashboard".project_number: 4`.
 - Sub-issue routes to `acme-dashboard`.
 
 **Expected behavior**:
 
-- Phase 2.4 calls `gh project list --owner nightgauge --format json`, finds the
-  project whose title matches the repo's display name (`Nightgauge
-Dashboard`), and uses its number for the manifest.
+- Phase 2.4 calls `nightgauge project resolve --repo acme/acme-dashboard
+--json`, gets `{"number": 4, ...}`, and uses `4` for the manifest's
+  `target_project`.
 - All subsequent phases work as in TC-2.
 
 **Failure modes the test must catch**:
 
-- Skill aborts because `project_number` is missing. Fallback discovery is
-  REQUIRED.
+- Phase 2.4 reads `repositories[].project_number` from the yaml directly
+  (the pre-#271 Source-A path) instead of calling the resolver. This test
+  fails that regression because the yaml carries no `project_number` at all
+  — a Source-A read would find nothing and either abort or silently pick 0.
+- Skill falls back to `gh project list` name-matching. Fallback discovery by
+  display name was removed with #271; the resolver's own error (naming the
+  exact `.nightgauge/config.yaml` path to fix) is the only fallback.
+
+---
+
+## TC-6: Phase 4.8 Audit Fails When Manifest and Live Resolution Disagree
+
+**Scenario**: The #271 regression case — Phase 2.4 resolved a repo's project
+correctly at manifest-build time, but `.nightgauge/config.yaml` changed mid-run
+(or the manifest was hand-edited) before Phase 4.8 runs. Pre-#271, Phase 4.8
+re-derived its "expected" project from the manifest's own `target_project`
+field — so it could never catch this drift; the audit would pass even though
+the live board and the freshly-resolved project disagree.
+
+**Input**:
+
+- Phase 2.4 manifest says sub-issue `#501` → `acme-dashboard` / project 4
+  (`target_project: 4`, resolved at routing time).
+- Between Phase 2.4 and Phase 4.8, `.nightgauge/config.yaml` is edited so
+  `autonomous.repositories."acme/acme-dashboard".project_number` is now `9`.
+- The issue itself is still only a member of project 4 (nothing moved it).
+
+**Expected behavior**:
+
+- Phase 4.8 calls `nightgauge project resolve --repo acme/acme-dashboard
+--json` fresh for the row — NOT the manifest's `target_project: 4` — and gets
+  `9`.
+- The issue's actual project memberships (project 4) do not include the
+  freshly-resolved project 9, so the audit FAILS with a message naming both
+  the manifest's stale value (4) and the freshly-resolved value (9).
+- The skill does NOT report success; the manifest file is NOT deleted.
+
+**Failure modes the test must catch**:
+
+- Phase 4.8 compares `ACTUAL` against the manifest's `target_project` (4)
+  instead of the freshly-resolved value (9) — this is exactly the "today it
+  passes" bug #271 exists to close. A regression here means the audit is
+  checking the routing manifest against itself, not against the live runtime
+  state.

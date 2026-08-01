@@ -7,6 +7,7 @@ package doctor
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -178,6 +179,27 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		}
 	}
 
+	// --- project_mapping (required when a workspace manifest exists and cfg is loaded) ---
+	// Cross-checks the workspace manifest's repositories[].project_number
+	// (Source A) against the runtime-resolved
+	// autonomous.repositories.<repo>.project_number (Source B, via
+	// config.ResolveRepoProjectNumber). A mismatch means issues get filed
+	// against a board the scheduler never polls (#271) — always a
+	// misconfiguration, never a warning-only path.
+	if cfg != nil {
+		if mismatches, mmErr := checkProjectMapping(cfg); mmErr == nil && len(mismatches) > 0 {
+			result.Checks["project_mapping"] = CheckItem{
+				OK:    false,
+				Error: strings.Join(mismatches, "; "),
+			}
+			errors = append(errors, mismatches...)
+			hasRequiredFailure = true
+		} else if mmErr == nil {
+			result.Checks["project_mapping"] = CheckItem{OK: true, Detail: "workspace manifest and runtime config agree"}
+		}
+		// mmErr != nil means no workspace manifest was found (single-repo mode) — check omitted.
+	}
+
 	// --- orphaned docker compose projects (warning only) ---
 	// Issue #3050: per-issue compose stacks (`issue-NNN`) whose worktree no
 	// longer exists indicate a leaked teardown. Surface them so the operator
@@ -312,4 +334,17 @@ func activeWorktreeIssues() map[int]bool {
 		}
 	}
 	return out
+}
+
+// checkProjectMapping cross-validates the workspace manifest's
+// repositories[].project_number entries against config.ResolveRepoProjectNumber
+// via the shared config.CheckWorkspaceProjectMapping helper. Returns a
+// non-nil error only when no workspace manifest exists (single-repo mode —
+// not an error condition, just "nothing to check").
+func checkProjectMapping(cfg *config.Config) ([]string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return config.CheckWorkspaceProjectMapping(cfg, wd)
 }
