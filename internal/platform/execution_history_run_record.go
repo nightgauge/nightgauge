@@ -114,6 +114,15 @@ type ExecutionHistoryStageMetric struct {
 	// no omitempty — a nil pointer must still serialize the key as `null`
 	// ("provider unknown"), never be dropped.
 	Provider *string `json:"provider"`
+	// ExecutionPath, ModelEffort, and ModelReasoning mirror V2StageDetail's
+	// fields of the same name (internal/state/history.go) verbatim — no
+	// fallback to Model/Provider when absent. Like Provider they are
+	// `*string`, nullable but not omitempty: a stage with no recorded value
+	// must still serialize the key as `null`, never drop it or borrow
+	// another field's value (#217).
+	ExecutionPath  *string `json:"executionPath"`
+	ModelEffort    *string `json:"modelEffort"`
+	ModelReasoning *string `json:"modelReasoning"`
 }
 
 // ExecutionHistoryMapperInput provides fields required for

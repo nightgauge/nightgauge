@@ -27,6 +27,9 @@ func fullTestRecord() state.V2RunRecord {
 				Status:         "complete",
 				DurationMs:     1000,
 				ModelSelection: &state.V2ModelSelect{Model: "claude-sonnet-4-5", Source: "routing"},
+				ExecutionPath:  "llm",
+				ModelEffort:    "high",
+				ModelReasoning: "deep",
 			},
 			"feature-dev": {
 				Status:     "complete",
@@ -140,6 +143,15 @@ func TestV2RunRecordToExecutionHistoryRunRecord_HappyPath(t *testing.T) {
 	if s0.Attempt != 1 {
 		t.Errorf("Stages[0].Attempt = %d, want 1", s0.Attempt)
 	}
+	if s0.ExecutionPath == nil || *s0.ExecutionPath != "llm" {
+		t.Errorf("Stages[0].ExecutionPath = %v, want pointer to llm", s0.ExecutionPath)
+	}
+	if s0.ModelEffort == nil || *s0.ModelEffort != "high" {
+		t.Errorf("Stages[0].ModelEffort = %v, want pointer to high", s0.ModelEffort)
+	}
+	if s0.ModelReasoning == nil || *s0.ModelReasoning != "deep" {
+		t.Errorf("Stages[0].ModelReasoning = %v, want pointer to deep", s0.ModelReasoning)
+	}
 
 	s1 := got.Stages[1]
 	if s1.StageID != "feature-dev" {
@@ -153,6 +165,48 @@ func TestV2RunRecordToExecutionHistoryRunRecord_HappyPath(t *testing.T) {
 	}
 	if s1.CostUsd != nil {
 		t.Errorf("Stages[1].CostUsd = %v, want nil (zero cost omitted)", s1.CostUsd)
+	}
+	if s1.ExecutionPath != nil {
+		t.Errorf("Stages[1].ExecutionPath = %v, want nil (not recorded, must not borrow Model/Provider)", s1.ExecutionPath)
+	}
+	if s1.ModelEffort != nil {
+		t.Errorf("Stages[1].ModelEffort = %v, want nil (not recorded)", s1.ModelEffort)
+	}
+	if s1.ModelReasoning != nil {
+		t.Errorf("Stages[1].ModelReasoning = %v, want nil (not recorded)", s1.ModelReasoning)
+	}
+}
+
+// TestBuildExecutionHistoryStages_ExecutionPathEffortReasoningTruncated asserts
+// ExecutionPath/ModelEffort/ModelReasoning are truncated to
+// executionHistoryFieldMax like Model/Provider, and read with no fallback
+// chain (#217).
+func TestBuildExecutionHistoryStages_ExecutionPathEffortReasoningTruncated(t *testing.T) {
+	long := strings.Repeat("x", executionHistoryFieldMax+20)
+	rec := state.V2RunRecord{
+		Stages: map[string]state.V2StageDetail{
+			"feature-dev": {
+				Status:         "complete",
+				ExecutionPath:  long,
+				ModelEffort:    long,
+				ModelReasoning: long,
+			},
+		},
+	}
+
+	stages, _ := buildExecutionHistoryStages(rec)
+	if len(stages) != 1 {
+		t.Fatalf("len(stages) = %d, want 1", len(stages))
+	}
+	s := stages[0]
+	if s.ExecutionPath == nil || len(*s.ExecutionPath) != executionHistoryFieldMax {
+		t.Errorf("ExecutionPath = %v, want truncated to %d chars", s.ExecutionPath, executionHistoryFieldMax)
+	}
+	if s.ModelEffort == nil || len(*s.ModelEffort) != executionHistoryFieldMax {
+		t.Errorf("ModelEffort = %v, want truncated to %d chars", s.ModelEffort, executionHistoryFieldMax)
+	}
+	if s.ModelReasoning == nil || len(*s.ModelReasoning) != executionHistoryFieldMax {
+		t.Errorf("ModelReasoning = %v, want truncated to %d chars", s.ModelReasoning, executionHistoryFieldMax)
 	}
 }
 

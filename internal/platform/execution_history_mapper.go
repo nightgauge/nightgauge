@@ -234,6 +234,10 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 			// producer writes; 'complete' and 'skipped' both count as success —
 			// mirrors pipelineRunV4Mapper.ts's success predicate exactly.
 			Success: detail.Status != "failed" && detail.Status != "error",
+			// Read directly from detail — no fallback to Model/Provider (#217).
+			ExecutionPath:  nonEmptyTruncatedPtr(detail.ExecutionPath, executionHistoryFieldMax),
+			ModelEffort:    nonEmptyTruncatedPtr(detail.ModelEffort, executionHistoryFieldMax),
+			ModelReasoning: nonEmptyTruncatedPtr(detail.ModelReasoning, executionHistoryFieldMax),
 		})
 	}
 
