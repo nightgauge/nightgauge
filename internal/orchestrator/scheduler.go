@@ -615,6 +615,11 @@ type SchedulerConfig struct {
 	// (OWNER/MEMBER/COLLABORATOR) used by PickNext's author-trust
 	// defense-in-depth filter (#270). Empty → use the built-in default.
 	TrustedAuthorAssociations []string
+	// RuntimeConfig is the loaded config.Config for this repo, used at
+	// startup to cross-check a multi-repo workspace manifest's
+	// project_number against the runtime-resolved board (#271). Nil skips
+	// the check (e.g. single-repo invocations with no loaded config).
+	RuntimeConfig *config.Config
 }
 
 // NewScheduler creates a board-driven scheduler.
@@ -667,7 +672,28 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	// merge use a single source of truth.
 	s.recoveryRegistry = recovery.Default(cfg.WorkspaceRoot, s.prMergeRunner, s.prCreateRunner)
 	s.loadQueue()
+	warnProjectMappingMismatch(cfg.RuntimeConfig, cfg.WorkspaceRoot)
 	return s
+}
+
+// warnProjectMappingMismatch logs a loud but non-fatal warning when a
+// multi-repo workspace manifest's project_number disagrees with the
+// runtime-resolved board (#271). Issues land on the board the manifest
+// names, but PickNext only ever polls the runtime-resolved board — this
+// startup check surfaces the split immediately instead of letting it
+// silently strand Ready items. Never blocks scheduler construction; the
+// loud, blocking failure mode is `nightgauge doctor`'s job.
+func warnProjectMappingMismatch(runtimeCfg *config.Config, workspaceRoot string) {
+	if runtimeCfg == nil {
+		return
+	}
+	mismatches, err := config.CheckWorkspaceProjectMapping(runtimeCfg, workspaceRoot)
+	if err != nil {
+		return // no workspace manifest — nothing to cross-check
+	}
+	for _, m := range mismatches {
+		log.Printf("WARN scheduler: %s", m)
+	}
 }
 
 // applyStageAdapter re-points the execution manager at the adapter the

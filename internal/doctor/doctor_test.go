@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -259,6 +260,98 @@ func TestRunDoctor_NoAdapterSectionByDefault(t *testing.T) {
 	result := RunDoctor(context.Background(), nil, nil, nil)
 	if result.Adapters != nil {
 		t.Errorf("expected nil Adapters when none requested, got %+v", result.Adapters)
+	}
+}
+
+// TestRunDoctor_ProjectMappingMismatch verifies that a workspace manifest
+// whose repositories[].project_number disagrees with the runtime-resolved
+// autonomous.repositories.<repo>.project_number is a required failure
+// (ExitCode 2), never a warning — issue #271.
+func TestRunDoctor_ProjectMappingMismatch(t *testing.T) {
+	dir := t.TempDir()
+	vscodeDir := filepath.Join(dir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir .vscode: %v", err)
+	}
+	manifest := `
+workspace:
+  name: test-workspace
+repositories:
+  - name: nightgauge/nightgauge
+    path: .
+    project_number: 1
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "nightgauge-workspace.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	t.Chdir(dir)
+
+	cfg := &config.Config{
+		Owner:       "nightgauge",
+		DefaultRepo: "primary-repo", // not the manifest's repo, so cross-repo mapping applies
+		Autonomous: &config.AutonomousConfig{
+			Repositories: map[string]*config.RepositoryConfig{
+				"nightgauge/nightgauge": {ProjectNumber: 4},
+			},
+		},
+	}
+
+	result := RunDoctor(context.Background(), cfg, nil, nil)
+
+	if result.ExitCode != 2 {
+		t.Fatalf("expected ExitCode 2 on project mapping mismatch, got %d (errors=%v)", result.ExitCode, result.Errors)
+	}
+	check, ok := result.Checks["project_mapping"]
+	if !ok {
+		t.Fatal("expected project_mapping check to be present")
+	}
+	if check.OK {
+		t.Error("expected project_mapping.OK=false on mismatch")
+	}
+	if !strings.Contains(check.Error, "workspace yaml says project 1") || !strings.Contains(check.Error, "runtime config resolves to 4") {
+		t.Errorf("expected mismatch detail naming both project numbers, got: %q", check.Error)
+	}
+}
+
+// TestRunDoctor_ProjectMappingAgrees verifies that a matching manifest and
+// runtime config produces a passing project_mapping check.
+func TestRunDoctor_ProjectMappingAgrees(t *testing.T) {
+	dir := t.TempDir()
+	vscodeDir := filepath.Join(dir, ".vscode")
+	if err := os.MkdirAll(vscodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir .vscode: %v", err)
+	}
+	manifest := `
+workspace:
+  name: test-workspace
+repositories:
+  - name: nightgauge/nightgauge
+    path: .
+    project_number: 4
+`
+	if err := os.WriteFile(filepath.Join(vscodeDir, "nightgauge-workspace.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	t.Chdir(dir)
+
+	cfg := &config.Config{
+		Owner:       "nightgauge",
+		DefaultRepo: "primary-repo",
+		Autonomous: &config.AutonomousConfig{
+			Repositories: map[string]*config.RepositoryConfig{
+				"nightgauge/nightgauge": {ProjectNumber: 4},
+			},
+		},
+	}
+
+	result := RunDoctor(context.Background(), cfg, nil, nil)
+
+	check, ok := result.Checks["project_mapping"]
+	if !ok {
+		t.Fatal("expected project_mapping check to be present")
+	}
+	if !check.OK {
+		t.Errorf("expected project_mapping.OK=true when sources agree, got error: %q", check.Error)
 	}
 }
 

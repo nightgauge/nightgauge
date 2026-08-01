@@ -40,10 +40,8 @@ The yaml shape this phase consumes:
 repositories:
   - name: nightgauge
     path: .
-    project_number: 1 # NEW (#3232) — explicit project mapping
   - name: acme-dashboard
     path: ../acme-dashboard
-    project_number: 4
   # ...
 
 routing:
@@ -55,10 +53,25 @@ routing:
     # ...
 ```
 
-If a repository entry is missing `project_number`, the skill falls back to
-`gh project list --owner <owner> --format json` and matches by display name
-(`<repo-display-name>` ↔ project title). Cache the result in memory for the
-duration of the skill run.
+`routing.patterns` (keyword → `target_repo` matching) is the only thing this
+phase still reads from the workspace yaml. **Project numbers are NOT read from
+`repositories[].project_number`** — that field is routing-manifest scaffolding
+input only, never an independent authority for "which board does this repo
+use?" (see the "Single-resolver contract" in
+[docs/MULTI_REPO_WORKSPACE.md](../../../docs/MULTI_REPO_WORKSPACE.md)).
+Instead, resolve each repository's project number with the single
+authoritative resolver:
+
+```bash
+nightgauge project resolve --repo <owner>/<repo> --json
+# → { "number": 4, "owner": "...", "owner_type": "...", "id": "...", "title": "...", "url": "..." }
+```
+
+Call this once per distinct repo in the manifest (not once per sub-issue) and
+cache the result (`.number`) in memory for the duration of the skill run. A
+non-zero exit means no runtime mapping exists for that repo — surface the
+resolver's error verbatim (it names the exact `.nightgauge/config.yaml` path
+to fix) rather than falling back to `gh project list` name-matching.
 
 #### Step 2.4.2: Build the routing manifest
 

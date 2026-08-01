@@ -3758,6 +3758,7 @@ func runCmd() *cobra.Command {
 				AdapterExplicit: adapterExplicit,
 				OnFailureStatus: onFailureStatus,
 				ExcludeLabels:   excludeLabels,
+				RuntimeConfig:   runCfg,
 			})
 
 			// Identity preflight gate (#4068): assert the resolved per-repo
@@ -3857,7 +3858,9 @@ func getQueueScheduler(owner string, projectNumber int) (*orchestrator.Scheduler
 	rc := config.ResolveConcurrency(nil) // defaults (workspace 3, per_repo 1)
 	var repoOverrides map[string]int
 	excludeLabels := config.DefaultExcludeLabels
+	var runtimeCfg *config.Config
 	if cfg, err := config.Load(cwd); err == nil {
+		runtimeCfg = cfg
 		ot = gh.ParseOwnerType(cfg.OwnerType)
 		if cfg.Autonomous != nil {
 			onFailureStatus = cfg.Autonomous.ResolvedOnFailureStatus()
@@ -3878,6 +3881,7 @@ func getQueueScheduler(owner string, projectNumber int) (*orchestrator.Scheduler
 		Adapter:                  adapters.NewClaudeAdapter(),
 		OnFailureStatus:          onFailureStatus,
 		ExcludeLabels:            excludeLabels,
+		RuntimeConfig:            runtimeCfg,
 	})
 	// Identity preflight gate (#4068): skips when no github_user is configured.
 	wireIdentityChecker(queueScheduler, cwd)
@@ -4403,6 +4407,7 @@ func serveCmd() *cobra.Command {
 					Adapter:         nil, // IPC mode uses IpcStageRunner, not CLI adapter
 					OnFailureStatus: ipcOnFailure,
 					ExcludeLabels:   ipcExcludeLabels,
+					RuntimeConfig:   cfg,
 				})
 
 				// Wire per-repo client resolution so cross-repo epics use the
@@ -7507,27 +7512,67 @@ func projectViewCreateCmd() *cobra.Command {
 func projectResolveCmd() *cobra.Command {
 	var (
 		owner      string
+		repo       string
 		outputJSON bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "resolve --number N",
-		Short: "Resolve a project by number, trying org then user ownership",
-		Long: `Resolve a GitHub project by number against both org and user ownership.
+		Use:   "resolve --number N | --repo owner/name",
+		Short: "Resolve a project by number or by repo, trying org then user ownership",
+		Long: `Resolve a GitHub project either by number, or by the repository that owns it.
+
+--number resolves a project by number against both org and user ownership.
 Org is tried first (preferred — personal projects cannot be linked to org repos).
 Falls back to user ownership when the org lookup finds no matching project.
 
+--repo resolves the project *number* mapped to that repository via the same
+authoritative lookup used by "nightgauge project add" and "nightgauge doctor"
+(autonomous.repositories.<repo>.project_number, falling back to the local
+default-repo project when --repo names the local repo), then feeds that
+number through the same ownership resolution as --number — so the output
+shape is identical for both modes.
+
+--number and --repo are mutually exclusive.
+
 Outputs: number, owner, owner_type, id, title, url`,
 		Example: `  nightgauge project resolve --number 5
-  nightgauge project resolve --number 5 --owner myorg --json`,
+  nightgauge project resolve --number 5 --owner myorg --json
+  nightgauge project resolve --repo nightgauge/nightgauge --json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			numberFlag := cmd.Flags().Lookup("number")
-			if numberFlag == nil || !numberFlag.Changed {
-				return fmt.Errorf("--number is required")
+			repoFlag := cmd.Flags().Lookup("repo")
+			numberChanged := numberFlag != nil && numberFlag.Changed
+			repoChanged := repoFlag != nil && repoFlag.Changed
+
+			if numberChanged && repoChanged {
+				return fmt.Errorf("--number and --repo are mutually exclusive")
 			}
-			projectNumber, err := strconv.Atoi(numberFlag.Value.String())
-			if err != nil || projectNumber <= 0 {
-				return fmt.Errorf("--number must be a positive integer")
+			if !numberChanged && !repoChanged {
+				return fmt.Errorf("either --number or --repo is required")
+			}
+
+			var projectNumber int
+			if numberChanged {
+				n, err := strconv.Atoi(numberFlag.Value.String())
+				if err != nil || n <= 0 {
+					return fmt.Errorf("--number must be a positive integer")
+				}
+				projectNumber = n
+			} else {
+				ownerPart, repoPart := splitRepo(owner, repo)
+				workdir, wdErr := os.Getwd()
+				if wdErr != nil {
+					return wdErr
+				}
+				cfg, cfgErr := config.Load(workdir)
+				if cfgErr != nil || cfg == nil {
+					return fmt.Errorf("no config loaded for --repo resolution: %w", cfgErr)
+				}
+				n, err := config.ResolveRepoProjectNumber(cfg, ownerPart, repoPart)
+				if err != nil {
+					return err
+				}
+				projectNumber = n
 			}
 
 			client, err := clientFromConfig()
@@ -7554,7 +7599,8 @@ Outputs: number, owner, owner_type, id, title, url`,
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user login")
-	cmd.Flags().Int("number", 0, "Project board number (required)")
+	cmd.Flags().Int("number", 0, "Project board number")
+	cmd.Flags().StringVar(&repo, "repo", "", "Repository (owner/name or name) to resolve the project board for")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -7584,23 +7630,7 @@ func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumbe
 	if cfg == nil {
 		return projectNumber, nil
 	}
-	localRepo := cfg.Owner + "/" + cfg.DefaultRepo
-	targetRepo := ownerPart + "/" + repoPart
-	if cfg.DefaultRepo == "" || targetRepo == localRepo {
-		return projectNumber, nil // unchanged existing behavior
-	}
-	// Cross-repo: look up the mapping by fully-qualified name, then by
-	// short name (mirrors Repositories map short-name resolution used
-	// elsewhere, e.g. AutonomousConfig.EnabledRepos doc comment).
-	if cfg.Autonomous != nil {
-		if rc := cfg.Autonomous.Repositories[targetRepo]; rc != nil && rc.ProjectNumber > 0 {
-			return rc.ProjectNumber, nil
-		}
-		if rc := cfg.Autonomous.Repositories[repoPart]; rc != nil && rc.ProjectNumber > 0 {
-			return rc.ProjectNumber, nil
-		}
-	}
-	return 0, fmt.Errorf("no project board mapping for --repo %s (configure autonomous.repositories.%s.project_number in .nightgauge/config.yaml)", targetRepo, repoPart)
+	return config.ResolveRepoProjectNumber(cfg, ownerPart, repoPart)
 }
 
 func printJSON(v interface{}) error {
@@ -8909,6 +8939,7 @@ func autonomousRunCmd() *cobra.Command {
 				OnFailureStatus:           autoOnFailure,
 				ExcludeLabels:             autoExcludeLabels,
 				TrustedAuthorAssociations: autoTrustedAuthorAssociations,
+				RuntimeConfig:             cfg,
 			})
 
 			// Create autonomous scheduler

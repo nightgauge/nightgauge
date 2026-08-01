@@ -400,6 +400,49 @@ routing:
   default_repository: api-gateway
 ```
 
+### Single-Resolver Contract (Issue #271)
+
+`.vscode/nightgauge-workspace.yaml`'s `repositories[].project_number` is
+**not** an independent authority for "which project board does this repo
+use?". It exists only as routing-manifest scaffolding input — a starting
+point the `nightgauge-issue-create` skill's Phase 2.4 resolves through the
+runtime resolver before using it, never a value consumed directly.
+
+The single authoritative answer is the **runtime-resolved** value:
+`autonomous.repositories.<repo>.project_number` in `.nightgauge/config.yaml`
+(merged across the standard 6-tier config chain). This is the project the
+autonomous scheduler actually polls (`Scheduler.PickNext`) — a workspace-yaml
+`project_number` that disagrees with it names a board nothing ever reads.
+
+Resolve a repo's authoritative project number with:
+
+```bash
+nightgauge project resolve --repo <owner>/<repo> --json
+# → { "number": 4, "owner": "...", "owner_type": "...", "id": "...", "title": "...", "url": "..." }
+```
+
+This is the same subcommand's `--number` mode (`nightgauge project resolve
+--number N`) extended with a `--repo` mode — `--number` resolves ownership for
+an already-known project number; `--repo` resolves the number itself, then
+feeds it through the same ownership resolution, so the output shape is
+identical either way. `--number` and `--repo` are mutually exclusive.
+
+Any workspace-yaml `project_number` that disagrees with the runtime-resolved
+value is a **misconfiguration**, not an alternate valid mapping:
+
+- `nightgauge doctor` runs a `project_mapping` check for every
+  `repositories[]` entry with a non-zero `project_number` and fails
+  (`exit_code: 2`) on any mismatch, naming both values and the exact
+  `.nightgauge/config.yaml` path to fix.
+- The autonomous scheduler logs a loud (but non-fatal — see [Known
+  Limitations](#known-limitations)) startup warning on the same mismatch,
+  since a long-running scheduler process should not refuse to start over a
+  config drift `doctor` already surfaces.
+- An `attention sweep` producer (`stranded-ready-items`) cards any issue that
+  is "Ready" on the stale workspace-yaml board while the two sources
+  disagree — the issue the scheduler will never dispatch because it only
+  polls the runtime-resolved board.
+
 ---
 
 ## Knowledge Configuration
