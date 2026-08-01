@@ -17,6 +17,14 @@ import (
 // non-zero exit and map it to Status: "timeout" instead of "failed".
 var errE2ETimeout = errors.New("e2e: command timed out")
 
+// reapGrace bounds the post-kill reap on the timeout path. A descendant that
+// escaped the killed process group (e.g. via setsid) can keep a captured
+// pipe open indefinitely; without a bound, waiting for it to reap would
+// reinstate the exact hang the timeout exists to prevent. Short enough not
+// to meaningfully extend the caller-visible timeout, long enough that the
+// normal kill-and-EOF path never brushes it.
+const reapGrace = 2 * time.Second
+
 // E2EDetectResult is the structured output of e2e framework detection.
 type E2EDetectResult struct {
 	Detected    bool     `json:"detected"`
@@ -330,7 +338,13 @@ func runCmd(ctx context.Context, workdir string, timeout time.Duration, name str
 		} else {
 			_ = cmd.Process.Kill()
 		}
-		<-waitDone // reap the process; error is discarded — it's a kill artifact
+		select {
+		case <-waitDone:
+		case <-time.After(reapGrace):
+			// A descendant escaped the killed process group and is still
+			// holding a captured pipe open; give up waiting rather than
+			// hang past the timeout this path exists to enforce.
+		}
 		mu.Lock()
 		out := string(buf)
 		mu.Unlock()
