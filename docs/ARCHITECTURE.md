@@ -803,22 +803,49 @@ sequenceDiagram
 
 ### Input/Output Contracts
 
-Each skill defines explicit contracts:
+Each stage writes a JSON handoff that the next stage reads and the stage gate
+validates.
+
+> **The skill file is the contract; this section is a map.** Every shape below
+> is abridged to the fields a reader needs to follow the data flow. Write code
+> against the authoritative source listed in each subsection — never against the
+> excerpt here.
+>
+> This is not a style preference. These examples used to restate the full
+> schemas, drifted to `schema_version: "1.0"` while the skills moved on, and
+> `docs/ARCHITECTURE.md` is routed to stages by the CLAUDE.md Documentation Map —
+> so a stage reading this section for its output contract got a shape its own
+> gate rejects. #240 and #256 were both lost that way, mid-run, after the money
+> was spent. See #258.
+
+| Handoff                         | File                | Version | Authoritative source                                     |
+| ------------------------------- | ------------------- | ------- | -------------------------------------------------------- |
+| Issue Pickup → Feature Planning | `issue-{N}.json`    | `1.5`   | `skills/issue-pickup/_includes/context-and-knowledge.md` |
+| Feature Planning → Feature Dev  | `planning-{N}.json` | `1.8`   | `skills/feature-planning/SKILL.md`                       |
+| Feature Dev → PR Create         | `dev-{N}.json`      | `1.8`   | `skills/feature-dev/_includes/context-and-epilogue.md`   |
+| PR Create → PR Merge            | `pr-{N}.json`       | `1.0`   | `skills/pr-create/SKILL.md`                              |
+
+Paths are relative to `claude-plugins/nightgauge/`. Gates live in
+`internal/orchestrator/gates/`.
 
 #### Issue Pickup → Feature Planning
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.5",
   "issue_number": 81,
   "title": "Add user authentication",
   "branch": "feat/81-add-user-auth",
-  "labels": ["type:feature"],
-  "board_fields": { "priority": "P1", "size": "M" },
+  "base_branch": "main",
+  "type": "feature",
   "requirements": {
+    "summary": "...",
     "acceptance_criteria": ["Users can log in with email/password"],
-    "technical_notes": "Use bcrypt for password hashing"
-  }
+    "user_story": null,
+    "technical_notes": null
+  },
+  "labels": ["type:feature"],
+  "knowledge_path": null
 }
 ```
 
@@ -826,25 +853,46 @@ Each skill defines explicit contracts:
 
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.8",
   "issue_number": 81,
   "plan_file": ".nightgauge/plans/81-add-user-auth.md",
-  "patterns_identified": ["Repository pattern", "JWT middleware"],
+  "approach": "...",
   "files_to_create": ["src/auth/AuthService.ts"],
-  "files_to_modify": ["src/routes/index.ts"]
+  "files_to_modify": ["src/routes/index.ts"],
+  "revision_count": 0,
+  "knowledge_path": null
 }
 ```
 
 #### Feature Dev → PR Create
 
+`files_changed` is an **object with three arrays**, not a flat list, and
+`tests_status` is an **object**, not a string. `build_verification` is required
+— the gate treats a missing object as "the skill skipped verification entirely"
+and fails the stage.
+
 ```json
 {
-  "schema_version": "1.0",
+  "schema_version": "1.8",
   "issue_number": 81,
-  "branch": "feat/81-add-user-auth",
-  "implementation_summary": "Added JWT-based authentication",
-  "files_changed": ["src/auth/AuthService.ts", "src/routes/index.ts"],
-  "tests_status": "passing"
+  "commit_sha": null,
+  "files_changed": {
+    "created": ["src/auth/AuthService.ts"],
+    "modified": ["src/routes/index.ts"],
+    "deleted": []
+  },
+  "build_verification": {
+    "ran": true,
+    "status": "passed",
+    "commands_run": ["npm run build"],
+    "timestamp": "2026-01-01T00:00:00Z"
+  },
+  "tests_status": {
+    "passed": 12,
+    "failed": 0,
+    "coverage": null,
+    "test_command": "npm test"
+  }
 }
 ```
 
@@ -856,7 +904,9 @@ Each skill defines explicit contracts:
   "issue_number": 81,
   "pr_number": 123,
   "pr_url": "https://github.com/org/repo/pull/123",
-  "merge_strategy": "squash"
+  "title": "feat: add user authentication",
+  "base_branch": "main",
+  "status": "open"
 }
 ```
 
