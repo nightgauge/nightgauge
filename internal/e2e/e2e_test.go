@@ -325,6 +325,40 @@ func TestRunCmd_Timeout_PartialOutputCaptured(t *testing.T) {
 	}
 }
 
+func TestRunCmd_Timeout_SurvivorHoldsPipe_ReturnsPromptly(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid not available on this platform")
+	}
+
+	dir := t.TempDir()
+	// The grandchild detaches into its own session via setsid, inheriting
+	// stdout, and outlives the timeout's process-group kill — so the pipe's
+	// write end stays open after the parent shell is killed.
+	script := "echo before-timeout; setsid sh -c 'sleep 999 >&1' & sleep 999"
+
+	deadline := time.Now().Add(200*time.Millisecond + reapGrace + 3*time.Second)
+	done := make(chan struct{})
+	var out string
+	var err error
+	go func() {
+		out, err = runCmd(context.Background(), dir, 200*time.Millisecond, "sh", "-c", script)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Until(deadline)):
+		t.Fatal("runCmd did not return within timeout + reapGrace + margin; unbounded reap regression")
+	}
+
+	if !errors.Is(err, errE2ETimeout) {
+		t.Fatalf("expected errE2ETimeout, got %v", err)
+	}
+	if !strings.Contains(out, "before-timeout") {
+		t.Errorf("expected partial output to contain %q, got %q", "before-timeout", out)
+	}
+}
+
 func TestRunCmd_Success_ReturnsOutput(t *testing.T) {
 	dir := t.TempDir()
 	out, err := runCmd(context.Background(), dir, 5*time.Second, "echo", "hello")
