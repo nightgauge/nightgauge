@@ -959,11 +959,18 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // real completion signal. The slot is deleted from `this.slots` mid-flight
     // (cleanupSlot), so it can no longer be observed there once cleanup begins.
     this.lifecyclePromises.set(item.issueNumber, runPromise);
-    void runPromise.finally(() => {
-      if (this.lifecyclePromises.get(item.issueNumber) === runPromise) {
-        this.lifecyclePromises.delete(item.issueNumber);
-      }
-    });
+    // The rejection (if any) is already fully handled inside runSlotPipeline
+    // (logged, onSlotFailed fired, cleanup run) and rethrown so slot.runPromise
+    // consumers still observe it. .finally() adopts that rejection into a new
+    // promise; this .catch() only exists to stop that derived promise from
+    // surfacing as an unhandled rejection.
+    void runPromise
+      .finally(() => {
+        if (this.lifecyclePromises.get(item.issueNumber) === runPromise) {
+          this.lifecyclePromises.delete(item.issueNumber);
+        }
+      })
+      .catch(() => undefined);
     return true;
   }
 
