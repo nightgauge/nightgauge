@@ -855,6 +855,38 @@ func TestCompleteQueueItem_NoopWhenNotProcessing(t *testing.T) {
 	}
 }
 
+// TestCompleteQueueItem_SparesRequeueAndOtherRepo pins the two discriminations
+// that make CompleteQueueItem — not QueueRemove — the right primitive to expose
+// over IPC for run completion (#254).
+//
+// QueueRemove matches on issue number alone. Wiring the extension's terminal
+// path to it would (a) delete a same-numbered item belonging to a different
+// repository in a multi-repo workspace, and (b) delete a *pending* re-queue of
+// the same issue that an operator added while the run was in flight — silently
+// dropping work the operator explicitly asked for.
+func TestCompleteQueueItem_SparesRequeueAndOtherRepo(t *testing.T) {
+	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
+	s.queue = []QueueItem{
+		{IssueNumber: 7, Repo: "o/A", Status: "processing"},
+		{IssueNumber: 7, Repo: "o/A", Status: "pending"}, // re-queued mid-run
+		{IssueNumber: 7, Repo: "o/B", Status: "processing"},
+	}
+
+	s.CompleteQueueItem("o/A", 7)
+
+	if len(s.queue) != 2 {
+		t.Fatalf("queue after completion = %+v, want 2 items", s.queue)
+	}
+	for _, item := range s.queue {
+		if item.Repo == "o/A" && item.Status != "pending" {
+			t.Errorf("o/A item = %+v, want the pending re-queue to survive", item)
+		}
+		if item.Repo == "o/B" && item.Status != "processing" {
+			t.Errorf("o/B item = %+v, want another repo's run untouched", item)
+		}
+	}
+}
+
 // TestSyncQueueToCloudLocked_IncludesProcessingItem pins AC5: the cloud sync
 // payload distinguishes a running item ("processing") from an idle/pending
 // one once DequeueIndependent has marked it in flight.

@@ -280,6 +280,10 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<IpcQueueItem[]>('queue.dequeueIndependent', { maxSlots, runningItems });
   }
 
+  async queueComplete(repo: string, issueNumber: number): Promise<void> {
+    await this.call<void>('queue.complete', { repo, issueNumber });
+  }
+
   async queueEnqueueEpic(owner: string, repo: string, epicNumber: number, title?: string, labels?: string[], eligibleSubIssues?: number[]): Promise<void> {
     await this.call<void>('queue.enqueueEpic', { owner, repo, epicNumber, title, labels, eligibleSubIssues });
   }

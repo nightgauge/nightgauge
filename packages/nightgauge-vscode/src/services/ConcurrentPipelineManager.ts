@@ -522,7 +522,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         for (const item of items) {
           // Re-check after each async worktree creation — Stop may have been
           // pressed while we were awaiting the previous startSlot.
-          if (this.isShuttingDown) break;
+          // These items were marked "processing" by the dequeue and will never
+          // reach a terminal run, so release the mark before abandoning them
+          // (#254) — otherwise a stop leaves them undispatchable forever.
+          if (this.isShuttingDown) {
+            await this.completeQueueItem(item, "shutdown before dispatch");
+            continue;
+          }
           // #188: per-issue in-flight guard at the dispatch boundary. An
           // issue with a live slot (or a reservation whose worktree is still
           // being created) must be skipped by subsequent fills regardless of
@@ -536,6 +542,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               hasLiveSlot: this.slots.has(item.issueNumber),
               hasReservation: this.reservedSlots.has(item.issueNumber),
             });
+            // The live slot's own completion clears ITS mark; this duplicate
+            // dequeue put a second one on and no run will ever clear it (#254).
+            await this.completeQueueItem(item, "duplicate dispatch skipped");
             continue;
           }
           const ok = await this.startSlot(item);
@@ -548,6 +557,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // until the next external event (slot completion, etc.) and can
             // be silently lost if no further events fire. See Issue #2359.
             try {
+              // Clear the dispatch's "processing" mark FIRST (#254). The
+              // re-enqueue below adds a fresh pending item; leaving the old
+              // mark in place would keep both, and the processing one makes
+              // the issue undispatchable — so the re-enqueue would be inert.
+              await this.completeQueueItem(item, "slot start failed");
               await this.queueService.enqueue(item.issueNumber, item.title, item.labels);
               this.fillAgain = true;
               this.logger.info("Re-enqueued item after slot start failure", {
@@ -575,6 +589,49 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
 
     return totalStarted;
+  }
+
+  /**
+   * Release the "processing" mark that `dequeueIndependent` put on an item.
+   *
+   * `DequeueIndependent` no longer splices items out of the Go queue (#232 /
+   * #246) — it marks them `processing` so in-flight work is visible to
+   * `queueStatusLocked()` and cloud sync, and relies on a terminal
+   * `CompleteQueueItem` to remove them. That call was wired only into Go's
+   * `Scheduler.runPipeline()`, which this class never enters: it dequeues over
+   * IPC and runs the stages itself. So every dispatch leaked a permanent
+   * `processing` item, the re-dispatch guard made that issue undispatchable,
+   * and the queue reported "processing" with nothing running (#254).
+   *
+   * The invariant this restores: **an item marked `processing` is completed on
+   * every path where dispatch does not lead to a terminal run.** There are four
+   * — run finished (any outcome), duplicate skip, slot-start failure, and
+   * shutdown before dispatch.
+   *
+   * Best-effort by design: this runs on cleanup paths, several of which are
+   * already handling a failure. A dead IPC socket must not mask the real error
+   * or abort cleanup — the reconcile sweep catches a missed mark later, whereas
+   * a thrown error here loses the run's actual outcome.
+   */
+  private async completeQueueItem(
+    ref: { issueNumber: number; repoName?: string },
+    reason: string
+  ): Promise<void> {
+    try {
+      await this.queueService.complete(ref.repoName ?? "", ref.issueNumber);
+      this.logger.debug("Cleared queue processing mark", {
+        issueNumber: ref.issueNumber,
+        repo: ref.repoName ?? "",
+        reason,
+      });
+    } catch (err) {
+      this.logger.warn("Failed to clear queue processing mark — item may linger as processing", {
+        issueNumber: ref.issueNumber,
+        repo: ref.repoName ?? "",
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -1130,6 +1187,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         slotsBeforeCleanup: this.slots.size,
         isShuttingDown: this.isShuttingDown,
       });
+
+      // Clear the dequeue's "processing" mark — the terminal counterpart to
+      // fillSlots' dequeueIndependent, covering success, failure, throw and
+      // cancellation alike (#254). Done FIRST: everything below is best-effort
+      // recovery work, and `cleanupSlot` is not itself wrapped in a try, so a
+      // throw down there would skip this and strand the item.
+      await this.completeQueueItem(
+        { issueNumber: slot.issueNumber, repoName: slot.repo },
+        "run reached terminal state"
+      );
 
       // Safety net: move board status to "In review" on pipeline failure.
       // HeadlessOrchestrator.markStatusInReviewOnFailure() handles most cases,
