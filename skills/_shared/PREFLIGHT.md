@@ -84,6 +84,10 @@ DOCTOR_RESULT=$("$BINARY" doctor --json 2>/dev/null)
 DOCTOR_EXIT=$?
 if [ "$DOCTOR_EXIT" -eq 2 ]; then
   echo "ERROR: Environment check failed — nightgauge doctor reports broken environment." >&2
+  FAILED_CHECKS=$(echo "$DOCTOR_RESULT" | jq -r '.failed_checks[]? // empty' 2>/dev/null)
+  if [ -n "$FAILED_CHECKS" ]; then
+    echo "Failing check(s): $(echo "$FAILED_CHECKS" | tr '\n' ',' | sed 's/,$//')" >&2
+  fi
   echo "$DOCTOR_RESULT" | jq -r '.errors[]' >&2 2>/dev/null || true
   INSTALL_MSG=$(echo "$DOCTOR_RESULT" | jq -r '.install_instructions // empty' 2>/dev/null)
   [ -n "$INSTALL_MSG" ] && echo "$INSTALL_MSG" >&2
@@ -103,3 +107,7 @@ fi
 | 0    | Healthy                         | Continue                                |
 | 1    | Degraded (warnings only)        | Continue with warning printed to stderr |
 | 2    | Broken (required checks failed) | Halt immediately with error details     |
+
+Do not theorize about the cause beyond what is printed here — the failing
+check name (`failed_checks`) and its `.errors[]` message are the complete
+diagnosis (#277).

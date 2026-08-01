@@ -191,6 +191,11 @@ func TestRunDoctor_BinaryNotInPath(t *testing.T) {
 
 	// Empty PATH so exec.LookPath("nightgauge") fails
 	_ = os.Setenv("PATH", "")
+	// Unset NIGHTGAUGE_BIN and HOME/repo-relative cascade steps so none of
+	// the other five cascade steps accidentally resolve in CI.
+	t.Setenv("NIGHTGAUGE_BIN", "")
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
 
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
@@ -218,6 +223,71 @@ func TestRunDoctor_BinaryNotInPath(t *testing.T) {
 	}
 	if !hasBinaryWarning {
 		t.Errorf("expected binary warning in result.Warnings, got: %v", result.Warnings)
+	}
+}
+
+// TestRunDoctor_BinaryOffPathResolvable_Degraded verifies that a binary
+// resolvable only via NIGHTGAUGE_BIN (off PATH) is reported as OK, and that
+// the binary check alone never drives ExitCode to 2 (#277 AC3).
+func TestRunDoctor_BinaryOffPathResolvable_Degraded(t *testing.T) {
+	tmpDir := t.TempDir()
+	fakeBinary := filepath.Join(tmpDir, "nightgauge")
+	if err := os.WriteFile(fakeBinary, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("failed to create fake binary: %v", err)
+	}
+
+	origPath := os.Getenv("PATH")
+	t.Cleanup(func() { _ = os.Setenv("PATH", origPath) })
+	_ = os.Setenv("PATH", "")
+	t.Setenv("NIGHTGAUGE_BIN", fakeBinary)
+
+	cfg := &config.Config{Owner: "nightgauge", ProjectNumber: 42}
+	ctx := context.Background()
+	result := RunDoctor(ctx, cfg, nil, nil)
+
+	binaryCheck := result.Checks["binary"]
+	if !binaryCheck.OK {
+		t.Fatalf("expected binary.OK=true when resolvable via NIGHTGAUGE_BIN, got: %s", binaryCheck.Error)
+	}
+	if !strings.Contains(binaryCheck.Detail, "NIGHTGAUGE_BIN") {
+		t.Errorf("expected binary.Detail to mention the resolving step, got: %q", binaryCheck.Detail)
+	}
+
+	// ExitCode is driven by the nil client (auth required failure), never by
+	// the binary check itself — assert the binary check contributed no
+	// warning/error.
+	for _, w := range result.Warnings {
+		if strings.Contains(strings.ToLower(w), "binary") {
+			t.Errorf("resolvable off-PATH binary must not produce a warning, got: %q", w)
+		}
+	}
+	for _, fc := range result.FailedChecks {
+		if fc == "binary" {
+			t.Error("binary check must never appear in FailedChecks — it is warning-only")
+		}
+	}
+}
+
+// TestRunDoctor_FailedChecksNamesRequiredFailures verifies that a required
+// check failure is named in result.FailedChecks so PREFLIGHT.md can print
+// the failing check(s) on exit 2 (#277 AC4).
+func TestRunDoctor_FailedChecksNamesRequiredFailures(t *testing.T) {
+	ctx := context.Background()
+	result := RunDoctor(ctx, nil, nil, nil)
+
+	if result.ExitCode != 2 {
+		t.Fatalf("expected ExitCode 2 with nil client, got %d", result.ExitCode)
+	}
+
+	found := false
+	for _, fc := range result.FailedChecks {
+		if fc == "github_auth" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected FailedChecks to contain %q, got: %v", "github_auth", result.FailedChecks)
 	}
 }
 
