@@ -2924,7 +2924,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
 				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
 					item.Number, branchName)
-				_ = s.execMgr.CleanupLocalBranch(branchName)
+				_ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
 			default:
 				// Reclaim from the repo root, not the worktree: linked worktrees
 				// share the ref store and object database, so the branch tip is
@@ -2936,7 +2936,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				} else {
 					log.Printf("#%d: orphaned-push reclamation declined — %s", item.Number, res.Reason)
 				}
-				_ = s.execMgr.CleanupLocalBranch(branchName)
+				_ = s.execMgr.CleanupLocalBranch(item.Repo, branchName)
 			}
 		}
 
@@ -2968,9 +2968,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// the issue straight back into the same non-fast-forward rejection, which
 		// is the loop that burned a full pipeline per cycle. The issue stays put
 		// and its Action Center card is the way back in.
+		// commit_orphaned (#266) joins branch_forked for the same reason:
+		// reverting to Ready re-dispatches into a fresh worktree that redoes the
+		// work, while the commit the pipeline actually produced sits preserved
+		// (by the CleanupWorktree/CleanupLocalBranch ahead-of-base guard) on a
+		// branch nobody re-runs against automatically. The way back in is the
+		// Action Center card, not an automatic retry.
 		skipBoardRevert := terminalFailureKind == TerminalKindWorktreeUncommitted ||
 			terminalFailureKind == TerminalKindBudgetCeiling ||
-			terminalFailureKind == TerminalKindBranchForked
+			terminalFailureKind == TerminalKindBranchForked ||
+			terminalFailureKind == TerminalKindCommitOrphaned
 		if !pipelineSuccess && !skipBoardRevert && s.stateSvc != nil && s.onFailureStatus != "unchanged" {
 			var targetStatus state.BoardStatus
 			switch s.onFailureStatus {

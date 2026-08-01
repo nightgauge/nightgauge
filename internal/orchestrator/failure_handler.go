@@ -371,6 +371,26 @@ const (
 	// cannot fully self-heal via the deterministic PRCreateRunner, mirroring
 	// how gate-sourced kinds override ResolveTerminalKind.
 	TerminalKindAbandonedCommit = "abandoned_commit"
+	// TerminalKindCommitOrphaned is the backstop for the specific stranding
+	// #266 was filed for: a stage killed (SIGKILL) mid `nightgauge pre-push
+	// validate` bypasses pre_push.go's restore-defer (a defer cannot run
+	// against SIGKILL), leaving the worktree checked out on a stray
+	// `temp-pre-push-<n>` branch. If feature-validate's later commit step then
+	// commits without checking which branch it landed on, the commit is valid
+	// but sits on a branch nobody expects. Unlike TerminalKindAbandonedCommit
+	// (work is on the correct feature branch, just missing a PR), here the
+	// commit is on the WRONG branch — self-heal (feedback-and-commit.md Step
+	// 5.1) checks out the expected feature branch before committing and is the
+	// primary fix; this kind exists for the case self-heal itself cannot
+	// recover from (the expected feature branch doesn't exist locally either),
+	// where the skill fails loudly rather than silently committing onto the
+	// wrong ref. Emitted via the `[commit-orphaned]` marker (mirrors
+	// `[branch-forked]` / `[validation-failed]`). Recoverable: does NOT
+	// increment LifetimeIssueFailures — the commit is not lost, CleanupWorktree
+	// and CleanupLocalBranch's ahead-of-base guard (also added in #266) refuse
+	// to delete the branch/worktree holding it, so a human can push it or open
+	// a PR by hand.
+	TerminalKindCommitOrphaned = "commit_orphaned"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error
@@ -771,6 +791,17 @@ func ClassifyTerminalKind(errorText string) string {
 		strings.Contains(t, "non-fast-forward") ||
 		(strings.Contains(t, "push rejected") && strings.Contains(t, "fetch first")) {
 		return TerminalKindBranchForked
+	}
+
+	// Commit stranded on the wrong branch after a SIGKILL bypassed
+	// pre_push.go's restore-defer (#266). Matched BEFORE the generic
+	// subagent-crash fallback for the same "exit "-substring reason as the
+	// checks above. Emitted by feature-validate's Step 5.1 branch-identity
+	// guard when it detects HEAD is not on the issue's expected feature branch
+	// and cannot self-heal (the expected branch doesn't exist locally either).
+	if strings.Contains(t, "[commit-orphaned]") ||
+		strings.Contains(t, "commit_orphaned") {
+		return TerminalKindCommitOrphaned
 	}
 
 	// Subagent process death / non-zero exit fallback.

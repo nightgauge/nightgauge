@@ -315,6 +315,44 @@ func reclaimWorktree(repoRoot string, wt worktreeRecord) error {
 	return nil
 }
 
+// branchAheadOfBase reports whether branchName carries commits (with content
+// not already represented on repo's default branch) — the state a killed
+// stage can leave behind: a validated commit that never reached pr-create, or
+// a commit that landed on a stray branch (e.g. `temp-pre-push-<n>`, left
+// behind when a SIGKILL bypasses pre_push.go's restore-defer) after the
+// pipeline's own cleanup lost track of it. Shared by CleanupWorktree (checked
+// against the worktree's current HEAD, whatever branch that is) and
+// CleanupLocalBranch (checked against a named branch ref) — both must refuse
+// to destroy content the remote doesn't have, independent of working-tree
+// dirtiness (#266).
+//
+// dir may be a linked worktree or the main checkout; git resolves refs
+// against the shared object store either way. Soft-fail: an unresolvable
+// default branch or a failed content-diff both return (false, err) so the
+// caller logs and falls through to its existing behavior rather than
+// blocking cleanup on this check's own fragility.
+func branchAheadOfBase(dir, branchName string) (bool, error) {
+	if branchName == "" {
+		return false, nil
+	}
+	defaultBranch := detectDefaultBranch(dir)
+	if branchName == "main" || branchName == "master" || branchName == defaultBranch {
+		return false, nil
+	}
+	if !refExists(dir, "refs/heads/"+branchName) {
+		return false, nil
+	}
+	baseRef, err := resolveBaseRef(dir, defaultBranch)
+	if err != nil {
+		return false, err
+	}
+	merged, hasOwnCommits, err := mergedIntoBase(dir, baseRef, branchName)
+	if err != nil {
+		return false, err
+	}
+	return hasOwnCommits && !merged, nil
+}
+
 // resolveBaseRef picks the ref every branch is compared against. The remote
 // ref is preferred (origin/main is what "already merged" actually means); a
 // repo with no remote falls back to the local branch so the check still works

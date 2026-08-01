@@ -161,6 +161,80 @@ func TestCleanupWorktree_SoftFailWhenDockerMissing(t *testing.T) {
 	}
 }
 
+// TestCleanupWorktree_PreservesUnpushedCommit is a regression guard for #266:
+// a worktree with a CLEAN tree (so the pre-existing hasUncommittedChanges
+// guard does not fire) whose current branch carries a commit not yet on the
+// default branch must survive CleanupWorktree — this is exactly the state a
+// killed stage leaves behind after a validated commit that never reached
+// pr-create.
+func TestCleanupWorktree_PreservesUnpushedCommit(t *testing.T) {
+	repoRoot := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: repoRoot}
+	worktreePath, err := m.ensureWorktree("nightgauge/nightgauge", 266)
+	if err != nil {
+		t.Fatalf("ensureWorktree: %v", err)
+	}
+
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	runGit(worktreePath, "checkout", "-b", "feat/266-thing")
+	if err := os.WriteFile(filepath.Join(worktreePath, "feature.txt"), []byte("work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(worktreePath, "add", ".")
+	runGit(worktreePath, "commit", "-m", "feat: unpushed work")
+
+	if err := m.CleanupWorktree("nightgauge/nightgauge", 266); err != nil {
+		t.Fatalf("CleanupWorktree: %v", err)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree carrying an unmerged commit must survive cleanup, got stat err: %v", err)
+	}
+}
+
+// TestCleanupWorktree_PreservesStrayTempPrePushBranch regression-guards the
+// exact #266 scenario: a SIGKILL mid pre-push validation can leave a
+// worktree's HEAD on a stray `temp-pre-push-<n>` branch (not the issue's
+// expected feature branch) holding a commit. CleanupWorktree must inspect
+// whatever branch is actually checked out, not assume it is the feature
+// branch, and preserve it.
+func TestCleanupWorktree_PreservesStrayTempPrePushBranch(t *testing.T) {
+	repoRoot := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: repoRoot}
+	worktreePath, err := m.ensureWorktree("nightgauge/nightgauge", 267)
+	if err != nil {
+		t.Fatalf("ensureWorktree: %v", err)
+	}
+
+	runGit := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	runGit(worktreePath, "checkout", "-b", "temp-pre-push-42")
+	if err := os.WriteFile(filepath.Join(worktreePath, "stray.txt"), []byte("stray\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(worktreePath, "add", ".")
+	runGit(worktreePath, "commit", "-m", "feat: committed while stranded on temp branch")
+
+	if err := m.CleanupWorktree("nightgauge/nightgauge", 267); err != nil {
+		t.Fatalf("CleanupWorktree: %v", err)
+	}
+	if _, err := os.Stat(worktreePath); err != nil {
+		t.Fatalf("worktree stranded on temp-pre-push branch must survive cleanup, got stat err: %v", err)
+	}
+}
+
 // TestRepoRoot_ResolvesViaResolver verifies the additive repo-root resolution
 // (#229): with a resolver installed, a registered repo resolves to its mapped
 // filesystem root, an unregistered repo falls back to workspaceRoot, and with

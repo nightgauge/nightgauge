@@ -230,6 +230,22 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 		return nil
 	}
 
+	// Preserve a worktree whose current HEAD carries commits the default
+	// branch doesn't have — a clean tree does not mean "safe to delete" when a
+	// killed stage committed valid work and never got to push it (#266). This
+	// checks whatever branch the worktree actually has checked out, not only
+	// the issue's expected feature branch, so it also catches the case where a
+	// SIGKILL mid pre-push-validate left HEAD on a stray `temp-pre-push-<n>`
+	// branch.
+	if branchOut, err := gitOutput(worktreeDir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		branch := strings.TrimSpace(branchOut)
+		if ahead, aerr := branchAheadOfBase(worktreeDir, branch); aerr == nil && ahead {
+			log.Printf("worktree teardown: preserving %s (issue #%d) — branch %s carries commits not on the default branch (%s)",
+				worktreeDir, issueNumber, branch, SkipUnmergedContent)
+			return nil
+		}
+	}
+
 	// Soft-fail: docker may not be installed (dev machines without docker)
 	// or the daemon may be down. Either case must not block worktree
 	// removal — log a one-line WARN and continue.
@@ -291,12 +307,27 @@ func (m *Manager) repoRoot(repo string) string {
 // failed run whose remote branch is holding an open PR, or one whose remote
 // head came from someone else (#163) — can still drop its local ref without
 // reaching for CleanupBranch's unconditional remote delete.
+//
+// Guarded against deleting a branch that carries commits not yet on the
+// default branch (#266): the pre-fix behavior deleted the local ref
+// unconditionally, which is how a killed stage's validated-but-unpushed
+// commit became unreachable the moment CleanupWorktree ran next. Uses repo to
+// resolve the same repo root the content-diff check elsewhere in this file
+// uses, independent of the branch's dirty state (a branch ref carries no
+// working tree of its own).
+//
 // Idempotent; protected branches are never deleted.
-func (m *Manager) CleanupLocalBranch(branchName string) error {
+func (m *Manager) CleanupLocalBranch(repo, branchName string) error {
 	if branchName == "" || branchName == "main" || branchName == "master" {
 		return nil
 	}
 	repoRoot := m.workspaceRoot
+
+	if ahead, err := branchAheadOfBase(m.repoRoot(repo), branchName); err == nil && ahead {
+		log.Printf("branch cleanup: preserving local branch %s — carries commits not on the default branch (%s)",
+			branchName, SkipUnmergedContent)
+		return nil
+	}
 
 	delLocal := exec.Command("git", "branch", "-D", branchName)
 	delLocal.Dir = repoRoot
@@ -317,7 +348,7 @@ func (m *Manager) CleanupLocalBranch(branchName string) error {
 // PR is merged, so origin's copy is spent. On a failed run use
 // CleanupLocalBranch plus the guarded ReclaimOrphanedRemoteBranch, which drops
 // origin's copy only when the pipeline itself pushed it.
-func (m *Manager) CleanupBranch(branchName string) error {
+func (m *Manager) CleanupBranch(repo, branchName string) error {
 	if branchName == "" || branchName == "main" || branchName == "master" {
 		return nil
 	}
@@ -329,7 +360,7 @@ func (m *Manager) CleanupBranch(branchName string) error {
 	_ = delRemote.Run() // ignore error — branch may not exist on remote
 
 	// Delete local branch + prune stale remote-tracking refs
-	return m.CleanupLocalBranch(branchName)
+	return m.CleanupLocalBranch(repo, branchName)
 }
 
 // CleanupBranchIfMerged deletes branchName's local ref only when its content
@@ -349,7 +380,7 @@ func (m *Manager) CleanupBranchIfMerged(repo, branchName string) error {
 	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
 		return nil
 	}
-	return m.CleanupLocalBranch(branchName)
+	return m.CleanupLocalBranch(repo, branchName)
 }
 
 // branchMergedIntoDefault reports whether branchName's content is already
@@ -397,7 +428,7 @@ func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) error 
 	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
 		return nil
 	}
-	return m.CleanupBranch(branchName)
+	return m.CleanupBranch(repo, branchName)
 }
 
 // CleanupMergedBranches removes local branches whose remote tracking branch

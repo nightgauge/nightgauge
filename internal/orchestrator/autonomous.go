@@ -3473,6 +3473,38 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
+		// Issue #266: a killed stage's commit landed on the wrong branch (a
+		// stray `temp-pre-push-<n>` left behind when a SIGKILL bypassed
+		// pre_push.go's restore-defer) and self-heal could not recover it
+		// because the expected feature branch doesn't exist locally either.
+		// Same shape as branch_forked: retrying re-dispatches into a fresh
+		// worktree that redoes the work while the actual commit sits preserved
+		// (CleanupWorktree/CleanupLocalBranch's ahead-of-base guard refuses to
+		// delete the branch/worktree holding it) on a branch nothing re-runs
+		// against automatically. No lifetime-cap increment, no cascade feed (a
+		// stranded commit says nothing about the health of the factory), no
+		// board revert to Ready. The Action Center card is the way back in.
+		if terminalFailureKind == TerminalKindCommitOrphaned {
+			detail := failureDetail
+			if detail == "" {
+				detail = "commit stranded off the feature branch after a killed stage — needs a human to push it or open a PR"
+			}
+			as.recordFailureLocked(repo, issue, title, now, detail)
+			log.Printf("autonomous: %s#%d commit-orphaned (unrecoverable by retry — left for human triage, queue continues) — %s",
+				repo, issue, detail)
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			return
+		}
+
 		// Issue #3691: pr-merge "completed but PR not merged" is an
 		// externally-blocked state, not a generic failure. The TS-side
 		// diagnostic in HeadlessOrchestrator.diagnosePrMergeBlocker has
