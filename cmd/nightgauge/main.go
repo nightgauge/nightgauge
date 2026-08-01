@@ -2881,10 +2881,10 @@ func projectAddCmd() *cobra.Command {
 				}
 			}
 
-			client, err := clientFromConfig()
-			if err != nil {
-				return err
-			}
+			// Resolve the board before any network call. A missing cross-repo
+			// mapping is a config error and must be reportable without
+			// credentials — otherwise an unmapped repo surfaces as "no GitHub
+			// token available", naming the wrong problem.
 			ownerPart, repoPart := splitRepo(owner, repo)
 			if workdir, wdErr := os.Getwd(); wdErr == nil {
 				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
@@ -2894,6 +2894,11 @@ func projectAddCmd() *cobra.Command {
 					}
 					projectNumber = resolved
 				}
+			}
+
+			client, err := clientFromConfig()
+			if err != nil {
+				return err
 			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
 
@@ -3010,11 +3015,7 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 			}
 			status := args[1]
 
-			client, err := clientFromConfig()
-			if err != nil {
-				return err
-			}
-
+			// Resolve the board before any network call — see projectAddCmd.
 			ownerPart, repoPart := splitRepo(owner, repo)
 			if workdir, wdErr := os.Getwd(); wdErr == nil {
 				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
@@ -3024,6 +3025,11 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 					}
 					projectNumber = resolved
 				}
+			}
+
+			client, err := clientFromConfig()
+			if err != nil {
+				return err
 			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
 			if err := svc.SyncStatus(cmd.Context(), ownerPart, repoPart, number, status); err != nil {
