@@ -265,6 +265,10 @@ type RepositoryConfig struct {
 	// Forge is the forge ID (key in the forges: block) this repo is hosted on.
 	// When empty, the workspace default forge is used. Matches Router.MapRepo semantics.
 	Forge string `yaml:"forge,omitempty" json:"forge,omitempty"`
+	// ProjectNumber is the GitHub Project V2 board number to use when
+	// --repo names this repository and it differs from the local config's
+	// default repo. 0 = no mapping.
+	ProjectNumber int `yaml:"project_number,omitempty" json:"projectNumber,omitempty"`
 }
 
 // AutonomousConfig holds autonomous scheduler settings from config.yaml.

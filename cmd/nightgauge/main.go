@@ -2886,6 +2886,15 @@ func projectAddCmd() *cobra.Command {
 				return err
 			}
 			ownerPart, repoPart := splitRepo(owner, repo)
+			if workdir, wdErr := os.Getwd(); wdErr == nil {
+				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
+					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart)
+					if resolveErr != nil {
+						return resolveErr
+					}
+					projectNumber = resolved
+				}
+			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
 
 			if bulk {
@@ -2948,18 +2957,19 @@ func projectAddCmd() *cobra.Command {
 
 			if outputJSON {
 				return printJSON(map[string]interface{}{
-					"itemId":      itemID,
-					"issueNumber": number,
-					"repo":        ownerPart + "/" + repoPart,
-					"result":      "added",
-					"status":      resolvedStatus,
+					"itemId":        itemID,
+					"issueNumber":   number,
+					"repo":          ownerPart + "/" + repoPart,
+					"result":        "added",
+					"status":        resolvedStatus,
+					"projectNumber": projectNumber,
 				})
 			}
 
 			if resolvedStatus != "" {
-				fmt.Printf("Added #%d to project board (item: %s, status: %s)\n", number, itemID, resolvedStatus)
+				fmt.Printf("Added #%d to project board %s/%d (item: %s, status: %s)\n", number, ownerPart, projectNumber, itemID, resolvedStatus)
 			} else {
-				fmt.Printf("Added #%d to project board (item: %s)\n", number, itemID)
+				fmt.Printf("Added #%d to project board %s/%d (item: %s)\n", number, ownerPart, projectNumber, itemID)
 			}
 			return nil
 		},
@@ -3006,6 +3016,15 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 			}
 
 			ownerPart, repoPart := splitRepo(owner, repo)
+			if workdir, wdErr := os.Getwd(); wdErr == nil {
+				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
+					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart)
+					if resolveErr != nil {
+						return resolveErr
+					}
+					projectNumber = resolved
+				}
+			}
 			svc := gh.NewProjectService(client, ownerPart, projectNumber)
 			if err := svc.SyncStatus(cmd.Context(), ownerPart, repoPart, number, status); err != nil {
 				return fmt.Errorf("sync-status #%d in %s/%s: %w", number, ownerPart, repoPart, enrichError(err))
@@ -3013,13 +3032,14 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 
 			if outputJSON {
 				return printJSON(map[string]interface{}{
-					"issueNumber": number,
-					"status":      status,
-					"result":      "synced",
+					"issueNumber":   number,
+					"status":        status,
+					"result":        "synced",
+					"projectNumber": projectNumber,
 				})
 			}
 
-			fmt.Printf("Synced #%d status → %s\n", number, status)
+			fmt.Printf("Synced #%d status → %s (board %s/%d)\n", number, status, ownerPart, projectNumber)
 			return nil
 		},
 	}
@@ -7528,6 +7548,40 @@ func splitRepo(owner, repo string) (string, string) {
 		return parts[0], parts[1]
 	}
 	return owner, repo
+}
+
+// resolveProjectNumber decides which project board number to write to.
+// Precedence: explicit --project always wins. Otherwise, when --repo names
+// a different repository than the local config's default repo, the board
+// MUST come from an explicit autonomous.repositories.<repo>.project_number
+// mapping — an unmapped cross-repo target fails loudly rather than
+// silently falling back to the local board (#262). Same-repo (or no
+// --repo) behavior is unchanged: cfg.ProjectNumber via existing
+// PersistentPreRunE backfill.
+func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumber int, ownerPart, repoPart string) (int, error) {
+	if explicitProject {
+		return projectNumber, nil
+	}
+	if cfg == nil {
+		return projectNumber, nil
+	}
+	localRepo := cfg.Owner + "/" + cfg.DefaultRepo
+	targetRepo := ownerPart + "/" + repoPart
+	if cfg.DefaultRepo == "" || targetRepo == localRepo {
+		return projectNumber, nil // unchanged existing behavior
+	}
+	// Cross-repo: look up the mapping by fully-qualified name, then by
+	// short name (mirrors Repositories map short-name resolution used
+	// elsewhere, e.g. AutonomousConfig.EnabledRepos doc comment).
+	if cfg.Autonomous != nil {
+		if rc := cfg.Autonomous.Repositories[targetRepo]; rc != nil && rc.ProjectNumber > 0 {
+			return rc.ProjectNumber, nil
+		}
+		if rc := cfg.Autonomous.Repositories[repoPart]; rc != nil && rc.ProjectNumber > 0 {
+			return rc.ProjectNumber, nil
+		}
+	}
+	return 0, fmt.Errorf("no project board mapping for --repo %s (configure autonomous.repositories.%s.project_number in .nightgauge/config.yaml)", targetRepo, repoPart)
 }
 
 func printJSON(v interface{}) error {

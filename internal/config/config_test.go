@@ -1328,6 +1328,42 @@ func TestValidateForgeConfig_ValidEntries(t *testing.T) {
 	}
 }
 
+// TestLoadYAML_RepositoryConfigProjectNumber verifies that
+// autonomous.repositories.<repo>.project_number round-trips through YAML
+// parsing (#262).
+func TestLoadYAML_RepositoryConfigProjectNumber(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yamlContent := `owner: nightgauge
+defaultRepo: nightgauge
+autonomous:
+  repositories:
+    nightgauge/other-repo:
+      forge: github
+      project_number: 6
+`
+	if err := os.WriteFile(path, []byte(yamlContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadYAML(path)
+	if err != nil {
+		t.Fatalf("LoadYAML: %v", err)
+	}
+	if cfg.Autonomous == nil {
+		t.Fatal("Autonomous is nil")
+	}
+	rc := cfg.Autonomous.Repositories["nightgauge/other-repo"]
+	if rc == nil {
+		t.Fatal("repositories[\"nightgauge/other-repo\"] is nil")
+	}
+	if rc.ProjectNumber != 6 {
+		t.Errorf("ProjectNumber = %d, want 6", rc.ProjectNumber)
+	}
+	if rc.Forge != "github" {
+		t.Errorf("Forge = %q, want github", rc.Forge)
+	}
+}
+
 // TestValidateForgeConfig_TokenAuthMissingEnv verifies that auth_method=token
 // without a token_env returns a validation error.
 func TestValidateForgeConfig_TokenAuthMissingEnv(t *testing.T) {
