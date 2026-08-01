@@ -65,6 +65,16 @@ export interface V4StageMetric {
   totalTokens: number;
   costUsd: number | null;
   success: boolean;
+  /**
+   * executionPath/modelEffort/modelReasoning mirror V2StageDetail's fields of
+   * the same name (internal/state/history.go) verbatim — read directly from
+   * `detail`, with NO fallback to `model_selection`/`tokens.adapter` (unlike
+   * `model` above). Absent provenance serializes as `null`, never borrows
+   * another field's value (#217).
+   */
+  executionPath: string | null;
+  modelEffort: string | null;
+  modelReasoning: string | null;
 }
 
 /** One completed pipeline run (matches ExecutionHistoryRunRecordV4). */
@@ -115,6 +125,11 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 
 function asFiniteNumber(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Truncated string, or null for a non-string/empty value — matches nonEmptyTruncatedPtr (Go). */
+function asNonEmptyString(v: unknown, max = 100): string | null {
+  return typeof v === "string" && v !== "" ? v.slice(0, max) : null;
 }
 
 function asNonNegInt(v: unknown): number {
@@ -221,6 +236,10 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
       // 'failed'/'error' are the only non-success terminal states the producer
       // writes; 'complete' and 'skipped' both count as success.
       success: status !== "failed" && status !== "error",
+      // Read directly from detail — no fallback to model_selection/tokens.adapter (#217).
+      executionPath: asNonEmptyString(detail["execution_path"]),
+      modelEffort: asNonEmptyString(detail["model_effort"]),
+      modelReasoning: asNonEmptyString(detail["model_reasoning"]),
     });
   }
   return out;
