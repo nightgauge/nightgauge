@@ -322,6 +322,33 @@ export class IssueQueueService implements vscode.Disposable {
     return items;
   }
 
+  /**
+   * Terminal counterpart to {@link dequeueIndependent}: clear the "processing"
+   * mark a dispatch put on an item once its run reaches a terminal state.
+   *
+   * #232/#246 stopped splicing dequeued items out of the Go queue so in-flight
+   * work stays visible to `queueStatusLocked()` and cloud sync — removal moved
+   * to a terminal `CompleteQueueItem` call. That call was wired only into Go's
+   * `Scheduler.runPipeline()`, which the extension never enters: it dequeues
+   * over IPC and runs the stages itself. Every autonomous run therefore left an
+   * item stuck at "processing", which the re-dispatch guard then treats as
+   * permanently in flight. See #254.
+   *
+   * `repo` is required and must be the value carried on the dequeued item
+   * (`QueueItem.repoName`). This is deliberately NOT {@link remove}: that
+   * matches on issue number alone and would delete a same-numbered item from
+   * another repository, or a *pending* re-queue of the same issue an operator
+   * added while the run was in flight.
+   *
+   * No local callback fires. `dequeueIndependent` already emitted
+   * `onItemRemoved` for this item at dispatch, and re-emitting it here would
+   * wrongly clear a pending re-queue that the Go side deliberately spares.
+   */
+  async complete(repo: string, issueNumber: number): Promise<void> {
+    const ipc = IpcClient.getInstance();
+    await ipc.queueComplete(repo, issueNumber);
+  }
+
   async remove(issueNumber: number): Promise<boolean> {
     const ipc = IpcClient.getInstance();
     await ipc.queueRemove(issueNumber);

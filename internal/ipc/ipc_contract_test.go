@@ -164,6 +164,7 @@ var contractTestedMethods = map[string]bool{
 	// Queue
 	"queue.add":                true,
 	"queue.clear":              true,
+	"queue.complete":           true,
 	"queue.dequeueIndependent": true,
 	"queue.enqueueEpic":        true,
 	"queue.list":               true,
@@ -733,6 +734,16 @@ func TestContract_Queue(t *testing.T) {
 	t.Run("queue.clear/registered", func(t *testing.T) {
 		id := h.sendRequest("queue.clear", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.clear")
+	})
+
+	// queue.complete is the terminal counterpart to queue.dequeueIndependent.
+	// The extension owns the run loop, so without this method reaching the
+	// scheduler every dispatched item stays "processing" forever (#254).
+	t.Run("queue.complete/registered", func(t *testing.T) {
+		id := h.sendRequest("queue.complete", map[string]interface{}{
+			"repo": "test-org/test-repo", "issueNumber": 42,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.complete")
 	})
 
 	// queue.enqueueEpic fetches sub-issues from GitHub → -32603 with fake token.

@@ -3163,6 +3163,19 @@ func (s *Server) registerMethods() {
 		return items, nil
 	}
 
+	//ipc:method queueComplete params:QueueCompleteParams result:void
+	s.methods["queue.complete"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueCompleteParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if s.scheduler == nil {
+			return nil, errors.New(errSchedulerNotConfigured)
+		}
+		s.scheduler.CompleteQueueItem(p.Repo, p.IssueNumber)
+		return map[string]string{"status": "ok"}, nil
+	}
+
 	//ipc:method queueEnqueueEpic params:QueueEnqueueEpicParams result:void
 	s.methods["queue.enqueueEpic"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p QueueEnqueueEpicParams

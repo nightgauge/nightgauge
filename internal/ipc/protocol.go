@@ -416,6 +416,21 @@ type QueueRemoveParams struct {
 	IssueNumber int `json:"issueNumber"`
 }
 
+// QueueCompleteParams are parameters for queue.complete — the terminal
+// counterpart to queue.dequeueIndependent.
+//
+// Repo is required and is not redundant with IssueNumber: completion must only
+// clear the item this run actually dequeued. queue.remove matches on issue
+// number alone, so in a multi-repo workspace it would happily delete a
+// same-numbered item belonging to a different repository, and it would delete a
+// *pending* re-queue of the same issue that arrived while the run was in
+// flight. queue.complete matches repo + number + status=="processing".
+type QueueCompleteParams struct {
+	// Repo is the "owner/name" identity carried on the dequeued item.
+	Repo        string `json:"repo"`
+	IssueNumber int    `json:"issueNumber"`
+}
+
 // QueueRunningRef identifies an in-flight pipeline by repo + issue number so
 // the scheduler can enforce per-repo concurrency caps when dequeuing.
 type QueueRunningRef struct {
