@@ -407,6 +407,10 @@ type Scheduler struct {
 	// Issue #317.
 	excludeLabels []string
 
+	// trustedAuthorAssociations mirrors SchedulerConfig.TrustedAuthorAssociations
+	// (#270) — used by PickNext's defense-in-depth author-trust filter.
+	trustedAuthorAssociations []string
+
 	// adapterExplicit mirrors SchedulerConfig.AdapterExplicit (#54).
 	adapterExplicit string
 	// runDefaultAdapter is the adapter the run started with — stages without
@@ -607,6 +611,10 @@ type SchedulerConfig struct {
 	// EnqueueEpic must never enqueue as sub-issues. Empty falls back to
 	// defaultExcludeLabels (["owner-action"]). Issue #317.
 	ExcludeLabels []string
+	// TrustedAuthorAssociations overrides the default trusted set
+	// (OWNER/MEMBER/COLLABORATOR) used by PickNext's author-trust
+	// defense-in-depth filter (#270). Empty → use the built-in default.
+	TrustedAuthorAssociations []string
 }
 
 // NewScheduler creates a board-driven scheduler.
@@ -626,32 +634,33 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 	excludeLabels := resolvedExcludeLabels(cfg.ExcludeLabels)
 
 	s := &Scheduler{
-		client:                   client,
-		boardSvc:                 gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
-		issueSvc:                 gh.NewIssueService(client),
-		epicSvc:                  gh.NewEpicService(client),
-		execMgr:                  execMgr,
-		stateSvc:                 state.NewBoardStateService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
-		owner:                    cfg.Owner,
-		projectNumber:            cfg.ProjectNumber,
-		workspaceRoot:            cfg.WorkspaceRoot,
-		stageRunner:              &ExecutionManagerRunner{execMgr: execMgr},
-		retryEngine:              NewRetryEngine(retryConfigForWorkspace(cfg.WorkspaceRoot)),
-		budgetEngine:             NewBudgetEnforcer(DefaultBudgetConfig()),
-		ralphEngine:              NewRalphLoopController(DefaultRalphConfig()),
-		stageGates:               defaultStageGatesFromEnv(),
-		maxPerRepo:               maxPerRepo,
-		repoConcurrencyOverrides: cfg.RepoConcurrencyOverrides,
-		repoRunning:              make(map[string]int),
-		budgetRetries:            make(map[string]int),
-		mergeLocks:               make(map[string]*sync.Mutex),
-		recorder:                 learning.NewRecorder(cfg.WorkspaceRoot),
-		onFailureStatus:          onFailureStatus,
-		excludeLabels:            excludeLabels,
-		adapterExplicit:          cfg.AdapterExplicit,
-		runDefaultAdapter:        cfg.Adapter,
-		prMergeRunner:            pmstages.NewDeterministicRunner(),
-		prCreateRunner:           NewDefaultPRCreateRunner(client),
+		client:                    client,
+		boardSvc:                  gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
+		issueSvc:                  gh.NewIssueService(client),
+		epicSvc:                   gh.NewEpicService(client),
+		execMgr:                   execMgr,
+		stateSvc:                  state.NewBoardStateService(client, cfg.Owner, cfg.ProjectNumber, cfg.OwnerType),
+		owner:                     cfg.Owner,
+		projectNumber:             cfg.ProjectNumber,
+		workspaceRoot:             cfg.WorkspaceRoot,
+		stageRunner:               &ExecutionManagerRunner{execMgr: execMgr},
+		retryEngine:               NewRetryEngine(retryConfigForWorkspace(cfg.WorkspaceRoot)),
+		budgetEngine:              NewBudgetEnforcer(DefaultBudgetConfig()),
+		ralphEngine:               NewRalphLoopController(DefaultRalphConfig()),
+		stageGates:                defaultStageGatesFromEnv(),
+		maxPerRepo:                maxPerRepo,
+		repoConcurrencyOverrides:  cfg.RepoConcurrencyOverrides,
+		repoRunning:               make(map[string]int),
+		budgetRetries:             make(map[string]int),
+		mergeLocks:                make(map[string]*sync.Mutex),
+		recorder:                  learning.NewRecorder(cfg.WorkspaceRoot),
+		onFailureStatus:           onFailureStatus,
+		excludeLabels:             excludeLabels,
+		trustedAuthorAssociations: cfg.TrustedAuthorAssociations,
+		adapterExplicit:           cfg.AdapterExplicit,
+		runDefaultAdapter:         cfg.Adapter,
+		prMergeRunner:             pmstages.NewDeterministicRunner(),
+		prCreateRunner:            NewDefaultPRCreateRunner(client),
 	}
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
 	// as the deterministic-first hooks so a recovery and a deterministic
@@ -1142,6 +1151,16 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	var candidates []types.BoardItem
 	for _, item := range items {
 		if item.IsPR {
+			continue
+		}
+
+		// Author-trust gate, defense-in-depth (#270): even if an item reached
+		// Ready by some other route (board auto-add, a mis-set status, a
+		// future code path), the final dispatch gate must still refuse an
+		// untrusted author. Deliberately redundant with the refinement and
+		// isTriagedAndUnblocked gates upstream.
+		if !isTrustedAuthor(item.AuthorAssociation, s.trustedAuthorAssociations) {
+			log.Printf("#%d: skipping — untrusted author (author_association=%q)", item.Number, item.AuthorAssociation)
 			continue
 		}
 

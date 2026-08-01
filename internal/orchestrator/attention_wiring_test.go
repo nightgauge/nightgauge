@@ -199,6 +199,45 @@ func TestProducerArchitectureApprovalEmitsApprove(t *testing.T) {
 	assertSteerSet(t, r)
 }
 
+// TestProducerUntrustedAuthorSkipEmitsApprove covers the review_required-
+// equivalent card for #270's author-trust gate: without it, an untrusted
+// author's issue silently disappears from autonomous consideration instead of
+// surfacing to a maintainer who can review and manually promote it.
+func TestProducerUntrustedAuthorSkipEmitsApprove(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "refinement")
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	r := reqs[0]
+	if r.Kind != attention.KindApprove {
+		t.Errorf("kind = %q, want approve", r.Kind)
+	}
+	promote := r.FindOption("promote")
+	if promote == nil || r.FindOption("leave") == nil {
+		t.Fatal("expected promote + leave options")
+	}
+	if promote.Verb != attention.VerbProjectSyncStatus {
+		t.Errorf("promote verb = %q, want %q", promote.Verb, attention.VerbProjectSyncStatus)
+	}
+	assertSteerSet(t, r)
+}
+
+// TestUntrustedAuthorSkipDedupesAcrossGates verifies that both gate sites
+// (refinement candidate selection and Backlog->Ready promotion) observing the
+// same issue update a single card rather than spawning duplicates.
+func TestUntrustedAuthorSkipDedupesAcrossGates(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "refinement")
+	as.raiseUntrustedAuthorSkip("octocat", "acme", 900, "Stranger's issue", "NONE", "triage-promotion")
+
+	if got := len(openRequests(t, as)); got != 1 {
+		t.Fatalf("got %d requests after both gates observed the same issue, want 1", got)
+	}
+}
+
 // TestArchitectureApprovalReHaltNeverGrowsTheInbox is the shape that matters in
 // production: the gate re-fires on every dispatch attempt, and the operator must
 // still end up with exactly one card.

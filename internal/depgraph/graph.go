@@ -32,6 +32,10 @@ type Node struct {
 	Labels      []string `json:"labels"`
 	EpicNumber  int      `json:"epicNumber,omitempty"` // parent epic if sub-issue
 	Weight      int      `json:"weight"`               // size weight for critical path
+	// AuthorAssociation is the issue author's relationship to the repo
+	// (OWNER, MEMBER, COLLABORATOR, ...). Used by the autonomous pipeline's
+	// author-trust gate (#270) — empty/unknown values are untrusted.
+	AuthorAssociation string `json:"authorAssociation,omitempty"`
 }
 
 // ID returns the NodeID for this node.

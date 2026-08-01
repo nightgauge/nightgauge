@@ -44,5 +44,6 @@
       "state": "OPEN",
       "repo": "nightgauge/nightgauge"
     }
-  ]
+  ],
+  "authorAssociation": "OWNER"
 }

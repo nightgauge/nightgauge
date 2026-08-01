@@ -51,6 +51,12 @@ type BoardItem struct {
 	// Blocking relationships (GitHub native)
 	BlockedBy []BlockingRef `json:"blockedBy,omitempty"`
 	Blocking  []BlockingRef `json:"blocking,omitempty"`
+
+	// AuthorAssociation is the issue author's relationship to the repo
+	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR,
+	// FIRST_TIMER, NONE, MANNEQUIN). Used by the autonomous pipeline's
+	// author-trust gate (#270) — empty/unknown values are untrusted.
+	AuthorAssociation string `json:"authorAssociation,omitempty"`
 }
 
 // Issue represents a GitHub issue with sub-issue and blocking relationships.
