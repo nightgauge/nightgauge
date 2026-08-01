@@ -60,6 +60,13 @@
 #
 # @see Issue #3234 — Stop hook hard-fails on missing binary in worktree mode.
 # @see Issue #3262 — Residual stop-hook-error sources after PR #3234.
+#
+# Parity contract (#277): internal/doctor/binary_resolve.go's ResolveBinary()
+# is the canonical Go-side implementation of this same cascade (used by
+# `nightgauge doctor`'s binary self-check), and
+# internal/doctor/binary_resolve_test.go pins the five filesystem-based steps
+# below against this file's resolution order. If you change a step here,
+# update binary_resolve.go and its parity test in the same PR.
 
 NIGHTGAUGE_HOOK_BLOCKING="${NIGHTGAUGE_HOOK_BLOCKING:-false}"
 NIGHTGAUGE_HOOK_SILENT="${NIGHTGAUGE_HOOK_SILENT:-true}"

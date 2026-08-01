@@ -76,6 +76,41 @@ ports. An adapter with its model env set but no listening server now reports
 `ok: false` with remediation — previously it could report healthy with no
 server running at all.
 
+### Binary self-check cascade (#277)
+
+The `binary` check in the default (non-adapter) `nightgauge doctor` output
+reports whether the `nightgauge` binary itself is resolvable, via a
+six-step cascade (mirrors `claude-plugins/nightgauge/hooks/lib/guard.sh`):
+
+1. `$NIGHTGAUGE_BIN` (only when it points at an executable file)
+2. `PATH` (`exec.LookPath("nightgauge")`)
+3. `<repo-root>/bin/nightgauge` (`git rev-parse --show-toplevel`)
+4. `<canonical-repo-root>/bin/nightgauge` (`git rev-parse --git-common-dir`,
+   for worktree checkouts)
+5. `~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
+6. `~/go/bin/nightgauge`
+
+This is implemented once, in Go, at `internal/doctor/binary_resolve.go`
+(`ResolveBinary`), and is the canonical implementation the cascade is
+specified against; `internal/doctor/binary_resolve_test.go` pins
+`guard.sh`'s resolution order against it for the five filesystem-based
+steps, so the two cannot silently drift.
+
+The `binary` check is **warning-only** — an unresolved binary contributes
+to `warnings` and populates `install_instructions`, but never sets
+`exit_code` to `2`. A missing binary can only be observed by running
+`doctor` in the first place, so it cannot be a hard-required check. An
+extension-only install (binary resolvable via step 5 but never on `PATH`)
+reports `checks.binary.ok == true` with a `Detail` naming the resolving
+step (e.g. `"... (resolved via vscode_extension)"`), not a false "not
+found".
+
+`DoctorResult.FailedChecks` (`failed_checks` in JSON) lists every check
+name that contributed a required failure (`exit_code == 2`), in the order
+added — e.g. `["github_auth"]`. `skills/_shared/PREFLIGHT.md`'s exit-2
+branch reads this field to print the failing check name(s) alongside
+`.errors[]`, instead of leaving the stage agent to guess which check broke.
+
 ## Agentic capability gate (#57)
 
 Every adapter declares whether it drives a real agentic tool loop

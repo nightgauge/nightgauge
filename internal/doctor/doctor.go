@@ -26,6 +26,7 @@ type DoctorResult struct {
 	Checks              map[string]CheckItem `json:"checks"`                         // per-check results keyed by check name
 	Warnings            []string             `json:"warnings"`                       // non-blocking issues
 	Errors              []string             `json:"errors"`                         // blocking issues (ExitCode 2)
+	FailedChecks        []string             `json:"failed_checks,omitempty"`        // check names that contributed to hasRequiredFailure, in order added
 	InstallInstructions string               `json:"install_instructions,omitempty"` // populated when binary check fails
 	// Adapters is the per-adapter health section (Issue #4031), populated only
 	// when the caller requests specific adapters (e.g. `doctor --adapters
@@ -106,6 +107,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		result.Checks["rate_limit"] = CheckItem{OK: false, Error: "skipped: no authenticated client"}
 		errors = append(errors, "GitHub authentication failed — set GITHUB_TOKEN or run `gh auth login`")
 		hasRequiredFailure = true
+		result.FailedChecks = append(result.FailedChecks, "github_auth")
 	} else {
 		scopeInfo, err := client.CheckTokenScopes(ctx)
 		if err != nil {
@@ -114,6 +116,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 			result.Checks["scopes"] = CheckItem{OK: false, Error: "skipped: auth check failed"}
 			errors = append(errors, fmt.Sprintf("GitHub token check failed: %s", err.Error()))
 			hasRequiredFailure = true
+			result.FailedChecks = append(result.FailedChecks, "github_auth")
 		} else {
 			result.Checks["github_auth"] = CheckItem{OK: true, Detail: fmt.Sprintf("authenticated as %s", scopeInfo.Login)}
 
@@ -122,6 +125,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				result.Checks["api_user"] = CheckItem{OK: false, Error: "GET /user returned empty login"}
 				errors = append(errors, "GitHub API user check failed: empty login")
 				hasRequiredFailure = true
+				result.FailedChecks = append(result.FailedChecks, "api_user")
 			} else {
 				result.Checks["api_user"] = CheckItem{OK: true, Detail: scopeInfo.Login}
 			}
@@ -132,6 +136,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				result.Checks["scopes"] = CheckItem{OK: false, Error: scopeErr}
 				errors = append(errors, scopeErr)
 				hasRequiredFailure = true
+				result.FailedChecks = append(result.FailedChecks, "scopes")
 			} else {
 				result.Checks["scopes"] = CheckItem{OK: true, Detail: strings.Join(scopeInfo.Scopes, ", ")}
 				if !containsScope(scopeInfo.Scopes, "read:org") {
@@ -174,6 +179,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 			result.Checks["project"] = CheckItem{OK: false, Error: projectErr}
 			errors = append(errors, projectErr)
 			hasRequiredFailure = true
+			result.FailedChecks = append(result.FailedChecks, "project")
 		} else {
 			result.Checks["project"] = CheckItem{OK: true, Detail: fmt.Sprintf("project %d (owner: %s)", cfg.ProjectNumber, cfg.Owner)}
 		}
@@ -194,6 +200,7 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 			}
 			errors = append(errors, mismatches...)
 			hasRequiredFailure = true
+			result.FailedChecks = append(result.FailedChecks, "project_mapping")
 		} else if mmErr == nil {
 			result.Checks["project_mapping"] = CheckItem{OK: true, Detail: "workspace manifest and runtime config agree"}
 		}
@@ -267,13 +274,19 @@ func containsScope(scopes []string, expected string) bool {
 	return false
 }
 
-// checkBinary reports whether the `nightgauge` binary is reachable via PATH.
+// checkBinary reports whether the `nightgauge` binary is resolvable via the
+// six-step cascade documented in ResolveBinary (mirroring guard.sh):
+// $NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension
+// bundle, or ~/go/bin. This check is warning-only — never a required
+// failure — since discovering the binary is what this command itself is;
+// a missing binary can only be observed by the environment that ran `doctor`
+// in the first place.
 func checkBinary() CheckItem {
-	path, err := exec.LookPath("nightgauge")
-	if err != nil {
-		return CheckItem{OK: false, Error: "nightgauge not found in PATH"}
+	resolved := ResolveBinary()
+	if resolved.Path == "" {
+		return CheckItem{OK: false, Error: "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin"}
 	}
-	return CheckItem{OK: true, Detail: path}
+	return CheckItem{OK: true, Detail: fmt.Sprintf("%s (resolved via %s)", resolved.Path, resolved.Step)}
 }
 
 // checkGH reports whether the `gh` CLI is reachable via PATH.
