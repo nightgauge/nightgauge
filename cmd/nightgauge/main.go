@@ -4580,6 +4580,19 @@ func serveCmd() *cobra.Command {
 
 			// Set up signal handling for graceful shutdown
 			ctx, cancel := context.WithCancel(context.Background())
+
+			// Additive workspace-scoped Unix socket transport (#263): lets a
+			// standalone terminal `nightgauge` CLI process (which has no
+			// access to the private stdio pipe below) reach this same
+			// daemon for one-shot request/response calls like
+			// `attention resolve`. A listen failure is logged, never
+			// fatal — the existing stdio daemon must keep working even if
+			// the socket cannot bind (e.g. a read-only .nightgauge mount).
+			go func() {
+				if err := server.ListenSocket(ctx, ipc.DaemonSocketPath(workspaceRoot)); err != nil {
+					log.Printf("ipc: socket listener exited: %v", err)
+				}
+			}()
 			defer cancel()
 
 			// Startup orphan recovery: reset any board items left stuck "In

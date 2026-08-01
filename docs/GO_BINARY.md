@@ -1142,6 +1142,33 @@ nightgauge attention sweep --repo octocat/acme-web --json
 nightgauge attention sweep --repo octocat/acme-web --strict
 ```
 
+**CLI `resolve`/`show` reach a co-located daemon over a workspace-scoped Unix
+socket when one is running (#263).** `nightgauge serve` additionally listens
+on `.nightgauge/daemon.sock` (mode `0600`, workspace-root-scoped — matching
+every other local `.nightgauge/` state file) alongside its existing stdio
+JSON-RPC loop for the VSCode extension. A standalone terminal `attention
+resolve` first dials that socket with a short (300ms) timeout:
+
+- **Daemon reachable**: the call runs through the daemon's full
+  `Server.ExecuteVerb`, the same path the VSCode extension's click-to-resolve
+  already uses — all registered verbs, not just the CLI's local subset.
+- **Daemon unreachable**: falls back to the CLI's local, file-based
+  `cliVerbExecutor`, which executes only `noop`, `budget.raiseCeiling`, and
+  `run.retryWithEscalation` directly. Any other verb fails with a
+  non-retryable error naming the missing daemon and the exact fix
+  (`nightgauge serve`) — retrying the identical command without starting a
+  daemon first cannot succeed.
+
+`attention show` mirrors this: each option is annotated
+`— unavailable from this CLI: start the daemon with 'nightgauge serve' to
+enable` when it binds a verb outside the CLI's local subset AND no daemon is
+reachable. `internal/attention.IsCLIExecutableVerb` names that local subset.
+
+Out of scope: cross-machine/cross-workspace daemon discovery, push/subscribe
+traffic over the socket (live events stay stdio-only, extension-only), and
+Windows support (`net.Listen("unix", ...)` is POSIX-only — Windows keeps
+today's "no daemon reachable" fallback, no regression).
+
 **`ack` and `mute` are lifecycle operations, not registry verbs.** Resolving is
 terminal, so binding mute to an option would end a card whose condition is still
 true. A muted card stays in the inbox at its severity — muting is not resolving,
