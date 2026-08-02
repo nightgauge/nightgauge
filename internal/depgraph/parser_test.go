@@ -586,9 +586,9 @@ func TestStructuredSectionMarkerGating(t *testing.T) {
 			wantEdge: false,
 		},
 		{
-			name:     "unmarked entry does not gate (no status marker, no edge)",
+			name:     "unmarked entry gates by default (#132 — no marker is not opt-out)",
 			entry:    "- acme/platform#535 — plain entry",
-			wantEdge: false,
+			wantEdge: true,
 		},
 		{
 			name:     "textual deferred token does not gate",
@@ -805,5 +805,123 @@ func TestParseRefsCarrySourceLine(t *testing.T) {
 	}
 	if refs[0].SourceLine != "- ⚠️ acme/platform#209 — store distribution" {
 		t.Errorf("SourceLine = %q, want the originating body line", refs[0].SourceLine)
+	}
+}
+
+// --- #132: unmarked "## Cross-Repo Dependencies" entries gate by default ---
+
+// TestUnmarkedEntryGates pins the corrected behavior: a bare, unmarked entry
+// under "## Cross-Repo Dependencies" is a real blocker to a human author, so
+// it must produce a gating edge (Verified false, since no ✅ was written) —
+// the opposite of the behavior #126 pinned.
+func TestUnmarkedEntryGates(t *testing.T) {
+	body := "## Cross-Repo Dependencies\n\n- acme/platform#535 — really blocks us\n"
+	refs := ParseCrossRepoRefs(body, nil)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
+	}
+	if refs[0].Repo != "acme/platform" || refs[0].Number != 535 {
+		t.Errorf("expected acme/platform#535, got %s#%d", refs[0].Repo, refs[0].Number)
+	}
+	if refs[0].Verified {
+		t.Errorf("Verified = true, want false for an unmarked entry")
+	}
+}
+
+// TestUnmarkedEntryWithNonGatingTokenDoesNotGate confirms an unmarked entry
+// can still opt out of gating via ⏸️ or a textual "deferred"/"not-gating"
+// token — isNonGatingLine's precedence is unchanged by the marker-optional
+// regex.
+func TestUnmarkedEntryWithNonGatingTokenDoesNotGate(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{"pause marker", "- ⏸️ acme/platform#535 — store distribution"},
+		{"deferred token", "- acme/platform#535 — deferred to a later release"},
+		{"not-gating token", "- acme/platform#535 — informational, not-gating"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body := "## Cross-Repo Dependencies\n\n" + tc.entry + "\n"
+			refs := ParseCrossRepoRefs(body, nil)
+			if len(refs) != 0 {
+				t.Fatalf("entry %q must produce NO dependency edge, got %d: %+v",
+					tc.entry, len(refs), refs)
+			}
+		})
+	}
+}
+
+// TestUnmarkedEntryMixedWithMarkedEntries is the #132 sibling of
+// TestStructuredSectionMixedMarkers: a section combining unmarked, marked-
+// gating, and marked-suppressed entries must produce edges for every gating
+// entry (unmarked included) and dedup/order without dropping any.
+func TestUnmarkedEntryMixedWithMarkedEntries(t *testing.T) {
+	body := `## Cross-Repo Dependencies
+
+- acme/platform#209 — plain entry, really blocks us
+- ⚠️ acme/mobile#77 — watch this
+- ⏸️ acme/dashboard#12 — deferred, out of scope
+- ✅ acme/platform#209 — duplicate, already listed above
+`
+	refs := ParseCrossRepoRefs(body, nil)
+	got := map[int]bool{}
+	for _, r := range refs {
+		got[r.Number] = true
+	}
+	if !got[209] {
+		t.Errorf("unmarked entry #209 must produce a dependency edge, got %+v", refs)
+	}
+	if !got[77] {
+		t.Errorf("⚠️ entry #77 must remain a dependency edge, got %+v", refs)
+	}
+	if got[12] {
+		t.Errorf("⏸️ entry #12 must NOT produce a dependency edge, got %+v", refs)
+	}
+	// #209 appears twice (unmarked, then ✅) — dedup keeps only the first.
+	count := 0
+	for _, r := range refs {
+		if r.Number == 209 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected #209 to be deduplicated to a single ref, got %d: %+v", count, refs)
+	}
+	for _, r := range refs {
+		if r.Number == 209 && r.Verified {
+			t.Errorf("first-seen #209 ref must keep Verified=false (unmarked), got %+v", r)
+		}
+	}
+}
+
+// TestMarkedEntriesUnaffectedByOptionalMarkerGroup is a regression guard: the
+// marker group in reStructuredEntry became optional (`*` instead of `+`) so
+// unmarked entries would match, but every previously-passing marked-entry
+// case must parse byte-for-byte identically.
+func TestMarkedEntriesUnaffectedByOptionalMarkerGroup(t *testing.T) {
+	tests := []struct {
+		marker       string
+		wantVerified bool
+	}{
+		{"✅", true},
+		{"❌", false},
+		{"⚠️", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.marker, func(t *testing.T) {
+			body := "## Cross-Repo Dependencies\n\n- " + tc.marker + " acme/platform#535 — description\n"
+			refs := ParseCrossRepoRefs(body, nil)
+			if len(refs) != 1 {
+				t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
+			}
+			if refs[0].Repo != "acme/platform" || refs[0].Number != 535 {
+				t.Errorf("expected acme/platform#535, got %s#%d", refs[0].Repo, refs[0].Number)
+			}
+			if refs[0].Verified != tc.wantVerified {
+				t.Errorf("Verified = %v, want %v", refs[0].Verified, tc.wantVerified)
+			}
+		})
 	}
 }

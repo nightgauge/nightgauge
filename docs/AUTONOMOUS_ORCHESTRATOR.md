@@ -536,14 +536,20 @@ scheduler edge.** Entries in this section are parsed into real dependency
 edges, and an open blocker stops the issue (and, via the epic cascade below,
 every sub-issue of an epic that carries it) from dispatching.
 
-| Marker                         | Becomes an edge? | Meaning                                                                                                                                                        |
-| ------------------------------ | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `✅`                           | **Yes**          | Verified as satisfied (sets `Verified`); still an edge until the issue closes.                                                                                 |
-| `❌`                           | **Yes**          | Known-unsatisfied dependency.                                                                                                                                  |
-| `⚠️`                           | **Yes**          | "Watch this" — a real dependency with caveats, deliberately still gating.                                                                                      |
-| `⏸️`                           | **No**           | Deferred / recorded for context. Documentation, not a dependency. Unconditional — see precedence below.                                                        |
-| `deferred` / `not-gating` text | **No\***         | Same as `⏸️`, for authors writing prose instead of a marker. **\*Except** on a line that also declares `Blocked by …` / `Depends on …` — see precedence below. |
-| _(no marker)_                  | **No**           | The entry regex requires a status marker; unmarked lines are ignored.                                                                                          |
+| Marker                         | Becomes an edge? | Meaning                                                                                                                                                                                                                                    |
+| ------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `✅`                           | **Yes**          | Verified as satisfied (sets `Verified`); still an edge until the issue closes.                                                                                                                                                             |
+| `❌`                           | **Yes**          | Known-unsatisfied dependency.                                                                                                                                                                                                              |
+| `⚠️`                           | **Yes**          | "Watch this" — a real dependency with caveats, deliberately still gating.                                                                                                                                                                  |
+| `⏸️`                           | **No**           | Deferred / recorded for context. Documentation, not a dependency. Unconditional — see precedence below.                                                                                                                                    |
+| `deferred` / `not-gating` text | **No\***         | Same as `⏸️`, for authors writing prose instead of a marker. **\*Except** on a line that also declares `Blocked by …` / `Depends on …` — see precedence below.                                                                             |
+| _(no marker)_                  | **Yes**          | A plain, unmarked entry reads as a real blocker to a human author, so it gates by default ([#132](https://github.com/nightgauge/nightgauge/issues/132)). Not `Verified` (no `✅`). Use `⏸️` or a `deferred`/`not-gating` token to opt out. |
+
+**Rollout note ([#132](https://github.com/nightgauge/nightgauge/issues/132)):**
+existing unmarked entries begin gating on upgrade — no manual edit is needed to
+opt in, since "no marker" now matches what the section header already implies.
+Add `⏸️` or a `deferred`/`not-gating` token to any existing entry you want to
+keep as documentation-only.
 
 #### Precedence when signals conflict
 
