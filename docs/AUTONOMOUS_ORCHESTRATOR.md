@@ -292,6 +292,74 @@ the actual trigger).
 See [CONFIGURATION.md](CONFIGURATION.md#autonomous-scheduler-configuration) for
 full details on each option.
 
+### Scan Cadence (Rate-Aware) — #172
+
+The active scan cadence (default base: 30s) determines how often the
+scheduler re-scans boards and rebuilds the dependency graph. A fixed cadence,
+multiplied by per-cycle GraphQL cost, can exceed the GitHub GraphQL hourly
+budget on a busy multi-repo workspace — measured at ~101 points/min (~6,065/hr
+against a 5,000/hr budget) on a 6-repo workspace with one issue in flight.
+When that happens, `hasDispatchHeadroom()` routinely defers dispatch with a
+`"github-rate-limit-headroom"` rejection until the hourly window resets —
+invisible in every place an operator would normally look (no failed run, no
+error, board looks correct).
+
+Rate-aware cadence closes this gap by deriving the effective scan interval
+from three already-available, zero-extra-cost inputs, all sourced from the
+shared GitHub rate-limit tracker (populated from `X-RateLimit-*` response
+headers — no new GraphQL calls are introduced):
+
+1. **Remaining quota and time-to-reset** — `gitHubQuotaSnapshot()`.
+2. **Measured per-cycle GraphQL cost** — an EWMA (`AvgCycleGraphQLCost`,
+   smoothing factor `graphQLCostEWMAAlpha = 0.3`) updated by diffing
+   `remaining` immediately before and after each cycle
+   (`runCycleWithCostTracking`). A window reset mid-cycle (remaining
+   increases) is detected and discarded rather than corrupting the average.
+3. **`dispatchHeadroomFloor()`** — the same margin the hard per-dispatch gate
+   already protects, reused here as the floor input so pacing and the gate
+   agree on what "safe" means.
+
+`scanCadence()` calls the pure function `rateAwareCadence(base, remaining,
+limit, resetAt, avgCost, floor, ceiling)`, which **fails open to `base`**
+whenever the inputs are missing or stale (cold start, long idle gap, `avgCost
+<= 0`, `remaining <= 0`, or `resetAt` not in the future) — a missing/stale
+quota signal never makes cadence worse than the fixed-cadence behavior it
+replaces. When headroom is projected to run out before the window resets, the
+interval stretches, clamped to `MaxScanInterval` (default 10 minutes — an
+independent ceiling from `IdleScanInterval`'s 5-minute default, since
+rate-aware slowdown and idle backoff are different reasons to wait). Any
+candidate appearance, dispatch, or rescan still snaps cadence back to base
+immediately via the existing rescan-trigger path, so responsiveness is
+unaffected whenever there is real work and real headroom. Rate-aware
+stretching and idle-backoff stretching compose via "the longer interval
+wins" — a workspace that is both idle and rate-pressured backs off to
+whichever interval is larger.
+
+**Config knobs**: `RateAwareCadence` (default `true`) and `MaxScanInterval`
+(default `10m`) are `AutonomousConfig` fields with safe code-level defaults
+(`DefaultAutonomousConfig()`); they are not yet exposed as `config.yaml` keys
+— follow up as a separate issue if operator-level tuning is wanted.
+
+#### Rate-Limit Pressure Signal (`RateLimitPressureActive`)
+
+A `"github-rate-limit-headroom"` dispatch rejection is a scheduler-level
+event — no pipeline run happens, so it has no natural anomaly surface (the
+per-run `gates/anomaly.go` mechanism attaches to
+`V2StageDetail.Anomalies` on individual runs, and there is no run here — see
+ADR-002 in the issue's knowledge base). Instead, the scheduler tracks a
+rolling window of the last `rateLimitPressureWindow` (20) cycles and sets
+`RateLimitPressureActive = true` once rejections occur in at least
+`rateLimitPressureThreshold` (25%) of them, clearing it once the window is
+clean again. Only the true→false / false→true transition is logged (at
+`WARN`), not every cycle, so it reads as an event rather than noise.
+
+`RateLimitPressureActive` and `AvgCycleGraphQLCost` /
+`LastCycleGraphQLCost` are surfaced alongside the existing
+`LastRejectionReasons` wherever autonomous state is already exposed
+(`nightgauge autonomous status --json`, `.nightgauge/autonomous/state.json`),
+so an operator or a dashboard can treat sustained rate-limit pressure as an
+anomaly rather than a routine, invisible occurrence.
+
 ### 6. Safety Rails
 
 Five safety rails protect against runaway execution:

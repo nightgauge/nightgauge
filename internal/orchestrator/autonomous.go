@@ -47,6 +47,19 @@ type AutonomousConfig struct {
 	// before the loop widens to IdleScanInterval. Default 4.
 	IdleCyclesBeforeBackoff int
 
+	// RateAwareCadence enables stretching the active scan interval based on
+	// measured per-cycle GraphQL cost and remaining rate-limit headroom, so a
+	// fixed cadence can't multiply past the hourly budget (#172). Default
+	// true. This is orthogonal to IdleScanInterval — idle backoff triggers on
+	// no-work, rate-aware cadence triggers on GraphQL pressure; the two
+	// compose via "longer interval wins" (see scanCadence()).
+	RateAwareCadence bool
+	// MaxScanInterval is the ceiling rate-aware cadence stretches to under
+	// sustained GraphQL pressure. Default 10 minutes — independent of
+	// IdleScanInterval's 5-minute default since they represent different
+	// reasons to wait.
+	MaxScanInterval time.Duration
+
 	// Refinement fields
 	RefinementEnabled       bool          // default: true — enable refinement scan loop
 	RefinementInterval      time.Duration // default: 60s (min 30s) — interval between refinement scans
@@ -163,6 +176,8 @@ func DefaultAutonomousConfig() AutonomousConfig {
 		// Snaps back to base on any rescan trigger or candidate appearance.
 		IdleScanInterval:          5 * time.Minute,
 		IdleCyclesBeforeBackoff:   4,
+		RateAwareCadence:          true,
+		MaxScanInterval:           10 * time.Minute,
 		GraphCacheTTL:             5 * time.Minute,
 		StuckEpicDetectionEnabled: true,
 		StuckEpicReAlertAfter:     6 * time.Hour,
@@ -250,6 +265,24 @@ type AutonomousState struct {
 	LastNodeCount        int            `json:"lastNodeCount,omitempty"`
 	LastCandidateCount   int            `json:"lastCandidateCount,omitempty"`
 	LastRejectionReasons map[string]int `json:"lastRejectionReasons,omitempty"`
+
+	// GraphQL cost tracking for rate-aware cadence (#172). LastCycleGraphQLCost
+	// is the most recent cycle's measured cost (remaining diffed before/after
+	// runCycle); AvgCycleGraphQLCost is an EWMA (alpha=graphQLCostEWMAAlpha)
+	// used by rateAwareCadence() to project consumption at the current cadence.
+	LastCycleGraphQLCost int     `json:"lastCycleGraphQLCost,omitempty"`
+	AvgCycleGraphQLCost  float64 `json:"avgCycleGraphQLCost,omitempty"`
+
+	// RateLimitPressureActive is true when "github-rate-limit-headroom"
+	// dispatch rejections occurred in at least rateLimitPressureThreshold of
+	// the last rateLimitPressureWindow cycles (#172, ADR-002) — a scheduler-
+	// local anomaly signal so sustained pressure surfaces as an anomaly
+	// instead of a routine, invisible occurrence. rejectionWindow is the
+	// rolling window itself (true = cycle ended with the rejection); not
+	// persisted to JSON — reconstructed from behavior, not needed across
+	// restarts.
+	RateLimitPressureActive bool   `json:"rateLimitPressureActive,omitempty"`
+	rejectionWindow         []bool `json:"-"`
 
 	// Why the scheduler is currently paused/safety-tripped. Recorded on
 	// every Pause()/safety-trip transition so future investigations don't
@@ -1085,7 +1118,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	as.recoverOrphanedRunning(ctx)
 
 	// Initial scan
-	as.runCycle(ctx)
+	as.runCycleWithCostTracking(ctx)
 	consecutiveIdleCycles = as.updateIdleCounterAfterCycle(consecutiveIdleCycles)
 
 	resetTimer := func(d time.Duration) {
@@ -1113,11 +1146,11 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 			// Immediate re-scan triggered by pipeline completion or by an
 			// external caller via TriggerRescan() (#3023 phase 1).
 			consecutiveIdleCycles = 0 // explicit signal — reset cadence
-			as.runCycle(ctx)
+			as.runCycleWithCostTracking(ctx)
 			consecutiveIdleCycles = as.updateIdleCounterAfterCycle(consecutiveIdleCycles)
 			resetTimer(as.scanCadence())
 		case <-timer.C:
-			as.runCycle(ctx)
+			as.runCycleWithCostTracking(ctx)
 			consecutiveIdleCycles = as.updateIdleCounterAfterCycle(consecutiveIdleCycles)
 			next := as.scanCadence()
 			if consecutiveIdleCycles >= as.idleCyclesBeforeBackoff() && as.config.IdleScanInterval > next {
@@ -1128,14 +1161,76 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	}
 }
 
+// graphQLCostEWMAAlpha is the smoothing factor for AvgCycleGraphQLCost.
+// Kept low enough that a single noisy cycle (e.g. a fresh graph build
+// overlapping a concurrent dispatch's GitHub calls) can't swing cadence
+// wildly, but high enough that the average adapts to a real cost change
+// within a handful of cycles.
+const graphQLCostEWMAAlpha = 0.3
+
+// maxScanIntervalFloor is the sane minimum applied to MaxScanInterval,
+// matching scanCadence's own minimum so the rate-aware ceiling can never be
+// configured below the base cadence floor.
+const maxScanIntervalFloor = 5 * time.Second
+
 // scanCadence returns the current base scan interval, clamped to a sane
-// minimum (5s) so a misconfigured config can't wedge the CPU.
+// minimum (5s) so a misconfigured config can't wedge the CPU. When
+// RateAwareCadence is enabled (default), the base is then stretched by
+// rateAwareCadence() using the live GitHub rate-limit tracker snapshot and
+// the measured EWMA per-cycle GraphQL cost, so a fixed cadence can't
+// multiply past the hourly budget (#172).
 func (as *AutonomousScheduler) scanCadence() time.Duration {
 	d := as.config.ScanInterval
 	if d < 5*time.Second {
 		d = 30 * time.Second
 	}
-	return d
+	if !as.config.RateAwareCadence {
+		return d
+	}
+	ceiling := as.config.MaxScanInterval
+	if ceiling < maxScanIntervalFloor {
+		ceiling = 10 * time.Minute
+	}
+	remaining, limit, resetAt, ok := as.gitHubQuotaSnapshot()
+	if !ok {
+		return d
+	}
+	as.mu.Lock()
+	avgCost := as.state.AvgCycleGraphQLCost
+	as.mu.Unlock()
+	return rateAwareCadence(d, remaining, limit, resetAt, avgCost, dispatchHeadroomFloor(), ceiling)
+}
+
+// rateAwareCadence derives the effective active scan interval from measured
+// per-cycle GraphQL cost, remaining rate-limit headroom, and time-to-reset
+// (#172). It is a pure function so the pacing math is independently
+// testable without a live scheduler or GitHub client.
+//
+// Fails open to `base` whenever the inputs are missing or stale (avgCost <=
+// 0, remaining <= 0, or resetAt not in the future) — a cold-start or stale
+// signal must never make cadence worse than today's fixed behavior.
+// `floor` reuses dispatchHeadroomFloor() so pacing protects the same margin
+// the hard dispatch gate already protects.
+func rateAwareCadence(base time.Duration, remaining, limit int, resetAt time.Time, avgCost float64, floor int, ceiling time.Duration) time.Duration {
+	if avgCost <= 0 || remaining <= 0 || !resetAt.After(time.Now()) {
+		return base
+	}
+	usable := remaining - floor
+	if usable <= 0 {
+		return ceiling
+	}
+	allowedCycles := float64(usable) / avgCost
+	if allowedCycles < 1 {
+		return ceiling
+	}
+	needed := time.Duration(float64(time.Until(resetAt)) / allowedCycles)
+	if needed < base {
+		return base
+	}
+	if needed > ceiling {
+		return ceiling
+	}
+	return needed
 }
 
 // idleCyclesBeforeBackoff returns the configured idle threshold with a sane
@@ -1822,6 +1917,84 @@ func (as *AutonomousScheduler) Status() AutonomousState {
 		snapshot.Safety = &safetySnap
 	}
 	return snapshot
+}
+
+// rateLimitPressureWindow is the rolling window (in cycles) over which
+// RateLimitPressureActive is evaluated. rateLimitPressureThreshold is the
+// fraction of that window that must have ended in a
+// "github-rate-limit-headroom" rejection for pressure to be considered
+// active (#172). Named consts so the single-blip-does-not-trip behavior is
+// unit-tested and deliberate.
+const rateLimitPressureWindow = 20
+const rateLimitPressureThreshold = 0.25
+
+// runCycleWithCostTracking wraps runCycle with per-cycle GraphQL cost
+// measurement (#172). It snapshots the shared rate-limit tracker's
+// `remaining` immediately before and after the cycle — this is free (no
+// GraphQL call; the tracker is populated from response headers) — and feeds
+// the diff into an EWMA (AvgCycleGraphQLCost) that rateAwareCadence() uses to
+// project consumption at the current cadence.
+//
+// A window reset happening mid-cycle makes `remaining` increase, which would
+// read as negative cost; that sample is discarded rather than corrupting the
+// average. Cost measurement wraps the call site (not runCycle itself)
+// because runCycle has many early-return paths (quota cooldown, no slots,
+// safety trip) — measuring at the single caller-side entry/exit avoids
+// having to thread the snapshot through every one of them.
+func (as *AutonomousScheduler) runCycleWithCostTracking(ctx context.Context) {
+	before, _, _, beforeOK := as.gitHubQuotaSnapshot()
+
+	as.runCycle(ctx)
+
+	after, _, _, afterOK := as.gitHubQuotaSnapshot()
+
+	if beforeOK && afterOK {
+		cost := before - after
+		if cost >= 0 {
+			as.mu.Lock()
+			as.state.LastCycleGraphQLCost = cost
+			if as.state.AvgCycleGraphQLCost <= 0 {
+				as.state.AvgCycleGraphQLCost = float64(cost)
+			} else {
+				as.state.AvgCycleGraphQLCost = graphQLCostEWMAAlpha*float64(cost) +
+					(1-graphQLCostEWMAAlpha)*as.state.AvgCycleGraphQLCost
+			}
+			as.mu.Unlock()
+		}
+	}
+
+	as.updateRateLimitPressure()
+}
+
+// updateRateLimitPressure recomputes RateLimitPressureActive from the
+// rolling window of per-cycle "github-rate-limit-headroom" rejections
+// (#172, ADR-002). Logs only on the true/false transition edge so it reads
+// as an event, not per-cycle noise.
+func (as *AutonomousScheduler) updateRateLimitPressure() {
+	as.mu.Lock()
+	rejected := as.state.LastRejectionReasons["github-rate-limit-headroom"] > 0
+	as.state.rejectionWindow = append(as.state.rejectionWindow, rejected)
+	if len(as.state.rejectionWindow) > rateLimitPressureWindow {
+		as.state.rejectionWindow = as.state.rejectionWindow[len(as.state.rejectionWindow)-rateLimitPressureWindow:]
+	}
+	count := 0
+	for _, r := range as.state.rejectionWindow {
+		if r {
+			count++
+		}
+	}
+	fraction := float64(count) / float64(len(as.state.rejectionWindow))
+	wasActive := as.state.RateLimitPressureActive
+	nowActive := fraction >= rateLimitPressureThreshold
+	as.state.RateLimitPressureActive = nowActive
+	as.mu.Unlock()
+
+	if nowActive && !wasActive {
+		log.Printf("autonomous: RateLimitPressureActive=true — github-rate-limit-headroom rejected %d/%d recent cycles (>= %.0f%% threshold)",
+			count, len(as.state.rejectionWindow), rateLimitPressureThreshold*100)
+	} else if wasActive && !nowActive {
+		log.Printf("autonomous: RateLimitPressureActive=false — github-rate-limit-headroom rejections dropped below threshold")
+	}
 }
 
 // runCycle performs one scan-prioritize-dispatch cycle.
