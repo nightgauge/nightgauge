@@ -52,14 +52,16 @@ var (
 
 	// Structured section entries:
 	// "- ✅ platform #535 — description" / "- ❌ flutter #127" / "- ⚠️ angular #152"
+	// / "- owner/repo#535 — description" (unmarked, gates by default — #132)
 	//
 	// ⏸️ is deliberately part of the marker class even though a ⏸️ entry never
 	// becomes an edge: recognizing the marker and then classifying it as
 	// non-gating (see isNonGatingLine) makes the outcome an intentional
 	// decision rather than an accident of which runes the class happens to
-	// contain. See docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
+	// contain. The marker group is optional so a bare, unmarked entry also
+	// matches — see docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
 	reStructuredEntry = regexp.MustCompile(
-		`(?m)^[ \t]*-\s*([✅❌⚠️⏸]+)\s+([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+		`(?m)^[ \t]*-\s*([✅❌⚠️⏸]*)\s*([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
 	)
 
 	// Textual tokens that declare a line to be documentation rather than a
@@ -288,6 +290,9 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 			if isNonGatingLine(line) {
 				continue
 			}
+			// status may be "" for an unmarked entry (marker group is
+			// optional). An empty status is treated as gating-unverified,
+			// same as ❌/⚠️ — only an explicit ✅ marks Verified true (#132).
 			status := sectionBody[m[2]:m[3]]
 			repo := resolveAlias(sectionBody[m[4]:m[5]], repoAliases)
 			num, _ := strconv.Atoi(sectionBody[m[6]:m[7]])
