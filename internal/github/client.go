@@ -590,12 +590,19 @@ func ValidateTokenScopes(ctx context.Context, token string) {
 		return
 	}
 
-	requiredScopes := []string{"repo", "project", "read:org"}
-	missing := make([]string, 0, len(requiredScopes))
+	actualScopes := make([]string, 0, 4)
+	for _, scope := range strings.Split(scopeHeader, ",") {
+		if s := strings.TrimSpace(scope); s != "" {
+			actualScopes = append(actualScopes, s)
+		}
+	}
+
+	requiredScopes := []string{"repo", "project"}
+	missing := make([]string, 0, len(requiredScopes)+1)
 	for _, required := range requiredScopes {
 		found := false
-		for _, scope := range strings.Split(scopeHeader, ",") {
-			if strings.TrimSpace(scope) == required {
+		for _, scope := range actualScopes {
+			if scope == required {
 				found = true
 				break
 			}
@@ -603,6 +610,9 @@ func ValidateTokenScopes(ctx context.Context, token string) {
 		if !found {
 			missing = append(missing, required)
 		}
+	}
+	if !HasOrgReadAccess(actualScopes) {
+		missing = append(missing, "read:org")
 	}
 	if len(missing) > 0 {
 		fmt.Fprintf(os.Stderr, "warning: GitHub token may be missing required scopes: %s (have: %s)\n",

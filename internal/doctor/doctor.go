@@ -44,6 +44,16 @@ type CheckItem struct {
 	Error  string `json:"error,omitempty"`  // human-readable failure reason
 }
 
+// readOrgWarning returns the read:org advisory warning when scopes lacks
+// organization read access (honoring the admin:org/write:org hierarchy via
+// gh.HasOrgReadAccess), or "" when access is already satisfied.
+func readOrgWarning(scopes []string) string {
+	if gh.HasOrgReadAccess(scopes) {
+		return ""
+	}
+	return "GitHub token does not include read:org; private organisation membership discovery may be incomplete"
+}
+
 // rateLimitCritical is the remaining-requests threshold below which the rate limit check
 // reports OK=false and emits a warning. Operations will likely fail at this level.
 const rateLimitCritical = 100
@@ -139,8 +149,8 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 				result.FailedChecks = append(result.FailedChecks, "scopes")
 			} else {
 				result.Checks["scopes"] = CheckItem{OK: true, Detail: strings.Join(scopeInfo.Scopes, ", ")}
-				if !containsScope(scopeInfo.Scopes, "read:org") {
-					warnings = append(warnings, "GitHub token does not include read:org; private organisation membership discovery may be incomplete")
+				if w := readOrgWarning(scopeInfo.Scopes); w != "" {
+					warnings = append(warnings, w)
 				}
 			}
 		}
@@ -263,15 +273,6 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	}
 
 	return result
-}
-
-func containsScope(scopes []string, expected string) bool {
-	for _, scope := range scopes {
-		if scope == expected {
-			return true
-		}
-	}
-	return false
 }
 
 // checkBinary reports whether the `nightgauge` binary is resolvable via the
