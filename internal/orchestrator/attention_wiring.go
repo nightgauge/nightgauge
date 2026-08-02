@@ -411,7 +411,7 @@ func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int,
 		Title:          fmt.Sprintf("Architecture approval required — #%d", issue),
 		Body: fmt.Sprintf("%s\n\nApproving applies the architecture-approval label and requeues the issue; "+
 			"the next run passes the gate and proceeds to feature-dev. "+
-			"Leaving it parks the issue in In review — nothing re-dispatches it and the rest of the queue keeps flowing.",
+			"Leaving it parks the issue off the dispatch path (In progress, no PR exists) — nothing re-dispatches it and the rest of the queue keeps flowing.",
 			detail),
 		Producer: producerArchitectureApprove,
 		Standing: true,

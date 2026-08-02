@@ -1,9 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 )
 
 // Tests for the #4098/#4222 architecture_approval_required terminal kind on the
@@ -158,5 +162,48 @@ func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 	}
 	if _, ok := retryDeadline(as, key); ok {
 		t.Errorf("retryBackoff[%q] was set — the reclassified halt must not be queued for retry", key)
+	}
+}
+
+// TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent is the AC #1
+// regression for #281: a no-implementation architecture-approval halt must
+// land at "In progress" (never "In review", which has no PR behind it here)
+// and a downstream blockedBy dependent must NOT become a dispatch candidate
+// afterward — evaluateDeps requires confirmed PR evidence, not the bare
+// status string, before treating an upstream "In review" as satisfied.
+func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
+	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		return []byte("[]"), nil // no open PRs anywhere — the gate fired before feature-dev
+	})
+
+	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+
+	// Simulate the halted upstream issue parked at "In review" by a stale/buggy
+	// caller (defense in depth for the isWorkCompleteStatus/evaluateDeps split):
+	// with no PR-backing evidence refreshed, evaluateDeps must still block.
+	g := &depgraph.Graph{
+		Nodes: map[string]*depgraph.Node{
+			"O/app#900": {Repo: "O/app", Number: 900, State: "OPEN", BoardStatus: "In review"},
+			"O/app#901": {Repo: "O/app", Number: 901, State: "OPEN", BoardStatus: "Ready"},
+		},
+		Edges: []depgraph.Edge{
+			{From: depgraph.NodeID{Repo: "O/app", Number: 901}, To: depgraph.NodeID{Repo: "O/app", Number: 900}, Type: "blockedBy"},
+		},
+	}
+
+	candidates := as.prioritize(context.Background(), g)
+	for _, c := range candidates {
+		if c.Repo == "O/app" && c.Number == 901 {
+			t.Fatalf("O/app#901 dispatched despite depending on an In-review issue with no confirmed PR — evaluateDeps must fail closed")
+		}
+	}
+
+	// sidelineHalt itself must choose "In progress", not "In review", for the
+	// halted issue given no confirmed PR.
+	buf := withCapturedLog(t)
+	as.sidelineHalt("O/app", 900, "architecture approval required")
+	got := buf.String()
+	if !strings.Contains(got, "move-to-in-progress:") {
+		t.Errorf("expected sidelineHalt to choose In progress with no PR, got log: %q", got)
 	}
 }

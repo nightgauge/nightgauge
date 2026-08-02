@@ -145,14 +145,24 @@ func (as *AutonomousScheduler) reconcileStuckInReviewPRs(ctx context.Context, gr
 // once a PR unblocks, merges, or closes it drops out of the set on the next
 // fresh scan. Non-destructive: board status is never touched, so nothing can be
 // parked or deadlocked by this sweep.
+//
+// This sweep also populates as.inReviewPRBacked (#281): the set of "In
+// review" nodes with a confirmed OPEN PR, which evaluateDeps requires before
+// treating a dep's "In review" board status as satisfying a blockedBy edge.
+// "In review" candidates are unioned into the SAME per-repo candidate set as
+// the dispatchable ones above so a repo needing both answers still pays for
+// exactly one gh-pr-list call.
 func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph *depgraph.Graph) {
 	if graph == nil {
 		return
 	}
 
 	// Group dispatchable, open, non-epic candidates by repo so each repo's open
-	// PRs are listed exactly once (mirrors #3896 quota discipline).
+	// PRs are listed exactly once (mirrors #3896 quota discipline). "In review"
+	// nodes are unioned in here too (#281) so the PR-evidence sweep below rides
+	// the same per-repo call.
 	candidates := map[string][]*depgraph.Node{}
+	inReviewNodes := map[string][]*depgraph.Node{}
 	for _, node := range graph.Nodes {
 		if node == nil || !strings.EqualFold(node.State, "OPEN") {
 			continue
@@ -160,20 +170,31 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 		if nodeHasEpicLabel(node) {
 			continue
 		}
-		if !isDispatchableStatus(node.BoardStatus, as.config.PickupBacklog) {
-			continue
+		if isDispatchableStatus(node.BoardStatus, as.config.PickupBacklog) {
+			candidates[node.Repo] = append(candidates[node.Repo], node)
 		}
-		candidates[node.Repo] = append(candidates[node.Repo], node)
+		if isWorkCompleteStatus(node.BoardStatus) {
+			inReviewNodes[node.Repo] = append(inReviewNodes[node.Repo], node)
+		}
+	}
+
+	repos := map[string]bool{}
+	for repo := range candidates {
+		repos[repo] = true
+	}
+	for repo := range inReviewNodes {
+		repos[repo] = true
 	}
 
 	blocked := map[string]bool{}
-	for repo, nodes := range candidates {
+	prBacked := map[string]bool{}
+	for repo := range repos {
 		openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
 		if !ok {
-			continue // query failed — leave this repo out (fail-open)
+			continue // query failed — leave this repo out (fail-open / fail-closed)
 		}
 		policies := newBranchPolicyCache(repo)
-		for _, node := range nodes {
+		for _, node := range candidates[repo] {
 			pr, found := openPRs[node.Number]
 			if !found {
 				continue // no open PR for this issue — not our case
@@ -194,10 +215,18 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 			blocked[key] = true
 			log.Printf("autonomous: %s has an OPEN PR #%d that cannot merge (%s) — will not re-dispatch; needs human, no retry can clear", key, pr.Number, reason)
 		}
+		for _, node := range inReviewNodes[repo] {
+			if _, found := openPRs[node.Number]; !found {
+				continue // "In review" but no confirmed OPEN PR — not backed
+			}
+			key := fmt.Sprintf("%s#%d", node.Repo, node.Number)
+			prBacked[key] = true
+		}
 	}
 
 	as.mu.Lock()
 	as.blockedReadyPRIssues = blocked
+	as.inReviewPRBacked = prBacked
 	as.mu.Unlock()
 }
 

@@ -735,6 +735,17 @@ type AutonomousScheduler struct {
 	// Guarded by mu.
 	blockedReadyPRIssues map[string]bool
 
+	// inReviewPRBacked is the set (keyed "repo#number") of "In review" nodes
+	// with a confirmed OPEN PR, refreshed on FRESH graph builds alongside
+	// blockedReadyPRIssues. evaluateDeps requires membership here before
+	// treating a dep's "In review" board status as satisfying a blockedBy
+	// edge — the status string alone is not evidence a PR actually exists
+	// (see #281: the architecture-approval gate parked a zero-implementation
+	// issue at "In review" with no PR behind it). Fail-closed: a repo whose
+	// PR query fails contributes nothing, so its "In review" deps read as
+	// unsatisfied rather than silently satisfied. Guarded by mu.
+	inReviewPRBacked map[string]bool
+
 	mu      sync.Mutex
 	running bool
 	stopCh  chan struct{} // signals dispatch loop only — one reader
@@ -2445,12 +2456,14 @@ type CandidateItem struct {
 	UnblockCount int // how many downstream items this unblocks
 }
 
-// isWorkCompleteStatus returns true when the dep's pipeline work is
-// effectively done — even if the issue itself is still OPEN. Currently this
-// covers "In review" (PR open, awaiting merge). Downstream items are not
-// blocked by deps in these statuses because the upstream output (the PR /
-// merged code) already exists. If the PR is later rejected, the issue moves
-// back to In progress / Backlog and the dep re-blocks on the next scan.
+// isWorkCompleteStatus returns true when the dep's board status is the one
+// that CAN mean the dep's pipeline work is effectively done — even if the
+// issue itself is still OPEN. Currently this covers "In review". The status
+// string alone is NOT sufficient evidence, though (#281): a status-only
+// match is verified against inReviewPRBacked by evaluateDeps before it is
+// treated as satisfying a blockedBy edge, since a halt can park an issue at
+// "In review" with no PR behind it. If the PR is later rejected, the issue
+// moves back to In progress / Backlog and the dep re-blocks on the next scan.
 func isWorkCompleteStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "in review"
@@ -2601,7 +2614,14 @@ type depBlockResult struct {
 //     issue-state resolver was available, the GitHub lookup for its repo
 //     failed, or the batch response simply omitted it — never guess
 //     "satisfied" for a blocker of unknown state (#306).
-func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string) depBlockResult {
+//
+// prBacked (keyed "repo#number", refreshed once per fresh graph build — see
+// inReviewPRBacked) is the evidence gate for the "In review" case (#281): a
+// dep whose board status is "In review" satisfies the edge only when its key
+// is also present in prBacked (a confirmed OPEN PR backs it). A status-only
+// match without confirmed PR evidence falls through to BLOCKED — the same
+// fail-closed posture as the off-board case above.
+func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]string, prBacked map[string]bool) depBlockResult {
 	for _, depKey := range depKeys {
 		depNode, exists := g.Nodes[depKey]
 		if !exists {
@@ -2625,7 +2645,12 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 			continue
 		}
 		if isWorkCompleteStatus(depNode.BoardStatus) {
-			continue
+			key := fmt.Sprintf("%s#%d", depNode.Repo, depNode.Number)
+			if prBacked[key] {
+				continue // satisfied — PR confirmed
+			}
+			// "In review" without a confirmed PR does not satisfy the edge —
+			// fall through to blocked below (#281).
 		}
 		return depBlockResult{blocked: true, blocker: depKey, status: depNode.BoardStatus}
 	}
@@ -2691,6 +2716,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// place, so a captured reference is stable for this pass; a nil map reads as
 	// all-false. No GitHub call happens here — the guard is pure map lookup.
 	blockedPRSet := as.blockedReadyPRIssues
+	prBackedSet := as.inReviewPRBacked
 	as.mu.Unlock()
 
 	now := time.Now()
@@ -2863,7 +2889,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		blocked := false
 		var blocker, blockerStatus, blockerEdge string
 		offBoard := false
-		if res := evaluateDeps(adj[key], g, resolvedDepStates); res.blocked {
+		if res := evaluateDeps(adj[key], g, resolvedDepStates, prBackedSet); res.blocked {
 			blocked = true
 			blocker = res.blocker
 			blockerStatus = res.status
@@ -2892,7 +2918,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		if !as.config.DisableEpicBlockedByCascade && node.EpicNumber != 0 {
 			epicKey := g.NodeKey(depgraph.NodeID{Repo: node.Repo, Number: node.EpicNumber})
 			if epicNode, ok := g.Nodes[epicKey]; ok && strings.EqualFold(epicNode.State, "OPEN") {
-				if res := evaluateDeps(adj[epicKey], g, resolvedDepStates); res.blocked {
+				if res := evaluateDeps(adj[epicKey], g, resolvedDepStates, prBackedSet); res.blocked {
 					blocked = true
 					blocker = res.blocker
 					offBoard = res.offBoard
@@ -2959,7 +2985,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 				continue
 			}
 			epicKey := g.NodeKey(node.ID())
-			hasOpenBlocker := evaluateDeps(adj[epicKey], g, resolvedDepStates).blocked
+			hasOpenBlocker := evaluateDeps(adj[epicKey], g, resolvedDepStates, prBackedSet).blocked
 			if !hasOpenBlocker {
 				continue
 			}
@@ -3788,7 +3814,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// requeue the issue. Raised after persistState so the record and the
 			// card cannot disagree about the issue's state.
 			as.raiseArchitectureApproval(repo, issue, title, detail)
-			go as.moveIssueToInReview(repo, issue)
+			go as.sidelineHalt(repo, issue, "architecture approval required")
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3810,7 +3836,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			go as.moveIssueToInReview(repo, issue)
+			go as.sidelineHalt(repo, issue, "pr-merge: PR was not merged")
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4031,6 +4057,64 @@ func (as *AutonomousScheduler) moveIssueToInReview(repo string, issue int) {
 	}
 	log.Printf("autonomous: move-to-in-review: moved %s#%d → In review (PR exists, externally blocked — no re-dispatch)",
 		repo, issue)
+}
+
+// moveIssueToInProgress moves a sidelined issue's board status to "In
+// progress" — the truthful state when no PR backs it (e.g. the
+// architecture-approval gate halted before feature-dev ever ran). Modeled
+// after moveIssueToDone/moveIssueToInReview. Unlike "In review" this status
+// is never treated as satisfying a blockedBy edge (isWorkCompleteStatus only
+// matches "in review"), so dependents correctly stay blocked. Best-effort: a
+// network failure logs a warning.
+func (as *AutonomousScheduler) moveIssueToInProgress(repo string, issue int, reason string) {
+	owner, repoName := splitOwnerRepo(repo)
+	var projectNum int
+	var ownerType gh.OwnerType
+	as.mu.Lock()
+	for _, rc := range as.repos {
+		if rc.Owner == owner && rc.Name == repoName && rc.Project > 0 {
+			projectNum = rc.Project
+			ownerType = rc.OwnerType
+			break
+		}
+	}
+	as.mu.Unlock()
+	if projectNum == 0 {
+		log.Printf("autonomous: move-to-in-progress: no project config for %s — skipping #%d", repo, issue)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	defer cancel()
+	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
+	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In progress"); err != nil {
+		log.Printf("autonomous: move-to-in-progress: failed to move %s#%d to In progress (%s): %v",
+			repo, issue, reason, err)
+		return
+	}
+	log.Printf("autonomous: move-to-in-progress: moved %s#%d → In progress (%s — no PR exists, no re-dispatch)",
+		repo, issue, reason)
+}
+
+// sidelineHalt parks a halted issue off the dispatch path and picks the
+// truthful board status: "In review" only when an OPEN PR actually backs the
+// issue (confirmed via openPRMergeStatesForRepo), "In progress" otherwise.
+// Both statuses are non-dispatchable via isDispatchableStatus, but only "In
+// review" — and only when backed by a confirmed PR — satisfies a blockedBy
+// edge (see evaluateDeps). A failed or inconclusive PR query fails toward the
+// safer state: "In progress", never asserting a PR exists on an unconfirmed
+// query. See #281.
+func (as *AutonomousScheduler) sidelineHalt(repo string, issue int, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	defer cancel()
+	openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
+	if ok {
+		if _, hasPR := openPRs[issue]; hasPR {
+			as.moveIssueToInReview(repo, issue) // unchanged: truthful here
+			return
+		}
+	}
+	as.moveIssueToInProgress(repo, issue, reason)
 }
 
 // RecoverOrphanedRunning is the exported entry point for startup orphan

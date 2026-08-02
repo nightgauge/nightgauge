@@ -166,6 +166,38 @@ When it fails it reports `dev_produced_no_changes` and names any sibling
 worktree still holding uncommitted work, so the stranded implementation can be
 recovered from the failure record instead of by hand.
 
+## Which statuses satisfy a `blockedBy` edge (#281)
+
+Same theme as the section above — board status is not ground truth without
+corroborating evidence, applied to `AutonomousScheduler`'s dependency
+evaluation (`evaluateDeps` in `internal/orchestrator/autonomous.go`) rather
+than a stage gate. Before #281, `isWorkCompleteStatus` treated the board
+status string `"In review"` as unconditional proof that a dep's work was
+done — true when a PR-merge case parked a genuinely-blocked issue there, but
+false when the architecture-approval gate sidelined a zero-implementation
+issue to the same status (the gate fires _before_ feature-dev ever runs, so
+no branch, no PR). Every dependent of that issue read the bare status string
+and dispatched against a contract that was never built.
+
+- **`Done` / issue `CLOSED`** — always satisfies. Terminal, unambiguous.
+- **`In review`** — satisfies **only** when an OPEN PR is confirmed for that
+  issue, via `openPRMergeStatesForRepo` (one batched `gh pr list` per repo,
+  cached each fresh graph build as `AutonomousScheduler.inReviewPRBacked`).
+  The board string alone is never sufficient — `evaluateDeps` checks
+  membership in that confirmed set before treating the dep as satisfied.
+  Fail-closed on query failure: a repo whose PR query fails contributes
+  nothing to `inReviewPRBacked`, so its `"In review"` deps read as blocked,
+  never as silently satisfied.
+- **`Ready`, `Backlog`, `In progress`, no status** — never satisfies.
+
+The halt path that produced the false positive is fixed the same way:
+`sidelineHalt` now checks `openPRMergeStatesForRepo` before choosing a board
+status — `"In review"` only when a PR is actually confirmed open, `"In
+progress"` otherwise (a new `moveIssueToInProgress`, non-dispatchable but
+also never mistaken for PR-backed work). The architecture-approval and
+pr-merge-unmerged halt sites both route through it now instead of calling
+`moveIssueToInReview` directly.
+
 ## CLI seam — `nightgauge gate verify`
 
 ```
