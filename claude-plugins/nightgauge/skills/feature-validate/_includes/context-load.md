@@ -20,29 +20,17 @@ Phase 0.6 Step 0.6.1 (the `type:docs` label detection) stays inline in
 Extract issue number from branch. Load `.nightgauge/pipeline/dev-{N}.json`.
 Parse COMMIT_SHA, FILES_CREATED, FILES_MODIFIED, TESTS_PASSED, TESTS_FAILED, and
 dev-stage build/quality results for redundancy elimination. Signal stage start
-via Go binary `project move-status`. If context file missing, exit 1 with error
-listing pipeline order.
+via Go binary `project move-status`. If the context file is missing, ask git
+ground truth via `nightgauge gate verify feature-dev` (#134) before deciding
+this is "no implementation work" — see below.
 
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER=$(echo "$BRANCH" | grep -oE '[0-9]+' | head -1)
 CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
 
-if [ ! -f "$CONTEXT_FILE" ]; then
-  echo "ERROR: Missing $CONTEXT_FILE. Run pipeline in order: issue-pickup → feature-planning → feature-dev → feature-validate"
-  exit 1
-fi
-
-COMMIT_SHA=$(jq -r '.commit_sha // empty' "$CONTEXT_FILE")  # may be null (Issue #1608)
-FILES_CREATED=$(jq -r '.files_changed.created | @json' "$CONTEXT_FILE")
-FILES_MODIFIED=$(jq -r '.files_changed.modified | @json' "$CONTEXT_FILE")
-TESTS_PASSED=$(jq -r '.tests_status.passed' "$CONTEXT_FILE")
-TESTS_FAILED=$(jq -r '.tests_status.failed' "$CONTEXT_FILE")
-DEV_BUILD_STATUS=$(jq -r '.build_verification.status // "unknown"' "$CONTEXT_FILE")
-DEV_BUILD_RAN=$(jq -r '.build_verification.ran // false' "$CONTEXT_FILE")
-SKIPPED_PHASES="[]"
-
-# Go binary: project move-status
+# Resolve the nightgauge binary now — needed both for the missing-context
+# ground-truth check below and for project move-status.
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -59,6 +47,57 @@ if [ -z "$BINARY" ]; then
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+
+GIT_GROUND_TRUTH_FILES="[]"
+
+if [ ! -f "$CONTEXT_FILE" ]; then
+  if [ -z "$BINARY" ]; then
+    # No binary resolvable at all — the binary is the only ground-truth
+    # source; without it there is nothing safer to assume than the pre-#134
+    # behavior (#134 Risks: fail closed exactly as before).
+    echo "ERROR: Missing $CONTEXT_FILE. Run pipeline in order: issue-pickup → feature-planning → feature-dev → feature-validate"
+    exit 1
+  fi
+
+  GATE_JSON=$("$BINARY" gate verify feature-dev "$ISSUE_NUMBER" --workdir . --json 2>/dev/null)
+  GATE_EXIT=$?
+  TERMINAL_KIND=""
+  [ "$GATE_EXIT" -eq 2 ] && TERMINAL_KIND=$(echo "$GATE_JSON" | jq -r '.terminal_kind // empty' 2>/dev/null)
+
+  if [ "$GATE_EXIT" -eq 2 ] && [ "$TERMINAL_KIND" = "dev_handoff_missing" ]; then
+    # Work exists: feature-dev was likely killed mid-stage after writing real
+    # changes but before writing its handoff JSON. Proceed against the
+    # git-derived file list instead of exiting (#134).
+    GIT_GROUND_TRUTH_FILES=$(echo "$GATE_JSON" | jq -c '.files // []' 2>/dev/null)
+    FILE_COUNT=$(echo "$GATE_JSON" | jq -r '.file_count // 0' 2>/dev/null)
+    echo "dev-${ISSUE_NUMBER}.json missing but git finds ${FILE_COUNT} changed file(s) — feature-dev was likely killed mid-stage; proceeding against the working tree"
+    COMMIT_SHA=""
+    FILES_CREATED="[]"
+    FILES_MODIFIED="$GIT_GROUND_TRUTH_FILES"
+    TESTS_PASSED=null
+    TESTS_FAILED=null
+    DEV_BUILD_STATUS="unknown"
+    DEV_BUILD_RAN=false
+    SKIPPED_PHASES="[]"
+  else
+    # Git agrees: clean tree, branch level with base. feature-dev genuinely
+    # never produced anything to validate — distinct wording from the
+    # "missing file" case above so operators can tell "stage never ran" apart
+    # from "context malformed".
+    echo "ERROR: No dev context (.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json) and no git evidence of implementation work (clean tree, branch level with base). feature-dev has not produced anything to validate. Run pipeline in order: issue-pickup → feature-planning → feature-dev → feature-validate"
+    exit 1
+  fi
+else
+  COMMIT_SHA=$(jq -r '.commit_sha // empty' "$CONTEXT_FILE")  # may be null (Issue #1608)
+  FILES_CREATED=$(jq -r '.files_changed.created | @json' "$CONTEXT_FILE")
+  FILES_MODIFIED=$(jq -r '.files_changed.modified | @json' "$CONTEXT_FILE")
+  TESTS_PASSED=$(jq -r '.tests_status.passed' "$CONTEXT_FILE")
+  TESTS_FAILED=$(jq -r '.tests_status.failed' "$CONTEXT_FILE")
+  DEV_BUILD_STATUS=$(jq -r '.build_verification.status // "unknown"' "$CONTEXT_FILE")
+  DEV_BUILD_RAN=$(jq -r '.build_verification.ran // false' "$CONTEXT_FILE")
+  SKIPPED_PHASES="[]"
+fi
+
 [ -n "$BINARY" ] && \
   "$BINARY" project move-status "$ISSUE_NUMBER" "in-progress" 2>/dev/null || true
 ```
