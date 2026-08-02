@@ -178,7 +178,13 @@ the safety net for the #3232 footgun. If the routing manifest, Phase 3, or
 Phase 4 ever drift such that a sub-issue lands in the wrong project for its
 repo, this phase catches it before the skill reports success.
 
-For each entry in the Phase 2.4 routing manifest:
+For each entry in the Phase 2.4 routing manifest, re-resolve the expected
+project **independently at audit time** — never trust the manifest's
+`target_project` value on its own. The manifest was populated by the resolver
+at Phase-2.4 time; if config changed mid-run, or Phase 2.4 was skipped/
+manually edited, the manifest value can silently go stale. A fresh call to
+the same resolver at audit time catches that drift instead of trusting
+either the manifest or the live board blindly:
 
 ```bash
 MANIFEST=".nightgauge/pipeline/issue-create-routing-<epic-number>.json"
@@ -186,7 +192,10 @@ EXIT_CODE=0
 jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
   NUM=$(echo "$row" | jq -r .number)
   EXPECTED_REPO=$(echo "$row" | jq -r .target_repo)
-  EXPECTED_PROJECT=$(echo "$row" | jq -r .target_project)
+  MANIFEST_PROJECT=$(echo "$row" | jq -r .target_project)
+
+  # Re-resolve fresh — do NOT reuse $MANIFEST_PROJECT as the expected value.
+  RESOLVED_PROJECT=$(nightgauge project resolve --repo "nightgauge/$EXPECTED_REPO" --json | jq -r .number)
 
   # Query the issue's actual project memberships
   ACTUAL=$(gh api graphql -f query="query {
@@ -199,8 +208,12 @@ jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
     }
   }" -q '.data.repository.issue.projectItems.nodes[].project.number')
 
-  if ! echo "$ACTUAL" | grep -qx "$EXPECTED_PROJECT"; then
-    echo "AUDIT FAIL: #$NUM in nightgauge/$EXPECTED_REPO is not a member of project $EXPECTED_PROJECT (actual: ${ACTUAL:-<none>})"
+  if ! echo "$ACTUAL" | grep -qx "$RESOLVED_PROJECT"; then
+    if [ "$MANIFEST_PROJECT" != "$RESOLVED_PROJECT" ]; then
+      echo "AUDIT FAIL: #$NUM in nightgauge/$EXPECTED_REPO is not a member of project $RESOLVED_PROJECT (actual: ${ACTUAL:-<none>}; manifest said $MANIFEST_PROJECT at routing time — the two disagree, config drifted mid-run)"
+    else
+      echo "AUDIT FAIL: #$NUM in nightgauge/$EXPECTED_REPO is not a member of project $RESOLVED_PROJECT (actual: ${ACTUAL:-<none>})"
+    fi
     EXIT_CODE=1
   fi
 done
@@ -213,7 +226,7 @@ if [ "$EXIT_CODE" -ne 0 ]; then
   echo "  2. Re-running with --no-route to relax routing (after manual verification)"
   exit 1
 fi
-echo "Routing audit passed: all sub-issues are in the correct project per Phase 2.4 manifest."
+echo "Routing audit passed: all sub-issues are in the freshly-resolved project for their repo."
 rm -f "$MANIFEST"  # safe to delete the manifest only after audit passes
 ```
 
