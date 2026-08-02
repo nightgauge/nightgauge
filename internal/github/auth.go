@@ -182,6 +182,20 @@ func parseScopes(raw string) []string {
 	return result
 }
 
+// HasOrgReadAccess reports whether actual satisfies read:org access,
+// honoring GitHub's OAuth org-scope hierarchy: admin:org and write:org are
+// each a superset of read:org, so either one satisfies the requirement even
+// without the literal "read:org" scope present.
+func HasOrgReadAccess(actual []string) bool {
+	for _, s := range actual {
+		switch s {
+		case "read:org", "write:org", "admin:org":
+			return true
+		}
+	}
+	return false
+}
+
 // computeMissingScopes returns the elements of required that are not in actual.
 func computeMissingScopes(actual, required []string) []string {
 	have := make(map[string]bool, len(actual))

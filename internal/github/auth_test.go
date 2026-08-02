@@ -73,6 +73,37 @@ func TestComputeMissingScopes(t *testing.T) {
 	}
 }
 
+func TestHasOrgReadAccess(t *testing.T) {
+	tests := []struct {
+		name   string
+		actual []string
+		want   bool
+	}{
+		{"admin:org alone satisfies", []string{"repo", "project", "admin:org"}, true},
+		{"write:org alone satisfies", []string{"repo", "project", "write:org"}, true},
+		{"read:org alone satisfies", []string{"repo", "project", "read:org"}, true},
+		{"no org scope fails", []string{"repo", "project"}, false},
+		{"empty scopes fails", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasOrgReadAccess(tt.actual); got != tt.want {
+				t.Errorf("HasOrgReadAccess(%v) = %v, want %v", tt.actual, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestComputeMissingScopes_RepoProjectUnaffected proves repo/project checks
+// remain exact-match and are not weakened by the read:org hierarchy change.
+func TestComputeMissingScopes_RepoProjectUnaffected(t *testing.T) {
+	got := computeMissingScopes([]string{"admin:org"}, []string{"repo", "project"})
+	want := []string{"repo", "project"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("computeMissingScopes with admin:org only = %v, want %v (repo/project must not be satisfied by org scopes)", got, want)
+	}
+}
+
 // newTestServer creates a test HTTP server with the provided handlers and
 // returns a GitHub client wired to it.
 func newTestServerWithHandlers(t *testing.T, mux *http.ServeMux) (*Client, *httptest.Server) {

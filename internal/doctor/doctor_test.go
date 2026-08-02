@@ -446,3 +446,28 @@ func TestDoctorResult_Schema(t *testing.T) {
 		}
 	}
 }
+
+// TestReadOrgWarning verifies the read:org advisory warning honors the
+// admin:org/write:org org-scope hierarchy (#23): admin:org alone must not
+// produce the warning, while a token with neither admin:org, write:org, nor
+// read:org still does.
+func TestReadOrgWarning(t *testing.T) {
+	tests := []struct {
+		name       string
+		scopes     []string
+		wantWarned bool
+	}{
+		{"admin:org satisfies, no warning", []string{"repo", "project", "admin:org"}, false},
+		{"write:org satisfies, no warning", []string{"repo", "project", "write:org"}, false},
+		{"read:org satisfies, no warning", []string{"repo", "project", "read:org"}, false},
+		{"no org scope warns", []string{"repo", "project"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := readOrgWarning(tt.scopes)
+			if warned := got != ""; warned != tt.wantWarned {
+				t.Errorf("readOrgWarning(%v) = %q, wantWarned=%v", tt.scopes, got, tt.wantWarned)
+			}
+		})
+	}
+}
