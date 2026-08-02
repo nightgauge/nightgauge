@@ -143,3 +143,82 @@ func TestReconcileStuckInReview_SkipsNonInReviewAndEpics(t *testing.T) {
 		t.Fatal("no gh PR lookup should run for Ready/epic/closed nodes")
 	}
 }
+
+// TestRefreshBlockedReadyPRs_PopulatesInReviewPRBacked (#281): the sweep
+// records "In review" nodes with a confirmed OPEN PR into inReviewPRBacked,
+// and leaves out "In review" nodes with no confirmed PR — sharing one
+// gh-pr-list call per repo with the existing blockedReadyPRIssues sweep.
+func TestRefreshBlockedReadyPRs_PopulatesInReviewPRBacked(t *testing.T) {
+	calls := 0
+	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if !ghArgsContain(args, "list") {
+			return []byte("[]"), nil
+		}
+		calls++
+		return []byte(`[{"number":10,"headRefName":"feat/1-backed","mergeStateStatus":"CLEAN"}]`), nil
+	})
+
+	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"}, // confirmed PR → backed
+		"O/app#2": {Repo: "O/app", Number: 2, State: "OPEN", BoardStatus: "In review"}, // no PR → not backed
+	}}
+
+	as.refreshBlockedReadyPRs(context.Background(), g)
+
+	if calls != 1 {
+		t.Fatalf("expected exactly 1 gh pr list for the repo, got %d", calls)
+	}
+	if !as.inReviewPRBacked["O/app#1"] {
+		t.Error("expected O/app#1 (In review, confirmed PR) to be marked backed")
+	}
+	if as.inReviewPRBacked["O/app#2"] {
+		t.Error("expected O/app#2 (In review, no PR) NOT marked backed")
+	}
+}
+
+// TestRefreshBlockedReadyPRs_QueryFailure_LeavesInReviewPRBackedEmpty: a
+// failed gh query must fail closed — the repo's "In review" nodes contribute
+// nothing to inReviewPRBacked, never a silent "satisfied".
+func TestRefreshBlockedReadyPRs_QueryFailure_LeavesInReviewPRBackedEmpty(t *testing.T) {
+	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
+		return nil, context.DeadlineExceeded
+	})
+
+	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
+	}}
+
+	as.refreshBlockedReadyPRs(context.Background(), g)
+
+	if len(as.inReviewPRBacked) != 0 {
+		t.Fatalf("gh error must leave inReviewPRBacked empty (fail-closed); got %v", as.inReviewPRBacked)
+	}
+}
+
+// TestEvaluateDeps_InReviewWithoutPRBacking_Blocks (#281): a dep whose board
+// status is "In review" but has no confirmed OPEN PR must NOT satisfy the
+// blockedBy edge — the status string alone is not evidence.
+func TestEvaluateDeps_InReviewWithoutPRBacking_Blocks(t *testing.T) {
+	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
+	}}
+	res := evaluateDeps([]string{"O/app#1"}, g, nil, nil)
+	if !res.blocked {
+		t.Fatal("expected blocked=true for In-review dep with no PR-backing evidence")
+	}
+}
+
+// TestEvaluateDeps_InReviewWithPRBacking_Satisfies is the regression guard:
+// a dep confirmed PR-backed still satisfies the edge exactly as before.
+func TestEvaluateDeps_InReviewWithPRBacking_Satisfies(t *testing.T) {
+	g := &depgraph.Graph{Nodes: map[string]*depgraph.Node{
+		"O/app#1": {Repo: "O/app", Number: 1, State: "OPEN", BoardStatus: "In review"},
+	}}
+	prBacked := map[string]bool{"O/app#1": true}
+	res := evaluateDeps([]string{"O/app#1"}, g, nil, prBacked)
+	if res.blocked {
+		t.Fatalf("expected blocked=false for In-review dep with confirmed PR backing, got %+v", res)
+	}
+}
