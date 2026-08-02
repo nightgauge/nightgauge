@@ -252,6 +252,16 @@ type AutonomousState struct {
 	// at $21.59/run because Resume() reset the per-session counter.
 	LifetimeIssueFailures map[string]int `json:"lifetimeIssueFailures,omitempty"`
 
+	// QuarantinedIssues holds the keys ("repo#number") that tripped the
+	// per-issue lifetime-failure cap. A quarantined issue is skipped by the
+	// dispatch loop but every OTHER issue in the workspace keeps dispatching
+	// normally — unlike the old behavior where a single chronically-broken
+	// issue set Status="safety_tripped" and paused the entire fleet across
+	// every repo (#127). Cleared only by an explicit ClearIssueFailures call
+	// or by reconcileStateAgainstGraph pruning a stale entry (issue
+	// transferred/deleted/closed). Key: "repo#number".
+	QuarantinedIssues map[string]bool `json:"quarantinedIssues,omitempty"`
+
 	// Refinement state
 	RefinementRunning    []RefinementItem `json:"refinementRunning,omitempty"`
 	RefinementCompleted  []RefinementItem `json:"refinementCompleted,omitempty"`
@@ -1840,6 +1850,7 @@ func (as *AutonomousScheduler) ClearIssueFailures(key string) (cleared int, circ
 	if key == "" {
 		n := len(as.state.LifetimeIssueFailures)
 		as.state.LifetimeIssueFailures = make(map[string]int)
+		as.state.QuarantinedIssues = nil
 		as.persistStateLocked()
 		return n, circuitBreakerTripped
 	}
@@ -1847,6 +1858,9 @@ func (as *AutonomousScheduler) ClearIssueFailures(key string) (cleared int, circ
 		return 0, circuitBreakerTripped
 	}
 	delete(as.state.LifetimeIssueFailures, key)
+	if as.state.QuarantinedIssues != nil {
+		delete(as.state.QuarantinedIssues, key)
+	}
 	// Also clear any session-level backoff so the cleared issue can dispatch
 	// immediately on the next scan.
 	if as.perIssueFailureCount != nil {
@@ -2258,27 +2272,26 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		}
 		as.mu.Unlock()
 		if lifetimeFails >= MaxLifetimeFailuresPerIssue {
-			log.Printf("autonomous: skipping %s#%d — exceeded lifetime failure cap (%d/%d), manual triage required",
+			// #127: a structural, always-reproducible failure on ONE issue must
+			// not pause the whole fleet. Quarantine just this issue — skip its
+			// dispatch and record why — and keep the dispatch loop running so
+			// every other repo/issue is unaffected. Manual triage
+			// (ClearIssueFailures) or graph pruning (reconcileStateAgainstGraph,
+			// when the issue is closed/removed/transferred) are the only ways
+			// out of quarantine.
+			log.Printf("autonomous: quarantining %s#%d — exceeded lifetime failure cap (%d/%d), manual triage required",
 				item.Repo, item.Number, lifetimeFails, MaxLifetimeFailuresPerIssue)
 			as.mu.Lock()
-			as.state.Status = "safety_tripped"
-			if as.state.Safety == nil {
-				as.state.Safety = &SafetyState{}
+			if as.state.QuarantinedIssues == nil {
+				as.state.QuarantinedIssues = make(map[string]bool)
 			}
-			tripReason := fmt.Sprintf(
-				"issue %s has failed %d times — manual triage required (clear via clearIssueFailures or remove from board)",
-				key, lifetimeFails)
-			as.state.Safety.TripReason = tripReason
-			as.state.PauseReason = tripReason
-			as.state.PauseTriggeredBy = "safety:lifetime-failure-cap"
-			as.state.PausedAt = time.Now().UTC().Format(time.RFC3339)
-			as.fireStatusChangeLocked()
+			alreadyQuarantined := as.state.QuarantinedIssues[key]
+			as.state.QuarantinedIssues[key] = true
 			as.mu.Unlock()
-			as.persistState()
-			if as.onCycleComplete != nil {
-				as.onCycleComplete()
+			if !alreadyQuarantined {
+				as.persistState()
 			}
-			return
+			continue
 		}
 
 		if as.config.DryRun {
@@ -4992,9 +5005,36 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 	}
 	as.state.Failed = keptFailed
 
-	if readmitted > 0 || readmittedFailed > 0 || prunedFailed > 0 {
-		log.Printf("autonomous: reconciled state — re-admitted %d completed + %d failed items still OPEN; pruned %d closed failures",
-			readmitted, readmittedFailed, prunedFailed)
+	// Prune stale LifetimeIssueFailures/QuarantinedIssues keys (#127). Both
+	// maps key on "repo#number" and are NOT cleared by Resume() — that's the
+	// point, it's what makes the cap survive across sessions (#3020). But it
+	// also means a key for an issue that was transferred to another repo or
+	// deleted outright becomes permanently unclearable by rescan: the key no
+	// longer exists in the live graph under that repo, so no future dispatch
+	// cycle will ever see it again to naturally age it out, and manual
+	// ClearIssueFailures requires knowing the exact stale key. Use the same
+	// g.Nodes[key] existence check already used for Failed pruning above, for
+	// consistency and to avoid a second source of truth.
+	prunedLifetime := 0
+	for key := range as.state.LifetimeIssueFailures {
+		if _, exists := g.Nodes[key]; !exists {
+			delete(as.state.LifetimeIssueFailures, key)
+			prunedLifetime++
+			log.Printf("autonomous: pruned stale lifetimeIssueFailures entry %s — issue no longer on project board", key)
+		}
+	}
+	prunedQuarantine := 0
+	for key := range as.state.QuarantinedIssues {
+		if _, exists := g.Nodes[key]; !exists {
+			delete(as.state.QuarantinedIssues, key)
+			prunedQuarantine++
+			log.Printf("autonomous: pruned stale quarantine entry %s — issue no longer on project board", key)
+		}
+	}
+
+	if readmitted > 0 || readmittedFailed > 0 || prunedFailed > 0 || prunedLifetime > 0 || prunedQuarantine > 0 {
+		log.Printf("autonomous: reconciled state — re-admitted %d completed + %d failed items still OPEN; pruned %d closed failures, %d stale lifetime-failure keys, %d stale quarantine keys",
+			readmitted, readmittedFailed, prunedFailed, prunedLifetime, prunedQuarantine)
 		as.persistStateLocked()
 	}
 }

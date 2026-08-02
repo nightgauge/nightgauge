@@ -3601,6 +3601,83 @@ func TestReconcileStateAgainstGraph_ReadmitsOpenFailures(t *testing.T) {
 	}
 }
 
+// TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys verifies
+// #127 AC5: a lifetimeIssueFailures/quarantinedIssues key for an issue that no
+// longer exists on the live project board (transferred, deleted, or removed)
+// is pruned during reconcileStateAgainstGraph, using the same g.Nodes[key]
+// existence check already used for Failed pruning. Pre-fix, these keys were
+// permanent — the trip stayed forever and could only be cleared by an operator
+// who knew the exact stale key to pass to ClearIssueFailures.
+func TestReconcileStateAgainstGraph_PrunesStaleLifetimeAndQuarantineKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	as := &AutonomousScheduler{
+		workspaceRoot: tmpDir,
+		state: &AutonomousState{
+			LifetimeIssueFailures: map[string]int{
+				"R1#100": 2, // still on the board — must survive
+				"R1#999": 2, // transferred/deleted — must be pruned
+			},
+			QuarantinedIssues: map[string]bool{
+				"R1#100": true,
+				"R1#999": true,
+			},
+		},
+	}
+	g := buildTestGraph([]*depgraph.Node{
+		{Repo: "R1", Number: 100, State: "OPEN"},
+	}, nil)
+
+	as.reconcileStateAgainstGraph(g)
+
+	if _, ok := as.state.LifetimeIssueFailures["R1#100"]; !ok {
+		t.Errorf("expected R1#100 to survive pruning (still on board), was removed")
+	}
+	if _, ok := as.state.LifetimeIssueFailures["R1#999"]; ok {
+		t.Errorf("expected R1#999 to be pruned (no longer on board), still present")
+	}
+	if _, ok := as.state.QuarantinedIssues["R1#100"]; !ok {
+		t.Errorf("expected quarantine R1#100 to survive pruning (still on board), was removed")
+	}
+	if _, ok := as.state.QuarantinedIssues["R1#999"]; ok {
+		t.Errorf("expected quarantine R1#999 to be pruned (no longer on board), still present")
+	}
+}
+
+// TestClearIssueFailures_AlsoClearsQuarantine verifies that both the
+// single-key and clear-all paths of ClearIssueFailures also lift quarantine
+// for the same key — the manual-triage escape hatch must clear both maps
+// together or an operator who clears the counter still finds the issue
+// silently skipped by the dispatch loop.
+func TestClearIssueFailures_AlsoClearsQuarantine(t *testing.T) {
+	tmpDir := t.TempDir()
+	as := &AutonomousScheduler{
+		workspaceRoot: tmpDir,
+		state: &AutonomousState{
+			LifetimeIssueFailures: map[string]int{"R1#100": 2, "R1#101": 2},
+			QuarantinedIssues:     map[string]bool{"R1#100": true, "R1#101": true},
+		},
+	}
+
+	cleared, _ := as.ClearIssueFailures("R1#100")
+	if cleared != 1 {
+		t.Fatalf("expected 1 cleared, got %d", cleared)
+	}
+	if as.state.QuarantinedIssues["R1#100"] {
+		t.Errorf("expected R1#100 quarantine cleared, still present")
+	}
+	if !as.state.QuarantinedIssues["R1#101"] {
+		t.Errorf("expected R1#101 quarantine to remain untouched")
+	}
+
+	cleared, _ = as.ClearIssueFailures("")
+	if cleared != 1 {
+		t.Fatalf("expected 1 cleared on clear-all, got %d", cleared)
+	}
+	if as.state.QuarantinedIssues != nil {
+		t.Errorf("expected QuarantinedIssues reset to nil on clear-all, got %v", as.state.QuarantinedIssues)
+	}
+}
+
 func TestSequentialModeSkipsSecondDispatch(t *testing.T) {
 	// Per-repo cap defaults to 1 (sequential), so a second issue from the same
 	// repo is blocked while one is running — no explicit config needed.

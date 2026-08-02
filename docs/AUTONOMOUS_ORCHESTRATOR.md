@@ -740,6 +740,29 @@ Detection still surfaces via state and the CLI when no webhook is configured.
 - **Note**: If no health score has been recorded yet (score = 0), the gate does
   NOT block
 
+### Per-Issue Lifetime Failure Cap (#3020, #127)
+
+- **Config**: `MaxLifetimeFailuresPerIssue` (default: 2, not currently
+  config-exposed)
+- **Trigger**: A single issue's failure count in `LifetimeIssueFailures`
+  (persisted across sessions, NOT reset by `Resume()`) reaches the cap
+- **Effect**: The offending issue is added to `QuarantinedIssues` and skipped
+  by the dispatch loop every cycle — every other issue and repo in the
+  workspace keeps dispatching normally. Prior to #127, hitting this cap
+  flipped the entire scheduler to `safety_tripped`, pausing dispatch for
+  every repo in the workspace over one chronically-broken issue.
+- **Recovery**: `ClearIssueFailures(key)` (or `""` for all) clears both the
+  failure counter and the quarantine entry for manual triage. Alternatively,
+  `reconcileStateAgainstGraph` prunes a `LifetimeIssueFailures`/
+  `QuarantinedIssues` entry automatically once the issue no longer exists on
+  the live project board (closed, deleted, or transferred to another repo) —
+  otherwise a transferred issue's key would be permanently unclearable since
+  no key format tells you where it went.
+- **Note**: Only failures classified as the issue's own fault increment the
+  counter — transient/environmental terminal kinds (stall-kill, rate-limit
+  quota exhaustion, API overload, stream-idle-timeout) are exempt so a
+  provider outage never trips quarantine.
+
 ### Author Trust Gate (#270)
 
 - **Config**: `autonomous.trusted_author_associations` — default

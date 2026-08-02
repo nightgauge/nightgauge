@@ -493,6 +493,37 @@ describe("retry — a rewrite of the same paths is still the stage's (#129)", ()
       "// operator, weeks later\n"
     );
   });
+
+  it("attributes a breach reported by both feature-dev and feature-validate on the same run (#127)", async () => {
+    // #127's incident: feature-dev wrote across sibling repos and still
+    // self-reported success; feature-validate ran next in the SAME sibling
+    // working tree without cleaning up first. The ledger must attribute the
+    // breach to whichever stage's detectContainmentBreach call runs, not
+    // silently treat the second stage's baseline as "already dirty, not
+    // ours" just because the first stage already recorded it.
+    const first = await captureContainmentBaseline({
+      stageCwd: worktree,
+      repoPaths: [primary, sibling],
+    });
+    stageWritesIntoSibling();
+    const devReport = await detectContainmentBreach({
+      baseline: first,
+      stage: "feature-dev",
+      issueNumber: 127,
+    });
+    expect(devReport.breaches).toHaveLength(1);
+
+    // feature-validate runs next in the same worktree, same dirty sibling —
+    // no new baseline capture between stages in the real pipeline. The
+    // breach must still be attributed and reported.
+    const validateReport = await detectContainmentBreach({
+      baseline: first,
+      stage: "feature-validate",
+      issueNumber: 127,
+    });
+    expect(validateReport.breaches).toHaveLength(1);
+    expect(validateReport.breaches[0].paths).toContain("src/handlers.ts");
+  });
 });
 
 describe("parsePorcelainZ", () => {

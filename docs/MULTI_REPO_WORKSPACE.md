@@ -517,6 +517,24 @@ knowledge:
 
 ## Cross-Repository Workflows
 
+### Policy: One Issue, One Repo (#127)
+
+**An epic may span repositories; a single issue's implementation work may
+not.** `feature-dev` runs inside one issue's worktree and may only write
+files inside that worktree's repository. If a feature genuinely needs
+coordinated changes in multiple repos, decompose it into one sub-issue per
+repository at issue-creation time (see Epic Decomposition below) — never rely
+on a single feature-dev run to edit sibling repo checkouts.
+
+This is enforced structurally, not by convention: the write-containment
+mechanism (`worktreeContainment.ts` + `skillRunner.ts`, #129) captures a
+baseline before each stage and detects any file written outside the stage's
+own worktree, attributing and quarantining the out-of-scope patch instead of
+letting it land silently in a sibling working tree. `pr-create` opens exactly
+one PR, on the issue's own repo branch — it has no way to express a change set
+spanning repos, so an issue whose implementation needs cross-repo writes will
+never produce a landable PR no matter how the stages report their status.
+
 ### Epic Decomposition
 
 Epics can span multiple repositories. The `nightgauge-issue-create` skill
