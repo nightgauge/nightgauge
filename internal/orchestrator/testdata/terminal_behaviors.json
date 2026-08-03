@@ -192,6 +192,18 @@
       }
     },
     {
+      "name": "terminating-stage-cost-booking",
+      "note": "A failing stage's spend must be booked, not dropped — a run's cost picture is wrong exactly where it matters (the retry decision) otherwise (#293, #146).",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "runtime.RecordTerminatingStageTokens(stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)"
+      }
+    },
+    {
       "name": "lifecycle-decision-trace",
       "go": {
         "file": "internal/orchestrator/scheduler.go",

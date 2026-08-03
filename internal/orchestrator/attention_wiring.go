@@ -533,9 +533,11 @@ func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue in
 // carrying whatever structured fields ConcurrentPipelineManager.
 // haltQueueOnSlotFailure had in scope at the call site.
 //
-// stage/terminalKind/costUSD degrade gracefully when empty/zero — the
-// terminating-stage cost plumbing (#146) has not landed on main yet, so the
-// card must not block on it.
+// stage/terminalKind/costUSD degrade gracefully when empty/zero. costUSD is
+// the run's total spend including the failing stage: the IPC "failed" stage
+// transition books the terminating stage's cost into TotalCostUSD (#293),
+// mirroring the Go scheduler path's #146 plumbing, and the extension passes
+// that total through.
 func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stage, terminalKind string, costUSD float64) {
 	if as == nil {
 		return

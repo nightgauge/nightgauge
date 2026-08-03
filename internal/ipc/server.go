@@ -2539,6 +2539,24 @@ func (s *Server) registerMethods() {
 			// Cleanup happens naturally: the next "initialized" call for
 			// the same issue replaces the runtime, and process exit drops all.
 		case "failed":
+			// Book the failing stage's spend BEFORE recording the error (#293).
+			// This branch previously dropped p.CostUsd/p.*Tokens entirely, so
+			// TotalCostUSD — and every consumer downstream (stateChanged
+			// snapshot → TS estimated_cost_usd → the terminal-failure card) —
+			// omitted the failing stage: the card showed $1.52 (spend through
+			// the last successful stage) for a $14.84 run, on the exact screen
+			// where the operator decides Retry vs recover. Mirrors the Go
+			// scheduler path, which books cost unconditionally after a stage
+			// returns and records terminating-stage ground truth on failure
+			// (#146); the stage also lands in StageErrors below, which the TS
+			// snapshot applier applies after completedStages, so its UI status
+			// stays "failed".
+			if p.CostUsd > 0 {
+				rt.CompleteStageWithCost(1, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
+			} else if p.InputTokens > 0 || p.OutputTokens > 0 {
+				rt.CompleteStage(1, p.InputTokens, p.OutputTokens, p.Model)
+			}
+			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			rt.SetStageError(stage, p.Error)
 			// NOTE: Do NOT delete the runtime here (#232). notifyComplete is the
 			// interactive terminal funnel and fires right after this with

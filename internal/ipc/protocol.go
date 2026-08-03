@@ -1105,8 +1105,10 @@ type AutonomousPauseParams struct {
 	Stage string `json:"stage,omitempty"`
 	// TerminalKind is the classified terminal failure kind.
 	TerminalKind string `json:"terminalKind,omitempty"`
-	// CostUsd is the run's estimated spend so far; omitted/zero degrades
-	// gracefully (the terminating-stage cost plumbing of #146 has not landed).
+	// CostUsd is the run's estimated spend so far, including the failing
+	// stage (#293 — the "failed" stage transition books its cost into
+	// TotalCostUSD, which the extension mirrors into estimated_cost_usd).
+	// Omitted/zero degrades gracefully.
 	CostUsd float64 `json:"costUsd,omitempty"`
 }
 

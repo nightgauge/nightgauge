@@ -399,3 +399,72 @@ func TestNotifyComplete_ThreadsStageExecutionPathsFromParams(t *testing.T) {
 		t.Errorf("pr-create punt_reason = %q, want %q — the record must answer WHY the LLM ran", create.PuntReason, "missing-validate-context")
 	}
 }
+
+// #293: the terminal-failure card showed $1.52 for a $14.84 run because the
+// "failed" stage transition dropped the failing stage's cost entirely —
+// TotalCostUSD only accumulated on "complete". The failing stage's spend must
+// be booked (mirroring the Go scheduler path's #146 plumbing) so the runtime
+// snapshot, the stateChanged event the extension mirrors into
+// estimated_cost_usd (the value the halt card reports), and the V2 RunRecord
+// all carry the run's TRUE total: X (succeeded stage) + Y (failing stage).
+func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
+	dir := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	// Stage 1: feature-planning succeeds at $1.52.
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"running"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(planning running): %v", err)
+	}
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"complete","inputTokens":1000,"outputTokens":200,"costUsd":1.52}`)); err != nil {
+		t.Fatalf("notifyStageTransition(planning complete): %v", err)
+	}
+	// Stage 2: feature-dev fails at $13.32.
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"running"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(dev running): %v", err)
+	}
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"failed","error":"stage gate failed","inputTokens":90000,"outputTokens":8000,"costUsd":13.32}`)); err != nil {
+		t.Fatalf("notifyStageTransition(dev failed): %v", err)
+	}
+
+	// The in-memory runtime — the source of the stateChanged snapshot the
+	// extension mirrors into tokens.estimated_cost_usd — must carry X+Y.
+	s.mu.Lock()
+	rt := s.activeRuntimes["293"]
+	s.mu.Unlock()
+	if rt == nil {
+		t.Fatal("runtime missing after failed transition (must survive until notifyComplete, #232)")
+	}
+	snap := rt.Snapshot()
+	if got, want := snap.TotalCostUSD, 1.52+13.32; got < want-0.001 || got > want+0.001 {
+		t.Errorf("snapshot TotalCostUSD = %.4f, want %.2f (failing stage's cost must be booked, not dropped)", got, want)
+	}
+
+	// The failed run's V2 RunRecord must also total X+Y with per-stage
+	// attribution for BOTH stages and no double count from the
+	// terminating-stage synthesis branch (the stage is in CompletedStages,
+	// so synthesis must not fire).
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"success":false,"failedStage":"feature-dev","error":"stage gate failed","totalDurationMs":295000}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
+	records := readHistoryRecords(t, dir)
+	if len(records) != 1 {
+		t.Fatalf("expected exactly one RunRecord, got %d", len(records))
+	}
+	rec := records[0]
+	if got, want := rec.Tokens.EstimatedCostUSD, 1.52+13.32; got < want-0.001 || got > want+0.001 {
+		t.Errorf("V2 Tokens.EstimatedCostUSD = %.4f, want %.2f", got, want)
+	}
+	dev, ok := rec.Tokens.PerStage["feature-dev"]
+	if !ok {
+		t.Fatalf("feature-dev missing from tokens.per_stage; per_stage=%v", rec.Tokens.PerStage)
+	}
+	if got := dev.CostUSD; got < 13.32-0.001 || got > 13.32+0.001 {
+		t.Errorf("feature-dev per-stage CostUSD = %.4f, want 13.32 (booked exactly once)", got)
+	}
+	if detail, ok := rec.Stages["feature-dev"]; !ok || detail.Status != "failed" {
+		t.Errorf("feature-dev stage detail = %+v, want status failed (cost booking must not flip the stage to complete)", detail)
+	}
+}
