@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,6 +142,25 @@ func TestClassifyTerminalKind_RecoverableKinds(t *testing.T) {
 			"pr_merge_unmerged: something went wrong",
 			TerminalKindPrMergeUnmerged,
 		},
+		// Issue #289: a harness tool-call denial (the canonical trigger is a
+		// stage reaching for a forbidden foreground `sleep` wait loop) must
+		// classify as permission_denied, not fall through to the generic
+		// subagent_crash "exit " heuristic.
+		{
+			"permission_denied_user_rejected_tool_use",
+			`{"is_error": true, "stop_reason": "tool_use", "tool_use_result": "User rejected tool use"}`,
+			TerminalKindPermissionDenied,
+		},
+		{
+			"permission_denied_bracket_marker",
+			"[permission-denied] harness denied the tool call",
+			TerminalKindPermissionDenied,
+		},
+		{
+			"permission_denied_underscore_form",
+			"permission_denied: tool call rejected",
+			TerminalKindPermissionDenied,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,6 +168,46 @@ func TestClassifyTerminalKind_RecoverableKinds(t *testing.T) {
 				t.Errorf("ClassifyTerminalKind(%q) = %q, want %q", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestOnPipelineComplete_PermissionDenied_TransientNoPauseNoCascade covers
+// Issue #289 AC3: a denied tool call (the canonical trigger is a stage
+// reaching for a forbidden foreground `sleep` wait loop) must route as
+// retryable, must NOT increment LifetimeIssueFailures, and must NOT trip
+// haltQueueOnSlotFailure — even across a burst on the same issue.
+func TestOnPipelineComplete_PermissionDenied_TransientNoPauseNoCascade(t *testing.T) {
+	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+	as.state.LifetimeIssueFailures = map[string]int{}
+	as.perIssueFailureCount = map[string]int{}
+	as.retryBackoff = map[string]retryPlan{}
+
+	repo := "acme/widgets"
+	issue := 289
+	before := time.Now()
+
+	addRunning(as, repo, issue, "denied tool call")
+	as.onPipelineComplete(repo, issue, false, false,
+		TerminalKindPermissionDenied,
+		"[permission-denied] harness denied a foreground sleep wait loop tool call")
+
+	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
+		t.Fatalf("scheduler tripped/paused on permission_denied; want still running (harness denial is not a crash)")
+	}
+	if as.cascadeTracker.IsTripped() {
+		t.Errorf("cascadeTracker tripped on permission_denied; want excluded from cascade")
+	}
+
+	key := fmt.Sprintf("%s#%d", repo, issue)
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("LifetimeIssueFailures[%q] = %d, want 0 (permission_denied must not count)", key, got)
+	}
+	retryAt, ok := retryDeadline(as, key)
+	if !ok {
+		t.Fatalf("expected retryBackoff[%q] to be set after permission_denied", key)
+	}
+	if !retryAt.After(before) {
+		t.Errorf("retryAt %v for %q not after call start %v", retryAt, key, before)
 	}
 }
 
