@@ -507,6 +507,7 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"notifications.discord.enabled",
 		"lm_studio",
 		"autonomous.enabled_repos",
+		"autonomous.allow_self_repo",
 		"ui.core.adapter",
 		"ui.core.default_model",
 		"ui.core.fallback_model",

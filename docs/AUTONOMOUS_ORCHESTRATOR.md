@@ -433,6 +433,7 @@ autonomous:
   enabled_repos: # Optional allowlist — scan only these repos.
     - acme-platform # Short names expand against the configured owner.
     - acme/mobile # Or use fully-qualified names.
+  allow_self_repo: false # Self-repo dispatch guard override (#292) — see below.
   safety_rails:
     budget_ceiling: 500000 # Token limit (overrides top-level)
     circuit_breaker_max: 3 # Consecutive failures before trip
@@ -440,6 +441,32 @@ autonomous:
     epic_checkpoint: true # Pause between epics for review
     health_gate_min: 30 # Minimum health score (0-100)
 ```
+
+### Self-repo dispatch guard (allow_self_repo, #292)
+
+Autonomous **refuses to dispatch an issue belonging to the repository that
+built the running binary**. That is a fixed-point hazard: a stage editing the
+execution machinery can be destroyed by the unfixed version of itself — #289
+lost a completed implementation exactly this way (the running binary's
+`ResetPipeline()` hard-reset the worktree of the stage implementing the guard
+against hard resets), and a fix does not take effect until rebuild + reload,
+so the pipeline would keep running the broken version while repeatedly trying
+to fix it.
+
+- **Identity** derives from the running binary's own origin: the executable's
+  enclosing git repo's `origin` remote, falling back to the module path for
+  binaries installed outside a checkout. It is _not_ the workspace's default
+  repo — the extension may be launched from anywhere.
+- **The refusal is visible, never a silent skip**: each refused issue raises
+  exactly one standing `fyi` Action Center card (`self-repo-refusal`
+  producer) saying the issue must be worked interactively; the card retracts
+  itself when the issue closes or leaves the board. The scan cycle also
+  counts refusals under the `self-repo-refused` rejection reason.
+- **Escape hatch**: set `autonomous.allow_self_repo: true` (machine tier,
+  `~/.nightgauge/config.yaml`) or pass `--allow-self-repo` to
+  `nightgauge autonomous run` when the hazard is deliberately accepted.
+- When self-identity cannot be resolved at all, the guard disables itself
+  rather than refusing blindly.
 
 ### Scoping to specific repos (enabled_repos)
 

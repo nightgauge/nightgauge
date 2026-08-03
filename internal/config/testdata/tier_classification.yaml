@@ -37,6 +37,7 @@ keys:
   notifications.discord.webhook_url: machine
   lm_studio: machine
   autonomous.enabled_repos: machine
+  autonomous.allow_self_repo: machine
   autonomous.repositories.*: machine
   # Runtime tier — VSCode memento (not in YAML files; enforcement pending #3313 Phase 3)
   pipeline.max_concurrent: runtime
