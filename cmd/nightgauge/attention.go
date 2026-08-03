@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/spf13/cobra"
@@ -109,6 +111,7 @@ func attentionListCmd() *cobra.Command {
 				return json.NewEncoder(os.Stdout).Encode(reqs)
 			}
 			printAttentionTable(cmd, reqs, repo, store, all)
+			printCoverageFooter(cmd, root)
 			return nil
 		},
 	}
@@ -117,6 +120,30 @@ func attentionListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repo, "repo", "", "Filter to a single owner/name repo")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Project root (default: current working directory)")
 	return cmd
+}
+
+// printCoverageFooter states what the last sweep actually looked at (#260).
+//
+// "✓ All clear" is only reassuring if you know its scope. Before this, an
+// empty Action Center read identically whether every repo was healthy or
+// whether nothing had ever been swept — and the second is how a sibling repo
+// accumulated six weeks of blocked PRs in silence.
+//
+// The count comes from the recorded sweep, never from config: the configured
+// list says what WOULD be covered, and reporting that as coverage would repeat
+// the same error one level up.
+func printCoverageFooter(cmd *cobra.Command, root string) {
+	cov, ok := sweep.ReadCoverage(root)
+	if !ok || len(cov.Repos) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "\nCoverage: no sweep on record — nothing has been looked at yet. Run `nightgauge attention sweep --repo <owner/name>`.")
+		return
+	}
+	when := ""
+	if t, err := time.Parse(time.RFC3339, cov.SweptAt); err == nil {
+		when = fmt.Sprintf(" (last swept %s)", t.Local().Format("2006-01-02 15:04"))
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "\nCoverage: %d repo(s) swept%s — %s\n",
+		len(cov.Repos), when, strings.Join(cov.Repos, ", "))
 }
 
 // printAttentionTable renders the decision-request list, or an all-clear

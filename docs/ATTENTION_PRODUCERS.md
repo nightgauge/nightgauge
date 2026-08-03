@@ -12,19 +12,32 @@ violating one degrades the inbox for every other producer.
 
 ## Which kind are you writing?
 
-|                  | **Run-scoped**                              | **Repo-scoped**                                    |
-| ---------------- | ------------------------------------------- | -------------------------------------------------- |
-| Fires on         | A transition inside a run                   | A condition observed by a sweep                    |
-| Lives in         | `internal/orchestrator/attention_wiring.go` | `internal/attention/sweep/<name>.go`               |
-| Raised by        | The scheduler calling `raiseAttention`      | Returning an observation from `Evaluate`           |
-| Ends when        | A human resolves it, or it expires          | ...also when the condition stops being observed    |
-| `context.run_id` | Set                                         | Absent                                             |
-| Needs            | A stable `idempotency_key`                  | A stable `idempotency_key` **and** a `fingerprint` |
+|                  | **Run-scoped**                              | **Repo-scoped**                                    | **Workspace-scoped**                     |
+| ---------------- | ------------------------------------------- | -------------------------------------------------- | ---------------------------------------- |
+| Fires on         | A transition inside a run                   | A condition observed by a sweep                    | A condition about the repo LIST itself   |
+| Lives in         | `internal/orchestrator/attention_wiring.go` | `internal/attention/sweep/<name>.go`               | `internal/attention/sweep/<name>.go`     |
+| Raised by        | The scheduler calling `raiseAttention`      | Returning an observation from `Evaluate`           | Same, from `WorkspaceProducer.Evaluate`  |
+| Evaluated        | Per transition                              | Once per repo, per sweep                           | Once per sweep, with the whole repo list |
+| Ends when        | A human resolves it, or it expires          | ...also when the condition stops being observed    | ...same                                  |
+| `context.run_id` | Set                                         | Absent                                             | Absent                                   |
+| Needs            | A stable `idempotency_key`                  | A stable `idempotency_key` **and** a `fingerprint` | Same as repo-scoped                      |
 
-The question that decides it: **if nobody is running anything, can this
-condition still be true?** A budget ceiling cannot — it only exists because a
-run spent money. A red default branch can, and does, most of the time nobody is
-looking.
+The question that decides run-scoped vs the rest: **if nobody is running
+anything, can this condition still be true?** A budget ceiling cannot — it only
+exists because a run spent money. A red default branch can, and does, most of
+the time nobody is looking.
+
+The question that decides repo-scoped vs workspace-scoped: **can a producer
+that is handed one repo at a time observe this?** If the condition is about a
+repo, it is repo-scoped. If it is about the repo _list_ — its coverage, its
+consistency, what is missing from it — no repo-scoped producer can see it,
+because it is never invoked for a repo nobody configured.
+
+That blind spot is not hypothetical; it is why `WorkspaceProducer` exists
+(#260). A sibling repo sat outside the configured list for six weeks with every
+open PR blocked by a broken required check, and the Action Center stayed quiet
+throughout — "not in scope" and "nothing wrong" render identically when the
+only thing that can speak is scoped to what is already in scope.
 
 Getting this wrong is not a style error. A standing condition raised as an event
 produces one duplicate card per observation; an event raised as a standing
@@ -38,6 +51,57 @@ they set `Standing: true` with a fingerprint, and their trigger sites call
 `AutoResolveUnobserved` with the complete set they just saw. The test is not
 which file the producer lives in, it is whether the trigger site observes a
 transition once or re-answers the same question forever.
+
+## Workspace-scoped: the interface
+
+```go
+type WorkspaceProducer interface {
+    Name() string
+    Evaluate(ctx context.Context, in WorkspaceInput) ([]attention.DecisionRequest, error)
+}
+```
+
+Register from an `init()` with `Default.RegisterWorkspace(&MyProducer{})`. The
+`Evaluate` contract is identical to the repo-scoped one, Invariant 1 included.
+
+`WorkspaceInput` carries `ConfiguredRepos` (every repo this sweep covers),
+`WorkspaceRoot`, a `forge.ForgeClient` for board-level discovery, and
+`Existing`. Use `in.Covers(repo)` rather than comparing strings — it matches a
+bare name against an `owner/name` spec in either direction, so a manifest entry
+written either way counts as coverage.
+
+**Cards are still per-repo.** Only the evaluation is workspace-wide: set
+`Context.Repo` to the repo the card is about, and the sweeper groups
+observations by repo before reconciling.
+
+### Reconciliation is two-step, and both steps are load-bearing
+
+`SweepWorkspace` reconciles per repo via `ReconcileStanding`, then calls
+`AutoResolveUnobserved` once for the producer. Neither alone is sufficient:
+
+- **`ReconcileStanding` per repo** supplies ID stamping, expiry refresh, and
+  the create/update/refresh/suppress decision that distinguishes a changed
+  condition from a re-observation. Calling `Store.Raise` directly skips all of
+  it and re-alerts on every sweep.
+- **`AutoResolveUnobserved` for the producer** is what retracts a card whose
+  repo stopped being uncovered. That repo produces no observation at all, so
+  the per-repo pass never visits it and nothing there would ever close it.
+
+This is safe here for the reason the [Run-scoped
+producers](#run-scoped-producers) section describes: a workspace producer
+re-answers its **entire** condition set on every sweep, which is exactly
+`AutoResolveUnobserved`'s documented precondition. A producer that only ever
+observed part of its set would need `AutoResolveKey` instead.
+
+### Discovery must fail loudly
+
+A workspace producer usually answers by comparing config against the world, and
+"the world" can fail to enumerate. `coverage-gap` reads two independent sources
+(local git checkouts, board-linked repos); either may fail alone, but if
+**both** fail it returns an error rather than an empty slice. An empty slice
+there would assert "no coverage gaps" on the strength of having looked nowhere
+— Invariant 1's exact failure mode, and doubly wrong in a producer whose entire
+purpose is that not-looking should be visible.
 
 ## Repo-scoped: the interface
 

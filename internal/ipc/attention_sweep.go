@@ -27,6 +27,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // AttentionSweepRepoResult is one repo's outcome. Every failure mode is a field
@@ -73,6 +74,14 @@ type AttentionSweepResult struct {
 	Busy bool `json:"busy,omitempty"`
 	// Reason echoes the trigger label the caller sent.
 	Reason string `json:"reason,omitempty"`
+	// SweptRepos is how many repos this sweep covered (#260). Surfaces so a
+	// caller can say "no cards across N repos" instead of just "no cards" —
+	// an empty Action Center is only reassuring if you know what was looked at.
+	SweptRepos int `json:"sweptRepos"`
+	// WorkspaceEvaluated / WorkspaceFailed report the workspace-scoped
+	// producers, which run once per sweep rather than per repo.
+	WorkspaceEvaluated []string          `json:"workspaceEvaluated,omitempty"`
+	WorkspaceFailed    map[string]string `json:"workspaceFailed,omitempty"`
 }
 
 // sweepMu serialises sweeps within one daemon. Four independent triggers can
@@ -116,7 +125,44 @@ func (s *Server) handleAttentionSweep(ctx context.Context, raw json.RawMessage) 
 		res.Updated += r.Updated
 		res.AutoResolved += r.AutoResolved
 	}
+	res.SweptRepos = len(repos)
+
+	// Workspace-scoped producers run ONCE, after the per-repo loop, and are
+	// given the same repo list (#260). They exist to reason about that list as
+	// an object — most importantly, about what is missing from it, which no
+	// per-repo producer can observe.
+	s.sweepWorkspace(ctx, store, repos, &res)
 	return res, nil
+}
+
+// sweepWorkspace evaluates the workspace-scoped producers. It never fails the
+// call: a workspace producer erroring must not invalidate the per-repo results
+// already collected.
+func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, repos []string, res *AttentionSweepResult) {
+	// Any repo's client will do — workspace producers use it only for
+	// board-level discovery, and every repo in a workspace shares the board.
+	// Without one, local-checkout discovery still runs.
+	var client forge.ForgeClient
+	if len(repos) > 0 && s.forgeClientFn != nil {
+		if c, err := s.forgeClientFn(repos[0]); err == nil {
+			client = c
+		}
+	}
+	sweeper := &sweep.Sweeper{
+		Store:         store,
+		Registry:      sweep.Default,
+		Forge:         client,
+		WorkspaceRoot: s.workspaceRoot,
+	}
+	wres, err := sweeper.SweepWorkspace(ctx, repos)
+	if err != nil {
+		log.Printf("attention.sweep: workspace sweep could not run: %v", err)
+		return
+	}
+	res.Created += wres.Created
+	res.AutoResolved += wres.AutoResolved
+	res.WorkspaceEvaluated = wres.Evaluated
+	res.WorkspaceFailed = wres.Failed
 }
 
 // sweepOneRepo runs the registry against a single repo. It never returns an
