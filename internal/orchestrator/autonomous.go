@@ -36,6 +36,7 @@ type AutonomousConfig struct {
 	DebounceRepos bool          // only re-query repos with recent completions
 	DryRun        bool          // show what would run without executing
 	PickupBacklog bool          // dispatch Backlog items after all Ready items are done (default: false)
+	AllowSelfRepo bool          // permit dispatching issues in the running binary's own repo (#292; default false — see docs/AUTONOMOUS_ORCHESTRATOR.md)
 	SafetyRails   *SafetyConfig // safety rail overrides (nil = use defaults)
 
 	// IdleScanInterval is the polling cadence used after the loop has been
@@ -715,6 +716,11 @@ type AutonomousScheduler struct {
 	// allowlist was applied (scan-all mode). Issue #3640.
 	enabledRepos []string
 	repoAliases  map[string]string
+	// selfRepoSlug is the "owner/repo" of the repository that built the
+	// RUNNING binary (#292), memoized at construction via
+	// ResolveSelfRepoSlug. "" means identity unknown — the self-repo
+	// dispatch guard disables itself rather than refusing blindly.
+	selfRepoSlug string
 	config       AutonomousConfig
 	state        *AutonomousState
 	safetyRails  *SafetyRails
@@ -968,13 +974,14 @@ func NewAutonomousScheduler(
 	copy(pristine, repos)
 
 	as := &AutonomousScheduler{
-		scheduler:   scheduler,
-		ghClient:    ghClient,
-		allRepos:    pristine,
-		repos:       repos,
-		repoAliases: repoAliases,
-		config:      cfg,
-		safetyRails: NewSafetyRails(safetyCfg),
+		scheduler:    scheduler,
+		ghClient:     ghClient,
+		allRepos:     pristine,
+		repos:        repos,
+		repoAliases:  repoAliases,
+		selfRepoSlug: ResolveSelfRepoSlug(),
+		config:       cfg,
+		safetyRails:  NewSafetyRails(safetyCfg),
 		// #3605 bullet C: cascading-failure circuit breaker. Defaults are
 		// 3 failures inside a 30-minute sliding window; env-var overrides
 		// (NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD / _WINDOW) take effect
@@ -2812,6 +2819,12 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// describes an issue that has since been closed, relabelled, or completed.
 	var ownerActionObserved []string
 
+	// selfRepoObserved mirrors ownerActionObserved for the self-repo refusal
+	// producer (#292): the loop visits every node, so the collected keys are
+	// the complete set of refusals true right now, and the post-loop
+	// auto-resolve retracts cards for issues that closed or moved.
+	var selfRepoObserved []string
+
 	var candidates []CandidateItem
 	for key, node := range g.Nodes {
 		// Skip nodes not in the filtered repo set (--repos restriction).
@@ -2884,6 +2897,22 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// blockedBy relationships are configured.
 		if !isDispatchableStatus(node.BoardStatus, as.config.PickupBacklog) {
 			bump(fmt.Sprintf("status=%q", node.BoardStatus))
+			continue
+		}
+
+		// Self-repo guard (#292): never dispatch an issue belonging to the
+		// repository that built the RUNNING binary — a stage editing that
+		// repo can be destroyed by the unfixed version of itself (#289).
+		// Placed after the label/board gates so only an issue that would
+		// otherwise dispatch raises a card. The refusal is visible (fyi
+		// card + rejection reason), never a silent skip; the escape hatch
+		// is autonomous.allow_self_repo / --allow-self-repo.
+		if as.selfRepoSlug != "" && !as.config.AllowSelfRepo && strings.EqualFold(node.Repo, as.selfRepoSlug) {
+			bump("self-repo-refused")
+			log.Printf("autonomous: refusing to dispatch %s — it belongs to the running binary's own repo (%s); work it interactively or set autonomous.allow_self_repo (#292)",
+				key, as.selfRepoSlug)
+			as.raiseSelfRepoRefusal(node.Repo, node.Number, node.Title)
+			selfRepoObserved = append(selfRepoObserved, keySelfRepoRefusal(node.Repo, node.Number))
 			continue
 		}
 
@@ -2984,6 +3013,10 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// The scan is complete, so every owner-action card the producer still holds
 	// open for an issue it did NOT just see describes a handoff that is over.
 	as.autoResolveAttention(producerOwnerActionHandoff, ownerActionObserved)
+	// Same contract for self-repo refusals (#292): a card whose issue the
+	// scan no longer refuses (closed, moved off Ready, override enabled)
+	// retracts itself instead of waiting out a TTL.
+	as.autoResolveAttention(producerSelfRepoRefusal, selfRepoObserved)
 
 	// Dangling epic gate warning: when cascade is disabled, warn if an epic has
 	// an open blockedBy but one or more of its sub-issues became candidates.
@@ -3126,6 +3159,16 @@ func candidatePriorityRank(p string) int {
 
 // enqueueItem adds an item to the existing scheduler's queue and starts it.
 func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateItem) {
+	// Defense-in-depth for the self-repo guard (#292): every dispatch path
+	// funnels through here, so even a candidate that slipped past the
+	// prioritize-level gate (or a future path that forgets it) is refused
+	// before any work starts. Loud by contract — never a silent skip.
+	if as.selfRepoSlug != "" && !as.config.AllowSelfRepo && strings.EqualFold(item.Repo, as.selfRepoSlug) {
+		log.Printf("autonomous: enqueueItem REFUSED %s#%d — self-repo guard (#292); work it interactively or set autonomous.allow_self_repo",
+			item.Repo, item.Number)
+		as.raiseSelfRepoRefusal(item.Repo, item.Number, item.Title)
+		return
+	}
 	log.Printf("autonomous: dispatching %s#%d (%s)", item.Repo, item.Number, item.Title)
 
 	// Add to running set

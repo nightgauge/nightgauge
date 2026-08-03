@@ -349,6 +349,14 @@ type AutonomousConfig struct {
 	// Empty/unset = scan all configured repos (current default behavior).
 	EnabledRepos []string `yaml:"enabled_repos,omitempty" json:"enabledRepos,omitempty"`
 
+	// AllowSelfRepo permits autonomous dispatch of issues belonging to the
+	// repository that built the RUNNING binary (#292). Default false: a
+	// stage editing that repo can be destroyed by the unfixed version of
+	// itself (#289), so self-repo issues are refused with an fyi attention
+	// card and must be worked interactively. Set true (or pass
+	// --allow-self-repo) only when that hazard is deliberately accepted.
+	AllowSelfRepo bool `yaml:"allow_self_repo,omitempty" json:"allowSelfRepo,omitempty"`
+
 	// DisableEpicBlockedByCascade disables the default behaviour where a
 	// sub-issue is treated as blocked when its parent epic has an open
 	// blockedBy dependency. When false (default), the cascade is active and

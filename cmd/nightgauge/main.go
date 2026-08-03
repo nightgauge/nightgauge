@@ -4473,6 +4473,9 @@ func serveCmd() *cobra.Command {
 						if cfg.Autonomous.PickupBacklog != nil {
 							autoCfg.PickupBacklog = *cfg.Autonomous.PickupBacklog
 						}
+						if cfg.Autonomous.AllowSelfRepo {
+							autoCfg.AllowSelfRepo = true
+						}
 						if cfg.Autonomous.SafetyRails != nil {
 							src := cfg.Autonomous.SafetyRails
 							autoCfg.SafetyRails = &orchestrator.SafetyConfig{
@@ -8824,14 +8827,15 @@ func autonomousCmd() *cobra.Command {
 
 func autonomousRunCmd() *cobra.Command {
 	var (
-		owner      string
-		repos      []string
-		project    int
-		interval   time.Duration
-		budget     int64
-		maxSlots   int
-		dryRun     bool
-		outputJSON bool
+		owner         string
+		repos         []string
+		project       int
+		interval      time.Duration
+		budget        int64
+		maxSlots      int
+		dryRun        bool
+		allowSelfRepo bool
+		outputJSON    bool
 	)
 
 	cmd := &cobra.Command{
@@ -8874,6 +8878,9 @@ func autonomousRunCmd() *cobra.Command {
 					}
 					if !cmd.Flags().Changed("dry-run") && cfg.Autonomous.DryRun != nil {
 						dryRun = *cfg.Autonomous.DryRun
+					}
+					if !cmd.Flags().Changed("allow-self-repo") && cfg.Autonomous.AllowSelfRepo {
+						allowSelfRepo = true
 					}
 				}
 			}
@@ -8980,6 +8987,7 @@ func autonomousRunCmd() *cobra.Command {
 				BudgetCeiling:             budget,
 				DebounceRepos:             true,
 				DryRun:                    dryRun,
+				AllowSelfRepo:             allowSelfRepo,
 				PickupBacklog:             pickupBacklog,
 				RefinementEnabled:         refinementEnabled,
 				RefinementInterval:        refinementInterval,
@@ -9087,6 +9095,7 @@ func autonomousRunCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&budget, "budget", 0, "Token budget ceiling (0 = unlimited)")
 	cmd.Flags().IntVar(&maxSlots, "max-concurrent", 3, "Maximum concurrent pipeline slots")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would run without executing")
+	cmd.Flags().BoolVar(&allowSelfRepo, "allow-self-repo", false, "Permit dispatching issues in the running binary's own repo (#292 — a stage editing that repo can be destroyed by the unfixed version of itself)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output final status as JSON")
 	return cmd
 }

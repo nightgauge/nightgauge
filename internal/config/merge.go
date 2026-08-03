@@ -38,6 +38,10 @@ var MachineTierKeys = []string{
 	"notifications.discord.enabled",
 	"lm_studio",
 	"autonomous.enabled_repos",
+	// autonomous.allow_self_repo is a per-machine safety opt-out (#292):
+	// which binary is "self" is a property of the machine's checkout, and
+	// the hazard it accepts is machine-local. Same tier as enabled_repos.
+	"autonomous.allow_self_repo",
 	"ui.core.adapter",
 	"ui.core.default_model",
 	"ui.core.fallback_model",

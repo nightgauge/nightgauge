@@ -44,6 +44,7 @@ const (
 	producerArchitectureApprove = "architecture-approval"
 	producerTerminalFailure     = "terminal-failure"
 	producerUntrustedAuthor     = "author-trust-gate"
+	producerSelfRepoRefusal     = "self-repo-refusal"
 )
 
 // producerUnverifiedDeliverableStreak is a fourth standing, run-loop-scoped
@@ -439,6 +440,50 @@ func (as *AutonomousScheduler) raiseArchitectureApproval(repo string, issue int,
 // the same card in place instead of spawning duplicates.
 func keyUntrustedAuthorSkip(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerUntrustedAuthor, repo, issue)
+}
+
+// keySelfRepoRefusal builds the sticky (producer, idempotency_key) identity
+// for a self-repo dispatch refusal (#292), keyed on repo#issue so both the
+// prioritize-level gate and the enqueueItem defense-in-depth gate update one
+// card in place.
+func keySelfRepoRefusal(repo string, issue int) string {
+	return fmt.Sprintf("%s:%s#%d", producerSelfRepoRefusal, repo, issue)
+}
+
+// raiseSelfRepoRefusal surfaces an fyi card when the self-repo guard (#292)
+// refuses to dispatch an issue belonging to the repository that built the
+// running binary. The refusal must be visible rather than a silent skip: the
+// operator needs to know the issue exists and must be worked interactively
+// (or the guard explicitly overridden). No repair option is offered — no
+// registry verb clears the condition; only working the issue interactively
+// or setting autonomous.allow_self_repo does (ADR 015 invariant 3).
+func (as *AutonomousScheduler) raiseSelfRepoRefusal(repo string, issue int, title string) {
+	as.raiseAttention(attention.DecisionRequest{
+		IdempotencyKey: keySelfRepoRefusal(repo, issue),
+		Kind:           attention.KindHandoff,
+		Severity:       attention.SeverityFYI,
+		Title:          fmt.Sprintf("Self-repo issue refused — work #%d interactively", issue),
+		Body: fmt.Sprintf("#%d (%q) belongs to %s — the repository that built the RUNNING binary. "+
+			"Autonomous refuses to dispatch it: a stage editing this repo can be destroyed by the "+
+			"unfixed version of itself (#289 lost a completed implementation exactly this way, and a "+
+			"fix to the execution machinery does not take effect until rebuild+reload, so the pipeline "+
+			"would keep running the broken version while repeatedly trying to fix it). Work the issue "+
+			"in an interactive session; to override deliberately, set autonomous.allow_self_repo: true "+
+			"or pass --allow-self-repo.",
+			issue, title, repo),
+		Producer: producerSelfRepoRefusal,
+		Standing: true,
+		// Constant fingerprint: the verdict for a given issue cannot change
+		// cycle to cycle unless config or the binary's origin changes, so
+		// this alerts once and stays muted until resolved or retracted.
+		Fingerprint: "refused:self-repo",
+		Context:     attention.Context{Repo: repo, Issue: issue, Blocker: "self-repo guard (#292)"},
+		Options: []attention.Option{
+			noopOption("acknowledge", "Acknowledge (work interactively)"),
+		},
+		DefaultAction: "acknowledge",
+		ExpiresAt:     standingExpiry(),
+	})
 }
 
 // raiseUntrustedAuthorSkip surfaces a review_required-equivalent card when the
