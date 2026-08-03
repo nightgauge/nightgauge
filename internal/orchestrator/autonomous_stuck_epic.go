@@ -56,7 +56,38 @@ type stuckEpicScanOpts struct {
 	disableEpicCascade bool                                 // honor autonomous.disable_epic_blockedby_cascade
 	isRecovering       func(repo string, number int) bool   // actively recovering → not stuck
 	failureReason      func(repo string, number int) string // best-effort last-run reason for the alert
+
+	// prEvidence answers whether an "In review" sub-issue actually has an open
+	// PR behind it. THREE-state on purpose (#265): the board status "In review"
+	// is overloaded — the PR-review phase and the architecture-approval gate
+	// both land an issue there — so rendering "PR open, awaiting merge" from
+	// the status alone sends the operator hunting for a PR that may not exist.
+	// nil means no evidence source was wired, which reads as prUnverified
+	// rather than as an assertion either way.
+	prEvidence func(repo string, number int) prVerdict
+
+	// awaitingArchApproval reports that the issue's last run halted on the
+	// architecture-approval gate — the other, opposite-action cause of an "In
+	// review" status. nil means "cannot tell", never "no".
+	awaitingArchApproval func(repo string, number int) bool
 }
+
+// prVerdict is the three-state answer to "does this issue have an open PR?".
+// The third state exists because #265 shipped a card that stated the answer
+// confidently without ever asking the question; a diagnostic that cannot tell
+// "no" from "I did not look" must say so rather than pick the likelier story.
+type prVerdict int
+
+const (
+	// prUnverified means no successful PR lookup covered this issue — the
+	// repo's PR query failed, or no evidence source was wired. Never render
+	// this as either the presence or the absence of a PR.
+	prUnverified prVerdict = iota
+	// prOpen means a PR listing succeeded and found an OPEN PR for the issue.
+	prOpen
+	// prAbsent means a PR listing succeeded and found no OPEN PR for the issue.
+	prAbsent
+)
 
 // stuckEpicsFromGraph is the pure detector. It returns one StuckEpic per OPEN
 // epic that has at least one open sub-issue, NO sub-issue that is eligible
@@ -129,7 +160,7 @@ func stuckEpicsFromGraph(graph *depgraph.Graph, o stuckEpicScanOpts) []StuckEpic
 			blockers = append(blockers, StuckBlocker{
 				Number: s.Number,
 				Title:  s.Title,
-				Reason: blockerReasonFor(s, adj, graph, o.failureReason, o.disableEpicCascade),
+				Reason: blockerReasonFor(s, adj, graph, o),
 			})
 		}
 		ts := ""
@@ -235,8 +266,12 @@ func openBlockerRefs(depKeys []string, graph *depgraph.Graph) []string {
 
 // blockerReasonFor explains why an open sub-issue is not making progress. It
 // prefers the concrete graph blocker (open dependency), then the last-run failure
-// from history, then the board status.
-func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph.Graph, failureReason func(string, int) string, disableEpicCascade bool) string {
+// from history, then the board status. Takes the whole scan opts so the
+// "In review" branch can consult PR evidence and the approval gate (#265)
+// instead of inferring a cause from the overloaded status string.
+func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph.Graph, o stuckEpicScanOpts) string {
+	failureReason := o.failureReason
+	disableEpicCascade := o.disableEpicCascade
 	// Direct blocker takes precedence (matches the dispatcher's ordering: own-dep
 	// before epic cascade). Only OPEN, non-work-complete deps are real blockers —
 	// an "In review" dep (PR up) does not block downstream work (#4073 review).
@@ -264,11 +299,7 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 	status := n.BoardStatus
 	switch {
 	case strings.EqualFold(status, "In review"):
-		// Normal PR-awaiting-merge state — not a likely silent failure.
-		if hist != "" {
-			return "in review (PR open, awaiting merge) — last run: " + hist
-		}
-		return "in review (PR open, awaiting merge)"
+		return inReviewReason(n, o, hist)
 	case strings.EqualFold(status, "In progress"):
 		if hist != "" {
 			return fmt.Sprintf("in %s with no active run — last run: %s", status, hist)
@@ -287,6 +318,52 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 	}
 }
 
+// withHist appends the last-run reason to a stall reason when there is one.
+func withHist(reason, hist string) string {
+	if hist == "" {
+		return reason
+	}
+	return reason + " — last run: " + hist
+}
+
+// inReviewReason explains an "In review" sub-issue WITHOUT inferring a cause
+// from the status string (#265).
+//
+// "In review" is overloaded: the PR-review phase parks an issue there, and so
+// does the architecture-approval gate (see TerminalKindArchitectureApprovalRequired,
+// which moves the board to "In review" on purpose). The two states need
+// opposite operator actions — merge a PR, versus approve a gate so work can
+// START — so the old unconditional "PR open, awaiting merge" was not merely
+// imprecise: it named the wrong action, confidently, and sent the operator to
+// a PR list that had nothing in it.
+//
+// Each branch below states only what was observed. When nothing was observed,
+// it says that too rather than picking the likelier story.
+func inReviewReason(n *depgraph.Node, o stuckEpicScanOpts, hist string) string {
+	// The approval gate is checked first: when it is holding the issue, that
+	// is the actionable blocker regardless of PR state. The last-run reason is
+	// deliberately dropped here — it would read "architecture approval
+	// required", restating the sentence it is appended to.
+	if o.awaitingArchApproval != nil && o.awaitingArchApproval(n.Repo, n.Number) {
+		return "in review, awaiting architecture approval (no PR to merge — approve the gate so work can start)"
+	}
+
+	verdict := prUnverified
+	if o.prEvidence != nil {
+		verdict = o.prEvidence(n.Repo, n.Number)
+	}
+	switch verdict {
+	case prOpen:
+		return withHist("in review (PR open, awaiting merge)", hist)
+	case prAbsent:
+		return withHist("in review, but no open PR exists — the run never produced one", hist)
+	default:
+		// Fail-loud: naming the uncertainty is what lets an operator decide
+		// whether to trust the card, and is cheaper than a wrong instruction.
+		return withHist("in review (PR state unverified — the PR lookup did not succeed for this repo)", hist)
+	}
+}
+
 // --- scheduler wiring -------------------------------------------------------
 
 // detectStuckEpics runs the pure detector against the cycle's graph using the
@@ -300,16 +377,51 @@ func (as *AutonomousScheduler) detectStuckEpics(graph *depgraph.Graph) []StuckEp
 	}
 	pickup := as.config.PickupBacklog
 	disableCascade := as.config.DisableEpicBlockedByCascade
+	// Snapshot the PR-evidence maps under the same lock so the verdict a card
+	// reports is internally consistent for the whole scan.
+	prBacked := as.inReviewPRBacked
+	queryOK := as.prQueryOKRepos
 	as.mu.Unlock()
 
 	return stuckEpicsFromGraph(graph, stuckEpicScanOpts{
-		now:                time.Now(),
-		runningSet:         runningSet,
-		pickupBacklog:      pickup,
-		disableEpicCascade: disableCascade,
-		isRecovering:       as.isIssueActivelyRecovering,
-		failureReason:      as.issueLastFailureReason,
+		now:                  time.Now(),
+		runningSet:           runningSet,
+		pickupBacklog:        pickup,
+		disableEpicCascade:   disableCascade,
+		isRecovering:         as.isIssueActivelyRecovering,
+		failureReason:        as.issueLastFailureReason,
+		prEvidence:           prEvidenceFrom(prBacked, queryOK),
+		awaitingArchApproval: as.isAwaitingArchitectureApproval,
 	})
+}
+
+// prEvidenceFrom builds the three-state PR lookup from the reconcile sweep's
+// two maps. Membership in prBacked is a confirmed OPEN PR; otherwise the answer
+// depends on whether that repo's PR listing succeeded at all (#265) — which is
+// the difference between "there is no PR" and "nobody looked".
+func prEvidenceFrom(prBacked, queryOK map[string]bool) func(string, int) prVerdict {
+	return func(repo string, number int) prVerdict {
+		if prBacked[fmt.Sprintf("%s#%d", repo, number)] {
+			return prOpen
+		}
+		if queryOK[repo] {
+			return prAbsent
+		}
+		return prUnverified
+	}
+}
+
+// isAwaitingArchitectureApproval reports whether the issue's most recent run
+// halted on the architecture-approval gate. That gate parks the issue at "In
+// review" deliberately (see TerminalKindArchitectureApprovalRequired), which is
+// the second, PR-less meaning of that board status (#265). Best-effort: no
+// record reads as false, and the PR-evidence branch then does the talking.
+func (as *AutonomousScheduler) isAwaitingArchitectureApproval(repo string, number int) bool {
+	rec, ok := as.latestRunRecord(repo, number)
+	if !ok || rec == nil {
+		return false
+	}
+	return rec.TerminalFailureKind == TerminalKindArchitectureApprovalRequired
 }
 
 // isIssueActivelyRecovering reports whether the scheduler is currently working

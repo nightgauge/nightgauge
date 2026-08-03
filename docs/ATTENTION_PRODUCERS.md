@@ -161,6 +161,43 @@ distrust. Use `VerbNoop` for an honest dismiss and put the real next action in
 only when it is literally true. A failing check that is not _required_ blocks no
 merge, so it is not `blocking_fleet` no matter how red it looks.
 
+## Say only what you observed
+
+A card's body is an instruction. State what was **observed**, never what the
+state usually implies — and when nothing was observed, say that instead of
+picking the likelier story.
+
+`watchdog-stuck-epic` shipped the counter-example (#265). It rendered
+sub-issues as _"in review (PR open, awaiting merge)"_ from the board status
+alone, having never queried a PR. But `In review` is overloaded: the PR-review
+phase parks an issue there, and so does the architecture-approval gate
+(`TerminalKindArchitectureApprovalRequired` moves the board there on purpose).
+The two states need **opposite** operator actions — merge a PR, versus approve
+a gate so work can _start_ — so the card did not merely round off a detail; it
+named the wrong action confidently and sent the operator to an empty PR list. A
+specific, confident, wrong diagnostic is worse than none.
+
+The fix generalizes. Any lookup that can fail has **three** answers, not two:
+
+| Verdict      | Means                              | Render as             |
+| ------------ | ---------------------------------- | --------------------- |
+| present      | queried, and it is there           | the concrete claim    |
+| absent       | queried, and it is not there       | the explicit negative |
+| _unverified_ | the query failed, or nobody ran it | name the uncertainty  |
+
+Collapsing `unverified` into either neighbour reintroduces the same defect with
+the sign flipped — an unreachable forge becomes "no PR exists". Note that a
+**gating** caller may legitimately fold `unverified` into the fail-closed
+branch (`inReviewPRBacked` does, so an unverifiable dep never satisfies a
+`blockedBy` edge); a **reporting** caller must not, because its output is read
+by a human as a statement of fact. When one map serves both, keep the
+success-of-the-query signal alongside it (`prQueryOKRepos`) rather than making
+reporters re-derive it.
+
+This is the Silent No-Op class from
+[docs/FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md) pointed at output instead of
+control flow, and it is checked at review.
+
 ## Deduplicating against another producer
 
 Two producers can observe the same fact from different vantage points. The

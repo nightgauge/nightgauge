@@ -532,3 +532,129 @@ func TestAlertStuckEpics_PartialBatchArmsDelivered(t *testing.T) {
 		t.Errorf("only the 10 delivered epics must be armed, got %d", len(as.alertedStuckEpics))
 	}
 }
+
+// --- #265: "In review" is overloaded, so the reason must be observed --------
+
+// inReviewEpic builds a stalled epic whose single open sub-issue (#143) sits at
+// "In review" — the status the PR-review phase AND the architecture-approval
+// gate both produce.
+func inReviewEpic() *depgraph.Graph {
+	return buildEpicGraph("In progress",
+		[]*depgraph.Node{
+			{Number: 143, Title: "Sub A", State: "OPEN", BoardStatus: "In review"},
+		},
+		nil,
+	)
+}
+
+// reasonForInReviewSub runs the detector and returns the single blocker reason.
+func reasonForInReviewSub(t *testing.T, o stuckEpicScanOpts) string {
+	t.Helper()
+	o.now = time.Unix(1_700_000_000, 0)
+	o.runningSet = map[string]bool{}
+	o.isRecovering = noRecovery
+	if o.failureReason == nil {
+		o.failureReason = noReason
+	}
+	got := stuckEpicsFromGraph(inReviewEpic(), o)
+	if len(got) != 1 || len(got[0].Blockers) != 1 {
+		t.Fatalf("want 1 stuck epic with 1 blocker, got %+v", got)
+	}
+	return got[0].Blockers[0].Reason
+}
+
+// A confirmed OPEN PR is the ONLY input that licenses the "PR open, awaiting
+// merge" claim — the state the card is allowed to assert.
+func TestInReviewReason_ConfirmedOpenPR_ClaimsPR(t *testing.T) {
+	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
+		prEvidence: prEvidenceFrom(map[string]bool{"o/r#143": true}, map[string]bool{"o/r": true}),
+	})
+	if !strings.Contains(reason, "PR open, awaiting merge") {
+		t.Fatalf("a confirmed open PR must be reported as such; got %q", reason)
+	}
+}
+
+// #265 proper: a successful PR query that found NO PR must not claim one. This
+// is the exact production shape — the architecture-approval gate parked the
+// issue at "In review" with zero implementation behind it.
+func TestInReviewReason_QueriedAndNoPR_DoesNotClaimPR(t *testing.T) {
+	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
+		prEvidence: prEvidenceFrom(map[string]bool{}, map[string]bool{"o/r": true}),
+	})
+	if strings.Contains(reason, "PR open") {
+		t.Fatalf("no PR exists — the card must not claim one; got %q", reason)
+	}
+	if !strings.Contains(reason, "no open PR") {
+		t.Fatalf("want an explicit no-PR statement, got %q", reason)
+	}
+}
+
+// The third state: the repo's PR listing FAILED, so nothing was observed. The
+// card must say so rather than pick either confident answer — collapsing this
+// into "no PR" is the same defect class as #265 itself, just reversed.
+func TestInReviewReason_PRQueryFailed_ReportsUnverified(t *testing.T) {
+	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
+		// prBacked empty AND the repo missing from queryOK — a failed lookup.
+		prEvidence: prEvidenceFrom(map[string]bool{}, map[string]bool{}),
+	})
+	if strings.Contains(reason, "PR open") {
+		t.Fatalf("nothing was observed — must not claim a PR; got %q", reason)
+	}
+	if strings.Contains(reason, "no open PR exists") {
+		t.Fatalf("a failed lookup is not evidence of absence; got %q", reason)
+	}
+	if !strings.Contains(reason, "unverified") {
+		t.Fatalf("want the uncertainty named, got %q", reason)
+	}
+}
+
+// A wholly unwired detector (no evidence source at all) must also degrade to
+// "unverified" rather than inheriting the old unconditional PR claim.
+func TestInReviewReason_NoEvidenceSource_ReportsUnverified(t *testing.T) {
+	reason := reasonForInReviewSub(t, stuckEpicScanOpts{})
+	if strings.Contains(reason, "PR open") {
+		t.Fatalf("no evidence source wired — must not claim a PR; got %q", reason)
+	}
+	if !strings.Contains(reason, "unverified") {
+		t.Fatalf("want the uncertainty named, got %q", reason)
+	}
+}
+
+// The acceptance case from #265: sub-issues parked on the architecture-approval
+// gate must name the approval — the action that unblocks them — and never a PR.
+func TestInReviewReason_AwaitingArchApproval_NamesApprovalNotPR(t *testing.T) {
+	reason := reasonForInReviewSub(t, stuckEpicScanOpts{
+		awaitingArchApproval: func(string, int) bool { return true },
+		prEvidence:           prEvidenceFrom(map[string]bool{}, map[string]bool{"o/r": true}),
+		// The gate's terminal kind also surfaces as the last-run reason; the
+		// card must not restate it.
+		failureReason: func(string, int) string { return "architecture approval required" },
+	})
+	if strings.Contains(reason, "PR open") {
+		t.Fatalf("gate-parked issue has no PR to merge; got %q", reason)
+	}
+	if !strings.Contains(reason, "architecture approval") {
+		t.Fatalf("want the approval named as the blocker, got %q", reason)
+	}
+	if strings.Contains(reason, "last run:") {
+		t.Fatalf("last-run reason restates the sentence; got %q", reason)
+	}
+}
+
+// prEvidenceFrom is the seam that keeps "no PR" and "never looked" apart; test
+// it directly so a future refactor cannot quietly collapse the two.
+func TestPREvidenceFrom_ThreeStates(t *testing.T) {
+	ev := prEvidenceFrom(
+		map[string]bool{"o/r#1": true},
+		map[string]bool{"o/r": true},
+	)
+	if got := ev("o/r", 1); got != prOpen {
+		t.Errorf("backed issue: want prOpen, got %v", got)
+	}
+	if got := ev("o/r", 2); got != prAbsent {
+		t.Errorf("queried repo, unbacked issue: want prAbsent, got %v", got)
+	}
+	if got := ev("o/other", 3); got != prUnverified {
+		t.Errorf("repo whose query failed: want prUnverified, got %v", got)
+	}
+}
