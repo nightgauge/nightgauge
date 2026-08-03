@@ -1,0 +1,241 @@
+{
+  "comment": [
+    "Terminal-path behavior parity manifest (#257).",
+    "",
+    "Nightgauge has two pipeline execution paths that must stay behavior-parallel:",
+    "  Go:        Scheduler.runPipeline() via dispatchItem (CLI/auto mode, autonomous board-scan)",
+    "  Extension: queue.dequeueIndependent over IPC -> ConcurrentPipelineManager.fillSlots -> HeadlessOrchestrator",
+    "A behavior wired to only one path is invisible on the other: no error, no failed test,",
+    "no log line (#210 stage gates, #254 CompleteQueueItem).",
+    "",
+    "Every behavior a dispatched run must perform when it reaches a terminal state is listed",
+    "here, with the call-site anchor on each path, or an explicit pathSpecific reason (and,",
+    "where the gap is a defect, the tracking issue). Two test suites enforce this manifest —",
+    "internal/orchestrator/terminal_parity_test.go and",
+    "packages/nightgauge-vscode/tests/services/terminalParity.test.ts:",
+    "  1. every anchor listed here must exist in its file (a rename/removal fails both suites);",
+    "  2. the fenced terminal-funnel regions (terminal-parity markers in scheduler.go and",
+    "     ConcurrentPipelineManager.ts) are content-pinned by sha256 of their normalized source.",
+    "     ANY change inside a fence fails the tests until the hash here is updated — that is",
+    "     the point: updating this file is the moment you answer 'which of the two paths",
+    "     reaches the behavior I just added, and is the other one intentionally excluded?'",
+    "",
+    "To update a fence hash after a deliberate change: run the failing test; it prints the",
+    "new hash. Record it here together with any behavior rows the change added or removed.",
+    "Normalization (identical in both suites): per line, trim whitespace; drop empty lines;",
+    "drop lines starting with '//'; join with '\\n'; sha256 hex."
+  ],
+  "behaviors": [
+    {
+      "name": "queue-item-completion",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.CompleteQueueItem(item.Repo, item.Number)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await this.completeQueueItem("
+      }
+    },
+    {
+      "name": "autonomous-terminal-notify",
+      "note": "Cascade-breaker feed, lifetime failure cap, and board revert all hang off this signal (AUTO OnPipelineComplete).",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.onPipelineComplete(item.Repo, item.Number, snap, pipelineSuccess)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/bootstrap/services.ts",
+        "anchor": ".autonomousComplete("
+      }
+    },
+    {
+      "name": "stage-gate-evaluation",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "if gate, ok := s.stageGates[stage]; ok && gate != nil {"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "anchor": "private async runPostConditionGate("
+      }
+    },
+    {
+      "name": "board-status-failure-sync",
+      "note": "Terminal board status intentionally differs today: Go moves to Ready/Backlog (FailPipeline), the extension moves to In review with the autonomous layer re-reverting to Ready. Parity here asserts both paths sync SOMETHING, not that the target status matches.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.stateSvc.FailPipeline(context.Background(), item.ID, targetStatus)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "const revertResult = await updateProjectItemStatus("
+      }
+    },
+    {
+      "name": "learning-outcome-record",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel)"
+      },
+      "extension": {
+        "pathSpecific": "NOT WIRED — extension-path runs record no learning outcomes; HeadlessOrchestrator's comment claiming the Go side covers it is false for this path. Tracked by #304."
+      }
+    },
+    {
+      "name": "history-record-write",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.recordV2History(item, snap, pipelineSuccess, workspaceRoot"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "s.methods[\"pipeline.notifyComplete\"]"
+      }
+    },
+    {
+      "name": "pipeline-done-telemetry",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{"
+      },
+      "extension": {
+        "file": "internal/ipc/server.go",
+        "anchor": "s.emitPipelineDoneTelemetry(runID, p)"
+      }
+    },
+    {
+      "name": "worktree-cleanup",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.execMgr.CleanupWorktree(item.Repo, item.Number)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await this.cleanupSlot(slot, preserveWorktree, deleteMergedBranch)"
+      }
+    },
+    {
+      "name": "merged-branch-cleanup",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;"
+      }
+    },
+    {
+      "name": "orphaned-remote-branch-reclaim",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "ReclaimOrphanedRemoteBranch(context.Background(), workspaceRoot, branchName)"
+      },
+      "extension": {
+        "pathSpecific": "NOT WIRED — the extension path leaves orphaned remote branches to the Go-side reconcile/worktree sweeps (#110 lineage) instead of reclaiming at terminal time. Revisit if sweep coverage changes."
+      }
+    },
+    {
+      "name": "uncommitted-work-recovery",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "RecoverUncommittedWork(worktreePath, item.Number"
+      },
+      "extension": {
+        "pathSpecific": "Intentionally different mechanism: the extension preserves a failed run's worktree (cleanupSlot preserveWorktree) rather than deleting it, so recover-before-cleanup does not apply. The Go path deletes worktrees on every terminal outcome (#106) and must recover first (#3542/#3365)."
+      }
+    },
+    {
+      "name": "run-scoped-attention",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID"
+      },
+      "extension": {
+        "pathSpecific": "NOT WIRED — no IPC verb exists to raise a DecisionRequest, so extension-path runs can produce zero run-scoped Action Center cards. Tracked by #305."
+      }
+    },
+    {
+      "name": "terminal-kind-classification",
+      "note": "Wired on both paths but as two independent implementations held aligned by comments only. #306 tracks pinning them with a shared-fixture parity test.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "terminalFailureKind = ClassifyTerminalKind(errMsg)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/bootstrap/services.ts",
+        "anchor": "terminalFailureKind = \"stream_idle_timeout\""
+      }
+    },
+    {
+      "name": "queue-halt-on-failure",
+      "note": "Semantics differ (Go: pause with QueuePausedReason per failure_mode config; extension: clear + autonomousPause with a suppression ladder). Parity asserts both paths react to a slot failure.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "paused := s.pauseQueuedItemsUnlocked(reason)"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await this.haltQueueOnSlotFailure(slot, pipelineResult)"
+      }
+    },
+    {
+      "name": "stage-exit-records",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.writeStageExitRecord(item, stage, runtime, result, exitCode, err,"
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "anchor": "private async recordStageExitDiagnostic("
+      }
+    },
+    {
+      "name": "lifecycle-decision-trace",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "tracer := trace.NewWriter(workspaceRoot, runtime.RunID, item.Repo, item.Number)"
+      },
+      "extension": {
+        "pathSpecific": "By design Go-only (ADR 013 / #179): decision traces are produced by the deterministic layer; there is no TS producer, and replay reads Go-written journals."
+      }
+    },
+    {
+      "name": "failure-issue-comment",
+      "go": {
+        "pathSpecific": "Extension-only UX affordance: the interactive mode posts the failure comment where the operator is looking; the autonomous Go path surfaces failures through attention cards and board state instead."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await postFailureComment({"
+      }
+    },
+    {
+      "name": "auto-retro-on-failure",
+      "go": {
+        "pathSpecific": "Extension-only (#3926): auto-retro analysis runs in the interactive mode; the Go path's failures are analyzed by the batch retro skill instead."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "anchor": "void AutoRetroService.runAfterFailure("
+      }
+    }
+  ],
+  "fences": [
+    {
+      "id": "go-runPipeline-terminal-defer",
+      "file": "internal/orchestrator/scheduler.go",
+      "begin": "terminal-parity:begin runPipeline-terminal-defer",
+      "end": "terminal-parity:end runPipeline-terminal-defer",
+      "sha256": "d39c8923ae662162664c3beedacd82f004998e78e21237b8e21584ffcc86db4c"
+    },
+    {
+      "id": "extension-runSlotPipeline-finally",
+      "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+      "begin": "terminal-parity:begin runSlotPipeline-finally",
+      "end": "terminal-parity:end runSlotPipeline-finally",
+      "sha256": "4e2a04aa322678b4a0b20db308f32b6b554d5af0742846494fe0308e368aae67"
+    }
+  ]
+}
