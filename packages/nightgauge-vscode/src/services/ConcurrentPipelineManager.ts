@@ -232,7 +232,20 @@ export class BranchCollisionError extends Error {
 }
 
 /**
- * ConcurrentPipelineManager manages N pipeline "slots" for parallel execution
+ * ConcurrentPipelineManager manages N pipeline "slots" for parallel execution.
+ *
+ * PATH WARNING (#257): this class — not the Go scheduler — is the execution
+ * path the product is primarily operated in. Extension-mode runs go
+ * queue.dequeueIndependent over IPC → fillSlots → HeadlessOrchestrator and
+ * NEVER enter the Go Scheduler.runPipeline loop; their terminal bookkeeping
+ * lives in runSlotPipeline's finally block plus the IPC
+ * pipeline.notifyComplete handler. A behavior wired only into the Go loop
+ * does not exist here, and vice versa, with no error and no failed test
+ * (#210, #254). Before adding a terminal-path behavior, answer: which of the
+ * two paths reaches this, and is the other intentionally excluded? Then
+ * record it in internal/orchestrator/testdata/terminal_behaviors.json — the
+ * parity tests (tests/services/terminalParity.test.ts and the Go twin) fail
+ * until you do.
  */
 export class ConcurrentPipelineManager implements vscode.Disposable {
   private slots: Map<number, PipelineSlot> = new Map(); // keyed by issueNumber
@@ -1187,6 +1200,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       );
       throw error;
     } finally {
+      // terminal-parity:begin runSlotPipeline-finally (#257 — this region is
+      // content-pinned by internal/orchestrator/testdata/terminal_behaviors.json;
+      // any edit fails tests/services/terminalParity.test.ts until the manifest
+      // is updated, which is the moment to check the Go path for the same
+      // behavior)
       this.logger.info("[SlotLifecycle] FINALLY block entered", {
         slotIndex: slot.index,
         issueNumber: slot.issueNumber,
@@ -1377,6 +1395,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         });
         this.callbacks.onAllComplete?.();
       }
+      // terminal-parity:end runSlotPipeline-finally
     }
   }
 

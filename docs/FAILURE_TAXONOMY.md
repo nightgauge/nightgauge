@@ -669,3 +669,57 @@ excluded. The confirmed instances are filed as:
 - **#302** — batch of four small guards (bash-ring correlation self-check,
   zero-root worktree sweep, nil-state card retraction, unlogged
   `autonomousComplete` skip)
+
+### Dual-Path Drift (Issue #257)
+
+**Shape:** a behavior wired to one pipeline execution path silently does not
+exist on the other. The code is present, correct, and covered by tests — and
+never reached in the mode that matters. No error, no failed test, no log line.
+
+Nightgauge has two dispatch paths that must stay behavior-parallel:
+
+| Path      | Entry                                                                                                | Used by                               |
+| --------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Go        | `Scheduler.runPipeline()` via `dispatchItem`                                                         | CLI/auto mode, autonomous scan        |
+| Extension | `queue.dequeueIndependent` over IPC → `ConcurrentPipelineManager.fillSlots` → `HeadlessOrchestrator` | the VSCode extension (operating mode) |
+
+**Confirmed instances (evidence):**
+
+| Issue | Behavior                   | Wired to               | Consequence in the operating mode                                           |
+| ----- | -------------------------- | ---------------------- | --------------------------------------------------------------------------- |
+| #210  | Stage gates                | Extension wired 3 of 6 | `feature-dev`, `feature-planning`, `issue-pickup` ran ungated               |
+| #254  | `CompleteQueueItem`        | Go `runPipeline` only  | every autonomous run leaked a permanent `processing` queue item             |
+| #304  | Learning outcome record    | Go `runPipeline` only  | extension runs feed the self-improvement loop nothing                       |
+| #305  | Run-scoped attention cards | Go `runPipeline` only  | no IPC raise verb exists; interactive runs produce zero Action Center cards |
+
+**Why review does not catch it:** confirming _where_ a call sits inside a
+function says nothing about whether that function is ever entered. #254's
+comment even named the unwired path — as an aside, so it read as a benign edge
+case. The question review must ask is not "is this correct?" but **"which of
+the two paths reaches this — and is the other intentionally excluded?"**
+
+**Guards now in place:**
+
+1. **Parity manifest + twin tests.** Every terminal-path behavior is listed in
+   `internal/orchestrator/testdata/terminal_behaviors.json` with its call-site
+   anchor on each path, or an explicit `pathSpecific` reason (and tracking
+   issue when the gap is a defect). `internal/orchestrator/terminal_parity_test.go`
+   and `packages/nightgauge-vscode/tests/services/terminalParity.test.ts` both
+   enforce it: anchors must exist, and the two terminal funnels
+   (`runPipeline`'s defer; `runSlotPipeline`'s finally) are content-pinned by
+   hash — any edit inside them fails until the manifest answers the parity
+   question.
+2. **The paths are named in the code.** `runPipeline`'s doc comment states
+   the extension never enters it; `ConcurrentPipelineManager`'s states it is
+   the operating path and never enters the Go loop.
+
+**Relationship to adjacent classes:** distinct from Silent No-Op (above —
+an empty value conflated with success) and from shape-blindness (#169 — a
+dead branch because the runtime delivers a different shape). Here the code is
+live and correct but sits on a path the operating mode never takes; the guard
+is a path-parity assertion, not a value or shape check.
+
+Known intentional divergences (board terminal status, queue-halt semantics,
+worktree preservation on failure) and remaining alignment gaps (#306
+terminal-kind classifiers, #307 abort-deadline bookkeeping) are recorded in
+the manifest and its notes.

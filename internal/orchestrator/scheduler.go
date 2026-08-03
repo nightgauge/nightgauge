@@ -2644,6 +2644,18 @@ func maxFloat64(a, b float64) float64 {
 // 4. Evaluate model escalation signals (same-stage retry with better model)
 // 5. Evaluate backtrack signals (rewind to earlier stage)
 // 6. For feature-validate: run RALPH loop for self-healing
+//
+// PATH WARNING (#257): the VSCode extension NEVER enters this function.
+// Extension-mode runs — the mode this product is primarily operated in — go
+// queue.dequeueIndependent over IPC → ConcurrentPipelineManager.fillSlots →
+// HeadlessOrchestrator, and their terminal bookkeeping runs in
+// ConcurrentPipelineManager.runSlotPipeline's finally block plus the IPC
+// pipeline.notifyComplete handler. A behavior added ONLY here is invisible in
+// that mode with no error, no failed test, and no log line (#210, #254).
+// Before adding a terminal-path behavior below, answer: which of the two
+// paths reaches this, and is the other intentionally excluded? Then record it
+// in internal/orchestrator/testdata/terminal_behaviors.json — the parity
+// tests (terminal_parity_test.go and the TS twin) fail until you do.
 func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// Track repo concurrency
 	s.mu.Lock()
@@ -2794,6 +2806,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// applied to the V3 record. Used by adaptive stall-recovery (Issue #3005)
 	// to mark second-stall stages as `stall-killed-after-retry`.
 	stageFailureCategories := make(map[string]string)
+	// terminal-parity:begin runPipeline-terminal-defer (#257 — this region is
+	// content-pinned by testdata/terminal_behaviors.json; any edit fails
+	// terminal_parity_test.go until the manifest is updated, which is the
+	// moment to check the extension path for the same behavior)
 	defer func() {
 		// Issue #3542: before notifying the autonomous scheduler or reverting
 		// the board, check for uncommitted work in the worktree. The #3365
@@ -3041,6 +3057,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 	}()
+	// terminal-parity:end runPipeline-terminal-defer
 
 	// Set board status to In Progress (non-fatal: board sync failure should not abort pipeline)
 	if s.stateSvc != nil {
