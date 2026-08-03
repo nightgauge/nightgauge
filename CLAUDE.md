@@ -1,49 +1,23 @@
 # Nightgauge - Claude Code Configuration
 
-AI-powered Issue-to-PR pipeline. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for product layers and design.
+AI-powered Issue-to-PR pipeline. The **canonical agent ruleset** — project
+overview, versioning, git workflow, merge policy, pre-submission validation,
+security, public-core boundary, knowledge base usage — lives in `AGENTS.md`
+and is imported here:
 
-## Key Files
+@AGENTS.md
 
-- **packages/nightgauge-vscode/** - VSCode extension (PRIMARY product)
-- **cmd/nightgauge/** - Go CLI binary entry point
-- **internal/** - Go packages (deterministic layer — hooks, GitHub,
-  intelligence)
-- **packages/nightgauge-sdk/** - SDK for programmatic access
-- **skills/** - Pipeline stage definitions (portable)
-- **claude-plugins/** - Claude Code CLI wrappers (thin shell → Go binary)
-- **standards/** - Universal coding standards and security requirements
-- **[docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)** - Git workflow and
-  pre-submission validation
-- **[docs/GO_BINARY.md](docs/GO_BINARY.md)** - Go binary architecture and CLI
-  reference
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contributing guide (skills, plugins,
-  extension, SDK)
+This file adds only Claude-Code-specific material. Each rule appears in
+exactly one of the two files: if it is not below, it is in `AGENTS.md`.
 
-## Critical Rules
-
-### Versioning
-
-**Unified version**: all packages share `0.1.0` as the base version in
-`package.json`. The release version is derived from the git tag (`vX.Y.Z`)
-at release time and applied uniformly to the Go binary and the extension —
-not from a commit count. **NEVER set different versions** across
-`nightgauge-vscode` and `nightgauge-sdk`. See
-[docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md#versioning) for full rules.
-
-### Git Workflow
-
-**NEVER push directly to main.** Use feature branches (`feat/`, `fix/`,
-`docs/`). See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md) for full workflow.
-
-### Knowledge & Memory — Single Source of Truth
+## Knowledge & Memory — Single Source of Truth
 
 **Do NOT use the Claude Code auto-memory system** (no `MEMORY.md` / per-fact
 memory files). Everything durable lives in the repository so there is exactly
 one source of truth:
 
-- **How the agent should work** (rules, preferences, conventions) → this
-  `CLAUDE.md` and `AGENTS.md`.
+- **How the agent should work** (rules, preferences, conventions) →
+  `AGENTS.md` (canonical, all tools) and this `CLAUDE.md` (Claude Code only).
 - **Technical / triage knowledge** (symptom → root cause → fix, known
   false-alarms, runtime gotchas) → `docs/` — primarily
   [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md),
@@ -58,178 +32,15 @@ one source of truth:
 When you learn something worth keeping, edit the appropriate repo file in a
 branch/PR — never a side-channel memory store.
 
-### Agent Operating Rules
+## Claude Code Rules Directory
 
-- **No backwards compatibility (pre-customer).** Delete old paths; never add
-  deprecation shims, migration fallbacks, or compat knobs. Consolidate N
-  overlapping options to one, delete the rest from schema/config/docs, and
-  surface the single resolved value. Consistency over compatibility.
-- **Ship the best solution; don't offer menus.** If you spot a real gap or a
-  better approach, file the issue and execute it. Propose the recommended fix
-  and do it — avoid "quick fix vs proper fix" choices and "want me to…?"
-  friction. (This does not override genuine product-direction decisions, which
-  are still the user's call.)
-- **Manual PR merges only.** Auto-merge is disabled on all workspace repos.
-  Watch CI (`gh pr checks`), fix/rerun real failures (never dismiss a failing
-  test as "flaky" without root-causing it), then `gh pr merge --squash` — never
-  `--auto`. **`--admin` is required while the project has a single maintainer**:
-  `main` rulesets demand an approving review that nobody else can give, so
-  `--squash --admin` after green CI is the sanctioned path, not a bypass. Green
-  CI is still a precondition — `--admin` covers the missing reviewer, never a
-  failing check. Revisit when a second maintainer exists. See
-  [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
-- **Clean up on merge — branch and worktree, remote and local, every forge.** A
-  merge is not finished until its branch and any worktree are gone on both
-  sides. Squash merges need `git branch -D` (the squash commit is not the branch
-  tip, so `-d` refuses); confirm by content rather than ancestry. **Do not
-  hand-write the comparison — run `scripts/branch-merged-check.sh <branch>`**
-  (`--all` for every local branch). It exits `0` SAFE-DELETE / `1` KEEP / `2`
-  UNKNOWN, and only `0` authorizes deletion. Content alone cannot decide this:
-  a branch that _was_ merged reads "differs" once `main` evolves those files
-  (large deletion counts are the tell), so the script also accepts a merged PR
-  whose head SHA equals the branch tip. `NO_PR=1` skips the forge lookup and is
-  conservative by design. The idiom is scripted because every
-  hand-written form fails toward "safe to delete", silently: `git diff
-origin/main..<branch>` also reports everything `main` gained afterwards, and
-  restricting to the branch's own files via `-- $files` stops word-splitting
-  under zsh (an unquoted _variable_ is one word there, unlike an unquoted
-  command substitution) so the pathspec matches nothing and **every** branch
-  reads merged. An empty file list produces the same false "merged". Skipping
-  this is invisible once and compounding
-  across a hundred merges — and after the fact you cannot cheaply tell a
-  squash-merged branch from one that was never pushed. When the pipeline created
-  the branch or worktree, the pipeline must remove it; the operator is never the
-  garbage collector for machine-created state. See
-  [docs/GIT_WORKFLOW.md § After Merge](docs/GIT_WORKFLOW.md#after-merge).
-- **Concurrent issues must be conflict-free by construction.** Before working
-  two issues at the same time, compare the file sets they will plausibly touch.
-  If those sets overlap, either work the issues **sequentially** or declare a
-  `blockedBy` edge and **honor it** — declaring the edge and then starting both
-  anyway is the same failure with extra steps. Separate worktrees isolate the
-  checkout, not the merge: two agents editing one file in two worktrees each see
-  a clean tree and green CI, and the collision only surfaces when the second PR
-  rebases. Prefer sequencing whenever the overlap is uncertain; the cost of
-  serializing two issues is far below the cost of untangling a conflict after
-  both are "done". Broad mechanical sweeps (renames, redactions, codemods) touch
-  everything by definition — land them alone, over settled code, never
-  alongside logic changes to the same files.
-- **Context economy — auto-compact is not a context-management strategy.**
-  Frontier-model tokens are expensive and long contexts cost more per step, so
-  a large context is justified only when it actually carries the answer to the
-  task at hand (e.g. an in-flight incident's accumulated state). Otherwise
-  prefer the lean path: finish the current scope, then start a fresh session
-  for new work; delegate self-contained searches/subtasks to subagents that
-  return conclusions instead of dumping file contents into the main context;
-  and read only the parts of files a task needs. Never let a session drift
-  into "one more small task" accretion just because compaction will eventually
-  reclaim space — deliberate scoping beats automatic summarization. This is
-  also product philosophy: Nightgauge's pipeline hands each stage a scoped
-  context on purpose.
+Scoped rule files under `.claude/rules/` load only when working in the paths
+they cover:
 
-### GitHub CLI in Multi-User Workspaces
-
-Multiple workspaces from **different GitHub accounts** are often open at once
-(e.g. `octocat` for nightgauge repos, a separate bot account elsewhere).
-`gh auth switch` changes the **global** active account and silently breaks every
-other open workspace. **Never `gh auth switch` for repo work.** Instead pass a
-per-command scoped token:
-
-```bash
-GH_TOKEN=$(gh auth token --user octocat) gh <command> ...
-```
-
-This resolves `nightgauge/*` without disturbing the active account. (`git push`
-uses SSH and is unaffected.)
-
-### Developer Setup
-
-`npm install` requires no registry authentication: this repo depends on no
-private packages, and the generated platform types are vendored under
-`api/generated/`. Building the Go binary needs only the Go toolchain (`go.mod`).
-
-### Pre-Submission Validation (MANDATORY before every push)
-
-**NEVER push to GitHub without passing ALL local checks first.** CI is for
-confirming environment differences — not for discovering failures you could
-have caught locally. Every failed CI push wastes time and pollutes PRs with
-fix-up commits.
-
-The complete, ordered command list is maintained in **exactly one place** —
-[docs/GIT_WORKFLOW.md § Pre-Submission Validation](docs/GIT_WORKFLOW.md#pre-submission-validation-critical).
-Run every step there (Go build/tests → IPC client regen → TypeScript build →
-VSCode tests → SDK tests → Prettier → ESLint), or run them all at once with
-`bash scripts/ci-local.sh`, before every `git push`. Do NOT mark work as
-complete until all checks pass.
-
-**This rule binds whoever pushes — not every stage that touches code.** In the
-pipeline that is `feature-validate` (and any interactive session about to push).
-`feature-dev` does not commit or push (#1608); it verifies what it changed and
-hands off. A stage that runs the full suite anyway spends its whole budget on a
-job the next stage will redo — #221 lost a completed implementation that way,
-babysitting `ci-local.sh` until it ran out of turn.
-
-### Security
-
-See **[standards/security.md](standards/security.md)** for complete
-requirements.
-
-- NEVER hardcode secrets
-- ALWAYS validate input
-- NEVER commit secrets to git
-
-**Code review checklist**: Input validation on external data, no hardcoded
-secrets, parameterized DB queries, auth checks on every request, authorization
-for resource access, sensitive data encrypted, no internals in error messages,
-no sensitive data in logs, dependencies up to date.
-
-### Public-Repo Content Hygiene (issues, spikes, docs)
-
-This repo is maintained as a public-safe tree. The publication-boundary guard scans
-the tracked **tree** — but **GitHub issue and epic bodies are not in the tree**,
-so nothing mechanical catches them. When authoring an issue, epic, spike, or doc
-whose home is `nightgauge/nightgauge`, keep company economics, private
-implementation details, customer data, and unreleased roadmap material out.
-Those belong in `nightgauge-internal`; see
-[docs/DOCUMENTATION_IA.md](docs/DOCUMENTATION_IA.md). Describe only the stable
-public integration contract.
-
-- **Coordination epics/spikes that are mostly private work** belong in
-  `nightgauge-internal`; leave only a
-  slim capability-level stub in the public repo if a community tracker is wanted.
-- References to a public integration contract are fine. Private repository
-  plans, issue numbers, deployment topology, and implementation status are not.
-- Generated `docs/spikes/`, `docs/epics/`, and ADR artifacts require explicit
-  publication review; their directory location is not evidence of safety.
-
-### Pipeline Execution
-
-See `.claude/rules/vscode-extension.md` for pipeline execution rules (scoped to
-`packages/nightgauge-vscode/**`).
-
-### Issue Creation
-
-See `.claude/rules/scripts.md` for issue creation and project board sync rules
-(scoped to `claude-plugins/**` and `scripts/**`).
-
-## Creating Content
-
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for how to add VSCode commands, SDK
-modules, skills, and plugin commands.
-
-## Architecture
-
-See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for complete documentation.
-
-## Multi-Repository Workspace
-
-See **[docs/MULTI_REPO_WORKSPACE.md](docs/MULTI_REPO_WORKSPACE.md)** for
-multi-repo workspace support.
-
-## Knowledge Base Usage
-
-When working within `nightgauge/`, the pipeline auto-scaffolds a knowledge base directory per issue when `knowledge.enabled: true`. Always read `knowledge_path/PRD.md` and `knowledge_path/decisions.md` if `knowledge_path` is set in context. See `docs/KNOWLEDGE_BASE.md` for the full schema and lifecycle.
-
-**IA rule**: see [docs/KNOWLEDGE_BASE.md#information-architecture](docs/KNOWLEDGE_BASE.md#information-architecture) before deciding where to record decisions (`docs/` vs `.nightgauge/knowledge/`). Cross-cutting, stable, reader-facing decisions live in `docs/`; per-issue context lives in `knowledge/` and graduates manually via `nightgauge knowledge graduate`.
+- **Pipeline execution** — `.claude/rules/vscode-extension.md` (scoped to
+  `packages/nightgauge-vscode/**`).
+- **Issue creation and project board sync** — `.claude/rules/scripts.md`
+  (scoped to `claude-plugins/**` and `scripts/**`).
 
 ## Documentation Map
 
@@ -314,16 +125,6 @@ When working within `nightgauge/`, the pipeline auto-scaffolds a knowledge base 
 | Fan-Out Security         | docs/security/WORKFLOW_FANOUT_SECURITY.md                                          | security-review, fan-out, ceiling, absolute-ceiling, outputRef, replay, prompt-injection, secret-exfil, budget-dos, spawn                                                                                                      |
 | Adapter Doctor           | docs/ADAPTER_DOCTOR.md                                                             | doctor, preflight, adapter-health, codex login, version, mcp, model-validity, remediation, binary, auth, per-stage, doctor --adapters                                                                                          |
 
-## Companion Repositories
-
-Nightgauge integrates with a separate, closed-source hosted platform
-(licensing, billing, team analytics). It is optional: the pipeline runs fully
-locally against your own model keys with no account and no server.
-
-## Knowledge Base Usage
-
-When `knowledge_path` is set in pipeline context (auto-scaffolded at issue pickup when `knowledge.enabled: true`), always read `knowledge_path/PRD.md` and `knowledge_path/decisions.md` before implementing — these capture accumulated requirements and architecture decisions for the issue's feature area. Record new decisions using the ADR block format defined in `docs/KNOWLEDGE_BASE.md`. Outcomes and lessons are appended post-retro via `/nightgauge:retro`. See `docs/KNOWLEDGE_BASE.md` for the full schema and lifecycle.
-
 ## Compaction Preservation
 
 When compacting conversation history, ALWAYS preserve:
@@ -334,7 +135,3 @@ When compacting conversation history, ALWAYS preserve:
 - Error messages from failed operations
 - The current git branch name
 - Acceptance criteria from the issue being worked on
-
-## Author
-
-nightgauge

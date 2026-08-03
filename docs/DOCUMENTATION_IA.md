@@ -51,7 +51,7 @@ surfaces before a push, not only after CI rejects it.
 
 Note this scan covers the tracked **tree** only — GitHub issue and epic
 bodies are not in the tree, so nothing mechanical catches private content
-written there; see `CLAUDE.md`'s Public-Repo Content Hygiene section.
+written there; see `AGENTS.md` § Public Core Boundary & Content Hygiene.
 
 When uncertain, document the public contract here and keep the business or
 private implementation rationale internal.
