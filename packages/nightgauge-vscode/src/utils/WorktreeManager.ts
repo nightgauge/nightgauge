@@ -125,6 +125,25 @@ export class WorktreeManager {
     // if the target branch already has commits ahead of origin/<baseBranch>,
     // reuse it instead of destroying committed work on every retry.
     if (!options?.deleteRemoteBranch) {
+      // #283 defect 3 (work destruction): commits alone cannot decide reuse.
+      // feature-dev leaves its implementation UNCOMMITTED by contract
+      // (feature-validate commits), so after a failure-revert the preserved
+      // worktree is dirty with zero unique commits — and the rebuild below
+      // (`worktree remove --force` + `branch -D` + fresh add) deleted a
+      // completed, paid-for implementation on re-dispatch. A worktree that is
+      // registered to this branch AND carries uncommitted work is real work:
+      // reuse it in place.
+      if (
+        (await this.isWorktreeRegisteredToBranch(worktreePath, branchName)) &&
+        (await this.worktreeHasUncommittedWork(worktreePath))
+      ) {
+        return {
+          path: worktreePath,
+          branch: branchName,
+          issueNumber,
+          exists: true,
+        };
+      }
       const hasUniqueCommits = await this.branchHasUniqueCommits(branchName, baseBranch);
       if (hasUniqueCommits) {
         if (await this.isWorktreeRegisteredToBranch(worktreePath, branchName)) {
@@ -579,6 +598,27 @@ export class WorktreeManager {
    * lose. Requires a prior `git fetch origin` (already run earlier in
    * `create()`) for `origin/<baseBranch>` to be current.
    */
+  /**
+   * True when the worktree directory carries uncommitted work — modified
+   * tracked files or unignored untracked files (`git status --porcelain`).
+   * The check that keeps a re-dispatch from deleting a completed,
+   * not-yet-committed implementation (#283): feature-dev's deliverable is
+   * uncommitted by contract, so this — not commit count — is the signal that
+   * the worktree holds real work. Errors (missing dir, not a worktree) fall
+   * back to false, which routes to the existing rebuild path.
+   */
+  private async worktreeHasUncommittedWork(worktreePath: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", worktreePath, "status", "--porcelain"], {
+        timeout: 10_000,
+        encoding: "utf-8",
+      });
+      return stdout.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   private async branchHasUniqueCommits(branchName: string, baseBranch: string): Promise<boolean> {
     try {
       await execFileAsync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branchName}`], {

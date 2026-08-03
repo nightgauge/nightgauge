@@ -268,6 +268,14 @@ export interface PipelineRunResult {
   deferredStages: PipelineStage[];
   failedStage?: PipelineStage;
   error?: Error;
+  /**
+   * Structured terminal kind from the failing stage's post-condition gate
+   * (#283) — e.g. "validation_error" for a schema-mismatched handoff. Lets
+   * downstream consumers (haltQueueOnSlotFailure → autonomous.pause → the
+   * terminal-failure card) classify a harness/bookkeeping fault as such
+   * instead of hardcoding "unclassified" into the generic failure branch.
+   */
+  terminalKind?: string;
   /** Set when the run ended blocked — PR unmerged behind a non-retryable blocker (#190) */
   blocked?: BlockedTerminalState;
   /**
@@ -2729,7 +2737,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private async runPostConditionGate(
     stage: PipelineStage,
     issueNumber: number
-  ): Promise<Error | null> {
+  ): Promise<{ error: Error; terminalKind?: string } | null> {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
 
@@ -2819,12 +2827,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         await this.recoverStrandedWork(binary, cwd, issueNumber, stage);
       }
 
+      // #283 defect 3: thread the gate's STRUCTURED terminal_kind through
+      // instead of discarding it. Without it the exit record carried no
+      // terminal_kind at all (Go's text fallback matched nothing for e.g.
+      // "dev context does not match the expected schema"), the pause
+      // hardcoded "unclassified", and a harness/bookkeeping fault was booked
+      // as an organic FAIL — routing the run into the lifetime-cap,
+      // fleet-pausing branch and steering the operator wrong.
       if (gateResult.kind === "no_op") {
-        return new Error(
-          `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
-        );
+        return {
+          error: new Error(
+            `premature turn end: stage exited 0 with no state change (gate no-op): ${gateResult.reason}`
+          ),
+          terminalKind: gateResult.terminal_kind || undefined,
+        };
       }
-      return new Error(`stage gate failed: ${gateResult.reason}`);
+      return {
+        error: new Error(`stage gate failed: ${gateResult.reason}`),
+        terminalKind: gateResult.terminal_kind || undefined,
+      };
     } catch (err) {
       this.logger.warn("Post-condition gate failed with unexpected error, continuing", {
         issueNumber,
@@ -6118,7 +6139,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     issueNumber: number,
     result: StageRunResult,
     stageStartTime: number,
-    gateFailure?: { kind: string; reason: string }
+    gateFailure?: { kind: string; reason: string; terminalKind?: string }
   ): Promise<void> {
     try {
       const ipc = IpcClient.getInstance();
@@ -6132,8 +6153,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const errorText = gateFailure?.reason ?? result.error?.message ?? "";
       // Pre-classify the common terminal kinds we already detect at this layer.
       // Empty string defers to the Go-side `ClassifyTerminalKind` fallback so
-      // both write paths produce consistent `terminal_kind` values.
-      let terminalKind = "";
+      // both write paths produce consistent `terminal_kind` values. A gate's
+      // structured verdict (#283) seeds it — the gate knows better than any
+      // text fallback (e.g. validation_error for a schema-mismatched handoff).
+      let terminalKind = gateFailure?.terminalKind ?? "";
       if (result.budgetExceeded) {
         // #3666: when the stage shipped its work product before being killed
         // (e.g. pr-create successfully opened the PR), classify as the
@@ -8374,6 +8397,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const deferredStages: PipelineStage[] = [];
     let failedStage: PipelineStage | undefined;
     let error: Error | undefined;
+    // The failing gate's structured terminal_kind (#283 defect 3), threaded
+    // into the stage exit record and the PipelineRunResult so a
+    // harness/bookkeeping fault classifies as such instead of "unclassified".
+    let gateTerminalKind: string | undefined;
     let budgetExceeded = false;
     // #253: true when the between-stage ceiling check performed a controlled
     // stop. Suppresses the completion reconcile's pr-merge reclassification —
@@ -8998,6 +9025,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           ? {
               kind: "fail",
               reason: error?.message ?? "stage post-condition gate failed",
+              terminalKind: gateTerminalKind,
             }
           : undefined
       );
@@ -9368,6 +9396,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 },
               });
               void this.auditClient?.flush();
+
+              // Post-condition gate (#283 defect 1): this `continue` used to
+              // jump the generic gate block below, so issue-pickup landed in
+              // completedStages with its registered gate NEVER invoked and no
+              // recorded result — which the completion-time gate-not-invoked
+              // audit then correctly flagged (and #127's forensics
+              // mis-attributed two stages later). The Go scheduler gates
+              // every successful stage; the deterministic fast path must too.
+              {
+                const detGate = await this.runPostConditionGate(stage, issueNumber);
+                if (detGate) {
+                  this.logger.error(
+                    "Deterministic issue-pickup failed its post-condition gate — failing stage instead of recording false success",
+                    { issueNumber, stage, error: detGate.error.message }
+                  );
+                  if (this.stateService) {
+                    try {
+                      await this.stateService.failStage(stage, detGate.error.message);
+                    } catch {
+                      // Non-critical — the break below still fails the pipeline.
+                    }
+                  }
+                  failedStage = stage;
+                  gateTerminalKind = detGate.terminalKind;
+                  error = detGate.error;
+                  break;
+                }
+              }
 
               // Mark stage as complete in state service
               if (this.stateService) {
@@ -10066,23 +10122,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           !failedStage &&
           (stage === "issue-pickup" || stage === "feature-planning" || stage === "feature-dev")
         ) {
-          const gateError = await this.runPostConditionGate(stage, issueNumber);
-          if (gateError) {
+          const gateFail = await this.runPostConditionGate(stage, issueNumber);
+          if (gateFail) {
             this.logger.error(
               "Post-condition gate failed — failing stage instead of recording false success",
-              { issueNumber, stage, error: gateError.message }
+              { issueNumber, stage, error: gateFail.error.message }
             );
             if (this.stateService) {
               try {
-                await this.stateService.failStage(stage, gateError.message);
+                await this.stateService.failStage(stage, gateFail.error.message);
               } catch {
                 // Non-critical — the break below still fails the pipeline.
               }
             }
             failedStage = stage;
-            error = gateError;
+            gateTerminalKind = gateFail.terminalKind;
+            error = gateFail.error;
             if (earlySpinnerFired) {
-              this.eventDispatcher.onStageError(stage, gateError);
+              this.eventDispatcher.onStageError(stage, gateFail.error);
             }
             break;
           }
@@ -11163,6 +11220,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       deferredStages,
       failedStage,
       error,
+      terminalKind: gateTerminalKind,
       blocked: this.blockedTerminalState ?? undefined,
       totalDurationMs: Date.now() - startTime,
       outcomeType: classifiedOutcome,

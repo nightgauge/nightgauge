@@ -31,6 +31,16 @@ vi.mock("../../src/utils/skillRunner", () => ({
     .mockReturnValue({ model: "claude-haiku-4-5-20251001", source: "stage-default" }),
 }));
 
+// Mock BinaryResolver so runPostConditionGate (#283) resolves a binary and
+// actually runs — the gate's execFile call is served by the child_process
+// mock below (unhandled commands return "", which the gate treats as
+// unparseable and skips, so pre-#283 tests behave exactly as before).
+vi.mock("../../src/services/BinaryResolver", () => ({
+  BinaryResolver: {
+    fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }),
+  },
+}));
+
 // Mock fs — control existsSync, readFileSync, writeFileSync per test
 vi.mock("fs", async () => {
   const actual = await vi.importActual<typeof import("fs")>("fs");
@@ -240,6 +250,71 @@ describe("HeadlessOrchestrator deterministic-first issue-pickup (Issue #2614)", 
     expect(mockLogger.info).toHaveBeenCalledWith(
       expect.stringContaining("deterministic context written and validated"),
       expect.any(Object)
+    );
+  });
+
+  it("fails issue-pickup when the deterministic path's post-condition gate rejects (#283)", async () => {
+    const mockState = createMockStateService();
+    const orchestrator = new HeadlessOrchestrator(mockState, mockLogger, {
+      contextFileWaitMs: 0,
+    });
+
+    // Deterministic generation succeeds (same fixture as the success test)…
+    vi.mocked(readFileSync).mockReturnValue(
+      JSON.stringify({
+        schema_version: "1.3",
+        issue_number: 42,
+        title: "Test issue #42",
+        type: "feature",
+        branch: "feat/2614-test",
+        base_branch: "main",
+        _deterministic: true,
+      })
+    );
+
+    // …but the registered gate REJECTS it. Pre-#283 the deterministic path
+    // `continue`d past the gate entirely, recording a completed stage with a
+    // registered gate never invoked — the exact gap #127's gate-not-invoked
+    // audit reported.
+    vi.mocked(execFileSync).mockImplementation((cmd: unknown, args: unknown) => {
+      const a = (args as string[]) ?? [];
+      if (String(cmd).includes("nightgauge") && a[0] === "gate") {
+        const err: any = new Error("gate failed");
+        err.code = 2;
+        err.stdout = JSON.stringify({
+          stage: "issue-pickup",
+          gate_name: "issue-pickup",
+          passed: false,
+          reason: "branch not created",
+          kind: "fail",
+          terminal_kind: "validation_error",
+        });
+        throw err;
+      }
+      if (cmd === "git" && a[0] === "branch") return "feat/2614-test\n";
+      if (cmd === "gh" && a[0] === "issue")
+        return JSON.stringify({
+          title: "Test issue #42",
+          labels: [{ name: "type:feature" }],
+          body: "## Summary\nTest summary\n## Acceptance Criteria\n- [ ] AC1",
+        });
+      if (cmd === "gh" && a[0] === "repo") return "TestOrg/test-repo";
+      return "";
+    });
+
+    const result = await orchestrator.runPipeline(42);
+
+    // The gate verdict fails the stage — no false success, no LLM fallback.
+    expect(runStageSkillHeadless).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(result.failedStage).toBe("issue-pickup");
+    // The gate's structured verdict survives to the run result (#283
+    // defect 3) so downstream classification is not "unclassified".
+    expect(result.terminalKind).toBe("validation_error");
+    expect(mockState.completeStage).not.toHaveBeenCalledWith("issue-pickup");
+    expect(mockState.failStage).toHaveBeenCalledWith(
+      "issue-pickup",
+      expect.stringContaining("branch not created")
     );
   });
 

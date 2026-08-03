@@ -83,6 +83,9 @@ vi.mock("child_process", async () => {
         return Promise.resolve({ stdout, stderr: "" });
       }
       // fail / no_op → CLI exits 2 with the JSON GateResult on stdout.
+      // terminal_kind mirrors the Go gate's structured verdict
+      // (feature_dev_gate.go) — #283 threads it through instead of
+      // discarding it at this boundary.
       const stdout = JSON.stringify({
         stage: args[2],
         gate_name: args[2],
@@ -92,6 +95,7 @@ vi.mock("child_process", async () => {
             ? "dev context file missing"
             : "dev context is not valid JSON",
         kind: gateOutcome.value === "no_op" ? "no_op" : "fail",
+        terminal_kind: gateOutcome.value === "no_op" ? "dev_handoff_missing" : "validation_error",
       });
       const err: any = new Error("gate failed");
       err.code = 2;
@@ -147,23 +151,30 @@ describe("HeadlessOrchestrator.runPostConditionGate (Issue #210)", () => {
     }
   );
 
-  it("returns a premature-turn-end error on a KindNoOp gate result", async () => {
+  it("returns a premature-turn-end failure with the gate's terminal_kind on a KindNoOp gate result", async () => {
     gateOutcome.value = "no_op";
     const orch = new HeadlessOrchestrator(null as any, logger, { contextFileWaitMs: 0 });
     const result = await (orch as any).runPostConditionGate("feature-dev", 210);
-    expect(result).toBeInstanceOf(Error);
-    expect((result as Error).message).toMatch(
+    expect(result).not.toBeNull();
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toMatch(
       /premature turn end: stage exited 0 with no state change \(gate no-op\)/
     );
-    expect((result as Error).message).toMatch(/dev context file missing/);
+    expect(result.error.message).toMatch(/dev context file missing/);
+    // #283 defect 3: the structured verdict survives the boundary.
+    expect(result.terminalKind).toBe("dev_handoff_missing");
   });
 
-  it("returns a plain gate-failed error on a KindFail gate result", async () => {
+  it("returns a gate-failed failure with the gate's terminal_kind on a KindFail gate result", async () => {
     gateOutcome.value = "fail";
     const orch = new HeadlessOrchestrator(null as any, logger, { contextFileWaitMs: 0 });
     const result = await (orch as any).runPostConditionGate("issue-pickup", 210);
-    expect(result).toBeInstanceOf(Error);
-    expect((result as Error).message).toBe("stage gate failed: dev context is not valid JSON");
+    expect(result).not.toBeNull();
+    expect(result.error).toBeInstanceOf(Error);
+    expect(result.error.message).toBe("stage gate failed: dev context is not valid JSON");
+    // #283 defect 3: a validation_error classifies as a harness/bookkeeping
+    // fault downstream instead of "unclassified".
+    expect(result.terminalKind).toBe("validation_error");
   });
 
   it("returns null (skips) when the binary cannot be resolved", async () => {

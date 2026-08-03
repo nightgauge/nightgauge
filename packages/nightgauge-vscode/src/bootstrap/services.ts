@@ -1426,10 +1426,10 @@ export async function initializeServices(
             return; // Phase markers are metadata, not user-visible output
           }
         }
-        slotOutputManager!.appendOutput(issueNumber, data);
+        slotOutputManager!.appendOutput(issueNumber, data, stage);
       },
-      onSlotError: (_slotIndex, issueNumber, data) => {
-        slotOutputManager!.appendError(issueNumber, data);
+      onSlotError: (_slotIndex, issueNumber, data, stage) => {
+        slotOutputManager!.appendError(issueNumber, data, stage);
       },
       onSlotPhaseStart: (_slotIndex, issueNumber, stage, name, index, total) => {
         slotPhaseTrackers.get(issueNumber)?.onPhaseDetected(stage, {
@@ -2761,8 +2761,15 @@ export async function initializeServices(
     const slotCurrentStage = new Map<number, PipelineStage>();
 
     slotOutputManager.setCallbacks({
-      onOutput: (slotIndex, issueNumber, text, level) => {
-        const stage = slotCurrentStage.get(issueNumber);
+      onOutput: (slotIndex, issueNumber, text, level, emittingStage) => {
+        // #283 defect 2: prefer the EMITTING stage carried by the event over
+        // the slot's current-stage pointer — the early spinner (#981)
+        // advances the pointer before the previous stage's gate runs, so
+        // re-deriving here filed end-of-stage diagnostics (e.g. a
+        // gate-not-invoked audit about issue-pickup) under the NEXT stage,
+        // manufacturing the false "[feature-validate] detected it" story in
+        // #127's forensics. Fall back only when the producer had no stage.
+        const stage = emittingStage ?? slotCurrentStage.get(issueNumber);
         // Route output to per-slot buffer in the OutputWindow (Issue #2705)
         outputWindow.appendLine(text, level === "error" ? "error" : "info", stage, { slotIndex });
       },
