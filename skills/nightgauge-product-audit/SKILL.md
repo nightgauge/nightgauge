@@ -268,7 +268,7 @@ message. Each subagent writes its findings to
 - Each subagent reads config from `.nightgauge/config.yaml` → `product_audit.dimensions.{name}` section
 - Each subagent reads the parity config (if assigned feature_parity)
 - Each subagent writes to its dimension file atomically (complete JSON, not streaming)
-- Main agent polls for completion: `while ! all_dimension_files_exist; do sleep 5; done`
+- Main agent waits for all 4 subagents to finish (they were spawned via the `Task` tool, so their completion is awaited directly — no polling loop, and never a foreground `sleep` wait; see `skills/_shared/GOTCHAS.md`)
 
 #### Subagent 1: API Alignment + Feature Parity
 

@@ -281,6 +281,55 @@ func TestAntiPatterns_MissingRoot_Errors(t *testing.T) {
 	}
 }
 
+// --- Check E: sleep wait loop ---
+
+func TestAntiPatterns_SleepWaitLoop_FlagsUntilGrepSleep(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "demo/SKILL.md",
+		"# demo\n\n```bash\n"+
+			`until grep -q "BASELINE_INTEGRATION_EXIT" /tmp/289-baseline.log 2>/dev/null; do sleep 30; done; echo DONE`+
+			"\n```\n")
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckSleepWaitLoop); got != 1 {
+		t.Fatalf("sleep_wait_loop findings = %d, want 1: %+v", got, res.Findings)
+	}
+	f := findFirst(res.Findings, CheckSleepWaitLoop)
+	if f.Line != 4 {
+		t.Errorf("line = %d, want 4", f.Line)
+	}
+}
+
+func TestAntiPatterns_SleepWaitLoop_FlagsWhileSleep(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "demo/SKILL.md",
+		"# demo\n\n```bash\nwhile [ ! -f /tmp/done ]\ndo\n  sleep 5\ndone\n```\n")
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckSleepWaitLoop); got != 1 {
+		t.Fatalf("sleep_wait_loop findings = %d, want 1: %+v", got, res.Findings)
+	}
+}
+
+func TestAntiPatterns_SleepWaitLoop_PlainSleepIsClean(t *testing.T) {
+	root := t.TempDir()
+	// A bare `sleep` outside a while/until loop is a different (still
+	// discouraged, but not this check's) pattern \u2014 must not be flagged.
+	writeSkillFile(t, root, "demo/SKILL.md", "# demo\n\n```bash\nsleep 10\n```\n")
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckSleepWaitLoop); got != 0 {
+		t.Fatalf("bare sleep falsely flagged: %+v", res.Findings)
+	}
+}
+
+func TestAntiPatterns_SleepWaitLoop_LoopWithoutSleepIsClean(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "demo/SKILL.md",
+		"# demo\n\n```bash\nwhile read -r line; do echo \"$line\"; done < file.txt\n```\n")
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckSleepWaitLoop); got != 0 {
+		t.Fatalf("sleep-free loop falsely flagged: %+v", res.Findings)
+	}
+}
+
 // findFirst returns the first finding with the given check, or a zero value.
 func findFirst(findings []SkillAntiPattern, check string) SkillAntiPattern {
 	for _, f := range findings {

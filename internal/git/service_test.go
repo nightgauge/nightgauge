@@ -2,6 +2,7 @@ package git
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -678,5 +679,95 @@ func TestResetLocalBranchToRemote_CreatesWhenLocalAbsent(t *testing.T) {
 
 	if got := localBranchHash(t, svc, branch); got != remoteHash {
 		t.Errorf("created local = %s, want origin tip %s", got, remoteHash)
+	}
+}
+
+func gitExecTest(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, string(out))
+	}
+	return string(out)
+}
+
+func TestResetPipeline_PreservesUnlandedDeliverable(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+	if err := svc.BranchCreate("feat/289-test-issue"); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	if err := svc.Checkout("feat/289-test-issue"); err != nil {
+		t.Fatalf("Checkout: %v", err)
+	}
+
+	deliverablePath := filepath.Join(dir, "internal", "widget.go")
+	if err := os.MkdirAll(filepath.Dir(deliverablePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(deliverablePath, []byte("package internal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	handoff := `{"files_changed":{"created":["internal/widget.go"],"modified":[]}}`
+	if err := os.WriteFile(filepath.Join(pipelineDir, "dev-289.json"), []byte(handoff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	if _, err := os.Stat(deliverablePath); err != nil {
+		t.Fatalf("deliverable was discarded by ResetPipeline: %v", err)
+	}
+	status, err := svc.Status()
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if !status.IsClean {
+		t.Errorf("expected clean tree after recovery-commit + reset, got dirty: %+v", status)
+	}
+}
+
+func TestResetPipeline_NoHandoffStillResets(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dirty.txt")); !os.IsNotExist(err) {
+		t.Errorf("expected dirty.txt removed by reset (no dev-context to preserve it), err=%v", err)
+	}
+}
+
+func TestResetPipeline_PopsBaselineStash(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, "baseline.txt"), []byte("baseline"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExecTest(t, dir, "stash", "push", "-u", "-m", "feature-validate-289-baseline")
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	// The stash must no longer be tracked in the stash list — ResetPipeline's
+	// whole purpose is to wipe the tree, so the popped content is discarded by
+	// the subsequent hard reset + clean along with everything else. What AC5
+	// guards against is an *orphaned* stash silently surviving untracked.
+	stashOut := gitExecTest(t, dir, "stash", "list")
+	if strings.Contains(stashOut, "baseline") {
+		t.Errorf("expected baseline stash to be popped, stash list = %q", stashOut)
 	}
 }
