@@ -801,7 +801,7 @@ different candidate sets:
 
 - **Startup scan** (`promoteUnblockedOnStartup`) runs **unconditionally**
   every time `recoverOrphanedRunning` executes — i.e. every `nightgauge
-  autonomous run` start and every `serve` daemon start
+autonomous run` start and every `serve` daemon start
   (`cmd/nightgauge/main.go`'s startup goroutine). Recovery of orphaned
   "In progress" items from a crashed session is conditional (only runs when
   `state.Running` is non-empty); the promotion scan is not — a clean start
@@ -840,11 +840,11 @@ distinguish two conditions that otherwise look identical
 
 - `LastPromotionEligible == 0` → `Idle: no work` (genuinely nothing to do)
 - `LastPromotionEligible > 0` → `Idle: N Backlog issue(s) are gate-eligible
-  but not yet Ready — this is a fault, not idleness`
+but not yet Ready — this is a fault, not idleness`
 
 The same `LastPromotionEligible` count feeds the existing fleet-idle Action
 Center card (`raiseWorkExhaustion`, ADR 015 §F) instead of the pre-#288
-`sum(LastRejectionReasons)`, which tallied rejection *reasons* rather than
+`sum(LastRejectionReasons)`, which tallied rejection _reasons_ rather than
 an actual promotable count.
 
 ### Discipline Gate (#4100)
