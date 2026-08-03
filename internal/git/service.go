@@ -609,11 +609,31 @@ func (s *Service) AbortPipeline(featureBranch string) error {
 // a completed-but-uncommitted implementation is exactly the destroy-on-revert
 // mechanism from Issue #289. Any baseline stash this branch is carrying
 // (`<stage>-<issue>-baseline`, taken by the CI-gate baseline-failure
-// detector) is also popped first so it is never silently left behind. Both
-// guards are best-effort: failures are logged, never fatal.
+// detector) is also popped first so it is never silently left behind.
+//
+// The deliverable guard answers in three states, not two (#297). "There is
+// nothing to preserve" and "I could not tell what this tree holds" used to
+// share one `return nil` and therefore one consequence — reset anyway — so
+// every input the guard failed to understand read as permission to destroy: a
+// detached HEAD (which is how every pipeline worktree starts), a stray
+// `temp-pre-push-<n>` branch, a handoff path resolved against the wrong root,
+// a handoff written in a shape the struct did not model. An UNDETERMINED
+// verdict now commits the whole tree as a checkpoint instead, and if even that
+// fails ResetPipeline refuses to run rather than falling through to the
+// destructive path.
 func (s *Service) ResetPipeline() error {
-	if err := s.preserveUnlandedDeliverable(); err != nil {
-		log.Printf("git: ResetPipeline: failed to preserve unlanded deliverable: %v", err)
+	verdict, err := s.preserveUnlandedDeliverable()
+	if err != nil {
+		log.Printf("git: ResetPipeline: could not establish what the working tree holds: %v", err)
+	}
+	if verdict == preserveUndetermined {
+		// Fail toward keeping the work. A checkpoint commit costs an operator
+		// one `git reset HEAD~1`; the alternative cost #289 a completed
+		// implementation and $14.84 of the run that produced it.
+		if cerr := s.checkpointUncommitted(); cerr != nil {
+			return fmt.Errorf("refusing to hard-reset %s: the working tree may hold unlanded pipeline "+
+				"work and the safety checkpoint failed: %w", s.repoPath, cerr)
+		}
 	}
 	if err := s.popBaselineStash(); err != nil {
 		log.Printf("git: ResetPipeline: failed to pop baseline stash: %v", err)
@@ -644,52 +664,152 @@ func (s *Service) ResetPipeline() error {
 	return nil
 }
 
-// devHandoffFilesChanged mirrors the subset of dev-{N}.json (see
-// docs/CONTEXT_ARCHITECTURE.md) this guard needs.
-type devHandoffFilesChanged struct {
-	FilesChanged struct {
-		Created  []string `json:"created"`
-		Modified []string `json:"modified"`
-	} `json:"files_changed"`
-}
+// preserveVerdict is the guard's three-state answer to "does this working tree
+// hold pipeline work that a hard reset would destroy?" (#297).
+//
+// The two-state version shipped with #289 collapsed "nothing is at risk" and
+// "I could not tell" into a single `return nil`, and the caller read both as
+// consent to hard-reset. Splitting them is the whole fix: only a positive
+// determination may authorise destruction.
+//
+// preserveUndetermined is the zero value deliberately, so a path added later
+// that returns without deciding fails toward keeping the work.
+type preserveVerdict int
+
+const (
+	// preserveUndetermined: the guard could not establish what the tree holds.
+	// Nothing may be destroyed on this verdict.
+	preserveUndetermined preserveVerdict = iota
+	// preserveNothingAtRisk: positively determined that no recorded deliverable
+	// is sitting uncommitted. Resetting is safe.
+	preserveNothingAtRisk
+	// preservePreserved: a recorded deliverable was uncommitted and has been
+	// committed as a recovery commit.
+	preservePreserved
+)
 
 // issueNumberFromBranchRE extracts the issue number from the pipeline's
 // standard feature-branch naming convention (feat/<N>-slug, fix/<N>-slug).
 var issueNumberFromBranchRE = regexp.MustCompile(`^(?:feat|fix|docs)/(\d+)-`)
 
-// preserveUnlandedDeliverable checks the current branch's dev-context handoff
-// for created/modified files. If any are present on disk and uncommitted, it
-// commits every uncommitted change to the current branch as a recovery
-// commit so a subsequent hard reset cannot discard them (Issue #289 AC4).
-func (s *Service) preserveUnlandedDeliverable() error {
+// issueNumberFromWorktreeRE matches the directory layout the worktree manager
+// creates (`.nightgauge/worktrees/<repo>-issue-<N>`, see
+// internal/execution/worktree.go). Worktrees are created with
+// `git worktree add --detach`, so from creation until the dev skill creates
+// `feat/<N>-…` the branch name carries no issue number at all and the path is
+// the only thing that does — the exact window #289 was killed in.
+var issueNumberFromWorktreeRE = regexp.MustCompile(`-issue-(\d+)$`)
+
+// devHandoffFileRE extracts the issue number from a dev handoff filename.
+var devHandoffFileRE = regexp.MustCompile(`^dev-(\d+)\.json$`)
+
+// pipelineIssueNumber identifies which issue's handoff describes this checkout,
+// trying every source that carries the number rather than the branch name
+// alone. It reports an error — never a silent empty string — when no source
+// answers, because "I don't know which run owns this tree" and "no run owns
+// this tree" must not reach the caller as the same value.
+func (s *Service) pipelineIssueNumber() (string, error) {
 	branch, err := s.currentBranchName()
-	if err != nil || branch == "" {
-		return nil
-	}
-	m := issueNumberFromBranchRE.FindStringSubmatch(branch)
-	if m == nil {
-		return nil
-	}
-	handoffPath := filepath.Join(s.repoPath, ".nightgauge", "pipeline", fmt.Sprintf("dev-%s.json", m[1]))
-	data, err := os.ReadFile(handoffPath)
 	if err != nil {
-		return nil // no handoff recorded — nothing to preserve
+		return "", fmt.Errorf("read current branch: %w", err)
 	}
-	var handoff devHandoffFilesChanged
-	if err := json.Unmarshal(data, &handoff); err != nil {
-		return fmt.Errorf("parse %s: %w", handoffPath, err)
+	if m := issueNumberFromBranchRE.FindStringSubmatch(branch); m != nil {
+		return m[1], nil
 	}
-	recorded := append(append([]string{}, handoff.FilesChanged.Created...), handoff.FilesChanged.Modified...)
-	if len(recorded) == 0 {
-		return nil
+	if m := issueNumberFromWorktreeRE.FindStringSubmatch(filepath.Base(s.repoPath)); m != nil {
+		return m[1], nil
+	}
+	// Last resort: an unambiguous handoff in this checkout. Two or more and we
+	// cannot say which run produced the dirty tree, so we decline rather than
+	// guess — guessing wrong here commits one run's work under another's name.
+	matches, globErr := filepath.Glob(filepath.Join(s.repoPath, ".nightgauge", "pipeline", "dev-*.json"))
+	if globErr == nil && len(matches) == 1 {
+		if m := devHandoffFileRE.FindStringSubmatch(filepath.Base(matches[0])); m != nil {
+			return m[1], nil
+		}
+	}
+	return "", fmt.Errorf("cannot identify the pipeline issue for checkout %s (branch %q, %d dev handoff(s) present)",
+		s.repoPath, branch, len(matches))
+}
+
+// recordedDeliverableFiles reads the paths a dev handoff claims it produced.
+//
+// It accepts both shapes the pipeline has actually shipped: the documented
+// object (`{"created": …, "modified": …, "deleted": …}`, see
+// docs/CONTEXT_ARCHITECTURE.md) and the flat array of paths #240 wrote, which
+// is recorded as a real production context in
+// internal/orchestrator/gates/context_decode_test.go. Modelling only the object
+// shape turned the flat variant into a parse error whose sole consequence was a
+// log line — the reset then proceeded and took the deliverable with it.
+func recordedDeliverableFiles(data []byte) ([]string, error) {
+	var envelope struct {
+		FilesChanged json.RawMessage `json:"files_changed"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("decode handoff: %w", err)
+	}
+	if len(envelope.FilesChanged) == 0 {
+		return nil, fmt.Errorf("handoff has no files_changed field")
 	}
 
+	var obj struct {
+		Created  []string `json:"created"`
+		Modified []string `json:"modified"`
+		Deleted  []string `json:"deleted"`
+	}
+	if err := json.Unmarshal(envelope.FilesChanged, &obj); err == nil {
+		files := append([]string{}, obj.Created...)
+		files = append(files, obj.Modified...)
+		files = append(files, obj.Deleted...)
+		return files, nil
+	}
+
+	var flat []string
+	if err := json.Unmarshal(envelope.FilesChanged, &flat); err == nil {
+		return flat, nil
+	}
+
+	return nil, fmt.Errorf("files_changed is neither an object nor an array of paths")
+}
+
+// preserveUnlandedDeliverable decides whether the current working tree holds
+// pipeline work a hard reset would destroy, and commits it to the current
+// branch as a recovery commit when it does (Issue #289 AC4).
+//
+// Every path that cannot answer returns preserveUndetermined with the reason,
+// never a bare "nothing to preserve" (#297).
+func (s *Service) preserveUnlandedDeliverable() (preserveVerdict, error) {
 	status, err := s.Status()
 	if err != nil {
-		return fmt.Errorf("status: %w", err)
+		return preserveUndetermined, fmt.Errorf("status: %w", err)
 	}
 	if status.IsClean {
-		return nil // nothing uncommitted to lose
+		// The one unconditionally honest "nothing to preserve": there is no
+		// uncommitted content in this tree at all, whatever the branch name or
+		// the handoff say.
+		return preserveNothingAtRisk, nil
+	}
+
+	issue, err := s.pipelineIssueNumber()
+	if err != nil {
+		return preserveUndetermined, err
+	}
+	handoffPath := filepath.Join(s.repoPath, ".nightgauge", "pipeline", fmt.Sprintf("dev-%s.json", issue))
+	data, err := os.ReadFile(handoffPath)
+	if err != nil {
+		// A dirty tree with no readable handoff is not "nothing to preserve" —
+		// it is a tree whose contents nothing accounts for. A worktree-isolated
+		// run whose Service was constructed on the main root looks exactly like
+		// this, and its deliverable is real.
+		return preserveUndetermined, fmt.Errorf("read %s: %w", handoffPath, err)
+	}
+	recorded, err := recordedDeliverableFiles(data)
+	if err != nil {
+		return preserveUndetermined, fmt.Errorf("parse %s: %w", handoffPath, err)
+	}
+	if len(recorded) == 0 {
+		return preserveUndetermined, fmt.Errorf(
+			"%s records no changed files, yet the working tree is dirty", handoffPath)
 	}
 
 	dirty := map[string]bool{}
@@ -710,21 +830,68 @@ func (s *Service) preserveUnlandedDeliverable() error {
 		}
 	}
 	if !hasRecordedDeliverable {
-		return nil
+		// Positive determination: the run's own record of what it produced is
+		// fully committed, so the dirt still in the tree is not the deliverable.
+		return preserveNothingAtRisk, nil
 	}
 
-	cmd := exec.Command("git", "add", "-A")
-	cmd.Dir = s.repoPath
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if err := s.commitAll(fmt.Sprintf(
+		"chore(#%s): preserve unlanded deliverable before pipeline reset", issue)); err != nil {
+		return preserveUndetermined, err
+	}
+	log.Printf("git: ResetPipeline: preserved %d dev-context file(s) into a recovery commit for #%s before reset",
+		len(recorded), issue)
+	return preservePreserved, nil
+}
+
+// checkpointUncommitted commits the entire working tree so the hard reset that
+// follows has nothing left to destroy. It is what an UNDETERMINED verdict buys:
+// the tree still ends clean, which is ResetPipeline's contract, but the content
+// ends up in history instead of in the bit bucket.
+func (s *Service) checkpointUncommitted() error {
+	return s.commitAll("chore: checkpoint uncommitted work before pipeline reset")
+}
+
+// commitAll stages and commits everything in the working tree, then makes sure
+// the resulting commit is reachable by name.
+func (s *Service) commitAll(message string) error {
+	addCmd := exec.Command("git", "add", "-A")
+	addCmd.Dir = s.repoPath
+	if out, err := addCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add -A: %w: %s", err, string(out))
 	}
-	commitCmd := exec.Command("git", "commit", "-m",
-		fmt.Sprintf("chore(#%s): preserve unlanded deliverable before pipeline reset", m[1]))
+	commitCmd := exec.Command("git", "commit", "-m", message)
 	commitCmd.Dir = s.repoPath
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git commit: %w: %s", err, string(out))
 	}
-	log.Printf("git: ResetPipeline: preserved %d dev-context file(s) into a recovery commit on %s before reset", len(recorded), branch)
+	return s.anchorDetachedHead()
+}
+
+// anchorDetachedHead points a branch at HEAD when the checkout is detached, so
+// a commit made to rescue work is findable by name rather than surviving only
+// in the reflog until gc collects it. Pipeline worktrees are created with
+// `git worktree add --detach`, so for the reset path this is the common case,
+// not the exotic one.
+func (s *Service) anchorDetachedHead() error {
+	branch, err := s.currentBranchName()
+	if err != nil {
+		return fmt.Errorf("read current branch: %w", err)
+	}
+	if branch != "" {
+		return nil
+	}
+	head, err := s.repo.Head()
+	if err != nil {
+		return fmt.Errorf("get HEAD: %w", err)
+	}
+	name := fmt.Sprintf("nightgauge-checkpoint-%s", head.Hash().String()[:12])
+	cmd := exec.Command("git", "branch", name)
+	cmd.Dir = s.repoPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git branch %s: %w: %s", name, err, string(out))
+	}
+	log.Printf("git: anchored detached rescue commit on branch %s", name)
 	return nil
 }
 
