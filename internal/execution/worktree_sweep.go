@@ -249,7 +249,7 @@ func DetectDefaultBranch(repoRoot string) string {
 // project squash-merges, so the branch tip is never an ancestor of the default
 // branch and `git merge-base --is-ancestor` reports a false negative for every
 // merged branch — the exact reason a squash-merged branch cannot be told apart
-// from one that was never pushed after the fact (CLAUDE.md § Clean up on
+// from one that was never pushed after the fact (AGENTS.md § Clean up on
 // merge; docs/GIT_WORKFLOW.md § After Merge).
 //
 // hasOwnCommits is a safety guard, not part of the merge test: a worktree

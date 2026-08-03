@@ -73,7 +73,7 @@ to activate it. See [Configuration](#configuration).
 This section is the **source of truth** for where a given piece of recorded
 context belongs. Read it before deciding whether a new decision goes in `docs/`,
 in `.nightgauge/knowledge/`, or in both. A small one-line pointer to this
-section lives in the repo-root `CLAUDE.md` so AI agents read it first.
+section lives in the repo-root `AGENTS.md` so AI agents read it first.
 
 ### Scope rule (the one rule)
 

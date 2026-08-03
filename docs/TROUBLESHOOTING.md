@@ -636,7 +636,7 @@ no error) and no scheduler is created. Fix: add a root
 `TestContract_*` hangs on the shared self-hosted Mac runner under CPU load
 (especially when local `go test` runs during CI). Stop local tests and
 `gh run rerun <id> --failed`; the GitHub-hosted `build-and-test` job stays
-green. (Per [no flaky dismissal](../CLAUDE.md#agent-operating-rules): confirm
+green. (Per [no flaky dismissal](../AGENTS.md#agent-operating-rules): confirm
 it's contention, don't assume.)
 
 ### Dashboard shows "0 runs" while the pipeline is healthy
