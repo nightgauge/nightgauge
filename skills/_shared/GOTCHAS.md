@@ -9,12 +9,13 @@
   binary-discovery cascade first and prepend `dirname($BINARY)` to `PATH`.
   Skipping it surfaces as `command not found` only on some machines.
 - **Never emit a foreground `sleep` wait loop.** The harness denies foreground
-  `sleep` (a shell idiom like `until grep -q DONE log; do sleep 30; done`) —
-  the tool call is rejected outright. To wait on a long-running background job,
-  start it with the backgrounded-command form the harness provides (e.g. a
-  Bash call with `run_in_background: true`) and then block on its completion
-  notification / the Monitor tool instead of polling with `sleep`. Never
-  invent a foreground poll loop to bridge the wait (#289).
+  `sleep` — an unbounded shell idiom that polls a completion marker in a
+  `while`/`until` loop with no iteration cap — the tool call is rejected
+  outright. To wait on a long-running background job, start it with the
+  backgrounded-command form the harness provides (e.g. a Bash call with
+  `run_in_background: true`) and then block on its completion notification /
+  the Monitor tool instead of polling on a timer. Never invent a foreground
+  poll loop to bridge the wait (#289).
 - **Never call the forge CLI directly.** Use `nightgauge forge …`
   (`issue`/`pr`/`project`/`label`/`repo`/`auth`/`graphql`), never a bare
   `gh`/`glab`. The `no-direct-gh` lint fails CI on regressions; the abstraction

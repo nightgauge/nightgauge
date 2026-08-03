@@ -124,7 +124,15 @@ var adminMergeRE = regexp.MustCompile(`(?i)(?:\b(?:pr|mr)\s+merge\b|/[a-z0-9-]*p
 // shell form. Requires `sleep` to be followed by a numeric duration so prose
 // that merely uses the word "sleep" (e.g. "put the process to sleep") is not
 // matched.
-var sleepWaitLoopRE = regexp.MustCompile(`(?is)\b(?:while|until)\b.*?\bdo\b.*?\bsleep\s+[0-9].*?\bdone\b`)
+var sleepWaitLoopRE = regexp.MustCompile(`(?is)\b(?:while|until)\b.{0,200}?\bdo\b.{0,40}?\bsleep\s+[0-9].{0,400}?\bdone\b`)
+
+// boundedLoopSignalRE matches a visible iteration cap / timeout guard inside
+// a matched loop span (e.g. `BOOT_WAIT -ge 120`, `if [ $ELAPSED -gt $TIMEOUT ]`).
+// A loop with its own bail-out condition is a bounded, single-tool-call retry
+// wait — a materially different (and generally fine) shape from the
+// unbounded `until COND; do sleep N; done` idiom #289 is about, which blocks
+// indefinitely across turns waiting on a backgrounded job with no cap at all.
+var boundedLoopSignalRE = regexp.MustCompile(`(?i)-ge\s|-gt\s|timeout|max_wait|max_attempts`)
 
 // RunSkillAntiPatternsCheck walks the skill tree rooted at Root and emits a
 // finding for each occurrence of the three mechanical anti-patterns. Returns a
@@ -224,12 +232,16 @@ func RunSkillAntiPatternsCheck(_ context.Context, opts SkillAntiPatternsOptions)
 		// number reported is where the match starts (the `while`/`until`).
 		content := string(data)
 		for _, loc := range sleepWaitLoopRE.FindAllStringIndex(content, -1) {
+			matched := content[loc[0]:loc[1]]
+			if boundedLoopSignalRE.MatchString(matched) {
+				continue // has its own iteration cap — not the unbounded #289 idiom
+			}
 			line := strings.Count(content[:loc[0]], "\n") + 1
 			result.Findings = append(result.Findings, SkillAntiPattern{
 				Check: CheckSleepWaitLoop,
 				File:  rel,
 				Line:  line,
-				Match: trimMatch(content[loc[0]:loc[1]]),
+				Match: trimMatch(matched),
 			})
 		}
 	}
