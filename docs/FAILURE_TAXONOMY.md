@@ -588,3 +588,84 @@ The fix:
    with a MERGED PR reclassifies the PRIMARY finding to
    `false-negative-shipped` (low severity), generalizing the budget-only
    `shipped-but-overbudget` path.
+
+---
+
+## Defect Classes (Cross-Cutting Engineering Patterns)
+
+The sections above classify _run outcomes_. This section names recurring
+_defect shapes_ in the deterministic layer itself, so retros can point at a
+class instead of re-deriving it, and reviews can ask the class's question
+before the next instance ships.
+
+### Silent No-Op (Issue #166)
+
+**Shape:** code that runs, succeeds, and does nothing on the inputs that
+matter. No exception, no error, no log line — exit code 0 and an empty result
+indistinguishable from "nothing to do."
+
+**The common precondition:** an empty/zero/absent value is **semantically
+meaningful** (it implies a real precondition failure) but is treated as
+**vacuously fine**, because emptiness and "no work required" share the same
+value. The bug is never the emptiness itself; it is that the distinction
+cannot be observed.
+
+**Why the class is worse than a crash:** a crash is self-reporting and lands
+on the failing change. A silent no-op surfaces only when something downstream
+is missing — often days later — and the investigation starts far from the
+cause. Worst case, the empty result is read as an affirmative verdict and
+**authorizes a destructive action** (#165: "empty diff" → "fully merged" →
+"safe to delete").
+
+**Fixed instances (evidence):**
+
+| Issue | Where          | What silently did nothing                                                                          |
+| ----- | -------------- | -------------------------------------------------------------------------------------------------- |
+| #149  | recovery       | the catch-path branch was dropped, so the recovery never ran                                       |
+| #151  | capture        | shape-blind parse — the runtime shape fell through the singular-only branch                        |
+| #154  | tokenParser    | `tool_use.id` discarded at a parse boundary, so `last_bash_exit` could never populate              |
+| #163  | cleanup        | `loadFeatureBranch(workspaceRoot, …)` resolved `""` on worktree-isolated runs; cleanup hit nothing |
+| #165  | branch cleanup | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"        |
+
+Every one passed its tests. Several sat in code whose own comment asserted it
+was the sole detection channel for the thing it was failing to detect.
+
+**The rule (binding at review):** at any boundary where an empty result
+implies a precondition failure rather than a clean no-op —
+
+1. **Assert non-empty where empty is meaningful.** Check it and fail loud.
+2. **Never let a not-found path share a return value with a success path.**
+   Where the states are genuinely three ("found work" / "nothing to do" /
+   "could not determine"), return three states. `UNKNOWN` must never fold
+   into "nothing found" — and a destructive consumer must treat `UNKNOWN` as
+   "do not act" (`scripts/branch-merged-check.sh` exit 2 is the model).
+3. **Test the shape production actually sends.** Fixtures drawn from real
+   transcripts, not from the shape the parser happens to expect (#151, #154).
+4. **"The comment says this is the only detector" is a review trigger.**
+   Sole-detection-channel code gets a test that removes the input and asserts
+   the alarm fires.
+
+**Sweep (2026-08-03):** the deterministic-layer cleanup and capture paths were
+swept for the same shape. Ten candidates were verified against surrounding
+code; sites already carrying an explicit three-state verdict (e.g.
+`classifyWorktree`'s `SkipReason`s, `CheckBranchFork`'s `ForkStateUnknown`,
+the change classifier's distinct `Empty` class) were confirmed GUARDED and
+excluded. The confirmed instances are filed as:
+
+- **#296** — `reconcileOrphanedComposeProjects` treats an undetermined
+  worktree set as empty and tears down live cross-repo docker stacks
+  (destructive; same root cause as #163)
+- **#297** — `preserveUnlandedDeliverable` (the #289 guard) no-ops on
+  detached HEAD, temp branches, worktree-scoped context, and the legacy
+  `files_changed` shape — and `ResetPipeline` proceeds regardless
+- **#298** — `git.resetPipeline` IPC handler drops its unmarshal error;
+  empty `workDir` aims the hard reset at the workspace root
+- **#299** — two remaining `loadFeatureBranch(workspaceRoot, …)` call sites
+  (non-terminal reconcile, V2 history) still miss worktree-isolated runs
+- **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage
+  killed before the `result` event books zero tokens
+- **#301** — `captureConflictContextFromIndex` writes an empty capture as
+  success, then `rebase --abort` destroys the evidence
+- **#302** — batch of four small guards (bash-ring correlation self-check,
+  zero-root worktree sweep, nil-state card retraction, unlogged
+  `autonomousComplete` skip)
