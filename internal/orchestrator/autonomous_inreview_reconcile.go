@@ -188,11 +188,16 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 
 	blocked := map[string]bool{}
 	prBacked := map[string]bool{}
+	// queryOK records the repos whose PR listing actually succeeded, so a
+	// reporting caller can tell "queried, no PR" from "never looked" (#265).
+	// Gating callers still read only prBacked and keep failing closed.
+	queryOK := map[string]bool{}
 	for repo := range repos {
 		openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
 		if !ok {
 			continue // query failed — leave this repo out (fail-open / fail-closed)
 		}
+		queryOK[repo] = true
 		policies := newBranchPolicyCache(repo)
 		for _, node := range candidates[repo] {
 			pr, found := openPRs[node.Number]
@@ -227,6 +232,7 @@ func (as *AutonomousScheduler) refreshBlockedReadyPRs(ctx context.Context, graph
 	as.mu.Lock()
 	as.blockedReadyPRIssues = blocked
 	as.inReviewPRBacked = prBacked
+	as.prQueryOKRepos = queryOK
 	as.mu.Unlock()
 }
 

@@ -778,6 +778,16 @@ type AutonomousScheduler struct {
 	// unsatisfied rather than silently satisfied. Guarded by mu.
 	inReviewPRBacked map[string]bool
 
+	// prQueryOKRepos is the set of repos whose open-PR listing SUCCEEDED on
+	// the last fresh graph build. Absence from inReviewPRBacked is otherwise
+	// ambiguous — it means either "queried, no PR exists" or "the query
+	// failed, so nobody looked" — and #265 showed that collapsing those two
+	// into one answer is how a diagnostic ends up confidently wrong. Callers
+	// that REPORT (rather than gate) must consult this first and say
+	// "unverified" when the repo is absent. Gating callers keep failing
+	// closed and do not need it. Guarded by mu.
+	prQueryOKRepos map[string]bool
+
 	mu      sync.Mutex
 	running bool
 	stopCh  chan struct{} // signals dispatch loop only — one reader
