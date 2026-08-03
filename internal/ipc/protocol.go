@@ -549,14 +549,21 @@ type GitPushParams struct {
 }
 
 // GitAbortPipelineParams are parameters for git.abortPipeline.
+//
+// WorkDir is required, not optional: both this verb and git.resetPipeline
+// destroy working-tree state, and an omitted workDir used to resolve to the
+// workspace root (#298). Dropping `omitempty` makes the generated client
+// demand it at compile time rather than leaving the server to reject it at
+// runtime.
 type GitAbortPipelineParams struct {
 	FeatureBranch string `json:"featureBranch"`
-	WorkDir       string `json:"workDir,omitempty"`
+	WorkDir       string `json:"workDir"`
 }
 
-// GitResetPipelineParams are parameters for git.resetPipeline.
+// GitResetPipelineParams are parameters for git.resetPipeline. WorkDir is
+// required — see GitAbortPipelineParams.
 type GitResetPipelineParams struct {
-	WorkDir string `json:"workDir,omitempty"`
+	WorkDir string `json:"workDir"`
 }
 
 // --- Issue mutation methods (additional) ---
