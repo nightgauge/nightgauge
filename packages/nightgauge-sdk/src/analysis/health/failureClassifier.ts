@@ -247,7 +247,8 @@ export type TerminalFailureKind =
   // structured evidence, never derived from error text, so
   // classifyTerminalKind has no matcher for it either.
   | "abandoned_commit" // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
-  | "commit_orphaned"; // Issue #266 — a killed stage's commit landed on the wrong branch (a stray temp-pre-push-<n> left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry
+  | "commit_orphaned" // Issue #266 — a killed stage's commit landed on the wrong branch (a stray temp-pre-push-<n> left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry
+  | "permission_denied"; // Issue #289 — the harness denied a tool call outright (commonly a foreground `sleep` wait loop, reported as "User rejected tool use"). A denial is the harness saying "not that way", not a defect: the stage had turns left and could pick another approach. Routed like adapter_auth_failed — short backoff, board → Ready, no lifetime-cap increment, no cascade feed, no pause — but bounded by a max-attempt cap so a stage that keeps reaching for the same denied pattern stops re-dispatching
 
 /**
  * Every `TerminalFailureKind` union member, in declaration order. TS union
@@ -286,6 +287,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "validation_inconclusive",
   "abandoned_commit",
   "commit_orphaned",
+  "permission_denied",
 ];
 
 /**
