@@ -111,6 +111,18 @@ to exit non-zero on a degraded sweep instead.`,
 			if err != nil {
 				return err
 			}
+			// Workspace producers run here too, not only in the daemon
+			// (internal/ipc/attention_sweep.go). A producer that fires on one
+			// path and not the other is how two surfaces end up disagreeing
+			// about the same workspace — the drift class tracked in #313.
+			// Best-effort: a workspace producer must never fail a repo sweep
+			// that already succeeded.
+			if wres, werr := s.SweepWorkspace(cmd.Context(), []string{repo}); werr != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "workspace sweep skipped: %v\n", werr)
+			} else if !jsonOutput && (wres.Created > 0 || wres.AutoResolved > 0) {
+				fmt.Fprintf(cmd.OutOrStdout(), "workspace: %d raised, %d auto-resolved\n",
+					wres.Created, wres.AutoResolved)
+			}
 			if jsonOutput {
 				if err := json.NewEncoder(cmd.OutOrStdout()).Encode(res); err != nil {
 					return err

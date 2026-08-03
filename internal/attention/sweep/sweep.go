@@ -114,6 +114,9 @@ type Producer interface {
 type Registry struct {
 	mu        sync.RWMutex
 	producers []Producer
+	// workspaceProducers are evaluated once per sweep against the whole
+	// configured repo list rather than per-repo (#260). See workspace.go.
+	workspaceProducers []WorkspaceProducer
 }
 
 // NewRegistry returns an empty registry (tests build their own).
