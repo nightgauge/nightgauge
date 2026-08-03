@@ -657,7 +657,11 @@ excluded. The confirmed instances are filed as:
   (destructive; same root cause as #163)
 - **#297** — `preserveUnlandedDeliverable` (the #289 guard) no-ops on
   detached HEAD, temp branches, worktree-scoped context, and the legacy
-  `files_changed` shape — and `ResetPipeline` proceeds regardless
+  `files_changed` shape — and `ResetPipeline` proceeds regardless.
+  **Fixed:** the guard returns a three-state `preserveVerdict` whose zero
+  value is `preserveUndetermined`, and `ResetPipeline` checkpoint-commits the
+  tree on that verdict — refusing to reset at all if the checkpoint itself
+  fails. Rule 2 above, applied literally
 - **#298** — `git.resetPipeline` IPC handler drops its unmarshal error;
   empty `workDir` aims the hard reset at the workspace root
 - **#299** — two remaining `loadFeatureBranch(workspaceRoot, …)` call sites

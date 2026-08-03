@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -737,17 +738,338 @@ func TestResetPipeline_PreservesUnlandedDeliverable(t *testing.T) {
 	}
 }
 
-func TestResetPipeline_NoHandoffStillResets(t *testing.T) {
-	svc, dir := setupTestRepo(t)
-	if err := os.WriteFile(filepath.Join(dir, "dirty.txt"), []byte("dirty"), 0644); err != nil {
+// setupTestRepoNamed initialises a repo in a directory with a chosen basename,
+// so a test can reproduce the worktree layout (`<repo>-issue-<N>`) the
+// issue-number derivation reads when HEAD is detached.
+func setupTestRepoNamed(t *testing.T, name string) (*Service, string) {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	repo, err := InitRepo(dir)
+	if err != nil {
+		t.Fatalf("InitRepo: %v", err)
+	}
+	if err := CreateInitialCommit(repo, dir); err != nil {
+		t.Fatalf("CreateInitialCommit: %v", err)
+	}
+	return NewServiceFromRepo(repo, dir), dir
+}
+
+func writeFileTest(t *testing.T, dir, rel, content string) string {
+	t.Helper()
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func writeDevHandoff(t *testing.T, dir string, issue int, body string) {
+	t.Helper()
+	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := fmt.Sprintf("dev-%d.json", issue)
+	if err := os.WriteFile(filepath.Join(pipelineDir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func detachHeadTest(t *testing.T, svc *Service) {
+	t.Helper()
+	head, err := svc.repo.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	wt, err := svc.repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := wt.Checkout(&gogit.CheckoutOptions{Hash: head.Hash()}); err != nil {
+		t.Fatalf("detach HEAD: %v", err)
+	}
+}
+
+func checkoutNewBranchTest(t *testing.T, svc *Service, branch string) {
+	t.Helper()
+	if err := svc.BranchCreate(branch); err != nil {
+		t.Fatalf("BranchCreate %s: %v", branch, err)
+	}
+	if err := svc.Checkout(branch); err != nil {
+		t.Fatalf("Checkout %s: %v", branch, err)
+	}
+}
+
+// TestResetPipeline_UndeterminedInputsPreserveWork covers the inputs #297
+// recorded as silent no-ops. Each one reached the guard's `return nil` —
+// indistinguishable from "there is nothing to preserve" — and the hard reset
+// then destroyed the deliverable. The assertion is identical for all of them:
+// the work survives, and the tree still ends clean.
+func TestResetPipeline_UndeterminedInputsPreserveWork(t *testing.T) {
+	const deliverable = "internal/widget.go"
+
+	cases := []struct {
+		name    string
+		repoDir string
+		setup   func(t *testing.T, svc *Service, dir string)
+	}{
+		{
+			// Worktrees are created with `git worktree add --detach`, so a run
+			// killed before the dev skill creates feat/<N>-… is always here.
+			name:    "detached HEAD before the feature branch exists",
+			repoDir: "checkout",
+			setup: func(t *testing.T, svc *Service, dir string) {
+				detachHeadTest(t, svc)
+			},
+		},
+		{
+			// A SIGKILL mid pre-push-validate leaves HEAD on this stray branch,
+			// which matches no feat|fix|docs pattern and preserves nothing.
+			name:    "stray temp-pre-push branch",
+			repoDir: "checkout",
+			setup: func(t *testing.T, svc *Service, dir string) {
+				checkoutNewBranchTest(t, svc, "temp-pre-push-3")
+			},
+		},
+		{
+			// The handoff path is built from the Service's repoPath: a
+			// worktree-isolated run whose Service was constructed on the main
+			// root never finds the file, and the deliverable is still real.
+			name:    "feature branch whose handoff is not in this checkout",
+			repoDir: "checkout",
+			setup: func(t *testing.T, svc *Service, dir string) {
+				checkoutNewBranchTest(t, svc, "feat/297-widget")
+			},
+		},
+		{
+			name:    "handoff records no files while the tree is dirty",
+			repoDir: "checkout",
+			setup: func(t *testing.T, svc *Service, dir string) {
+				checkoutNewBranchTest(t, svc, "feat/297-widget")
+				writeDevHandoff(t, dir, 297, `{"schema_version":"1.8","files_changed":{}}`)
+			},
+		},
+		{
+			name:    "files_changed in a shape nothing models",
+			repoDir: "checkout",
+			setup: func(t *testing.T, svc *Service, dir string) {
+				checkoutNewBranchTest(t, svc, "feat/297-widget")
+				writeDevHandoff(t, dir, 297, `{"files_changed":42}`)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, dir := setupTestRepoNamed(t, tc.repoDir)
+			tc.setup(t, svc, dir)
+			path := writeFileTest(t, dir, deliverable, "package internal\n")
+
+			if err := svc.ResetPipeline(); err != nil {
+				t.Fatalf("ResetPipeline: %v", err)
+			}
+
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("hard reset destroyed work the guard could not account for: %v", err)
+			}
+			status, err := svc.Status()
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			if !status.IsClean {
+				t.Errorf("expected a clean tree after checkpoint + reset, got %+v", status)
+			}
+		})
+	}
+}
+
+// TestResetPipeline_PreservesFlatFilesChangedShape pins the tolerant decode.
+// #240 shipped a complete, well-formed dev context whose files_changed was a
+// flat array of paths; the struct that modelled only {created, modified} turned
+// it into a parse error whose sole consequence was a log line.
+//
+// Asserting the commit *subject* is what makes this test discriminating: the
+// unconditional checkpoint would also leave the file on disk, so surviving the
+// reset alone would not prove the array was ever understood.
+func TestResetPipeline_PreservesFlatFilesChangedShape(t *testing.T) {
+	svc, dir := setupTestRepoNamed(t, "checkout")
+	checkoutNewBranchTest(t, svc, "feat/297-widget")
+	path := writeFileTest(t, dir, "internal/widget.go", "package internal\n")
+	writeDevHandoff(t, dir, 297,
+		`{"schema_version":"1.8","files_changed":["internal/widget.go"]}`)
+
 	if err := svc.ResetPipeline(); err != nil {
 		t.Fatalf("ResetPipeline: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "dirty.txt")); !os.IsNotExist(err) {
-		t.Errorf("expected dirty.txt removed by reset (no dev-context to preserve it), err=%v", err)
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("deliverable was discarded: %v", err)
 	}
+	subject := strings.TrimSpace(gitExecTest(t, dir, "log", "-1", "--format=%s"))
+	if !strings.Contains(subject, "preserve unlanded deliverable") {
+		t.Errorf("expected the recorded-deliverable path to run, commit subject = %q", subject)
+	}
+	if !strings.Contains(subject, "#297") {
+		t.Errorf("expected the recovery commit to name the issue, subject = %q", subject)
+	}
+}
+
+// TestResetPipeline_DiscardsDirtWhenNothingRecordedIsAtRisk is the counterweight
+// to the tests above: a guard that answered UNDETERMINED to everything would
+// pass all of them while making ResetPipeline incapable of resetting. Here the
+// run's own record of what it produced is fully committed, so the remaining
+// dirt is positively not the deliverable and the reset must still wipe it.
+func TestResetPipeline_DiscardsDirtWhenNothingRecordedIsAtRisk(t *testing.T) {
+	svc, dir := setupTestRepoNamed(t, "checkout")
+	checkoutNewBranchTest(t, svc, "feat/297-widget")
+
+	writeFileTest(t, dir, "internal/widget.go", "package internal\n")
+	writeDevHandoff(t, dir, 297,
+		`{"schema_version":"1.8","files_changed":{"created":["internal/widget.go"],"modified":[]}}`)
+	gitExecTest(t, dir, "add", "-A")
+	gitExecTest(t, dir, "commit", "-m", "feat: land the deliverable")
+
+	junk := writeFileTest(t, dir, "junk.txt", "build output\n")
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	if _, err := os.Stat(junk); !os.IsNotExist(err) {
+		t.Errorf("expected reset to discard dirt the run did not record, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "internal", "widget.go")); err != nil {
+		t.Errorf("committed deliverable should be untouched: %v", err)
+	}
+}
+
+// TestResetPipeline_DetachedCheckpointIsReachableByName guards the recovery
+// path's usability. A commit made on a detached HEAD is preserved only in the
+// reflog until gc runs, and pipeline worktrees are detached by construction, so
+// the rescue commit gets a branch pointing at it.
+func TestResetPipeline_DetachedCheckpointIsReachableByName(t *testing.T) {
+	svc, dir := setupTestRepoNamed(t, "checkout")
+	detachHeadTest(t, svc)
+	writeFileTest(t, dir, "internal/widget.go", "package internal\n")
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	branches := gitExecTest(t, dir, "branch", "--list", "nightgauge-checkpoint-*")
+	if strings.TrimSpace(branches) == "" {
+		t.Error("expected a nightgauge-checkpoint-* branch anchoring the detached rescue commit")
+	}
+}
+
+// TestResetPipeline_RefusesWhenCheckpointFails is the fix's floor: when the
+// guard cannot tell what the tree holds AND the rescue commit fails, the only
+// safe answer is to not reset. Falling through to HardReset + clean here is
+// precisely the #289 blast.
+func TestResetPipeline_RefusesWhenCheckpointFails(t *testing.T) {
+	svc, dir := setupTestRepoNamed(t, "checkout")
+	checkoutNewBranchTest(t, svc, "temp-pre-push-3")
+	path := writeFileTest(t, dir, "internal/widget.go", "package internal\n")
+
+	hooks := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitExecTest(t, dir, "config", "core.hooksPath", hooks)
+
+	err := svc.ResetPipeline()
+	if err == nil {
+		t.Fatal("expected ResetPipeline to refuse when the safety checkpoint fails")
+	}
+	if !strings.Contains(err.Error(), "refusing to hard-reset") {
+		t.Errorf("error should say the reset was refused, got: %v", err)
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Fatalf("work was destroyed despite the refusal: %v", statErr)
+	}
+}
+
+func TestRecordedDeliverableFiles(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "documented object shape",
+			body: `{"files_changed":{"created":["a.go"],"modified":["b.go"],"deleted":["c.go"]}}`,
+			want: []string{"a.go", "b.go", "c.go"},
+		},
+		{
+			// The real #240 context, recorded in
+			// internal/orchestrator/gates/context_decode_test.go.
+			name: "flat array shape shipped by #240",
+			body: `{"schema_version":"1.8","files_changed":["internal/e2e/e2e.go","internal/e2e/e2e_test.go"]}`,
+			want: []string{"internal/e2e/e2e.go", "internal/e2e/e2e_test.go"},
+		},
+		{
+			name: "empty object decodes to no files",
+			body: `{"files_changed":{}}`,
+			want: nil,
+		},
+		{name: "missing field", body: `{"schema_version":"1.8"}`, wantErr: true},
+		{name: "scalar files_changed", body: `{"files_changed":42}`, wantErr: true},
+		{name: "truncated json", body: `{"files_changed": {`, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := recordedDeliverableFiles([]byte(tc.body))
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected an error, got files %v", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("recordedDeliverableFiles: %v", err)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("files = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPipelineIssueNumber(t *testing.T) {
+	t.Run("derived from the worktree directory when HEAD is detached", func(t *testing.T) {
+		svc, _ := setupTestRepoNamed(t, "nightgauge-issue-289")
+		detachHeadTest(t, svc)
+
+		got, err := svc.pipelineIssueNumber()
+		if err != nil {
+			t.Fatalf("pipelineIssueNumber: %v", err)
+		}
+		if got != "289" {
+			t.Errorf("issue = %q, want %q", got, "289")
+		}
+	})
+
+	t.Run("declines when two handoffs make ownership ambiguous", func(t *testing.T) {
+		svc, dir := setupTestRepoNamed(t, "checkout")
+		detachHeadTest(t, svc)
+		writeDevHandoff(t, dir, 289, `{"files_changed":{}}`)
+		writeDevHandoff(t, dir, 297, `{"files_changed":{}}`)
+
+		if got, err := svc.pipelineIssueNumber(); err == nil {
+			t.Errorf("expected ambiguity to be declined, got issue %q", got)
+		}
+	})
 }
 
 func TestResetPipeline_PopsBaselineStash(t *testing.T) {
