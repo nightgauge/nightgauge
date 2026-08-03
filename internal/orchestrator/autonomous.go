@@ -980,8 +980,8 @@ func NewAutonomousScheduler(
 		repos:        repos,
 		repoAliases:  repoAliases,
 		selfRepoSlug: ResolveSelfRepoSlug(),
-		config:      cfg,
-		safetyRails: NewSafetyRails(safetyCfg),
+		config:       cfg,
+		safetyRails:  NewSafetyRails(safetyCfg),
 		// #3605 bullet C: cascading-failure circuit breaker. Defaults are
 		// 3 failures inside a 30-minute sliding window; env-var overrides
 		// (NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD / _WINDOW) take effect
