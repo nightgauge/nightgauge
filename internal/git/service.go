@@ -3,7 +3,9 @@
 package git
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -598,7 +600,25 @@ func (s *Service) AbortPipeline(featureBranch string) error {
 }
 
 // ResetPipeline resets the working tree to a clean state (hard reset to HEAD).
+//
+// Before resetting, it preserves any unlanded deliverable a pipeline stage
+// recorded: if `.nightgauge/pipeline/dev-{N}.json` lists created/modified
+// files that are still present on disk and uncommitted, those changes are
+// committed to the current branch as a recovery commit FIRST, so the reset
+// below cannot discard them. A hard reset+clean called on a worktree holding
+// a completed-but-uncommitted implementation is exactly the destroy-on-revert
+// mechanism from Issue #289. Any baseline stash this branch is carrying
+// (`<stage>-<issue>-baseline`, taken by the CI-gate baseline-failure
+// detector) is also popped first so it is never silently left behind. Both
+// guards are best-effort: failures are logged, never fatal.
 func (s *Service) ResetPipeline() error {
+	if err := s.preserveUnlandedDeliverable(); err != nil {
+		log.Printf("git: ResetPipeline: failed to preserve unlanded deliverable: %v", err)
+	}
+	if err := s.popBaselineStash(); err != nil {
+		log.Printf("git: ResetPipeline: failed to pop baseline stash: %v", err)
+	}
+
 	wt, err := s.repo.Worktree()
 	if err != nil {
 		return fmt.Errorf("get worktree: %w", err)
@@ -622,6 +642,135 @@ func (s *Service) ResetPipeline() error {
 	}
 
 	return nil
+}
+
+// devHandoffFilesChanged mirrors the subset of dev-{N}.json (see
+// docs/CONTEXT_ARCHITECTURE.md) this guard needs.
+type devHandoffFilesChanged struct {
+	FilesChanged struct {
+		Created  []string `json:"created"`
+		Modified []string `json:"modified"`
+	} `json:"files_changed"`
+}
+
+// issueNumberFromBranchRE extracts the issue number from the pipeline's
+// standard feature-branch naming convention (feat/<N>-slug, fix/<N>-slug).
+var issueNumberFromBranchRE = regexp.MustCompile(`^(?:feat|fix|docs)/(\d+)-`)
+
+// preserveUnlandedDeliverable checks the current branch's dev-context handoff
+// for created/modified files. If any are present on disk and uncommitted, it
+// commits every uncommitted change to the current branch as a recovery
+// commit so a subsequent hard reset cannot discard them (Issue #289 AC4).
+func (s *Service) preserveUnlandedDeliverable() error {
+	branch, err := s.currentBranchName()
+	if err != nil || branch == "" {
+		return nil
+	}
+	m := issueNumberFromBranchRE.FindStringSubmatch(branch)
+	if m == nil {
+		return nil
+	}
+	handoffPath := filepath.Join(s.repoPath, ".nightgauge", "pipeline", fmt.Sprintf("dev-%s.json", m[1]))
+	data, err := os.ReadFile(handoffPath)
+	if err != nil {
+		return nil // no handoff recorded — nothing to preserve
+	}
+	var handoff devHandoffFilesChanged
+	if err := json.Unmarshal(data, &handoff); err != nil {
+		return fmt.Errorf("parse %s: %w", handoffPath, err)
+	}
+	recorded := append(append([]string{}, handoff.FilesChanged.Created...), handoff.FilesChanged.Modified...)
+	if len(recorded) == 0 {
+		return nil
+	}
+
+	status, err := s.Status()
+	if err != nil {
+		return fmt.Errorf("status: %w", err)
+	}
+	if status.IsClean {
+		return nil // nothing uncommitted to lose
+	}
+
+	dirty := map[string]bool{}
+	for _, f := range status.StagedFiles {
+		dirty[f.Path] = true
+	}
+	for _, f := range status.UnstagedFiles {
+		dirty[f.Path] = true
+	}
+	for _, f := range status.UntrackedFiles {
+		dirty[f] = true
+	}
+	hasRecordedDeliverable := false
+	for _, f := range recorded {
+		if dirty[f] {
+			hasRecordedDeliverable = true
+			break
+		}
+	}
+	if !hasRecordedDeliverable {
+		return nil
+	}
+
+	cmd := exec.Command("git", "add", "-A")
+	cmd.Dir = s.repoPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add -A: %w: %s", err, string(out))
+	}
+	commitCmd := exec.Command("git", "commit", "-m",
+		fmt.Sprintf("chore(#%s): preserve unlanded deliverable before pipeline reset", m[1]))
+	commitCmd.Dir = s.repoPath
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %w: %s", err, string(out))
+	}
+	log.Printf("git: ResetPipeline: preserved %d dev-context file(s) into a recovery commit on %s before reset", len(recorded), branch)
+	return nil
+}
+
+// baselineStashMessageRE matches the naming convention a stage's
+// baseline-comparison stash uses: `<stage>-<issue>-baseline` (see
+// skills/_shared/AUTO_FIX_LOOP.md Step 2.5).
+var baselineStashMessageRE = regexp.MustCompile(`[a-z-]+-\d+-baseline`)
+
+// popBaselineStash finds the top-of-stack stash matching the
+// `<stage>-<issue>-baseline` naming convention and pops it, so a pipeline
+// reset never silently leaves it behind (Issue #289 AC5).
+func (s *Service) popBaselineStash() error {
+	listCmd := exec.Command("git", "stash", "list")
+	listCmd.Dir = s.repoPath
+	out, err := listCmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git stash list: %w: %s", err, string(out))
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	for _, line := range lines {
+		if line == "" || !baselineStashMessageRE.MatchString(line) {
+			continue
+		}
+		ref := strings.SplitN(line, ":", 2)[0]
+		popCmd := exec.Command("git", "stash", "pop", ref)
+		popCmd.Dir = s.repoPath
+		if popOut, popErr := popCmd.CombinedOutput(); popErr != nil {
+			return fmt.Errorf("git stash pop %s: %w: %s", ref, popErr, string(popOut))
+		}
+		log.Printf("git: ResetPipeline: popped baseline stash %s before reset", ref)
+		return nil
+	}
+	return nil
+}
+
+// currentBranchName returns the short name of the currently checked-out
+// branch, or "" for a detached HEAD.
+func (s *Service) currentBranchName() (string, error) {
+	head, err := s.repo.Head()
+	if err != nil {
+		return "", err
+	}
+	if !head.Name().IsBranch() {
+		return "", nil
+	}
+	return head.Name().Short(), nil
 }
 
 // InitRepo initializes a new git repository at the given path (for testing).
