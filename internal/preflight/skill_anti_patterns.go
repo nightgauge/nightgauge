@@ -48,6 +48,12 @@ const (
 	CheckBackslashPath    = "backslash_path"
 	CheckMissingTOC       = "missing_toc"
 	CheckAdminMergeBypass = "admin_merge_bypass"
+	// CheckSleepWaitLoop flags a foreground `sleep`-based wait/poll loop
+	// (`while`/`until ...; do sleep N; done`). The host harness denies
+	// foreground `sleep` outright, so a stage that emits this pattern to wait
+	// on a background job dies on a rejected tool call instead of using the
+	// harness's backgrounded-command + completion-notification idiom (#289).
+	CheckSleepWaitLoop = "sleep_wait_loop"
 )
 
 // SkillAntiPatternsResult is the stable JSON output schema for
@@ -108,6 +114,17 @@ var tocHeadingRE = regexp.MustCompile(`(?im)^#{1,2}\s+(Contents|Table of Content
 // The trailing guard excludes longer flags like `--auto-fix` (RE2 has no
 // lookahead, so a non-word/non-hyphen follower or end-of-line is required).
 var adminMergeRE = regexp.MustCompile(`(?i)(?:\b(?:pr|mr)\s+merge\b|/[a-z0-9-]*pr-merge\b)[^\n]*\s--(?:admin|auto)(?:[^a-z0-9-]|$)`)
+
+// sleepWaitLoopRE matches a foreground `sleep`-based wait/poll loop: a
+// `while`/`until` condition followed by a `do ... sleep N ... done` body,
+// non-greedy so it stops at the loop's own `done` rather than swallowing
+// unrelated later text. Case-insensitive and dot-matches-newline so it
+// catches both the single-line idiom from #289
+// (`until grep -q DONE log; do sleep 30; done`) and the equivalent multi-line
+// shell form. Requires `sleep` to be followed by a numeric duration so prose
+// that merely uses the word "sleep" (e.g. "put the process to sleep") is not
+// matched.
+var sleepWaitLoopRE = regexp.MustCompile(`(?is)\b(?:while|until)\b.*?\bdo\b.*?\bsleep\s+[0-9].*?\bdone\b`)
 
 // RunSkillAntiPatternsCheck walks the skill tree rooted at Root and emits a
 // finding for each occurrence of the three mechanical anti-patterns. Returns a
@@ -200,6 +217,20 @@ func RunSkillAntiPatternsCheck(_ context.Context, opts SkillAntiPatternsOptions)
 					Match: trimMatch(line),
 				})
 			}
+		}
+
+		// Check E (sleep wait loop) can span multiple lines, so it is matched
+		// against the whole file content rather than line-by-line. The line
+		// number reported is where the match starts (the `while`/`until`).
+		content := string(data)
+		for _, loc := range sleepWaitLoopRE.FindAllStringIndex(content, -1) {
+			line := strings.Count(content[:loc[0]], "\n") + 1
+			result.Findings = append(result.Findings, SkillAntiPattern{
+				Check: CheckSleepWaitLoop,
+				File:  rel,
+				Line:  line,
+				Match: trimMatch(content[loc[0]:loc[1]]),
+			})
 		}
 	}
 

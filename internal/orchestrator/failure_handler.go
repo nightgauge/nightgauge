@@ -391,6 +391,25 @@ const (
 	// to delete the branch/worktree holding it, so a human can push it or open
 	// a PR by hand.
 	TerminalKindCommitOrphaned = "commit_orphaned"
+	// TerminalKindPermissionDenied is set when the harness denies a tool call
+	// outright â most commonly a stage reaching for a foreground `sleep` wait
+	// loop, which the host blocks and reports as `is_error: true,
+	// tool_use_result: "User rejected tool use"`. A denial is the harness
+	// saying "not that way", not a defect in the work: the stage had turns
+	// remaining and could pick a different approach (e.g. a backgrounded
+	// command plus its completion notification) on its very next turn. Pre-fix
+	// this fell through to the generic subagent_crash fallback, which
+	// permanently killed the run, counted toward LifetimeIssueFailures, and
+	// tripped haltQueueOnSlotFailure over a single rejected tool call â pausing
+	// the whole fleet for a retryable mistake (#289).
+	//
+	// Routed like TerminalKindAdapterAuthFailed: short backoff, board â Ready,
+	// NO LifetimeIssueFailures increment, NO cascade-breaker feed, NO pause â
+	// but bounded by permissionDeniedMaxAttempts so a stage that keeps
+	// reaching for the same denied pattern eventually stops re-dispatching
+	// instead of looping forever. Classified `infrastructure` (harness
+	// behavior, not a code or issue defect) in docs/FAILURE_TAXONOMY.md.
+	TerminalKindPermissionDenied = "permission_denied"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error
@@ -802,6 +821,21 @@ func ClassifyTerminalKind(errorText string) string {
 	if strings.Contains(t, "[commit-orphaned]") ||
 		strings.Contains(t, "commit_orphaned") {
 		return TerminalKindCommitOrphaned
+	}
+
+	// Harness tool-call denial (#289). Most commonly a stage that reached for a
+	// forbidden foreground `sleep` wait loop; the harness rejects the tool call
+	// outright and the Claude CLI surfaces it as a result envelope with
+	// `is_error:true` and `tool_use_result: "User rejected tool use"`. Matched
+	// BEFORE the generic subagent-crash fallback, whose "exit " substring would
+	// otherwise misbucket a denial as a process death â the exact misbucketing
+	// that turned one rejected tool call into a permanently killed run and a
+	// fleet-wide pause.
+	if strings.Contains(t, "[permission-denied]") ||
+		strings.Contains(t, "permission_denied") ||
+		strings.Contains(t, "user rejected tool use") ||
+		(strings.Contains(t, "tool_use_result") && strings.Contains(t, "rejected")) {
+		return TerminalKindPermissionDenied
 	}
 
 	// Subagent process death / non-zero exit fallback.

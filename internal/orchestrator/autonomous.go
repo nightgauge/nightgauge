@@ -436,6 +436,22 @@ const apiOverloadedBackoffCap = 30 * time.Minute
 // it. Issue #194.
 const apiOverloadedMaxAttempts = 8
 
+// permissionDeniedBackoff is the per-issue backoff applied when the harness
+// denies a tool call (TerminalKindPermissionDenied) â most commonly a stage
+// reaching for a forbidden foreground `sleep` wait loop. The stage has turns
+// remaining and can pick a different approach on retry, so the backoff is
+// short. Issue #289.
+const permissionDeniedBackoff = 2 * time.Minute
+
+// permissionDeniedMaxAttempts bounds consecutive permission-denial retries on
+// the same issue before the scheduler stops re-dispatching it. A single
+// denial is almost always cleared by the stage's next turn; repeated denials
+// on the same issue mean the stage keeps reaching for the same forbidden
+// pattern and needs a human or a skill-guidance fix, not more retries. Does
+// NOT increment LifetimeIssueFailures either way â a harness denial is never
+// the issue's fault. Issue #289.
+const permissionDeniedMaxAttempts = 3
+
 // apiOverloadedBackoffFor computes the escalating backoff for the given
 // number of PRIOR consecutive transient failures (i.e. retryPlan.Attempts
 // before this call), doubling per attempt and capped at
@@ -3521,6 +3537,68 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			as.scheduleRetryLocked(key, terminalFailureKind, "adapter auth pre-flight failed", time.Now().Add(stallKillBackoff))
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
+			as.persistStateLocked()
+			go as.revertFailedIssueStatus(repo, issue)
+			select {
+			case as.rescanCh <- struct{}{}:
+			default:
+			}
+			if as.safetyRails != nil {
+				as.safetyRails.RecordNonFaultOutcome(0)
+				safetySnap := as.safetyRails.State()
+				as.state.Safety = &safetySnap
+			}
+			as.persistStateLocked()
+			return
+		}
+
+		// Harness tool-call denial (#289). Most commonly a stage that reached
+		// for a forbidden foreground `sleep` wait loop; the harness rejects the
+		// tool call outright and this is NOT a defect in the work â the stage
+		// had turns remaining and could have picked a different approach (e.g.
+		// a backgrounded command plus its completion notification) on its very
+		// next turn. Pre-fix this fell through to the generic subagent_crash
+		// path, permanently killing the run, counting toward
+		// LifetimeIssueFailures, and tripping haltQueueOnSlotFailure over a
+		// single rejected tool call. Route it like adapter_auth_failed: short
+		// backoff, board â Ready, NO LifetimeIssueFailures increment, NO
+		// cascade-breaker feed, NO pause â but bounded by
+		// permissionDeniedMaxAttempts so a stage that keeps reaching for the
+		// same denied pattern eventually stops re-dispatching instead of
+		// looping forever.
+		if terminalFailureKind == TerminalKindPermissionDenied {
+			detail := failureDetail
+			if detail == "" {
+				detail = "harness denied a tool call (e.g. a forbidden foreground sleep wait loop)"
+			}
+			priorAttempts := as.retryBackoff[key].Attempts
+			if priorAttempts >= permissionDeniedMaxAttempts {
+				as.recordFailureLocked(repo, issue, title, now,
+					fmt.Sprintf("permission-denied (retryable, harness fault) â exceeded %d consecutive denials, pausing re-dispatch (no lifetime-cap increment) â %s", permissionDeniedMaxAttempts, detail))
+				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials â pausing re-dispatch, no lifetime-cap increment",
+					key, permissionDeniedMaxAttempts)
+				if as.retryBackoff != nil {
+					delete(as.retryBackoff, key)
+				}
+				as.persistStateLocked()
+				go as.revertFailedIssueStatus(repo, issue)
+				select {
+				case as.rescanCh <- struct{}{}:
+				default:
+				}
+				if as.safetyRails != nil {
+					as.safetyRails.RecordNonFaultOutcome(0)
+					safetySnap := as.safetyRails.State()
+					as.state.Safety = &safetySnap
+				}
+				as.persistStateLocked()
+				return
+			}
+			as.recordFailureLocked(repo, issue, title, now,
+				"permission-denied (retryable, harness fault) â will retry after backoff â "+detail)
+			as.scheduleRetryLocked(key, terminalFailureKind, detail, time.Now().Add(permissionDeniedBackoff))
+			log.Printf("autonomous: permission_denied for %s â retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
+				key, permissionDeniedBackoff, priorAttempts+1)
 			as.persistStateLocked()
 			go as.revertFailedIssueStatus(repo, issue)
 			select {

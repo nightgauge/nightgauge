@@ -355,9 +355,11 @@ response is to break and surface, not to pretend a fix happened.
 
 #### Step 5: Wait for Re-Check
 
-Wait briefly (`sleep 10`), then use Go binary `nightgauge ci wait` again.
-**NEVER** substitute your own polling loop using `gh pr checks` — always use the
-Go binary as shown in CI_GATE.md.
+Re-invoke the Go binary `nightgauge ci wait` directly — it blocks internally
+until CI reports a result, so no separate wait step is needed. **NEVER** add a
+foreground `sleep` before it and **NEVER** substitute your own polling loop
+using `gh pr checks`; the harness denies foreground `sleep` outright and the
+Go binary already handles polling correctly (#289, see CI_GATE.md).
 
 - Exit code 0: `AUTO_FIX_SUCCESS=true`, break loop
 - Exit code 1: Compare failures to previous. If same failure repeats 2+ times,

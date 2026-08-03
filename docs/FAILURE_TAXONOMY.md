@@ -240,6 +240,7 @@ record may carry both fields, neither, or only one.
 | `branch_forked`              | The run's branch diverged from its remote; every push is rejected non-fast-forward (Issue #163) — unrecoverable by retry, needs human action                                                                                                                                                                      |
 | `abandoned_commit`           | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
 | `commit_orphaned`            | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
+| `permission_denied`          | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable |
 
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so
