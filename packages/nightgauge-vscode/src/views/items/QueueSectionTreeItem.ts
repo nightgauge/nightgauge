@@ -48,6 +48,10 @@ export class QueueSectionTreeItem extends BaseTreeItem {
   private queueItems: QueueItem[] = [];
   private queueStatus: QueueStatus = "idle";
   private pauseReason?: string;
+  /** Items actually waiting for a slot (excludes `processing`). */
+  private queuedCount = 0;
+  /** Items dispatched and executing — marked in place, not removed (#232/#246). */
+  private runningCount = 0;
 
   constructor() {
     super("Queued Issues", vscode.TreeItemCollapsibleState.Collapsed);
@@ -61,6 +65,28 @@ export class QueueSectionTreeItem extends BaseTreeItem {
   }
 
   /**
+   * Render the section header count (Issue #264).
+   *
+   * The header answers "how much work is WAITING?", so running work is
+   * excluded from the queued count — it is already represented by the run
+   * view, and counting it here read as double-dispatch to an operator.
+   *
+   * Running items are still counted, separately and visibly. Hiding them
+   * would re-create the #232 blindness that the mark-in-place model
+   * (#232/#246) exists to fix: before that change, dispatch deleted the only
+   * record of the work and the queue reported `idle` while a pipeline ran.
+   */
+  private describeCounts(): string {
+    if (this.runningCount === 0) {
+      return `(${this.queuedCount})`;
+    }
+    if (this.queuedCount === 0) {
+      return `(0 queued, ${this.runningCount} running)`;
+    }
+    return `(${this.queuedCount} queued, ${this.runningCount} running)`;
+  }
+
+  /**
    * Update the tooltip based on current state
    */
   private updateTooltip(): void {
@@ -71,7 +97,10 @@ export class QueueSectionTreeItem extends BaseTreeItem {
     if (this.items.length === 0) {
       tooltipText += "_No issues queued_";
     } else {
-      tooltipText += `**${this.items.length}** issue(s) in queue\n`;
+      tooltipText += `**${this.queuedCount}** issue(s) waiting\n`;
+      if (this.runningCount > 0) {
+        tooltipText += `**${this.runningCount}** currently running (shown here and in the run view — one record, two views)\n`;
+      }
       tooltipText += `Status: ${this.queueStatus}`;
       if (this.pauseReason) {
         tooltipText += `\n\n⚠️ ${this.pauseReason}`;
@@ -87,7 +116,9 @@ export class QueueSectionTreeItem extends BaseTreeItem {
   setItems(queueItems: QueueItem[]): void {
     this.queueItems = queueItems;
     this.items = queueItems.map((item) => new QueuedIssueTreeItem(item));
-    this.description = `(${this.items.length})`;
+    this.runningCount = queueItems.filter((item) => item.status === "processing").length;
+    this.queuedCount = this.items.length - this.runningCount;
+    this.description = this.describeCounts();
     this.iconPath = getQueueStatusIcon(this.queueStatus, this.items.length);
     this.updateTooltip();
 
@@ -134,6 +165,8 @@ export class QueueSectionTreeItem extends BaseTreeItem {
   clear(): void {
     this.items = [];
     this.queueItems = [];
+    this.queuedCount = 0;
+    this.runningCount = 0;
     this.queueStatus = "idle";
     this.pauseReason = undefined;
     this.description = "(0)";
