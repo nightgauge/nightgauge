@@ -276,6 +276,16 @@ type AutonomousState struct {
 	LastCandidateCount   int            `json:"lastCandidateCount,omitempty"`
 	LastRejectionReasons map[string]int `json:"lastRejectionReasons,omitempty"`
 
+	// Diagnostics from the most recent Backlog->Ready promotion scan (either
+	// promoteUnblockedOnStartup or promoteUnblockedToReady — #288). Mirrors
+	// the LastNodeCount/LastCandidateCount/LastRejectionReasons pattern above
+	// so "why hasn't anything promoted?" is answerable without grepping logs.
+	// Overwritten by whichever promotion function ran most recently.
+	LastPromotionConsidered       int            `json:"lastPromotionConsidered,omitempty"`
+	LastPromotionEligible         int            `json:"lastPromotionEligible,omitempty"`
+	LastPromotionPromoted         int            `json:"lastPromotionPromoted,omitempty"`
+	LastPromotionRejectionReasons map[string]int `json:"lastPromotionRejectionReasons,omitempty"`
+
 	// GraphQL cost tracking for rate-aware cadence (#172). LastCycleGraphQLCost
 	// is the most recent cycle's measured cost (remaining diffed before/after
 	// runCycle); AvgCycleGraphQLCost is an EWMA (alpha=graphQLCostEWMAAlpha)
@@ -2403,10 +2413,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 			// fleet-scoped card so the operator can re-scan/promote from any surface
 			// instead of learning of it from a bare one-way "stopped" notice.
 			as.mu.Lock()
-			promotable := 0
-			for _, n := range as.state.LastRejectionReasons {
-				promotable += n
-			}
+			promotable := as.state.LastPromotionEligible
 			as.mu.Unlock()
 			as.raiseWorkExhaustion(promotable)
 		}
@@ -4135,18 +4142,30 @@ func (as *AutonomousScheduler) RecoverOrphanedRunning(ctx context.Context) {
 // board and consuming dispatch slots. Without recovery, the scheduler sees zero
 // dispatchable items and idles forever.
 //
-// After recovering orphaned items, this also runs a promotion scan to pick up
-// any downstream issues that became unblocked while the session was down.
+// Recovery itself is conditional on orphaned items existing, but the trailing
+// promotion scan is NOT — it always runs, because a clean start (state.Running
+// empty) is the overwhelmingly common case and is exactly when triaged,
+// unblocked Backlog issues would otherwise never get promoted (#288).
 func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
 	as.mu.Lock()
 	orphaned := make([]RunningItem, len(as.state.Running))
 	copy(orphaned, as.state.Running)
 	as.mu.Unlock()
 
-	if len(orphaned) == 0 {
-		return
+	if len(orphaned) > 0 {
+		as.recoverOrphanedRunningItems(ctx, orphaned)
 	}
 
+	// Always reconcile Backlog -> Ready at startup, whether or not there was
+	// anything to recover — a clean start is the common case (#288).
+	as.promoteUnblockedOnStartup(ctx)
+}
+
+// recoverOrphanedRunningItems performs the actual orphan-recovery board moves
+// for a non-empty set of previously-running items. Split out of
+// recoverOrphanedRunning so the promotion scan that follows it is reachable
+// unconditionally (#288).
+func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, orphaned []RunningItem) {
 	log.Printf("autonomous: startup recovery — found %d orphaned running item(s) from previous session", len(orphaned))
 
 	// Decouple the board writes from the caller's context deadline so a GitHub
@@ -4199,11 +4218,6 @@ func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
 	if recovered > 0 {
 		log.Printf("autonomous: startup recovery complete — recovered %d orphaned item(s)", recovered)
 	}
-
-	// Run promotion scan to catch downstream issues that became unblocked
-	// while the session was down. Build a fresh graph and promote any Backlog
-	// items whose blockers are all now closed.
-	as.promoteUnblockedOnStartup(ctx)
 }
 
 // isTriagedAndUnblocked returns true if a Backlog node is fully triaged
@@ -4255,6 +4269,46 @@ func isTriagedAndUnblocked(node *depgraph.Node, graph *depgraph.Graph, adj map[s
 	return true
 }
 
+// triageRejectionReason mirrors isTriagedAndUnblocked's checks in order and
+// returns the first failing reason, or "" if the node is eligible. Used only
+// to populate the LastPromotionRejectionReasons tally (#288) — it is a
+// read-only diagnostic helper and must never be used for gating, so
+// isTriagedAndUnblocked stays the single source of truth for the rule itself.
+func triageRejectionReason(node *depgraph.Node, graph *depgraph.Graph, adj map[string][]string, trustedAssociations []string) string {
+	if node == nil || !strings.EqualFold(node.State, "OPEN") {
+		return "not-open"
+	}
+	if !strings.EqualFold(node.BoardStatus, "Backlog") {
+		return "not-backlog"
+	}
+	if node.Priority == "" {
+		return "no-priority"
+	}
+	if !isTrustedAuthor(node.AuthorAssociation, trustedAssociations) {
+		return "untrusted-author"
+	}
+	hasType := false
+	for _, label := range node.Labels {
+		ll := strings.ToLower(label)
+		if ll == "type:epic" {
+			return "epic"
+		}
+		if strings.HasPrefix(ll, "type:") {
+			hasType = true
+		}
+	}
+	if !hasType {
+		return "no-type-label"
+	}
+	for _, depKey := range adj[node.ID().String()] {
+		depNode, exists := graph.Nodes[depKey]
+		if exists && strings.EqualFold(depNode.State, "OPEN") {
+			return "open-blocker"
+		}
+	}
+	return ""
+}
+
 // promoteUnblockedOnStartup scans all issues on the board and promotes any
 // triaged Backlog item whose blockers are all closed (or that has no
 // blockers) to Ready. Unlike promoteUnblockedToReady (which only checks
@@ -4271,7 +4325,13 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), boardRecoveryTimeout)
 	defer cancel()
 
-	graph, err := depgraph.BuildGraph(opCtx, as.ghClient, as.repos, as.repoAliases)
+	var graph *depgraph.Graph
+	var err error
+	if as.buildGraphFn != nil {
+		graph, err = as.buildGraphFn(opCtx)
+	} else {
+		graph, err = depgraph.BuildGraph(opCtx, as.ghClient, as.repos, as.repoAliases)
+	}
 	if err != nil {
 		log.Printf("autonomous: startup promotion: graph build failed: %v", err)
 		return
@@ -4280,6 +4340,9 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 
 	adj := graph.Adjacency()
 	promoted := 0
+	considered := len(graph.Nodes)
+	eligible := 0
+	rejections := make(map[string]int)
 
 	for _, node := range graph.Nodes {
 		if strings.EqualFold(node.BoardStatus, "Backlog") && node.Priority != "" &&
@@ -4288,8 +4351,12 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
 		}
 		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
+			if reason := triageRejectionReason(node, graph, adj, as.config.TrustedAuthorAssociations); reason != "" {
+				rejections[reason]++
+			}
 			continue
 		}
+		eligible++
 
 		// A fully-unblocked node whose pickup was deferred with a
 		// blocked_dependency queue pause is now re-eligible (Issue #231).
@@ -4319,6 +4386,10 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 		log.Printf("autonomous: startup promotion: promoted %s#%d from Backlog → Ready (triaged: priority=%s)",
 			node.Repo, node.Number, node.Priority)
 	}
+
+	as.recordPromotionDiagnostics(considered, eligible, promoted, rejections)
+	log.Printf("autonomous: promoteUnblockedOnStartup: considered=%d eligible=%d promoted=%d top_rejections=%s",
+		considered, eligible, promoted, topRejectionReasons(rejections))
 
 	if promoted > 0 {
 		log.Printf("autonomous: startup promotion: promoted %d issue(s) to Ready", promoted)
@@ -4371,12 +4442,32 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(completedRepo string, com
 	adj := graph.Adjacency()
 
 	downstreamKeys := revAdj[completedKey]
-	if len(downstreamKeys) == 0 {
-		return
+
+	// Candidate set is the union of the completed issue's dependents AND every
+	// other Backlog node in the already-built graph (#288, defect 1) — an
+	// independent issue with no blockedBy edges has no entry in revAdj at all
+	// and would otherwise never be considered. Dedup by key so a node that is
+	// both a dependent and independently eligible isn't processed twice.
+	seen := make(map[string]bool, len(downstreamKeys))
+	candidateKeys := make([]string, 0, len(downstreamKeys))
+	for _, k := range downstreamKeys {
+		if !seen[k] {
+			seen[k] = true
+			candidateKeys = append(candidateKeys, k)
+		}
+	}
+	for k := range graph.Nodes {
+		if !seen[k] {
+			seen[k] = true
+			candidateKeys = append(candidateKeys, k)
+		}
 	}
 
 	var promoted int
-	for _, downKey := range downstreamKeys {
+	considered := len(candidateKeys)
+	eligible := 0
+	rejections := make(map[string]int)
+	for _, downKey := range candidateKeys {
 		node, exists := graph.Nodes[downKey]
 		if !exists {
 			continue
@@ -4389,8 +4480,12 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(completedRepo string, com
 			as.raiseUntrustedAuthorSkip(owner, repoName, node.Number, node.Title, node.AuthorAssociation, "triage-promotion")
 		}
 		if !isTriagedAndUnblocked(node, graph, adj, as.config.TrustedAuthorAssociations) {
+			if reason := triageRejectionReason(node, graph, adj, as.config.TrustedAuthorAssociations); reason != "" {
+				rejections[reason]++
+			}
 			continue
 		}
+		eligible++
 
 		// A fully-unblocked downstream node whose pickup was deferred with a
 		// blocked_dependency queue pause is now re-eligible — auto-requeue it
@@ -4424,9 +4519,53 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(completedRepo string, com
 			node.Repo, node.Number, completedRepo, completedIssue)
 	}
 
+	as.recordPromotionDiagnostics(considered, eligible, promoted, rejections)
+	log.Printf("autonomous: promoteUnblockedToReady: considered=%d eligible=%d promoted=%d top_rejections=%s",
+		considered, eligible, promoted, topRejectionReasons(rejections))
+
 	if promoted > 0 {
 		log.Printf("autonomous: promoteUnblockedToReady: promoted %d issue(s) to Ready", promoted)
 	}
+}
+
+// recordPromotionDiagnostics overwrites the LastPromotion* diagnostics fields
+// on AutonomousState after a promotion scan (either promoteUnblockedOnStartup
+// or promoteUnblockedToReady). Same overwrite-per-cycle semantics as the
+// existing LastNodeCount/LastCandidateCount/LastRejectionReasons fields (#288).
+func (as *AutonomousScheduler) recordPromotionDiagnostics(considered, eligible, promoted int, rejections map[string]int) {
+	as.mu.Lock()
+	as.state.LastPromotionConsidered = considered
+	as.state.LastPromotionEligible = eligible
+	as.state.LastPromotionPromoted = promoted
+	as.state.LastPromotionRejectionReasons = rejections
+	as.mu.Unlock()
+	as.persistState()
+}
+
+// topRejectionReasons formats a rejection-reason tally for a single log line,
+// e.g. "[not-backlog:12 no-priority:5 open-blocker:2]", sorted by count
+// descending (ties broken alphabetically for stable output). Returns "[]" for
+// an empty tally.
+func topRejectionReasons(rejections map[string]int) string {
+	type reasonCount struct {
+		reason string
+		count  int
+	}
+	counts := make([]reasonCount, 0, len(rejections))
+	for reason, count := range rejections {
+		counts = append(counts, reasonCount{reason, count})
+	}
+	sort.Slice(counts, func(i, j int) bool {
+		if counts[i].count != counts[j].count {
+			return counts[i].count > counts[j].count
+		}
+		return counts[i].reason < counts[j].reason
+	})
+	parts := make([]string, 0, len(counts))
+	for _, rc := range counts {
+		parts = append(parts, fmt.Sprintf("%s:%d", rc.reason, rc.count))
+	}
+	return "[" + strings.Join(parts, " ") + "]"
 }
 
 // resumeBlockedDependencyPause resumes a queue item paused with kind=

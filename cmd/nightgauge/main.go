@@ -9217,6 +9217,8 @@ func autonomousStatusCmd() *cobra.Command {
 			// Remaining
 			if state.Remaining > 0 {
 				fmt.Printf("\nRemaining: %d issues\n", state.Remaining)
+			} else if len(state.Running) == 0 {
+				fmt.Print(formatIdleFedVsStarved(state))
 			}
 
 			// Config warnings (Issue #3640)
@@ -9237,6 +9239,17 @@ func autonomousStatusCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output status as JSON for scripting")
 	return cmd
+}
+
+// formatIdleFedVsStarved renders the fed-vs-starved distinction (#288) for
+// the remaining==0 && running==0 idle case: "no work" is genuine idleness,
+// while LastPromotionEligible > 0 means the fleet is starved by a promotion
+// fault — gate-eligible Backlog issues exist but never reached Ready.
+func formatIdleFedVsStarved(state orchestrator.AutonomousState) string {
+	if state.LastPromotionEligible > 0 {
+		return fmt.Sprintf("\nIdle: %d Backlog issue(s) are gate-eligible but not yet Ready — this is a fault, not idleness\n", state.LastPromotionEligible)
+	}
+	return "\nIdle: no work\n"
 }
 
 // formatElapsedSince returns a human-readable elapsed time string from an ISO

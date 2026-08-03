@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 )
 
 // newAttentionProducerScheduler builds a scheduler through the real constructor
@@ -99,6 +100,33 @@ func TestProducerWorkExhaustionEmitsFleetCard(t *testing.T) {
 		}
 	}
 	assertSteerSet(t, r)
+}
+
+// TestIdleBranch_WorkExhaustionUsesLastPromotionEligible (#288) asserts the
+// idle branch in runCycle feeds raiseWorkExhaustion the corrected
+// LastPromotionEligible count rather than the old (semantically wrong)
+// sum-of-rejection-reasons value.
+func TestIdleBranch_WorkExhaustionUsesLastPromotionEligible(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.state.Status = "running"
+	as.state.LastPromotionEligible = 3
+	// The old computation summed LastRejectionReasons — populate it with a
+	// different total so a regression back to the old value is caught.
+	as.state.LastRejectionReasons = map[string]int{"no-priority": 99}
+	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+		return buildTestGraph(nil, nil), nil
+	}
+
+	as.runCycle(context.Background())
+
+	reqs := openRequests(t, as)
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1 (fleet-idle card)", len(reqs))
+	}
+	r := reqs[0]
+	if !strings.Contains(r.Title, "3 Backlog item(s) promotable") {
+		t.Errorf("Title = %q, want it to reflect LastPromotionEligible=3, not LastRejectionReasons sum=99", r.Title)
+	}
 }
 
 func TestProducerOwnerActionHandoffEmitsAndDedups(t *testing.T) {

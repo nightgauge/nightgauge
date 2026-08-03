@@ -144,3 +144,84 @@ func TestIsTriagedAndUnblocked_HandlesNilNode(t *testing.T) {
 		t.Error("nil node must never be promoted")
 	}
 }
+
+// TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked (#288) asserts the
+// diagnostic helper returns the expected first-failing-reason string for each
+// rejection branch, and "" for the eligible case — used only for the
+// LastPromotionRejectionReasons tally, never for gating.
+func TestTriageRejectionReason_MirrorsIsTriagedAndUnblocked(t *testing.T) {
+	t.Run("nil node", func(t *testing.T) {
+		g := graphWith()
+		if got := triageRejectionReason(nil, g, g.Adjacency(), nil); got != "not-open" {
+			t.Errorf("nil node: got %q, want %q", got, "not-open")
+		}
+	})
+
+	t.Run("closed item", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "CLOSED")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "not-open" {
+			t.Errorf("closed item: got %q, want %q", got, "not-open")
+		}
+	})
+
+	t.Run("non-backlog status", func(t *testing.T) {
+		node := makeNode(3216, "Ready", "P1", []string{"type:bug"}, "OPEN")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "not-backlog" {
+			t.Errorf("non-backlog status: got %q, want %q", got, "not-backlog")
+		}
+	})
+
+	t.Run("missing priority", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "", []string{"type:bug"}, "OPEN")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "no-priority" {
+			t.Errorf("missing priority: got %q, want %q", got, "no-priority")
+		}
+	})
+
+	t.Run("untrusted author", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
+		node.AuthorAssociation = "NONE"
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), []string{"OWNER", "MEMBER"}); got != "untrusted-author" {
+			t.Errorf("untrusted author: got %q, want %q", got, "untrusted-author")
+		}
+	})
+
+	t.Run("epic", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "P1", []string{"type:epic"}, "OPEN")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "epic" {
+			t.Errorf("epic: got %q, want %q", got, "epic")
+		}
+	})
+
+	t.Run("missing type label", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "P1", []string{"priority:high"}, "OPEN")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "no-type-label" {
+			t.Errorf("missing type label: got %q, want %q", got, "no-type-label")
+		}
+	})
+
+	t.Run("open blocker", func(t *testing.T) {
+		blocker := makeNode(100, "In progress", "P1", []string{"type:feature"}, "OPEN")
+		blocked := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
+		g := graphWith(blocker, blocked)
+		g.Edges = []depgraph.Edge{{From: blocked.ID(), To: blocker.ID()}}
+		adj := g.Adjacency()
+		if got := triageRejectionReason(blocked, g, adj, nil); got != "open-blocker" {
+			t.Errorf("open blocker: got %q, want %q", got, "open-blocker")
+		}
+	})
+
+	t.Run("eligible returns empty string", func(t *testing.T) {
+		node := makeNode(3216, "Backlog", "P1", []string{"type:bug"}, "OPEN")
+		g := graphWith(node)
+		if got := triageRejectionReason(node, g, g.Adjacency(), nil); got != "" {
+			t.Errorf("eligible node: got %q, want empty string", got)
+		}
+	})
+}

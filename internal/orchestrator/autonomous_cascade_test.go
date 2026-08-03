@@ -1,10 +1,13 @@
 package orchestrator
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 )
 
 // newAutonomousForCascadeTest builds a minimal AutonomousScheduler with the
@@ -254,5 +257,63 @@ func TestAutonomous_CascadeBreakerNilTrackerIsNoop(t *testing.T) {
 	}
 	if as.state.Status == "safety_tripped" {
 		t.Errorf("nil tracker should not trip safety; got %q", as.state.Status)
+	}
+}
+
+// TestRecoverOrphanedRunning_PromotesOnCleanStart (#288, AC #1/#2) asserts
+// that promoteUnblockedOnStartup runs even when state.Running is empty — the
+// early-return path that pre-fix skipped the promotion scan entirely on
+// every clean start, the overwhelmingly common case.
+func TestRecoverOrphanedRunning_PromotesOnCleanStart(t *testing.T) {
+	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+	as.state.Running = nil // clean start — nothing to recover
+
+	node := &depgraph.Node{
+		Repo: "nightgauge/nightgauge", Number: 3216, State: "OPEN",
+		BoardStatus: "Backlog", Priority: "P1", Labels: []string{"type:bug"},
+		AuthorAssociation: "OWNER",
+	}
+	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+		return buildTestGraph([]*depgraph.Node{node}, nil), nil
+	}
+
+	as.recoverOrphanedRunning(context.Background())
+
+	if as.state.LastPromotionConsidered != 1 {
+		t.Errorf("LastPromotionConsidered = %d, want 1 (promotion scan must have run on a clean start)",
+			as.state.LastPromotionConsidered)
+	}
+	if as.state.LastPromotionEligible != 1 {
+		t.Errorf("LastPromotionEligible = %d, want 1 — a triaged Backlog issue with no blockedBy edges must be gate-eligible on a clean start",
+			as.state.LastPromotionEligible)
+	}
+}
+
+// TestPromoteUnblockedToReady_PromotesIndependentBacklogNode (#288, AC #3)
+// asserts the cascade path considers Backlog nodes that are NOT dependents of
+// the completed issue — pre-fix, an empty revAdj[completedKey] short-circuited
+// the whole function before any independent node was ever examined.
+func TestPromoteUnblockedToReady_PromotesIndependentBacklogNode(t *testing.T) {
+	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
+
+	completed := &depgraph.Node{
+		Repo: "nightgauge/nightgauge", Number: 1, State: "CLOSED", BoardStatus: "Done",
+	}
+	independent := &depgraph.Node{
+		Repo: "nightgauge/nightgauge", Number: 3216, State: "OPEN",
+		BoardStatus: "Backlog", Priority: "P1", Labels: []string{"type:bug"},
+		AuthorAssociation: "OWNER",
+	}
+	// No edge between completed and independent — independent has no
+	// blockedBy entry, so revAdj[completedKey] is empty.
+	as.buildGraphFn = func(_ context.Context) (*depgraph.Graph, error) {
+		return buildTestGraph([]*depgraph.Node{completed, independent}, nil), nil
+	}
+
+	as.promoteUnblockedToReady("nightgauge/nightgauge", 1)
+
+	if as.state.LastPromotionEligible != 1 {
+		t.Errorf("LastPromotionEligible = %d, want 1 — an independent unblocked Backlog node must be considered even with an empty revAdj entry",
+			as.state.LastPromotionEligible)
 	}
 }

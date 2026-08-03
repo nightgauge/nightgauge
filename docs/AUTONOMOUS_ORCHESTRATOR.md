@@ -793,6 +793,60 @@ Detection still surfaces via state and the CLI when no webhook is configured.
   board template status (`Todo` / `To Do`) as dispatchable, since it
   collapsed the Backlog gate entirely; only `Ready` is dispatchable now.
 
+### Backlog → Ready Promotion (#288)
+
+Two independent scans promote fully-triaged Backlog issues to Ready. Both
+share the same triage predicate but run at different times and over
+different candidate sets:
+
+- **Startup scan** (`promoteUnblockedOnStartup`) runs **unconditionally**
+  every time `recoverOrphanedRunning` executes — i.e. every `nightgauge
+  autonomous run` start and every `serve` daemon start
+  (`cmd/nightgauge/main.go`'s startup goroutine). Recovery of orphaned
+  "In progress" items from a crashed session is conditional (only runs when
+  `state.Running` is non-empty); the promotion scan is not — a clean start
+  is the overwhelmingly common case, and pre-#288 it was the case that
+  silently skipped promotion entirely. It scans **every** Backlog node in
+  the freshly-built graph.
+- **Cascade scan** (`promoteUnblockedToReady`) runs after every pipeline
+  completion. It considers the union of the completed issue's dependents
+  (`revAdj[completedKey]`) **and** every other Backlog node already present
+  in the graph it built for the completion event — pre-#288 it only walked
+  dependents, so an issue with no `blockedBy` edges (the common case for a
+  fully-independent triaged issue) had no entry in `revAdj` and was never
+  considered, regardless of how many completions ran.
+
+Both scans gate candidates through the same `isTriagedAndUnblocked`
+predicate: `BoardStatus == "Backlog"`, `State == "OPEN"`, a non-empty
+`Priority`, a trusted author (see Author Trust Gate above), a `type:*` label
+that isn't `type:epic`, and no open `blockedBy` dependency. Extending the
+candidate set to cover independent Backlog nodes costs no extra GitHub
+calls in either path — the graph is already built for other reasons.
+
+**Diagnostics**: `AutonomousState.LastPromotionConsidered` /
+`LastPromotionEligible` / `LastPromotionPromoted` /
+`LastPromotionRejectionReasons` are overwritten by whichever scan ran most
+recently (same overwrite-per-cycle semantics as `LastNodeCount` /
+`LastCandidateCount` / `LastRejectionReasons`). Both scans also log a
+one-line summary, e.g.:
+
+```
+autonomous: promoteUnblockedOnStartup: considered=25 eligible=6 promoted=6 top_rejections=[not-backlog:12 no-priority:5 open-blocker:2]
+```
+
+**`nightgauge autonomous status`** uses `LastPromotionEligible` to
+distinguish two conditions that otherwise look identical
+(`Remaining == 0 && len(Running) == 0`):
+
+- `LastPromotionEligible == 0` → `Idle: no work` (genuinely nothing to do)
+- `LastPromotionEligible > 0` → `Idle: N Backlog issue(s) are gate-eligible
+  but not yet Ready — this is a fault, not idleness`
+
+The same `LastPromotionEligible` count feeds the existing fleet-idle Action
+Center card (`raiseWorkExhaustion`, ADR 015 §F) instead of the pre-#288
+`sum(LastRejectionReasons)`, which tallied rejection *reasons* rather than
+an actual promotable count.
+
 ### Discipline Gate (#4100)
 
 - **Config**: `autonomous.discipline_gate` — `enabled` (default `true`),
