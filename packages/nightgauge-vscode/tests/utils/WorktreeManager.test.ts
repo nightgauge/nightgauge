@@ -315,6 +315,96 @@ describe("WorktreeManager", () => {
       );
     });
 
+    it("reuses a registered worktree carrying UNCOMMITTED work even with zero unique commits (#283)", async () => {
+      // feature-dev leaves its implementation uncommitted by contract
+      // (feature-validate commits), so after a failure-revert the preserved
+      // worktree is dirty with zero commits ahead — the commits-only
+      // predicate routed exactly this shape into the destructive rebuild,
+      // deleting a completed implementation on re-dispatch.
+      execFileAsyncMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "-C" && args[2] === "status" && args[3] === "--porcelain") {
+          return Promise.resolve({ stdout: " M src/impl.ts\n?? tests/impl.test.ts\n", stderr: "" });
+        }
+        if (args[0] === "rev-parse" && args[1] === "--verify") {
+          return Promise.resolve({ stdout: "abc123\n", stderr: "" });
+        }
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: "0\n", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd === "git worktree list --porcelain") {
+          return Promise.resolve({
+            stdout: [
+              "worktree /repo/.worktrees/issue-42",
+              "HEAD def456",
+              "branch refs/heads/feat/42-test",
+              "",
+            ].join("\n"),
+            stderr: "",
+          });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+
+      const result = await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(result).toEqual({
+        path: "/repo/.worktrees/issue-42",
+        branch: "feat/42-test",
+        issueNumber: 42,
+        exists: true,
+      });
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.anything()
+      );
+      expect(
+        execAsyncMock.mock.calls.some(
+          ([cmd]: [string]) => typeof cmd === "string" && cmd.includes("worktree remove")
+        )
+      ).toBe(false);
+    });
+
+    it("still rebuilds a registered but CLEAN worktree with zero unique commits (#283 negative)", async () => {
+      execFileAsyncMock.mockImplementation((cmd: string, args: string[]) => {
+        if (args[0] === "-C" && args[2] === "status" && args[3] === "--porcelain") {
+          return Promise.resolve({ stdout: "", stderr: "" }); // clean
+        }
+        if (args[0] === "rev-parse" && args[1] === "--verify") {
+          return Promise.resolve({ stdout: "abc123\n", stderr: "" });
+        }
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: "0\n", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd === "git worktree list --porcelain") {
+          return Promise.resolve({
+            stdout: [
+              "worktree /repo/.worktrees/issue-42",
+              "HEAD def456",
+              "branch refs/heads/feat/42-test",
+              "",
+            ].join("\n"),
+            stderr: "",
+          });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+
+      await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        expect.anything()
+      );
+    });
+
     it("follows the destructive stale-worktree path when the branch has zero unique commits", async () => {
       mockUniqueCommits(0);
 

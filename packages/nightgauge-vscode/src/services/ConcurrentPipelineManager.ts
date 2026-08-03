@@ -200,8 +200,15 @@ export interface ConcurrentPipelineCallbacks {
     data: string,
     stage?: PipelineStage
   ) => void;
-  /** Called when stderr output arrives for a slot */
-  onSlotError?: (slotIndex: number, issueNumber: number, data: string) => void;
+  /** Called when stderr output arrives for a slot. `stage` is the emitting
+   * stage when known (#283) — consumers must prefer it over the slot's
+   * current-stage pointer, which advances early. */
+  onSlotError?: (
+    slotIndex: number,
+    issueNumber: number,
+    data: string,
+    stage?: PipelineStage
+  ) => void;
   /** Called when a phase starts within a slot's stage (for live phase progress) */
   onSlotPhaseStart?: (
     slotIndex: number,
@@ -1051,7 +1058,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             const lower = line.toLowerCase();
             const isError = lower.includes("error") || lower.includes("failed");
             if (isError) {
-              this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line);
+              this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line, stage);
             } else {
               this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, line, stage);
             }
@@ -1938,13 +1945,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           // landed) and degrades to omitted/zero on the card.
           const pauseSlotState = await slot.stateService.getState().catch(() => null);
           const pauseCostUsd = pauseSlotState?.tokens?.estimated_cost_usd ?? 0;
+          // #283: prefer the gate's structured verdict over the generic
+          // label — a validation_error (harness/bookkeeping fault) must not
+          // present as an unclassifiable organic failure on the halt card.
+          const pauseTerminalKind = pipelineResult?.terminalKind || "unclassified";
           await ipc.autonomousPause(
             `haltQueueOnSlotFailure: issue #${slot.issueNumber} failed at ${failedStage}`,
             "haltQueueOnSlotFailure",
             slot.repo ?? "",
             slot.issueNumber,
             failedStage,
-            "unclassified",
+            pauseTerminalKind,
             pauseCostUsd
           );
           autonomousPaused = true;

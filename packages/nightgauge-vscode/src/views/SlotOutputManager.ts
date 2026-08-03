@@ -39,12 +39,22 @@ interface SlotChannel {
  * Callbacks for aggregated output events
  */
 export interface SlotOutputCallbacks {
-  /** Called with output from any slot (for WebView aggregation) */
+  /**
+   * Called with output from any slot (for WebView aggregation).
+   *
+   * `stage` is the EMITTING stage as reported by the orchestrator event that
+   * carried the line (#283): the slot's "current stage" pointer advances
+   * early (the #981 spinner fires before the previous stage's gate runs), so
+   * a consumer that re-derives the stage from slot state mis-files
+   * end-of-stage diagnostics under the next stage. Undefined when the
+   * producer had no stage in scope — only then may consumers fall back.
+   */
   onOutput?: (
     slotIndex: number,
     issueNumber: number,
     text: string,
-    level: "info" | "error"
+    level: "info" | "error",
+    stage?: PipelineStage
   ) => void;
   /** Called when a slot's stage changes */
   onStageChanged?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
@@ -96,24 +106,26 @@ export class SlotOutputManager implements vscode.Disposable {
   }
 
   /**
-   * Write output to a slot's channel
+   * Write output to a slot's channel. `stage` is the emitting stage when the
+   * producer knows it (#283) — threaded through so consumers never have to
+   * re-derive it from the (early-advancing) slot stage pointer.
    */
-  appendOutput(issueNumber: number, text: string): void {
+  appendOutput(issueNumber: number, text: string, stage?: PipelineStage): void {
     const slot = this.channels.get(issueNumber);
     if (slot) {
       slot.channel.appendLine(text);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "info");
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "info", stage);
     }
   }
 
   /**
-   * Write error output to a slot's channel
+   * Write error output to a slot's channel. See appendOutput for `stage`.
    */
-  appendError(issueNumber: number, text: string): void {
+  appendError(issueNumber: number, text: string, stage?: PipelineStage): void {
     const slot = this.channels.get(issueNumber);
     if (slot) {
       slot.channel.appendLine(`[ERROR] ${text}`);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "error");
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, text, "error", stage);
     }
   }
 

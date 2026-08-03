@@ -91,3 +91,51 @@ describe("SlotOutputManager - updateStage idempotency (#230)", () => {
     expect(onStageChanged).toHaveBeenNthCalledWith(2, 0, 244, "feature-planning");
   });
 });
+
+// #283 defect 2: the slot's current-stage pointer advances early (the #981
+// spinner fires before the previous stage's gate runs), so consumers that
+// re-derive the stage from slot state mis-file end-of-stage diagnostics under
+// the NEXT stage — #127's gate-not-invoked audit about issue-pickup printed
+// as "[feature-validate]". The EMITTING stage must be threaded through
+// appendOutput/appendError to the aggregation callback verbatim.
+describe("SlotOutputManager - stage threading (#283)", () => {
+  let manager: SlotOutputManager;
+  let onOutput: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    manager = new SlotOutputManager();
+    onOutput = vi.fn();
+    manager.setCallbacks({ onOutput });
+    vi.clearAllMocks();
+  });
+
+  it("threads the emitting stage through appendOutput", () => {
+    manager.createSlotChannel(0, 127, "Issue 127");
+
+    manager.appendOutput(127, "[gate-not-invoked] stage=issue-pickup …", "issue-pickup");
+
+    expect(onOutput).toHaveBeenCalledWith(
+      0,
+      127,
+      "[gate-not-invoked] stage=issue-pickup …",
+      "info",
+      "issue-pickup"
+    );
+  });
+
+  it("threads the emitting stage through appendError", () => {
+    manager.createSlotChannel(1, 127, "Issue 127");
+
+    manager.appendError(127, "gate failed", "feature-dev");
+
+    expect(onOutput).toHaveBeenCalledWith(1, 127, "gate failed", "error", "feature-dev");
+  });
+
+  it("passes undefined stage through unchanged so consumers may fall back", () => {
+    manager.createSlotChannel(0, 127, "Issue 127");
+
+    manager.appendOutput(127, "no stage in scope");
+
+    expect(onOutput).toHaveBeenCalledWith(0, 127, "no stage in scope", "info", undefined);
+  });
+});
