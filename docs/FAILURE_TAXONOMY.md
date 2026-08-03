@@ -663,7 +663,13 @@ excluded. The confirmed instances are filed as:
   tree on that verdict — refusing to reset at all if the checkpoint itself
   fails. Rule 2 above, applied literally
 - **#298** — `git.resetPipeline` IPC handler drops its unmarshal error;
-  empty `workDir` aims the hard reset at the workspace root
+  empty `workDir` aims the hard reset at the workspace root.
+  **Fixed:** the handler checks the error, and destructive git verbs resolve
+  through `destructiveGitService`, which refuses an empty `workDir` rather
+  than falling back to the workspace root. `workDir` lost its `omitempty` so
+  the generated client demands it at compile time. The fallback remains
+  correct for read verbs — it is the _destructive_ consumer that must treat
+  "unspecified" as "do not act", per rule 2 above
 - **#299** — two remaining `loadFeatureBranch(workspaceRoot, …)` call sites
   (non-terminal reconcile, V2 history) still miss worktree-isolated runs
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage

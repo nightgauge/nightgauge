@@ -493,11 +493,11 @@ export class IpcClientGenerated extends IpcClientBase {
     await this.call<void>('git.push', { workDir });
   }
 
-  async gitAbortPipeline(featureBranch: string, workDir?: string): Promise<void> {
+  async gitAbortPipeline(featureBranch: string, workDir: string): Promise<void> {
     await this.call<void>('git.abortPipeline', { featureBranch, workDir });
   }
 
-  async gitResetPipeline(workDir?: string): Promise<void> {
+  async gitResetPipeline(workDir: string): Promise<void> {
     await this.call<void>('git.resetPipeline', { workDir });
   }
 

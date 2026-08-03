@@ -3649,7 +3649,7 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		svc, err := s.gitService(p.WorkDir)
+		svc, err := s.destructiveGitService("git.abortPipeline", p.WorkDir)
 		if err != nil {
 			return nil, err
 		}
@@ -3662,10 +3662,10 @@ func (s *Server) registerMethods() {
 	//ipc:method gitResetPipeline params:GitResetPipelineParams result:void
 	s.methods["git.resetPipeline"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p GitResetPipelineParams
-		if params != nil {
-			json.Unmarshal(params, &p)
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		svc, err := s.gitService(p.WorkDir)
+		svc, err := s.destructiveGitService("git.resetPipeline", p.WorkDir)
 		if err != nil {
 			return nil, err
 		}
@@ -4342,6 +4342,24 @@ func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
 	}
 	return gitops.NewService(dir)
+}
+
+// destructiveGitService resolves the git service for a verb that destroys
+// working-tree state, refusing an empty workDir instead of falling back to the
+// workspace root (#298).
+//
+// For a read verb that fallback is a convenience. For `HardReset` + `clean -d`
+// it is the #289 blast pattern — a reset escaping its worktree into the main
+// checkout — reachable from one malformed frame: the handler dropped its
+// unmarshal error, so a renamed or corrupt `workDir` field left the zero value
+// and `gitService` helpfully substituted the workspace root. A caller that
+// genuinely wants to reset the root has to name it.
+func (s *Server) destructiveGitService(method, workDir string) (*gitops.Service, error) {
+	if strings.TrimSpace(workDir) == "" {
+		return nil, fmt.Errorf("%s requires an explicit workDir: refusing to default to the workspace root "+
+			"for a destructive git operation", method)
+	}
+	return s.gitService(workDir)
 }
 
 // statusToTabId maps a board status string to its corresponding TabId
