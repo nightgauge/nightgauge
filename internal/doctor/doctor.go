@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -202,19 +204,83 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// config.ResolveRepoProjectNumber). A mismatch means issues get filed
 	// against a board the scheduler never polls (#271) — always a
 	// misconfiguration, never a warning-only path.
+	//
+	// A repo Source B cannot resolve at all is reported SEPARATELY and as a
+	// warning (#280). It used to be dropped silently, which let this check
+	// report "agree" about repos it never compared — but it is not the same
+	// condition as a disagreement: nothing is misrouted yet, the manifest
+	// value is simply unverified, and the scheduler polls the top-level board
+	// for that repo regardless. Failing hard on it would overstate the
+	// consequence exactly as the old silence understated it.
 	if cfg != nil {
-		if mismatches, mmErr := checkProjectMapping(cfg); mmErr == nil && len(mismatches) > 0 {
-			result.Checks["project_mapping"] = CheckItem{
-				OK:    false,
-				Error: strings.Join(mismatches, "; "),
+		if report, mmErr := checkProjectMapping(cfg); mmErr == nil {
+			mismatches := make([]string, 0, len(report.Mismatches))
+			for _, m := range report.Mismatches {
+				mismatches = append(mismatches, m.String())
 			}
-			errors = append(errors, mismatches...)
-			hasRequiredFailure = true
-			result.FailedChecks = append(result.FailedChecks, "project_mapping")
-		} else if mmErr == nil {
-			result.Checks["project_mapping"] = CheckItem{OK: true, Detail: "workspace manifest and runtime config agree"}
+			unverifiable := make([]string, 0, len(report.Unresolvable))
+			for _, u := range report.Unresolvable {
+				unverifiable = append(unverifiable, u.String())
+			}
+			switch {
+			case len(mismatches) > 0:
+				detail := strings.Join(mismatches, "; ")
+				result.Checks["project_mapping"] = CheckItem{OK: false, Error: detail}
+				errors = append(errors, mismatches...)
+				hasRequiredFailure = true
+				result.FailedChecks = append(result.FailedChecks, "project_mapping")
+				// Unverifiable repos still deserve a mention alongside.
+				warnings = append(warnings, unverifiable...)
+			case len(unverifiable) > 0:
+				result.Checks["project_mapping"] = CheckItem{
+					OK:     false,
+					Detail: fmt.Sprintf("%d repo(s) could not be cross-checked", len(unverifiable)),
+					Error:  strings.Join(unverifiable, "; "),
+				}
+				warnings = append(warnings, unverifiable...)
+			default:
+				result.Checks["project_mapping"] = CheckItem{OK: true, Detail: "workspace manifest and runtime config agree"}
+			}
 		}
 		// mmErr != nil means no workspace manifest was found (single-repo mode) — check omitted.
+	}
+
+	// --- board_population (required when config and a client are available) ---
+	// Config agreement is not evidence of reachability (#280). Two config
+	// sources can name the same board perfectly while every one of the repo's
+	// issues lives on a different one — at which point the scheduler polls an
+	// empty board, reports "0 candidates", and every other check here passes.
+	// This is the only check that asks the forge where the work actually is.
+	if cfg != nil && client != nil && cfg.ProjectNumber > 0 && cfg.Owner != "" && cfg.DefaultRepo != "" {
+		switch pop, popErr := checkBoardPopulation(ctx, cfg, client); {
+		case popErr != nil:
+			// "I could not look" is a warning, never a failure and never a
+			// pass — the whole point of this check is that silence must not
+			// read as health.
+			result.Checks["board_population"] = CheckItem{
+				OK:     false,
+				Detail: "could not verify which board holds the repo's issues",
+				Error:  popErr.Error(),
+			}
+			warnings = append(warnings, fmt.Sprintf("board population unverified: %s", popErr.Error()))
+		case pop.OpenIssues > 0 && pop.OnBoard == 0:
+			msg := fmt.Sprintf(
+				"project %d holds 0 of %s/%s's %d open issues — the scheduler polls a board that has none of this repo's work",
+				cfg.ProjectNumber, cfg.Owner, cfg.DefaultRepo, pop.OpenIssues)
+			if len(pop.ElsewhereBoards) > 0 {
+				msg += fmt.Sprintf("; those issues are on project(s) %s", joinInts(pop.ElsewhereBoards))
+			}
+			result.Checks["board_population"] = CheckItem{OK: false, Error: msg}
+			errors = append(errors, msg)
+			hasRequiredFailure = true
+			result.FailedChecks = append(result.FailedChecks, "board_population")
+		default:
+			result.Checks["board_population"] = CheckItem{
+				OK: true,
+				Detail: fmt.Sprintf("project %d holds %d of %d open issues",
+					cfg.ProjectNumber, pop.OnBoard, pop.OpenIssues),
+			}
+		}
 	}
 
 	// --- orphaned docker compose projects (warning only) ---
@@ -355,10 +421,98 @@ func activeWorktreeIssues() map[int]bool {
 // via the shared config.CheckWorkspaceProjectMapping helper. Returns a
 // non-nil error only when no workspace manifest exists (single-repo mode —
 // not an error condition, just "nothing to check").
-func checkProjectMapping(cfg *config.Config) ([]string, error) {
+// boardPopulation is what the configured board actually holds for its repo.
+type boardPopulation struct {
+	// OpenIssues is the repo's open issue count.
+	OpenIssues int
+	// OnBoard is how many of them are on the configured board.
+	OnBoard int
+	// ElsewhereBoards names the boards that DO hold the repo's issues, sampled
+	// when the configured board holds none. Empty means the sample found no
+	// board at all (the issues are on no project), which is a different and
+	// less alarming state than "they are on the wrong board".
+	ElsewhereBoards []int
+}
+
+// boardPopulationSample bounds how many issues are probed for their real board
+// when the configured one turns up empty. The answer is the same after two or
+// three; this exists to name a destination, not to take a census.
+const boardPopulationSample = 3
+
+// checkBoardPopulation asks the forge whether the configured board holds any
+// of the repo's open issues, and — when it holds none — which board(s) do.
+//
+// This is the only check that consults ground truth. `project` verifies the
+// configured board RESOLVES; `project_mapping` verifies two config files agree
+// about its number. Neither looks at membership, so both pass while the
+// scheduler polls a board containing none of the repo's work (#280).
+func checkBoardPopulation(ctx context.Context, cfg *config.Config, client *gh.Client) (boardPopulation, error) {
+	var pop boardPopulation
+
+	issues, err := gh.NewIssueService(client).ListIssues(ctx, cfg.Owner, cfg.DefaultRepo, nil)
+	if err != nil {
+		return pop, fmt.Errorf("list open issues: %w", err)
+	}
+	pop.OpenIssues = len(issues)
+	if pop.OpenIssues == 0 {
+		// No open work — an empty board is correct, not a misconfiguration.
+		return pop, nil
+	}
+
+	ownerType := gh.OwnerTypeOrg
+	if strings.EqualFold(cfg.OwnerType, "user") {
+		ownerType = gh.OwnerTypeUser
+	}
+	items, _, err := gh.NewBoardService(client, cfg.Owner, cfg.ProjectNumber, ownerType).ListOpenItems(ctx)
+	if err != nil {
+		return pop, fmt.Errorf("list open items on project %d: %w", cfg.ProjectNumber, err)
+	}
+	repoSpec := cfg.Owner + "/" + cfg.DefaultRepo
+	for _, item := range items {
+		if item.Repo == "" || item.Repo == repoSpec {
+			pop.OnBoard++
+		}
+	}
+	if pop.OnBoard > 0 {
+		return pop, nil
+	}
+
+	// The configured board is empty for this repo. Name where the work is, so
+	// the error is actionable rather than merely alarming. Best-effort: a
+	// failed probe degrades the message, never the verdict.
+	seen := map[int]bool{}
+	for i, issue := range issues {
+		if i >= boardPopulationSample {
+			break
+		}
+		nums, probeErr := gh.ProjectNumbersForIssue(ctx, client, cfg.Owner, cfg.DefaultRepo, issue.Number)
+		if probeErr != nil {
+			continue
+		}
+		for _, n := range nums {
+			if n != cfg.ProjectNumber && !seen[n] {
+				seen[n] = true
+				pop.ElsewhereBoards = append(pop.ElsewhereBoards, n)
+			}
+		}
+	}
+	sort.Ints(pop.ElsewhereBoards)
+	return pop, nil
+}
+
+// joinInts renders board numbers for a human-readable message.
+func joinInts(nums []int) string {
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func checkProjectMapping(cfg *config.Config) (config.ProjectMappingReport, error) {
 	wd, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return config.ProjectMappingReport{}, err
 	}
-	return config.CheckWorkspaceProjectMapping(cfg, wd)
+	return config.FindWorkspaceProjectMappingMismatches(cfg, wd)
 }
