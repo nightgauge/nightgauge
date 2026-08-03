@@ -142,6 +142,14 @@ vi.mock("vscode", () => ({
     value: string = "";
     isTrusted?: boolean;
 
+    // The real API is `new MarkdownString(value?: string)`. The mock used to
+    // ignore the argument, so every tooltip built in one shot read back as ""
+    // and could not be asserted on at all — a silently untestable surface
+    // rather than a failing one (#264).
+    constructor(value?: string) {
+      this.value = value ?? "";
+    }
+
     appendMarkdown(value: string) {
       this.value += value;
       return this;
