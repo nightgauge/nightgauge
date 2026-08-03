@@ -958,6 +958,82 @@ After migration:
 
 ---
 
+## Board Reachability (issue #280)
+
+**Config agreement is not evidence that work is reachable.** A repo's project
+board is named in two places — the workspace manifest's
+`repositories[].project_number` (Source A) and the runtime-resolved
+`autonomous.repositories.<repo>.project_number` (Source B) — and both can agree
+perfectly on a board that holds none of the repo's issues.
+
+That is not hypothetical. It is the state #280 was filed from: ~28 open issues
+lived on board A while both config sources named board B. The scheduler polled
+B, found nothing, and reported `0 candidates` for hours. `nightgauge doctor`
+passed, the stranded-ready sweep raised nothing, and no log named the
+condition — because every check compared configuration against configuration.
+An audit that validates a source against itself is not an audit.
+
+### The contract
+
+Reachability is decided by **issue→board membership, queried from the forge**,
+never inferred from config:
+
+| Check                         | Question it answers                                 | What it cannot tell you   |
+| ----------------------------- | --------------------------------------------------- | ------------------------- |
+| `doctor` → `project`          | Does the configured board resolve?                  | Whether it holds anything |
+| `doctor` → `project_mapping`  | Do Source A and Source B agree?                     | Whether either is correct |
+| `doctor` → `board_population` | Does the polled board hold this repo's open issues? | —                         |
+| `stranded-ready-items` sweep  | Same, continuously, as an Action Center card        | —                         |
+
+Only the last two consult ground truth. The first two are necessary and jointly
+insufficient — treat a green `project` plus a green `project_mapping` as "the
+config is internally consistent", nothing more.
+
+### Diagnosing an idle scheduler
+
+The scheduler logs one line per repo it is responsible for, every prioritize
+pass:
+
+```text
+autonomous: repo=acme/platform project=4 nodes=0 open=0 dispatchable=0 — this repo
+contributed NO nodes; if it has open issues, they are not on project 4
+```
+
+`nodes=0` for a repo that visibly has open issues is the signature of an
+unreachable board. Confirm with `nightgauge doctor` (`board_population` names
+the board(s) that actually hold the work), then either point the config at that
+board or move the items onto the polled one. Nightgauge will not move them for
+you — which board is correct is a human decision, and moving them on a guess is
+worse than doing nothing.
+
+### Unverifiable mappings
+
+A repo listed in the manifest with **no** runtime mapping is reported as its
+own condition, not folded into "agree" — the cross-check never happened, and
+silence about that is not evidence of health:
+
+```text
+project mapping unverifiable for acme/platform: workspace yaml says project 4,
+but runtime config has no mapping (...) — the manifest value is unchecked, and
+issue creation or board sync targeting this repo will fail until
+autonomous.repositories.acme/platform.project_number is set
+```
+
+This is a **warning**, not a failure, and the reason is worth understanding
+because two different resolvers are in play:
+
+| Caller                                      | Resolver                   | Behavior with no mapping              |
+| ------------------------------------------- | -------------------------- | ------------------------------------- |
+| `project resolve`, issue-create, board sync | `ResolveRepoProjectNumber` | **Errors** — refuses to guess (#3232) |
+| Autonomous scheduler                        | one `RepoConfig` per repo  | Polls the top-level project number    |
+
+The resolver's refusal is deliberate: defaulting a cross-repo target to the
+primary board silently misrouted new issues, so anything that _files_ something
+must fail loudly. The scheduler never calls it and polls the shared board
+regardless. So an unverifiable mapping breaks issue creation for that repo
+while leaving dispatch working — which is why the check warns rather than
+declaring the workspace broken.
+
 ## Troubleshooting
 
 ### Workspace Not Detected

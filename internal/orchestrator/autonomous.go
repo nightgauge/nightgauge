@@ -2504,6 +2504,51 @@ type CandidateItem struct {
 // treated as satisfying a blockedBy edge, since a halt can park an issue at
 // "In review" with no PR behind it. If the PR is later rejected, the issue
 // moves back to In progress / Backlog and the dep re-blocks on the next scan.
+// repoContribution is one repo's contribution to a prioritize pass: how many
+// graph nodes it owns, how many are open, and how many survived every gate to
+// become dispatchable.
+type repoContribution struct {
+	nodes        int
+	open         int
+	dispatchable int
+}
+
+// logRepoContributions emits one line per repo the scheduler is responsible
+// for, naming the board it polled and what that board yielded (#280).
+//
+// "0 candidates from 87 nodes" is true and useless: it cannot distinguish a
+// repo whose work is all blocked from a repo whose issues are on a board
+// nobody polls. The second is invisible in every aggregate — the repo simply
+// contributes nothing and no gate rejects anything, because there was nothing
+// there to reject. A repo reporting nodes=0 while it has open issues on the
+// forge IS that condition, and this line is where an operator sees it.
+func (as *AutonomousScheduler) logRepoContributions(contrib map[string]*repoContribution) {
+	if len(as.repos) == 0 {
+		return
+	}
+	repos := make([]string, 0, len(as.repos))
+	project := make(map[string]int, len(as.repos))
+	for _, rc := range as.repos {
+		full := rc.FullName()
+		repos = append(repos, full)
+		project[full] = rc.Project
+	}
+	sort.Strings(repos)
+	for _, repo := range repos {
+		c := contrib[repo]
+		if c == nil {
+			c = &repoContribution{}
+		}
+		msg := fmt.Sprintf("autonomous: repo=%s project=%d nodes=%d open=%d dispatchable=%d",
+			repo, project[repo], c.nodes, c.open, c.dispatchable)
+		if c.nodes == 0 {
+			msg += " — this repo contributed NO nodes; if it has open issues, they are not on project " +
+				strconv.Itoa(project[repo]) + " (see `nightgauge doctor` board_population)"
+		}
+		log.Print(msg)
+	}
+}
+
 func isWorkCompleteStatus(status string) bool {
 	s := strings.ToLower(strings.TrimSpace(status))
 	return s == "in review"
@@ -2823,6 +2868,21 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	rejected := map[string]int{}
 	bump := func(reason string) { rejected[reason]++ }
 
+	// Per-REPO contribution accounting (#280). The aggregate breakdown above
+	// answers "why were nodes rejected"; it cannot answer "which repo
+	// contributed nothing, and was its board even the right one?" — the
+	// question that matters when a repo's issues live on a board nobody polls.
+	// A repo showing nodes=0 is the signature of exactly that.
+	contrib := map[string]*repoContribution{}
+	countIn := func(repo string) *repoContribution {
+		c := contrib[repo]
+		if c == nil {
+			c = &repoContribution{}
+			contrib[repo] = c
+		}
+		return c
+	}
+
 	// Owner-action handoffs are a STANDING condition (#108): this pass walks
 	// every node, so the keys it collects are the complete set of human-only
 	// skips that are true right now, and anything else the producer has open
@@ -2844,12 +2904,16 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			bump("repo-not-in-filter")
 			continue
 		}
+		// Counted AFTER the repo filter so the summary describes the repos the
+		// scheduler is actually responsible for.
+		countIn(node.Repo).nodes++
 
 		// Skip closed issues
 		if strings.EqualFold(node.State, "CLOSED") {
 			bump("closed")
 			continue
 		}
+		countIn(node.Repo).open++
 
 		// Skip already running or completed
 		if runningSet[key] {
@@ -3007,6 +3071,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// Count downstream unblocks
 		unblockCount := len(revAdj[key])
 
+		countIn(node.Repo).dispatchable++
 		candidates = append(candidates, CandidateItem{
 			Repo:         node.Repo,
 			Number:       node.Number,
@@ -3097,6 +3162,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		log.Printf("autonomous: prioritize rejected %d/%d nodes: %s",
 			len(g.Nodes)-len(candidates), len(g.Nodes), strings.Join(parts, ", "))
 	}
+
+	as.logRepoContributions(contrib)
 
 	// Sort by priority rules:
 	// 0. Board status (Ready > Backlog — Ready always dispatched first)
