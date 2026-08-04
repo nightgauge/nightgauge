@@ -8693,7 +8693,11 @@ func reposFromWorkspaceManifest(cfg *config.Config, root, defaultOwner string, d
 			MemberRoot:  repoRoot,
 		})
 		if rc.Project == 0 {
-			continue // no board declared and no default — nothing to scan
+			// No board declared and no default. Dropping a member repo from the
+			// scheduler's set is exactly the kind of thing that vanishes — the
+			// loop just scans fewer repos and reports nothing wrong.
+			log.Printf("autonomous: skipping workspace member %s/%s — no project board declared in its .nightgauge/config.yaml and no workspace default", owner, name)
+			continue
 		}
 		configs = append(configs, rc)
 	}
