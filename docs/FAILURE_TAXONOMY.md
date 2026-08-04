@@ -242,6 +242,26 @@ record may carry both fields, neither, or only one.
 | `commit_orphaned`            | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
 | `permission_denied`          | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                |
 
+`permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
+stage failure. The harness rejects certain tool calls outright — the observed
+trigger is a stage reaching for a foreground `sleep` wait loop
+(`until grep -q DONE log; do sleep 30; done`) to poll a backgrounded job, which
+the host denies (`is_error:true`,
+`tool_use_result: "User rejected tool use"`). A denial is not a defect in the
+work: the stage still had turns available and could have used a backgrounded
+command plus its completion notification on its very next turn instead.
+Pre-fix, a denial fell through to the generic `subagent_crash` fallback,
+which killed the run permanently, incremented `LifetimeIssueFailures`, and
+tripped `haltQueueOnSlotFailure` — turning one rejected tool call into a
+fleet-wide pause. Routed like `adapter_auth_failed`: short backoff, board →
+Ready, **no `LifetimeIssueFailures` increment, no cascade-breaker feed, no
+pause** — bounded by a small consecutive-attempt cap so a stage that keeps
+reaching for the same denied pattern eventually stops re-dispatching rather
+than looping forever. Emitted with the `[permission-denied]` marker /
+`user rejected tool use` text, matched BEFORE the generic subagent-crash
+fallback so the "exit " substring in the rejection text doesn't misclassify it
+as a process death.
+
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so
 every push is rejected as non-fast-forward; a retry rebuilds the same local

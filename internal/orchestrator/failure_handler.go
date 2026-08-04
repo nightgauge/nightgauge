@@ -392,7 +392,7 @@ const (
 	// a PR by hand.
 	TerminalKindCommitOrphaned = "commit_orphaned"
 	// TerminalKindPermissionDenied is set when the harness denies a tool call
-	// outright â most commonly a stage reaching for a foreground `sleep` wait
+	// outright — most commonly a stage reaching for a foreground `sleep` wait
 	// loop, which the host blocks and reports as `is_error: true,
 	// tool_use_result: "User rejected tool use"`. A denial is the harness
 	// saying "not that way", not a defect in the work: the stage had turns
@@ -400,11 +400,11 @@ const (
 	// command plus its completion notification) on its very next turn. Pre-fix
 	// this fell through to the generic subagent_crash fallback, which
 	// permanently killed the run, counted toward LifetimeIssueFailures, and
-	// tripped haltQueueOnSlotFailure over a single rejected tool call â pausing
+	// tripped haltQueueOnSlotFailure over a single rejected tool call — pausing
 	// the whole fleet for a retryable mistake (#289).
 	//
-	// Routed like TerminalKindAdapterAuthFailed: short backoff, board â Ready,
-	// NO LifetimeIssueFailures increment, NO cascade-breaker feed, NO pause â
+	// Routed like TerminalKindAdapterAuthFailed: short backoff, board → Ready,
+	// NO LifetimeIssueFailures increment, NO cascade-breaker feed, NO pause —
 	// but bounded by permissionDeniedMaxAttempts so a stage that keeps
 	// reaching for the same denied pattern eventually stops re-dispatching
 	// instead of looping forever. Classified `infrastructure` (harness
@@ -828,7 +828,7 @@ func ClassifyTerminalKind(errorText string) string {
 	// outright and the Claude CLI surfaces it as a result envelope with
 	// `is_error:true` and `tool_use_result: "User rejected tool use"`. Matched
 	// BEFORE the generic subagent-crash fallback, whose "exit " substring would
-	// otherwise misbucket a denial as a process death â the exact misbucketing
+	// otherwise misbucket a denial as a process death — the exact misbucketing
 	// that turned one rejected tool call into a permanently killed run and a
 	// fleet-wide pause.
 	if strings.Contains(t, "[permission-denied]") ||
