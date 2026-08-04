@@ -35,7 +35,7 @@ const (
 	// RepoProjectExplicitMapping: autonomous.repositories.<repo>.project_number
 	// in this config named the board. This is an operator override and outranks
 	// what the target repo says about itself.
-	RepoProjectExplicitMapping RepoProjectSource = "member-config-override"
+	RepoProjectExplicitMapping RepoProjectSource = "explicit-mapping"
 
 	// RepoProjectMemberConfig: the target repo's own .nightgauge/config.yaml
 	// declared project.number. Reading it is not guessing — the repo said so.

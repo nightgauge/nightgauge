@@ -415,13 +415,13 @@ precedence order. Every consumer — `nightgauge project resolve`, issue-create,
 board sync, `doctor`, the stranded-ready sweep, **and the autonomous
 scheduler's repo set** — uses this one lookup:
 
-| #   | Source                                                              | Reason code              |
-| --- | ------------------------------------------------------------------- | ------------------------ |
-| 1   | The target is the local repo → its own `project.number`             | `local-config`           |
-| 2   | `autonomous.repositories.<repo>.project_number` (operator override) | `member-config-override` |
-| 3   | The target repo's own `.nightgauge/config.yaml` `project.number`    | `member-config`          |
-| 4   | The workspace-wide default board (`--project` / `project.number`)   | `shared-board-default`   |
-| 5   | Nothing — board `0`                                                 | `unmapped`               |
+| #   | Source                                                              | Reason code            |
+| --- | ------------------------------------------------------------------- | ---------------------- |
+| 1   | The target is the local repo → its own `project.number`             | `local-config`         |
+| 2   | `autonomous.repositories.<repo>.project_number` (operator override) | `explicit-mapping`     |
+| 3   | The target repo's own `.nightgauge/config.yaml` `project.number`    | `member-config`        |
+| 4   | The workspace-wide default board (`--project` / `project.number`)   | `shared-board-default` |
+| 5   | Nothing — board `0`                                                 | `unmapped`             |
 
 The reason code travels with every answer because two kinds of caller act on
 it differently, and that difference must be explicit:
