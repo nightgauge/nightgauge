@@ -2888,7 +2888,7 @@ func projectAddCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			if workdir, wdErr := os.Getwd(); wdErr == nil {
 				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
-					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart)
+					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart, workdir)
 					if resolveErr != nil {
 						return resolveErr
 					}
@@ -3019,7 +3019,7 @@ Valid statuses: ready, in-progress, in-review, done, blocked, needs-info`,
 			ownerPart, repoPart := splitRepo(owner, repo)
 			if workdir, wdErr := os.Getwd(); wdErr == nil {
 				if cfg, cfgErr := config.Load(workdir); cfgErr == nil && cfg != nil {
-					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart)
+					resolved, resolveErr := resolveProjectNumber(cfg, cmd.Flags().Changed("project"), projectNumber, ownerPart, repoPart, workdir)
 					if resolveErr != nil {
 						return resolveErr
 					}
@@ -4511,13 +4511,13 @@ func serveCmd() *cobra.Command {
 					// autonomous repo set is consistent with the attached scheduler
 					// — critical for manifest-only roots where cfg.ProjectNumber==0
 					// but schedIdent carries the manifest-derived owner/project.
-					repoConfigs := reposFromWorkspaceManifest(workspaceRoot, schedIdent.Owner, schedIdent.ProjectNumber)
+					repoConfigs := reposFromWorkspaceManifest(cfg, workspaceRoot, schedIdent.Owner, schedIdent.ProjectNumber)
 
 					if len(repoConfigs) == 0 {
 						// No workspace manifest — legacy behavior. Detect sibling repos
 						// from workspaceRoot (not CWD — the IPC server's CWD is
 						// unpredictable when started by VSCode).
-						repoConfigs = detectSiblingRepos(workspaceRoot, schedIdent.Owner, schedIdent.ProjectNumber)
+						repoConfigs = detectSiblingRepos(cfg, workspaceRoot, schedIdent.Owner, schedIdent.ProjectNumber)
 
 						// Always include the current workspace as a repo so standalone
 						// repos (customers with a single project) can use autonomous
@@ -4531,12 +4531,12 @@ func serveCmd() *cobra.Command {
 							}
 						}
 						if !alreadyIncluded && schedIdent.Owner != "" && schedIdent.ProjectNumber > 0 {
-							repoConfigs = append(repoConfigs, depgraph.RepoConfig{
-								Owner:     schedIdent.Owner,
-								OwnerType: gh.ParseOwnerType(schedIdent.OwnerType),
-								Name:      currentRepoName,
-								Project:   schedIdent.ProjectNumber,
-							})
+							repoConfigs = append(repoConfigs, schedulerRepoConfig(cfg, gh.ParseOwnerType(schedIdent.OwnerType), config.RepoProjectQuery{
+								Owner:       schedIdent.Owner,
+								Repo:        currentRepoName,
+								SharedBoard: schedIdent.ProjectNumber,
+								MemberRoot:  workspaceRoot,
+							}))
 						}
 					}
 
@@ -7571,7 +7571,11 @@ Outputs: number, owner, owner_type, id, title, url`,
 				if cfgErr != nil || cfg == nil {
 					return fmt.Errorf("no config loaded for --repo resolution: %w", cfgErr)
 				}
-				n, err := config.ResolveRepoProjectNumber(cfg, ownerPart, repoPart)
+				n, err := config.ResolveRepoProjectNumber(cfg, config.RepoProjectQuery{
+					Owner:    ownerPart,
+					Repo:     repoPart,
+					StartDir: workdir,
+				})
 				if err != nil {
 					return err
 				}
@@ -7619,21 +7623,28 @@ func splitRepo(owner, repo string) (string, string) {
 }
 
 // resolveProjectNumber decides which project board number to write to.
-// Precedence: explicit --project always wins. Otherwise, when --repo names
-// a different repository than the local config's default repo, the board
-// MUST come from an explicit autonomous.repositories.<repo>.project_number
-// mapping — an unmapped cross-repo target fails loudly rather than
-// silently falling back to the local board (#262). Same-repo (or no
-// --repo) behavior is unchanged: cfg.ProjectNumber via existing
-// PersistentPreRunE backfill.
-func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumber int, ownerPart, repoPart string) (int, error) {
+// Precedence: explicit --project always wins. Otherwise the board must be one
+// some config DECLARED for the target repo — its own .nightgauge/config.yaml or
+// an autonomous.repositories.<repo>.project_number mapping. A target nothing
+// declares fails loudly rather than silently falling back to the local board
+// (#262, #3232). Same-repo (or no --repo) behavior is unchanged:
+// cfg.ProjectNumber via existing PersistentPreRunE backfill.
+//
+// startDir lets the resolver find a named sibling's own config through the
+// workspace manifest; pass "" when the caller has no working directory.
+func resolveProjectNumber(cfg *config.Config, explicitProject bool, projectNumber int, ownerPart, repoPart, startDir string) (int, error) {
 	if explicitProject {
 		return projectNumber, nil
 	}
 	if cfg == nil {
 		return projectNumber, nil
 	}
-	return config.ResolveRepoProjectNumber(cfg, ownerPart, repoPart)
+	return config.ResolveRepoProjectNumber(cfg, config.RepoProjectQuery{
+		Owner:       ownerPart,
+		Repo:        repoPart,
+		SharedBoard: projectNumber,
+		StartDir:    startDir,
+	})
 }
 
 func printJSON(v interface{}) error {
@@ -8237,16 +8248,17 @@ func depgraphBuildCmd() *cobra.Command {
 			}
 
 			// Resolve owner and project from config if not set
-			if !cmd.Flags().Changed("owner") || !cmd.Flags().Changed("project") {
-				workdir, _ := os.Getwd()
-				cfg, cfgErr := config.Load(workdir)
-				if cfgErr == nil && cfg != nil {
-					if !cmd.Flags().Changed("owner") && cfg.Owner != "" {
-						owner = cfg.Owner
-					}
-					if !cmd.Flags().Changed("project") && cfg.ProjectNumber != 0 {
-						project = cfg.ProjectNumber
-					}
+			workdir, _ := os.Getwd()
+			cfg, cfgErr := config.Load(workdir)
+			if cfgErr != nil {
+				cfg = nil
+			}
+			if cfg != nil {
+				if !cmd.Flags().Changed("owner") && cfg.Owner != "" {
+					owner = cfg.Owner
+				}
+				if !cmd.Flags().Changed("project") && cfg.ProjectNumber != 0 {
+					project = cfg.ProjectNumber
 				}
 			}
 
@@ -8262,16 +8274,16 @@ func depgraphBuildCmd() *cobra.Command {
 			var repoConfigs []depgraph.RepoConfig
 			if len(repos) > 0 {
 				for _, r := range repos {
-					repoConfigs = append(repoConfigs, depgraph.RepoConfig{
-						Owner:     owner,
-						OwnerType: ot,
-						Name:      r,
-						Project:   project,
-					})
+					repoConfigs = append(repoConfigs, schedulerRepoConfig(cfg, ot, config.RepoProjectQuery{
+						Owner:       owner,
+						Repo:        r,
+						SharedBoard: project,
+						StartDir:    workdir,
+					}))
 				}
 			} else {
 				// Default: auto-detect from sibling directories
-				repoConfigs = autoDetectRepos(owner, project)
+				repoConfigs = autoDetectRepos(cfg, owner, project)
 			}
 
 			if len(repoConfigs) == 0 {
@@ -8302,8 +8314,36 @@ func depgraphBuildCmd() *cobra.Command {
 	return cmd
 }
 
+// schedulerRepoConfig is the ONE place a depgraph.RepoConfig gets its board
+// number (#313). Every repo-set construction in this file — explicit --repos,
+// sibling auto-detection, manifest-driven, and the IPC server's sibling
+// fallback — routes through it, so the scheduler and `nightgauge project
+// resolve` cannot answer "which board does repo X use?" differently.
+//
+// Before this, four sites answered independently: the bare top-level project
+// for every repo (autoDetectRepos), the member config with a manifest fallback
+// (reposFromWorkspaceManifest), the member config with a flag fallback
+// (detectSiblingRepos), and a refusal (config.ResolveRepoProjectNumber). On the
+// nightgauge workspace that was three different answers for the same repo, and
+// a doctor diagnostic written against one of them stated a falsehood about
+// another (#280).
+//
+// q.Repo must be a bare repo slug, not "owner/name"; it becomes the
+// RepoConfig's Name.
+func schedulerRepoConfig(cfg *config.Config, ownerType gh.OwnerType, q config.RepoProjectQuery) depgraph.RepoConfig {
+	return depgraph.RepoConfig{
+		Owner:     q.Owner,
+		OwnerType: ownerType,
+		Name:      q.Repo,
+		Project:   config.ResolveRepoProject(cfg, q).Number,
+	}
+}
+
 // autoDetectRepos looks for sibling directories with .nightgauge/ config.
-func autoDetectRepos(owner string, project int) []depgraph.RepoConfig {
+//
+// `project` is the fallback for a sibling that declares no board of its own,
+// not an override of one that does — see schedulerRepoConfig.
+func autoDetectRepos(cfg *config.Config, owner string, project int) []depgraph.RepoConfig {
 	gitRoot, err := getGitRoot()
 	if err != nil {
 		return nil
@@ -8324,16 +8364,17 @@ func autoDetectRepos(owner string, project int) []depgraph.RepoConfig {
 		repoRoot := filepath.Join(parent, entry.Name())
 		cfgPath := filepath.Join(repoRoot, ".nightgauge", "config.yaml")
 		if _, err := os.Stat(cfgPath); err == nil {
-			rc := depgraph.RepoConfig{
-				Owner:   owner,
-				Name:    entry.Name(),
-				Project: project,
-			}
 			// Read per-repo config for owner type
+			var ownerType gh.OwnerType
 			if repoCfg, loadErr := config.Load(repoRoot); loadErr == nil && repoCfg.OwnerType != "" {
-				rc.OwnerType = gh.ParseOwnerType(repoCfg.OwnerType)
+				ownerType = gh.ParseOwnerType(repoCfg.OwnerType)
 			}
-			configs = append(configs, rc)
+			configs = append(configs, schedulerRepoConfig(cfg, ownerType, config.RepoProjectQuery{
+				Owner:       owner,
+				Repo:        entry.Name(),
+				SharedBoard: project,
+				MemberRoot:  repoRoot,
+			}))
 		}
 	}
 
@@ -8387,7 +8428,7 @@ func registerWorkspaceReposInResolver(server *ipc.Server, workspaceRoot string, 
 	}
 }
 
-func detectSiblingRepos(root string, defaultOwner string, defaultProject int) []depgraph.RepoConfig {
+func detectSiblingRepos(cfg *config.Config, root string, defaultOwner string, defaultProject int) []depgraph.RepoConfig {
 	parent := filepath.Dir(root)
 	entries, err := os.ReadDir(parent)
 	if err != nil {
@@ -8405,28 +8446,25 @@ func detectSiblingRepos(root string, defaultOwner string, defaultProject int) []
 			continue
 		}
 
-		// Read each repo's own config to get its project number and owner type.
-		// Each repo may have a different project board and owner type.
+		// Read each repo's own config for its owner and owner type. The board
+		// comes from the shared resolver, which consults the same config —
+		// see schedulerRepoConfig.
 		repoOwner := defaultOwner
-		repoProject := defaultProject
 		var repoOwnerType gh.OwnerType
 		if repoCfg, loadErr := config.Load(repoRoot); loadErr == nil {
 			if repoCfg.Owner != "" {
 				repoOwner = repoCfg.Owner
 			}
-			if repoCfg.ProjectNumber > 0 {
-				repoProject = repoCfg.ProjectNumber
-			}
 			if repoCfg.OwnerType != "" {
 				repoOwnerType = gh.ParseOwnerType(repoCfg.OwnerType)
 			}
 		}
-		configs = append(configs, depgraph.RepoConfig{
-			Owner:     repoOwner,
-			OwnerType: repoOwnerType,
-			Name:      entry.Name(),
-			Project:   repoProject,
-		})
+		configs = append(configs, schedulerRepoConfig(cfg, repoOwnerType, config.RepoProjectQuery{
+			Owner:       repoOwner,
+			Repo:        entry.Name(),
+			SharedBoard: defaultProject,
+			MemberRoot:  repoRoot,
+		}))
 	}
 	return configs
 }
@@ -8593,12 +8631,19 @@ func resolveSchedulerIdentity(workspaceRoot string, cfg *config.Config) schedule
 // child directories of the workspace root.
 //
 // Each entry's path is resolved relative to root, and that repo's own
-// .nightgauge/config.yaml is loaded for the canonical owner, repo slug,
-// project number, and owner type (each repo may target a different project —
-// e.g. nightgauge' 1:1 layout). The manifest's project_number and the
-// passed defaults are used as fallbacks. Returns nil when no manifest exists or
-// it yields no usable repos, so callers can fall back to legacy detection.
-func reposFromWorkspaceManifest(root, defaultOwner string, defaultProject int) []depgraph.RepoConfig {
+// .nightgauge/config.yaml is loaded for the canonical owner, repo slug, and
+// owner type. The board comes from config.ResolveRepoProject via
+// schedulerRepoConfig — which reads that same member config, so per-repo boards
+// still work (nightgauge's 1:1 layout) and defaultProject still covers a member
+// that declares none.
+//
+// The manifest's own repositories[].project_number is deliberately NOT read
+// (#313). It is Source A of the doctor cross-check, validated against the
+// resolver's answer; a scheduler that also treated it as an input would be
+// comparing a value to itself, and a workspace where the two disagree would
+// have doctor reporting a mismatch while the scheduler silently sided with the
+// manifest.
+func reposFromWorkspaceManifest(cfg *config.Config, root, defaultOwner string, defaultProject int) []depgraph.RepoConfig {
 	manifestPath := filepath.Join(root, ".vscode", "nightgauge-workspace.yaml")
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -8607,9 +8652,8 @@ func reposFromWorkspaceManifest(root, defaultOwner string, defaultProject int) [
 
 	var manifest struct {
 		Repositories []struct {
-			Name          string `yaml:"name"`
-			Path          string `yaml:"path"`
-			ProjectNumber int    `yaml:"project_number"`
+			Name string `yaml:"name"`
+			Path string `yaml:"path"`
 		} `yaml:"repositories"`
 	}
 	if err := yaml.Unmarshal(data, &manifest); err != nil {
@@ -8625,19 +8669,12 @@ func reposFromWorkspaceManifest(root, defaultOwner string, defaultProject int) [
 		repoRoot := filepath.Join(root, entry.Path)
 
 		owner := defaultOwner
-		project := entry.ProjectNumber
-		if project == 0 {
-			project = defaultProject
-		}
 		name := entry.Name
 		var ownerType gh.OwnerType
-		// Each member repo's own config is canonical for owner/slug/project/type.
+		// Each member repo's own config is canonical for owner/slug/type.
 		if repoCfg, loadErr := config.Load(repoRoot); loadErr == nil && repoCfg != nil {
 			if repoCfg.Owner != "" {
 				owner = repoCfg.Owner
-			}
-			if repoCfg.ProjectNumber > 0 {
-				project = repoCfg.ProjectNumber
 			}
 			if repoCfg.DefaultRepo != "" {
 				name = repoCfg.DefaultRepo
@@ -8646,15 +8683,19 @@ func reposFromWorkspaceManifest(root, defaultOwner string, defaultProject int) [
 				ownerType = gh.ParseOwnerType(repoCfg.OwnerType)
 			}
 		}
-		if owner == "" || name == "" || project == 0 {
+		if owner == "" || name == "" {
 			continue // not enough to scan this repo
 		}
-		configs = append(configs, depgraph.RepoConfig{
-			Owner:     owner,
-			OwnerType: ownerType,
-			Name:      name,
-			Project:   project,
+		rc := schedulerRepoConfig(cfg, ownerType, config.RepoProjectQuery{
+			Owner:       owner,
+			Repo:        name,
+			SharedBoard: defaultProject,
+			MemberRoot:  repoRoot,
 		})
+		if rc.Project == 0 {
+			continue // no board declared and no default — nothing to scan
+		}
+		configs = append(configs, rc)
 	}
 	if len(configs) == 0 {
 		return nil
@@ -8853,7 +8894,10 @@ func autonomousRunCmd() *cobra.Command {
 			// Resolve owner and project from config
 			workdir, _ := os.Getwd()
 			cfg, cfgErr := config.Load(workdir)
-			if cfgErr == nil && cfg != nil {
+			if cfgErr != nil {
+				cfg = nil
+			}
+			if cfg != nil {
 				if !cmd.Flags().Changed("owner") && cfg.Owner != "" {
 					owner = cfg.Owner
 				}
@@ -8897,15 +8941,15 @@ func autonomousRunCmd() *cobra.Command {
 			var repoConfigs []depgraph.RepoConfig
 			if len(repos) > 0 {
 				for _, r := range repos {
-					repoConfigs = append(repoConfigs, depgraph.RepoConfig{
-						Owner:     owner,
-						OwnerType: ot,
-						Name:      r,
-						Project:   project,
-					})
+					repoConfigs = append(repoConfigs, schedulerRepoConfig(cfg, ot, config.RepoProjectQuery{
+						Owner:       owner,
+						Repo:        r,
+						SharedBoard: project,
+						StartDir:    workdir,
+					}))
 				}
 			} else {
-				repoConfigs = autoDetectRepos(owner, project)
+				repoConfigs = autoDetectRepos(cfg, owner, project)
 			}
 			if len(repoConfigs) == 0 {
 				return fmt.Errorf("no repos found; use --repos to specify")

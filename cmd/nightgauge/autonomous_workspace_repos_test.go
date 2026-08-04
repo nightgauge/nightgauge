@@ -77,7 +77,7 @@ repositories:
     project_number: 6
 `)
 
-	got := reposFromWorkspaceManifest(root, "nightgauge", 6)
+	got := reposFromWorkspaceManifest(nil, root, "nightgauge", 6)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 repos, got %d: %+v", len(got), got)
 	}
@@ -122,7 +122,7 @@ func TestReposFromWorkspaceManifest_PerRepoProject(t *testing.T) {
     project_number: 2
 `)
 
-	got := reposFromWorkspaceManifest(root, "nightgauge", 1)
+	got := reposFromWorkspaceManifest(nil, root, "nightgauge", 1)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 repos, got %d: %+v", len(got), got)
 	}
@@ -142,7 +142,7 @@ func TestReposFromWorkspaceManifest_PerRepoProject(t *testing.T) {
 // to legacy sibling/folder detection.
 func TestReposFromWorkspaceManifest_NoManifest(t *testing.T) {
 	root := t.TempDir()
-	if got := reposFromWorkspaceManifest(root, "nightgauge", 6); got != nil {
+	if got := reposFromWorkspaceManifest(nil, root, "nightgauge", 6); got != nil {
 		t.Fatalf("expected nil with no manifest, got %+v", got)
 	}
 }

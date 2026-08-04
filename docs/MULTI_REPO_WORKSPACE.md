@@ -400,19 +400,47 @@ routing:
   default_repository: api-gateway
 ```
 
-### Single-Resolver Contract (Issue #271)
+### Single-Resolver Contract (Issues #271, #313)
 
 `.vscode/nightgauge-workspace.yaml`'s `repositories[].project_number` is
 **not** an independent authority for "which project board does this repo
 use?". It exists only as routing-manifest scaffolding input — a starting
 point the `nightgauge-issue-create` skill's Phase 2.4 resolves through the
-runtime resolver before using it, never a value consumed directly.
+runtime resolver before using it, never a value consumed directly. It is also
+what `doctor` validates _against_ the resolver, so the resolver must never
+read it back in.
 
-The single authoritative answer is the **runtime-resolved** value:
-`autonomous.repositories.<repo>.project_number` in `.nightgauge/config.yaml`
-(merged across the standard 6-tier config chain). This is the project the
-autonomous scheduler actually polls (`Scheduler.PickNext`) — a workspace-yaml
-`project_number` that disagrees with it names a board nothing ever reads.
+The authoritative answer comes from `config.ResolveRepoProject`, in this
+precedence order. Every consumer — `nightgauge project resolve`, issue-create,
+board sync, `doctor`, the stranded-ready sweep, **and the autonomous
+scheduler's repo set** — uses this one lookup:
+
+| #   | Source                                                              | Reason code              |
+| --- | ------------------------------------------------------------------- | ------------------------ |
+| 1   | The target is the local repo → its own `project.number`             | `local-config`           |
+| 2   | `autonomous.repositories.<repo>.project_number` (operator override) | `member-config-override` |
+| 3   | The target repo's own `.nightgauge/config.yaml` `project.number`    | `member-config`          |
+| 4   | The workspace-wide default board (`--project` / `project.number`)   | `shared-board-default`   |
+| 5   | Nothing — board `0`                                                 | `unmapped`               |
+
+The reason code travels with every answer because two kinds of caller act on
+it differently, and that difference must be explicit:
+
+- **Callers that FILE** (issue-create, board sync, `project resolve`) accept
+  only rungs 1–3. A `shared-board-default` is refused with an error naming the
+  config key to set — defaulting a cross-repo target to the primary board is
+  how #3232 silently misrouted issues.
+- **Callers that POLL** (the autonomous scheduler) accept rung 4 as well.
+  Scanning the wrong board wastes a poll; it cannot misfile anything.
+
+Before #313 those two policies were two separate lookups. The resolver refused
+to answer for an unmapped sibling while the scheduler built its repo set from
+the bare top-level project number and polled that board for every repo — so on
+a workspace whose siblings declared boards 4, 5, and 6, the scheduler polled
+board 3 for all of them. Because both behaviors were individually defensible
+and nothing reconciled them, a diagnostic written against either one stated
+falsehoods about the other (#280 shipped a `doctor` message claiming "the
+scheduler polls no board for this repo").
 
 Resolve a repo's authoritative project number with:
 
@@ -442,6 +470,13 @@ value is a **misconfiguration**, not an alternate valid mapping:
   is "Ready" on the stale workspace-yaml board while the two sources
   disagree — the issue the scheduler will never dispatch because it only
   polls the runtime-resolved board.
+
+A repo that resolves only to `shared-board-default` is reported separately, as
+a warning rather than a failure: nothing is misrouted yet, but the manifest
+value was never compared against anything, so it is **not** agreement (#280).
+That warning names the board the scheduler falls back to _and_ the fact that
+filing will refuse — both read off the same resolution, so neither statement
+can drift out of step with the other.
 
 ---
 

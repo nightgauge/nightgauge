@@ -266,7 +266,7 @@ func TestProjectSyncStatusRequiresArgs(t *testing.T) {
 
 func TestResolveProjectNumber_ExplicitProjectWins(t *testing.T) {
 	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
-	got, err := resolveProjectNumber(cfg, true, 99, "nightgauge", "other-repo")
+	got, err := resolveProjectNumber(cfg, true, 99, "nightgauge", "other-repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestResolveProjectNumber_ExplicitProjectWins(t *testing.T) {
 
 func TestResolveProjectNumber_SameRepoUnchanged(t *testing.T) {
 	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge", ProjectNumber: 5}
-	got, err := resolveProjectNumber(cfg, false, 5, "nightgauge", "nightgauge")
+	got, err := resolveProjectNumber(cfg, false, 5, "nightgauge", "nightgauge", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestResolveProjectNumber_CrossRepoMapped(t *testing.T) {
 			},
 		},
 	}
-	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo")
+	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestResolveProjectNumber_CrossRepoMappedByShortName(t *testing.T) {
 			},
 		},
 	}
-	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo")
+	got, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "other-repo", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestResolveProjectNumber_CrossRepoMappedByShortName(t *testing.T) {
 
 func TestResolveProjectNumber_CrossRepoUnmapped(t *testing.T) {
 	cfg := &config.Config{Owner: "nightgauge", DefaultRepo: "nightgauge"}
-	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo")
+	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo", "")
 	if err == nil {
 		t.Fatal("expected error for unmapped cross-repo target")
 	}
@@ -340,7 +340,7 @@ func TestResolveProjectNumber_NilAutonomousDoesNotPanic(t *testing.T) {
 	if cfg.Autonomous != nil {
 		t.Fatal("test setup invariant broken: Autonomous should be nil")
 	}
-	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo")
+	_, err := resolveProjectNumber(cfg, false, 0, "nightgauge", "unmapped-repo", "")
 	if err == nil {
 		t.Fatal("expected error, not a panic, for nil Autonomous config")
 	}
@@ -348,7 +348,7 @@ func TestResolveProjectNumber_NilAutonomousDoesNotPanic(t *testing.T) {
 
 func TestResolveProjectNumber_DefaultRepoUnsetFallsThrough(t *testing.T) {
 	cfg := &config.Config{Owner: "nightgauge", ProjectNumber: 3}
-	got, err := resolveProjectNumber(cfg, false, 3, "nightgauge", "anything")
+	got, err := resolveProjectNumber(cfg, false, 3, "nightgauge", "anything", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
