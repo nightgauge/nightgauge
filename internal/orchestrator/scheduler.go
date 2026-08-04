@@ -329,6 +329,15 @@ type Scheduler struct {
 	// unchanged (#239).
 	repoRootsResolver func() []string
 
+	// composeLister and composeTeardown are seams over the docker compose CLI so
+	// reconcileOrphanedComposeProjects' DECISION is testable without a docker
+	// daemon. The decision is the whole risk: teardown runs `down -v
+	// --remove-orphans`, so a test asserting only "no error" would pass against
+	// the #296 bug, which returned success while destroying a live run's
+	// volumes. nil → the real dockercompose package.
+	composeLister   func(ctx context.Context) ([]dockercompose.Project, error)
+	composeTeardown func(ctx context.Context, name string, opts dockercompose.TeardownOptions) (dockercompose.TeardownResult, error)
+
 	// StageRunner abstracts skill execution (auto mode vs IPC mode)
 	stageRunner StageRunner
 
@@ -2067,7 +2076,16 @@ func (s *Scheduler) sweepMergedWorktrees() {
 		active[item.IssueNumber] = true
 	}
 	s.mu.Unlock()
-	for issue := range s.activeWorktreeIssues() {
+	// The worktree scan WIDENS the protected set beyond the queue, so an
+	// undetermined answer is not a smaller protection — it is an unknown one,
+	// and the sweep removes directories. Skip rather than reclaim on a set we
+	// could not read (#296).
+	worktreeIssues, determined := s.activeWorktreeIssues()
+	if !determined {
+		log.Printf("worktree-reconcile: WARN active-worktree set is undetermined — skipping the merged-worktree sweep")
+		return
+	}
+	for issue := range worktreeIssues {
 		active[issue] = true
 	}
 
@@ -2100,7 +2118,16 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	projects, err := dockercompose.ListIssueProjects(ctx)
+	lister := s.composeLister
+	if lister == nil {
+		lister = dockercompose.ListIssueProjects
+	}
+	teardown := s.composeTeardown
+	if teardown == nil {
+		teardown = dockercompose.TeardownProject
+	}
+
+	projects, err := lister(ctx)
 	if err != nil {
 		log.Printf("compose-reconcile: list compose projects failed: %v", err)
 		return
@@ -2108,13 +2135,21 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	if len(projects) == 0 {
 		return
 	}
-	active := s.activeWorktreeIssues()
+	active, determined := s.activeWorktreeIssues()
+	if !determined {
+		// Every project here would be torn down with `down -v --remove-orphans`
+		// on the strength of a set we could not read. Doing nothing leaves stale
+		// containers squatting ports, which is what a later sweep is for;
+		// guessing destroys a live run's volumes, which nothing recovers.
+		log.Printf("compose-reconcile: WARN active-worktree set is undetermined — skipping teardown of %d compose project(s) rather than risk destroying a live run's volumes", len(projects))
+		return
+	}
 	for _, p := range projects {
 		if active[p.IssueNumber] {
 			continue
 		}
 		log.Printf("compose-reconcile: tearing down orphaned compose project %s (no matching worktree)", p.Name)
-		if _, err := dockercompose.TeardownProject(ctx, p.Name, dockercompose.TeardownOptions{
+		if _, err := teardown(ctx, p.Name, dockercompose.TeardownOptions{
 			RemoveImages: true,
 		}); err != nil {
 			log.Printf("compose-reconcile: teardown of %s failed: %v", p.Name, err)
@@ -2122,31 +2157,63 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	}
 }
 
-// activeWorktreeIssues parses `git worktree list --porcelain` from the
-// scheduler's workspace root and returns the set of issue numbers held by
-// an active worktree. Returns an empty map when git is unavailable or the
-// workspace root is unset.
-func (s *Scheduler) activeWorktreeIssues() map[int]bool {
+// activeWorktreeIssues parses `git worktree list --porcelain` across every repo
+// root the scheduler reconciles and returns the issue numbers held by an active
+// worktree, plus whether that answer is DETERMINED.
+//
+// determined=false means "I could not find out", which is not the same as "no
+// worktrees exist" — and the difference decides whether a destructive caller
+// may act. Three paths used to produce an indistinguishable empty map (#296):
+//
+//  1. no workspace root configured;
+//  2. `git worktree list` failed;
+//  3. a cross-repo run registers its worktree in the TARGET repo
+//     (execution.ensureWorktree runs git with cmd.Dir = repoRoot), so listing
+//     only the launch root never sees it — the same root cause as #163/#229.
+//
+// Case 3 made a live cross-repo run look orphaned, and
+// reconcileOrphanedComposeProjects answered that by running `docker compose
+// down -v --remove-orphans` on its stack, destroying the running pipeline's
+// named volumes. Failing toward the destructive answer is what makes this class
+// worth fixing on sight (#165, and the same shape as #297's preserveVerdict).
+//
+// A root that no longer exists on disk is skipped rather than undetermining
+// everything: it genuinely holds no worktrees, and a deleted sibling repo must
+// not permanently disable reconciliation. Any other git failure undetermines
+// the whole answer — a partial set is indistinguishable from a complete one at
+// the call site, and acting on it tears down whatever the unreadable root held.
+func (s *Scheduler) activeWorktreeIssues() (map[int]bool, bool) {
+	roots := s.repoScanRoots()
+	if len(roots) == 0 {
+		return nil, false
+	}
 	out := map[int]bool{}
-	if s.workspaceRoot == "" {
-		return out
-	}
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	cmd.Dir = s.workspaceRoot
-	data, err := cmd.Output()
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			log.Printf("worktree-scan: cannot stat repo root %s: %v — active-worktree set is UNDETERMINED", root, err)
+			return nil, false
 		}
-		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		if n, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path)); ok {
-			out[n] = true
+		cmd := exec.Command("git", "worktree", "list", "--porcelain")
+		cmd.Dir = root
+		data, err := cmd.Output()
+		if err != nil {
+			log.Printf("worktree-scan: git worktree list failed in %s: %v — active-worktree set is UNDETERMINED", root, err)
+			return nil, false
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if !strings.HasPrefix(line, "worktree ") {
+				continue
+			}
+			path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			if n, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path)); ok {
+				out[n] = true
+			}
 		}
 	}
-	return out
+	return out, true
 }
 
 // repoScanRoots returns every filesystem root a workspace-wide reconcile must
