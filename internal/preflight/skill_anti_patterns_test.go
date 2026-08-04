@@ -312,7 +312,7 @@ func TestAntiPatterns_SleepWaitLoop_FlagsWhileSleep(t *testing.T) {
 func TestAntiPatterns_SleepWaitLoop_PlainSleepIsClean(t *testing.T) {
 	root := t.TempDir()
 	// A bare `sleep` outside a while/until loop is a different (still
-	// discouraged, but not this check's) pattern \u2014 must not be flagged.
+	// discouraged, but not this check's) pattern — must not be flagged.
 	writeSkillFile(t, root, "demo/SKILL.md", "# demo\n\n```bash\nsleep 10\n```\n")
 	res := run(t, root)
 	if got := countByCheck(res.Findings, CheckSleepWaitLoop); got != 0 {
