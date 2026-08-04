@@ -279,3 +279,31 @@ func TestCleanupCmd_AllStillWorksOutsideWorkspace(t *testing.T) {
 		t.Errorf("--all must still tear down every stack, got log:\n%s", calls)
 	}
 }
+
+// TestCleanupCmd_NoProjectsSucceedsOutsideWorkspace: the undetermined guard
+// must not fire when there is nothing to tear down. Caught by running the real
+// binary outside a repo — `cleanup` reported "refusing to tear down 0 compose
+// project(s)" and exited non-zero, turning the ordinary no-op into a failure
+// for any script that calls it opportunistically. A guard with no destructive
+// act to prevent is just an outage.
+func TestCleanupCmd_NoProjectsSucceedsOutsideWorkspace(t *testing.T) {
+	installFakeDockerForCleanup(t)
+	t.Setenv("FAKE_DOCKER_LS_OUTPUT", `[]`)
+
+	outside := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
+	t.Chdir(outside)
+
+	cmd := cleanupCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"--json"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	_ = captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("no compose projects is a no-op, not a refusal: %v", err)
+		}
+	})
+}

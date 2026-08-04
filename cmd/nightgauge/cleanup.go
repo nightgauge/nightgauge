@@ -65,8 +65,15 @@ host. The command is idempotent and safe to re-run.`,
 			// every stack", which is the operator stating a decision rather than
 			// the code inferring one from disk. Only the orphan inference can be
 			// wrong about a live run, so only it is guarded.
+			//
+			// Zero projects short-circuits too. With nothing to tear down the
+			// guard has nothing to protect, and refusing there turns the ordinary
+			// no-op — `cleanup` on a host with no stacks, run from outside any
+			// workspace — into a non-zero exit that breaks opportunistic callers.
+			// A guard that fires when there is no destructive act to prevent is
+			// just an outage.
 			var active map[int]bool
-			if orphaned && !allFlag {
+			if orphaned && !allFlag && len(projects) > 0 {
 				cwd, _ := os.Getwd()
 				var determined bool
 				active, determined = execution.ActiveWorktreeIssues(config.WorkspaceRepoRoots(cwd))
