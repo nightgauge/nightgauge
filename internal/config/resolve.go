@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -266,6 +267,87 @@ func readWorkspaceManifest(wsRoot string) ([]workspaceManifestRepo, error) {
 		return nil, err
 	}
 	return manifest.Repositories, nil
+}
+
+// WorkspaceRepoRoots returns every repo checkout root a workspace-wide scan
+// must inspect, discovered from startDir. It is the CLI analogue of the
+// scheduler's repoScanRoots(): the scheduler has an injected repoRootsResolver
+// because it is a long-lived process that was handed its repo set, while a CLI
+// command has only the operator's cwd and must discover the rest (#323).
+//
+// The set is the local repo's git toplevel plus every repositories[].path in
+// the workspace manifest, resolved relative to the manifest's own directory and
+// deduplicated. Both halves matter: the manifest supplies the siblings that
+// make a cross-repo run visible (since #229 a run's worktree is registered in
+// its TARGET repo, so scanning only cwd misses it — #163/#229/#296), and the
+// git toplevel keeps single-repo mode working, where no manifest exists at all.
+//
+// An empty result means neither source answered — not inside a git repo and not
+// inside a workspace. Callers must treat that as "unverifiable", never as
+// "nothing is running": that conflation is the #296/#280 defect this function
+// exists to make impossible. execution.ActiveWorktreeIssues enforces it by
+// returning determined=false for an empty root set.
+//
+// A repo deliberately absent from the manifest (nightgauge-internal carries no
+// project board, so it is not listed) is simply not scanned. That matches the
+// scheduler, whose resolver enumerates the same registered set.
+func WorkspaceRepoRoots(startDir string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	add := func(root string) {
+		if root == "" {
+			return
+		}
+		abs, err := filepath.Abs(root)
+		if err != nil {
+			return
+		}
+		abs = filepath.Clean(abs)
+		if seen[abs] {
+			return
+		}
+		seen[abs] = true
+		roots = append(roots, abs)
+	}
+
+	add(gitToplevel(startDir))
+
+	wsRoot, err := workspace.DetectWorkspaceRoot(startDir)
+	if err != nil {
+		return roots
+	}
+	manifest, err := readWorkspaceManifest(wsRoot)
+	if err != nil {
+		return roots
+	}
+	for _, r := range manifest {
+		if r.Path == "" {
+			continue
+		}
+		if filepath.IsAbs(r.Path) {
+			add(r.Path)
+			continue
+		}
+		add(filepath.Join(wsRoot, r.Path))
+	}
+	return roots
+}
+
+// gitToplevel returns the root of the git repository containing dir, or "" when
+// dir is not inside one. Inside a worktree this reports the worktree's own
+// directory, which is the correct scan root: `git worktree list` run from a
+// worktree still enumerates every worktree of its repository.
+func gitToplevel(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ProjectMappingMismatch is one repo whose workspace-manifest project_number

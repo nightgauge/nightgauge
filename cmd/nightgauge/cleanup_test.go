@@ -210,3 +210,72 @@ func captureStdout(t *testing.T, fn func()) string {
 	os.Stdout = origStdout
 	return <-doneCh
 }
+
+// TestCleanupCmd_RefusesTeardownWhenWorktreeSetUndetermined is the destructive
+// half of #323. Pre-fix, `active, _ := listActiveWorktreeIssues()` discarded the
+// error and treated the resulting empty map as fact, so a git failure — or
+// simply running outside the workspace — made EVERY issue-* stack look
+// orphaned. `down -v` then destroyed the named volumes of whatever was running.
+//
+// The scheduler already refuses this (#296); the operator-facing command must
+// too, because `doctor` is what sends the operator here.
+//
+// The assertion is on the side effect, not the error: the pre-fix code returned
+// no error at all while tearing the stack down, so an error-only assertion
+// would pass against the bug.
+func TestCleanupCmd_RefusesTeardownWhenWorktreeSetUndetermined(t *testing.T) {
+	logPath := installFakeDockerForCleanup(t)
+	t.Setenv("FAKE_DOCKER_LS_OUTPUT", `[{"Name":"issue-42","Status":"running(1)"}]`)
+
+	// Not a git repo and not inside a workspace: the active set is unknowable.
+	outside := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
+	t.Chdir(outside)
+
+	cmd := cleanupCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"--json"})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+
+	err := cmd.Execute()
+
+	calls := readFile(t, logPath)
+	if strings.Contains(calls, "down -v") {
+		t.Errorf("tore down a stack on the strength of an unreadable worktree set — this destroys a live run's volumes; log:\n%s", calls)
+	}
+	if err == nil {
+		t.Fatal("expected cleanup to refuse and say why, got nil error")
+	}
+	if !strings.Contains(err.Error(), "refusing to tear down") {
+		t.Errorf("error must explain the refusal, got: %v", err)
+	}
+}
+
+// TestCleanupCmd_AllStillWorksOutsideWorkspace: --all is the operator stating a
+// decision rather than inferring one, so it must not consult the worktree set
+// and must keep working as the documented escape hatch.
+func TestCleanupCmd_AllStillWorksOutsideWorkspace(t *testing.T) {
+	logPath := installFakeDockerForCleanup(t)
+	t.Setenv("FAKE_DOCKER_LS_OUTPUT", `[{"Name":"issue-42","Status":"running(1)"}]`)
+
+	outside := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
+	t.Chdir(outside)
+
+	cmd := cleanupCmd()
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{"--all", "--json"})
+
+	_ = captureStdout(t, func() {
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("cleanup --all must not consult the worktree set: %v", err)
+		}
+	})
+
+	calls := readFile(t, logPath)
+	if !strings.Contains(calls, "compose -p issue-42 down -v --remove-orphans") {
+		t.Errorf("--all must still tear down every stack, got log:\n%s", calls)
+	}
+}

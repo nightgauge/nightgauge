@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
@@ -293,8 +293,20 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	// longer exists indicate a leaked teardown. Surface them so the operator
 	// can run `nightgauge cleanup`. Skipped silently when docker is
 	// unavailable.
-	orphans := findOrphanedComposeProjects(ctx)
-	if len(orphans) > 0 {
+	cwd, _ := os.Getwd()
+	orphans, orphansDetermined := findOrphanedComposeProjects(ctx, cwd)
+	switch {
+	case !orphansDetermined:
+		// Never report "no orphans" from an unreadable worktree set — every
+		// stack looks orphaned then, including a live run's (#280, #323).
+		msg := "orphaned compose projects unverifiable: could not read the active worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed. Do NOT run `nightgauge cleanup` on this basis; it would tear down live runs' stacks"
+		result.Checks["compose_orphans"] = CheckItem{
+			OK:     false,
+			Detail: "could not determine which issues have an active worktree",
+			Error:  msg,
+		}
+		warnings = append(warnings, msg)
+	case len(orphans) > 0:
 		names := make([]string, 0, len(orphans))
 		for _, p := range orphans {
 			names = append(names, p.Name)
@@ -370,55 +382,36 @@ func checkGH() CheckItem {
 	return CheckItem{OK: true, Detail: path}
 }
 
-// findOrphanedComposeProjects returns the set of `issue-NNN` compose
-// projects whose corresponding git worktree no longer exists. Returns an
-// empty slice when docker isn't available — the check is best-effort.
-func findOrphanedComposeProjects(ctx context.Context) []dockercompose.Project {
+// findOrphanedComposeProjects returns the set of `issue-NNN` compose projects
+// whose corresponding git worktree no longer exists, plus whether the
+// active-worktree set backing that judgement was DETERMINED.
+//
+// determined=false means the orphan list is meaningless and must not be
+// reported: with no readable worktree set every compose project looks orphaned,
+// so the check would name a live run's stack and tell the operator to run
+// `nightgauge cleanup` on it. That is #280's defect — a doctor message
+// asserting something about a path it never consulted — with #296's
+// consequences one indirection later, since the operator's hand carries out the
+// teardown the scheduler now refuses to. Callers surface it as unverifiable.
+//
+// Returns (nil, true) when docker isn't available or no projects exist: there
+// is genuinely nothing to be wrong about, which is a determined answer.
+func findOrphanedComposeProjects(ctx context.Context, startDir string) ([]dockercompose.Project, bool) {
 	projects, err := dockercompose.ListIssueProjects(ctx)
 	if err != nil || len(projects) == 0 {
-		return nil
+		return nil, true
 	}
-	active := activeWorktreeIssues()
+	active, determined := execution.ActiveWorktreeIssues(config.WorkspaceRepoRoots(startDir))
+	if !determined {
+		return nil, false
+	}
 	var orphans []dockercompose.Project
 	for _, p := range projects {
 		if !active[p.IssueNumber] {
 			orphans = append(orphans, p)
 		}
 	}
-	return orphans
-}
-
-// activeWorktreeIssues parses `git worktree list --porcelain` to derive the
-// set of issue numbers currently represented by an active worktree. Returns
-// an empty map on any error so the doctor degrades gracefully outside a
-// repo.
-func activeWorktreeIssues() map[int]bool {
-	out := map[int]bool{}
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	data, err := cmd.Output()
-	if err != nil {
-		return out
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		base := filepath.Base(path)
-		idx := strings.LastIndex(base, "issue-")
-		if idx < 0 {
-			continue
-		}
-		tail := base[idx+len("issue-"):]
-		if tail == "" {
-			continue
-		}
-		var n int
-		if _, err := fmt.Sscanf(tail, "%d", &n); err == nil && n > 0 {
-			out[n] = true
-		}
-	}
-	return out
+	return orphans, true
 }
 
 // checkProjectMapping cross-validates the workspace manifest's
