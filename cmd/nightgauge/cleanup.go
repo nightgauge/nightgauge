@@ -3,10 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/spf13/cobra"
@@ -61,7 +60,27 @@ host. The command is idempotent and safe to re-run.`,
 				return fmt.Errorf("list compose projects: %w", err)
 			}
 
-			active, _ := listActiveWorktreeIssues()
+			// The worktree set is consulted only when it actually decides
+			// something: `--all` and `--orphaned=false` both mean "tear down
+			// every stack", which is the operator stating a decision rather than
+			// the code inferring one from disk. Only the orphan inference can be
+			// wrong about a live run, so only it is guarded.
+			var active map[int]bool
+			if orphaned && !allFlag {
+				cwd, _ := os.Getwd()
+				var determined bool
+				active, determined = execution.ActiveWorktreeIssues(config.WorkspaceRepoRoots(cwd))
+				if !determined {
+					// Pre-#323 this discarded the error (`active, _ :=`) and
+					// treated the empty map as fact, so a git failure — or a run
+					// living in a sibling repo — made every stack look orphaned,
+					// and `down -v` destroyed the live run's named volumes. The
+					// scheduler already refuses this (#296); the operator-facing
+					// path must refuse it too, because `doctor` sends the
+					// operator here.
+					return fmt.Errorf("refusing to tear down %d compose project(s): could not read the active worktree set across the workspace's repo roots, so every stack would look orphaned — including live runs'. Re-run inside the workspace, or use --all to tear down everything deliberately", len(projects))
+				}
+			}
 
 			targets := selectCleanupTargets(projects, active, orphaned, allFlag)
 
@@ -135,30 +154,4 @@ func selectCleanupTargets(projects []dockercompose.Project, activeIssues map[int
 		}
 	}
 	return out
-}
-
-// listActiveWorktreeIssues returns the set of issue numbers currently
-// represented by an active git worktree. Errors are non-fatal — when git
-// isn't available we treat the active set as empty so all known projects
-// look orphaned (the user can always escape with --all).
-func listActiveWorktreeIssues() (map[int]bool, error) {
-	out := map[int]bool{}
-	cmd := exec.Command("git", "worktree", "list", "--porcelain")
-	data, err := cmd.Output()
-	if err != nil {
-		return out, err
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if !strings.HasPrefix(line, "worktree ") {
-			continue
-		}
-		path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-		// Matches either "issue-NNN" (TS WorktreeManager) or
-		// "<repo>-issue-NNN" (Go execution.Manager) directory shapes.
-		num, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path))
-		if ok {
-			out[num] = true
-		}
-	}
-	return out, nil
 }

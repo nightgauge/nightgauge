@@ -2157,63 +2157,17 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	}
 }
 
-// activeWorktreeIssues parses `git worktree list --porcelain` across every repo
-// root the scheduler reconciles and returns the issue numbers held by an active
-// worktree, plus whether that answer is DETERMINED.
+// activeWorktreeIssues returns the issue numbers held by an active worktree
+// across every repo root the scheduler reconciles, plus whether that answer is
+// DETERMINED. The scan itself lives in execution.ActiveWorktreeIssues — the one
+// implementation shared with `doctor` and `cleanup` (#323); the scheduler's
+// only distinct contribution is knowing which roots to scan.
 //
 // determined=false means "I could not find out", which is not the same as "no
-// worktrees exist" — and the difference decides whether a destructive caller
-// may act. Three paths used to produce an indistinguishable empty map (#296):
-//
-//  1. no workspace root configured;
-//  2. `git worktree list` failed;
-//  3. a cross-repo run registers its worktree in the TARGET repo
-//     (execution.ensureWorktree runs git with cmd.Dir = repoRoot), so listing
-//     only the launch root never sees it — the same root cause as #163/#229.
-//
-// Case 3 made a live cross-repo run look orphaned, and
-// reconcileOrphanedComposeProjects answered that by running `docker compose
-// down -v --remove-orphans` on its stack, destroying the running pipeline's
-// named volumes. Failing toward the destructive answer is what makes this class
-// worth fixing on sight (#165, and the same shape as #297's preserveVerdict).
-//
-// A root that no longer exists on disk is skipped rather than undetermining
-// everything: it genuinely holds no worktrees, and a deleted sibling repo must
-// not permanently disable reconciliation. Any other git failure undetermines
-// the whole answer — a partial set is indistinguishable from a complete one at
-// the call site, and acting on it tears down whatever the unreadable root held.
+// worktrees exist", and the difference decides whether a destructive caller may
+// act. See execution.ActiveWorktreeIssues for why (#296).
 func (s *Scheduler) activeWorktreeIssues() (map[int]bool, bool) {
-	roots := s.repoScanRoots()
-	if len(roots) == 0 {
-		return nil, false
-	}
-	out := map[int]bool{}
-	for _, root := range roots {
-		if _, err := os.Stat(root); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			log.Printf("worktree-scan: cannot stat repo root %s: %v — active-worktree set is UNDETERMINED", root, err)
-			return nil, false
-		}
-		cmd := exec.Command("git", "worktree", "list", "--porcelain")
-		cmd.Dir = root
-		data, err := cmd.Output()
-		if err != nil {
-			log.Printf("worktree-scan: git worktree list failed in %s: %v — active-worktree set is UNDETERMINED", root, err)
-			return nil, false
-		}
-		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-			if !strings.HasPrefix(line, "worktree ") {
-				continue
-			}
-			path := strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
-			if n, ok := execution.IssueNumberFromWorktreeDir(filepath.Base(path)); ok {
-				out[n] = true
-			}
-		}
-	}
-	return out, true
+	return execution.ActiveWorktreeIssues(s.repoScanRoots())
 }
 
 // repoScanRoots returns every filesystem root a workspace-wide reconcile must

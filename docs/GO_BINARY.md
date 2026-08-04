@@ -839,6 +839,48 @@ merge makes `-d` refuse it). Removal failures are logged at `[WARN]` rather than
 swallowed — on both the inline and reconcile paths — so a leak is observable
 when it happens instead of inferred days later from disk usage.
 
+#### Active-Worktree Scanning — Single-Scanner Contract (Issue #323)
+
+"Which issues have a live worktree?" is asked by three consumers — the
+scheduler's compose reconcile, `nightgauge doctor`, and `nightgauge cleanup` —
+and answered by exactly one function, `execution.ActiveWorktreeIssues(roots)`.
+Before #323 each consumer carried its own copy, and the copies had already
+drifted into three different `issue-NNN` parsers and two different answers to
+the question below.
+
+**The answer is two values, not one: `(active, determined)`.** `determined=false`
+means "I could not find out", which is not the same as "no worktrees exist". The
+distinction is load-bearing because every consumer's next step is destructive or
+advises one:
+
+| Consumer                           | On `determined=false`                     |
+| ---------------------------------- | ----------------------------------------- |
+| Scheduler compose reconcile (#296) | Skip teardown, log a `WARN`               |
+| `nightgauge doctor`                | Report `compose_orphans` **unverifiable** |
+| `nightgauge cleanup` (no `--all`)  | Refuse, naming the reason; exit non-zero  |
+
+Conflating the two states means every compose project looks orphaned, and
+`docker compose down -v` then destroys a live run's named volumes. `--all` is
+exempt because it does not consult the set at all — it is the operator stating a
+decision rather than the code inferring one.
+
+**Roots are supplied by the caller, and must include every repo.** Since #229 a
+cross-repo run registers its worktree in the TARGET repo, so scanning only the
+launch root misses it (the #163/#229/#296 root cause). The scheduler passes
+`repoScanRoots()` (launch root + injected resolver); CLI commands have no
+resolver and pass `config.WorkspaceRepoRoots(cwd)`, which is the git toplevel
+plus every `repositories[].path` in the workspace manifest. An empty root set is
+`determined=false` — never an empty active set.
+
+A root that no longer exists on disk is skipped; any other git failure
+undetermines the whole answer, because a partial set is indistinguishable from a
+complete one at the call site.
+
+**One parser.** `execution.IssueNumberFromWorktreeDir` is the only function that
+turns a worktree directory name into an issue number.
+`TestExactlyOneWorktreeIssueParser` walks the AST of every non-test Go file and
+fails if a second one appears — do not add an exemption; call the shared parser.
+
 ### PR Operations
 
 ```bash

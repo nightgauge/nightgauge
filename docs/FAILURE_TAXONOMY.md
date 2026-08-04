@@ -654,7 +654,23 @@ excluded. The confirmed instances are filed as:
 
 - **#296** — `reconcileOrphanedComposeProjects` treats an undetermined
   worktree set as empty and tears down live cross-repo docker stacks
-  (destructive; same root cause as #163)
+  (destructive; same root cause as #163).
+  **Fixed:** `activeWorktreeIssues` returns `(set, determined)` and enumerates
+  every repo scan root; both destructive callers honour the verdict
+- **#323** — the same defect in the two copies #296 did not reach: `doctor`
+  reported a live cross-repo run's stack as orphaned, and `nightgauge cleanup`
+  — the command that report tells the operator to run — discarded its git
+  error (`active, _ :=`) and tore down every stack that an unreadable set made
+  look orphaned. Diagnostic and destructive halves of one defect, one
+  indirection apart.
+  **Fixed:** all three consumers call one
+  `execution.ActiveWorktreeIssues(roots)`; CLI callers discover roots via
+  `config.WorkspaceRepoRoots(cwd)` (git toplevel + workspace manifest);
+  `doctor` reports **unverifiable** and `cleanup` refuses rather than either
+  reporting or acting on a set they could not read. Rule 2 above, applied to
+  the advisory path as well as the destructive one — an operator acting on a
+  false "orphaned" report reaches the destructive outcome by hand.
+  `TestExactlyOneWorktreeIssueParser` is the standing drift guard
 - **#297** — `preserveUnlandedDeliverable` (the #289 guard) no-ops on
   detached HEAD, temp branches, worktree-scoped context, and the legacy
   `files_changed` shape — and `ResetPipeline` proceeds regardless.
