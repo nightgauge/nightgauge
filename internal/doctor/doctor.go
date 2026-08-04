@@ -199,19 +199,24 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 
 	// --- project_mapping (required when a workspace manifest exists and cfg is loaded) ---
 	// Cross-checks the workspace manifest's repositories[].project_number
-	// (Source A) against the runtime-resolved
-	// autonomous.repositories.<repo>.project_number (Source B, via
-	// config.ResolveRepoProjectNumber). A mismatch means issues get filed
-	// against a board the scheduler never polls (#271) — always a
-	// misconfiguration, never a warning-only path.
+	// (Source A) against the board config.ResolveRepoProject declares for that
+	// same repo (Source B — its own .nightgauge/config.yaml, or an
+	// autonomous.repositories.<repo>.project_number override). A mismatch means
+	// issues get filed against a board the scheduler never polls (#271) —
+	// always a misconfiguration, never a warning-only path.
 	//
-	// A repo Source B cannot resolve at all is reported SEPARATELY and as a
+	// A repo no config declares a board for is reported SEPARATELY and as a
 	// warning (#280). It used to be dropped silently, which let this check
 	// report "agree" about repos it never compared — but it is not the same
-	// condition as a disagreement: nothing is misrouted yet, the manifest
-	// value is simply unverified, and the scheduler polls the top-level board
-	// for that repo regardless. Failing hard on it would overstate the
+	// condition as a disagreement: nothing is misrouted yet, the manifest value
+	// is simply unverified, and the scheduler falls back to the workspace
+	// default board for that repo. Failing hard on it would overstate the
 	// consequence exactly as the old silence understated it.
+	//
+	// Both statements now come from ONE lookup (#313). This check does not
+	// assert anything about the scheduler on its own authority: the scheduler
+	// builds its repo set from the same resolver, and the fallback board named
+	// in the warning is the number that resolver returned.
 	if cfg != nil {
 		if report, mmErr := checkProjectMapping(cfg); mmErr == nil {
 			mismatches := make([]string, 0, len(report.Mismatches))

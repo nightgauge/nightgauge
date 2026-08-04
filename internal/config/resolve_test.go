@@ -9,7 +9,7 @@ import (
 
 func TestResolveRepoProjectNumber_LocalRepo(t *testing.T) {
 	cfg := &Config{Owner: "acme", DefaultRepo: "web", ProjectNumber: 7}
-	got, err := ResolveRepoProjectNumber(cfg, "acme", "web")
+	got, err := ResolveRepoProjectNumber(cfg, RepoProjectQuery{Owner: "acme", Repo: "web"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestResolveRepoProjectNumber_CrossRepoMapped(t *testing.T) {
 			},
 		},
 	}
-	got, err := ResolveRepoProjectNumber(cfg, "acme", "platform")
+	got, err := ResolveRepoProjectNumber(cfg, RepoProjectQuery{Owner: "acme", Repo: "platform"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestResolveRepoProjectNumber_CrossRepoMapped(t *testing.T) {
 
 func TestResolveRepoProjectNumber_CrossRepoUnmapped(t *testing.T) {
 	cfg := &Config{Owner: "acme", DefaultRepo: "web", ProjectNumber: 7}
-	_, err := ResolveRepoProjectNumber(cfg, "acme", "platform")
+	_, err := ResolveRepoProjectNumber(cfg, RepoProjectQuery{Owner: "acme", Repo: "platform"})
 	if err == nil {
 		t.Fatal("expected an error for an unmapped cross-repo target")
 	}
