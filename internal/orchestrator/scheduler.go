@@ -43,6 +43,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -3358,16 +3359,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// Find and read SKILL.md
-		skillPath, err := execution.FindSkillFile(workspaceRoot, stage)
+		// Compose SKILL.md through the one renderer (#78). Model is left empty
+		// here: overlay-aware dispatch is #79's migration, and an empty model
+		// resolves no keys, so this renders base-only — byte-identical to the
+		// pre-#78 FindSkillFile + ReadSkillFile path it replaces.
+		skillData, err := skillrender.Render(skillrender.Options{
+			Stage:       string(stage),
+			SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+		})
 		if err != nil {
 			log.Printf("#%d: %v", item.Number, err)
-			return
-		}
-
-		skillData, err := execution.ReadSkillFile(skillPath)
-		if err != nil {
-			log.Printf("#%d: failed to read skill: %v", item.Number, err)
 			return
 		}
 
@@ -3409,7 +3411,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if prereqCtxOK {
 			effectiveContextType = string(prereqCtxType)
 		}
-		prompt := execution.BuildPrompt(stage, skillData.Content, item.Number, filepath.Dir(skillData.Path), effectiveContextType, contextFile)
+		prompt := execution.BuildPrompt(stage, skillData.Content, item.Number, filepath.Dir(skillData.SkillPath), effectiveContextType, contextFile)
 
 		// Epic project-memory forward injection (#4096): for a sub-issue that
 		// belongs to an epic, append the bounded, semi-trusted context that
@@ -3628,7 +3630,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
 			Timeout:           routing.ResolveStageTimeout(string(stage), model),
-			SkillPath:         skillPath,
+			SkillPath:         skillData.SkillPath,
 			ContextFile:       contextFile,
 			OutputFile:        outputFile,
 			TargetRepo:        item.Repo,

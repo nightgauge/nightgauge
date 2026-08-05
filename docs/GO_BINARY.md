@@ -237,6 +237,69 @@ nightgauge backlog preflight --status Ready --issue 42 --json
 nightgauge backlog preflight --focus greenfield
 ```
 
+### Skill Composition (Issue #78 / ADR 016)
+
+`nightgauge skill render` is the **one** composer for a stage's executable
+skill text: frontmatter parsing, `_includes` expansion, model-overlay
+resolution, and absolute-path rewriting. `internal/skillrender` owns all of it;
+the Go scheduler calls the package directly and every other host calls this
+verb. Adding overlay resolution to a second implementation is the drift
+liability the verb exists to remove.
+
+```bash
+# Base-only render — no model resolves no overlay keys
+nightgauge skill render --stage feature-dev --skills-root ./skills
+
+# Overlay-aware render
+nightgauge skill render --stage feature-dev --model claude-opus-5 --skills-root ./skills
+
+# What resolved, and why
+nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json
+```
+
+| Flag            | Meaning                                                             |
+| --------------- | ------------------------------------------------------------------- |
+| `--stage`       | Pipeline stage to render (required)                                 |
+| `--model`       | Concrete registry id or tier band; empty renders base-only          |
+| `--adapter`     | Selects the provider for tier resolution (`claude`, `codex`, …)     |
+| `--skills-root` | Directory containing skill directories — **repeatable, first wins** |
+| `--json`        | Emit the provenance envelope instead of the composed text           |
+
+**Skill location is the caller's responsibility.** The binary cannot reproduce
+the extension's bundle discovery (`dist/skills/`, plus the
+garbage-collected-bundle self-heal from #3883), so it owns only parsing,
+expansion, resolution, and composition. Supplying no `--skills-root` is an
+error rather than a guessed default — guessing is how an agent ends up reading
+a stale `~/.codex/skills` copy (#196).
+
+**Resolution cascade** (ADR 016 §2), general to specific, shared before
+skill-specific:
+
+```text
+_shared/anthropic → _shared/opus → _shared/claude-opus-5
+  → <skill>/anthropic → <skill>/opus → <skill>/claude-opus-5
+```
+
+Fragments are **composed, not replaced**; later ones may countermand earlier
+ones. Missing fragments are skipped silently — absence is the norm.
+
+**Injection site**, in precedence order: an explicit `<!-- overlay -->` anchor;
+otherwise immediately after the skill's context includes (the
+`PIPELINE_CONTEXT.md` / `AUTONOMY_CONTRACT.md` region), which is read before
+the procedure rather than buried under it; otherwise the top of the body.
+
+**Fail-open at every step, exit 0.** An unknown model, a local provider
+(ollama/lm-studio have no registry entries by design), or an unreadable
+fragment all render base-only. A malformed overlay must never take down a run.
+
+**The path rewrite runs exactly once, here.** It is deliberately _not_
+idempotent: an already-absolute `/abs/skills/_shared/` still contains the
+`skills/_shared/` needle, so a second pass expands it to
+`/abs//abs/skills/_shared/` and every read directive points at nothing —
+the #196 failure the rewrite exists to fix. `execution.BuildPrompt` therefore
+consumes an already-composed body and must not rewrite again;
+`TestRewriteIsNotIdempotent` pins the property.
+
 ### Preflight Operations
 
 Pre-submission gate verbs that replace the bash + python3 + sed chains in

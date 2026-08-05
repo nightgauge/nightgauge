@@ -1,0 +1,675 @@
+package skillrender
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// ─── Migrated regression tests ───────────────────────────────────────────────
+//
+// These came over verbatim in substance from internal/execution/skill_test.go
+// when the primitives moved here (#78). They are the guard on AC "existing
+// include-expansion behavior is preserved exactly": the implementation was
+// MOVED, not rewritten, and these prove the observable behavior came with it.
+
+func TestStageSkillDirs(t *testing.T) {
+	for _, stage := range []string{
+		"issue-pickup", "feature-planning", "feature-dev",
+		"feature-validate", "pr-create", "pr-merge",
+	} {
+		dir, ok := StageSkillDirs[stage]
+		if !ok || dir == "" {
+			t.Errorf("missing skill dir for stage %q", stage)
+		}
+		if !strings.HasPrefix(dir, "nightgauge-") {
+			t.Errorf("skill dir %q should start with 'nightgauge-'", dir)
+		}
+	}
+}
+
+func TestFrontmatterParsedAndAskUserQuestionFiltered(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", `---
+name: test-skill
+allowed-tools: Read Edit Bash AskUserQuestion
+programmatic-tools: TodoWrite
+---
+
+# Test Skill
+
+Do the thing.
+`)
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+
+	if res.SkillName != "test-skill" {
+		t.Errorf("SkillName = %q, want test-skill", res.SkillName)
+	}
+	if len(res.AllowedTools) != 3 {
+		t.Errorf("AllowedTools = %v, want 3 entries", res.AllowedTools)
+	}
+	for _, tool := range res.AllowedTools {
+		if tool == "AskUserQuestion" {
+			t.Error("AskUserQuestion must be filtered — it does not work headless")
+		}
+	}
+	if len(res.ProgrammaticTools) != 1 || res.ProgrammaticTools[0] != "TodoWrite" {
+		t.Errorf("ProgrammaticTools = %v", res.ProgrammaticTools)
+	}
+	if !strings.Contains(res.Content, "# Test Skill") {
+		t.Error("content should contain the skill body")
+	}
+	if strings.Contains(res.Content, "name: test-skill") {
+		t.Error("frontmatter must be stripped from the body")
+	}
+}
+
+func TestIncludesAreExpanded(t *testing.T) {
+	root := t.TempDir()
+	shared := filepath.Join(root, "_shared")
+	mkdir(t, shared)
+	write(t, filepath.Join(shared, "CONTEXT.md"), "## Shared Context\nThis is shared.")
+	writeSkill(t, root, "nightgauge-feature-dev", `---
+name: test-include
+allowed-tools: Read
+---
+
+<!-- include: ../_shared/CONTEXT.md -->
+
+# Main Content
+`)
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+
+	for _, want := range []string{"## Shared Context", "This is shared.", "# Main Content"} {
+		if !strings.Contains(res.Content, want) {
+			t.Errorf("expanded content missing %q", want)
+		}
+	}
+	if strings.Contains(res.Content, "<!-- include:") {
+		t.Error("include directive survived expansion")
+	}
+}
+
+func TestMissingIncludeIsLeftInPlace(t *testing.T) {
+	// Portability contract: the same document must stay readable under a host
+	// that does not expand. Erroring here would make a skill unrunnable on any
+	// adapter whose bundle omits an optional include.
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", "body\n<!-- include: ../_shared/ABSENT.md -->\n")
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+	if !strings.Contains(res.Content, "<!-- include: ../_shared/ABSENT.md -->") {
+		t.Errorf("missing include should be left as-is, got:\n%s", res.Content)
+	}
+}
+
+func TestRewriteSkillRelativePaths(t *testing.T) {
+	content := "Read `skills/nightgauge-feature-dev/_includes/plan.md` now.\n" +
+		"Also see skills/_shared/GOTCHAS.md and skills/feature-dev/_includes/x.md.\n" +
+		"Cross-skill ref: skills/nightgauge-pipeline-audit/SKILL.md stays put.\n"
+	got := RewriteSkillRelativePaths(content, "feature-dev", "/bundle/dist/skills/nightgauge-feature-dev")
+
+	for _, want := range []string{
+		"/bundle/dist/skills/nightgauge-feature-dev/_includes/plan.md",
+		"/bundle/dist/skills/_shared/GOTCHAS.md",
+		"/bundle/dist/skills/nightgauge-feature-dev/_includes/x.md", // prefix-stripped variant
+		"skills/nightgauge-pipeline-audit/SKILL.md",                 // cross-skill ref untouched
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rewritten content missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "`skills/nightgauge-feature-dev/") {
+		t.Errorf("own-skill relative path survived the rewrite:\n%s", got)
+	}
+}
+
+func TestSplitTools(t *testing.T) {
+	for _, tt := range []struct {
+		input string
+		want  int
+	}{
+		{"Read Edit Bash", 3},
+		{"Read Edit Bash AskUserQuestion", 3},
+		{"", 0},
+		{"Read", 1},
+	} {
+		if got := splitTools(tt.input); len(got) != tt.want {
+			t.Errorf("splitTools(%q) = %d tools, want %d", tt.input, len(got), tt.want)
+		}
+	}
+}
+
+// ─── Location ────────────────────────────────────────────────────────────────
+
+func TestLocateFirstMatchWins(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	writeSkill(t, second, "nightgauge-feature-dev", "second root\n")
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{first, second}})
+	if !strings.Contains(res.Content, "second root") {
+		t.Error("should fall through an empty root to the next one")
+	}
+
+	writeSkill(t, first, "nightgauge-feature-dev", "first root\n")
+	res = mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{first, second}})
+	if !strings.Contains(res.Content, "first root") {
+		t.Error("first matching root must win")
+	}
+}
+
+func TestLocateErrorsWithoutRoots(t *testing.T) {
+	// Skill location is deliberately the caller's responsibility (ADR 016 §4):
+	// silently defaulting to a guessed root is how an agent ends up reading a
+	// stale ~/.codex/skills copy (#196).
+	if _, err := Render(Options{Stage: "feature-dev"}); err == nil {
+		t.Error("expected an error when no roots are supplied")
+	}
+}
+
+func TestLocateUnknownStage(t *testing.T) {
+	if _, err := Render(Options{Stage: "not-a-stage", SkillsRoots: []string{t.TempDir()}}); err == nil {
+		t.Error("expected an error for an unknown stage")
+	}
+}
+
+// ─── Overlay key cascade ─────────────────────────────────────────────────────
+
+func TestOverlayKeysCascade(t *testing.T) {
+	for _, tt := range []struct {
+		name, model, adapter string
+		want                 []string
+	}{
+		{"concrete anthropic id", "claude-opus-5", "", []string{"anthropic", "opus", "claude-opus-5"}},
+		{"tier alias", "opus", "", []string{"anthropic", "opus", "claude-opus-5"}},
+		{"multi-band model lists every band", "gpt-5.6-sol", "codex",
+			[]string{"openai", "opus", "fable", "gpt-5.6-sol"}},
+		{"adapter selects provider", "sonnet", "codex",
+			[]string{"openai", "sonnet", "gpt-5.6-terra"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _, ok := OverlayKeys(tt.model, tt.adapter)
+			if !ok {
+				t.Fatalf("OverlayKeys(%q, %q) did not resolve", tt.model, tt.adapter)
+			}
+			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
+				t.Errorf("keys = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOverlayKeysFailOpen(t *testing.T) {
+	// Unknown ids and local providers have no registry entry by design. They
+	// must resolve NO keys and render base-only — never error, or every local
+	// run breaks.
+	for _, tt := range []struct{ model, adapter string }{
+		{"", ""},
+		{"llama-3-70b-local", ""},
+		{"opus", "ollama"},
+		{"sonnet", "lm-studio"},
+	} {
+		if keys, _, ok := OverlayKeys(tt.model, tt.adapter); ok || len(keys) > 0 {
+			t.Errorf("OverlayKeys(%q, %q) = %v ok=%v, want no keys", tt.model, tt.adapter, keys, ok)
+		}
+	}
+}
+
+// ─── Composition ─────────────────────────────────────────────────────────────
+
+const bodyWithContextIncludes = `---
+name: nightgauge-feature-dev
+allowed-tools: Read
+---
+
+# Feature Dev
+
+<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
+<!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+
+## Procedure
+
+Do the work.
+`
+
+func TestNoOverlaysRendersBaseOnly(t *testing.T) {
+	root := overlayFixture(t, nil, nil, "")
+	res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+
+	if len(res.Fragments) != 0 {
+		t.Errorf("expected no fragments, got %v", res.Fragments)
+	}
+	if strings.Contains(res.Content, AdaptationHeading) {
+		t.Error("no fragments must mean no Model Adaptation section at all")
+	}
+	if res.InjectionSite != SiteNone {
+		t.Errorf("InjectionSite = %q, want %q", res.InjectionSite, SiteNone)
+	}
+	// The cascade still resolves — absence of files, not absence of keys.
+	if len(res.Keys) == 0 {
+		t.Error("keys should resolve even when no fragment files exist")
+	}
+}
+
+func TestSharedOnlySkillOnlyAndBothCompose(t *testing.T) {
+	t.Run("shared only", func(t *testing.T) {
+		root := overlayFixture(t, map[string]string{"anthropic": "SHARED-ANTHROPIC"}, nil, "")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+		assertFragments(t, res, "shared:anthropic")
+		if !strings.Contains(res.Content, "SHARED-ANTHROPIC") {
+			t.Error("shared fragment body missing from output")
+		}
+	})
+
+	t.Run("skill only", func(t *testing.T) {
+		root := overlayFixture(t, nil, map[string]string{"opus": "SKILL-OPUS"}, "")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+		assertFragments(t, res, "skill:opus")
+	})
+
+	t.Run("both, shared before skill and general before specific", func(t *testing.T) {
+		root := overlayFixture(t,
+			map[string]string{"anthropic": "S-PROVIDER", "opus": "S-TIER", "claude-opus-5": "S-MODEL"},
+			map[string]string{"anthropic": "K-PROVIDER", "claude-opus-5": "K-MODEL"}, "")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+
+		// ADR 016 §2: _shared/anthropic -> _shared/opus -> _shared/claude-opus-5
+		//          -> <skill>/anthropic -> <skill>/claude-opus-5
+		assertFragments(t, res,
+			"shared:anthropic", "shared:opus", "shared:claude-opus-5",
+			"skill:anthropic", "skill:claude-opus-5")
+
+		// And the ORDER must hold in the rendered text, not just the metadata —
+		// "later fragments may countermand earlier ones" is only true if the
+		// composed body preserves the cascade.
+		var idx []int
+		for _, marker := range []string{"S-PROVIDER", "S-TIER", "S-MODEL", "K-PROVIDER", "K-MODEL"} {
+			i := strings.Index(res.Content, marker)
+			if i < 0 {
+				t.Fatalf("fragment %q missing from composed output", marker)
+			}
+			idx = append(idx, i)
+		}
+		for i := 1; i < len(idx); i++ {
+			if idx[i] < idx[i-1] {
+				t.Errorf("fragments out of cascade order in the body: %v", idx)
+			}
+		}
+	})
+}
+
+func TestInjectionSites(t *testing.T) {
+	t.Run("after context includes by default", func(t *testing.T) {
+		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil, "")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+		if res.InjectionSite != SiteAfterContext {
+			t.Fatalf("InjectionSite = %q, want %q", res.InjectionSite, SiteAfterContext)
+		}
+		// Read before the procedure, not after it — burying adaptation guidance
+		// below a thousand lines of procedure is how it gets ignored (§3).
+		overlayAt := strings.Index(res.Content, "OVERLAY")
+		procedureAt := strings.Index(res.Content, "## Procedure")
+		if overlayAt < 0 || procedureAt < 0 || overlayAt > procedureAt {
+			t.Errorf("adaptation block must precede the procedure (overlay=%d procedure=%d)", overlayAt, procedureAt)
+		}
+	})
+
+	t.Run("explicit anchor wins over the positional fallback", func(t *testing.T) {
+		body := strings.Replace(bodyWithContextIncludes, "Do the work.", OverlayAnchor+"\n\nDo the work.", 1)
+		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil, body)
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+
+		if res.InjectionSite != SiteAnchor {
+			t.Fatalf("InjectionSite = %q, want %q", res.InjectionSite, SiteAnchor)
+		}
+		if strings.Contains(res.Content, OverlayAnchor) {
+			t.Error("the anchor comment should be consumed, not left in the output")
+		}
+		// Anchor sits AFTER "## Procedure" in this fixture, so honouring it must
+		// move the block there — proving the anchor really beat the fallback.
+		if strings.Index(res.Content, "OVERLAY") < strings.Index(res.Content, "## Procedure") {
+			t.Error("block was placed at the positional fallback, not the anchor")
+		}
+	})
+
+	t.Run("top of body when no context includes exist", func(t *testing.T) {
+		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil,
+			"---\nname: x\n---\n\n# Bare Skill\n\nNo context includes here.\n")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+		if res.InjectionSite != SiteTopOfBody {
+			t.Errorf("InjectionSite = %q, want %q", res.InjectionSite, SiteTopOfBody)
+		}
+		if !strings.Contains(res.Content, "OVERLAY") {
+			t.Error("overlay missing from output")
+		}
+	})
+}
+
+func TestWholeFileOverrideReplacesBase(t *testing.T) {
+	root := overlayFixture(t, map[string]string{"anthropic": "SHARED"}, map[string]string{"opus": "SKILL-FRAG"}, "")
+	skillDir := filepath.Join(root, "nightgauge-feature-dev")
+	write(t, filepath.Join(skillDir, "_overlays", "claude-opus-5.SKILL.md"),
+		"---\nname: overridden\nallowed-tools: Read Bash\n---\n\n# Wholly Different Procedure\n")
+
+	res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+
+	if res.InjectionSite != SiteWholeFile {
+		t.Errorf("InjectionSite = %q, want %q", res.InjectionSite, SiteWholeFile)
+	}
+	if res.WholeFile == "" {
+		t.Error("--json must report the override so the drift liability stays visible (ADR 016 §8)")
+	}
+	if !strings.Contains(res.Content, "# Wholly Different Procedure") {
+		t.Error("override body missing")
+	}
+	// "Replaces the base ENTIRELY" — additive fragments must not also apply.
+	for _, leak := range []string{"# Feature Dev", "## Procedure", "SHARED", "SKILL-FRAG", AdaptationHeading} {
+		if strings.Contains(res.Content, leak) {
+			t.Errorf("override did not replace the base: %q leaked through", leak)
+		}
+	}
+	if res.SkillName != "overridden" {
+		t.Errorf("SkillName = %q, want the override's frontmatter", res.SkillName)
+	}
+}
+
+func TestWholeFileOverridePrefersMostSpecific(t *testing.T) {
+	root := overlayFixture(t, nil, nil, "")
+	dir := filepath.Join(root, "nightgauge-feature-dev", "_overlays")
+	write(t, filepath.Join(dir, "anthropic.SKILL.md"), "# PROVIDER LEVEL\n")
+	write(t, filepath.Join(dir, "claude-opus-5.SKILL.md"), "# MODEL LEVEL\n")
+
+	res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+	if !strings.Contains(res.Content, "# MODEL LEVEL") {
+		t.Error("most specific override must win")
+	}
+	if strings.Contains(res.Content, "# PROVIDER LEVEL") {
+		t.Error("less specific override should not apply")
+	}
+}
+
+func TestUnknownModelAndLocalProviderRenderBaseOnly(t *testing.T) {
+	// Both must produce byte-identical output to a no-model render — that
+	// equality IS the fail-open contract, so assert the bytes, not just that
+	// no error came back.
+	root := overlayFixture(t, map[string]string{"anthropic": "SHOULD-NOT-APPLY"}, nil, "")
+	base := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+
+	for _, tt := range []struct{ name, model, adapter string }{
+		{"unknown model id", "some-unreleased-model", ""},
+		{"ollama local", "opus", "ollama"},
+		{"lm-studio local", "opus", "lm-studio"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mustRender(t, Options{
+				Stage: "feature-dev", Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
+			})
+			if got.Content != base.Content {
+				t.Errorf("content differs from base-only render:\n--- got ---\n%s", got.Content)
+			}
+			if len(got.Fragments) != 0 {
+				t.Errorf("fragments applied for a model with no registry entry: %v", got.Fragments)
+			}
+			if strings.Contains(got.Content, "SHOULD-NOT-APPLY") {
+				t.Error("an overlay leaked into a base-only render")
+			}
+		})
+	}
+}
+
+func TestUnreadableFragmentWarnsAndSkips(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not deny reads")
+	}
+	root := overlayFixture(t, map[string]string{"anthropic": "READABLE", "opus": "UNREADABLE"}, nil, "")
+	bad := filepath.Join(root, "_shared", "_overlays", "opus.md")
+	if err := os.Chmod(bad, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(bad, 0o644) })
+
+	var warned []string
+	res, err := Render(Options{
+		Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root},
+		Warn: func(m string) { warned = append(warned, m) },
+	})
+	if err != nil {
+		t.Fatalf("a malformed overlay must never take down a run: %v", err)
+	}
+	if len(warned) == 0 {
+		t.Error("an unreadable fragment should warn — silence makes it undiagnosable")
+	}
+	if !strings.Contains(res.Content, "READABLE") {
+		t.Error("the readable fragment should still apply")
+	}
+	for _, f := range res.Fragments {
+		if strings.HasSuffix(f.Path, "opus.md") {
+			t.Error("--json reported a fragment that contributed nothing to the output")
+		}
+	}
+}
+
+func TestRenderIsDeterministic(t *testing.T) {
+	root := overlayFixture(t,
+		map[string]string{"anthropic": "A", "opus": "B", "claude-opus-5": "C"},
+		map[string]string{"anthropic": "D", "opus": "E"}, "")
+	opts := Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}}
+
+	first := mustRender(t, opts)
+	for i := 0; i < 25; i++ {
+		got := mustRender(t, opts)
+		if got.Content != first.Content {
+			t.Fatalf("render %d differs — output is not byte-stable", i)
+		}
+		if a, b := jsonOf(t, got), jsonOf(t, first); a != b {
+			t.Fatalf("render %d envelope differs:\n%s\n%s", i, a, b)
+		}
+	}
+}
+
+func TestJSONEnvelopeReportsProvenance(t *testing.T) {
+	root := overlayFixture(t, map[string]string{"opus": "S"}, map[string]string{"claude-opus-5": "K"}, "")
+	res := mustRender(t, Options{Stage: "feature-dev", Model: "opus", SkillsRoots: []string{root}})
+
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(jsonOf(t, res)), &envelope); err != nil {
+		t.Fatalf("envelope is not valid JSON: %v", err)
+	}
+	for _, key := range []string{"v", "stage", "resolved_keys", "fragments", "injection_site", "skill_path"} {
+		if _, ok := envelope[key]; !ok {
+			t.Errorf("envelope missing %q", key)
+		}
+	}
+	if envelope["resolved_model_id"] != "claude-opus-5" {
+		t.Errorf("tier alias should report the concrete id it resolved to, got %v", envelope["resolved_model_id"])
+	}
+	// Content goes to stdout, never into the envelope.
+	if _, leaked := envelope["Content"]; leaked {
+		t.Error("composed content must not be embedded in the JSON envelope")
+	}
+}
+
+// ─── Real-skill invariants ───────────────────────────────────────────────────
+
+// TestRealSkillsRenderClean runs the shipped skills through the renderer. It
+// asserts INVARIANTS rather than pinning bytes on purpose: golden copies of
+// real skills would have to be regenerated on every skill edit (#82 alone
+// rewrites 14 of them), and a golden nobody can read is a golden nobody
+// checks — it gets regenerated to green instead of read.
+func TestRealSkillsRenderClean(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("skills/ not present: %v", err)
+	}
+	for stage := range StageSkillDirs {
+		t.Run(stage, func(t *testing.T) {
+			res, err := Render(Options{Stage: stage, SkillsRoots: []string{root}})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			// A surviving directive is only acceptable when its target genuinely
+			// does not exist — that is the documented portability behavior. If a
+			// directive survives while its file IS present, expansion is broken.
+			//
+			// Asserting "no directive survives" would be wrong and would have to
+			// be weakened on day one: every shipped stage skill includes
+			// `../_shared/BATCH_MODE.md`, which has never existed in this repo's
+			// history, so all six ship that literal comment to the model instead
+			// of batch-mode instructions. Tracked separately; this assertion is
+			// written to catch a real expansion regression without going green on
+			// that pre-existing hole.
+			skillDir := filepath.Dir(res.SkillPath)
+			for _, m := range includePattern.FindAllStringSubmatch(res.Content, -1) {
+				target := filepath.Join(skillDir, strings.TrimSpace(m[1]))
+				if _, err := os.Stat(target); err == nil {
+					t.Errorf("include %q survived expansion although %s exists — expansion is broken",
+						m[0], target)
+				}
+			}
+			if res.SkillName == "" {
+				t.Error("frontmatter name not parsed")
+			}
+			if len(res.AllowedTools) == 0 {
+				t.Error("allowed-tools not parsed")
+			}
+			if len(res.Content) < 1000 {
+				t.Errorf("suspiciously short render (%d bytes)", len(res.Content))
+			}
+			// No overlays exist yet (#81 authors them), so every shipped skill
+			// must render base-only today.
+			if len(res.Fragments) != 0 {
+				t.Errorf("unexpected fragments before #81: %v", res.Fragments)
+			}
+		})
+	}
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+func mustRender(t *testing.T, opts Options) *Result {
+	t.Helper()
+	res, err := Render(opts)
+	if err != nil {
+		t.Fatalf("Render(%+v): %v", opts, err)
+	}
+	return res
+}
+
+func jsonOf(t *testing.T, res *Result) string {
+	t.Helper()
+	b, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(b)
+}
+
+func mkdir(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+}
+
+func write(t *testing.T, path, content string) {
+	t.Helper()
+	mkdir(t, filepath.Dir(path))
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func writeSkill(t *testing.T, root, dir, content string) {
+	t.Helper()
+	write(t, filepath.Join(root, dir, "SKILL.md"), content)
+}
+
+// overlayFixture builds a skills root with a feature-dev skill plus the given
+// shared and skill-scoped overlay fragments, keyed by overlay key.
+func overlayFixture(t *testing.T, shared, skill map[string]string, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	if body == "" {
+		body = bodyWithContextIncludes
+	}
+	writeSkill(t, root, "nightgauge-feature-dev", body)
+	for key, text := range shared {
+		write(t, filepath.Join(root, "_shared", "_overlays", key+".md"), text+"\n")
+	}
+	for key, text := range skill {
+		write(t, filepath.Join(root, "nightgauge-feature-dev", "_overlays", key+".md"), text+"\n")
+	}
+	return root
+}
+
+func assertFragments(t *testing.T, res *Result, want ...string) {
+	t.Helper()
+	var got []string
+	for _, f := range res.Fragments {
+		got = append(got, f.Scope+":"+f.Key)
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("fragments = %v, want %v", got, want)
+	}
+}
+
+// TestRewriteIsNotIdempotent pins a property that reads like a defect and is
+// in fact the reason the rewrite may run exactly once.
+//
+// An already-absolute "/abs/skills/_shared/" still CONTAINS the
+// "skills/_shared/" needle, so a second pass expands it to
+// "/abs//abs/skills/_shared/" and every read directive points at a path that
+// does not exist — the #196 filesystem-scan failure the rewrite exists to fix.
+// Render owns the rewrite (ADR 016 §4) and BuildPrompt must not repeat it.
+// Should someone make the rewrite idempotent, this test is the place to record
+// that the second caller is safe again.
+func TestRewriteIsNotIdempotent(t *testing.T) {
+	dir := "/abs/skills/nightgauge-feature-dev"
+	once := RewriteSkillRelativePaths("See skills/_shared/GOTCHAS.md\n", "feature-dev", dir)
+	twice := RewriteSkillRelativePaths(once, "feature-dev", dir)
+
+	if once != twice {
+		if !strings.Contains(twice, "/abs//abs/") {
+			t.Errorf("expected the double-rewrite to duplicate the prefix, got: %q", twice)
+		}
+		return // documented, expected
+	}
+	t.Error("rewrite became idempotent — BuildPrompt may now rewrite again safely; " +
+		"update the comments in internal/execution/skill.go that cite this property")
+}
+
+// TestRelativeRootStillYieldsAbsoluteDirectives is the guard on a silent
+// failure mode. A relative --skills-root makes skillDir relative, and
+// rewriting "skills/x/" to "skills/x/" is a no-op that looks like success —
+// the composed prompt still ships relative paths, and an agent spawned in
+// another worktree cannot resolve them (#196). Asserting only "the rewrite
+// ran" would pass against exactly that bug.
+func TestRelativeRootStillYieldsAbsoluteDirectives(t *testing.T) {
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev",
+		"Read `skills/nightgauge-feature-dev/_includes/plan.md` and skills/_shared/X.md now.\n")
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	rel, err := filepath.Rel(wd, root)
+	if err != nil {
+		t.Skipf("cannot relativize %s against %s: %v", root, wd, err)
+	}
+
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{rel}})
+
+	if !filepath.IsAbs(res.SkillPath) {
+		t.Errorf("SkillPath = %q, want an absolute path", res.SkillPath)
+	}
+	for _, leaked := range []string{"`skills/nightgauge-feature-dev/", " skills/_shared/"} {
+		if strings.Contains(res.Content, leaked) {
+			t.Errorf("relative directive %q survived — a spawned agent cannot resolve it:\n%s",
+				leaked, res.Content)
+		}
+	}
+	if !strings.Contains(res.Content, root) {
+		t.Errorf("expected directives rewritten under %s, got:\n%s", root, res.Content)
+	}
+}
