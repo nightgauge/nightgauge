@@ -38,19 +38,28 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(),
 }));
 
-vi.mock("child_process", () => ({
-  spawn: vi.fn(),
-  execFile: vi.fn(
-    (
-      _cmd: string,
-      _args: string[],
-      _opts: unknown,
-      cb: (e: Error | null, s: string, t: string) => void
-    ) => {
-      cb(new Error("no children"), "", "");
-    }
-  ),
-}));
+vi.mock("child_process", async () => {
+  // Since #79 the extension composes no skill text of its own: it shells out
+  // to `nightgauge skill render`. Answer that one call with the shared
+  // envelope stub; every other execFileSync caller keeps an empty result.
+  const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
+  return {
+    spawn: vi.fn(),
+    execFileSync: vi.fn((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args) ? skillRenderStdout(args) : ""
+    ),
+    execFile: vi.fn(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, s: string, t: string) => void
+      ) => {
+        cb(new Error("no children"), "", "");
+      }
+    ),
+  };
+});
 
 vi.mock("../../src/utils/configPathResolver", () => ({
   resolveConfigPathSync: vi.fn(() => ({

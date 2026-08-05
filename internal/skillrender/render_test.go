@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -30,7 +31,7 @@ func TestStageSkillDirs(t *testing.T) {
 	}
 }
 
-func TestFrontmatterParsedAndAskUserQuestionFiltered(t *testing.T) {
+func TestFrontmatterParsedVerbatim(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, "nightgauge-feature-dev", `---
 name: test-skill
@@ -47,13 +48,13 @@ Do the thing.
 	if res.SkillName != "test-skill" {
 		t.Errorf("SkillName = %q, want test-skill", res.SkillName)
 	}
-	if len(res.AllowedTools) != 3 {
-		t.Errorf("AllowedTools = %v, want 3 entries", res.AllowedTools)
-	}
-	for _, tool := range res.AllowedTools {
-		if tool == "AskUserQuestion" {
-			t.Error("AskUserQuestion must be filtered — it does not work headless")
-		}
+	// The envelope reports what the skill DECLARES. The composer serves the
+	// interactive dispatcher too, where AskUserQuestion is the whole point, so
+	// dropping it here would have been a headless policy applied by a function
+	// that cannot know its caller (#79).
+	want := []string{"Read", "Edit", "Bash", "AskUserQuestion"}
+	if !reflect.DeepEqual(res.AllowedTools, want) {
+		t.Errorf("AllowedTools = %v, want %v", res.AllowedTools, want)
 	}
 	if len(res.ProgrammaticTools) != 1 || res.ProgrammaticTools[0] != "TodoWrite" {
 		t.Errorf("ProgrammaticTools = %v", res.ProgrammaticTools)
@@ -63,6 +64,27 @@ Do the thing.
 	}
 	if strings.Contains(res.Content, "name: test-skill") {
 		t.Error("frontmatter must be stripped from the body")
+	}
+}
+
+func TestFilterHeadlessToolsDropsOnlyAskUserQuestion(t *testing.T) {
+	// The headless callers apply this; the interactive ones deliberately do not.
+	got := FilterHeadlessTools([]string{"Read", "AskUserQuestion", "Bash", "Task"})
+	want := []string{"Read", "Bash", "Task"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("FilterHeadlessTools = %v, want %v", got, want)
+	}
+
+	// Nothing to filter is the ordinary case — every shipped stage skill
+	// declares no AskUserQuestion — so it must not disturb the list, and an
+	// empty input must not become a non-nil empty slice that reads as "the
+	// skill declared zero tools" instead of "declared none".
+	unchanged := []string{"Read", "Bash"}
+	if got := FilterHeadlessTools(unchanged); !reflect.DeepEqual(got, unchanged) {
+		t.Errorf("FilterHeadlessTools(%v) = %v, want unchanged", unchanged, got)
+	}
+	if got := FilterHeadlessTools(nil); got != nil {
+		t.Errorf("FilterHeadlessTools(nil) = %v, want nil", got)
 	}
 }
 
@@ -131,7 +153,9 @@ func TestSplitTools(t *testing.T) {
 		want  int
 	}{
 		{"Read Edit Bash", 3},
-		{"Read Edit Bash AskUserQuestion", 3},
+		// Verbatim: AskUserQuestion is counted, not dropped. Filtering is the
+		// headless caller's job now (FilterHeadlessTools) — see #79.
+		{"Read Edit Bash AskUserQuestion", 4},
 		{"", 0},
 		{"Read", 1},
 	} {

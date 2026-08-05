@@ -54,6 +54,22 @@ allowed-tools: Read Write Edit Bash
   unlinkSync: vi.fn(),
 }));
 
+// `skill render` is a real subprocess since #79 — the interactive dispatcher
+// composes through the binary too, with no --model (the user's own session
+// model runs, and this process cannot know it).
+vi.mock("child_process", async () => {
+  const actual = await vi.importActual<typeof import("child_process")>("child_process");
+  const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
+  return {
+    ...actual,
+    execFileSync: vi.fn((cmd: string, args: string[], opts: unknown) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args, { allowedTools: ["Read", "Write", "Edit", "Bash"] })
+        : (actual.execFileSync as (...a: unknown[]) => unknown)(cmd, args, opts)
+    ),
+  };
+});
+
 // Keep every real SDK export (validateModelForAdapter, PipelineStage, …) but
 // make the Codex steering/MCP provisioners inert so this unit test never touches
 // the real ~/.codex/config.toml or AGENTS.md (they have their own SDK tests).

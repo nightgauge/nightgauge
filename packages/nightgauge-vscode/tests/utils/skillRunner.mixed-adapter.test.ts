@@ -65,22 +65,29 @@ function createMockChildProcess(): ChildProcess {
   return proc;
 }
 
-vi.mock("child_process", () => ({
-  spawn: vi.fn(),
-  execFile: vi.fn(
-    (
-      _cmd: string,
-      _args: string[],
-      _opts: unknown,
-      cb: (e: Error | null, s: string, t: string) => void
-    ) => {
-      cb(new Error("no children"), "", "");
-    }
-  ),
-  // execFileSync is what commandExists() uses. Returning successfully signals
-  // the binary is in PATH so prereq checks pass for both claude and gemini.
-  execFileSync: vi.fn(() => Buffer.from("/usr/local/bin/cli")),
-}));
+vi.mock("child_process", async () => {
+  const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
+  return {
+    spawn: vi.fn(),
+    execFile: vi.fn(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, s: string, t: string) => void
+      ) => {
+        cb(new Error("no children"), "", "");
+      }
+    ),
+    // execFileSync serves two callers. `skill render` (#79) wants the JSON
+    // envelope; everything else is commandExists(), where returning
+    // successfully signals the binary is in PATH so prereq checks pass for
+    // both claude and gemini.
+    execFileSync: vi.fn((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args) ? skillRenderStdout(args) : Buffer.from("/usr/local/bin/cli")
+    ),
+  };
+});
 
 vi.mock("../../src/utils/configPathResolver", () => ({
   resolveConfigPathSync: vi.fn(() => ({

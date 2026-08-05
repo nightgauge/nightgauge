@@ -422,28 +422,59 @@ func extractYAMLField(frontmatter string, key string) string {
 	return ""
 }
 
-// splitTools splits a space-separated tool list, dropping AskUserQuestion,
-// which does not work in headless mode.
+// splitTools splits a space-separated frontmatter tool list.
+//
+// It reports what the skill DECLARES, verbatim. It used to drop
+// AskUserQuestion here, which was a headless-execution policy applied at parse
+// time by a composer that has no idea who is calling: the same render serves
+// the interactive dispatcher, where AskUserQuestion is exactly the tool the
+// user is present to answer. Filtering therefore moved to the headless callers
+// (FilterHeadlessTools) so the envelope stays a truthful reading of the
+// frontmatter — #79 caught this by way of an interactive test that asserted
+// the declared tool survives.
 func splitTools(tools string) []string {
 	if tools == "" {
 		return nil
 	}
-	var result []string
-	for _, t := range strings.Fields(tools) {
-		if t != "AskUserQuestion" {
-			result = append(result, t)
-		}
-	}
-	return result
+	return strings.Fields(tools)
 }
 
-// DefaultRoots is the conventional skills-root list for a workspace checkout:
-// the repo's own skills/ directory, then the plugin-command directory that
-// carries the same skills in the `<stage>.md` layout. Hosts with their own
-// discovery (the extension's bundle path) pass roots explicitly instead.
-func DefaultRoots(workspaceRoot string) []string {
-	return []string{
-		filepath.Join(workspaceRoot, "skills"),
-		filepath.Join(workspaceRoot, "claude-plugins", "nightgauge", "commands"),
+// FilterHeadlessTools removes tools that cannot work in a non-interactive run.
+//
+// Exactly one tool qualifies today: the Claude CLI treats an AskUserQuestion
+// call under `-p` as a permission denial, so the agent retries it in a loop and
+// floods the output (#118, #171, #205). Every headless dispatcher calls this —
+// the Go scheduler and the extension's headless path — and the interactive
+// dispatchers deliberately do not.
+func FilterHeadlessTools(tools []string) []string {
+	if len(tools) == 0 {
+		return tools
 	}
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if t != "AskUserQuestion" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// DefaultRoots is the conventional skills-root list for a workspace checkout.
+// Hosts with their own discovery (the extension's bundle path) pass roots
+// explicitly instead.
+//
+// One root, deliberately (#79). This used to also list
+// `claude-plugins/nightgauge/commands` as the "plugin-command layout" fallback,
+// which never resolved a stage skill: `git log --diff-filter=A` over that
+// directory returns exactly one file for the life of the repository
+// (`model-routing-report.md`), and ADR 007's #3876 amendment retired command
+// wrappers altogether — "the skill IS the slash command". The plugin's own
+// skills live at `claude-plugins/nightgauge/skills/<short>/` and are a
+// GENERATED mirror of this tree (scripts/install-agent-skills.sh
+// sync_plugin_skills), read by Claude Code's loader rather than by a render.
+// A second root that cannot match is not a harmless fallback: it is a
+// documented-looking answer to "where else do we look?" that costs a stat per
+// stage and hides the fact that there is no second source.
+func DefaultRoots(workspaceRoot string) []string {
+	return []string{filepath.Join(workspaceRoot, "skills")}
 }

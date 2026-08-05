@@ -24,14 +24,34 @@ resolution, and absolute-path rewriting (ADR 016).`,
 	return cmd
 }
 
+// renderEnvelope is the `--json --include-content` shape: the provenance
+// envelope with the composed body carried alongside it.
+//
+// skillrender.Result excludes Content from JSON on purpose — the default
+// contract writes the body to stdout, and an envelope that always carried it
+// would be unreadable. A host that needs BOTH (the extension's skillRunner
+// needs the body to build a prompt AND the frontmatter tool lists to build an
+// allowlist — #79) would otherwise have to spawn the binary twice, which is
+// not merely wasteful: two renders are two snapshots of the filesystem, so an
+// edit landing between them yields tool declarations that describe a different
+// document than the body. One spawn, one snapshot.
+//
+// The embedded pointer's Content field is `json:"-"`; this outer field is at
+// depth 0 and is what encodes.
+type renderEnvelope struct {
+	*skillrender.Result
+	Content string `json:"content,omitempty"`
+}
+
 // skillRenderCmd implements `nightgauge skill render` (#78).
 func skillRenderCmd() *cobra.Command {
 	var (
-		stage      string
-		model      string
-		adapter    string
-		roots      []string
-		jsonOutput bool
+		stage          string
+		model          string
+		adapter        string
+		roots          []string
+		jsonOutput     bool
+		includeContent bool
 	)
 	cmd := &cobra.Command{
 		Use:   "render",
@@ -54,7 +74,9 @@ discovery, so it owns only parsing, expansion, resolution, and composition.
 
 Composed text goes to stdout. With --json, the provenance envelope goes to
 stdout instead — resolved keys, the fragments applied in order, the injection
-site, and whether a whole-file override replaced the base.`,
+site, and whether a whole-file override replaced the base. Add --include-content
+to carry the composed text in the envelope too, so a host needing both the body
+and the frontmatter tool lists renders once rather than twice.`,
 		Example: `  # Base-only render (no model): exactly today's behavior
   nightgauge skill render --stage feature-dev --skills-root ./skills
 
@@ -62,10 +84,19 @@ site, and whether a whole-file override replaced the base.`,
   nightgauge skill render --stage feature-dev --model claude-opus-5 --skills-root ./skills
 
   # What resolved, and why
-  nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json`,
+  nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json
+
+  # Body and provenance in one spawn (the extension's path — #79)
+  nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json --include-content`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stage == "" {
 				return fmt.Errorf("--stage is required (one of: %s)", strings.Join(knownStages(), ", "))
+			}
+			// Refuse rather than silently ignore: without --json the flag has
+			// nowhere to put the content, and a flag that no-ops is the Silent
+			// No-Op defect class this repo classifies at review.
+			if includeContent && !jsonOutput {
+				return fmt.Errorf("--include-content requires --json (without it the composed text is already stdout)")
 			}
 			res, err := skillrender.Render(skillrender.Options{
 				Stage:       stage,
@@ -82,6 +113,9 @@ site, and whether a whole-file override replaced the base.`,
 			if jsonOutput {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
+				if includeContent {
+					return enc.Encode(renderEnvelope{Result: res, Content: res.Content})
+				}
 				return enc.Encode(res)
 			}
 			_, err = fmt.Fprint(cmd.OutOrStdout(), res.Content)
@@ -93,6 +127,7 @@ site, and whether a whole-file override replaced the base.`,
 	cmd.Flags().StringVar(&adapter, "adapter", "", "Execution adapter, selects the provider for tier resolution (claude, codex, gemini, …)")
 	cmd.Flags().StringArrayVar(&roots, "skills-root", nil, "Directory containing skill directories (repeatable; first match wins)")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit the provenance envelope instead of the composed text")
+	cmd.Flags().BoolVar(&includeContent, "include-content", false, "With --json, carry the composed text in the envelope's \"content\" field (one spawn instead of two)")
 	return cmd
 }
 

@@ -255,15 +255,27 @@ nightgauge skill render --stage feature-dev --model claude-opus-5 --skills-root 
 
 # What resolved, and why
 nightgauge skill render --stage pr-merge --model opus --skills-root ./skills --json
+
+# Body and provenance in one spawn — the extension's path (#79)
+nightgauge skill render --stage pr-merge --model opus --skills-root ./skills \
+  --json --include-content
 ```
 
-| Flag            | Meaning                                                             |
-| --------------- | ------------------------------------------------------------------- |
-| `--stage`       | Pipeline stage to render (required)                                 |
-| `--model`       | Concrete registry id or tier band; empty renders base-only          |
-| `--adapter`     | Selects the provider for tier resolution (`claude`, `codex`, …)     |
-| `--skills-root` | Directory containing skill directories — **repeatable, first wins** |
-| `--json`        | Emit the provenance envelope instead of the composed text           |
+| Flag                | Meaning                                                             |
+| ------------------- | ------------------------------------------------------------------- |
+| `--stage`           | Pipeline stage to render (required)                                 |
+| `--model`           | Concrete registry id or tier band; empty renders base-only          |
+| `--adapter`         | Selects the provider for tier resolution (`claude`, `codex`, …)     |
+| `--skills-root`     | Directory containing skill directories — **repeatable, first wins** |
+| `--json`            | Emit the provenance envelope instead of the composed text           |
+| `--include-content` | With `--json`, carry the composed text in the envelope's `content`  |
+
+**`--include-content` exists so a host needing both halves renders once.** The
+extension builds a prompt from the body _and_ a CLI allowlist from the
+frontmatter tool lists; without the flag that is two spawns, which is not
+merely wasteful — two renders are two filesystem snapshots, so an edit landing
+between them yields tool declarations describing a different document than the
+body. It requires `--json` and refuses without it rather than silently no-opping.
 
 **Skill location is the caller's responsibility.** The binary cannot reproduce
 the extension's bundle discovery (`dist/skills/`, plus the
@@ -298,7 +310,23 @@ idempotent: an already-absolute `/abs/skills/_shared/` still contains the
 `/abs//abs/skills/_shared/` and every read directive points at nothing —
 the #196 failure the rewrite exists to fix. `execution.BuildPrompt` therefore
 consumes an already-composed body and must not rewrite again;
-`TestRewriteIsNotIdempotent` pins the property.
+`TestRewriteIsNotIdempotent` pins the property. Since #79 the extension's
+`buildSkillPrompt` carries the same contract on the TypeScript side, and the
+one place that still rewrites there is the platform-injected-content path,
+whose body never passed through the binary.
+
+> Testing this needs a skills root that literally ends in `skills` — the
+> production layout. Under a bare temp root the rewritten path contains no
+> `skills/` segment, nothing is left for a second pass to match, and a
+> double-rewrite mutation survives. That is a fixture defect, not a weak
+> assertion; the doubled separator is the corruption's signature.
+
+**Frontmatter tool lists are reported verbatim.** `allowed_tools` is what the
+skill declares. Dropping `AskUserQuestion` at parse time was a headless
+execution policy applied by a composer that cannot know its caller — the same
+render serves the interactive dispatcher, where that tool is the point.
+Headless callers (the Go scheduler, the extension's headless path) apply
+`skillrender.FilterHeadlessTools`; interactive ones deliberately do not.
 
 ### Preflight Operations
 

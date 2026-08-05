@@ -11,7 +11,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { spawn } from "child_process";
+import { spawn, execFileSync } from "child_process";
+import {
+  isSkillRenderCall,
+  modelFromRenderArgs,
+  rootsFromRenderArgs,
+  skillRenderStdout,
+} from "../helpers/skillRender";
 import type { ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
@@ -57,19 +63,28 @@ function createMockChildProcess(): ChildProcess {
 }
 
 // Mock child_process module
-vi.mock("child_process", () => ({
-  spawn: vi.fn(),
-  execFile: vi.fn(
-    (
-      _cmd: string,
-      _args: string[],
-      _opts: unknown,
-      cb: (e: Error | null, s: string, t: string) => void
-    ) => {
-      cb(new Error("no children"), "", "");
-    }
-  ),
-}));
+vi.mock("child_process", async () => {
+  // Since #79 the extension composes no skill text of its own: it shells out
+  // to `nightgauge skill render`. Tests that need a specific body or tool list
+  // override this per-case via `stubSkillRender()` below.
+  const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
+  return {
+    spawn: vi.fn(),
+    execFileSync: vi.fn((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args) ? skillRenderStdout(args) : ""
+    ),
+    execFile: vi.fn(
+      (
+        _cmd: string,
+        _args: string[],
+        _opts: unknown,
+        cb: (e: Error | null, s: string, t: string) => void
+      ) => {
+        cb(new Error("no children"), "", "");
+      }
+    ),
+  };
+});
 
 // Mock configPathResolver so loadAutoAcceptConfigSync can find a config file
 vi.mock("../../src/utils/configPathResolver", () => ({
@@ -180,6 +195,16 @@ import {
   getGitHubUser,
 } from "../../src/utils/incrediConfig";
 
+// Reinstall the `skill render` stub before every test. Vitest 4's
+// restoreAllMocks() — which several describes below call in afterEach — clears
+// implementations set in a vi.mock factory, so without this the first test to
+// override the stub leaves every later test with an execFileSync that returns
+// undefined, and the failure surfaces as "spawn was never called".
+beforeEach(() => {
+  vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+    isSkillRenderCall(args) ? skillRenderStdout(args) : "") as never);
+});
+
 describe("skillRunner - Packaged SDK CLI", () => {
   it("resolves the VSIX-bundled CLI when the target repo has no Nightgauge source tree", () => {
     vi.mocked(vscode.extensions.getExtension).mockReturnValue({
@@ -279,57 +304,125 @@ describe("skillRunner - File Discovery and Parsing", () => {
     vi.restoreAllMocks();
   });
 
-  describe("findSkillFile (via runStageSkillHeadless)", () => {
-    it("should find SKILL.md in skills/ directory", () => {
-      vi.mocked(fs.existsSync).mockImplementation((filePath) => {
-        return String(filePath) === "/test/workspace/skills/nightgauge-feature-dev/SKILL.md";
-      });
-      vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: nightgauge-feature-dev
-allowed-tools: Read Write Edit
----
-# Feature Dev
-`);
+  describe("skill composition delegates to `nightgauge skill render` (#79)", () => {
+    /** Every `skill render` argv the dispatcher issued, in order. */
+    function renderCalls(): string[][] {
+      return vi
+        .mocked(execFileSync)
+        .mock.calls.map(([, args]) => (args ?? []) as string[])
+        .filter((args) => isSkillRenderCall(args));
+    }
+
+    /** Point the render stub at a specific envelope for this test. */
+    function stubRender(options: Parameters<typeof skillRenderStdout>[1]): void {
+      vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+        isSkillRenderCall(args) ? skillRenderStdout(args, options) : "") as never);
+    }
+
+    it("passes the stage, the host's skills roots, and the JSON+content flags", () => {
       const mockProcess = createMockChildProcess();
       vi.mocked(spawn).mockReturnValue(mockProcess);
 
-      const onStderr = vi.fn();
-      runStageSkillHeadless("feature-dev", 42, { onStderr });
+      runStageSkillHeadless("feature-dev", 42, {});
 
-      // Consolidated metadata line proves file was found and read (Issue #795)
-      expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("Stage: feature-dev"));
+      const [args] = renderCalls();
+      expect(args).toBeDefined();
+      // --include-content is what makes this ONE spawn rather than two; without
+      // it the envelope carries no body and the dispatcher would have to render
+      // a second time to get one (two filesystem snapshots, one prompt).
+      expect(args).toEqual(
+        expect.arrayContaining(["--stage", "feature-dev", "--json", "--include-content"])
+      );
+      // Skill LOCATION stays the host's job (ADR 016 §4) — the binary refuses
+      // to guess a root, so a missing --skills-root is a stage failure.
+      expect(rootsFromRenderArgs(args)).toContain("/test/workspace/skills");
     });
 
-    it("should fall back to claude-plugins/ directory", () => {
-      vi.mocked(fs.existsSync).mockImplementation((filePath) => {
-        const pathStr = String(filePath);
-        // First path (skills/) not found
-        if (pathStr.includes("skills/")) return false;
-        // Second path (claude-plugins/) found
-        return pathStr.includes("claude-plugins/");
-      });
-      vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: nightgauge-issue-pickup
-allowed-tools: Read Bash
----
-# Issue Pickup
-`);
+    it("keys the overlay cascade off the model that will actually be spawned", () => {
       const mockProcess = createMockChildProcess();
       vi.mocked(spawn).mockReturnValue(mockProcess);
 
-      const onStderr = vi.fn();
-      runStageSkillHeadless("issue-pickup", 42, { onStderr });
+      // #725: a stage model override resolves to haiku. The render has to see
+      // THAT, not the configured default — composing before the model was
+      // final is exactly what #79 moved.
+      runStageSkillHeadless("feature-dev", 42, {}, undefined, undefined, undefined, "haiku");
 
-      // Consolidated metadata line proves file was found via fallback (Issue #795)
-      expect(onStderr).toHaveBeenCalledWith(expect.stringContaining("Stage: issue-pickup"));
+      const [renderArgs] = renderCalls();
+      const spawnArgs = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as
+        string[] | undefined;
+
+      expect(modelFromRenderArgs(renderArgs)).toBe("haiku");
+      // The pairing is the point: whatever went to --model on the CLI is what
+      // the overlay cascade was keyed on. Asserting the render arg alone would
+      // pass even if the spawn later used a different tier.
+      expect(spawnArgs).toEqual(expect.arrayContaining(["--model", "haiku"]));
     });
 
-    it("should return error when skill file not found", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(false);
+    it("puts the rendered body in the prompt and never rewrites it again", () => {
+      // The binary has already rewritten skill-relative paths to absolute, so
+      // this body arrives with an ABSOLUTE _shared path. That string still
+      // contains the `skills/_shared/` needle, so a second rewrite pass would
+      // yield `/abs//test/workspace/skills/_shared/` and every read directive
+      // would resolve to nothing — the #196 failure, reintroduced. The Go side
+      // pins the same property in TestRewriteIsNotIdempotent.
+      const rendered =
+        "# Rendered\n\nRead `/test/workspace/skills/_shared/PIPELINE_CONTEXT.md` now.\n";
+      stubRender({ content: rendered });
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const prompt = String(vi.mocked(mockProcess.stdin!.write).mock.calls[0][0]);
+      expect(prompt).toContain("/test/workspace/skills/_shared/PIPELINE_CONTEXT.md");
+      expect(prompt).not.toContain("//test/workspace/skills/_shared/");
+    });
+
+    it("takes allowed-tools from the render envelope", () => {
+      // Deliberately NOT a prefix of the default set. `Read,Write,Edit,Glob,
+      // Grep` would have been — the default is that plus `,Bash,Task` — so a
+      // substring assertion on it passes even against an implementation that
+      // ignores the envelope entirely and always emits the default.
+      stubRender({ allowedTools: ["Glob", "Read"] });
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const args = vi.mocked(spawn).mock.calls.find(([cmd]) => cmd === "claude")![1] as string[];
+      expect(args[args.indexOf("--allowedTools") + 1]).toBe("Glob,Read");
+    });
+
+    it("falls back to the default tool set when the envelope declares none", () => {
+      // The binary omits an empty allowed_tools rather than sending [], so
+      // "absent" is the shape a frontmatter-less skill actually produces.
+      stubRender({ allowedTools: [] });
+      const mockProcess = createMockChildProcess();
+      vi.mocked(spawn).mockReturnValue(mockProcess);
+
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      expect(spawn).toHaveBeenCalledWith(
+        "claude",
+        expect.arrayContaining([
+          "--allowedTools",
+          expect.stringMatching(/Read,Write,Edit,Glob,Grep,Bash,Task/),
+        ]),
+        expect.any(Object)
+      );
+    });
+
+    it("fails the stage when the render fails, carrying the binary's reason", () => {
+      // No local composer to fall back to, and that is deliberate: a second
+      // implementation is the drift #78 removed. The binary is already a hard
+      // dependency of every stage run, so this says so instead of shipping a
+      // silently unexpanded skill.
+      vi.mocked(execFileSync).mockImplementation((() => {
+        throw new Error('SKILL.md not found for stage "feature-dev"');
+      }) as never);
 
       const onError = vi.fn();
       const onComplete = vi.fn();
-
       runStageSkillHeadless("feature-dev", 42, { onError, onComplete });
 
       expect(onError).toHaveBeenCalledWith(
@@ -338,103 +431,29 @@ allowed-tools: Read Bash
         })
       );
       expect(onComplete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          success: false,
-          exitCode: null,
-        })
-      );
-    });
-  });
-
-  describe("readSkillFile (via runStageSkillHeadless)", () => {
-    it("should extract allowed-tools from frontmatter", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: test-skill
-allowed-tools: Read Write Edit Glob Grep
----
-# Test Skill
-`);
-      const mockProcess = createMockChildProcess();
-      vi.mocked(spawn).mockReturnValue(mockProcess);
-
-      runStageSkillHeadless("feature-dev", 42, {});
-
-      // Check that spawn was called with filtered allowed tools
-      expect(spawn).toHaveBeenCalledWith(
-        "claude",
-        expect.arrayContaining([
-          "--allowedTools",
-          expect.stringMatching(/Read,Write,Edit,Glob,Grep/),
-        ]),
-        expect.any(Object)
+        expect.objectContaining({ success: false, exitCode: null })
       );
     });
 
-    it("should use default tools when no frontmatter", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`# Test Skill
-
-No frontmatter here.
-`);
-      const mockProcess = createMockChildProcess();
-      vi.mocked(spawn).mockReturnValue(mockProcess);
-
-      runStageSkillHeadless("feature-dev", 42, {});
-
-      // Should use default tools
-      expect(spawn).toHaveBeenCalledWith(
-        "claude",
-        expect.arrayContaining([
-          "--allowedTools",
-          expect.stringMatching(/Read,Write,Edit,Glob,Grep,Bash,Task/),
-        ]),
-        expect.any(Object)
-      );
-    });
-
-    it("should return error on file read failure", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        throw new Error("ENOENT: file not found");
-      });
+    it("fails the stage when the render returns unparseable output", () => {
+      vi.mocked(execFileSync).mockImplementation((() => "not json at all") as never);
 
       const onError = vi.fn();
       const onComplete = vi.fn();
-
       runStageSkillHeadless("feature-dev", 42, { onError, onComplete });
 
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining("Failed to load skill"),
+          message: expect.stringContaining("unparseable JSON"),
         })
       );
-    });
-
-    it("should handle missing allowed-tools field gracefully", () => {
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: test-skill
-description: No allowed-tools field
----
-# Test Skill
-`);
-      const mockProcess = createMockChildProcess();
-      vi.mocked(spawn).mockReturnValue(mockProcess);
-
-      runStageSkillHeadless("feature-dev", 42, {});
-
-      // Should use default tools when allowed-tools is missing
-      expect(spawn).toHaveBeenCalledWith(
-        "claude",
-        expect.arrayContaining([
-          "--allowedTools",
-          expect.stringMatching(/Read,Write,Edit,Glob,Grep,Bash,Task/),
-        ]),
-        expect.any(Object)
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, exitCode: null })
       );
     });
+  });
 
+  describe("spawn env (via runStageSkillHeadless)", () => {
     it("does not force-disable thinking on the claude spawn (#73 — #3801 workaround retired)", () => {
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue(`---
@@ -485,144 +504,25 @@ allowed-tools: Read
   });
 });
 
-describe("skillRunner - Include Expansion (Issue #862)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    killAllActiveProcesses();
-  });
-
-  it("should expand include directives with file content", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
-      const pathStr = String(filePath);
-      if (pathStr.endsWith("SKILL.md")) {
-        return `---
-name: test-skill
-allowed-tools: Read Write
----
-<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
-
-# Test Skill Content
-`;
-      }
-      if (pathStr.endsWith("PIPELINE_CONTEXT.md")) {
-        return `## System Context
-
-**Product**: Nightgauge — test content.
-`;
-      }
-      throw new Error(`Unexpected file read: ${pathStr}`);
-    });
-    const mockProcess = createMockChildProcess();
-    vi.mocked(spawn).mockReturnValue(mockProcess);
-
-    runStageSkillHeadless("feature-dev", 42, {});
-
-    // The prompt written to stdin should contain expanded content
-    const writeCall = vi.mocked(mockProcess.stdin!.write).mock.calls[0][0];
-    expect(writeCall).toContain("**Product**: Nightgauge — test content.");
-    // The include directive itself should NOT be present
-    expect(writeCall).not.toContain("<!-- include:");
-  });
-
-  it("should leave directive as-is when include file is missing", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
-      const pathStr = String(filePath);
-      if (pathStr.endsWith("SKILL.md")) {
-        return `---
-name: test-skill
-allowed-tools: Read Write
----
-<!-- include: ../_shared/NONEXISTENT.md -->
-
-# Test Skill
-`;
-      }
-      // Simulate missing file
-      throw new Error("ENOENT: no such file or directory");
-    });
-    const mockProcess = createMockChildProcess();
-    vi.mocked(spawn).mockReturnValue(mockProcess);
-
-    runStageSkillHeadless("feature-dev", 42, {});
-
-    // The directive should remain as-is (graceful degradation)
-    const writeCall = vi.mocked(mockProcess.stdin!.write).mock.calls[0][0];
-    expect(writeCall).toContain("<!-- include: ../_shared/NONEXISTENT.md -->");
-  });
-
-  it("should expand multiple includes in one file", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockImplementation((filePath) => {
-      const pathStr = String(filePath);
-      if (pathStr.endsWith("SKILL.md")) {
-        return `---
-name: test-skill
-allowed-tools: Read Write
----
-<!-- include: ../_shared/PIPELINE_CONTEXT.md -->
-
-# Test Skill
-
-<!-- include: ../_shared/BATCH_MODE.md -->
-`;
-      }
-      if (pathStr.endsWith("PIPELINE_CONTEXT.md")) {
-        return "## System Context\n";
-      }
-      if (pathStr.endsWith("BATCH_MODE.md")) {
-        return "### Batch Detection\n";
-      }
-      throw new Error(`Unexpected file: ${pathStr}`);
-    });
-    const mockProcess = createMockChildProcess();
-    vi.mocked(spawn).mockReturnValue(mockProcess);
-
-    runStageSkillHeadless("feature-dev", 42, {});
-
-    const writeCall = vi.mocked(mockProcess.stdin!.write).mock.calls[0][0];
-    expect(writeCall).toContain("## System Context");
-    expect(writeCall).toContain("### Batch Detection");
-  });
-
-  it("should pass through content without includes unchanged", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: test-skill
-allowed-tools: Read Write
----
-# No Includes Here
-
-Just regular content.
-`);
-    const mockProcess = createMockChildProcess();
-    vi.mocked(spawn).mockReturnValue(mockProcess);
-
-    runStageSkillHeadless("feature-dev", 42, {});
-
-    const writeCall = vi.mocked(mockProcess.stdin!.write).mock.calls[0][0];
-    expect(writeCall).toContain("# No Includes Here");
-    expect(writeCall).toContain("Just regular content.");
-  });
-});
+// Include expansion moved to the Go composer in #78 and the last TypeScript
+// caller went with #79, so the four tests that lived here — expand one, expand
+// several, leave a missing directive in place, pass through a body with none —
+// now test nothing this package owns. They are not deleted coverage: the same
+// four cases are TestIncludesAreExpanded and TestMissingIncludeIsLeftInPlace in
+// internal/skillrender/render_test.go, against the implementation that runs.
 
 describe("skillRunner - Prompt Building", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: test-skill
-allowed-tools: Read Write
----
-# Test Skill Content
-
-This is the skill content.
-`);
+    // The body comes from the render envelope now (#79) — already composed,
+    // frontmatter already stripped by the binary.
+    vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args, {
+            content: "# Test Skill Content\n\nThis is the skill content.\n",
+          })
+        : "") as never);
   });
 
   afterEach(() => {
@@ -2115,12 +2015,16 @@ describe("skillRunner - runStageSkillInteractive", () => {
     mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: test-skill
-allowed-tools: Read Write Edit Bash AskUserQuestion
----
-# Test Skill
-`);
+    // A skill that DECLARES AskUserQuestion. The composer reports declared
+    // tools verbatim (#79) precisely so this path can keep it: interactive is
+    // the mode where a question has someone to answer it, and the headless
+    // dispatcher is the one that strips it.
+    vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args, {
+            allowedTools: ["Read", "Write", "Edit", "Bash", "AskUserQuestion"],
+          })
+        : "") as never);
   });
 
   afterEach(() => {
@@ -2288,7 +2192,11 @@ allowed-tools: Read Write Edit Bash AskUserQuestion
   });
 
   it("should handle missing SKILL.md file", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
+    // Interactive composes through the binary too (#79), so "not found" is now
+    // the render's non-zero exit rather than a local stat miss.
+    vi.mocked(execFileSync).mockImplementation((() => {
+      throw new Error('SKILL.md not found for stage "feature-dev"');
+    }) as never);
 
     const onError = vi.fn();
     const handle = runStageSkillInteractive("feature-dev", 42, { onError });
@@ -3357,10 +3265,19 @@ describe("skillRunner - mcp-tools frontmatter field (Issue #1725)", () => {
 
   function setupSkillWithMcpTools(mcpToolsValue?: string) {
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    const frontmatter = mcpToolsValue
-      ? `---\nname: test-skill\nallowed-tools: Read Write Edit\nmcp-tools: ${mcpToolsValue}\n---\n# Test\n`
-      : `---\nname: test-skill\nallowed-tools: Read Write Edit\n---\n# Test\n`;
-    vi.mocked(fs.readFileSync).mockReturnValue(frontmatter);
+    // Frontmatter reaches the dispatcher through the render envelope now (#79),
+    // not through a disk read. `mcp-tools: all` arrives as the single-element
+    // list ["all"] — the binary's splitTools does not expand it, so resolution
+    // against .claude/settings.json stays a host concern (#1725).
+    const mcpTools = mcpToolsValue
+      ? mcpToolsValue === "all"
+        ? ["all"]
+        : mcpToolsValue.trim().split(/\s+/)
+      : undefined;
+    vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args, { allowedTools: ["Read", "Write", "Edit"], mcpTools })
+        : "") as never);
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
     return mockProcess;
@@ -3420,8 +3337,11 @@ describe("skillRunner - mcp-tools frontmatter field (Issue #1725)", () => {
       if (pathStr.includes(".claude/settings.json")) {
         return JSON.stringify({ mcpServers: { playwright: {} } });
       }
-      return `---\nname: test-skill\nallowed-tools: Read Write Edit\nmcp-tools: all\n---\n# Test\n`;
+      return "";
     });
+    // `mcp-tools: all` comes off the frontmatter through the render envelope
+    // (#79); expanding it against .claude/settings.json stays host-side.
+    setupSkillWithMcpTools("all");
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
 
@@ -3590,24 +3510,23 @@ allowed-tools: Read Bash
     expect(spawn).toHaveBeenCalled();
   });
 
-  it("should use local file when no injected content provided", () => {
+  it("should use the rendered skill when no injected content provided", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(`---
-name: local-skill
-allowed-tools: Read Write Edit
----
-# Local Skill
-`);
+    vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args, { content: "# Local Skill\n" })
+        : "") as never);
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
 
     // Call without injectedSkillContent (undefined)
     runStageSkillHeadless("feature-dev", 42, {});
 
-    // fs.existsSync should be called for skill file discovery
-    const existsCalls = vi.mocked(fs.existsSync).mock.calls;
-    const skillFileCalls = existsCalls.filter((call) => String(call[0]).includes("SKILL.md"));
-    expect(skillFileCalls.length).toBeGreaterThan(0);
+    // The rendered body reaches the prompt. Asserting the render CALL alone
+    // would pass even if its output were dropped on the floor — which is the
+    // shape of the bug this path can actually have.
+    const prompt = String(vi.mocked(mockProcess.stdin!.write).mock.calls[0][0]);
+    expect(prompt).toContain("# Local Skill");
   });
 });
 
