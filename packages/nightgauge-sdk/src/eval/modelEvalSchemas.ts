@@ -100,6 +100,59 @@ export const TokenRatesSchema = z
 export type TokenRates = z.infer<typeof TokenRatesSchema>;
 
 /**
+ * Sentinel for {@link BehaviorSchema.shape.thinking_disable_max_effort}: this
+ * model rejects disabled thinking at EVERY effort level, so there is no
+ * effort to name as the ceiling.
+ *
+ * Needed because "omitted" already means the opposite — unconstrained. Fable 5
+ * returns a 400 for `thinking: {"type": "disabled"}` at any effort, and
+ * without this value the only way to describe it is to leave the field off,
+ * which tells the interlock the pairing is always legal.
+ */
+export const THINKING_DISABLE_NEVER = "never";
+
+/**
+ * Ceiling on disabling thinking: an effort level, or `never`. Deliberately not
+ * a member of {@link EffortLevelSchema} — `never` is not a requestable effort,
+ * and widening the effort enum would let it leak into `supported_efforts`.
+ */
+export const ThinkingDisableLimitSchema = z.union([
+  EffortLevelSchema,
+  z.literal(THINKING_DISABLE_NEVER),
+]);
+export type ThinkingDisableLimit = z.infer<typeof ThinkingDisableLimitSchema>;
+
+/**
+ * How readily a model does something unbidden. Coarse on purpose (#77): these
+ * are revisable claims sourced from vendor documentation, and a three-way
+ * enum keeps them honest — a numeric score would imply a precision the
+ * evidence does not support (ADR 016 §6).
+ *
+ * `normal` is the neutral reading, and it is also what an undeclared
+ * propensity means, so a model with no entry behaves exactly as before.
+ */
+export const PROPENSITY_LEVELS = ["low", "normal", "high"] as const;
+export const PropensityLevelSchema = z.enum(PROPENSITY_LEVELS);
+export type PropensityLevel = z.infer<typeof PropensityLevelSchema>;
+
+/**
+ * The propensities overlays key off. Each is a documented disposition, not an
+ * instruction: an overlay reads `verification: "high"` and decides to drop the
+ * skill's own verification scaffolding, rather than restating the fact.
+ */
+export const PropensitySchema = z
+  .object({
+    /** How readily the model checks its own work without being asked. */
+    verification: PropensityLevelSchema.optional(),
+    /** How readily the model hands work to subagents. */
+    delegation: PropensityLevelSchema.optional(),
+    /** How much the model narrates progress between tool calls. */
+    narration: PropensityLevelSchema.optional(),
+  })
+  .strict();
+export type Propensity = z.infer<typeof PropensitySchema>;
+
+/**
  * Factual runtime properties of a model (#77).
  *
  * Strictly things the provider documents and a reader could verify — no
@@ -112,15 +165,18 @@ export const BehaviorSchema = z
     /** Whether the model reasons by default with no thinking parameter set. */
     thinking_default: z.enum(["on", "off"]).optional(),
     /**
-     * Highest effort at which thinking may be disabled. Omitted = unconstrained
-     * (pre-Opus-5, where the two settings were independent). Opus 5 caps this
-     * at `high`; disabling thinking at `xhigh`/`max` is a 400.
+     * Highest effort at which thinking may be disabled, or `never`. Omitted =
+     * unconstrained (pre-Opus-5, where the two settings were independent).
+     * Opus 5 caps this at `high`; disabling thinking at `xhigh`/`max` is a 400.
+     * Fable 5 refuses at every level — see {@link THINKING_DISABLE_NEVER}.
      */
-    thinking_disable_max_effort: EffortLevelSchema.optional(),
+    thinking_disable_max_effort: ThinkingDisableLimitSchema.optional(),
     /** Provider default effort when none is requested. */
     effort_default: EffortLevelSchema.optional(),
     /** Bounds thinking AND response text together — headroom matters at high effort. */
     max_output_tokens: z.number().int().positive().optional(),
+    /** Coarse dispositions overlays act on. Absent = read every axis as `normal`. */
+    propensity: PropensitySchema.optional(),
   })
   .strict();
 export type Behavior = z.infer<typeof BehaviorSchema>;

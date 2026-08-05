@@ -119,16 +119,26 @@ func RunThinkingEffortCheck(opts ThinkingEffortOptions) *ThinkingEffortResult {
 		if !conflict {
 			continue
 		}
+		// A "never" ceiling has no effort low enough to satisfy it, so the
+		// usual "lower the effort" remedy is not available and must not be
+		// offered — unsetting the escape hatch is the only fix.
+		message := fmt.Sprintf(
+			"%s=%s with %s set: %s rejects disabled thinking above effort %q (HTTP 400). "+
+				"Either unset %s, or lower the effort to %q or below.",
+			source, pair.Effort, DisableThinkingEnvVar, m.ID, maxAllowed,
+			DisableThinkingEnvVar, maxAllowed)
+		if maxAllowed == models.ThinkingDisableNever {
+			message = fmt.Sprintf(
+				"%s=%s with %s set: %s rejects disabled thinking at every effort (HTTP 400). "+
+					"Unset %s — no effort level makes this pairing valid.",
+				source, pair.Effort, DisableThinkingEnvVar, m.ID, DisableThinkingEnvVar)
+		}
 		result.Findings = append(result.Findings, ThinkingEffortFinding{
 			Source:     source,
 			Model:      m.ID,
 			Effort:     pair.Effort,
 			MaxAllowed: maxAllowed,
-			Message: fmt.Sprintf(
-				"%s=%s with %s set: %s rejects disabled thinking above effort %q (HTTP 400). "+
-					"Either unset %s, or lower the effort to %q or below.",
-				source, pair.Effort, DisableThinkingEnvVar, m.ID, maxAllowed,
-				DisableThinkingEnvVar, maxAllowed),
+			Message:    message,
 		})
 	}
 	return result

@@ -58,6 +58,34 @@ type ModelDescriptor struct {
 	Behavior *Behavior `json:"behavior,omitempty"`
 }
 
+// ThinkingDisableNever is the ThinkingDisableMaxEffort value meaning the model
+// rejects disabled thinking at EVERY effort, so no effort can be named as the
+// ceiling. Empty already means the opposite (unconstrained), which is why this
+// needs its own value rather than an absent field: Fable 5 returns a 400 for
+// disabled thinking at any effort, and describing that by omission would tell
+// the interlock the pairing is always legal.
+const ThinkingDisableNever = "never"
+
+// Propensity levels. Coarse on purpose (#77) — these are revisable claims from
+// vendor documentation, and a numeric score would imply precision the evidence
+// does not support. PropensityNormal is also what an undeclared axis reads as.
+const (
+	PropensityLow    = "low"
+	PropensityNormal = "normal"
+	PropensityHigh   = "high"
+)
+
+// Propensity mirrors the SDK Propensity: how readily the model does a thing
+// unbidden. An empty axis means undeclared, which reads as PropensityNormal.
+type Propensity struct {
+	// Verification is how readily the model checks its own work unasked.
+	Verification string `json:"verification,omitempty"`
+	// Delegation is how readily the model hands work to subagents.
+	Delegation string `json:"delegation,omitempty"`
+	// Narration is how much the model narrates progress between tool calls.
+	Narration string `json:"narration,omitempty"`
+}
+
 // Behavior holds factual, vendor-documented runtime properties — never prose
 // and never judgment. Anything here must be checkable against the provider's
 // own documentation.
@@ -66,15 +94,17 @@ type Behavior struct {
 	// with no thinking parameter set. Opus 5 flipped this to "on".
 	ThinkingDefault string `json:"thinking_default,omitempty"`
 	// ThinkingDisableMaxEffort is the highest effort level at which thinking
-	// may be disabled. Empty means unconstrained (the pre-Opus-5 behavior,
-	// where the two settings were independent). On Opus 5 this is "high":
-	// disabling thinking at xhigh or max is a 400 from the API.
+	// may be disabled, or ThinkingDisableNever. Empty means unconstrained (the
+	// pre-Opus-5 behavior, where the two settings were independent). On Opus 5
+	// this is "high": disabling thinking at xhigh or max is a 400 from the API.
 	ThinkingDisableMaxEffort string `json:"thinking_disable_max_effort,omitempty"`
 	// EffortDefault is the provider's default effort when none is requested.
 	EffortDefault string `json:"effort_default,omitempty"`
 	// MaxOutputTokens bounds thinking AND response text together, so a stage
 	// running at high effort needs headroom here or it truncates.
 	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Propensity carries the coarse dispositions skill overlays act on.
+	Propensity *Propensity `json:"propensity,omitempty"`
 }
 
 // HasTier reports whether the model serves the given capability band.
@@ -203,14 +233,85 @@ func effortIndex(effort string) int {
 // The rule is data, not a model-name check: a future model with different
 // limits needs a registry edit, not a code change. Models with no constraint
 // declared (and unknown/local models, which have no entry) never conflict.
+//
+// ThinkingDisableNever conflicts at every effort — Fable 5 rejects disabled
+// thinking outright, so there is no effort low enough to make the pairing
+// legal. Callers must not render maxAllowed as "lower the effort to X"
+// without checking for that value first.
 func (m ModelDescriptor) ThinkingDisableConflict(effort string) (conflict bool, maxAllowed string) {
 	if m.Behavior == nil || m.Behavior.ThinkingDisableMaxEffort == "" {
 		return false, ""
 	}
-	limit := effortIndex(m.Behavior.ThinkingDisableMaxEffort)
+	declared := m.Behavior.ThinkingDisableMaxEffort
+	if declared == ThinkingDisableNever {
+		return true, ThinkingDisableNever
+	}
+	limit := effortIndex(declared)
 	requested := effortIndex(effort)
 	if limit < 0 || requested < 0 {
-		return false, m.Behavior.ThinkingDisableMaxEffort
+		return false, declared
 	}
-	return requested > limit, m.Behavior.ThinkingDisableMaxEffort
+	return requested > limit, declared
+}
+
+// ─── Typed behavior accessors (#77) ──────────────────────────────────────────
+//
+// Consumers (skill render, the resolver interlock) read behavior through these
+// rather than reaching into the registry JSON or nil-checking Behavior twice.
+// Every one is total: an undeclared fact returns the neutral value, so a model
+// with no behavior block — and every unknown/local model, which has no entry
+// at all — behaves exactly as it did before the block existed.
+
+// ThinkingOnByDefault reports whether the model reasons with no thinking
+// parameter set. Undeclared reads as false, which is the pre-Opus-5 behavior.
+func (m ModelDescriptor) ThinkingOnByDefault() bool {
+	return m.Behavior != nil && m.Behavior.ThinkingDefault == "on"
+}
+
+// EffortDefault is the provider's default effort, or "" when undeclared.
+func (m ModelDescriptor) EffortDefault() string {
+	if m.Behavior == nil {
+		return ""
+	}
+	return m.Behavior.EffortDefault
+}
+
+// MaxOutputTokens bounds thinking and response text together, or 0 when
+// undeclared. Callers treat 0 as "no documented ceiling", not as "zero".
+func (m ModelDescriptor) MaxOutputTokens() int {
+	if m.Behavior == nil {
+		return 0
+	}
+	return m.Behavior.MaxOutputTokens
+}
+
+// VerificationPropensity reports how readily the model checks its own work.
+func (m ModelDescriptor) VerificationPropensity() string {
+	if m.Behavior == nil || m.Behavior.Propensity == nil {
+		return PropensityNormal
+	}
+	return propensityOrNormal(m.Behavior.Propensity.Verification)
+}
+
+// DelegationPropensity reports how readily the model uses subagents.
+func (m ModelDescriptor) DelegationPropensity() string {
+	if m.Behavior == nil || m.Behavior.Propensity == nil {
+		return PropensityNormal
+	}
+	return propensityOrNormal(m.Behavior.Propensity.Delegation)
+}
+
+// NarrationPropensity reports how much the model narrates progress.
+func (m ModelDescriptor) NarrationPropensity() string {
+	if m.Behavior == nil || m.Behavior.Propensity == nil {
+		return PropensityNormal
+	}
+	return propensityOrNormal(m.Behavior.Propensity.Narration)
+}
+
+func propensityOrNormal(v string) string {
+	if v == "" {
+		return PropensityNormal
+	}
+	return v
 }
