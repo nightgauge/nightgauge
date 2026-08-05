@@ -134,6 +134,44 @@ jobs:
           # Homebrew degrades gracefully: without a tap token, skip that pipe
           # rather than fail the release after the GitHub Release already exists.
           if [ -n "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+            # A PRESENT token is not a WORKING token, and the difference only
+            # shows up at the tap push — after the GitHub Release exists. Since
+            # the cask now arrives as a pull request (.goreleaser.yml), the token
+            # needs `pull_requests: write` on top of `contents: write`, and a
+            # contents-only token fails at exactly that late point.
+            #
+            # Probe both, without side effects:
+            #   contents  — GET the repo; `.permissions.push` must be true.
+            #   pull_reqs — POST a pull request with a head branch that cannot
+            #               exist. GitHub authorizes before it validates the
+            #               body, so 403 means "no permission" while 422 means
+            #               "permitted, bad head" — the answer we want. Nothing
+            #               is created on either path.
+            echo "HOMEBREW_TAP_GITHUB_TOKEN present — verifying it can write to nightgauge/homebrew-tap…"
+
+            if ! GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
+                 gh api repos/nightgauge/homebrew-tap --jq '.permissions.push' 2>/dev/null | grep -qx true; then
+              echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot write contents to nightgauge/homebrew-tap. Issue a fine-grained PAT with resource owner 'nightgauge', repository access limited to 'homebrew-tap', and Contents: Read and write. Failing now, before anything is published."
+              exit 1
+            fi
+
+            PR_PROBE=$(GH_TOKEN="$HOMEBREW_TAP_GITHUB_TOKEN" \
+              gh api -X POST repos/nightgauge/homebrew-tap/pulls \
+                -f head=__release_preflight_probe__ -f base=main -f title=probe \
+                -i 2>/dev/null | head -1 || true)
+            case "$PR_PROBE" in
+              *403*)
+                echo "::error::HOMEBREW_TAP_GITHUB_TOKEN can write contents but CANNOT open pull requests on nightgauge/homebrew-tap. The tap requires a PR (branch ruleset) and .goreleaser.yml opens one, so the release would fail at the tap step AFTER the GitHub Release already exists. Add 'Pull requests: Read and write' to the token. Failing now instead."
+                exit 1
+                ;;
+              *422*)
+                echo "HOMEBREW_TAP_GITHUB_TOKEN verified: contents + pull-request write."
+                ;;
+              *)
+                echo "::warning::Homebrew tap token PR-permission probe returned an unexpected response ('${PR_PROBE:-empty}'). Proceeding, but if the release fails at the tap step, check that the token has 'Pull requests: Read and write'."
+                ;;
+            esac
+
             echo "goreleaser_args=release --clean" >> "$GITHUB_OUTPUT"
           else
             echo "::notice::HOMEBREW_TAP_GITHUB_TOKEN not set — skipping the Homebrew cask push. Binaries and VSIXs still publish."
