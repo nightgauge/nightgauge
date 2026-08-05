@@ -203,6 +203,36 @@ One implementation, no TS/Go mirror to drift. This also closes a pre-existing
 duplication between `skillRunner.ts` and
 [`internal/execution/skill.go`](../../internal/execution/skill.go).
 
+> **Amendment (#79) — the second consumer no longer exists.**
+> The slash-command wrappers this decision names were retired by
+> [ADR 007's #3876 amendment](007-slash-command-skill-invocation-contract.md#amendment-2026-06-01-3876--skills-are-the-slash-commands)
+> before ADR 016 was written: **the skill IS the slash command.** Typing
+> `/nightgauge:<name>` loads `claude-plugins/nightgauge/skills/<name>/SKILL.md`
+> directly through the harness loader, and the plugin ships no command wrapper
+> except `model-routing-report.md`. `git log --diff-filter=A` over
+> `claude-plugins/nightgauge/commands/` returns that one file for the life of
+> the repository — the `commands/<stage>.md` layout this decision assumed has
+> never existed here.
+>
+> There is therefore **no process to interpose**. The plugin path is now the
+> "raw-file path" that Consequences already accepts as uncovered, and the
+> coverage note below should be read that way. Reintroducing a wrapper to
+> regain overlay awareness would recreate both defects #3876 fixed: duplicate
+> `/nightgauge:<name>` entries, and an agent improvising from the wrapper's
+> prose instead of running the skill.
+>
+> Two things make that acceptable rather than merely unavoidable. Base-only is
+> a correct rendering — overlays are additive by construction (§1, §2). And a
+> slash-command invocation runs on the **user's own session model**, which the
+> pipeline neither selects nor can observe, so there is no "model that actually
+> executes" to key a cascade off; guessing one would be worse than not adapting.
+> The plugin tree is regenerated from canonical `skills/` by
+> `scripts/install-agent-skills.sh`, so `_overlays/` directories authored in
+> #81 are mirrored into it — they are simply never resolved there.
+>
+> What #79 did migrate is the consumer that does exist: `skillRunner.ts`, both
+> its headless and interactive dispatchers.
+
 The binary cannot discover skills the way the extension can — `findSkillFile`
 resolves through the VSCode extension bundle (`dist/skills/`) including the
 garbage-collected-bundle self-heal from #3883. Skill **location** therefore stays
@@ -293,9 +323,16 @@ so they match no key and get base-only. Fail-open is the designed default.
 
 **Coverage gap, acknowledged.** A skill a human reads by hand (opening
 `SKILL.md` in an editor, or an agent reading the file directly rather than
-through the render path) sees the base document without adaptation. Decision 4
-closes this for the plugin path; the raw-file path stays uncovered and is
+through the render path) sees the base document without adaptation. That is
 acceptable precisely because base-only is a correct, if unoptimized, rendering.
+
+> **Amended by #79.** This originally read "Decision 4 closes this for the
+> plugin path". It does not, and cannot: ADR 007's #3876 amendment made the
+> plugin path _be_ the raw-file path — the harness loads `SKILL.md` itself,
+> with no wrapper to interpose. See the amendment under Decision 4. The gap is
+> therefore wider than stated here and is closed for exactly one class of
+> caller: anything that renders through `nightgauge skill render`, which since
+> #79 is every path the pipeline dispatches.
 
 **Migration cost.** The 14 skills carrying verification/subagent prose need it
 extracted to overlays. This is a one-time cost that pays for itself at the next

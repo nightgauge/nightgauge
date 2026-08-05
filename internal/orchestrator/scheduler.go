@@ -3359,12 +3359,39 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// Compose SKILL.md through the one renderer (#78). Model is left empty
-		// here: overlay-aware dispatch is #79's migration, and an empty model
-		// resolves no keys, so this renders base-only — byte-identical to the
-		// pre-#78 FindSkillFile + ReadSkillFile path it replaces.
+		// Per-stage adapter resolution (#54): only meaningful on the
+		// Go-direct path (execMgr holds an adapter) and when the invocation
+		// did not pin one via --adapter / NIGHTGAUGE_ADAPTER.
+		//
+		// Hoisted above the render (#79). Overlay keys are provider-scoped for
+		// tier bands — Resolve matches a concrete id across providers, but
+		// "sonnet" only inside one — so rendering before this ran keyed the
+		// cascade off the PREVIOUS stage's adapter in a mixed-adapter pipeline.
+		// The error is still consumed by the dispatch switch below, unchanged;
+		// only the re-point moves, and it touches nothing but execMgr's adapter.
+		var adapterResolveErr error
+		if s.adapterExplicit == "" && s.execMgr != nil && s.execMgr.HasAdapter() {
+			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot)
+		}
+
+		// Resolve the dispatch model BEFORE composing the skill (#79). Overlays
+		// must key off the model that actually executes, not a configured tier
+		// alias — so every escalation, floor, and downgrade below has to have
+		// been applied by the time Render runs. The behavioral preamble still
+		// applies after the prompt is assembled; only the resolution moves.
+		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors)
+
+		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
+		// With no overlay files present this is byte-identical to a base-only
+		// render: an unmatched key contributes nothing (ADR 016 §2).
+		adapterName := ""
+		if s.execMgr != nil && s.execMgr.HasAdapter() {
+			adapterName = s.execMgr.AdapterName()
+		}
 		skillData, err := skillrender.Render(skillrender.Options{
 			Stage:       string(stage),
+			Model:       model,
+			Adapter:     adapterName,
 			SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
@@ -3430,65 +3457,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		var outputFile string
 		if ctxType, ok := stageOutputContextType[stage]; ok {
 			outputFile = stagecontext.ContextPath(ws, item.Number, ctxType)
-		}
-
-		// Resolve model — use escalation override if set, otherwise use predicted model
-		model := predictedModel
-		if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
-			model = override
-		}
-		// Apply the per-stage model_routing.minimum_model floor (#366) so an
-		// autonomous run honors a configured minimum tier — parity with the TS
-		// SkillRunner's enforceMinimumModel. Placed before ApplyDowngrades so a
-		// model-unavailable downgrade (#42) stays the final safety net (a floor
-		// must never force a run back onto a tier the API just rejected), and
-		// before RecordStageModel so attribution reflects the floored tier.
-		if floor := stageModelFloor(modelFloors, string(stage)); floor != "" {
-			if raised := enforceMinimumModel(model, floor); raised != model {
-				log.Printf("#%d: stage %s — model_routing.minimum_model floor %q raised %s → %s",
-					item.Number, stage, floor, model, raised)
-				model = raised
-			}
-		}
-		// Reroute through any sticky model-unavailable downgrades (#42): once
-		// the API rejected a tier this run, every later stage resolving to it
-		// runs on the substituted tier instead of re-failing identically.
-		model = s.retryEngine.ApplyDowngrades(model)
-
-		// For pr-create, escalate from haiku to sonnet when the diff is large.
-		// Large diffs cause haiku to stall before producing a complete PR.
-		if stage == state.StagePRCreate && isHaikuModel(model) {
-			threshold := getLargeDiffThreshold(workspaceRoot)
-			if threshold > 0 {
-				if diffLines := getDiffLineCount(workspaceRoot); diffLines > threshold {
-					log.Printf("#%d: pr-create diff is %d lines (threshold %d) — escalating to sonnet",
-						item.Number, diffLines, threshold)
-					model = routing.ModelSonnet
-				}
-			}
-		}
-
-		// For feature-validate, disable haiku auto-routing unless the dev-stage
-		// build verification already passed. Haiku is too lightweight to reliably
-		// run real build/test commands without shortcutting them (Issue #3041).
-		if stage == state.StageFeatureValidate && isHaikuModel(model) {
-			if !devContextBuildPassed(workspaceRoot, item.Number) {
-				log.Printf("#%d: feature-validate: dev build_verification not passed — disabling haiku, escalating to sonnet",
-					item.Number)
-				model = routing.ModelSonnet
-			}
-		}
-
-		// pr-merge's LLM path only runs when the deterministic runner punted —
-		// exclusively the judgment-heavy instances (blocked merge state,
-		// failing checks, dirty state). Issue size does not predict punt
-		// difficulty, so haiku is never the right tier here regardless of what
-		// config/calibration resolved (#197 — bowlsheet#233's haiku pr-merge
-		// improvised an admin bypass). Floor: sonnet.
-		if stage == state.StagePRMerge && isHaikuModel(model) {
-			log.Printf("#%d: pr-merge LLM path runs only on deterministic punts — flooring haiku to sonnet (#197)",
-				item.Number)
-			model = routing.ModelSonnet
 		}
 
 		// Behavioral preamble for the Haiku tier (#77 → #106): measured
@@ -3629,14 +3597,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
-			Timeout:           routing.ResolveStageTimeout(string(stage), model),
-			SkillPath:         skillData.SkillPath,
-			ContextFile:       contextFile,
-			OutputFile:        outputFile,
-			TargetRepo:        item.Repo,
-			WorktreePath:      workspaceRoot, // Working directory for Claude CLI (IPC mode)
-			Runtime:           runtime,
-			AllowedTools:      skillData.AllowedTools,
+			Timeout:      routing.ResolveStageTimeout(string(stage), model),
+			SkillPath:    skillData.SkillPath,
+			ContextFile:  contextFile,
+			OutputFile:   outputFile,
+			TargetRepo:   item.Repo,
+			WorktreePath: workspaceRoot, // Working directory for Claude CLI (IPC mode)
+			Runtime:      runtime,
+			// Every stage the scheduler dispatches runs non-interactively, so
+			// strip the tools that cannot work there (#79 moved this out of the
+			// composer, which serves interactive callers too).
+			AllowedTools:      skillrender.FilterHeadlessTools(skillData.AllowedTools),
 			Prompt:            prompt,
 			PhaseEventFn:      phaseEventFn,
 			SkillContent:      resolvedSkillContent, // Platform-resolved; empty = TypeScript uses local file
@@ -3659,14 +3630,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		var result *StageRunResult
 		var stageRunErr error
 
-		// Per-stage adapter resolution (#54): only meaningful on the
-		// Go-direct path (execMgr holds an adapter) and when the invocation
-		// did not pin one via --adapter / NIGHTGAUGE_ADAPTER.
-		var adapterResolveErr error
-		if s.adapterExplicit == "" && s.execMgr != nil && s.execMgr.HasAdapter() {
-			adapterResolveErr = s.applyStageAdapter(string(stage), workspaceRoot)
-		}
-
+		// adapterResolveErr was produced by the hoisted per-stage adapter
+		// resolution above (#79) — the render needs the adapter, so the
+		// re-point runs there and only its outcome is consumed here.
 		deterministicMerged, detMergePRState, mergeRateLimited := s.tryDeterministicPRMerge(ctx, stage, runtime, item, workspaceRoot)
 		deterministicCreated := false
 		createRateLimited := false
@@ -5759,6 +5725,86 @@ func predictedSizeLabel(score int) string {
 // isHaikuModel checks whether a model string refers to Haiku.
 func isHaikuModel(model string) bool {
 	return strings.Contains(model, "haiku")
+}
+
+// resolveDispatchModel returns the model a stage will actually dispatch on,
+// after every override the run can apply: escalation, the configured minimum
+// floor, sticky model-unavailable downgrades, and the three stage-specific
+// haiku exclusions.
+//
+// Extracted from the dispatch path in #79 so the result is available BEFORE
+// the skill is composed. Overlay keys are derived from this value (ADR 016 §2)
+// — resolving it after the render would have keyed the cascade off the
+// pre-escalation tier, so a stage escalated from haiku to sonnet would have run
+// sonnet against haiku's overlays. The ordering INSIDE this function is
+// load-bearing and unchanged from the inline version: the floor lands before
+// ApplyDowngrades so a model-unavailable downgrade stays the final safety net
+// (a floor must never force a run back onto a tier the API just rejected).
+func (s *Scheduler) resolveDispatchModel(
+	stage state.PipelineStage,
+	issueNumber int,
+	workspaceRoot string,
+	predictedModel string,
+	modelFloors map[string]string,
+) string {
+	// Escalation override if set, otherwise the predicted model.
+	model := predictedModel
+	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
+		model = override
+	}
+	// Per-stage model_routing.minimum_model floor (#366) so an autonomous run
+	// honors a configured minimum tier — parity with the TS SkillRunner's
+	// enforceMinimumModel. Before RecordStageModel too, so attribution
+	// reflects the floored tier.
+	if floor := stageModelFloor(modelFloors, string(stage)); floor != "" {
+		if raised := enforceMinimumModel(model, floor); raised != model {
+			log.Printf("#%d: stage %s — model_routing.minimum_model floor %q raised %s → %s",
+				issueNumber, stage, floor, model, raised)
+			model = raised
+		}
+	}
+	// Reroute through any sticky model-unavailable downgrades (#42): once the
+	// API rejected a tier this run, every later stage resolving to it runs on
+	// the substituted tier instead of re-failing identically.
+	model = s.retryEngine.ApplyDowngrades(model)
+
+	// For pr-create, escalate from haiku to sonnet when the diff is large.
+	// Large diffs cause haiku to stall before producing a complete PR.
+	if stage == state.StagePRCreate && isHaikuModel(model) {
+		threshold := getLargeDiffThreshold(workspaceRoot)
+		if threshold > 0 {
+			if diffLines := getDiffLineCount(workspaceRoot); diffLines > threshold {
+				log.Printf("#%d: pr-create diff is %d lines (threshold %d) — escalating to sonnet",
+					issueNumber, diffLines, threshold)
+				model = routing.ModelSonnet
+			}
+		}
+	}
+
+	// For feature-validate, disable haiku auto-routing unless the dev-stage
+	// build verification already passed. Haiku is too lightweight to reliably
+	// run real build/test commands without shortcutting them (Issue #3041).
+	if stage == state.StageFeatureValidate && isHaikuModel(model) {
+		if !devContextBuildPassed(workspaceRoot, issueNumber) {
+			log.Printf("#%d: feature-validate: dev build_verification not passed — disabling haiku, escalating to sonnet",
+				issueNumber)
+			model = routing.ModelSonnet
+		}
+	}
+
+	// pr-merge's LLM path only runs when the deterministic runner punted —
+	// exclusively the judgment-heavy instances (blocked merge state, failing
+	// checks, dirty state). Issue size does not predict punt difficulty, so
+	// haiku is never the right tier here regardless of what config/calibration
+	// resolved (#197 — bowlsheet#233's haiku pr-merge improvised an admin
+	// bypass). Floor: sonnet.
+	if stage == state.StagePRMerge && isHaikuModel(model) {
+		log.Printf("#%d: pr-merge LLM path runs only on deterministic punts — flooring haiku to sonnet (#197)",
+			issueNumber)
+		model = routing.ModelSonnet
+	}
+
+	return model
 }
 
 // devContextBuildPassed reads dev-{N}.json and returns true when

@@ -1,0 +1,162 @@
+package orchestrator
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
+	"github.com/nightgauge/nightgauge/internal/state"
+)
+
+// resolveDispatchModel was extracted from the dispatch path in #79 so the
+// composed skill can be keyed off the model that actually runs. These pin the
+// ordering that extraction had to preserve — the pre-#79 code computed the same
+// value, just too late to reach skillrender.Render.
+
+func testScheduler(t *testing.T) *Scheduler {
+	t.Helper()
+	return &Scheduler{retryEngine: NewRetryEngine(RetryConfig{})}
+}
+
+func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
+	s := testScheduler(t)
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "sonnet", nil)
+	if got != "sonnet" {
+		t.Errorf("model = %q, want the predicted model", got)
+	}
+}
+
+func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
+	s := testScheduler(t)
+	s.retryEngine.RecordEscalation(string(state.StageFeatureDev), "opus")
+
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "sonnet", nil)
+	if got != "opus" {
+		t.Errorf("model = %q, want the escalated model", got)
+	}
+	// Escalation is per-stage: a sibling stage must not inherit it, or every
+	// later stage in the run would render against the escalated tier's
+	// overlays without having escalated.
+	if other := s.resolveDispatchModel(state.StagePRCreate, 1, t.TempDir(), "sonnet", nil); other != "sonnet" {
+		t.Errorf("pr-create model = %q, want the un-escalated prediction", other)
+	}
+}
+
+func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
+	// The floor raises haiku→sonnet; the sticky downgrade then reroutes off a
+	// tier the API rejected. Order matters and is the reason the extraction
+	// kept these adjacent: if the floor ran last it would push the run back
+	// onto the very tier that just refused it.
+	s := testScheduler(t)
+	s.retryEngine.RecordDowngrade("sonnet", "haiku")
+
+	floors := map[string]string{string(state.StageFeatureDev): "sonnet"}
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "haiku", floors)
+	if got != "haiku" {
+		t.Errorf("model = %q, want the downgrade to win over the floor", got)
+	}
+
+	// Without the rejection recorded, the same inputs stop at the floor —
+	// which is what proves the downgrade above did the work, not the floor
+	// simply failing to apply.
+	fresh := testScheduler(t)
+	if got := fresh.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "haiku", floors); got != "sonnet" {
+		t.Errorf("model = %q, want the floor to raise haiku to sonnet", got)
+	}
+}
+
+func TestResolveDispatchModelFloorsHaikuOnPRMerge(t *testing.T) {
+	// #197: pr-merge's LLM path only runs on deterministic punts, which are the
+	// judgment-heavy cases. Haiku is never right there regardless of routing.
+	s := testScheduler(t)
+	got := s.resolveDispatchModel(state.StagePRMerge, 1, t.TempDir(), "haiku", nil)
+	if got != routing.ModelSonnet {
+		t.Errorf("pr-merge model = %q, want %q", got, routing.ModelSonnet)
+	}
+
+	// A non-haiku tier passes through untouched — the guard is a floor, not a pin.
+	if got := s.resolveDispatchModel(state.StagePRMerge, 1, t.TempDir(), "opus", nil); got != "opus" {
+		t.Errorf("pr-merge model = %q, want opus preserved", got)
+	}
+}
+
+func TestResolveDispatchModelDisablesHaikuOnUnverifiedFeatureValidate(t *testing.T) {
+	// #3041: haiku shortcuts real build/test commands, so it only runs
+	// feature-validate when dev already proved the build. An empty workdir has
+	// no dev context, which is the unverified case.
+	s := testScheduler(t)
+	got := s.resolveDispatchModel(state.StageFeatureValidate, 1, t.TempDir(), "haiku", nil)
+	if got != routing.ModelSonnet {
+		t.Errorf("feature-validate model = %q, want %q", got, routing.ModelSonnet)
+	}
+}
+
+// TestSchedulerRendersWithAModel guards the wiring that resolveDispatchModel
+// exists to serve. The value is computed inside dispatchStage's closure, which
+// no unit test can reach without standing up a whole run — so this asserts the
+// call site structurally instead. Without it, someone could revert Options to
+// the pre-#79 base-only form and every test above would still pass: they cover
+// the model's VALUE, not that it reaches the composer.
+func TestSchedulerRendersWithAModel(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "scheduler.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse scheduler.go: %v", err)
+	}
+
+	found := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Options" {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "skillrender" {
+			return true
+		}
+		found++
+
+		keys := map[string]bool{}
+		for _, elt := range lit.Elts {
+			if kv, ok := elt.(*ast.KeyValueExpr); ok {
+				if id, ok := kv.Key.(*ast.Ident); ok {
+					keys[id.Name] = true
+				}
+			}
+		}
+		for _, want := range []string{"Model", "Adapter", "SkillsRoots"} {
+			if !keys[want] {
+				t.Errorf("skillrender.Options at %s omits %s — overlays would key off nothing",
+					fset.Position(lit.Pos()), want)
+			}
+		}
+		return true
+	})
+
+	if found == 0 {
+		t.Fatal("no skillrender.Options literal found in scheduler.go — did the render move?")
+	}
+}
+
+func TestDefaultRootsIsTheRepoSkillsTreeOnly(t *testing.T) {
+	roots := skillrender.DefaultRoots("/repo")
+
+	// The second root used to be claude-plugins/nightgauge/commands, a layout
+	// that has never carried a stage skill in this repository's history and
+	// that ADR 007's #3876 amendment retired outright. A root that cannot
+	// match is not a harmless fallback — it reads as a second source of skills
+	// when there is exactly one.
+	if len(roots) != 1 {
+		t.Fatalf("DefaultRoots = %v, want exactly one root", roots)
+	}
+	if roots[0] != "/repo/skills" {
+		t.Errorf("root = %q, want /repo/skills", roots[0])
+	}
+}

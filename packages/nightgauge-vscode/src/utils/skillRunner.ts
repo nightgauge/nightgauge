@@ -1715,36 +1715,51 @@ export function getStageLabel(stage: PipelineStage): string {
 }
 
 /**
- * Find the SKILL.md file for a stage.
+ * Skill roots for this host, in search order (first match wins).
  *
- * Exported for use by context schema repair (Issue #2552).
+ * Skill LOCATION is deliberately the host's job (ADR 016 §4): the binary
+ * cannot reproduce this discovery, because the bundle path depends on the
+ * VSCode extension host and carries the garbage-collected-bundle self-heal
+ * from #3883. Everything DOWNSTREAM of location — frontmatter, `_includes`,
+ * overlays, path rewriting — belongs to `nightgauge skill render`.
+ *
+ * A root is a directory CONTAINING skill directories, not a SKILL.md path.
  */
-export function findSkillFile(stage: PipelineStage): string | null {
+export function resolveSkillRoots(): string[] {
+  const roots: string[] = [];
+
+  // The nightgauge source repo's own skills/ (dev mode / dogfooding).
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!workspaceRoot) return null;
-
-  const skillDir = STAGE_TO_SKILL_DIR[stage];
-
-  // Try different possible locations (first match wins)
-  const possiblePaths = [
-    // In skills/ directory (nightgauge source repo — dev mode)
-    path.join(workspaceRoot, "skills", skillDir, "SKILL.md"),
-    // In claude-plugins/nightgauge/commands/ (legacy plugin location)
-    path.join(workspaceRoot, "claude-plugins", "nightgauge", "commands", `${skillDir}.md`),
-  ];
-
-  // Fallback: skills bundled inside the extension's dist/ directory.
-  // This is how standalone repos (customers) find pipeline skills without
-  // needing the nightgauge source repo as a workspace sibling.
-  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
-  // Self-heal past a garbage-collected extension dir (auto-update GC): resolve
-  // to the newest surviving sibling version so bundled skills still load (#3883).
-  const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
-  if (bundleRoot) {
-    possiblePaths.push(path.join(bundleRoot, "dist", "skills", skillDir, "SKILL.md"));
+  if (workspaceRoot) {
+    roots.push(path.join(workspaceRoot, "skills"));
   }
 
-  for (const skillPath of possiblePaths) {
+  // Skills bundled inside the extension's dist/. This is how standalone repos
+  // (customers) find pipeline skills without the nightgauge source repo as a
+  // workspace sibling. Self-heal past a garbage-collected extension dir
+  // (auto-update GC): resolve to the newest surviving sibling version (#3883).
+  const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
+  const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
+  if (bundleRoot) {
+    roots.push(path.join(bundleRoot, "dist", "skills"));
+  }
+
+  return roots;
+}
+
+/**
+ * Find the SKILL.md file for a stage.
+ *
+ * Exported for use by context schema repair (Issue #2552) and SkillLoader,
+ * which need the PATH rather than the composed text. The stage-execution paths
+ * do NOT use this — they pass `resolveSkillRoots()` to the binary and take the
+ * resolved path back from the render envelope, so location is answered once.
+ */
+export function findSkillFile(stage: PipelineStage): string | null {
+  const skillDir = STAGE_TO_SKILL_DIR[stage];
+
+  for (const root of resolveSkillRoots()) {
+    const skillPath = path.join(root, skillDir, "SKILL.md");
     if (fs.existsSync(skillPath)) {
       return skillPath;
     }
@@ -1754,22 +1769,111 @@ export function findSkillFile(stage: PipelineStage): string | null {
 }
 
 /**
- * Expand <!-- include: relative/path.md --> directives in skill content.
- * Resolves paths relative to the SKILL.md file's directory.
- * Non-existent includes are left as-is (graceful degradation for portability).
- *
- * @see Issue #862 - Extract shared SKILL.md content to common includes
+ * A composed skill: the executable body plus the frontmatter declarations the
+ * dispatcher needs to build a tool allowlist.
  */
-function expandIncludes(content: string, skillDir: string): string {
-  return content.replace(/<!-- include: (.+?) -->/g, (_match, relativePath: string) => {
-    const absPath = path.resolve(skillDir, relativePath.trim());
-    try {
-      return fs.readFileSync(absPath, "utf-8");
-    } catch {
-      // Leave directive as-is if file not found (portability)
-      return _match;
-    }
-  });
+export interface RenderedSkill {
+  /** Composed body: frontmatter stripped, includes expanded, overlays
+   *  injected, skill-relative paths rewritten to absolute. Ready to prompt. */
+  content: string;
+  allowedTools: string[];
+  mcpTools: string[];
+  programmaticTools?: string[];
+  /** Absolute path of the SKILL.md the binary resolved. */
+  skillPath: string;
+  /** Absolute directory of that SKILL.md (exported as NIGHTGAUGE_SKILL_DIR). */
+  skillDir: string;
+  /** Overlay cascade keys the model resolved to; empty means base-only. */
+  resolvedKeys: string[];
+}
+
+/** Frontmatter that declares no allowed-tools gets the historical default. */
+const DEFAULT_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"];
+
+/** Shape of `nightgauge skill render --json --include-content`. */
+interface SkillRenderEnvelope {
+  content?: string;
+  skill_path?: string;
+  allowed_tools?: string[];
+  mcp_tools?: string[];
+  programmatic_tools?: string[];
+  resolved_keys?: string[];
+}
+
+/**
+ * Compose a stage's executable skill text through `nightgauge skill render` —
+ * the ONE composer (#78, ADR 016 §4).
+ *
+ * `model` selects the overlay cascade, so it must be the model that will
+ * ACTUALLY be spawned: the value out of the stage resolver / AutoModelSelector
+ * after escalation, floors and downgrades, not a configured tier alias. Pass
+ * undefined when the model is genuinely unknown (the interactive path, where
+ * the user's own session model runs) — an empty model resolves no keys and
+ * renders base-only, which is the documented fail-open answer.
+ *
+ * Throws on failure rather than falling back to a local composer. A second
+ * implementation is precisely the drift #78 removed, and the binary is already
+ * a hard dependency of every stage run (the Go scheduler drives them over IPC),
+ * so a missing binary is an install defect that should say so out loud.
+ */
+export function renderSkill(stage: PipelineStage, model?: string, adapter?: string): RenderedSkill {
+  const roots = resolveSkillRoots();
+  if (roots.length === 0) {
+    throw new Error(`No skills root available for stage ${stage} (no workspace folder, no bundle)`);
+  }
+
+  // Tiers 1-3 read a VSCode setting and the extension bundle. Either can be
+  // unavailable — during activation, or in a host that is not the extension
+  // host at all — and that is precisely what BinaryResolver's PATH tier is
+  // for. Fall back to the bare name rather than failing the stage on a
+  // resolver that could not answer.
+  let binary = "nightgauge";
+  try {
+    binary = BinaryResolver.fromVSCode().resolveSync() ?? binary;
+  } catch {
+    // Keep the PATH name.
+  }
+  const args = ["skill", "render", "--stage", stage, "--json", "--include-content"];
+  if (model) args.push("--model", model);
+  if (adapter) args.push("--adapter", adapter);
+  for (const root of roots) {
+    args.push("--skills-root", root);
+  }
+
+  let stdout: string;
+  try {
+    stdout = execFileSync(binary, args, {
+      encoding: "utf-8",
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`skill render failed for stage ${stage}: ${detail}`, { cause: err });
+  }
+
+  let envelope: SkillRenderEnvelope;
+  try {
+    envelope = JSON.parse(stdout) as SkillRenderEnvelope;
+  } catch {
+    throw new Error(`skill render returned unparseable JSON for stage ${stage}`);
+  }
+
+  const skillPath = envelope.skill_path ?? "";
+  if (!skillPath || typeof envelope.content !== "string") {
+    throw new Error(`skill render returned no skill for stage ${stage}`);
+  }
+
+  return {
+    content: envelope.content,
+    // The binary omits an empty list, so absence means "frontmatter declared
+    // none" — which is the case the historical default exists for.
+    allowedTools: envelope.allowed_tools?.length ? envelope.allowed_tools : DEFAULT_ALLOWED_TOOLS,
+    mcpTools: envelope.mcp_tools ?? [],
+    programmaticTools: envelope.programmatic_tools,
+    skillPath,
+    skillDir: path.dirname(skillPath),
+    resolvedKeys: envelope.resolved_keys ?? [],
+  };
 }
 
 /**
@@ -1820,70 +1924,13 @@ function resolveMcpTools(mcpTools: string[], workspaceRoot: string): string[] {
 }
 
 /**
- * Read and parse SKILL.md content
- * Extracts the allowed-tools and programmatic-tools from frontmatter and the instructions.
- * Expands <!-- include: --> directives before returning content.
- *
- * @see Issue #1066 - programmatic-tools frontmatter support
- */
-function readSkillFile(skillPath: string): {
-  content: string;
-  allowedTools: string[];
-  mcpTools: string[];
-  programmaticTools?: string[];
-} | null {
-  try {
-    const raw = fs.readFileSync(skillPath, "utf-8");
-    const content = expandIncludes(raw, path.dirname(skillPath));
-
-    // Extract allowed-tools from frontmatter
-    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    let allowedTools: string[] = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"];
-    let mcpTools: string[] = [];
-    let programmaticTools: string[] | undefined;
-
-    if (frontmatterMatch) {
-      const frontmatter = frontmatterMatch[1];
-      const toolsMatch = frontmatter.match(/allowed-tools:\s*(.+)/);
-      if (toolsMatch) {
-        allowedTools = toolsMatch[1].trim().split(/\s+/);
-      }
-
-      // Parse mcp-tools: space-separated MCP tool names or 'all' (Issue #1725, #1726)
-      const mcpMatch = frontmatter.match(/mcp-tools:\s*(.+)/);
-      if (mcpMatch) {
-        const raw = mcpMatch[1].trim();
-        mcpTools = raw === "all" ? ["all"] : raw.split(/\s+/);
-      }
-
-      // Parse programmatic-tools: space-separated tool names (Issue #1066)
-      const ptcMatch = frontmatter.match(/programmatic-tools:\s*(.+)/);
-      if (ptcMatch) {
-        programmaticTools = ptcMatch[1].trim().split(/\s+/);
-      }
-    }
-
-    // Strip frontmatter from the content passed to the executing agent.
-    // Frontmatter keys like `agent:` and `context: fork` are metadata for the
-    // skill-invocation layer — they've already been extracted above. Leaving
-    // them in the prompt causes Claude to interpret them as subagent-routing
-    // directives and wrap the entire stage in a Task subagent whose synthesized
-    // prompt omits the phase markers, breaking phase tracking in the sidebar.
-    const contentBody = frontmatterMatch
-      ? content.slice(frontmatterMatch[0].length).trimStart()
-      : content;
-
-    return { content: contentBody, allowedTools, mcpTools, programmaticTools };
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Parse skill content from an injected string (platform-resolved).
- * Same frontmatter parsing logic as readSkillFile() but operates on a string
- * instead of reading from disk. Skips expandIncludes() since platform content
- * is already fully rendered.
+ *
+ * This is NOT a second composer. The platform sends a fully rendered body —
+ * no file to locate, no includes to expand — so there is nothing for
+ * `skill render` to do with it; the binary composes from a SKILL.md on disk,
+ * and no flag feeds it a string. What remains here is frontmatter extraction
+ * so the dispatcher can build a tool allowlist from the injected document.
  *
  * @see Issue #1473 - Platform skill resolution
  */
@@ -1895,7 +1942,7 @@ function parseSkillContent(raw: string): {
 } | null {
   try {
     const frontmatterMatch = raw.match(/^---\n([\s\S]*?)\n---/);
-    let allowedTools: string[] = ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"];
+    let allowedTools: string[] = [...DEFAULT_ALLOWED_TOOLS];
     let mcpTools: string[] = [];
     let programmaticTools: string[] | undefined;
 
@@ -1918,7 +1965,12 @@ function parseSkillContent(raw: string): {
       }
     }
 
-    // Strip frontmatter — same rationale as readSkillFile above.
+    // Strip frontmatter from the content passed to the executing agent.
+    // Frontmatter keys like `agent:` and `context: fork` are metadata for the
+    // skill-invocation layer — they have already been extracted above. Leaving
+    // them in the prompt causes Claude to interpret them as subagent-routing
+    // directives and wrap the entire stage in a Task subagent whose synthesized
+    // prompt omits the phase markers, breaking phase tracking in the sidebar.
     const contentBody = frontmatterMatch ? raw.slice(frontmatterMatch[0].length).trimStart() : raw;
 
     return { content: contentBody, allowedTools, mcpTools, programmaticTools };
@@ -2360,7 +2412,18 @@ export function rewriteSkillRelativePaths(
 }
 
 /**
- * Build the prompt for headless execution
+ * Build the prompt for headless execution.
+ *
+ * `skillContent` MUST already be composed and path-rewritten — from
+ * `renderSkill()` on the disk path, or from `rewriteSkillRelativePaths()` at
+ * the injection site on the platform path. This function does not rewrite, and
+ * making it do so "just in case" would corrupt every prompt on the disk path:
+ * the rewrite is deliberately NOT idempotent, because an already-absolute
+ * `/abs/skills/_shared/` still contains the `skills/_shared/` needle and a
+ * second pass yields `/abs//abs/skills/_shared/` — every read directive then
+ * points at nothing, which is the #196 failure the rewrite exists to fix.
+ * `TestRewriteIsNotIdempotent` in internal/skillrender pins the same property
+ * on the Go side. Mirrors execution.BuildPrompt's contract exactly.
  */
 function buildSkillPrompt(
   stage: PipelineStage,
@@ -2385,7 +2448,7 @@ Stage: ${getStageLabel(stage)}\n\n`;
   // from Bash tool_use inputs in tokenParser.ts (lines 285-298), making phase tracking
   // model-agnostic without a runtime shim.
   intro += `---\n\n`;
-  intro += skillDir ? rewriteSkillRelativePaths(skillContent, stage, skillDir) : skillContent;
+  intro += skillContent;
 
   return intro;
 }
@@ -2656,54 +2719,11 @@ export function runStageSkillHeadless(
     };
   }
 
-  // Find and read the SKILL.md file — use injected content if provided (Issue #1473)
-  // Resolve the absolute skill directory regardless of content source: the
-  // spawn env exports it (NIGHTGAUGE_SKILL_DIR) and buildSkillPrompt rewrites
-  // skill-relative read directives against it (#196).
-  let skillDir: string | null;
-  let skillData: ReturnType<typeof readSkillFile>;
-  if (injectedSkillContent) {
-    // Parse frontmatter from platform-resolved content (in-memory, no disk I/O)
-    skillData = parseSkillContent(injectedSkillContent);
-    const diskPath = findSkillFile(stage);
-    skillDir = diskPath ? path.dirname(diskPath) : null;
-    if (!skillData) {
-      // Fallback to disk on parse failure
-      skillData = diskPath ? readSkillFile(diskPath) : null;
-    }
-  } else {
-    const skillPath = findSkillFile(stage);
-    if (!skillPath) {
-      const error = new Error(`SKILL.md not found for stage: ${stage}`);
-      callbacks?.onError?.(error);
-      callbacks?.onComplete?.({ success: false, exitCode: null, error });
-
-      return {
-        process: null as unknown as ChildProcess,
-        stage,
-        issueNumber,
-        kill: () => {},
-      };
-    }
-    skillDir = path.dirname(skillPath);
-    skillData = readSkillFile(skillPath);
-  }
-  if (!skillData) {
-    const error = new Error(`Failed to load skill for stage: ${stage}`);
-    callbacks?.onError?.(error);
-    callbacks?.onComplete?.({ success: false, exitCode: null, error });
-
-    return {
-      process: null as unknown as ChildProcess,
-      stage,
-      issueNumber,
-      kill: () => {},
-    };
-  }
-
-  // Build the prompt. Mutable: the Haiku behavioral preamble (#77 → #106)
-  // is prepended below once the model decision is final.
-  let prompt = buildSkillPrompt(stage, skillData.content, issueNumber, skillDir ?? undefined);
+  // Skill composition is deferred until the adapter AND the model are final
+  // (#79). Overlay keys are derived from the model that actually executes
+  // (ADR 016 §2), so composing here — before the escalation, floor and
+  // fallback logic below has run — would key the cascade off a tier the stage
+  // is not going to use. See the render block after the model decision.
 
   // Per-stage adapter resolution (Issue #3223 — Wave 2 of Epic #3212; Issue
   // #3230 added Step 2.5 — AutoProviderRouter).
@@ -2833,39 +2853,6 @@ export function runStageSkillHeadless(
     }
   }
 
-  // Estimate token count (~4 chars per token for English text)
-  const estimatedTokens = Math.ceil(prompt.length / 4);
-  const tokenLabel =
-    estimatedTokens > 1000 ? `${(estimatedTokens / 1000).toFixed(1)}K` : String(estimatedTokens);
-
-  // Emit headless mode (Issue #496)
-  callbacks?.onMode?.("headless");
-
-  // Merge MCP tools: config.yaml stage overrides frontmatter when present.
-  // Global config tools are always merged in. (Issue #1725, #1726)
-  const mcpToolsFromFrontmatter = skillData.mcpTools;
-  const mcpToolsFromConfig = getMcpToolsConfig(workspaceRoot, stage);
-  const configStageMcpTools = getStageMcpTools(workspaceRoot, stage);
-  // Stage-level config overrides frontmatter; global config always merges in
-  const baseMcpTools =
-    configStageMcpTools.length > 0 ? configStageMcpTools : mcpToolsFromFrontmatter;
-  const mergedMcpTools = Array.from(new Set([...baseMcpTools, ...mcpToolsFromConfig]));
-  const resolvedMcpTools = resolveMcpTools(mergedMcpTools, workspaceRoot);
-
-  if (resolvedMcpTools.length > 0) {
-    callbacks?.onStderr?.(`[skillRunner] MCP tools: ${resolvedMcpTools.join(", ")}\n`);
-  }
-
-  // Filter out AskUserQuestion - it doesn't work in headless mode (-p)
-  // Claude CLI treats it as a permission denial, causing the agent to retry
-  // repeatedly and flood the output. See Issue #118, #171, #205.
-  const filteredTools = skillData.allowedTools.filter((tool) => tool !== "AskUserQuestion");
-
-  const allAllowedTools = [...filteredTools, ...resolvedMcpTools];
-
-  let cmd = "claude";
-  let args: string[];
-
   // Resolve model using full resolution chain (Issue #732 - AutoModelSelector)
   // Hoisted so the decision is available in the onComplete callback.
   // When modelOverride is provided (Issue #1343 - escalation engine), bypass
@@ -2873,6 +2860,9 @@ export function runStageSkillHeadless(
   // When pauseAutoRouting is true (Issue #1395 - health emergency policy), skip
   // issueMetadata so AutoModelSelector is not consulted — resolution falls through
   // to config/default model while still respecting env var and stage-default overrides.
+  //
+  // Moved above skill composition (#79): the render keys its overlay cascade
+  // off this value, so it has to be final first.
   const effectiveMetadata = pauseAutoRouting ? undefined : issueMetadata;
   const baselineModelDecision = resolveModel(stage, workspaceRoot, effectiveMetadata, issueNumber);
   const priorModel = modelOverride
@@ -2913,11 +2903,90 @@ export function runStageSkillHeadless(
   // reconciled by the Go handler's latest-wins recording at completion.
   callbacks?.onModelResolved?.(stage, modelDecision.model, adapter);
 
+  // Compose the skill through `nightgauge skill render` — the ONE composer
+  // (#78, ADR 016 §4). Platform-resolved content (#1473) arrives already
+  // rendered, so it only needs frontmatter extraction and the one path
+  // rewrite; the disk path gets both from the binary.
+  let skillDir: string;
+  let skillData: {
+    content: string;
+    allowedTools: string[];
+    mcpTools: string[];
+    programmaticTools?: string[];
+  };
+  try {
+    const rendered = renderSkill(stage, modelDecision.model, adapter);
+    skillDir = rendered.skillDir;
+    if (injectedSkillContent) {
+      const parsed = parseSkillContent(injectedSkillContent);
+      skillData = parsed
+        ? {
+            ...parsed,
+            // The ONLY rewrite on this path. The binary already rewrote its
+            // own render; applying it to that body too would double-expand
+            // (see buildSkillPrompt) — which is why the injected body is
+            // rewritten HERE and the rendered body is not rewritten at all.
+            content: rewriteSkillRelativePaths(parsed.content, stage, rendered.skillDir),
+          }
+        : rendered;
+    } else {
+      skillData = rendered;
+    }
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    callbacks?.onError?.(error);
+    callbacks?.onComplete?.({ success: false, exitCode: null, error });
+
+    return {
+      process: null as unknown as ChildProcess,
+      stage,
+      issueNumber,
+      kill: () => {},
+    };
+  }
+
+  // Build the prompt. Mutable: the Haiku behavioral preamble (#77 → #106)
+  // is prepended below now that the model decision is final.
+  let prompt = buildSkillPrompt(stage, skillData.content, issueNumber, skillDir);
+
   // Behavioral preamble for the Haiku tier (#77 → #106): prepended
   // prompt-proximally now that the model decision is final; measured skip
   // on Sonnet/Opus. Mirrors the Go scheduler and SDK StageExecutor
   // injections.
   prompt = withBehavioralPreamble(prompt, modelDecision.model);
+
+  // Estimate token count (~4 chars per token for English text)
+  const estimatedTokens = Math.ceil(prompt.length / 4);
+  const tokenLabel =
+    estimatedTokens > 1000 ? `${(estimatedTokens / 1000).toFixed(1)}K` : String(estimatedTokens);
+
+  // Emit headless mode (Issue #496)
+  callbacks?.onMode?.("headless");
+
+  // Merge MCP tools: config.yaml stage overrides frontmatter when present.
+  // Global config tools are always merged in. (Issue #1725, #1726)
+  const mcpToolsFromFrontmatter = skillData.mcpTools;
+  const mcpToolsFromConfig = getMcpToolsConfig(workspaceRoot, stage);
+  const configStageMcpTools = getStageMcpTools(workspaceRoot, stage);
+  // Stage-level config overrides frontmatter; global config always merges in
+  const baseMcpTools =
+    configStageMcpTools.length > 0 ? configStageMcpTools : mcpToolsFromFrontmatter;
+  const mergedMcpTools = Array.from(new Set([...baseMcpTools, ...mcpToolsFromConfig]));
+  const resolvedMcpTools = resolveMcpTools(mergedMcpTools, workspaceRoot);
+
+  if (resolvedMcpTools.length > 0) {
+    callbacks?.onStderr?.(`[skillRunner] MCP tools: ${resolvedMcpTools.join(", ")}\n`);
+  }
+
+  // Filter out AskUserQuestion - it doesn't work in headless mode (-p)
+  // Claude CLI treats it as a permission denial, causing the agent to retry
+  // repeatedly and flood the output. See Issue #118, #171, #205.
+  const filteredTools = skillData.allowedTools.filter((tool) => tool !== "AskUserQuestion");
+
+  const allAllowedTools = [...filteredTools, ...resolvedMcpTools];
+
+  let cmd = "claude";
+  let args: string[];
 
   if (adapter === "claude") {
     const authProvider = getAuthProvider(workspaceRoot);
@@ -6268,10 +6337,18 @@ export function runStageSkillInteractive(
     };
   }
 
-  // Find and read the SKILL.md file (reuse existing infrastructure)
-  const skillPath = findSkillFile(stage);
-  if (!skillPath) {
-    const error = new Error(`SKILL.md not found for stage: ${stage}`);
+  // Compose the skill through the one composer (#78/#79), same as headless.
+  //
+  // No `--model` here, and that is the honest answer rather than a gap: this
+  // path spawns `claude` WITHOUT a `--model` flag, so the model that runs is
+  // whatever the user's own session resolves to — a value this process does
+  // not know and must not invent. An empty model matches no overlay key and
+  // renders base-only, which ADR 016 §2 defines as the fail-open result.
+  let skillData: RenderedSkill;
+  try {
+    skillData = renderSkill(stage);
+  } catch (err) {
+    const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
     callbacks?.onComplete?.({ success: false, exitCode: null, error });
 
@@ -6283,24 +6360,8 @@ export function runStageSkillInteractive(
       isInteractive: true,
     };
   }
-
-  const skillData = readSkillFile(skillPath);
-  if (!skillData) {
-    const error = new Error(`Failed to read SKILL.md at: ${skillPath}`);
-    callbacks?.onError?.(error);
-    callbacks?.onComplete?.({ success: false, exitCode: null, error });
-
-    return {
-      process: null as unknown as ChildProcess,
-      stage,
-      issueNumber,
-      kill: () => {},
-      isInteractive: true,
-    };
-  }
-
   // Build the prompt (reuse existing infrastructure)
-  const prompt = buildSkillPrompt(stage, skillData.content, issueNumber, path.dirname(skillPath));
+  const prompt = buildSkillPrompt(stage, skillData.content, issueNumber, skillData.skillDir);
 
   // Interactive mode intentionally uses the global adapter lookup, not
   // `resolveStageAdapter`. Per-stage adapter routing (Issue #3223) is

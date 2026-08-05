@@ -69,7 +69,20 @@ vi.mock("vscode", () => ({
 // for real — see the file header.
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
-  return { ...actual, spawn: vi.fn() };
+  const { isSkillRenderCall, skillRenderStdout } = await import("../helpers/skillRender");
+  return {
+    ...actual,
+    spawn: vi.fn(),
+    // This suite runs REAL git against real temp repos, so execFileSync stays
+    // real for everything except `skill render` (#79) — the fixture workspace
+    // is a bare git repo with no skills/ tree, so a real render would
+    // correctly fail to locate a SKILL.md and mask what the suite is testing.
+    execFileSync: vi.fn((cmd: string, args: string[], opts: unknown) =>
+      isSkillRenderCall(args)
+        ? skillRenderStdout(args)
+        : (actual.execFileSync as (...a: unknown[]) => unknown)(cmd, args, opts)
+    ),
+  };
 });
 
 vi.mock("../../src/services/RepositoryContextLoader", () => ({
