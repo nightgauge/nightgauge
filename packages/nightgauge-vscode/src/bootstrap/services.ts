@@ -86,7 +86,7 @@ import { createStreamOutputHandler } from "../utils/streamOutputHandler";
 import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../utils/failureComment";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
-import { ensureGitignore } from "../utils/ensureGitignore";
+import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
 import { classifyRuntimeStub } from "../utils/runtimeStubSweep";
 import {
   isRepoInitialized,
@@ -602,6 +602,33 @@ export async function initializeServices(
         })
         .catch((error) => {
           logger.warn("Failed to ensure .nightgauge/.gitignore", { error });
+        });
+
+      // …and every OTHER repo in the workspace manifest (#332). Only the
+      // primary root was ever reached, so sibling repos kept a hand-written
+      // .gitignore predating the #326 generator — with no `/knowledge/` rule,
+      // which is what turned the pipeline's own scaffold into a permanent
+      // "uncommitted changes" verdict and deadlocked nine worktrees.
+      ensureWorkspaceGitignores(incrediRoot)
+        .then((results) => {
+          for (const r of results) {
+            if (r.error) {
+              logger.warn("Failed to ensure .nightgauge/.gitignore for workspace repo", {
+                repo: r.name,
+                root: r.root,
+                error: r.error,
+              });
+            } else if (r.created || r.updated) {
+              logger.info("Refreshed .nightgauge/.gitignore for workspace repo", {
+                repo: r.name,
+                created: r.created,
+                updated: r.updated,
+              });
+            }
+          }
+        })
+        .catch((error) => {
+          logger.warn("Workspace .nightgauge/.gitignore propagation failed", { error });
         });
     } else {
       logger.info(

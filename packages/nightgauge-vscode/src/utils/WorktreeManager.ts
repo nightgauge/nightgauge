@@ -103,6 +103,26 @@ export class WorktreeManager {
     assertValidBranchName(branchName, "branchName");
     assertValidBranchName(baseBranch, "baseBranch");
 
+    // A pipeline worktree must never be created on the default branch (#332).
+    // `.worktrees/issue-696` ended up holding `main`, and a worktree holding
+    // `main` breaks the operator's own primary clone outright:
+    //
+    //   $ git checkout main
+    //   fatal: 'main' is already used by worktree at '.../.worktrees/issue-696'
+    //
+    // It also arms the stale-cleanup path below, which runs
+    // `git branch -D <branchName>` unconditionally — with branchName === main
+    // that deletes the trunk. Refusing here is the only place both failures
+    // are still cheap; by the time `worktree sweep` sees it the damage is done
+    // and reclamation is all that is left.
+    if (branchName === baseBranch || branchName === "main" || branchName === "master") {
+      throw new Error(
+        `Refusing to create a pipeline worktree for issue #${issueNumber} on the default branch ` +
+          `("${branchName}"): a worktree holding the default branch blocks checkout in the primary ` +
+          `clone and would make the stale-worktree cleanup delete the branch.`
+      );
+    }
+
     // Ensure the base directory exists
     const baseDir = path.join(this.repoRoot, this.worktreeBase);
     await fs.mkdir(baseDir, { recursive: true });

@@ -822,10 +822,10 @@ with its reason:
 | Not the primary checkout                       | `primary-checkout`      |
 | Not `git worktree lock`ed                      | `locked`                |
 | Holds a branch                                 | `detached-head`         |
-| Branch is not main/master/default              | `protected-branch`      |
+| Non-pipeline worktree is not on main/default   | `protected-branch`      |
 | Directory is `issue-NNN` or `<repo>-issue-NNN` | `not-pipeline-managed`  |
 | Issue has no run in flight                     | `active-run`            |
-| No uncommitted or untracked changes            | `uncommitted-changes`   |
+| No **blocking** changes (see below)            | `uncommitted-changes`   |
 | Branch has commits of its own                  | `no-commits-of-its-own` |
 | Content already on the default branch          | `unmerged-content`      |
 
@@ -838,6 +838,67 @@ Reclaiming removes the worktree and deletes the local branch with `-D` (a squash
 merge makes `-d` refuse it). Removal failures are logged at `[WARN]` rather than
 swallowed — on both the inline and reconcile paths — so a leak is observable
 when it happens instead of inferred days later from disk usage.
+
+#### Pipeline Exhaust vs Blocking Changes (Issue #332)
+
+The dirtiness test is **not** "does `git status` report anything". It is
+`reclaim.ClassifyStatus`, and the line it draws is **tracked vs untracked**:
+
+| Change                                                   | Class      | Reclaimable? |
+| -------------------------------------------------------- | ---------- | ------------ |
+| Untracked file under `.nightgauge/` or `.claude/`        | _exhaust_  | yes          |
+| **Tracked** change under `.nightgauge/` or `.claude/`    | _blocking_ | no           |
+| Anything outside those directories, tracked or untracked | _blocking_ | no           |
+
+**Why this exists.** A workspace audit found nine leaked worktrees that `sweep`
+refused permanently. `.worktrees/issue-1181` had zero tracked changes and
+exactly one untracked file — `.nightgauge/knowledge/README.md`, the scaffold
+_the pipeline itself writes at issue pickup_. That made the tree read as dirty,
+`sweep` skipped as `uncommitted-changes`, and because nothing ever removes that
+file the skip was permanent. Since the worktree held the branch, `git branch -D`
+refused too: cleanup blocked at both ends by the pipeline's own exhaust.
+
+**Why "just exclude `.nightgauge`" is the wrong fix.** `.worktrees/issue-701`
+held 209 **staged deletions** under `.nightgauge/pipeline/assessments/` — that
+_is_ the deliverable of an open issue, with `origin/main` still tracking 45 of
+those files. A sweep that excluded the directory wholesale would have destroyed
+it and reported success. #237/#248 taught the dev gate that a bookkeeping-only
+deliverable is real work; the tracked/untracked test is how the reclamation
+tools learn the same thing, and it keeps #701 blocked while releasing the nine.
+
+A `uncommitted-changes` skip now names the paths that produced it (`blocking` in
+the JSON output), so the verdict is falsifiable from the sweep's own output
+instead of requiring the operator to open the worktree.
+
+The same classifier gates `nightgauge worktree recover`: a rescue commits
+tracked bookkeeping changes (they are the deliverable) and never publishes
+untracked exhaust (#202).
+
+#### A Pipeline Worktree on the Default Branch (Issue #332)
+
+`.worktrees/issue-696` held `main`, which breaks the operator's own primary
+clone outright:
+
+```text
+$ git checkout main
+fatal: 'main' is already used by worktree at '.../.worktrees/issue-696'
+```
+
+Two changes:
+
+- **Creation is refused.** `WorktreeManager.create` throws when the branch is
+  the default branch. This also disarms its own stale-cleanup path, which runs
+  an unconditional `git branch -D <branchName>`.
+- **`sweep` can reclaim one that already exists.** The pipeline-managed test now
+  runs _before_ the protected-branch test, so a clean `issue-NNN` worktree on
+  the default branch is removed — **and its branch is kept**. A worktree whose
+  directory name encodes no issue number is still `protected-branch`; the
+  protection was aimed at a developer's deliberate `main` worktree, and a
+  directory named `issue-NNN` is not that.
+
+The merge test cannot decide this case: the default branch is the base, so it
+has no commits of its own by construction and would land on
+`no-commits-of-its-own` forever.
 
 #### Active-Worktree Scanning — Single-Scanner Contract (Issue #323)
 
@@ -880,6 +941,66 @@ complete one at the call site.
 turns a worktree directory name into an issue number.
 `TestExactlyOneWorktreeIssueParser` walks the AST of every non-test Go file and
 fails if a second one appears — do not add an exemption; call the shared parser.
+
+### Stash Reclamation (Issue #330)
+
+Same two-half shape as worktree reclamation, for the same reason. A stage that
+needs a clean tree to measure against (the CI-gate baseline detector, the
+"preserve unrelated work" paths) stashes first and pops after; a stage killed
+mid-run never reaches the pop.
+
+```bash
+# Restore the pipeline stashes this repo is still carrying (default action)
+nightgauge stash sweep [--workdir <repo>] [--issue N] [--dry-run] [--json]
+
+# Discard them instead — explicit opt-in, destroys whatever was stashed
+nightgauge stash sweep --drop
+```
+
+**Every pipeline stash carries one name, and only that name is reclaimable:**
+
+```text
+nightgauge:<purpose>:<issue>:<stage>
+e.g. nightgauge:baseline:289:feature-validate
+```
+
+`reclaim.StashName` builds it; `reclaim.ParseStashMessage` reads it, searching
+for the `nightgauge:` marker rather than anchoring at the start (git renders
+every stash as `On <branch>: <message>`).
+
+**A stash without the marker is UNOWNED and is never touched** — reported as
+`unowned`, never acted on. This is the `determined=false` contract from #323
+applied to stashes: an operator's own `git stash -m "wip before the refactor"`
+is indistinguishable from a pre-marker pipeline stash, and no heuristic over
+free-form messages is safe enough to delete on.
+
+| Skip reason      | Meaning                                                |
+| ---------------- | ------------------------------------------------------ |
+| `unowned`        | No marker — ownership unprovable, so never reclaimed   |
+| `other-issue`    | Owned, but belongs to a different issue than `--issue` |
+| `dirty-tree`     | Restoring would collide with uncommitted work          |
+| `restore-failed` | `git stash pop` refused; git leaves the stash in place |
+
+`dirty-tree` uses the same exhaust classifier as the worktree sweep — a
+scaffolded knowledge README does not count as a collision.
+
+**Refs renumber on every removal** (dropping `stash@{1}` makes `stash@{2}`
+become `stash@{1}`), so the sweep re-resolves each stash by message immediately
+before acting. Iterating a captured list would act on the wrong stash from the
+second removal onward — and with a mix of owned and unowned entries, the wrong
+stash is the operator's.
+
+**Inline half:** `ResetPipeline` **drops** every pipeline stash in the repo
+before its hard reset (#289 AC5). Drop rather than pop, and the distinction only
+matters here: the reset wipes the tree milliseconds later, so anything popped is
+discarded anyway, while a pop-based reclaim can only ever clear one stash —
+restoring the first dirties the tree and makes the second unpoppable.
+
+**When neither half runs:** a SIGKILL executes no cleanup at all, so the reclaim
+cannot be made reliable. What is guaranteed is that a leak is not _silent_ — the
+stage-exit record carries `unreclaimed_stashes` (see
+[STAGE_EXIT_DIAGNOSTIC.md](STAGE_EXIT_DIAGNOSTIC.md)), and `nightgauge doctor`
+reports them per repo with age.
 
 ### PR Operations
 
@@ -2424,6 +2545,30 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
 | `config`      | `.nightgauge/config.yaml` parseable        | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
+
+Plus the leaked-machine-state checks (#330 / #332), both **warning-only**:
+
+| Check key          | What it verifies                                                    |
+| ------------------ | ------------------------------------------------------------------- |
+| `worktree_leaks`   | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
+| `pipeline_stashes` | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
+
+Both existed because a 2026-08-04 workspace audit found **9 leaked worktrees and
+5 leaked stashes** — all of them by running `git worktree list` and `git stash
+list` by hand in each repo, the oldest five months old — and `doctor` had
+reported none of them. Reclamation tooling that cannot see a leak is
+indistinguishable from a workspace that has none.
+
+Warning-only by design: a leaked worktree is untidy, not broken, and exiting 2
+on a workspace that runs perfectly well teaches operators to stop reading the
+output. Both report **unverifiable** rather than healthy when the scan cannot
+run — a clean report from a scan that never happened is #296's defect.
+
+A live run's worktree is excluded by **age**, not by the active-worktree set:
+`execution.ActiveWorktreeIssues` answers "which issues have a worktree
+registered on disk?", which is every worktree this scan can see, so feeding it
+back in as `ActiveIssues` (whose contract is "runs in flight") makes every
+candidate skip as `active-run` and the check reports nothing, forever.
 
 \* Downgraded to warning for fresh repositories (no `config.yaml`).
 

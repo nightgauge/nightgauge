@@ -260,7 +260,7 @@ func TestReclaimWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
 	phantom := filepath.Join(f.root, ".worktrees", "issue-999")
 
 	logged := captureLog(t, func() {
-		if err := reclaimWorktree(f.root, worktreeRecord{Path: phantom, Branch: "fix/999-gone"}); err != nil {
+		if err := reclaimWorktree(f.root, worktreeRecord{Path: phantom, Branch: "fix/999-gone"}, false); err != nil {
 			t.Fatalf("reclaimWorktree must soft-fail through the manual path: %v", err)
 		}
 	})
@@ -380,6 +380,213 @@ func TestParseWorktreeList(t *testing.T) {
 	}
 	if !got[3].Locked || !got[3].Prunable {
 		t.Errorf("record 3 = %+v, want locked and prunable", got[3])
+	}
+}
+
+// #332 — pipeline exhaust must not veto reclamation, and tracked bookkeeping
+// must still block it. ------------------------------------------------------
+
+// writeExhaust scaffolds the pipeline's own untracked bookkeeping into a
+// worktree. This is the literal file that deadlocked nine worktrees: the
+// knowledge scaffold written at issue pickup, untracked because the sibling
+// repos' `.nightgauge/.gitignore` predates the #326 generator and carries no
+// `/knowledge/` rule.
+func (f *sweepFixture) writeExhaust(worktree string) {
+	f.t.Helper()
+	writeFile(f.t, filepath.Join(worktree, ".nightgauge", "knowledge", "README.md"), "# Knowledge Base\n")
+}
+
+// commitToMain lands a file on main and pushes it, so a worktree created from
+// origin/main afterwards has it TRACKED.
+func (f *sweepFixture) commitToMain(relPath, content string) {
+	f.t.Helper()
+	writeFile(f.t, filepath.Join(f.root, relPath), content)
+	run(f.t, f.root, "git", "add", relPath)
+	run(f.t, f.root, "git", "commit", "-m", "seed: "+relPath)
+	run(f.t, f.root, "git", "push", "origin", "main")
+	run(f.t, f.root, "git", "fetch", "origin")
+}
+
+func TestSweepMergedWorktrees_ReclaimsWorktreeHoldingOnlyPipelineExhaust(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(1181, "fix/1181-thing")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("fix/1181-thing")
+	f.writeExhaust(wt)
+
+	// Arm the trap: git must genuinely report this worktree as dirty, or the
+	// test would pass against the pre-#332 code for the wrong reason.
+	if status := mustGit(t, wt, "status", "--porcelain"); !strings.Contains(status, ".nightgauge/knowledge/README.md") {
+		t.Fatalf("fixture produced no untracked pipeline exhaust; status = %q", status)
+	}
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Path != wt {
+		t.Fatalf("a worktree whose only change is pipeline exhaust must be reclaimed, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	// The side effect, not the verdict: the pre-#332 sweep also returned no
+	// error while leaving every one of nine worktrees on disk forever.
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree still on disk at %s", wt)
+	}
+	if branches := mustGit(t, f.root, "branch", "--list", "fix/1181-thing"); strings.TrimSpace(branches) != "" {
+		t.Errorf("the branch the worktree held survived, so `git branch -D` is still blocked: %q", branches)
+	}
+}
+
+func TestSweepMergedWorktrees_KeepsTrackedBookkeepingDeliverable(t *testing.T) {
+	f := newSweepFixture(t)
+	// origin/main tracks pipeline assessments — the #701 shape. Untracking
+	// them IS that issue's deliverable, so it must survive the sweep even
+	// though every path involved is under .nightgauge/.
+	assessment := filepath.Join(".nightgauge", "pipeline", "assessments", "issue-42.json")
+	f.commitToMain(assessment, "{}\n")
+
+	wt := f.addWorktree(701, "feat/701-untrack-assessments")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("feat/701-untrack-assessments")
+	run(t, wt, "git", "rm", "--cached", "-q", assessment)
+	f.writeExhaust(wt) // exhaust sits alongside the real work; it must not decide
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 0 {
+		t.Fatalf("a staged change to a TRACKED bookkeeping file is the deliverable, not exhaust; got %+v", res.Reclaimed)
+	}
+	assertSkipped(t, res, wt, SkipDirty)
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("the unlanded deliverable was destroyed: %v", err)
+	}
+	if staged := mustGit(t, wt, "diff", "--cached", "--name-only"); !strings.Contains(staged, "assessments") {
+		t.Errorf("staged deletion did not survive; staged = %q", staged)
+	}
+}
+
+func TestSweepMergedWorktrees_NamesTheBlockingPaths(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(1182, "fix/1182-dirty")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("fix/1182-dirty")
+	writeFile(t, filepath.Join(wt, "fix.txt"), "local edit not committed\n")
+	f.writeExhaust(wt)
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	var skipped SkippedWorktree
+	for _, s := range res.Skipped {
+		if s.Path == wt {
+			skipped = s
+		}
+	}
+	if len(skipped.Blocking) != 1 || skipped.Blocking[0] != "fix.txt" {
+		t.Fatalf("a skip must name exactly what blocked it, and exhaust is not a blocker; got %+v", skipped.Blocking)
+	}
+}
+
+func TestSweepMergedWorktrees_ReclaimsPipelineWorktreeParkedOnDefaultBranch(t *testing.T) {
+	f := newSweepFixture(t)
+	// Reproduce the production state exactly: the primary is parked on some
+	// OTHER branch, because `.worktrees/issue-696` holds `main` and
+	// `git checkout main` therefore fails outright ("fatal: 'main' is already
+	// used by worktree at …"). The pre-#332 sweep protected it as
+	// `protected-branch` forever, so it could never self-heal.
+	//
+	// Parking the primary elsewhere is load-bearing for the assertion below,
+	// not scene-setting: with the primary sitting ON main, git refuses
+	// `git branch -D main` all by itself, and a sweep that tried to delete the
+	// trunk would look correct here for a reason that does not hold in the
+	// workspace this bug was found in.
+	run(t, f.root, "git", "checkout", "-q", "-b", "fix/parked-elsewhere")
+	wt := filepath.Join(f.root, ".worktrees", "issue-696")
+	run(t, f.root, "git", "worktree", "add", wt, "main")
+	if _, err := commandOutput(f.root, "git", "checkout", "main"); err == nil {
+		t.Fatal("fixture is not the #332 state — the primary can still check out main")
+	}
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Path != wt {
+		t.Fatalf("a pipeline worktree parked on the default branch must be reclaimable, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree still on disk at %s", wt)
+	}
+	// The branch is the repository's trunk — removing the stray checkout must
+	// never take it with it. This is the assertion that separates the fix from
+	// the catastrophe: reclaimWorktree ends in `git branch -D <branch>`.
+	if branches := strings.TrimSpace(mustGit(t, f.root, "branch", "--list", "main")); branches == "" {
+		t.Fatal("the sweep deleted the default branch")
+	}
+	if _, err := commandOutput(f.root, "git", "rev-parse", "--verify", "main"); err != nil {
+		t.Fatalf("main no longer resolves in the primary checkout: %v", err)
+	}
+}
+
+func TestSweepMergedWorktrees_KeepsHandmadeWorktreeOnDefaultBranch(t *testing.T) {
+	f := newSweepFixture(t)
+	// Same state, but the directory name encodes no issue number, so a
+	// developer made it deliberately. Reordering the pipeline-managed test
+	// ahead of the protected-branch test must not widen the sweep to these.
+	wt := filepath.Join(f.root, ".worktrees", "my-main-checkout")
+	run(t, f.root, "git", "worktree", "add", "--force", wt, "main")
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 0 {
+		t.Fatalf("a hand-made worktree on the default branch must stay protected, got %+v", res.Reclaimed)
+	}
+	assertSkipped(t, res, wt, SkipProtectedBranch)
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("hand-made worktree was removed: %v", err)
+	}
+}
+
+func TestCleanupWorktree_RemovesWorktreeHoldingOnlyPipelineExhaust(t *testing.T) {
+	// The inline half of the same defect. CleanupWorktree runs on the path a
+	// finished run walks, so exhaust preserving the worktree here is how the
+	// leak is manufactured — one completed run at a time.
+	f := newSweepFixture(t)
+	m := &Manager{workspaceRoot: f.root}
+	wt := m.worktreePath("owner/clone", 1252)
+	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/1252", "origin/main")
+	f.writeExhaust(wt)
+
+	if err := m.CleanupWorktree("owner/clone", 1252); err != nil {
+		t.Fatalf("CleanupWorktree: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("teardown preserved a worktree holding only the pipeline's own exhaust: %s", wt)
+	}
+}
+
+func TestCleanupWorktree_PreservesTrackedBookkeepingChange(t *testing.T) {
+	f := newSweepFixture(t)
+	assessment := filepath.Join(".nightgauge", "pipeline", "assessments", "issue-9.json")
+	f.commitToMain(assessment, "{}\n")
+
+	m := &Manager{workspaceRoot: f.root}
+	wt := m.worktreePath("owner/clone", 1253)
+	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/1253", "origin/main")
+	run(t, wt, "git", "rm", "--cached", "-q", assessment)
+
+	if err := m.CleanupWorktree("owner/clone", 1253); err != nil {
+		t.Fatalf("CleanupWorktree: %v", err)
+	}
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("teardown destroyed a bookkeeping-only deliverable: %v", err)
 	}
 }
 

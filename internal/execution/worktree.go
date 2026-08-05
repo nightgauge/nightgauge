@@ -225,8 +225,15 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	// only guard standing between that and data loss. Missing/removed
 	// worktrees read as "not dirty" (nothing to lose) and fall through to
 	// the idempotent removal below.
-	if dirty, err := hasUncommittedChanges(worktreeDir); err == nil && dirty {
-		log.Printf("worktree teardown: preserving %s (issue #%d) — %s", worktreeDir, issueNumber, SkipDirty)
+	//
+	// The pipeline's own untracked exhaust does not count as work here, for
+	// the same reason it does not in the sweep (#332): this teardown runs on
+	// the happy path, so a scaffolded knowledge README preserving the worktree
+	// is how the leak is CREATED, one finished run at a time. See
+	// blockingChanges.
+	if blocking, err := blockingChanges(worktreeDir); err == nil && len(blocking) > 0 {
+		log.Printf("worktree teardown: preserving %s (issue #%d) — %s (%s)",
+			worktreeDir, issueNumber, SkipDirty, strings.Join(blocking, ", "))
 		return nil
 	}
 

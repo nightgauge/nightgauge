@@ -956,6 +956,77 @@ the teardown window treats the timing, not the cause. Remove the traffic.
 
 ---
 
+### `worktree sweep` reports "No reclaimable worktrees" over obvious leaks (#332)
+
+**Symptom.** Worktrees are visibly piling up, and every one is skipped:
+
+```text
+$ nightgauge worktree sweep --dry-run
+No reclaimable worktrees (scanned 7)
+  skipped  .worktrees/issue-1181  (uncommitted-changes)
+  skipped  .worktrees/issue-1252  (uncommitted-changes)
+```
+
+`git branch -D` also refuses their branches ("checked out at …"), so cleanup is
+blocked at both ends. `nightgauge doctor` reports nothing.
+
+**Root cause.** The worktree's only change is a file _the pipeline itself
+wrote_ — usually `.nightgauge/knowledge/README.md`, scaffolded at issue pickup:
+
+```text
+$ git -C .worktrees/issue-1181 status --porcelain
+?? .nightgauge/knowledge/README.md
+```
+
+It is untracked because that repo's `.nightgauge/.gitignore` has no
+`/knowledge/` rule. Pre-#326 the file was hand-written per repo; #326 made
+`ensureGitignore.ts` the single source but only the **primary** repo ever
+received the generated copy, so every sibling kept a stale one. Nothing removes
+the scaffold, so the skip was permanent.
+
+**Fixed in #332** on three levels — the sweep classifies untracked bookkeeping
+as exhaust rather than as a blocker, the extension propagates the generated
+`.gitignore` to every repo in the workspace manifest, and `doctor` now reports
+stale worktrees with the paths that blocked them.
+
+**If you see it on an older binary:** delete the scaffold and re-run the sweep,
+but guard on `git ls-files --error-unmatch <path>` first — `knowledge/README.md`
+is untracked exhaust in most worktrees and **tracked content** in some. Deleting
+a tracked one produces a staged deletion, and the removal then refuses for a
+genuinely different reason.
+
+**Do not "just exclude `.nightgauge`".** A staged change to a tracked file under
+`.nightgauge/` can be the whole deliverable — #701's was 209 staged deletions
+under `.nightgauge/pipeline/assessments/`. The tracked/untracked distinction is
+what separates the two, and it is why `sweep` still refuses that worktree.
+
+### Stashes accumulating in sibling repos (#330)
+
+**Symptom.** `git stash list` in a repo the pipeline has worked shows entries
+nobody created by hand, sometimes months old.
+
+**Root cause.** A stage stashes to run a test suite against a clean tree and
+pops afterwards. A killed stage never reaches the pop — no `trap` or `defer`
+survives a SIGKILL — and before #330 the stash carried no identifying message,
+so no tool could tell it from the operator's own and none would touch it.
+
+**Now:** pipeline stashes carry `nightgauge:<purpose>:<issue>:<stage>`.
+
+```bash
+git stash list | grep nightgauge:     # find them
+nightgauge stash sweep --dry-run      # classify
+nightgauge stash sweep                # restore (pop) them
+```
+
+`nightgauge doctor` reports them per repo with age, and a killed stage's
+stage-exit record names what it stranded in `unreclaimed_stashes`.
+
+**A stash with no marker is never touched by any of this** — that includes
+pre-#330 pipeline stashes. Ownership cannot be proven from a free-form message,
+so they are reported as `unowned` and left for you to decide on.
+
+---
+
 ## Getting Help
 
 If you can't resolve an issue:

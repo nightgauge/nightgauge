@@ -11,6 +11,8 @@ import (
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
 func setupTestRepo(t *testing.T) (*Service, string) {
@@ -1072,13 +1074,13 @@ func TestPipelineIssueNumber(t *testing.T) {
 	})
 }
 
-func TestResetPipeline_PopsBaselineStash(t *testing.T) {
+func TestResetPipeline_ReclaimsPipelineStash(t *testing.T) {
 	svc, dir := setupTestRepo(t)
 
 	if err := os.WriteFile(filepath.Join(dir, "baseline.txt"), []byte("baseline"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitExecTest(t, dir, "stash", "push", "-u", "-m", "feature-validate-289-baseline")
+	gitExecTest(t, dir, "stash", "push", "-u", "-m", reclaim.StashName(reclaim.StashBaseline, 289, "feature-validate"))
 
 	if err := svc.ResetPipeline(); err != nil {
 		t.Fatalf("ResetPipeline: %v", err)
@@ -1089,7 +1091,68 @@ func TestResetPipeline_PopsBaselineStash(t *testing.T) {
 	// the subsequent hard reset + clean along with everything else. What AC5
 	// guards against is an *orphaned* stash silently surviving untracked.
 	stashOut := gitExecTest(t, dir, "stash", "list")
-	if strings.Contains(stashOut, "baseline") {
-		t.Errorf("expected baseline stash to be popped, stash list = %q", stashOut)
+	if strings.Contains(stashOut, reclaim.StashMarker) {
+		t.Errorf("expected the pipeline stash to be reclaimed, stash list = %q", stashOut)
+	}
+}
+
+// #330. The pre-fix reclaim popped only the FIRST match, walking the list
+// top-down and returning on the first success. "Top of stack" was never a
+// property of a leak — a stage that stashes twice, or two stages that both
+// leak, left everything below the first entry behind forever.
+func TestResetPipeline_ReclaimsEveryPipelineStash(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+
+	for _, spec := range []struct {
+		file  string
+		issue int
+		stage string
+	}{
+		{"first.txt", 289, "feature-validate"},
+		{"second.txt", 330, "auto-fix"},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, spec.file), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitExecTest(t, dir, "stash", "push", "-u", "-m",
+			reclaim.StashName(reclaim.StashBaseline, spec.issue, spec.stage))
+	}
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	if out := gitExecTest(t, dir, "stash", "list"); strings.Contains(out, reclaim.StashMarker) {
+		t.Errorf("a pipeline stash survived the reset, stash list = %q", out)
+	}
+}
+
+// The reclaim is destructive by consequence — whatever it pops is wiped by the
+// hard reset that follows. Acting on a stash whose ownership it cannot prove
+// would destroy an operator's work, which is the failure mode #323 named for
+// worktrees and the reason the marker exists at all.
+func TestResetPipeline_NeverTouchesAnOperatorStash(t *testing.T) {
+	svc, dir := setupTestRepo(t)
+
+	// A modification to a TRACKED file, so `git stash show` can prove the
+	// content survived rather than merely that the entry is still listed.
+	if err := os.WriteFile(filepath.Join(dir, ".gitkeep"), []byte("my work in progress"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately shaped like the old convention the pre-#330 regex matched
+	// (`[a-z-]+-\d+-baseline`), so this fails against that implementation.
+	gitExecTest(t, dir, "stash", "push", "-m", "my-notes-42-baseline")
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	out := gitExecTest(t, dir, "stash", "list")
+	if !strings.Contains(out, "my-notes-42-baseline") {
+		t.Fatalf("the operator's stash was consumed by a pipeline reset; stash list = %q", out)
+	}
+	// And its content must still be recoverable, not merely listed.
+	if show := gitExecTest(t, dir, "stash", "show", "--name-only", "stash@{0}"); !strings.Contains(show, ".gitkeep") {
+		t.Errorf("the operator's stash no longer holds its content: %q", show)
 	}
 }

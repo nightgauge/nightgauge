@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
@@ -319,6 +320,27 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings,
 			fmt.Sprintf("orphaned docker compose project(s) detected (%s) — run `nightgauge cleanup`",
 				strings.Join(names, ", ")))
+	}
+
+	// --- leaked machine state (warning only, #330 / #332) ---
+	// The pipeline creates worktrees and stashes and is supposed to take them
+	// back. When a stage is killed it does not, and before these two checks
+	// nothing reported it: a 2026-08-04 audit found 9 leaked worktrees and 5
+	// leaked stashes, all of them found by hand, the oldest five months old,
+	// and `doctor` had reported none of them. Warning-only by design — a
+	// leaked worktree is untidy, not broken, and a required failure here would
+	// exit 2 on a workspace that runs perfectly well.
+	now := time.Now()
+	worktreeLeaks, worktreeWarning := checkLeakedWorktrees(cwd, now)
+	result.Checks["worktree_leaks"] = worktreeLeaks
+	if worktreeWarning != "" {
+		warnings = append(warnings, worktreeWarning)
+	}
+
+	stashLeaks, stashWarning := checkPipelineStashes(cwd, now)
+	result.Checks["pipeline_stashes"] = stashLeaks
+	if stashWarning != "" {
+		warnings = append(warnings, stashWarning)
 	}
 
 	// --- per-adapter health (Issue #4031, opt-in) ---

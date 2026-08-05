@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
 // Worktree reclamation — the reconcile half of worktree lifecycle.
@@ -35,11 +37,17 @@ const (
 	SkipLocked SkipReason = "locked"
 	// SkipDetached — no branch to compare against the default branch.
 	SkipDetached SkipReason = "detached-head"
-	// SkipProtectedBranch — main/master/the default branch itself.
+	// SkipProtectedBranch — main/master/the default branch itself, in a
+	// worktree the pipeline did not create. A PIPELINE worktree on the default
+	// branch is a different case entirely; see reclaimDefaultBranch.
 	SkipProtectedBranch SkipReason = "protected-branch"
 	// SkipActiveRun — the issue is currently executing.
 	SkipActiveRun SkipReason = "active-run"
-	// SkipDirty — uncommitted or untracked changes would be destroyed.
+	// SkipDirty — changes that are not the pipeline's own untracked exhaust
+	// would be destroyed. Untracked bookkeeping does NOT count: it is what the
+	// pipeline scaffolded into the worktree itself, and treating it as a
+	// blocker deadlocked nine worktrees permanently (#332). See
+	// reclaim.ClassifyStatus for why tracked-vs-untracked is the line.
 	SkipDirty SkipReason = "uncommitted-changes"
 	// SkipNoOwnCommits — the branch has produced no commits of its own, which
 	// is indistinguishable from a worktree that was just created for a run
@@ -63,7 +71,17 @@ type SkippedWorktree struct {
 	Path   string     `json:"path"`
 	Branch string     `json:"branch,omitempty"`
 	Reason SkipReason `json:"reason"`
+	// Blocking names the paths that produced a SkipDirty verdict, capped at
+	// maxBlockingReported. Without it "uncommitted-changes" is unfalsifiable
+	// from the sweep's own output: the operator has to open the worktree and
+	// re-run git to learn whether the blocker is their work or the pipeline's
+	// exhaust, which is the step nobody took for nine leaked worktrees.
+	Blocking []string `json:"blocking,omitempty"`
 }
+
+// maxBlockingReported caps the named blocking paths. The list is evidence, not
+// an inventory.
+const maxBlockingReported = 5
 
 // WorktreeSweepResult summarizes one reconcile pass over a single repo.
 type WorktreeSweepResult struct {
@@ -130,16 +148,19 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 	// distinguishes it in the porcelain format.
 	for i, wt := range records {
 		res.Scanned++
-		skip, num := classifyWorktree(wt, i == 0, defaultBranch, baseRef, opts)
-		if skip != "" {
-			res.Skipped = append(res.Skipped, SkippedWorktree{Path: wt.Path, Branch: wt.Branch, Reason: skip})
+		verdict := classifyWorktree(wt, i == 0, defaultBranch, baseRef, opts)
+		if verdict.Skip != "" {
+			res.Skipped = append(res.Skipped, SkippedWorktree{
+				Path: wt.Path, Branch: wt.Branch, Reason: verdict.Skip, Blocking: verdict.Blocking,
+			})
 			continue
 		}
+		num := verdict.IssueNumber
 		if opts.DryRun {
 			res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{Path: wt.Path, Branch: wt.Branch, IssueNumber: num})
 			continue
 		}
-		if err := reclaimWorktree(opts.RepoRoot, wt); err != nil {
+		if err := reclaimWorktree(opts.RepoRoot, wt, verdict.KeepBranch); err != nil {
 			log.Printf("[WARN] worktree sweep: %v", err)
 			res.Errors = append(res.Errors, err.Error())
 			continue
@@ -150,53 +171,92 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 	return res, nil
 }
 
+// worktreeVerdict is one worktree's classification.
+type worktreeVerdict struct {
+	// Skip is empty when the worktree may be reclaimed.
+	Skip SkipReason
+	// IssueNumber is set once the directory name has been parsed.
+	IssueNumber int
+	// Blocking names the paths behind a SkipDirty verdict.
+	Blocking []string
+	// KeepBranch suppresses branch deletion during reclamation. Set for a
+	// pipeline worktree parked on the default branch: the directory is the
+	// leak, the branch is everyone's.
+	KeepBranch bool
+}
+
 // classifyWorktree returns the reason a worktree must be left alone, or an
 // empty reason plus its issue number when it is safe to reclaim. Ordered
 // cheapest-check-first so the expensive git calls only run on candidates that
 // have already cleared every structural guard.
-func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef string, opts WorktreeSweepOptions) (SkipReason, int) {
+func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef string, opts WorktreeSweepOptions) worktreeVerdict {
 	if isPrimary || wt.Bare {
-		return SkipPrimary, 0
+		return worktreeVerdict{Skip: SkipPrimary}
 	}
 	if wt.Locked {
-		return SkipLocked, 0
+		return worktreeVerdict{Skip: SkipLocked}
 	}
 	if wt.Detached || wt.Branch == "" {
-		return SkipDetached, 0
-	}
-	if wt.Branch == "main" || wt.Branch == "master" || wt.Branch == defaultBranch {
-		return SkipProtectedBranch, 0
+		return worktreeVerdict{Skip: SkipDetached}
 	}
 
+	// The pipeline-managed test now precedes the protected-branch test, and
+	// the order is the fix (#332). A pipeline worktree that ended up on the
+	// default branch used to be shielded by SkipProtectedBranch forever — and
+	// it is the most damaging leak of all, because a worktree holding `main`
+	// makes `git checkout main` fail in the operator's own primary clone
+	// ("fatal: 'main' is already used by worktree at …"). The protection was
+	// aimed at a developer's deliberate `main` worktree; a directory named
+	// issue-NNN is not that.
 	num, ok := IssueNumberFromWorktreeDir(filepath.Base(wt.Path))
 	if !ok {
-		return SkipNotPipelineManaged, 0
+		if wt.Branch == "main" || wt.Branch == "master" || wt.Branch == defaultBranch {
+			return worktreeVerdict{Skip: SkipProtectedBranch}
+		}
+		return worktreeVerdict{Skip: SkipNotPipelineManaged}
 	}
 	if opts.ActiveIssues[num] {
-		return SkipActiveRun, num
+		return worktreeVerdict{Skip: SkipActiveRun, IssueNumber: num}
 	}
+	onDefaultBranch := wt.Branch == "main" || wt.Branch == "master" || wt.Branch == defaultBranch
 
 	// A prunable entry's directory is already gone — `git worktree remove`
 	// still needs to run to drop the registration, and there is nothing on
 	// disk left to protect.
 	if !wt.Prunable {
-		dirty, err := hasUncommittedChanges(wt.Path)
-		if err != nil || dirty {
-			return SkipDirty, num
+		blocking, err := blockingChanges(wt.Path)
+		if err != nil {
+			return worktreeVerdict{Skip: SkipDirty, IssueNumber: num}
 		}
+		if len(blocking) > 0 {
+			if len(blocking) > maxBlockingReported {
+				blocking = blocking[:maxBlockingReported]
+			}
+			return worktreeVerdict{Skip: SkipDirty, IssueNumber: num, Blocking: blocking}
+		}
+	}
+
+	// A clean pipeline worktree on the default branch is reclaimed on the
+	// strength of that alone. The merge test below cannot apply: the default
+	// branch is the base, so it has no commits of its own by construction and
+	// would land on SkipNoOwnCommits — which is how this state became
+	// permanent. Nothing is at risk, because the branch itself is preserved;
+	// only the stray checkout goes.
+	if onDefaultBranch {
+		return worktreeVerdict{IssueNumber: num, KeepBranch: true}
 	}
 
 	merged, hasOwnCommits, err := mergedIntoBase(opts.RepoRoot, baseRef, wt.Branch)
 	if err != nil {
-		return SkipUnmergedContent, num
+		return worktreeVerdict{Skip: SkipUnmergedContent, IssueNumber: num}
 	}
 	if !hasOwnCommits {
-		return SkipNoOwnCommits, num
+		return worktreeVerdict{Skip: SkipNoOwnCommits, IssueNumber: num}
 	}
 	if !merged {
-		return SkipUnmergedContent, num
+		return worktreeVerdict{Skip: SkipUnmergedContent, IssueNumber: num}
 	}
-	return "", num
+	return worktreeVerdict{IssueNumber: num}
 }
 
 // BranchAheadInfo reports whether a branch carries committed, unmerged work
@@ -217,13 +277,13 @@ func DetectBranchAhead(worktreePath, branch, baseRef string) (BranchAheadInfo, e
 	if err != nil {
 		return BranchAheadInfo{}, err
 	}
-	dirty, err := hasUncommittedChanges(worktreePath)
+	blocking, err := blockingChanges(worktreePath)
 	if err != nil {
 		return BranchAheadInfo{}, err
 	}
 	return BranchAheadInfo{
 		HasOwnCommits: hasOwnCommits,
-		Clean:         !dirty,
+		Clean:         len(blocking) == 0,
 		AheadOfBase:   hasOwnCommits && !merged,
 	}, nil
 }
@@ -272,15 +332,39 @@ func mergedIntoBase(repoRoot, baseRef, branch string) (merged bool, hasOwnCommit
 	return strings.TrimSpace(diffOut) == "", hasOwnCommits, nil
 }
 
-// hasUncommittedChanges reports whether the worktree holds modified, staged,
-// or untracked files. Gitignored files (node_modules, build output, the copied
-// config.local.yaml) are excluded, so a normal post-run worktree reads clean.
-func hasUncommittedChanges(worktreePath string) (bool, error) {
-	out, err := gitOutput(worktreePath, "status", "--porcelain")
+// blockingChanges returns the changes in a worktree that must not be
+// destroyed: every modified, staged, or untracked path EXCEPT the pipeline's
+// own untracked bookkeeping. Gitignored files (node_modules, build output, the
+// copied config.local.yaml) never appear, so a normal post-run worktree reads
+// clean.
+//
+// The exclusion is the whole of #332. This function used to answer "is the
+// tree dirty at all?", and the pipeline scaffolds `.nightgauge/knowledge/
+// README.md` into every worktree at issue pickup — a file the sibling repos do
+// not ignore, because their `.nightgauge/.gitignore` predates the #326
+// generator and carries no `/knowledge/` rule. So the answer was permanently
+// yes, and nine worktrees became unreclaimable on the strength of one file the
+// pipeline wrote itself. Nothing removes that file, so no retry, no later
+// sweep, and no amount of waiting could ever clear it.
+//
+// It is NOT enough to exclude `.nightgauge` wholesale. `.worktrees/issue-701`
+// held 209 staged deletions under `.nightgauge/pipeline/assessments/` — the
+// deliverable of an open issue. reclaim.ClassifyStatus draws the line at
+// tracked-vs-untracked, which keeps that worktree blocked while releasing the
+// nine that only ever held exhaust.
+//
+// `--untracked-files=all` is load-bearing: porcelain's default collapses an
+// untracked directory into one entry, so a worktree holding a scaffolded
+// `.nightgauge/knowledge/` directory reports the DIRECTORY, and a caller
+// checking `IsBookkeepingPath` on it would still classify correctly — but a
+// worktree holding a genuinely new source package would likewise report one
+// path, understating the blockers this function names as evidence.
+func blockingChanges(worktreePath string) ([]string, error) {
+	out, err := gitOutput(worktreePath, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return strings.TrimSpace(out) != "", nil
+	return reclaim.ClassifyStatus(out).Blocking, nil
 }
 
 // reclaimWorktree removes a worktree and the branch it held. Failures are
@@ -289,7 +373,13 @@ func hasUncommittedChanges(worktreePath string) (bool, error) {
 //
 // The branch is deleted with -D, not -d: its content is already on the default
 // branch, but a squash merge leaves the tip a non-ancestor, so -d refuses it.
-func reclaimWorktree(repoRoot string, wt worktreeRecord) error {
+//
+// keepBranch removes the worktree and leaves the branch: the case is a
+// pipeline worktree parked on the DEFAULT branch, where the stray checkout is
+// the leak and the branch is the repository's trunk. Passing this wrong once
+// deletes `main` locally, so the caller states it explicitly rather than
+// reclaimWorktree re-deriving the branch's protected-ness from a name.
+func reclaimWorktree(repoRoot string, wt worktreeRecord, keepBranch bool) error {
 	cmd := exec.Command("git", "worktree", "remove", wt.Path, "--force")
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -304,6 +394,11 @@ func reclaimWorktree(repoRoot string, wt worktreeRecord) error {
 			log.Printf("[WARN] worktree sweep: git worktree prune after manual removal of %s failed (%v): %s",
 				wt.Path, pruneErr, strings.TrimSpace(string(pruneOut)))
 		}
+	}
+
+	if keepBranch {
+		log.Printf("worktree sweep: removed %s but kept branch %s (default branch)", wt.Path, wt.Branch)
+		return nil
 	}
 
 	del := exec.Command("git", "branch", "-D", wt.Branch)

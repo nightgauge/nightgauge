@@ -101,6 +101,39 @@ describe("WorktreeManager", () => {
       expect(result.exists).toBe(true);
     });
 
+    // #332. `.worktrees/issue-696` ended up holding `main`, which makes
+    // `git checkout main` fail in the operator's own primary clone and which
+    // `worktree sweep` protected as `protected-branch` forever, so it could
+    // never self-heal. The stale-cleanup path below also runs an unconditional
+    // `git branch -D <branchName>` — with branchName === "main" that deletes
+    // the trunk.
+    it.each(["main", "master"])(
+      "refuses to create a pipeline worktree on the default branch (%s)",
+      async (branch) => {
+        await expect(manager.create(696, branch)).rejects.toThrow(/default branch/i);
+
+        // The side effect is the point: an error-only assertion would pass
+        // against a guard placed AFTER the destructive cleanup.
+        expect(
+          execFileAsyncMock.mock.calls.some(
+            ([, args]: [string, string[]]) =>
+              Array.isArray(args) && args[0] === "branch" && args.includes(branch)
+          )
+        ).toBe(false);
+        expect(
+          execFileAsyncMock.mock.calls.some(
+            ([, args]: [string, string[]]) => Array.isArray(args) && args[0] === "worktree"
+          )
+        ).toBe(false);
+      }
+    );
+
+    it("refuses a branch equal to a non-default baseBranch", async () => {
+      await expect(manager.create(696, "develop", { baseBranch: "develop" })).rejects.toThrow(
+        /default branch/i
+      );
+    });
+
     it("uses execFile array args for branch deletion (no shell interpolation)", async () => {
       await manager.create(42, "feat/42-dark-mode", { npmInstall: false });
 

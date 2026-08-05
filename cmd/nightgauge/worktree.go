@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 
-	"github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/spf13/cobra"
 )
 
@@ -45,8 +44,9 @@ func worktreeRecoverCmd() *cobra.Command {
 		Use:   "recover",
 		Short: "Commit a worktree's uncommitted work so a failed stage's output survives",
 		Long: `Stage everything in a pipeline worktree, commit it as an auto-recovery
-commit, and push. Bookkeeping directories (.nightgauge, .claude) are excluded so
-the rescue never publishes pipeline exhaust into the issue branch.
+commit, and push. The pipeline's own UNTRACKED exhaust under .nightgauge/ and
+.claude/ is excluded so the rescue never publishes it into the issue branch — but
+a tracked bookkeeping file the stage changed IS the deliverable and is committed.
 
 Idempotent: a clean worktree is a no-op, reported as recovered=false. The push
 is best-effort — a push failure still leaves the recovery commit on the local
@@ -88,18 +88,24 @@ branch, which is what actually prevents the work being lost.`,
 	return cmd
 }
 
-// worktreeHasChanges reports whether the worktree holds deliverable changes.
-// Bookkeeping is excluded for the same reason RecoverUncommittedWork unstages
-// it: a worktree whose only diff is the run's own state files has produced
-// nothing, and treating that as recoverable would create an empty commit on
-// every failed stage.
+// worktreeHasChanges reports whether the worktree holds anything worth
+// rescuing. The pipeline's own untracked exhaust is excluded for the same
+// reason RecoverUncommittedWork unstages it: a worktree whose only diff is the
+// run's own state files has produced nothing, and treating that as recoverable
+// would create an empty commit on every failed stage.
+//
+// A TRACKED bookkeeping change is not exhaust and counts (#332). This check
+// used to run against ci.DeliverablePathspec(), which excludes `.nightgauge`
+// wholesale — so a stage whose entire deliverable was untracking pipeline
+// assessments read as "clean", and `recover` reported "nothing to recover" over
+// 209 staged deletions. Gating the rescue on the same classifier the rescue
+// itself uses is what keeps the two answers from disagreeing.
 func worktreeHasChanges(path string) (bool, error) {
-	args := append([]string{"-C", path, "status", "--porcelain", "--"}, ci.DeliverablePathspec()...)
-	out, err := exec.Command("git", args...).Output()
+	out, err := exec.Command("git", "-C", path, "status", "--porcelain", "--untracked-files=all").Output()
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(string(out)) != "", nil
+	return reclaim.ClassifyStatus(string(out)).Blocked(), nil
 }
 
 func emitRecoverResult(cmd *cobra.Command, jsonOut, recovered bool, message string) error {
