@@ -416,7 +416,14 @@ func TestSweepMergedWorktrees_ReclaimsWorktreeHoldingOnlyPipelineExhaust(t *test
 
 	// Arm the trap: git must genuinely report this worktree as dirty, or the
 	// test would pass against the pre-#332 code for the wrong reason.
-	if status := mustGit(t, wt, "status", "--porcelain"); !strings.Contains(status, ".nightgauge/knowledge/README.md") {
+	//
+	// `--untracked-files=all` matches what blockingChanges passes, and pinning
+	// it is load-bearing rather than tidy: porcelain's DEFAULT collapses an
+	// untracked directory to a single `.nightgauge/` entry, so this assertion
+	// depends on the ambient `status.showUntrackedFiles` git config — green on
+	// a machine that sets `all`, red in CI, for a fixture that is identical
+	// either way. Exactly the #223 trap, reached from the test side.
+	if status := mustGit(t, wt, "status", "--porcelain", "--untracked-files=all"); !strings.Contains(status, ".nightgauge/knowledge/README.md") {
 		t.Fatalf("fixture produced no untracked pipeline exhaust; status = %q", status)
 	}
 
