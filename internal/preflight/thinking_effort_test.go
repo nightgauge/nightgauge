@@ -1,6 +1,11 @@
 package preflight
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/models"
+)
 
 func boolPtr(b bool) *bool { return &b }
 
@@ -118,4 +123,56 @@ func indexOf(h, n string) int {
 		}
 	}
 	return -1
+}
+
+// TestThinkingEffort_NeverCeilingOffersNoEffortRemedy covers the model that
+// rejects disabled thinking at every effort (fable). The generic message ends
+// with "lower the effort to %q or below" — rendered with a "never" ceiling that
+// reads "lower the effort to \"never\" or below", which is not an action an
+// operator can take and points away from the only fix.
+//
+// Asserting the remedy TEXT rather than just "a finding was produced" is
+// deliberate: the finding fires either way, so an assertion on count or on
+// error-ness passes against the broken message.
+func TestThinkingEffort_NeverCeilingOffersNoEffortRemedy(t *testing.T) {
+	disabled := true
+	res := RunThinkingEffortCheck(ThinkingEffortOptions{
+		ThinkingDisabledOverride: &disabled,
+		Efforts: map[string]ModelEffort{
+			"stage_efforts.feature-dev": {Model: "claude-fable-5", Effort: "low"},
+		},
+	})
+	if len(res.Findings) != 1 {
+		t.Fatalf("expected 1 finding for fable + disabled thinking, got %d", len(res.Findings))
+	}
+	f := res.Findings[0]
+	if f.MaxAllowed != models.ThinkingDisableNever {
+		t.Errorf("MaxAllowed = %q, want %q", f.MaxAllowed, models.ThinkingDisableNever)
+	}
+	if strings.Contains(f.Message, "lower the effort") {
+		t.Errorf("message offers an effort remedy that cannot work: %q", f.Message)
+	}
+	if !strings.Contains(f.Message, "every effort") {
+		t.Errorf("message should say the ceiling applies at every effort, got: %q", f.Message)
+	}
+	if !strings.Contains(f.Message, DisableThinkingEnvVar) {
+		t.Errorf("message should name the env var to unset, got: %q", f.Message)
+	}
+}
+
+// TestThinkingEffort_NeverCeilingFiresAtLowestEffort pins the rung an
+// Opus-5-shaped implementation would miss: fable conflicts even at "low".
+func TestThinkingEffort_NeverCeilingFiresAtLowestEffort(t *testing.T) {
+	disabled := true
+	for _, effort := range models.EffortOrder {
+		res := RunThinkingEffortCheck(ThinkingEffortOptions{
+			ThinkingDisabledOverride: &disabled,
+			Efforts: map[string]ModelEffort{
+				"s": {Model: "claude-fable-5", Effort: effort},
+			},
+		})
+		if len(res.Findings) != 1 {
+			t.Errorf("effort %q: expected a finding, got %d", effort, len(res.Findings))
+		}
+	}
 }

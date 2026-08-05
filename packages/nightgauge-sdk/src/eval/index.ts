@@ -128,6 +128,16 @@ export {
   type EvalRunSummary,
   type EvalRun,
   type ModelEvalRecord,
+  BehaviorSchema,
+  PropensitySchema,
+  PropensityLevelSchema,
+  ThinkingDisableLimitSchema,
+  PROPENSITY_LEVELS,
+  THINKING_DISABLE_NEVER,
+  type Behavior,
+  type Propensity,
+  type PropensityLevel,
+  type ThinkingDisableLimit,
 } from "./modelEvalSchemas.js";
 
 export {
@@ -139,6 +149,9 @@ export {
   isKnownModel,
   computeCostUsd,
   deriveDefaultModelCostRates,
+  getModelBehavior,
+  getModelPropensity,
+  thinkingDisableConflict,
   type TokenCounts,
 } from "./modelRegistry.js";
 

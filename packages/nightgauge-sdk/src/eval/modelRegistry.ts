@@ -25,7 +25,17 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { ModelDescriptorSchema, type ModelDescriptor, type Provider } from "./modelEvalSchemas.js";
+import {
+  EFFORT_LEVELS,
+  ModelDescriptorSchema,
+  THINKING_DISABLE_NEVER,
+  type Behavior,
+  type EffortLevel,
+  type ModelDescriptor,
+  type Propensity,
+  type Provider,
+  type ThinkingDisableLimit,
+} from "./modelEvalSchemas.js";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
 import type { ModelCostRate } from "../analysis/types.js";
 
@@ -128,6 +138,62 @@ export function resolveModelForAdapter(
 /** True when the registry knows this concrete model id (any provider). */
 export function isKnownModel(modelId: string): boolean {
   return MODEL_REGISTRY.some((m) => m.id === modelId);
+}
+
+// ---------------------------------------------------------------------------
+// Typed behavior accessors (#77)
+// ---------------------------------------------------------------------------
+
+/**
+ * The `behavior` block for a model, or `undefined` when the model is unknown
+ * or declares none. Consumers read facts through this and
+ * {@link getModelPropensity} rather than reaching into the registry JSON.
+ */
+export function getModelBehavior(
+  idOrTier: string,
+  provider: Provider = "anthropic"
+): Behavior | undefined {
+  return getModelDescriptor(idOrTier, provider)?.behavior;
+}
+
+/**
+ * Every propensity axis resolved to a concrete level, filling `normal` for
+ * anything undeclared — including for a model with no `behavior` block and for
+ * unknown/local ids, which have no registry entry at all. Total by design: an
+ * overlay asking "is verification high here?" gets a usable answer for every
+ * model, and the neutral default changes nothing.
+ */
+export function getModelPropensity(
+  idOrTier: string,
+  provider: Provider = "anthropic"
+): Required<Propensity> {
+  const p = getModelBehavior(idOrTier, provider)?.propensity;
+  return {
+    verification: p?.verification ?? "normal",
+    delegation: p?.delegation ?? "normal",
+    narration: p?.narration ?? "normal",
+  };
+}
+
+/**
+ * Whether disabling thinking is invalid for this model at `effort`, and the
+ * declared ceiling. `limit` is `never` when the model refuses at every effort
+ * (Fable 5) — callers must not render that as "lower the effort to …".
+ * Mirrors the Go `ModelDescriptor.ThinkingDisableConflict`.
+ */
+export function thinkingDisableConflict(
+  idOrTier: string,
+  effort: EffortLevel,
+  provider: Provider = "anthropic"
+): { conflict: boolean; limit?: ThinkingDisableLimit } {
+  const limit = getModelBehavior(idOrTier, provider)?.thinking_disable_max_effort;
+  if (!limit) return { conflict: false };
+  if (limit === THINKING_DISABLE_NEVER) return { conflict: true, limit };
+  const ladder = EFFORT_LEVELS as readonly string[];
+  const limitIdx = ladder.indexOf(limit);
+  const requestedIdx = ladder.indexOf(effort);
+  if (limitIdx < 0 || requestedIdx < 0) return { conflict: false, limit };
+  return { conflict: requestedIdx > limitIdx, limit };
 }
 
 /** Token counts for cost computation (cache fields optional). */

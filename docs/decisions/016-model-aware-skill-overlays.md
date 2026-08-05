@@ -220,6 +220,28 @@ model properties overlays reason about — `thinking_default`, `effort_ladder`,
 `narration` ∈ `low|normal|high`). Facts live in the registry as data; overlays
 carry only prose that acts on those facts and must not restate them.
 
+> **Implementation note (#77).** The ladder fields shipped as
+> `thinking_disable_max_effort` (the ceiling below which disabling thinking is
+> legal) and `effort_default`, rather than a single `effort_ladder` — the
+> requestable range already lives in `supported_efforts`, so a second copy of it
+> would be the restatement this decision exists to prevent.
+>
+> `thinking_disable_max_effort` also accepts **`never`**. As first specified the
+> field held an effort level, and an absent field meant _unconstrained_. That
+> pair cannot describe Fable 5, which rejects `thinking: {"type": "disabled"}` at
+> **every** effort: the only way to express it would be to omit the field, which
+> asserts the exact opposite and lets the interlock pass a configuration that
+> returns a 400. `never` is therefore a member of the field's own union,
+> deliberately **not** of `EffortLevel` — adding it there would make it spellable
+> in `supported_efforts` and in stage effort config, where it is meaningless.
+> Callers that render a remedy must branch on it: "lower the effort to `never` or
+> below" is not an action an operator can take, and it points away from the only
+> fix (unset the escape hatch).
+>
+> Undeclared propensity axes read as `normal`, so a model with no `behavior`
+> block — and every unknown or local model, which has no registry entry at all —
+> renders exactly as it did before the block existed.
+
 `nightgauge preflight skill-overlays` gates:
 
 - every overlay filename resolves to a live registry key (no typos, no overlays

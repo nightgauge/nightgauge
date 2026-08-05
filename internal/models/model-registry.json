@@ -21,7 +21,12 @@
         "thinking_default": "on",
         "thinking_disable_max_effort": "high",
         "effort_default": "high",
-        "max_output_tokens": 128000
+        "max_output_tokens": 128000,
+        "propensity": {
+          "verification": "high",
+          "delegation": "high",
+          "narration": "high"
+        }
       }
     },
     {
@@ -42,7 +47,13 @@
       "deprecated": true,
       "replacement": "claude-opus-5",
       "behavior": {
-        "thinking_default": "off"
+        "thinking_default": "off",
+        "effort_default": "high",
+        "max_output_tokens": 128000,
+        "propensity": {
+          "delegation": "low",
+          "narration": "high"
+        }
       }
     },
     {
@@ -57,9 +68,18 @@
         "cache_read": 0.3,
         "cache_creation": 3.75
       },
-      "supported_efforts": ["low", "medium", "high"],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 200000
+      "context_window": 1000000,
+      "behavior": {
+        "thinking_default": "on",
+        "effort_default": "high",
+        "max_output_tokens": 128000,
+        "propensity": {
+          "verification": "high",
+          "narration": "high"
+        }
+      }
     },
     {
       "id": "claude-haiku-4-5-20251001",
@@ -75,7 +95,11 @@
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 200000
+      "context_window": 200000,
+      "behavior": {
+        "thinking_default": "off",
+        "max_output_tokens": 64000
+      }
     },
     {
       "id": "claude-fable-5",
@@ -89,9 +113,15 @@
         "cache_read": 1.0,
         "cache_creation": 12.5
       },
-      "supported_efforts": ["low", "medium", "high", "xhigh"],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 200000
+      "context_window": 1000000,
+      "behavior": {
+        "thinking_default": "on",
+        "thinking_disable_max_effort": "never",
+        "effort_default": "high",
+        "max_output_tokens": 128000
+      }
     },
     {
       "id": "claude-sonnet-4-6",
