@@ -72,6 +72,30 @@ homebrew_casks:
       owner: nightgauge
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      # The tap is a DISTRIBUTION CHANNEL: whatever lands on its default branch
+      # is what `brew install` fetches. So the cask bump arrives as a pull
+      # request for review, not as a direct push — a compromised release token
+      # can then only *propose* a formula, never publish one.
+      #
+      # `nightgauge/homebrew-tap` enforces this with a branch ruleset requiring
+      # a PR. Setting `pull_request.enabled: false` here (or removing this
+      # block) does not restore direct pushes — it makes the release fail at the
+      # tap step, after the GitHub Release already exists.
+      #
+      # THE RELEASE IS NOT COMPLETE UNTIL THIS PR IS MERGED. Until then the
+      # GitHub Release carries the new version while `brew install` still serves
+      # the previous one — a partial publish that looks like a finished release.
+      #
+      # HOMEBREW_TAP_GITHUB_TOKEN therefore needs `pull_requests: write` as well
+      # as `contents: write`. A contents-only token opens nothing and fails here,
+      # after the GitHub Release already exists.
+      branch: "cask-{{ .Version }}"
+      pull_request:
+        enabled: true
+        base:
+          owner: nightgauge
+          name: homebrew-tap
+          branch: main
     homepage: https://github.com/nightgauge/nightgauge
     description: AI-powered Issue-to-PR pipeline CLI
     # SPDX identifier — Homebrew's audit rejects the free-text
