@@ -515,6 +515,7 @@ func rootCmd() *cobra.Command {
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),
+		skillCmd(),
 		pipelineCmd(),
 		logsCmd(),
 		exitRecordsCmd(),
