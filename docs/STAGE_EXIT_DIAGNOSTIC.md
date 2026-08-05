@@ -73,6 +73,32 @@ cross-process; an in-process mutex for goroutine interleaving).
 | `concurrent_pipelines_at_exit`                                       | []string               | Go scheduler   | Sibling pipelines that were running concurrently at exit (`owner/repo#number`). Empty when no siblings. Smoking gun for cross-pipeline interference (#3605 / #3591).                        |
 | `gate_kind`                                                          | string                 | Go scheduler   | Post-condition gate outcome shape when a gate ran: `ok` \| `no_op` \| `fail` (#3863). Empty when no gate ran.                                                                               |
 | `gate_reason`                                                        | string                 | Go scheduler   | Short human-readable reason from that gate. Populated on both dispatch paths since #125, so a retro sees _why_ a gate-caught failure failed without log archaeology.                        |
+| `unreclaimed_stashes`                                                | []string               | Go scheduler   | This issue's pipeline stashes still on the stash stack at exit, as `<ref> #<issue> <stage>`. Omitted entirely on a clean exit (#330) — see below.                                           |
+
+### Unreclaimed Stashes (#330)
+
+A stage that stashes to measure against a clean tree is supposed to pop it back.
+A killed stage never reaches that line — no `trap`, no `defer`, and no shell
+cleanup survives a SIGKILL — so the stash outlives it with no owner and no
+expiry. Five accumulated across three sibling repos before anyone looked, the
+oldest five months old, one of them holding an entire issue's deliverable.
+
+The reclaim itself cannot be made reliable. What can be guaranteed is that the
+leak is never **silent**: the exit record is the one artifact written on every
+terminal path, including the ones with no code of their own left to run, so it
+is where a stranded stash has to appear.
+
+Scoped to the record's own issue, so a concurrent run's stash is never
+attributed to this stage, and omitted entirely when nothing leaked — a field
+that is always present is a field readers learn to skip. Reclaim with
+`nightgauge stash sweep` (see
+[GO_BINARY.md § Stash Reclamation](GO_BINARY.md#stash-reclamation-issue-330)).
+
+```bash
+# Every stage exit that stranded a stash, today
+jq -r 'select(.unreclaimed_stashes) | "\(.issue) \(.stage) \(.unreclaimed_stashes|join(", "))"' \
+  .nightgauge/pipeline/exit-records/$(date +%F).jsonl
+```
 
 ### Kill Ceilings (#161)
 

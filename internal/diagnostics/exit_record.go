@@ -214,6 +214,21 @@ type StageExitRecord struct {
 	// GateReason is the short human-readable reason from the gate that ran,
 	// mirroring StageGateResult.Reason. Empty when no gate ran. (Issue #3863)
 	GateReason string `json:"gate_reason,omitempty"`
+	// UnreclaimedStashes names the pipeline stashes still on this repo's stash
+	// stack when the stage exited, as `<ref> #<issue> <stage>`.
+	//
+	// A stage that stashes to measure against a clean tree is supposed to pop
+	// it back. A killed stage never reaches that line — no trap, no defer, and
+	// no shell cleanup survives a SIGKILL — so the stash outlives it silently.
+	// Five accumulated across three repos before anyone looked, the oldest five
+	// months old, one holding an entire issue's deliverable. Recording them
+	// here is #330 AC2's "if it cannot reclaim, it must SAY SO in the
+	// stage-exit diagnostic rather than exiting silently": the exit record is
+	// the one artifact written on every terminal path, including the ones with
+	// no code of their own left to run.
+	//
+	// Empty on a healthy exit. Reclaim with `nightgauge stash sweep`.
+	UnreclaimedStashes []string `json:"unreclaimed_stashes,omitempty"`
 }
 
 // exitRecordsSubdir is the project-relative directory the daily JSONL files

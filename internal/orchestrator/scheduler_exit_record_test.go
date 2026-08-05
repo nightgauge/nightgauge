@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -629,5 +631,103 @@ func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
 	}
 	if len(name) != len("YYYY-MM-DD.jsonl") {
 		t.Errorf("daily filename %q does not match YYYY-MM-DD.jsonl shape", name)
+	}
+}
+
+// #330 AC2. A stage that stashes and is then killed never runs its `git stash
+// pop` — no trap or defer survives a SIGKILL — so the reclaim itself cannot be
+// made reliable. What CAN be guaranteed is that the leak is not silent: the
+// exit record is written on every terminal path, including the ones with no
+// code of their own left to run, so it is where a stranded stash has to appear.
+func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	gitInRoot := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	gitInRoot("init", "-b", "main")
+	gitInRoot("config", "user.email", "test@test")
+	gitInRoot("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInRoot("add", ".")
+	gitInRoot("commit", "-m", "initial")
+
+	// The stage stashes to measure against a clean tree…
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("stage work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInRoot("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 692, "feature-validate"))
+	// …an unrelated stash of the operator's…
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("my own wip\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInRoot("stash", "push", "-m", "wip before the refactor")
+	// …and a CONCURRENT run's pipeline stash. This one is the discriminating
+	// case: it carries the marker, so any filter weaker than "this issue"
+	// attributes another run's leak to this stage's exit record.
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("another run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitInRoot("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 701, "feature-dev"))
+
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 692, "item-id")
+	item := types.BoardItem{Number: 692, Repo: "nightgauge/nightgauge"}
+	s.writeStageExitRecord(item, state.StageFeatureValidate, runtime,
+		&StageRunResult{ExitCode: 137, Signal: "SIGKILL"},
+		137, errors.New("stage killed"), 0, "sonnet-4-5", 0, 0, 0,
+		time.Now().Add(-time.Second), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	got := recs[0].UnreclaimedStashes
+	if len(got) != 1 {
+		t.Fatalf("UnreclaimedStashes = %v, want exactly this issue's stash", got)
+	}
+	if !strings.Contains(got[0], "#692") || !strings.Contains(got[0], "feature-validate") {
+		t.Errorf("the record does not identify the leaked stash: %q", got[0])
+	}
+	for _, s := range got {
+		if strings.Contains(s, "refactor") {
+			t.Errorf("an operator's stash was attributed to the stage: %q", s)
+		}
+		if strings.Contains(s, "#701") {
+			t.Errorf("a concurrent run's stash was attributed to this stage: %q", s)
+		}
+	}
+}
+
+// A stage that leaked nothing must produce no field at all — a record that
+// always carries the key trains readers to ignore it.
+func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	root := t.TempDir()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 693, "item-id")
+	item := types.BoardItem{Number: 693, Repo: "nightgauge/nightgauge"}
+
+	s.writeStageExitRecord(item, state.StageFeatureDev, runtime, &StageRunResult{},
+		0, nil, 0, "sonnet-4-5", 0, 0, 0, time.Now(), root, "", "")
+
+	recs := readExitRecords(t, root)
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(recs))
+	}
+	if len(recs[0].UnreclaimedStashes) != 0 {
+		t.Errorf("UnreclaimedStashes = %v, want empty", recs[0].UnreclaimedStashes)
+	}
+	raw, err := os.ReadFile(diagnostics.DailyFilePath(root, time.Now()))
+	if err != nil {
+		t.Fatalf("read daily file: %v", err)
+	}
+	if strings.Contains(string(raw), "unreclaimed_stashes") {
+		t.Errorf("the key is present on a clean exit: %s", raw)
 	}
 }

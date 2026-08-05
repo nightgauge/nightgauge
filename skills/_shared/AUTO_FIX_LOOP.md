@@ -200,10 +200,18 @@ retro for why making this advisory burned a sham `[skip build]` commit).
 
 1. Extract the specific test names / build targets from the failure logs.
 2. Identify the merge base: `MERGE_BASE=$(git merge-base HEAD origin/$BASE_REF)`.
-3. Stash any uncommitted changes (`git stash push -u -m pre-baseline 2>/dev/null`).
+3. Stash any uncommitted changes. The message shape is a contract (#330) —
+   only a stash carrying the `nightgauge:` marker can be reclaimed by
+   `nightgauge stash sweep` or reported by `nightgauge doctor`, and an
+   unmarked one is indistinguishable from the operator's own, so no tool will
+   ever touch it:
+   `git stash push -u -m "nightgauge:baseline:${PR}:auto-fix" 2>/dev/null`.
 4. `git checkout "$MERGE_BASE"` (detached HEAD is fine).
 5. Run the same failing tests/builds on the base. Capture pass/fail per item.
-6. `git checkout -` and `git stash pop 2>/dev/null` to return to the PR branch.
+6. `git checkout -` and `git stash pop 2>/dev/null` to return to the PR
+   branch. If the stage is killed before this line the stash survives; the
+   marker in step 3 is what lets a later `nightgauge stash sweep` reclaim it,
+   since a SIGKILL runs no cleanup here at all.
 7. Classify each failure as one of:
    - **`regression`** — passed on base, fails on HEAD. Caused by this PR.
      The agent must fix.

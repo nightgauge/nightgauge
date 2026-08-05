@@ -149,6 +149,77 @@ func TestWorktreeRecover_BookkeepingOnlyIsNoOp(t *testing.T) {
 	}
 }
 
+// #332 / #237. A stage whose entire deliverable is bookkeeping produced real
+// work, and the pre-fix rescue erased exactly that work while reporting
+// success: `worktreeHasChanges` scoped its probe to ci.DeliverablePathspec()
+// (which excludes `.nightgauge` wholesale) so the tree read clean, and
+// `RecoverUncommittedWork` ran `git reset -- .nightgauge`, which restores every
+// staged deletion from HEAD.
+//
+// This is the shape of open issue #701: 209 staged deletions under
+// `.nightgauge/pipeline/assessments/`, with origin/main still tracking them.
+// The assertions are on the SIDE EFFECT — what the commit contains and what git
+// tracks afterwards — because an error-only check passes against the bug.
+func TestWorktreeRecover_RescuesBookkeepingOnlyDeliverable(t *testing.T) {
+	dir := recoverRepo(t)
+	writeAt := func(rel, content string) {
+		t.Helper()
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+
+	// The production shape: the assessment is tracked AND matched by the
+	// repo's own ignore rules, which is what makes `git add` refuse to
+	// re-stage it and why the fix must avoid unstaging it in the first place.
+	const assessment = ".nightgauge/pipeline/assessments/issue-42.json"
+	writeAt(".nightgauge/.gitignore", "pipeline/*\n")
+	writeAt(assessment, "{}\n")
+	git("add", "-f", ".nightgauge/.gitignore", assessment)
+	git("commit", "-m", "track pipeline assessments")
+
+	// The deliverable: untrack them. Nothing else changes in the worktree.
+	git("rm", "--cached", "-q", assessment)
+	// Pipeline exhaust scaffolded alongside it must still be kept out.
+	writeAt(".nightgauge/knowledge/README.md", "# Knowledge Base\n")
+
+	out, err := runRecover(t, "--worktree", dir, "--issue", "701", "--stage", "feature-dev", "--json")
+	if err != nil {
+		t.Fatalf("recover: %v (%s)", err, out)
+	}
+	if !strings.Contains(out, `"recovered":true`) {
+		t.Fatalf("a bookkeeping-only deliverable must be recoverable, got %s", out)
+	}
+
+	files := gitLines(t, dir, "show", "--name-only", "--format=", "HEAD")
+	if !strings.Contains(files, "assessments/issue-42.json") {
+		t.Errorf("the recovery commit does not carry the deliverable: %q", files)
+	}
+	if strings.Contains(files, "knowledge/README.md") {
+		t.Errorf("the recovery commit published pipeline exhaust: %q", files)
+	}
+	// The deliverable was "stop tracking this file". If the rescue restored it
+	// from HEAD, git still tracks it and the work is gone.
+	if tracked := gitLines(t, dir, "ls-files", "--", assessment); strings.TrimSpace(tracked) != "" {
+		t.Errorf("the rescue restored the file it was meant to untrack: still tracked as %q", tracked)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "knowledge", "README.md")); err != nil {
+		t.Errorf("exhaust must be left in the worktree, not deleted: %v", err)
+	}
+}
+
 func TestWorktreeRecover_CleanWorktreeIsNoOp(t *testing.T) {
 	dir := recoverRepo(t)
 

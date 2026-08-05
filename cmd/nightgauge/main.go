@@ -511,6 +511,7 @@ func rootCmd() *cobra.Command {
 		spikeCmd(),
 		cleanupCmd(),
 		worktreeCmd(),
+		stashCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),

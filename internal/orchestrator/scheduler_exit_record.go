@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -163,10 +164,39 @@ func (s *Scheduler) writeStageExitRecord(
 		}
 	}
 
+	// #330 AC2. Report the stashes this stage created and did not take back.
+	// The reclaim itself cannot be made reliable — a SIGKILL runs no cleanup —
+	// so the contract is that a leak is never SILENT. Scoped to this issue so a
+	// concurrent run's stash is never attributed to this stage.
+	rec.UnreclaimedStashes = unreclaimedStashesFor(workspaceRoot, item.Number)
+
 	if err := diagnostics.WriteStageExitRecord(workspaceRoot, rec); err != nil {
 		log.Printf("#%d: failed to write stage-exit diagnostic record for %s: %v",
 			item.Number, stage, err)
 	}
+}
+
+// unreclaimedStashesFor lists this issue's pipeline stashes still on the stash
+// stack, formatted for the exit record.
+//
+// Soft-fail by design: a repo git cannot read contributes nothing rather than
+// blocking the record. The record is forensic evidence about a stage that has
+// already ended, and losing the whole thing over an unreadable stash list would
+// destroy far more diagnostic value than this one field carries.
+func unreclaimedStashesFor(workspaceRoot string, issueNumber int) []string {
+	entries, err := reclaim.ListStashes(workspaceRoot)
+	if err != nil {
+		return nil
+	}
+	owned := reclaim.PipelineStashes(entries, issueNumber)
+	if len(owned) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(owned))
+	for _, e := range owned {
+		out = append(out, fmt.Sprintf("%s #%d %s", e.Ref, e.Issue, e.Stage))
+	}
+	return out
 }
 
 // rateLimitRemainingAtExit reads the latest GraphQL/REST rate-limit

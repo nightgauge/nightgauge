@@ -20,6 +20,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
+
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
 // Service provides git operations on a repository.
@@ -635,8 +637,8 @@ func (s *Service) ResetPipeline() error {
 				"work and the safety checkpoint failed: %w", s.repoPath, cerr)
 		}
 	}
-	if err := s.popBaselineStash(); err != nil {
-		log.Printf("git: ResetPipeline: failed to pop baseline stash: %v", err)
+	if err := s.reclaimPipelineStashes(); err != nil {
+		log.Printf("git: ResetPipeline: failed to reclaim pipeline stashes: %v", err)
 	}
 
 	wt, err := s.repo.Worktree()
@@ -895,34 +897,50 @@ func (s *Service) anchorDetachedHead() error {
 	return nil
 }
 
-// baselineStashMessageRE matches the naming convention a stage's
-// baseline-comparison stash uses: `<stage>-<issue>-baseline` (see
-// skills/_shared/AUTO_FIX_LOOP.md Step 2.5).
-var baselineStashMessageRE = regexp.MustCompile(`[a-z-]+-\d+-baseline`)
-
-// popBaselineStash finds the top-of-stack stash matching the
-// `<stage>-<issue>-baseline` naming convention and pops it, so a pipeline
-// reset never silently leaves it behind (Issue #289 AC5).
-func (s *Service) popBaselineStash() error {
-	listCmd := exec.Command("git", "stash", "list")
-	listCmd.Dir = s.repoPath
-	out, err := listCmd.CombinedOutput()
+// reclaimPipelineStashes discards every stash the pipeline created in this
+// repo, so a reset never silently leaves one behind (Issue #289 AC5).
+//
+// Drop, not pop, and the distinction is only apparent here: ResetPipeline's
+// next act is a hard reset + clean, so anything popped into the tree is wiped
+// milliseconds later. What AC5 guards against is an ORPHANED stash surviving
+// the reset untracked, and dropping achieves that without the failure mode
+// popping has — restoring stash A dirties the tree, which makes stash B
+// unpoppable, so a pop-based reclaim can only ever clear one of them. (The
+// reconcile sweep, which runs when no reset follows, defaults to restore for
+// exactly the opposite reason: there, the content is all there is.)
+//
+// This used to match `[a-z-]+-\d+-baseline` against the raw stash list — a
+// convention NOTHING wrote. The two producers in the tree created a stash with
+// no message at all (`git stash --include-untracked`) and one messaged
+// `pre-baseline`, so the reclaim had been dead code against its own producers
+// since it was written, and every stash they took leaked by construction
+// (#330). The producers now emit reclaim.StashName and this asks the one
+// classifier who owns what, rather than re-deriving a naming rule that can
+// drift from the code that writes it.
+//
+// Scoped to pipeline-owned stashes: an operator's own `git stash` is never
+// popped by a pipeline reset. All of them are reclaimed, not just the first —
+// "top of stack" was never a property of a leak.
+func (s *Service) reclaimPipelineStashes() error {
+	res, err := reclaim.SweepPipelineStashes(reclaim.StashSweepOptions{
+		RepoRoot: s.repoPath,
+		Action:   reclaim.StashDrop,
+	})
 	if err != nil {
-		return fmt.Errorf("git stash list: %w: %s", err, string(out))
+		return err
 	}
-	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
-	for _, line := range lines {
-		if line == "" || !baselineStashMessageRE.MatchString(line) {
-			continue
+	for _, r := range res.Reclaimed {
+		log.Printf("git: ResetPipeline: dropped pipeline stash %s (%s) before reset", r.Ref, r.Message)
+	}
+	for _, sk := range res.Skipped {
+		if sk.Reason == reclaim.StashSkipUnowned {
+			continue // an operator's stash is not ours to report on every reset
 		}
-		ref := strings.SplitN(line, ":", 2)[0]
-		popCmd := exec.Command("git", "stash", "pop", ref)
-		popCmd.Dir = s.repoPath
-		if popOut, popErr := popCmd.CombinedOutput(); popErr != nil {
-			return fmt.Errorf("git stash pop %s: %w: %s", ref, popErr, string(popOut))
-		}
-		log.Printf("git: ResetPipeline: popped baseline stash %s before reset", ref)
-		return nil
+		log.Printf("git: ResetPipeline: left pipeline stash %s in place (%s) — run `nightgauge stash sweep`",
+			sk.Ref, sk.Reason)
+	}
+	if len(res.Errors) > 0 {
+		return fmt.Errorf("stash reclaim: %s", strings.Join(res.Errors, "; "))
 	}
 	return nil
 }

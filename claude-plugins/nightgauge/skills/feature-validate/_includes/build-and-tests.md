@@ -299,9 +299,17 @@ For each failing test file, stash feature changes, re-run the test on baseline
 code (60s timeout per file), then restore:
 
 ```bash
-# Stash changes (uncommitted → git stash; committed → merge-base compare)
+# Stash changes (uncommitted → git stash; committed → merge-base compare).
+# The message is MANDATORY and its exact shape is a contract (#330): only a
+# stash carrying the `nightgauge:` marker can be reclaimed by
+# `nightgauge stash sweep` or reported by `nightgauge doctor`. An unnamed
+# stash — which is what this step used to create — is indistinguishable from
+# the operator's own and is therefore never touched by any tool. That is how
+# five machine-created stashes accumulated across three repos, the oldest
+# five months old, one holding an entire issue's deliverable.
+BASELINE_STASH="nightgauge:baseline:${ISSUE_NUMBER}:feature-validate"
 HAS_CHANGES=$(git status --porcelain)
-[ -n "$HAS_CHANGES" ] && git stash --include-untracked && STASH_APPLIED=true
+[ -n "$HAS_CHANGES" ] && git stash push --include-untracked -m "$BASELINE_STASH" && STASH_APPLIED=true
 
 for FAILING_FILE in $FAILING_TEST_FILES; do
   timeout 60 $TEST_CMD "$FAILING_FILE" 2>&1
@@ -319,7 +327,11 @@ for FAILING_FILE in $FAILING_TEST_FILES; do
   fi
 done
 
-# Restore: git stash pop, fallback to git checkout . && git stash drop
+# Restore: git stash pop, fallback to git checkout . && git stash drop.
+# If the stage is killed before reaching this line the stash survives; the
+# named marker above is what lets `nightgauge stash sweep` reclaim it later,
+# because a SIGKILL runs no cleanup at all and no amount of trapping here can
+# change that.
 if [ "$STASH_APPLIED" = "true" ]; then git stash pop || { git checkout . && git stash drop; }; fi
 ```
 

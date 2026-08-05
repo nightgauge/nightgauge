@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { loadWorkspaceConfig } from "./workspaceDetection";
 
 /**
  * Bump this when adding new patterns so the extension knows to update
@@ -192,4 +193,100 @@ export async function ensureGitignore(
   // Out-of-date — replace with canonical content
   await fs.writeFile(gitignorePath, GITIGNORE_CONTENT, "utf8");
   return { created: false, updated: true };
+}
+
+/** One repository's outcome from ensureWorkspaceGitignores. */
+export interface WorkspaceGitignoreResult {
+  /** Repository name from the workspace manifest. */
+  name: string;
+  /** Absolute path to the repository root. */
+  root: string;
+  created: boolean;
+  updated: boolean;
+  /**
+   * Set when the repo was passed over: "not-initialized" (no
+   * `.nightgauge/config.yaml`, so the user never opted this repo in) or
+   * "unreadable" (the path does not exist).
+   */
+  skipped?: "not-initialized" | "unreadable";
+  /** Populated when the write itself failed. Never thrown — see below. */
+  error?: string;
+}
+
+/**
+ * Ensure every repository in the workspace manifest carries the CURRENT
+ * `.nightgauge/.gitignore`, not just the primary one.
+ *
+ * #326 made this file generated-from-one-source, but only the primary root
+ * ever received it: `services.ts` called `ensureGitignore(incrediRoot)` and
+ * nothing walked `.vscode/nightgauge-workspace.yaml`. Every sibling repo was
+ * left with whatever hand-written copy predated the generator — in a real
+ * four-repo workspace, one carried a copy with no version marker at all and
+ * the other three had no `.nightgauge/.gitignore` whatsoever.
+ *
+ * That is not cosmetic drift, and #332 is what it cost. With no `/knowledge/`
+ * rule, the `.nightgauge/knowledge/README.md` the pipeline scaffolds at issue
+ * pickup shows up as an untracked file forever, and `worktree sweep` read that
+ * as "uncommitted changes" and refused to reclaim — permanently, on nine
+ * worktrees, four of them deadlocked by that single file. The sweep now
+ * classifies pipeline exhaust correctly regardless (see internal/reclaim), so
+ * this is defence in depth rather than the sole fix: keeping the generated
+ * file current means the exhaust never reaches `git status` at all.
+ *
+ * A repo is skipped unless it is already initialized. `ensureGitignore`
+ * creates `.nightgauge/` and its subdirectories as a side effect, and
+ * resurrecting that folder in a repo the user never onboarded is the behaviour
+ * the primary-root call site deliberately gated on `isRepoInitialized` — the
+ * gate has to travel with the propagation or this reintroduces it N times over.
+ *
+ * Never throws: this runs on activation, and one unreadable sibling must not
+ * take the whole scaffold with it. Failures are reported per repo.
+ */
+export async function ensureWorkspaceGitignores(
+  workspaceRoot: string
+): Promise<WorkspaceGitignoreResult[]> {
+  let config: Awaited<ReturnType<typeof loadWorkspaceConfig>>;
+  try {
+    config = await loadWorkspaceConfig(workspaceRoot);
+  } catch {
+    // Malformed manifest — single-repo behaviour is the safe fallback, and
+    // the manifest's own validation surfaces the error elsewhere.
+    return [];
+  }
+  if (!config?.repositories?.length) {
+    return [];
+  }
+
+  const results: WorkspaceGitignoreResult[] = [];
+  for (const repo of config.repositories) {
+    // Manifest paths are relative to the workspace root (".", "../sibling").
+    const root = path.resolve(workspaceRoot, repo.path);
+    const result: WorkspaceGitignoreResult = {
+      name: repo.name,
+      root,
+      created: false,
+      updated: false,
+    };
+    try {
+      const stat = await fs.stat(path.join(root, ".nightgauge", "config.yaml"));
+      if (!stat.isFile()) {
+        result.skipped = "not-initialized";
+        results.push(result);
+        continue;
+      }
+    } catch {
+      result.skipped = "not-initialized";
+      results.push(result);
+      continue;
+    }
+    try {
+      const { created, updated } = await ensureGitignore(root);
+      result.created = created;
+      result.updated = updated;
+    } catch (error) {
+      result.error = error instanceof Error ? error.message : String(error);
+    }
+    results.push(result);
+  }
+  return results;
 }

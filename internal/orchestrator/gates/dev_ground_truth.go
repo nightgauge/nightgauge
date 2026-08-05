@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/ci"
+	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
 // maxStrandedReported caps how many sibling worktrees a failing gate names.
@@ -118,23 +119,14 @@ func allBookkeeping(files []string) bool {
 const maxFilesReported = 10
 
 // statusPaths extracts the deliverable paths from `git status --porcelain`
-// output. Porcelain v1 format is `XY <path>`, and a rename is
-// `XY <old> -> <new>` — the new path is the one that exists.
+// output.
+//
+// Delegates to reclaim.ParseStatus so the tree holds exactly one porcelain
+// parser. This was a byte-identical second copy, and #330/#332 added a third
+// consumer — at which point "each caller parses status its own way" is the
+// Dual-Path Drift defect class the review checklist names, not a hypothetical.
 func statusPaths(status string) []string {
-	var paths []string
-	for _, line := range strings.Split(status, "\n") {
-		if len(line) < 4 {
-			continue
-		}
-		p := strings.TrimSpace(line[3:])
-		if _, after, found := strings.Cut(p, " -> "); found {
-			p = after
-		}
-		if p = strings.Trim(p, `"`); p != "" {
-			paths = append(paths, p)
-		}
-	}
-	return paths
+	return reclaim.StatusPaths(status)
 }
 
 // capped returns at most maxFilesReported entries.
