@@ -3,6 +3,7 @@
 package hooks
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 )
@@ -139,4 +140,53 @@ func IsSensitiveFile(filename string) bool {
 	}
 
 	return false
+}
+
+// TaskToolInput is the parsed tool_input for Task tool calls.
+type TaskToolInput struct {
+	Prompt      string `json:"prompt"`
+	Description string `json:"description"`
+}
+
+// EvaluateSanitizeText screens raw text for prompt-injection patterns.
+func EvaluateSanitizeText(text string) GateDecision {
+	if match := MatchPatterns(text, CategoryPromptInjection); match != nil {
+		return Block("Prompt injection detected: " + match.Pattern)
+	}
+	return Allow()
+}
+
+// EvaluateSanitizePrompt screens a PreToolUse:Task hook payload for
+// prompt-injection patterns in the delegated prompt.
+//
+// PreToolUse hooks are invoked with the payload on stdin and no argv, so this
+// is the path prompt-sanitize.sh actually exercises — the --input flag it used
+// to require was never supplied by the harness (#354).
+//
+// Unparseable or promptless payloads fail open, matching EvaluateGate: a
+// payload the gate cannot read is not evidence of an injection attempt, and a
+// screening hook must not wedge the session on malformed input.
+func EvaluateSanitizePrompt(inputJSON []byte) GateDecision {
+	var input GateInput
+	if err := json.Unmarshal(inputJSON, &input); err != nil {
+		return Allow()
+	}
+	if len(input.ToolInput) == 0 {
+		return Allow()
+	}
+
+	var toolInput TaskToolInput
+	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil {
+		return Allow()
+	}
+
+	for _, text := range []string{toolInput.Prompt, toolInput.Description} {
+		if text == "" {
+			continue
+		}
+		if decision := EvaluateSanitizeText(text); decision.Decision == "block" {
+			return decision
+		}
+	}
+	return Allow()
 }

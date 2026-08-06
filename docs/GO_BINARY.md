@@ -2190,14 +2190,58 @@ Used by Claude Code hook entry points (thin shell wrappers):
 nightgauge hook workflow-gate       # PreToolUse gate (stdin JSON)
 nightgauge hook careful-gate        # PreToolUse:Bash — block prod-destructive cmds while /careful is on
 nightgauge hook stage-gate          # PreToolUse:Bash — fence analysis stages from git/forge mutations (#4145)
+nightgauge hook skill-usage         # PreToolUse:Skill — catalog telemetry (stdin JSON)
+nightgauge hook sanitize-prompt     # PreToolUse:Task — prompt-injection screen (stdin JSON)
 nightgauge hook stop-verify         # Stop hook (PLAN.md check)
-nightgauge hook format --file <path>
+nightgauge hook format              # PostToolUse:Edit|Write — format on save (stdin JSON)
+nightgauge hook notify              # Notification hook (stdin JSON)
 nightgauge hook inject-context
-nightgauge hook notify --message <msg>
 nightgauge hook check-deps
 nightgauge hook check-version
-nightgauge hook sanitize-prompt --input <text>
 ```
+
+**Every hook subcommand reads its payload from stdin and takes no required
+flags.** Claude Code invokes hooks with the payload on stdin and no argv, so a
+required flag makes the command exit before it runs — `format`,
+`sanitize-prompt`, and `notify` each required one and had therefore never done
+any work (#354). `--file`, `--input`, and `--message` remain as optional
+operator overrides for manual invocation:
+
+```bash
+nightgauge hook format --file <path>            # manual: format one file
+nightgauge hook sanitize-prompt --input <text>  # manual: screen raw text
+nightgauge hook notify --message <msg>          # manual: send a notification
+```
+
+#### PreToolUse output contract (#354)
+
+Gate subcommands print Claude Code's PreToolUse schema, **not** the internal
+`hooks.GateDecision` shape:
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Direct push to main/master blocked. ..."
+  }
+}
+```
+
+`decision` is a recognized top-level hook key, but its PreToolUse enum never
+contained `allow`/`block`, so emitting `{"decision":"block"}` failed hook JSON
+validation. Claude Code reports that as a _non-blocking_ error, so the tool call
+proceeded — every gate decided correctly and was then discarded.
+
+**An allow decision prints nothing.** Exit 0 with empty stdout is the documented
+"no decision — continue through the normal permission flow". The alternatives
+are both harmful: `permissionDecision:"allow"` _bypasses_ the permission system
+and would auto-approve every `Bash`/`Edit`/`Write` the gate did not block, and
+`"defer"` (Claude Code 2.1.89) pauses headless sessions for `-p --resume`
+re-evaluation, which would stall pipeline runs.
+
+`cmd/nightgauge/hook_output_schema_test.go` pins this contract so schema drift
+fails CI rather than silently disabling a guard.
 
 #### `hook stage-gate` — analysis-stage git/forge fence (#4145)
 

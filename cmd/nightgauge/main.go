@@ -4963,17 +4963,14 @@ func hookWorkflowGateCmd() *cobra.Command {
 		Short:        "Evaluate PreToolUse workflow gate (reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			input, err := os.ReadFile("/dev/stdin")
-			if err != nil {
-				return printJSON(hooks.Allow())
-			}
+			input := readHookInput(cmd)
 			// Load sanitization mode from config (default: warn)
 			mode := config.SanitizationModeWarn
 			workdir, _ := os.Getwd()
 			if cfg, loadErr := config.Load(workdir); loadErr == nil && cfg != nil && cfg.Sanitization != nil {
 				mode = cfg.Sanitization.ResolvedMode()
 			}
-			return printJSON(hooks.EvaluateGate(input, mode))
+			return printPreToolUse(hooks.EvaluateGate(input, mode))
 		},
 	}
 }
@@ -4984,11 +4981,7 @@ func hookSkillUsageCmd() *cobra.Command {
 		Short:        "Log a Skill-tool invocation for catalog telemetry (PreToolUse:Skill, reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			input, err := os.ReadFile("/dev/stdin")
-			if err != nil {
-				return printJSON(hooks.Allow())
-			}
-			return printJSON(hooks.LogSkillUsage(input))
+			return printPreToolUse(hooks.LogSkillUsage(readHookInput(cmd)))
 		},
 	}
 }
@@ -4999,11 +4992,7 @@ func hookCarefulGateCmd() *cobra.Command {
 		Short:        "Block prod-destructive Bash commands while careful mode is on (PreToolUse:Bash, reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			input, err := os.ReadFile("/dev/stdin")
-			if err != nil {
-				return printJSON(hooks.Allow())
-			}
-			return printJSON(hooks.EvaluateCarefulGate(input))
+			return printPreToolUse(hooks.EvaluateCarefulGate(readHookInput(cmd)))
 		},
 	}
 }
@@ -5014,11 +5003,7 @@ func hookStageGateCmd() *cobra.Command {
 		Short:        "Fence analysis pipeline stages from mutating git/forge state (PreToolUse:Bash, reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			input, err := os.ReadFile("/dev/stdin")
-			if err != nil {
-				return printJSON(hooks.Allow())
-			}
-			return printJSON(hooks.EvaluateStageGate(input))
+			return printPreToolUse(hooks.EvaluateStageGate(readHookInput(cmd)))
 		},
 	}
 }
@@ -5071,16 +5056,23 @@ func hookFormatCmd() *cobra.Command {
 	var filePath string
 
 	cmd := &cobra.Command{
-		Use:          "format",
-		Short:        "Run formatter on a saved file (PostToolUse for Write/Edit)",
+		Use:   "format",
+		Short: "Run formatter on a saved file (PostToolUse for Write/Edit, reads JSON from stdin)",
+		Long: `Run the configured formatter for a saved file.
+
+As a PostToolUse hook for Write/Edit the payload arrives on stdin with no argv,
+so --file is optional: it is an operator override for manual invocation, and
+stdin is the path the hook itself uses.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return printJSON(hooks.EvaluateFormat(filePath))
+			if filePath != "" {
+				return printJSON(hooks.EvaluateFormat(filePath))
+			}
+			return printJSON(hooks.EvaluateFormatFromHook(readHookInput(cmd)))
 		},
 	}
 
-	cmd.Flags().StringVar(&filePath, "file", "", "File path to format")
-	_ = cmd.MarkFlagRequired("file") // cobra MarkFlagRequired never errors for known flags
+	cmd.Flags().StringVar(&filePath, "file", "", "File path to format (default: read the hook payload from stdin)")
 	return cmd
 }
 
@@ -5110,17 +5102,28 @@ func hookNotifyCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:          "notify",
-		Short:        "Send desktop notification",
+		Use:   "notify",
+		Short: "Send desktop notification (Notification hook, reads JSON from stdin)",
+		Long: `Send a desktop notification.
+
+As a Notification hook the payload arrives on stdin with no argv, so --message
+is optional: it is an operator override for manual invocation, and stdin is the
+path the hook itself uses. With neither, there is nothing to announce and no
+notification is sent.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if message == "" {
+				message = hooks.NotifyMessageFromHook(readHookInput(cmd))
+			}
+			if message == "" {
+				return printJSON(hooks.NotifyResult{Sent: false, Error: "no notification message"})
+			}
 			return printJSON(hooks.EvaluateNotify(hooks.NotifyEvent(event), message))
 		},
 	}
 
 	cmd.Flags().StringVar(&event, "event", "pipeline_complete", "Notification event type")
-	cmd.Flags().StringVar(&message, "message", "", "Notification message")
-	_ = cmd.MarkFlagRequired("message") // cobra MarkFlagRequired never errors for known flags
+	cmd.Flags().StringVar(&message, "message", "", "Notification message (default: read the hook payload from stdin)")
 	return cmd
 }
 
@@ -5201,20 +5204,23 @@ func hookSanitizePromptCmd() *cobra.Command {
 	var input string
 
 	cmd := &cobra.Command{
-		Use:          "sanitize-prompt",
-		Short:        "Sanitize prompt input for injection attempts",
+		Use:   "sanitize-prompt",
+		Short: "Screen a delegated prompt for injection attempts (PreToolUse:Task, reads JSON from stdin)",
+		Long: `Screen a prompt for injection patterns before it is delegated.
+
+As a PreToolUse hook for Task the payload arrives on stdin with no argv, so
+--input is optional: it is an operator override for screening raw text, and
+stdin is the path the hook itself uses.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			match := hooks.MatchPatterns(input, hooks.CategoryPromptInjection)
-			if match != nil {
-				return printJSON(hooks.Block("Prompt injection detected: " + match.Pattern))
+			if input != "" {
+				return printPreToolUse(hooks.EvaluateSanitizeText(input))
 			}
-			return printJSON(hooks.Allow())
+			return printPreToolUse(hooks.EvaluateSanitizePrompt(readHookInput(cmd)))
 		},
 	}
 
-	cmd.Flags().StringVar(&input, "input", "", "Text to sanitize")
-	_ = cmd.MarkFlagRequired("input") // cobra MarkFlagRequired never errors for known flags
+	cmd.Flags().StringVar(&input, "input", "", "Text to screen (default: read the hook payload from stdin)")
 	return cmd
 }
 
