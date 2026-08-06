@@ -145,7 +145,11 @@ Two distinct warning-level outcomes exist and they are not interchangeable:
 
 A diverging bundle names the **recorded** version, the **resolved** version and
 the resolved path in `checks.binary.error`, matching the `[stale-binary]` line
-`guard.sh` writes to its side-channel log.
+`guard.sh` writes to its side-channel log — and it keeps its full `detail`
+alongside that error. This is the outcome an operator is actually
+investigating, so the resolving step and the resolved binary's own version (the
+two facts that answer "is this really an old build?") are reported here, not
+only on healthy machines.
 
 #### The install record is the selection authority (#356)
 

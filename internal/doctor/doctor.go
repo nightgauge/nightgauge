@@ -426,7 +426,11 @@ func checkBinary() (CheckItem, bool) {
 	detail += bundleInventory(resolved.Bundles)
 
 	if resolved.Step == StepVSCodeExtension && resolved.Bundles.Divergence != DivergenceNone {
-		return CheckItem{OK: false, Error: divergenceMessage(resolved)}, true
+		// Detail is kept, not discarded: the resolving step and the resolved
+		// binary's own version are the two facts that answer "is this actually
+		// an old build?", and this is precisely the outcome an operator is
+		// investigating (AC3 — report on EVERY outcome).
+		return CheckItem{OK: false, Detail: detail, Error: divergenceMessage(resolved)}, true
 	}
 
 	return CheckItem{OK: true, Detail: detail}, true
@@ -448,7 +452,7 @@ func bundleInventory(scan VSCodeBundleScan) string {
 	out := fmt.Sprintf("; %d VSCode extension bundle dir(s) on disk", n)
 	switch {
 	case scan.RecordedVersion == "":
-		out += ", no VSCode install record"
+		out += ", no usable VSCode install record"
 	case scan.RecordedUsed:
 		out += fmt.Sprintf(", VSCode records %s as installed (in use)", scan.RecordedVersion)
 	default:
@@ -469,7 +473,7 @@ func divergenceMessage(resolved ResolvedBinary) string {
 		)
 	}
 	return fmt.Sprintf(
-		"stale binary: no VSCode install record for the nightgauge extension (~/.vscode/extensions/extensions.json); %d bundle dir(s) on disk, hooks resolve bundle %s from this directory, running %s",
+		"stale binary: no usable VSCode install record for the nightgauge extension (~/.vscode/extensions/extensions.json); %d bundle dir(s) on disk, hooks resolve bundle %s from this directory, running %s",
 		len(scan.Bundles), scan.SelectedVersion, resolved.Path,
 	)
 }

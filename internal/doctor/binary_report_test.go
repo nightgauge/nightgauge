@@ -80,6 +80,19 @@ func TestRunDoctor_ReportsUnusableRecord(t *testing.T) {
 		}
 	}
 
+	// AC3 says report on EVERY outcome, and this is the outcome an operator is
+	// actually investigating: the resolving STEP and the resolved binary's own
+	// VERSION are the two facts that answer "is this really an old build?".
+	// Discarding Detail here left them reported only for healthy machines.
+	if check.Detail == "" {
+		t.Fatal("the divergence outcome must keep its Detail — it carries the resolving step and the binary's version")
+	}
+	for _, want := range []string{wantPath, string(StepVSCodeExtension), "bundle dir(s) on disk"} {
+		if !strings.Contains(check.Detail, want) {
+			t.Errorf("Detail must name %q, got %q", want, check.Detail)
+		}
+	}
+
 	// Warning-level, never a required failure, and never mistaken for a
 	// missing binary.
 	for _, fc := range result.FailedChecks {
