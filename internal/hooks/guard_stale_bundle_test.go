@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -28,23 +26,28 @@ const (
 	preToolUsePayload = `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"stub"}}`
 	// stopPayload is a realistic Stop response.
 	stopPayload = `{"decision":"block","reason":"stub"}`
+	// bundleDirPrefix mirrors internal/doctor's constant; the two packages do
+	// not import each other.
+	bundleDirPrefix = "nightgauge.nightgauge-vscode-"
 )
 
 type capturedBundle struct {
-	BundleVersion    string `json:"bundle_version"`
-	BinaryExists     bool   `json:"binary_exists"`
-	BinaryExecutable bool   `json:"binary_executable"`
+	BundleVersion     string `json:"bundle_version"`
+	RecordedInstalled bool   `json:"recorded_installed"`
+	BinaryExists      bool   `json:"binary_exists"`
 }
 
 type capturedBundleLayout struct {
-	Bundles []capturedBundle `json:"bundles"`
+	RecordedRelativeLocation string           `json:"recorded_relative_location"`
+	Bundles                  []capturedBundle `json:"bundles"`
 }
 
-// loadCapturedBundleVersions reads the redacted capture of a real machine's
-// extension install (internal/doctor/testdata/vscode-bundles/, see the README
-// there) and returns the bundle versions, oldest first. The fixture is shared
-// with the resolver tests so both layers exercise the same real layout.
-func loadCapturedBundleVersions(t *testing.T, repoRoot string) []string {
+// loadCapturedLayout reads the redacted capture of a real machine's extension
+// install (internal/doctor/testdata/vscode-bundles/, see the README there).
+// The fixture is shared with the resolver tests so both layers exercise the
+// same real layout: two bundles on disk, the SECOND in glob order recorded as
+// installed.
+func loadCapturedLayout(t *testing.T, repoRoot string) capturedBundleLayout {
 	t.Helper()
 	path := filepath.Join(repoRoot, "internal", "doctor", "testdata", "vscode-bundles", "bundle-layout.json")
 	raw, err := os.ReadFile(path)
@@ -55,40 +58,38 @@ func loadCapturedBundleVersions(t *testing.T, repoRoot string) []string {
 	if err := json.Unmarshal(raw, &layout); err != nil {
 		t.Fatalf("parse captured bundle layout %s: %v", path, err)
 	}
-	var versions []string
+	usable := 0
 	for _, b := range layout.Bundles {
 		if b.BinaryExists && b.BundleVersion != "" {
-			versions = append(versions, b.BundleVersion)
+			usable++
 		}
 	}
-	if len(versions) < 2 {
-		t.Fatalf("captured layout has %d usable bundle(s); the staleness tests need at least 2", len(versions))
+	if usable < 2 {
+		t.Fatalf("captured layout has %d usable bundle(s); these tests need at least 2", usable)
 	}
-	sort.Slice(versions, func(i, j int) bool { return bundleVersionLess(versions[i], versions[j]) })
-	return versions
+	if layout.RecordedRelativeLocation == "" {
+		t.Fatal("captured layout records no installed bundle — re-capture with scripts/capture-vscode-bundle-layout.sh")
+	}
+	return layout
 }
 
-// bundleVersionLess is the test's own ordering oracle, deliberately
-// independent of guard.sh's comparator.
-func bundleVersionLess(a, b string) bool {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	n := len(as)
-	if len(bs) > n {
-		n = len(bs)
-	}
-	for i := 0; i < n; i++ {
-		av, bv := 0, 0
-		if i < len(as) {
-			av, _ = strconv.Atoi(as[i])
-		}
-		if i < len(bs) {
-			bv, _ = strconv.Atoi(bs[i])
-		}
-		if av != bv {
-			return av < bv
+// capturedVersions returns (unrecordedVersion, recordedVersion) from the
+// capture: the bundle VS Code does NOT record (the leftover that pre-#356
+// resolution silently ran) and the one it does.
+func capturedVersions(t *testing.T, layout capturedBundleLayout) (string, string) {
+	t.Helper()
+	recorded := strings.TrimPrefix(layout.RecordedRelativeLocation, bundleDirPrefix)
+	unrecorded := ""
+	for _, b := range layout.Bundles {
+		if b.BinaryExists && b.BundleVersion != "" && b.BundleVersion != recorded {
+			unrecorded = b.BundleVersion
+			break
 		}
 	}
-	return false
+	if unrecorded == "" {
+		t.Fatal("captured layout has no unrecorded bundle — it cannot express the #356 defect")
+	}
+	return unrecorded, recorded
 }
 
 // bundleStub writes a fake bundled binary that (a) records every invocation
@@ -97,7 +98,7 @@ func bundleVersionLess(a, b string) bool {
 // exactly payload (plus a trailing newline) for a `hook …` invocation.
 func bundleStub(t *testing.T, home, version, payload string, executable bool) string {
 	t.Helper()
-	binary := filepath.Join(home, ".vscode", "extensions", "nightgauge.nightgauge-vscode-"+version, "dist", "bin", "nightgauge")
+	binary := filepath.Join(home, ".vscode", "extensions", bundleDirPrefix+version, "dist", "bin", "nightgauge")
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		t.Fatalf("create bundle dir: %v", err)
 	}
@@ -117,12 +118,53 @@ func bundleStub(t *testing.T, home, version, payload string, executable bool) st
 	return binary
 }
 
+// recordInstall writes a VS Code-shaped extensions.json naming the given
+// bundle versions as installed. This is the SELECTION AUTHORITY guard.sh
+// consults (#356) — the whole point being that it, and not a version
+// comparison, decides which bundle the hooks run.
+func recordInstall(t *testing.T, home string, versions ...string) {
+	t.Helper()
+	entries := []string{`{"identifier":{"id":"publisher1.extension1"},"version":"1.0.0","relativeLocation":"publisher1.extension1-1.0.0"}`}
+	for _, v := range versions {
+		dir := bundleDirPrefix + v
+		entries = append(entries, `{"identifier":{"id":"nightgauge.nightgauge-vscode"},"version":"`+v+
+			`","location":{"$mid":1,"path":"`+filepath.Join(home, ".vscode", "extensions", dir)+
+			`","scheme":"file"},"relativeLocation":"`+dir+`"}`)
+	}
+	path := filepath.Join(home, ".vscode", "extensions", "extensions.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create extensions dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("["+strings.Join(entries, ",")+"]"), 0o644); err != nil {
+		t.Fatalf("write extensions index: %v", err)
+	}
+}
+
 type wrapperRun struct {
 	stdout   string
 	stderr   string
 	exitCode int
 	log      string
 	marker   string
+}
+
+// hookBash is the interpreter the wrappers are run under.
+//
+// It is pinned to /bin/bash rather than resolved from PATH because that is
+// what Claude Code hooks actually execute under — bash 3.2.57 on macOS, where
+// PATH would otherwise hand us Homebrew's bash 5.x. A bash-4ism in guard.sh
+// (arrays, `mapfile`, `${var,,}`) would pass CI against 5.x and break every
+// macOS hook silently.
+func hookBash(t *testing.T) string {
+	t.Helper()
+	if _, err := os.Stat("/bin/bash"); err == nil {
+		return "/bin/bash"
+	}
+	path, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash not available: %v", err)
+	}
+	return path
 }
 
 // runWrapper executes one of the real hook wrapper scripts through bash from a
@@ -136,6 +178,7 @@ func runWrapper(t *testing.T, repoRoot, wrapper, home, stdin string, extraEnv ma
 	env := map[string]string{
 		"HOME":                filepath.Clean(home),
 		"PATH":                lookupGitDir(t) + ":/bin:/usr/bin",
+		"LC_ALL":              "C",
 		"NIGHTGAUGE_BIN":      "",
 		"NIGHTGAUGE_HOOK_LOG": logFile,
 		"NG_STUB_MARKER":      marker,
@@ -144,7 +187,7 @@ func runWrapper(t *testing.T, repoRoot, wrapper, home, stdin string, extraEnv ma
 		env[k] = v
 	}
 
-	cmd := exec.Command("bash", filepath.Join(repoRoot, "claude-plugins", "nightgauge", "hooks", wrapper))
+	cmd := exec.Command(hookBash(t), filepath.Join(repoRoot, "claude-plugins", "nightgauge", "hooks", wrapper))
 	cmd.Dir = t.TempDir()
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Env = []string{}
@@ -167,12 +210,11 @@ func runWrapper(t *testing.T, repoRoot, wrapper, home, stdin string, extraEnv ma
 	return wrapperRun{stdout: out.String(), stderr: errBuf.String(), exitCode: code, log: logContent, marker: markerContent}
 }
 
-// TestGuardShellStaleBundleSignal covers #356 AC1: when the hooks resolve a
-// bundle that is NOT the newest one installed, that must produce a visible
-// signal naming both bundle versions and the resolved path — routed to the
-// side-channel log by default, because hook stderr surfaces to the parent
-// agent as a stop-hook-error notification (#3262).
-func TestGuardShellStaleBundleSignal(t *testing.T) {
+// TestGuardShellRecordedBundleWins covers the #356 core defect end to end: the
+// hooks must run the bundle VS Code RECORDS as installed, not whichever
+// directory the glob lists first — and must do it silently, because this path
+// executes on every single tool call.
+func TestGuardShellRecordedBundleWins(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("guard.sh is bash-only")
 	}
@@ -180,87 +222,118 @@ func TestGuardShellStaleBundleSignal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findRepoRoot: %v", err)
 	}
-	versions := loadCapturedBundleVersions(t, repoRoot)
-	oldest, newest := versions[0], versions[len(versions)-1]
+	const stdin = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
 
-	t.Run("silent default routes the staleness notice to the side-channel log", func(t *testing.T) {
+	t.Run("captured real layout runs the recorded bundle", func(t *testing.T) {
+		layout := loadCapturedLayout(t, repoRoot)
+		unrecorded, recorded := capturedVersions(t, layout)
+
 		home := t.TempDir()
-		// Newest bundle installed but its binary is not runnable → the hooks
-		// fall back to an older bundle. That resolved binary is stale.
-		resolved := bundleStub(t, home, oldest, preToolUsePayload, true)
-		bundleStub(t, home, newest, preToolUsePayload, false)
+		bundleStub(t, home, unrecorded, preToolUsePayload, true)
+		bundleStub(t, home, recorded, preToolUsePayload, true)
+		recordInstall(t, home, recorded)
 
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`, nil)
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
 
-		if run.log == "" {
-			t.Fatal("side-channel log is empty — the staleness signal was never emitted")
+		if !strings.Contains(run.marker, recorded) {
+			t.Errorf("expected the recorded bundle %q to have run, invocations were %q", recorded, run.marker)
 		}
-		for _, want := range []string{oldest, newest, resolved} {
-			if !strings.Contains(run.log, want) {
-				t.Errorf("side-channel log must name %q (both bundle versions and the resolved path), got %q", want, run.log)
-			}
-		}
-		if strings.TrimSpace(run.stderr) != "" {
-			t.Errorf("silent default must keep stderr empty (a stop-hook-error notification aborts turns per #3262), got %q", run.stderr)
-		}
-	})
-
-	t.Run("verbose mode moves the notice to stderr", func(t *testing.T) {
-		home := t.TempDir()
-		resolved := bundleStub(t, home, oldest, preToolUsePayload, true)
-		bundleStub(t, home, newest, preToolUsePayload, false)
-
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`, map[string]string{
-			"NIGHTGAUGE_HOOK_SILENT": "false",
-		})
-		for _, want := range []string{oldest, newest, resolved} {
-			if !strings.Contains(run.stderr, want) {
-				t.Errorf("verbose stderr must name %q, got %q", want, run.stderr)
-			}
-		}
-	})
-
-	t.Run("healthy multi-bundle install stays quiet and runs the newest bundle", func(t *testing.T) {
-		home := t.TempDir()
-		bundleStub(t, home, oldest, preToolUsePayload, true)
-		newestPath := bundleStub(t, home, newest, preToolUsePayload, true)
-
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`, nil)
-
-		// #356 core defect: the first glob match is the OLDER bundle.
-		if !strings.Contains(run.marker, newest) {
-			t.Errorf("expected the newest bundle %q (%s) to have run, invocations were %q", newest, newestPath, run.marker)
-		}
-		if strings.Contains(run.marker, oldest) {
-			t.Errorf("the superseded bundle %q must not run when a newer one is installed, invocations were %q", oldest, run.marker)
+		if strings.Contains(run.marker, unrecorded) {
+			t.Errorf("the unrecorded leftover %q must not run, invocations were %q", unrecorded, run.marker)
 		}
 		if strings.Contains(run.log, "[stale-binary]") {
-			t.Errorf("a correctly-resolved newest bundle must not log a staleness notice on every tool call, got %q", run.log)
+			t.Errorf("a confirmed resolution must not log on every tool call, got %q", run.log)
 		}
 		if strings.TrimSpace(run.stderr) != "" {
 			t.Errorf("expected empty stderr, got %q", run.stderr)
 		}
 	})
+
+	t.Run("recorded RC bundle wins over the tie-breaking glob order", func(t *testing.T) {
+		// The channel this repo actually ships: staging.yml runs
+		// `npm version 0.2.0-rc.23` then `vsce package --target <t>`. rc.22
+		// sorts first, and every dotted-numeric comparator ties the two.
+		home := t.TempDir()
+		bundleStub(t, home, "0.2.0-rc.22-darwin-arm64", preToolUsePayload, true)
+		bundleStub(t, home, "0.2.0-rc.23-darwin-arm64", preToolUsePayload, true)
+		recordInstall(t, home, "0.2.0-rc.23-darwin-arm64")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, "0.2.0-rc.23-darwin-arm64") {
+			t.Errorf("expected rc.23 to have run, invocations were %q", run.marker)
+		}
+		if strings.Contains(run.marker, "0.2.0-rc.22-darwin-arm64") {
+			t.Errorf("rc.22 must not run when rc.23 is the recorded install, invocations were %q", run.marker)
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("expected silence, got %q", run.log)
+		}
+	})
+
+	t.Run("recorded downgrade wins, silently", func(t *testing.T) {
+		// A maintainer dev-install is permanently `0.1.<epoch>`; a leftover
+		// release directory carries a bigger number. Ranking versions throws
+		// away the build the maintainer just installed. The recorded bundle
+		// here is neither the first glob match nor the highest version.
+		home := t.TempDir()
+		bundleStub(t, home, "0.1.0", preToolUsePayload, true)
+		bundleStub(t, home, "0.2.0", preToolUsePayload, true)
+		bundleStub(t, home, "0.3.0", preToolUsePayload, true)
+		recordInstall(t, home, "0.2.0")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, "0.2.0") {
+			t.Errorf("expected the recorded bundle 0.2.0 to have run, invocations were %q", run.marker)
+		}
+		for _, other := range []string{"0.1.0", "0.3.0"} {
+			if strings.Contains(run.marker, other) {
+				t.Errorf("bundle %q must not run; VS Code records 0.2.0, invocations were %q", other, run.marker)
+			}
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("a recorded downgrade is a healthy install and must stay silent, got %q", run.log)
+		}
+	})
+
+	t.Run("vsctmp partial-install orphan never wins", func(t *testing.T) {
+		home := t.TempDir()
+		bundleStub(t, home, "0.2.0-darwin-arm64.vsctmp", preToolUsePayload, true)
+		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true)
+		recordInstall(t, home, "0.2.1-darwin-arm64")
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, "0.2.1-darwin-arm64") {
+			t.Errorf("expected the recorded install to have run, invocations were %q", run.marker)
+		}
+		if strings.Contains(run.marker, "vsctmp") {
+			t.Errorf("a .vsctmp partial-install orphan ran, invocations were %q", run.marker)
+		}
+	})
+
+	t.Run("single unrecorded bundle resolves silently", func(t *testing.T) {
+		home := t.TempDir()
+		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true)
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, "0.2.1-darwin-arm64") {
+			t.Errorf("expected the only bundle to have run, invocations were %q", run.marker)
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("one bundle and no record is not ambiguous; expected silence, got %q", run.log)
+		}
+	})
 }
 
-// TestGuardShellReleaseTargetSuffixedBundles runs guard.sh against the
-// bundle-directory shape that every RELEASED / marketplace install actually
-// has, which no other test here exercises.
-//
-// VS Code appends the target platform to platform-specific extension folder
-// names, and .github/workflows/release.yml packages every released VSIX with
-// `vsce package --target <t>` (darwin-arm64, darwin-x64, linux-x64). So real
-// users have `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`, and the version
-// guard.sh extracts is `0.2.1-darwin-arm64`.
-//
-// The captured fixture and every version above come from the maintainer-only
-// dev scheme (dev-install.sh runs `vsce package` WITHOUT --target), which is
-// pure dotted digits. Before the trim in _ng_version_gt, the trailing component
-// `1-darwin-arm64` was not all-digits and collapsed to 0, so any two releases
-// differing only in patch compared EQUAL — leaving selection at first glob
-// match (the OLDER bundle) and suppressing the staleness signal entirely. The
-// suite was green while the fix was inert everywhere it mattered.
-func TestGuardShellReleaseTargetSuffixedBundles(t *testing.T) {
+// TestGuardShellDivergenceSignal covers #356 AC1: when the hooks resolve a
+// bundle VS Code's record does NOT confirm, that must produce a visible signal
+// naming the recorded version, the resolved version and the resolved path —
+// routed to the side-channel log by default, because hook stderr surfaces to
+// the parent agent as a stop-hook-error notification (#3262).
+func TestGuardShellDivergenceSignal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("guard.sh is bash-only")
 	}
@@ -268,83 +341,74 @@ func TestGuardShellReleaseTargetSuffixedBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findRepoRoot: %v", err)
 	}
-	const payload = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
+	const stdin = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
 
-	t.Run("runs the newest release bundle, not the first glob match", func(t *testing.T) {
-		home := t.TempDir()
-		// Collation order is 0.2.0, 0.2.1, 0.2.10, 0.2.9 — so the buggy answer
-		// is the OLDEST (0.2.0) and "last match" would be 0.2.9. Only numeric
-		// ordering of the suffix-trimmed version yields 0.2.10.
-		for _, v := range []string{"0.2.0", "0.2.1", "0.2.9"} {
-			bundleStub(t, home, v+"-darwin-arm64", preToolUsePayload, true)
-		}
-		newest := "0.2.10-darwin-arm64"
-		bundleStub(t, home, newest, preToolUsePayload, true)
-
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
-
-		if !strings.Contains(run.marker, newest) {
-			t.Errorf("expected the newest release bundle %q to have run, invocations were %q", newest, run.marker)
-		}
-		for _, stale := range []string{"0.2.0-darwin-arm64", "0.2.1-darwin-arm64", "0.2.9-darwin-arm64"} {
-			if strings.Contains(run.marker, stale) {
-				t.Errorf("superseded bundle %q must not run, invocations were %q", stale, run.marker)
-			}
-		}
-		if strings.Contains(run.log, "[stale-binary]") {
-			t.Errorf("a correctly-resolved newest bundle must stay silent, got %q", run.log)
-		}
-	})
-
-	t.Run("no inverted stale alarm when two targets of one release tie", func(t *testing.T) {
-		home := t.TempDir()
-		// Same version, two target platforms; the glob-first one is the broken
-		// (non-executable) copy. Comparing the two version STRINGS for
-		// staleness fires the warning backwards here — reporting the machine as
-		// stale, and naming the non-runnable bundle as the "newer" one — while
-		// it is in fact running the newest binary available.
+	// setup builds a $HOME exhibiting the divergence and returns the strings
+	// the signal must name.
+	unusableRecord := func(t *testing.T, home string) (resolved string, mustName []string) {
+		path := bundleStub(t, home, "0.2.0-darwin-arm64", preToolUsePayload, true)
 		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, false)
-		runnable := "0.2.1-linux-x64"
-		bundleStub(t, home, runnable, preToolUsePayload, true)
+		recordInstall(t, home, "0.2.1-darwin-arm64")
+		return path, []string{"0.2.1-darwin-arm64", "0.2.0-darwin-arm64", path}
+	}
+	noRecord := func(t *testing.T, home string) (resolved string, mustName []string) {
+		path := bundleStub(t, home, "0.2.0-darwin-arm64", preToolUsePayload, true)
+		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true)
+		return path, []string{"0.2.0-darwin-arm64", path}
+	}
 
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, home string) (string, []string)
+	}{
+		{"recorded bundle is not executable", unusableRecord},
+		{"no install record with several bundles", noRecord},
+	}
 
-		if !strings.Contains(run.marker, runnable) {
-			t.Errorf("expected the runnable bundle %q to have run, invocations were %q", runnable, run.marker)
-		}
-		if strings.Contains(run.log, "[stale-binary]") {
-			t.Errorf("false stale-binary alarm on a healthy install (nothing newer is installed), log was %q", run.log)
-		}
-		if strings.TrimSpace(run.stderr) != "" {
-			t.Errorf("expected empty stderr, got %q", run.stderr)
-		}
-	})
+	for _, tc := range cases {
+		t.Run(tc.name+"/silent default routes to the side-channel log", func(t *testing.T) {
+			home := t.TempDir()
+			_, mustName := tc.setup(t, home)
 
-	t.Run("still signals genuine staleness with release-shaped dirs", func(t *testing.T) {
-		home := t.TempDir()
-		newest := "0.2.2-darwin-arm64"
-		bundleStub(t, home, newest, preToolUsePayload, false)
-		selected := "0.2.1-darwin-arm64"
-		resolved := bundleStub(t, home, selected, preToolUsePayload, true)
+			run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
 
-		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
-
-		for _, want := range []string{selected, newest, resolved} {
-			if !strings.Contains(run.log, want) {
-				t.Errorf("side-channel log must name %q, got %q", want, run.log)
+			if !strings.Contains(run.log, "[stale-binary]") {
+				t.Fatalf("the divergence signal was never emitted; log=%q", run.log)
 			}
-		}
-		if strings.TrimSpace(run.stderr) != "" {
-			t.Errorf("silent default must keep stderr empty (#3262), got %q", run.stderr)
-		}
-	})
+			for _, want := range mustName {
+				if !strings.Contains(run.log, want) {
+					t.Errorf("side-channel log must name %q, got %q", want, run.log)
+				}
+			}
+			if strings.TrimSpace(run.stderr) != "" {
+				t.Errorf("silent default must keep stderr empty (a stop-hook-error notification aborts turns per #3262), got %q", run.stderr)
+			}
+		})
+
+		t.Run(tc.name+"/verbose mode moves the notice to stderr", func(t *testing.T) {
+			home := t.TempDir()
+			_, mustName := tc.setup(t, home)
+
+			run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, map[string]string{
+				"NIGHTGAUGE_HOOK_SILENT": "false",
+			})
+			for _, want := range mustName {
+				if !strings.Contains(run.stderr, want) {
+					t.Errorf("verbose stderr must name %q, got %q", want, run.stderr)
+				}
+			}
+			if strings.Contains(run.log, "[stale-binary]") {
+				t.Errorf("verbose mode must not ALSO write the log, got %q", run.log)
+			}
+		})
+	}
 }
 
-// TestGuardShellStaleBundleStdoutContract covers #356 AC2: the staleness
+// TestGuardShellDivergenceStdoutContract covers #356 AC2: the divergence
 // signal must not put a single byte on hook stdout, for any hook event shape.
 // Each case asserts stdout is EXACTLY what the binary produced — not "starts
 // with", not "contains".
-func TestGuardShellStaleBundleStdoutContract(t *testing.T) {
+func TestGuardShellDivergenceStdoutContract(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("guard.sh is bash-only")
 	}
@@ -352,8 +416,6 @@ func TestGuardShellStaleBundleStdoutContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("findRepoRoot: %v", err)
 	}
-	versions := loadCapturedBundleVersions(t, repoRoot)
-	oldest, newest := versions[0], versions[len(versions)-1]
 
 	cases := []struct {
 		name    string
@@ -385,18 +447,19 @@ func TestGuardShellStaleBundleStdoutContract(t *testing.T) {
 		for _, silent := range []string{"true", "false"} {
 			t.Run(tc.name+"/silent="+silent, func(t *testing.T) {
 				home := t.TempDir()
-				bundleStub(t, home, oldest, tc.payload, true)
-				bundleStub(t, home, newest, tc.payload, false)
+				bundleStub(t, home, "0.2.0-darwin-arm64", tc.payload, true)
+				bundleStub(t, home, "0.2.1-darwin-arm64", tc.payload, false)
+				recordInstall(t, home, "0.2.1-darwin-arm64")
 
 				run := runWrapper(t, repoRoot, tc.wrapper, home, tc.stdin, map[string]string{
 					"NIGHTGAUGE_HOOK_SILENT": silent,
 				})
 
-				// The staleness condition must actually be active, or this
+				// The divergence condition must actually be active, or this
 				// case proves nothing about the signal's stdout discipline.
 				signalled := strings.Contains(run.log, "[stale-binary]") || strings.Contains(run.stderr, "[stale-binary]")
 				if !signalled {
-					t.Fatalf("staleness signal never fired; log=%q stderr=%q", run.log, run.stderr)
+					t.Fatalf("divergence signal never fired; log=%q stderr=%q", run.log, run.stderr)
 				}
 
 				want := ""
