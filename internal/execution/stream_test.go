@@ -1,11 +1,19 @@
 package execution
 
-import "testing"
+import (
+	"os"
+	"strings"
+	"testing"
+)
 
+// The result event's shape is the one from testdata/claude_stream_real_capture.jsonl:
+// `usage` at the top level, and `result` holding the assistant's final TEXT.
+// Typing `result` as a struct failed the whole line's unmarshal and dropped the
+// terminal event, so every claude run on the Go path booked zero tokens (#300).
 func TestParseStreamLineResult(t *testing.T) {
 	acc := &TokenAccumulator{}
 
-	line := `{"type":"result","result":{"usage":{"input_tokens":1500,"output_tokens":800,"cache_creation_input_tokens":100,"cache_read_input_tokens":50}}}`
+	line := `{"type":"result","subtype":"success","result":"Done.","usage":{"input_tokens":1500,"output_tokens":800,"cache_creation_input_tokens":100,"cache_read_input_tokens":50},"total_cost_usd":0.0107762}`
 	event, updated := acc.ParseStreamLine(line)
 
 	if event == nil {
@@ -32,6 +40,9 @@ func TestParseStreamLineResult(t *testing.T) {
 	if acc.Total() != 2300 {
 		t.Errorf("total = %d", acc.Total())
 	}
+	if string(event.Result) != `"Done."` {
+		t.Errorf("result text = %s, want the raw final-text string", event.Result)
+	}
 }
 
 func TestParseStreamLineMessage(t *testing.T) {
@@ -51,10 +62,10 @@ func TestParseStreamLineMessage(t *testing.T) {
 func TestParseStreamLineCumulative(t *testing.T) {
 	acc := &TokenAccumulator{}
 
-	// First update
-	acc.ParseStreamLine(`{"type":"result","result":{"usage":{"input_tokens":100,"output_tokens":50}}}`)
-	// Second update with higher values (cumulative)
-	acc.ParseStreamLine(`{"type":"result","result":{"usage":{"input_tokens":200,"output_tokens":150}}}`)
+	// Result events carry invocation totals, so the accumulator stays monotonic:
+	// a later, smaller reading can never lower it.
+	acc.ParseStreamLine(`{"type":"result","result":"a","usage":{"input_tokens":200,"output_tokens":150}}`)
+	acc.ParseStreamLine(`{"type":"result","result":"b","usage":{"input_tokens":100,"output_tokens":50}}`)
 
 	if acc.InputTokens != 200 {
 		t.Errorf("should take max: input = %d", acc.InputTokens)
@@ -82,17 +93,172 @@ func TestParseStreamLineIgnoresNonJSON(t *testing.T) {
 	}
 }
 
-func TestParseStreamLineLegacyFormat(t *testing.T) {
-	acc := &TokenAccumulator{}
+// ── #300 per-turn usage, against a REAL captured transcript ──────────────
+//
+// The fixture is a live `claude --output-format stream-json` capture, not a
+// hand-authored one — see testdata/README.md. #300 is a #166 silent-no-op:
+// the parser was green against a shape the CLI does not emit, so the Go
+// auto/CLI path booked zero tokens and a killed stage looked free.
 
-	line := `{"type":"result","result":{"input_tokens":1000,"output_tokens":500}}`
-	_, updated := acc.ParseStreamLine(line)
+// Ground truth read off testdata/claude_stream_real_capture.jsonl.
+const (
+	captureTurn1ID = "msg_011CdkixpD3Jjqq1eV8pN4zj"
+	captureTurn2ID = "msg_011Cdkiy8tCJsBAWYxS2STVS"
 
-	if !updated {
-		t.Error("expected token update")
+	// Deduped per-turn sums: 10+8, 3+1, 3048+260, 13287+16335.
+	captureTurnSumInput  = 18
+	captureTurnSumOutput = 4
+	captureTurnSumCacheC = 3308
+	captureTurnSumCacheR = 29622
+
+	// The terminal result event's invocation totals.
+	captureResultInput  = 18
+	captureResultOutput = 236
+	captureResultCacheC = 3308
+	captureResultCacheR = 29622
+)
+
+// realCaptureLines returns the fixture's lines, and the index of its terminal
+// result event.
+func realCaptureLines(t *testing.T) (lines []string, resultIdx int) {
+	t.Helper()
+	data, err := os.ReadFile("testdata/claude_stream_real_capture.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
 	}
-	if acc.InputTokens != 1000 {
-		t.Errorf("input = %d", acc.InputTokens)
+	resultIdx = -1
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.Contains(line, `"type":"result"`) {
+			resultIdx = len(lines)
+		}
+		lines = append(lines, line)
+	}
+	if resultIdx < 0 {
+		t.Fatal("fixture has no result event — recapture it")
+	}
+	return lines, resultIdx
+}
+
+// The #300 regression: a stage killed before the terminal result event must
+// still book the tokens its assistant turns already reported. Booking zero is
+// worse than booking nothing — zero is indistinguishable from a free stage, so
+// the budget enforcer never accumulates against repeatedly-killed runs.
+func TestParseStreamRealCaptureKilledBeforeResult(t *testing.T) {
+	lines, resultIdx := realCaptureLines(t)
+
+	// Exactly what a killed stage leaves on stdout: every line up to, but not
+	// including, the result event.
+	acc := &TokenAccumulator{}
+	for _, line := range lines[:resultIdx] {
+		acc.ParseStreamLine(line)
+	}
+
+	if acc.Total() == 0 {
+		t.Fatal("killed stage booked zero tokens — a free stage and a lost one are indistinguishable (#300)")
+	}
+	if acc.InputTokens != captureTurnSumInput {
+		t.Errorf("input = %d, want %d (sum of the two turns)", acc.InputTokens, captureTurnSumInput)
+	}
+	if acc.OutputTokens != captureTurnSumOutput {
+		t.Errorf("output = %d, want %d", acc.OutputTokens, captureTurnSumOutput)
+	}
+	if acc.CacheCreated != captureTurnSumCacheC {
+		t.Errorf("cache created = %d, want %d", acc.CacheCreated, captureTurnSumCacheC)
+	}
+	if acc.CacheRead != captureTurnSumCacheR {
+		t.Errorf("cache read = %d, want %d", acc.CacheRead, captureTurnSumCacheR)
+	}
+}
+
+// The whole capture: the terminal result event must parse (its `result` field
+// is a STRING, which is what broke the unmarshal) and its invocation totals
+// must win over the partial per-turn sum.
+func TestParseStreamRealCaptureComplete(t *testing.T) {
+	lines, resultIdx := realCaptureLines(t)
+
+	acc := &TokenAccumulator{}
+	tracker := &ServedModelTracker{}
+	resultParsed := false
+	for i, line := range lines {
+		event, updated := acc.ParseStreamLine(line)
+		tracker.Observe(event)
+		if i == resultIdx {
+			if event == nil {
+				t.Fatal("result event did not parse — `result` is the final text string, not an object (#300)")
+			}
+			if !updated {
+				t.Error("result event carried usage but booked nothing")
+			}
+			resultParsed = true
+		}
+	}
+	if !resultParsed {
+		t.Fatal("never reached the result event")
+	}
+
+	if acc.InputTokens != captureResultInput {
+		t.Errorf("input = %d, want %d", acc.InputTokens, captureResultInput)
+	}
+	if acc.OutputTokens != captureResultOutput {
+		t.Errorf("output = %d, want %d (the result total, not the streamed partial)", acc.OutputTokens, captureResultOutput)
+	}
+	if acc.CacheCreated != captureResultCacheC {
+		t.Errorf("cache created = %d, want %d", acc.CacheCreated, captureResultCacheC)
+	}
+	if acc.CacheRead != captureResultCacheR {
+		t.Errorf("cache read = %d, want %d", acc.CacheRead, captureResultCacheR)
+	}
+	if tracker.ServedModel != "claude-haiku-4-5-20251001" {
+		t.Errorf("served model = %q", tracker.ServedModel)
+	}
+}
+
+// Why per-turn snapshots are deduped by message id before being summed: the
+// CLI emits one assistant event per content block (thinking, tool_use, text),
+// each repeating that turn's usage. The fixture's first turn spans three such
+// events. Summing them blind would triple-count it.
+func TestParseStreamRealCaptureDedupesTurnBlocks(t *testing.T) {
+	lines, _ := realCaptureLines(t)
+
+	acc := &TokenAccumulator{}
+	turn1Events := 0
+	for _, line := range lines {
+		if !strings.Contains(line, `"type":"assistant"`) {
+			continue
+		}
+		if strings.Contains(line, captureTurn1ID) {
+			turn1Events++
+		}
+		acc.ParseStreamLine(line)
+	}
+
+	if turn1Events < 2 {
+		t.Fatalf("fixture no longer exercises repeated blocks per turn (%d events for turn 1)", turn1Events)
+	}
+	if got := acc.turns[captureTurn1ID].InputTokens; got != 10 {
+		t.Errorf("turn 1 input = %d, want 10 counted once across %d events", got, turn1Events)
+	}
+	if got := acc.turns[captureTurn2ID].InputTokens; got != 8 {
+		t.Errorf("turn 2 input = %d, want 8", got)
+	}
+	if acc.InputTokens != captureTurnSumInput {
+		t.Errorf("input = %d, want %d — turns summed, blocks deduped", acc.InputTokens, captureTurnSumInput)
+	}
+}
+
+// Assistant events with no message id cannot be deduped, so they collapse into
+// one bucket by max. That under-counts a multi-turn stage; it never fabricates
+// cost, which is the safe direction for a budget input.
+func TestParseStreamAssistantWithoutMessageID(t *testing.T) {
+	acc := &TokenAccumulator{}
+	for i := 0; i < 3; i++ {
+		acc.ParseStreamLine(`{"type":"assistant","message":{"model":"claude-opus-5","usage":{"input_tokens":40,"output_tokens":10}}}`)
+	}
+	if acc.InputTokens != 40 {
+		t.Errorf("input = %d, want 40 — id-less snapshots must not be summed", acc.InputTokens)
+	}
+	if acc.OutputTokens != 10 {
+		t.Errorf("output = %d, want 10", acc.OutputTokens)
 	}
 }
 
@@ -321,7 +487,7 @@ func TestParseLineDispatch(t *testing.T) {
 	acc := &TokenAccumulator{}
 
 	// Claude format via ParseLine
-	line := `{"type":"result","result":{"usage":{"input_tokens":100,"output_tokens":50}}}`
+	line := `{"type":"result","result":"done","usage":{"input_tokens":100,"output_tokens":50}}`
 	_, updated := acc.ParseLine(StreamFormatClaude, line)
 	if !updated {
 		t.Error("Claude ParseLine should update tokens")

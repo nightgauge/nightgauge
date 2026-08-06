@@ -14,13 +14,22 @@ import (
 type StreamEvent struct {
 	Type string `json:"type"`
 
-	// For "result" events
-	Result *StreamResult `json:"result,omitempty"`
+	// Result is the terminal "result" event's payload, which the CLI sets to
+	// the assistant's final TEXT — a JSON string, not an object. It MUST stay
+	// raw: declaring it as a struct made json.Unmarshal fail on the whole line,
+	// so the terminal event was dropped and every claude run booked zero
+	// tokens (#300). Token usage is NOT in here; see Usage.
+	// Shape verified in testdata/claude_stream_real_capture.jsonl.
+	Result json.RawMessage `json:"result,omitempty"`
+
+	// Usage is the token payload on a "result" event, which the CLI puts at
+	// the TOP level of the event — not nested under `result` (#300).
+	Usage *TokenUsage `json:"usage,omitempty"`
 
 	// For "content_block_start" / "content_block_delta" events
 	ContentBlock *ContentBlock `json:"content_block,omitempty"`
 
-	// For "message" events
+	// For "assistant" / "message" events
 	Message *StreamMessage `json:"message,omitempty"`
 
 	// Session ID for conversation resumption
@@ -42,19 +51,14 @@ type StreamEvent struct {
 	RefusalCategory string `json:"api_refusal_category,omitempty"`
 }
 
-// StreamResult contains token usage from a "result" event.
-type StreamResult struct {
-	// Token usage is in different places depending on Claude CLI version
-	Usage *TokenUsage `json:"usage,omitempty"`
-
-	// Legacy fields
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
-}
-
 // StreamMessage contains message-level data.
 type StreamMessage struct {
 	Usage *TokenUsage `json:"usage,omitempty"`
+
+	// ID is the API message id. The CLI emits one assistant event per content
+	// block and repeats the turn's usage snapshot on each, so this is the key
+	// that separates "another block of the same turn" from "a new turn" (#300).
+	ID string `json:"id,omitempty"`
 
 	// Model is the model that served this message. After a refusal fallback
 	// every assistant message reports the fallback model, so the LAST
@@ -89,6 +93,14 @@ type TokenAccumulator struct {
 	// is the premium-request count from its stats footer (#52). Zero for
 	// token-metered adapters (claude/codex/gemini).
 	PremiumRequests int
+
+	// turns holds the largest usage snapshot seen for each assistant turn,
+	// keyed by message id, and turnTotal their running sum. Claude's per-turn
+	// assistant usage is per-turn, not cumulative — the terminal result event
+	// reports the SUM across turns — so turns must be deduped by id and then
+	// summed to reconstruct the stage total when no result event arrives (#300).
+	turns     map[string]TokenUsage
+	turnTotal TokenUsage
 }
 
 // ParseStreamLine parses a single NDJSON line from Claude's stream-json output.
@@ -109,16 +121,18 @@ func (acc *TokenAccumulator) ParseStreamLine(line string) (*StreamEvent, bool) {
 	// Extract token usage from various event types
 	switch event.Type {
 	case "result":
-		if event.Result != nil {
-			if event.Result.Usage != nil {
-				acc.updateFromUsage(event.Result.Usage)
-				tokenUpdated = true
-			} else if event.Result.InputTokens > 0 || event.Result.OutputTokens > 0 {
-				// Legacy format
-				acc.InputTokens = event.Result.InputTokens
-				acc.OutputTokens = event.Result.OutputTokens
-				tokenUpdated = true
-			}
+		// The invocation total, on the event's top-level `usage` (#300).
+		if event.Usage != nil {
+			acc.updateFromUsage(event.Usage)
+			tokenUpdated = true
+		}
+
+	case "assistant":
+		// Per-turn usage, the only accounting a stage killed/timed out before
+		// the result event ever produces (#300).
+		if event.Message != nil && event.Message.Usage != nil {
+			acc.addTurnUsage(event.Message.ID, event.Message.Usage)
+			tokenUpdated = true
 		}
 
 	case "message":
@@ -131,21 +145,47 @@ func (acc *TokenAccumulator) ParseStreamLine(line string) (*StreamEvent, bool) {
 	return &event, tokenUpdated
 }
 
+// addTurnUsage folds one assistant turn's usage snapshot into the accumulator.
+//
+// The CLI emits an assistant event per content block (thinking, tool_use,
+// text), each repeating that turn's usage, so snapshots are deduped by message
+// id — per-field max within a turn, summed across turns. An empty id folds
+// every id-less event into one bucket: that can only under-count, never
+// fabricate cost, which is the safe direction for a budget input.
+func (acc *TokenAccumulator) addTurnUsage(id string, usage *TokenUsage) {
+	if acc.turns == nil {
+		acc.turns = make(map[string]TokenUsage)
+	}
+	turn := acc.turns[id]
+	acc.turnTotal.InputTokens += raiseMax(&turn.InputTokens, usage.InputTokens)
+	acc.turnTotal.OutputTokens += raiseMax(&turn.OutputTokens, usage.OutputTokens)
+	acc.turnTotal.CacheCreationInput += raiseMax(&turn.CacheCreationInput, usage.CacheCreationInput)
+	acc.turnTotal.CacheReadInput += raiseMax(&turn.CacheReadInput, usage.CacheReadInput)
+	acc.turns[id] = turn
+	acc.updateFromUsage(&acc.turnTotal)
+}
+
+// raiseMax raises *dst to v when v is larger and returns the increase, so a
+// running sum can be maintained without rescanning every turn.
+func raiseMax(dst *int, v int) int {
+	if v <= *dst {
+		return 0
+	}
+	delta := v - *dst
+	*dst = v
+	return delta
+}
+
+// updateFromUsage folds a whole-invocation total into the accumulator. Both
+// inputs are invocation totals — the result event's `usage`, or the running sum
+// of per-turn assistant snapshots — so taking the max keeps the accumulator
+// monotonic: out-of-order events cannot lower it, and a partial per-turn sum
+// cannot overwrite the authoritative result total.
 func (acc *TokenAccumulator) updateFromUsage(usage *TokenUsage) {
-	// Claude reports cumulative totals, not deltas.
-	// Take the max to handle out-of-order events.
-	if usage.InputTokens > acc.InputTokens {
-		acc.InputTokens = usage.InputTokens
-	}
-	if usage.OutputTokens > acc.OutputTokens {
-		acc.OutputTokens = usage.OutputTokens
-	}
-	if usage.CacheCreationInput > acc.CacheCreated {
-		acc.CacheCreated = usage.CacheCreationInput
-	}
-	if usage.CacheReadInput > acc.CacheRead {
-		acc.CacheRead = usage.CacheReadInput
-	}
+	raiseMax(&acc.InputTokens, usage.InputTokens)
+	raiseMax(&acc.OutputTokens, usage.OutputTokens)
+	raiseMax(&acc.CacheCreated, usage.CacheCreationInput)
+	raiseMax(&acc.CacheRead, usage.CacheReadInput)
 }
 
 // Total returns the total token count (input + output).
