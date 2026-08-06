@@ -64,3 +64,48 @@ exactly — which is why assistant usage is summed across distinct `message.id`
 values rather than maxed. Output is the one field where the streamed snapshot
 is a partial (3+1 against a final 236); a killed stage therefore under-reports
 output tokens, but reports real non-zero cost instead of a fabricated free run.
+
+## `claude_stream_subagent_multi_result.jsonl`
+
+A second real capture — same CLI version and the same `redact.jq` — of a stage
+that spawns a `Task` subagent:
+
+```bash
+claude -p "Use the Task tool to launch one general-purpose subagent that runs \
+'echo subagent-ran' with Bash and reports the output. Then reply done." \
+  --output-format stream-json --verbose \
+  --model claude-haiku-4-5-20251001 --allowedTools Bash Task
+```
+
+It exists because it carries two shapes the single-turn capture cannot, both of
+which decide how the accumulator must combine its sources:
+
+**A run emits more than one `result` envelope, and their `usage` is a delta.**
+
+| envelope | num_turns | input | output | cache create | cache read | total_cost_usd |
+| -------- | --------: | ----: | -----: | -----------: | ---------: | -------------: |
+| 1        |         3 |    28 |    755 |         4903 |      47277 |      0.0280542 |
+| 2        |         1 |    10 |    141 |          557 |      18190 |      0.0335836 |
+| **sum**  |           |    38 |    896 |         5460 |      65467 |                |
+
+The second envelope is smaller than the first in **every** token field, so the
+payloads cannot be running totals — they are deltas, and envelopes must sum.
+`total_cost_usd` moves the other way (0.028 → 0.034): it alone is
+session-cumulative. That asymmetry is the one #256 was booked against, where
+six summed cumulative envelopes reported $100.47 for a $23.67 stage. The TS
+`TokenAccumulator.add()` already encodes exactly this split — sum the token
+counts, delta the cost.
+
+**Envelopes do not account for subagent turns.** The capture has six distinct
+assistant turns, two of them the subagent's (`parent_tool_use_id` set):
+
+| source                       | input | output | cache create | cache read |
+| ---------------------------- | ----: | -----: | -----------: | ---------: |
+| result envelopes (summed)    |    38 |    896 |         5460 |      65467 |
+| assistant turns (6, deduped) |    56 |     16 |        13350 |      72701 |
+
+The envelope sums equal the four **main-thread** turns exactly; the extra
+18 input / 7890 cache-create tokens are the subagent's, and no envelope ever
+reports them. So neither source is complete on its own — envelopes carry the
+only accurate output count, turn snapshots are the only ones that see
+subagents — and the accumulator takes the better-informed of the two per field.

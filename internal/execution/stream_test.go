@@ -59,19 +59,22 @@ func TestParseStreamLineMessage(t *testing.T) {
 	}
 }
 
-func TestParseStreamLineCumulative(t *testing.T) {
+// A run can emit several result envelopes, and their `usage` payloads are
+// per-envelope deltas — so envelopes sum. Maxing them would book only the
+// largest. (Only `total_cost_usd` is session-cumulative; that asymmetry is what
+// #256 was booked against.) Delta semantics are proven by the multi-envelope
+// fixture, where the second envelope is smaller in every field.
+func TestParseStreamLineResultEnvelopesSum(t *testing.T) {
 	acc := &TokenAccumulator{}
 
-	// Result events carry invocation totals, so the accumulator stays monotonic:
-	// a later, smaller reading can never lower it.
 	acc.ParseStreamLine(`{"type":"result","result":"a","usage":{"input_tokens":200,"output_tokens":150}}`)
 	acc.ParseStreamLine(`{"type":"result","result":"b","usage":{"input_tokens":100,"output_tokens":50}}`)
 
-	if acc.InputTokens != 200 {
-		t.Errorf("should take max: input = %d", acc.InputTokens)
+	if acc.InputTokens != 300 {
+		t.Errorf("input = %d, want 300 (200+100 — envelopes are deltas)", acc.InputTokens)
 	}
-	if acc.OutputTokens != 150 {
-		t.Errorf("should take max: output = %d", acc.OutputTokens)
+	if acc.OutputTokens != 200 {
+		t.Errorf("output = %d, want 200 (150+50)", acc.OutputTokens)
 	}
 }
 
@@ -243,6 +246,117 @@ func TestParseStreamRealCaptureDedupesTurnBlocks(t *testing.T) {
 	}
 	if acc.InputTokens != captureTurnSumInput {
 		t.Errorf("input = %d, want %d — turns summed, blocks deduped", acc.InputTokens, captureTurnSumInput)
+	}
+}
+
+// ── Multi-envelope + subagent capture ────────────────────────────────────
+//
+// A second real capture, of a stage that spawns a Task subagent. It exposes
+// two shapes the single-turn capture cannot: several result envelopes in one
+// stream, and assistant turns belonging to a subagent.
+
+// Ground truth read off testdata/claude_stream_subagent_multi_result.jsonl.
+const (
+	// Two result envelopes. The second is smaller in EVERY field, which is
+	// what proves envelope usage is a delta and not a running total.
+	subEnvelope1Input, subEnvelope1Output = 28, 755
+	subEnvelope2Input, subEnvelope2Output = 10, 141
+	subEnvelopeSumInput                   = subEnvelope1Input + subEnvelope2Input   // 38
+	subEnvelopeSumOutput                  = subEnvelope1Output + subEnvelope2Output // 896
+	subEnvelopeSumCacheC                  = 5460
+	subEnvelopeSumCacheR                  = 65467
+
+	// Six distinct assistant turns, two of them the subagent's. The envelopes
+	// account for the four main-thread turns only.
+	subTurnCount     = 6
+	subTurnSumInput  = 56 // 38 main + 18 subagent
+	subTurnSumCacheC = 13350
+	subTurnSumCacheR = 72701
+)
+
+func TestParseStreamSubagentCaptureEnvelopesAreDeltas(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude_stream_subagent_multi_result.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	acc := &TokenAccumulator{}
+	envelopes := 0
+	for _, line := range lines {
+		event, _ := acc.ParseStreamLine(line)
+		if event != nil && event.Type == "result" {
+			envelopes++
+		}
+	}
+
+	if envelopes != 2 {
+		t.Fatalf("fixture no longer carries multiple result envelopes (%d) — the shape this test exists for", envelopes)
+	}
+	if acc.resultTotal.InputTokens != subEnvelopeSumInput {
+		t.Errorf("envelope input sum = %d, want %d", acc.resultTotal.InputTokens, subEnvelopeSumInput)
+	}
+	if acc.resultTotal.OutputTokens != subEnvelopeSumOutput {
+		t.Errorf("envelope output sum = %d, want %d — maxing would book only %d", acc.resultTotal.OutputTokens, subEnvelopeSumOutput, subEnvelope1Output)
+	}
+	if acc.resultTotal.CacheCreationInput != subEnvelopeSumCacheC {
+		t.Errorf("envelope cache-create sum = %d, want %d", acc.resultTotal.CacheCreationInput, subEnvelopeSumCacheC)
+	}
+	if acc.resultTotal.CacheReadInput != subEnvelopeSumCacheR {
+		t.Errorf("envelope cache-read sum = %d, want %d", acc.resultTotal.CacheReadInput, subEnvelopeSumCacheR)
+	}
+
+	// Neither source is complete alone: the envelopes omit the subagent's
+	// turns, and the turn snapshots report output as a partial. Per field, the
+	// better-informed source wins.
+	if len(acc.turns) != subTurnCount {
+		t.Errorf("distinct turns = %d, want %d", len(acc.turns), subTurnCount)
+	}
+	if acc.InputTokens != subTurnSumInput {
+		t.Errorf("input = %d, want %d — turn sum, which unlike the envelopes counts subagent turns", acc.InputTokens, subTurnSumInput)
+	}
+	if acc.OutputTokens != subEnvelopeSumOutput {
+		t.Errorf("output = %d, want %d — envelope sum, the only accurate output source", acc.OutputTokens, subEnvelopeSumOutput)
+	}
+	if acc.CacheCreated != subTurnSumCacheC {
+		t.Errorf("cache created = %d, want %d", acc.CacheCreated, subTurnSumCacheC)
+	}
+	if acc.CacheRead != subTurnSumCacheR {
+		t.Errorf("cache read = %d, want %d", acc.CacheRead, subTurnSumCacheR)
+	}
+}
+
+// Killed mid-subagent: the stage still books the subagent's tokens, which no
+// result envelope would ever have reported.
+func TestParseStreamSubagentCaptureKilledStillCountsSubagentTurns(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude_stream_subagent_multi_result.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	acc := &TokenAccumulator{}
+	subagentTurns := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.Contains(line, `"type":"result"`) {
+			continue // no envelope ever arrives
+		}
+		if strings.Contains(line, `"type":"assistant"`) && !strings.Contains(line, `"parent_tool_use_id":null`) {
+			subagentTurns++
+		}
+		acc.ParseStreamLine(line)
+	}
+
+	if subagentTurns == 0 {
+		t.Fatal("fixture no longer contains subagent assistant turns")
+	}
+	if acc.Total() == 0 {
+		t.Fatal("killed stage booked zero tokens (#300)")
+	}
+	if acc.InputTokens != subTurnSumInput {
+		t.Errorf("input = %d, want %d (main + subagent turns)", acc.InputTokens, subTurnSumInput)
+	}
+	if acc.CacheRead != subTurnSumCacheR {
+		t.Errorf("cache read = %d, want %d", acc.CacheRead, subTurnSumCacheR)
 	}
 }
 

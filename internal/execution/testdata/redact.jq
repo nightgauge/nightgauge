@@ -12,6 +12,16 @@ select(.type != "system" or (.subtype | startswith("hook_") | not))
     {type, subtype, cwd: "/tmp/nightgauge-fixture", session_id, model, permissionMode, uuid}
   else . end
 
+# Absolute local paths can appear in any string value (tool results, task
+# notifications), not just in known keys.
+| walk(
+    if type == "string" then
+      gsub("/Users/[^ \",]*"; "/tmp/nightgauge-fixture")
+      | gsub("/private/tmp/[^ \",]*"; "/tmp/nightgauge-fixture")
+      | gsub("/tmp/claude-[^ \",]*"; "/tmp/nightgauge-fixture")
+    else . end
+  )
+
 # Stable placeholder identifiers.
 | walk(
     if type == "object" then

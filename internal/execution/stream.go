@@ -95,12 +95,23 @@ type TokenAccumulator struct {
 	PremiumRequests int
 
 	// turns holds the largest usage snapshot seen for each assistant turn,
-	// keyed by message id, and turnTotal their running sum. Claude's per-turn
-	// assistant usage is per-turn, not cumulative — the terminal result event
-	// reports the SUM across turns — so turns must be deduped by id and then
-	// summed to reconstruct the stage total when no result event arrives (#300).
+	// keyed by message id, and turnTotal their running sum. Claude's assistant
+	// usage is per-turn, not cumulative, and the CLI repeats a turn's snapshot
+	// on every content block — so turns are deduped by id, then summed. This is
+	// the only accounting a stage killed before a result event leaves behind,
+	// and the only one that sees subagent turns at all (#300).
 	turns     map[string]TokenUsage
 	turnTotal TokenUsage
+
+	// resultTotal sums the `usage` of every result envelope. A run can emit
+	// several (in-process continuations, subagent handoffs) and their usage
+	// payloads are per-envelope DELTAS — verified in
+	// testdata/claude_stream_subagent_multi_result.jsonl, where the second
+	// envelope is smaller than the first in every field and the two sum to the
+	// main thread's turn totals. Only `total_cost_usd` is session-cumulative,
+	// which is the asymmetry #256 was booked against. Matches the TS
+	// TokenAccumulator.add(), which likewise sums envelope token counts.
+	resultTotal TokenUsage
 }
 
 // ParseStreamLine parses a single NDJSON line from Claude's stream-json output.
@@ -121,9 +132,11 @@ func (acc *TokenAccumulator) ParseStreamLine(line string) (*StreamEvent, bool) {
 	// Extract token usage from various event types
 	switch event.Type {
 	case "result":
-		// The invocation total, on the event's top-level `usage` (#300).
+		// This envelope's usage, on the event's top-level `usage` (#300).
+		// Summed, not maxed: envelopes carry deltas, so a run that emits
+		// several would otherwise book only its largest one.
 		if event.Usage != nil {
-			acc.updateFromUsage(event.Usage)
+			acc.addResultUsage(event.Usage)
 			tokenUpdated = true
 		}
 
@@ -143,6 +156,19 @@ func (acc *TokenAccumulator) ParseStreamLine(line string) (*StreamEvent, bool) {
 	}
 
 	return &event, tokenUpdated
+}
+
+// addResultUsage folds one result envelope's usage into the accumulator.
+// Envelope usage is a delta, so envelopes sum; the running sum is then folded
+// in by max against the per-turn sum, because neither source is complete on
+// its own: envelopes carry the true output count but omit subagent turns,
+// while turn snapshots see subagents but report output as a partial.
+func (acc *TokenAccumulator) addResultUsage(usage *TokenUsage) {
+	acc.resultTotal.InputTokens += usage.InputTokens
+	acc.resultTotal.OutputTokens += usage.OutputTokens
+	acc.resultTotal.CacheCreationInput += usage.CacheCreationInput
+	acc.resultTotal.CacheReadInput += usage.CacheReadInput
+	acc.updateFromUsage(&acc.resultTotal)
 }
 
 // addTurnUsage folds one assistant turn's usage snapshot into the accumulator.
@@ -176,11 +202,11 @@ func raiseMax(dst *int, v int) int {
 	return delta
 }
 
-// updateFromUsage folds a whole-invocation total into the accumulator. Both
-// inputs are invocation totals — the result event's `usage`, or the running sum
-// of per-turn assistant snapshots — so taking the max keeps the accumulator
-// monotonic: out-of-order events cannot lower it, and a partial per-turn sum
-// cannot overwrite the authoritative result total.
+// updateFromUsage folds a running whole-stage total into the exposed counters.
+// Its two callers each pass their own source's running sum — result envelopes
+// or assistant turns — and the max keeps the better-informed of the two per
+// field without ever exceeding a real observation, so a partial sum can never
+// lower a total that another source already established.
 func (acc *TokenAccumulator) updateFromUsage(usage *TokenUsage) {
 	raiseMax(&acc.InputTokens, usage.InputTokens)
 	raiseMax(&acc.OutputTokens, usage.OutputTokens)
