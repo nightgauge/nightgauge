@@ -1,11 +1,10 @@
 package doctor
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -21,6 +20,34 @@ const (
 	StepGoBin            ResolveBinaryStep = "go_bin"
 )
 
+// bundleDirPrefix is the VS Code extension directory prefix for this
+// extension. A bundle directory is `<prefix><version>[-<targetPlatform>]`,
+// and extensions.json records exactly that directory name in
+// `relativeLocation`.
+const bundleDirPrefix = "nightgauge.nightgauge-vscode-"
+
+// extensionsIndexRelPath is VS Code's own record of what it has installed.
+const extensionsIndexRelPath = ".vscode/extensions/extensions.json"
+
+// BundleDivergence explains why a step-4 selection is NOT confirmed by VS
+// Code's install record. Empty means the resolution is confirmed (or is the
+// only possible answer), which is the silent case.
+type BundleDivergence string
+
+const (
+	// DivergenceNone — the recorded bundle was used, or exactly one bundle
+	// exists and nothing contradicts it.
+	DivergenceNone BundleDivergence = ""
+	// DivergenceRecordUnusable — extensions.json names an installed bundle
+	// that could not be used: its directory is absent, its binary is missing,
+	// or the binary is not executable.
+	DivergenceRecordUnusable BundleDivergence = "record_unusable"
+	// DivergenceUnrecorded — no usable record exists (no extensions.json, an
+	// unparseable one, or zero/multiple nightgauge entries) AND more than one
+	// bundle is on disk, so the selection is a guess between real candidates.
+	DivergenceUnrecorded BundleDivergence = "unrecorded_ambiguous"
+)
+
 // ResolvedBinary is the result of walking the cascade.
 type ResolvedBinary struct {
 	Path string
@@ -33,52 +60,82 @@ type ResolvedBinary struct {
 	Bundles VSCodeBundleScan
 }
 
-// VSCodeBundle is one nightgauge VSCode extension bundle whose bundled binary
-// file exists on disk.
+// VSCodeBundle is one nightgauge VSCode extension bundle directory whose
+// bundled binary file exists on disk.
 type VSCodeBundle struct {
 	Version    string // directory suffix, e.g. "0.1.1785982325"
+	Dir        string // directory base name, comparable to relativeLocation
 	Path       string // <bundle-dir>/dist/bin/nightgauge
 	Executable bool
+	Recorded   bool // this directory is the one extensions.json records
 }
 
-// VSCodeBundleScan summarizes the step-4 candidate set.
+// VSCodeBundleScan summarizes the step-4 candidate set and how the selection
+// relates to VS Code's own install record.
 type VSCodeBundleScan struct {
-	Bundles         []VSCodeBundle // newest first
-	SelectedPath    string         // newest EXECUTABLE bundle binary ("" when none is runnable)
+	// Bundles is in glob order — the same collation order both implementations
+	// iterate — not "newest first". Nothing here orders versions (#356).
+	Bundles []VSCodeBundle
+
+	SelectedPath    string // "" when no bundle binary is runnable
 	SelectedVersion string
-	NewestVersion   string // newest bundle whose binary file exists, runnable or not
-	// Superseded reports that the selected bundle is strictly OLDER than the
-	// newest one installed — i.e. the hooks would run a stale binary.
-	// Post-#356 this can only happen when the newer bundle's binary is present
-	// but not executable (partial install, lost exec bit), because selection is
-	// by version rather than by glob order.
-	//
-	// This is a NUMERIC comparison, deliberately: SelectedVersion and
-	// NewestVersion are chosen with compareBundleVersions, so testing them with
-	// string inequality mixes two orderings. Two versions that tie numerically
-	// but differ textually (e.g. the same release packaged for two target
-	// platforms) would then latch NewestVersion onto whichever bundle the glob
-	// happened to yield first and fire the warning BACKWARDS — naming an older
-	// bundle as "newer" on a machine that is in fact running the newest binary.
-	Superseded bool
+
+	// RecordedDir is extensions.json's `relativeLocation` for
+	// nightgauge.nightgauge-vscode, and RecordedVersion its version segment.
+	// Both are empty when there is no usable record. They are DISPLAY values:
+	// never ordered, never compared for newness.
+	RecordedDir     string
+	RecordedVersion string
+	// RecordedUsed reports that the selection came from the record.
+	RecordedUsed bool
+
+	// Divergence is empty when the resolution is confirmed (recorded bundle
+	// used) or unambiguous (a single unrecorded bundle). It is meaningful only
+	// when SelectedPath != "".
+	Divergence BundleDivergence
 }
 
 // ScanVSCodeBundles enumerates ~/.vscode/extensions/nightgauge.nightgauge-vscode-*
-// bundles under home and picks the NEWEST executable one.
+// bundles under home and picks the one VS Code RECORDS as installed.
 //
-// #356: this used to be "first executable glob match wins". Both bash globbing
-// and filepath.Glob return collation-sorted matches, so on a machine with two
-// installed bundles the hooks silently ran whichever version sorted first —
-// the OLDER one, for the epoch-suffixed versions the extension build emits.
-// The bundle version is the only totally-ordered, exec-free signal available
-// here (the binary's own stamp is a `git describe` string and the plugin
-// version is hand-maintained; neither is comparable to it), so selection is by
-// bundle version, compared component-wise and numerically.
+// # Why the record, and not the highest version number
 //
-// Modification time is deliberately NOT used: on the machine captured in
-// internal/doctor/testdata/vscode-bundles/ the older-versioned bundle's binary
-// had the later mtime, so an mtime ranking picks the wrong bundle and still
-// passes a naive local check.
+// #356 was "the hooks silently run a superseded bundle". The obvious repair —
+// pick the highest-parsing version among the glob matches — is not a repair,
+// because "highest version number on disk" is not "the bundle VS Code
+// installed". Three verified counter-examples, all reachable on this project:
+//
+//   - DOWNGRADE. packages/nightgauge-vscode/scripts/dev-install.sh stamps
+//     `0.1.<epoch>` (package.json stays 0.1.0 on main forever, and release.yml
+//     restores it after `npm version`). The moment v0.2.0 ships, every
+//     maintainer dev-install loses numerically to a leftover
+//     `…-0.2.0-darwin-arm64` directory — i.e. the dogfood build is silently
+//     discarded in favour of the thing it was built to replace.
+//   - PRERELEASE. staging.yml packages RC VSIXes with
+//     `npm version 0.2.0-rc.23` + `vsce package --target <t>`, so bundle
+//     directories really are `…-0.2.0-rc.23-darwin-arm64`. Any comparator that
+//     reduces a version to its dotted numeric prefix collapses rc.22 and rc.23
+//     to `0.2.0` — equal — and falls back to first-glob-match, i.e. the older
+//     one. That is #356 verbatim, on the channel this repo actually ships.
+//   - ORPHANS. The glob also matches partial-install leftovers such as
+//     `…-0.2.2-darwin-arm64.vsctmp`, which can out-parse the real install.
+//
+// All three vanish when the authority is the record rather than the parse:
+// ~/.vscode/extensions/extensions.json is written by VS Code and names exactly
+// one directory per installed extension. A recorded bundle whose binary is
+// runnable IS the answer, even when some other directory carries a bigger
+// number — a downgrade resolves to the older bundle, silently, because that is
+// what is installed.
+//
+// # Fallback
+//
+// When there is no usable record (file absent, unparseable, or zero/multiple
+// nightgauge entries) or the recorded bundle cannot be used (absent, or its
+// binary is missing/non-executable), selection falls back to the FIRST
+// executable glob match — the behaviour that shipped before #356. It is
+// deterministic and needs no ordering. Divergence then records why, so the
+// caller can signal it; a single unrecorded bundle is not ambiguous and stays
+// silent.
 //
 // guard.sh implements this identically; see the parity tests in
 // binary_resolve_test.go (#277).
@@ -87,133 +144,129 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 	if home == "" {
 		return scan
 	}
-	matches, _ := filepath.Glob(filepath.Join(home, ".vscode", "extensions", "nightgauge.nightgauge-vscode-*", "dist", "bin", "nightgauge"))
+
+	scan.RecordedDir = readRecordedBundleDir(home)
+	if scan.RecordedDir != "" {
+		scan.RecordedVersion = strings.TrimPrefix(scan.RecordedDir, bundleDirPrefix)
+	}
+
+	matches, _ := filepath.Glob(filepath.Join(home, ".vscode", "extensions", bundleDirPrefix+"*", "dist", "bin", "nightgauge"))
+
+	var (
+		recordedPath      string
+		recordedRunnable  bool
+		firstRunnablePath string
+		firstRunnableVer  string
+	)
 	for _, candidate := range matches {
 		info, err := os.Stat(candidate)
 		if err != nil || info.IsDir() {
 			continue
 		}
-		version := bundleVersionFromPath(candidate)
+		dir := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(candidate))))
+		if !strings.HasPrefix(dir, bundleDirPrefix) {
+			continue
+		}
+		version := strings.TrimPrefix(dir, bundleDirPrefix)
 		if version == "" {
 			continue
 		}
 		bundle := VSCodeBundle{
 			Version:    version,
+			Dir:        dir,
 			Path:       candidate,
 			Executable: info.Mode()&0o111 != 0,
+			Recorded:   scan.RecordedDir != "" && dir == scan.RecordedDir,
 		}
 		scan.Bundles = append(scan.Bundles, bundle)
 
-		if scan.NewestVersion == "" || compareBundleVersions(version, scan.NewestVersion) > 0 {
-			scan.NewestVersion = version
+		if bundle.Recorded && bundle.Executable {
+			recordedPath, recordedRunnable = candidate, true
 		}
-		if bundle.Executable && (scan.SelectedPath == "" || compareBundleVersions(version, scan.SelectedVersion) > 0) {
-			scan.SelectedPath = candidate
-			scan.SelectedVersion = version
+		if bundle.Executable && firstRunnablePath == "" {
+			firstRunnablePath, firstRunnableVer = candidate, version
 		}
 	}
-	sort.SliceStable(scan.Bundles, func(i, j int) bool {
-		return compareBundleVersions(scan.Bundles[i].Version, scan.Bundles[j].Version) > 0
-	})
-	scan.Superseded = scan.SelectedPath != "" && compareBundleVersions(scan.SelectedVersion, scan.NewestVersion) < 0
+
+	switch {
+	case recordedRunnable:
+		scan.SelectedPath = recordedPath
+		scan.SelectedVersion = scan.RecordedVersion
+		scan.RecordedUsed = true
+	case firstRunnablePath != "":
+		scan.SelectedPath = firstRunnablePath
+		scan.SelectedVersion = firstRunnableVer
+		if scan.RecordedDir != "" {
+			scan.Divergence = DivergenceRecordUnusable
+		} else if len(scan.Bundles) > 1 {
+			scan.Divergence = DivergenceUnrecorded
+		}
+	}
 	return scan
 }
 
-// bundleVersionFromPath extracts "0.1.1785982325" from
-// <home>/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785982325/dist/bin/nightgauge.
-// Returns "" when the path does not carry a version suffix.
-func bundleVersionFromPath(binaryPath string) string {
-	const prefix = "nightgauge.nightgauge-vscode-"
-	// <bundle-dir>/dist/bin/nightgauge → <bundle-dir>
-	dir := filepath.Dir(filepath.Dir(filepath.Dir(binaryPath)))
-	base := filepath.Base(dir)
-	if !strings.HasPrefix(base, prefix) {
+// vscodeExtensionRecord is the minimal shape read out of extensions.json.
+// Everything else in the file (location, metadata, marketplace ids) is
+// deliberately not decoded.
+type vscodeExtensionRecord struct {
+	RelativeLocation string `json:"relativeLocation"`
+}
+
+// readRecordedBundleDir returns the `relativeLocation` extensions.json records
+// for this extension, or "" when there is no usable record.
+//
+// Conservative by construction: the record is used ONLY when exactly one entry
+// names a nightgauge bundle directory. Zero entries (never installed, or the
+// file is missing/unparseable) and multiple entries (a state VS Code does not
+// produce) both mean "no record", which falls back rather than guessing.
+//
+// Selection is by the relativeLocation VALUE rather than by identifier.id so
+// that this and guard.sh apply the same rule: guard.sh cannot walk a JSON
+// object graph under the bash-3.2/no-jq floor, and a rule the shell cannot
+// express is a rule the two implementations cannot share (#277). The value is
+// also validated as a plain directory name — no separators, no traversal —
+// before it is joined onto a path.
+//
+// One bounded, documented asymmetry: this side requires the file to PARSE,
+// while guard.sh scans its text. A truncated extensions.json can therefore
+// still yield a record in the shell and none here; both then resolve to a real
+// installed bundle, and both are conservative in the direction of the
+// pre-#356 behaviour.
+func readRecordedBundleDir(home string) string {
+	raw, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(extensionsIndexRelPath)))
+	if err != nil {
 		return ""
 	}
-	return strings.TrimPrefix(base, prefix)
-}
-
-// bundleVersionNumericPrefix trims a trailing target-platform suffix from a
-// bundle directory's version segment, returning the bare dotted `x.y.z`.
-//
-// VS Code names platform-specific extension directories
-// `<publisher>.<name>-<version>-<targetPlatform>`, and
-// .github/workflows/release.yml packages EVERY released VSIX with
-// `vsce package --target <t>` (darwin-arm64, darwin-x64, linux-x64). So a
-// RELEASED bundle directory is `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`
-// and the raw version segment is `0.2.1-darwin-arm64`, not `0.2.1`.
-//
-// Without this trim the last dotted component is `1-darwin-arm64`, which is not
-// all-digits and so collapses to 0 in bundleVersionComponent. Every pair of
-// releases differing only in patch then compares EQUAL, the strict `>` guards
-// in ScanVSCodeBundles never fire, and newest-bundle selection silently
-// degrades to "first glob match wins" — #356 reproduced verbatim for the entire
-// released/marketplace population, while NewestVersion freezes on the same
-// wrong bundle so no staleness signal is emitted either.
-//
-// Only maintainer dev installs escaped it: packages/nightgauge-vscode/scripts/
-// dev-install.sh runs `vsce package` WITHOUT `--target`, producing the
-// unsuffixed `0.1.<epoch>` segment that every original #356 test and the
-// captured fixture used. That is why the whole suite was green over a fix that
-// did nothing on real installs.
-//
-// Splitting at the FIRST `-` is unambiguous: vsce requires a strict `x.y.z`
-// extension version and rejects a semver prerelease tag, so no `-` can appear
-// before the target platform. guard.sh's _ng_version_gt trims identically.
-func bundleVersionNumericPrefix(v string) string {
-	if i := strings.IndexByte(v, '-'); i >= 0 {
-		return v[:i]
+	var records []vscodeExtensionRecord
+	if err := json.Unmarshal(raw, &records); err != nil {
+		return ""
 	}
-	return v
-}
-
-// compareBundleVersions orders two bundle versions component-wise and
-// numerically: -1 when a < b, 0 when equal, 1 when a > b. Each input is first
-// reduced to its dotted numeric prefix (see bundleVersionNumericPrefix); a
-// missing or non-numeric component counts as 0, matching guard.sh's comparator
-// exactly.
-//
-// String comparison would work today only by accident — the extension emits a
-// fixed-width 10-digit epoch suffix — and would silently invert the moment
-// that width changes.
-func compareBundleVersions(a, b string) int {
-	as := strings.Split(bundleVersionNumericPrefix(a), ".")
-	bs := strings.Split(bundleVersionNumericPrefix(b), ".")
-	n := len(as)
-	if len(bs) > n {
-		n = len(bs)
-	}
-	for i := 0; i < n; i++ {
-		av := bundleVersionComponent(as, i)
-		bv := bundleVersionComponent(bs, i)
-		if av != bv {
-			if av < bv {
-				return -1
-			}
-			return 1
+	found := ""
+	hits := 0
+	for _, rec := range records {
+		if !strings.HasPrefix(rec.RelativeLocation, bundleDirPrefix) {
+			continue
 		}
+		if !isPlainDirName(rec.RelativeLocation) {
+			continue
+		}
+		hits++
+		found = rec.RelativeLocation
 	}
-	return 0
+	if hits != 1 {
+		return ""
+	}
+	return found
 }
 
-func bundleVersionComponent(parts []string, i int) int {
-	if i >= len(parts) {
-		return 0
+// isPlainDirName rejects anything that is not a single directory name, so a
+// hand-edited or hostile extensions.json cannot steer resolution outside
+// ~/.vscode/extensions.
+func isPlainDirName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
 	}
-	part := parts[i]
-	if part == "" {
-		return 0
-	}
-	for _, r := range part {
-		if r < '0' || r > '9' {
-			return 0
-		}
-	}
-	v, err := strconv.Atoi(part)
-	if err != nil {
-		return 0
-	}
-	return v
+	return !strings.ContainsAny(name, `/\`) && !strings.Contains(name, "..")
 }
 
 // ResolveBinary walks the same six-step cascade documented in
@@ -224,8 +277,8 @@ func bundleVersionComponent(parts []string, i int) int {
 //  2. <repo-root>/bin/nightgauge (git rev-parse --show-toplevel)
 //  3. <canonical-repo-root>/bin/nightgauge (git rev-parse --git-common-dir)
 //  4. ~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge
-//     — the NEWEST installed bundle by version (#356), never the first glob
-//     match
+//     — the bundle VS Code RECORDS as installed (#356), falling back to the
+//     first glob match when there is no usable record
 //  5. ~/go/bin/nightgauge
 //
 // This is the single canonical implementation of the cascade on the Go side;
@@ -269,8 +322,7 @@ func ResolveBinary() ResolvedBinary {
 		}
 	}
 
-	// 4. VSCode extension bundle — the NEWEST installed bundle, not the first
-	//    glob match (#356).
+	// 4. VSCode extension bundle — the RECORDED install (#356).
 	if bundles.SelectedPath != "" {
 		return ResolvedBinary{Path: bundles.SelectedPath, Step: StepVSCodeExtension, Bundles: bundles}
 	}

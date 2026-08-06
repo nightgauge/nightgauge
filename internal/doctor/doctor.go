@@ -400,41 +400,78 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 //
 // The second return value reports whether the binary resolved at all, so the
 // caller can distinguish "not installed" (install instructions apply) from
-// "installed but superseded" (they do not).
+// "installed but diverging from the install record" (they do not).
 //
 // This check is warning-only — never a required failure — since discovering
 // the binary is what this command itself is; a missing binary can only be
 // observed by the environment that ran `doctor` in the first place. A
-// superseded bundle is likewise a warning: a stale binary that mostly works
-// beats a hook that hard-fails.
+// diverging bundle is likewise a warning: a binary that mostly works beats a
+// hook that hard-fails.
 func checkBinary() (CheckItem, bool) {
 	resolved := ResolveBinary()
 	if resolved.Path == "" {
-		return CheckItem{OK: false, Error: "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin"}, false
+		// The bundle inventory is at its MOST actionable here — "N bundles
+		// installed, none runnable" is a different problem from "nothing
+		// installed" — so it is reported rather than discarded.
+		return CheckItem{
+			OK:    false,
+			Error: "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin" + bundleInventory(resolved.Bundles),
+		}, false
 	}
 
 	detail := fmt.Sprintf("hooks resolve %s from this directory (via %s)", resolved.Path, resolved.Step)
 	if version := binaryVersion(resolved.Path); version != "" {
 		detail += fmt.Sprintf("; reports version %s", version)
 	}
-	if n := len(resolved.Bundles.Bundles); n > 0 {
-		detail += fmt.Sprintf("; %d VSCode extension bundle(s) installed, newest %s", n, resolved.Bundles.NewestVersion)
-		if resolved.Bundles.SelectedVersion != "" {
-			detail += fmt.Sprintf(", newest runnable %s", resolved.Bundles.SelectedVersion)
-		}
-	}
+	detail += bundleInventory(resolved.Bundles)
 
-	if resolved.Step == StepVSCodeExtension && resolved.Bundles.Superseded {
-		return CheckItem{
-			OK: false,
-			Error: fmt.Sprintf(
-				"stale binary: hooks resolve VSCode extension bundle %s from this directory, but newer bundle %s is installed and its binary is not executable; running %s",
-				resolved.Bundles.SelectedVersion, resolved.Bundles.NewestVersion, resolved.Path,
-			),
-		}, true
+	if resolved.Step == StepVSCodeExtension && resolved.Bundles.Divergence != DivergenceNone {
+		return CheckItem{OK: false, Error: divergenceMessage(resolved)}, true
 	}
 
 	return CheckItem{OK: true, Detail: detail}, true
+}
+
+// bundleInventory renders the step-4 VSCode-extension inventory: how many
+// bundle directories are on disk and which one VS Code RECORDS as installed.
+// It is appended on every outcome, including when an earlier cascade step
+// wins — that is the exact confusion #356 describes, since inside a nightgauge
+// checkout `bin/nightgauge` short-circuits the cascade and the bundles other
+// repos will run are invisible.
+//
+// Versions here are opaque display strings. Nothing in this file orders them.
+func bundleInventory(scan VSCodeBundleScan) string {
+	n := len(scan.Bundles)
+	if n == 0 && scan.RecordedDir == "" {
+		return ""
+	}
+	out := fmt.Sprintf("; %d VSCode extension bundle dir(s) on disk", n)
+	switch {
+	case scan.RecordedVersion == "":
+		out += ", no VSCode install record"
+	case scan.RecordedUsed:
+		out += fmt.Sprintf(", VSCode records %s as installed (in use)", scan.RecordedVersion)
+	default:
+		out += fmt.Sprintf(", VSCode records %s as installed (NOT in use)", scan.RecordedVersion)
+	}
+	return out
+}
+
+// divergenceMessage explains a step-4 resolution the install record does not
+// confirm, naming the recorded version, the resolved version and the resolved
+// path — the same three facts guard.sh writes to its side-channel log.
+func divergenceMessage(resolved ResolvedBinary) string {
+	scan := resolved.Bundles
+	if scan.Divergence == DivergenceRecordUnusable {
+		return fmt.Sprintf(
+			"stale binary: VSCode records extension bundle %s as installed, but its bundled binary is missing or not executable; hooks resolve bundle %s from this directory, running %s",
+			scan.RecordedVersion, scan.SelectedVersion, resolved.Path,
+		)
+	}
+	return fmt.Sprintf(
+		"stale binary: no VSCode install record for the nightgauge extension (~/.vscode/extensions/extensions.json); %d bundle dir(s) on disk, hooks resolve bundle %s from this directory, running %s",
+		len(scan.Bundles), scan.SelectedVersion, resolved.Path,
+	)
 }
 
 // binaryVersion runs `<path> version` and returns its first line, or "" when
