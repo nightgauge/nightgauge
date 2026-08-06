@@ -55,6 +55,22 @@ func EvaluateNotify(event NotifyEvent, message string) NotifyResult {
 	}
 }
 
+// NotifyMessageFromHook extracts the message from a Notification hook payload.
+//
+// Notification hooks are invoked with the payload on stdin and no argv, so this
+// is the path notify.sh actually exercises — the --message flag it used to
+// require was never supplied by the harness (#354). An unparseable payload
+// yields an empty message, which the caller treats as "nothing to announce".
+func NotifyMessageFromHook(inputJSON []byte) string {
+	var input struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(inputJSON, &input); err != nil {
+		return ""
+	}
+	return input.Message
+}
+
 // EvaluateNotifyJSON returns the notification result as JSON bytes.
 func EvaluateNotifyJSON(event NotifyEvent, message string) ([]byte, error) {
 	result := EvaluateNotify(event, message)

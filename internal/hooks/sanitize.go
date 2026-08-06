@@ -3,8 +3,11 @@
 package hooks
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // PatternCategory identifies the type of sanitization pattern.
@@ -139,4 +142,73 @@ func IsSensitiveFile(filename string) bool {
 	}
 
 	return false
+}
+
+// TaskToolInput is the parsed tool_input for Task tool calls.
+type TaskToolInput struct {
+	Prompt      string `json:"prompt"`
+	Description string `json:"description"`
+}
+
+// EvaluateSanitizeText screens raw text for prompt-injection patterns, honoring
+// the configured sanitization mode.
+//
+// The mode is respected here for the same reason evaluateBashGate respects it,
+// and it matters more on this path. Fixing the stdin plumbing (#354) activates a
+// hard-DENY guard that had never once run, and its patterns — "ignore all
+// previous instructions", "you are now a ", "new system prompt" — appear
+// verbatim in legitimate orchestration and prompt-engineering work. Defaulting
+// to block would trade a dead guard for one that silently blocks real work, so
+// the default (warn) logs the match and allows; operators opt into enforcement
+// with sanitization.mode: block.
+func EvaluateSanitizeText(text string, mode config.SanitizationMode) GateDecision {
+	if mode == config.SanitizationModeDisabled {
+		return Allow()
+	}
+
+	match := MatchPatterns(text, CategoryPromptInjection)
+	if match == nil {
+		return Allow()
+	}
+
+	if mode == config.SanitizationModeWarn {
+		logWarnEvent(match, text)
+		return Allow()
+	}
+	return Block("Prompt injection detected: " + match.Pattern)
+}
+
+// EvaluateSanitizePrompt screens a PreToolUse:Task hook payload for
+// prompt-injection patterns in the delegated prompt.
+//
+// PreToolUse hooks are invoked with the payload on stdin and no argv, so this
+// is the path prompt-sanitize.sh actually exercises — the --input flag it used
+// to require was never supplied by the harness (#354).
+//
+// Unparseable or promptless payloads fail open, matching EvaluateGate: a
+// payload the gate cannot read is not evidence of an injection attempt, and a
+// screening hook must not wedge the session on malformed input.
+func EvaluateSanitizePrompt(inputJSON []byte, mode config.SanitizationMode) GateDecision {
+	var input GateInput
+	if err := json.Unmarshal(inputJSON, &input); err != nil {
+		return Allow()
+	}
+	if len(input.ToolInput) == 0 {
+		return Allow()
+	}
+
+	var toolInput TaskToolInput
+	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil {
+		return Allow()
+	}
+
+	for _, text := range []string{toolInput.Prompt, toolInput.Description} {
+		if text == "" {
+			continue
+		}
+		if decision := EvaluateSanitizeText(text, mode); decision.Decision == "block" {
+			return decision
+		}
+	}
+	return Allow()
 }
