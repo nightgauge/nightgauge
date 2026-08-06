@@ -88,7 +88,8 @@ six-step cascade (mirrors `claude-plugins/nightgauge/hooks/lib/guard.sh`):
 4. `<canonical-repo-root>/bin/nightgauge` (`git rev-parse --git-common-dir`,
    for worktree checkouts)
 5. `~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
-   — the **newest** installed bundle (#356), never the first glob match
+   — the bundle VSCode **records** as installed (#356), never the first glob
+   match and never the biggest version number
 6. `~/go/bin/nightgauge`
 
 This is implemented once, in Go, at `internal/doctor/binary_resolve.go`
@@ -120,10 +121,12 @@ here_, and carries:
   the verb is `version`; there is no `--version` flag. The exec lives in
   `doctor` (on demand) and deliberately **not** in `guard.sh`, which runs on
   every tool call.
-- the extension-bundle inventory — how many bundles are installed, the
-  newest, and the newest runnable — **even when an earlier step wins**, so
-  running `doctor` from inside a checkout still tells you what other repos
-  will use.
+- the extension-bundle inventory — how many bundle directories are on disk,
+  which one VSCode **records** as installed, and whether that recorded bundle
+  is the one in use — **even when an earlier step wins**, so running `doctor`
+  from inside a checkout still tells you what other repos will use. The
+  inventory is also carried on the not-found path, where "2 bundle dir(s) on
+  disk, none runnable" is a different problem from "nothing installed".
 
 The `binary` check is **warning-only** — it contributes to `warnings` but
 never sets `exit_code` to `2`, and never appears in `failed_checks`. A
@@ -134,50 +137,37 @@ resolvable via step 5 but never on `PATH`) reports
 
 Two distinct warning-level outcomes exist and they are not interchangeable:
 
-| Outcome           | `ok`    | `install_instructions` | Meaning                                                                                    |
-| ----------------- | ------- | ---------------------- | ------------------------------------------------------------------------------------------ |
-| unresolved        | `false` | populated              | no step matched — installing something is the fix                                          |
-| superseded bundle | `false` | **empty**              | step 5 selected a bundle that is not the newest installed one — installing changes nothing |
-| resolved          | `true`  | empty                  | normal                                                                                     |
+| Outcome          | `ok`    | `install_instructions` | Meaning                                                                                        |
+| ---------------- | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| unresolved       | `false` | populated              | no step matched — installing something is the fix                                              |
+| diverging bundle | `false` | **empty**              | step 5 resolved a bundle VSCode's install record does not confirm — installing changes nothing |
+| resolved         | `true`  | empty                  | normal                                                                                         |
 
-A superseded bundle names **both** versions and the resolved path in
-`checks.binary.error`, matching the `[stale-binary]` line `guard.sh` writes
-to its side-channel log. Post-#356 selection is by bundle version, so this
-can only occur when the newer bundle's binary exists but is not executable
-(partial install, lost exec bit).
+A diverging bundle names the **recorded** version, the **resolved** version and
+the resolved path in `checks.binary.error`, matching the `[stale-binary]` line
+`guard.sh` writes to its side-channel log.
 
-#### Bundle versions carry a target-platform suffix (#356)
+#### The install record is the selection authority (#356)
 
-VS Code names platform-specific extension directories
-`<publisher>.<name>-<version>-<targetPlatform>`, and
-`.github/workflows/release.yml` packages **every** released VSIX with
-`vsce package --target <t>` (`darwin-arm64`, `darwin-x64`, `linux-x64`). So a
-released bundle directory is
-`nightgauge.nightgauge-vscode-0.2.1-darwin-arm64` and the version segment the
-comparators see is `0.2.1-darwin-arm64`, not `0.2.1`.
+Step 5 does not rank version numbers, and neither does this check. VSCode
+records exactly one installed directory per extension in
+`~/.vscode/extensions/extensions.json` (`relativeLocation`), and that record —
+not the biggest-parsing directory name — decides which bundle the hooks run.
 
-Both comparators therefore reduce a version to its **dotted numeric prefix**
-(everything before the first `-`) before comparing component-wise. `vsce`
-requires a strict `x.y.z` extension version and rejects semver prerelease
-tags, so the first `-` is unambiguously the target-platform boundary.
+Ranking versions is wrong in three ways this project actually reaches:
+maintainer dev-installs are permanently `0.1.<epoch>` and lose to any leftover
+`0.2.x` release directory; RC bundles (`…-0.2.0-rc.22`, `…-0.2.0-rc.23`) tie
+under every dotted-numeric comparator and fall back to first-glob-match; and a
+`….vsctmp` partial-install orphan can out-parse the real install. Consequently
+a **recorded downgrade is healthy** — `doctor` reports `ok: true` and says
+nothing about the higher-numbered directory next to it.
 
-This is not cosmetic. Without the trim, the trailing component
-(`1-darwin-arm64`) is not all-digits, collapses to `0`, and **any two releases
-differing only in patch compare equal** — which silently restores the
-first-glob-match behaviour #356 exists to fix, for the entire
-released/marketplace population, while leaving `NewestVersion` frozen on the
-same wrong bundle so no `[stale-binary]` line is emitted either. Only
-maintainer dev installs escape it, because
-`packages/nightgauge-vscode/scripts/dev-install.sh` runs `vsce package`
-**without** `--target` and produces an unsuffixed `0.1.<epoch>` segment.
-
-For the same reason, "is the selected bundle stale?" is a **numeric**
-comparison of the selected and newest versions in both implementations, never
-string inequality. Two versions that tie numerically but differ textually
-(one release packaged for two targets) would otherwise let the newest-tracker
-latch onto whichever bundle the glob yielded first and fire the warning
-_backwards_ — flagging a machine that is running the newest available binary
-as stale, and naming an older, non-runnable bundle as the newer one.
+Divergence is reported only when the record cannot be honored (recorded bundle
+absent or not executable) or when there is no usable record and several bundles
+are on disk. See
+[docs/GO_BINARY.md](GO_BINARY.md#which-bundle-the-hooks-run--vscodes-record-not-the-biggest-number)
+for the full rule and for the parsing-parity contract between `guard.sh` and
+`internal/doctor/binary_resolve.go`.
 
 `DoctorResult.FailedChecks` (`failed_checks` in JSON) lists every check
 name that contributed a required failure (`exit_code == 2`), in the order

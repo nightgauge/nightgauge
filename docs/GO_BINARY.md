@@ -2270,53 +2270,80 @@ and asserts stdout is byte-identical to what the binary produced, including
 byte-empty for a silent allow. `hook_output_schema_test.go` cannot cover this:
 it invokes the cobra command in-process and never runs the shell.
 
-##### Newest-bundle selection
+##### Which bundle the hooks run — VSCode's record, not the biggest number
 
 `guard.sh`'s VSCode-extension fallback globs
-`~/.vscode/extensions/nightgauge.nightgauge-vscode-*`.
-VSCode keeps older extension versions on disk until it restarts, so that glob
-routinely matches several bundles. It used to take the **first** match; bash
-globs and `filepath.Glob` are both collation-sorted and the extension stamps an
-epoch-suffixed `0.1.<seconds>` version, so "first" meant "oldest" — hooks in
-every repo outside a nightgauge checkout silently ran a superseded binary.
+`~/.vscode/extensions/nightgauge.nightgauge-vscode-*`. VSCode keeps superseded
+extension directories on disk until it restarts, so that glob routinely matches
+several. It used to take the **first** match; bash globs and `filepath.Glob`
+are both collation-sorted and the extension stamps an epoch-suffixed
+`0.1.<seconds>` version, so "first" meant "oldest" — hooks in every repo
+outside a nightgauge checkout silently ran a superseded binary.
 
-Selection is now by bundle version, compared component-wise and numerically, in
-`guard.sh` and `internal/doctor/binary_resolve.go` alike. The bundle version is
-the only totally ordered signal available without an exec: the binary's own
-stamp is a `git describe` string (`v0.2.0-rc.23-103-g<sha>`) and the plugin
-version is hand-maintained (`1.21.0`) — no two of the three are comparable, so
-"compare the binary's build stamp against the plugin version" has no sound
-implementation. Modification time is not usable either; the captured real
-layout in `internal/doctor/testdata/vscode-bundles/` has the older-versioned
-bundle carrying the **later** mtime.
+**"Highest version number on disk" is not the repair.** It is a different
+wrong answer, and this project reaches all three of its failure modes:
 
-Versions are reduced to their **dotted numeric prefix** — everything before the
-first `-` — before that comparison. Released bundles are not named `0.2.1`:
-VS Code appends the target platform to platform-specific extension directories
-and `.github/workflows/release.yml` packages every VSIX with
-`vsce package --target <t>`, so real users have
-`nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`. Without the trim, the
-trailing `1-darwin-arm64` is not all-digits, collapses to `0`, and any two
-releases differing only in patch compare **equal** — restoring
-first-glob-match, and with it #356, for every released install while the dev
-scheme (`0.1.<epoch>`, packaged without `--target`) stays green. `vsce`
-requires a strict `x.y.z` version and rejects prerelease tags, so the first `-`
-is always the platform boundary. See
-[docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#bundle-versions-carry-a-target-platform-suffix-356).
+| Shape                | What happens                                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Downgrade**        | `dev-install.sh` derives `0.1.<epoch>` from a `package.json` that stays `0.1.0` on `main` forever, so every maintainer dev-install loses to a leftover `0.2.x` release directory |
+| **Prerelease**       | `staging.yml` runs `npm version 0.2.0-rc.23` + `vsce package --target <t>`, so directories are `…-0.2.0-rc.23-darwin-arm64`; any dotted-numeric comparator ties rc.22 with rc.23 |
+| **Partial installs** | the glob also matches `….vsctmp` leftovers, which can out-parse the real install                                                                                                 |
 
-When the selected bundle is still not the newest installed one — the newer
-bundle's binary exists but is not executable — `guard.sh` writes one
-`[stale-binary]` line naming both versions and the resolved path, and
-`nightgauge doctor` reports the same as a warning. A correctly resolved newest
-bundle stays silent: this path runs on every tool call.
+The authority is **`~/.vscode/extensions/extensions.json`** — VSCode's own
+record, a JSON array in which each installed extension carries a
+`relativeLocation` naming exactly one directory. If that directory's
+`dist/bin/nightgauge` is executable, it **is** the answer, even when a
+higher-numbered directory sits beside it. A recorded downgrade resolves to the
+older bundle, silently, because that is what is installed.
 
-That staleness test is **numeric** in both implementations, never string
-inequality on the two version strings. Both versions were chosen with the
-numeric comparator, so mixing orderings lets a numeric tie that differs
-textually (one release packaged for two targets) latch the newest-tracker onto
-whichever bundle the glob yielded first and fire the warning backwards — a
-healthy machine running the newest binary reported as stale, naming an older
-non-runnable bundle as the newer one, on every tool call.
+Neither implementation orders versions at all. Versions survive only as opaque
+display strings inside diagnostics.
+
+**Fallback.** No usable record — file absent, unparseable, or zero/several
+nightgauge entries — or a recorded bundle that cannot be run: the first
+executable glob match, exactly as before #356. Deterministic, no ordering.
+
+**Reading the record.** `internal/doctor/binary_resolve.go` decodes the JSON.
+`guard.sh` cannot: it runs under macOS's system bash 3.2 with no `jq`, on every
+tool call, so it scans the file's text with shell builtins alone — one `read`
+loop, then `case` + parameter expansion looking for a `"relativeLocation"` key
+whose value is a plain `nightgauge.nightgauge-vscode-…` directory name. No
+fork, no exec, and only on the branch where step 4 is reached. Both sides are
+conservative the same way — zero or multiple matches mean "no record" — and
+`TestGuardShParity_RecordedBundleDir` pins the two parsers against each other
+over the whole malformed-input matrix (#277).
+
+##### The divergence signal
+
+`guard.sh` writes ONE `[stale-binary]` line — naming the recorded version, the
+resolved version and the resolved path — when either:
+
+- the recorded bundle could not be used (its binary is missing or not
+  executable), or
+- there is no record and several bundles are on disk.
+
+A confirmed resolution stays silent, and so does a single unrecorded bundle:
+there is nothing else it could be, and this path runs on every tool call.
+`nightgauge doctor` reports the same states, plus the bundle-directory count
+and the recorded version, on every outcome — see
+[docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#what-the-binary-check-reports-356).
+
+##### Things that were tried and are wrong
+
+- **Compare the binary's build stamp to the plugin version.** The bundle dir
+  carries `0.1.<epoch>`, the binary carries a `git describe` string
+  (`v0.2.0-rc.23-103-g<sha>`), the plugin carries a hand-maintained `1.21.0`.
+  No two are comparable. (`nightgauge --version` also does not exist; the verb
+  is `nightgauge version`.)
+- **Rank by mtime.** The captured real layout in
+  `internal/doctor/testdata/vscode-bundles/` has the UNRECORDED bundle carrying
+  the LATER mtime — the `binary_mtime` field records both, so this is checkable
+  from the artifact rather than asserted.
+- **Trim the target-platform suffix and compare the dotted numeric prefix.**
+  This collapses `0.2.0-rc.22` and `0.2.0-rc.23` to `0.2.0`, ties them, and
+  falls back to first-glob-match — #356 verbatim on the channel this repo
+  ships. `vsce` accepts prerelease versions; `staging.yml` has shipped 19 of
+  them.
 
 #### `hook sanitize-prompt` — enforcement is opt-in
 

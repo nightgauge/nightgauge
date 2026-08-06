@@ -85,10 +85,28 @@ The skill preflight still `exit 1`s with a visible message when the binary
 remains unresolvable — that's the legitimate diagnostic AC3 requires
 preserving for genuine missing-binary cases.
 
-**Drift risk**: The cascade now exists in two places (`guard.sh` and
-`PREFLIGHT.md`). Both files include a header comment pointing at the other,
-and this audit lists them as authoritative copies. Future changes to one
-require a matching change to the other.
+**Since then — two corrections to the list above.**
+
+- **Step 4 is no longer an unordered first-match glob (#356).** When several
+  bundle directories are on disk, `guard.sh` and
+  `internal/doctor/binary_resolve.go` both select the one VSCode **records** as
+  installed in `~/.vscode/extensions/extensions.json`, falling back to the
+  first executable glob match only when there is no usable record. Neither
+  implementation orders version numbers. See
+  [docs/GO_BINARY.md](GO_BINARY.md#which-bundle-the-hooks-run--vscodes-record-not-the-biggest-number).
+- **`skills/_shared/PREFLIGHT.md` no longer replicates step 4.** It dropped
+  the `~/.vscode/extensions` glob in #4029 because skills must stay portable
+  Markdown across Claude/Codex/Cursor/Gemini, and `nightgauge preflight
+skill-portability` enforces that. Step 4 is guard.sh-only.
+
+**Drift risk**: The SHARED steps exist in two places (`guard.sh` and
+`PREFLIGHT.md`) and the whole cascade in a third
+(`internal/doctor/binary_resolve.go`, the #277 parity contract). All three
+carry header comments pointing at the others, and
+`internal/doctor/binary_resolve_test.go` fails CI when `guard.sh` and the Go
+resolver disagree — on step order, on step-4 selection, or on how the install
+record is parsed. Future changes to one require a matching change to the
+others.
 
 ## 3. Bare `nightgauge` Calls Inside Skill Bodies
 
@@ -168,16 +186,33 @@ To reproduce the controlled 10-stage no-op run cited in AC2:
    ```
 
 4. Both counts must be **zero**. The side-channel log
-   (`~/.nightgauge/hook-warnings.log`) may contain `[hook-skipped]`
-   entries — that's expected and proves the silent path is working.
+   (`~/.nightgauge/hook-warnings.log`) may contain `[hook-skipped]` or
+   `[stale-binary]` entries — that's expected and proves the silent path is
+   working.
 
 ## Side-Channel Log Contract
 
-`~/.nightgauge/hook-warnings.log` is a new producer of diagnostic data
-introduced by this PR. The path is overridable via the
-`NIGHTGAUGE_HOOK_LOG` environment variable. No consumer exists today —
-the file is for the user to inspect when debugging hooks. Future work could
-add a VSCode extension panel that surfaces it; that's not in scope here.
+`~/.nightgauge/hook-warnings.log` is the destination for every hook diagnostic
+that must not reach stdout (the hook's JSON contract, #354/#355) and must not
+default to stderr (which the Claude CLI turns into a `stop-hook-error`
+notification regardless of exit code, #3262). The path is overridable via the
+`NIGHTGAUGE_HOOK_LOG` environment variable, and
+`NIGHTGAUGE_HOOK_SILENT=false` routes the same lines to stderr instead when
+debugging hooks.
+
+Producers, all in `claude-plugins/nightgauge/hooks/lib/guard.sh`:
+
+| Marker           | Written when                                                                                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[hook-skipped]` | the binary could not be resolved and the hook is non-blocking — it exits 0 without running                                                                          |
+| `[hook-blocked]` | the binary could not be resolved and the hook is load-bearing (`NIGHTGAUGE_HOOK_BLOCKING=true`) — mirrored here, but stderr stays loud because the user must see it |
+| `[stale-binary]` | step 4 resolved an extension bundle VSCode's install record does not confirm (#356)                                                                                 |
+
+Nothing else writes to this file, and a healthy machine writes nothing at all
+— these hooks run on every tool call, so a per-call line would be noise. The
+same states are queryable on demand via `nightgauge doctor`
+(`checks.binary`). No automatic consumer exists today; a VSCode panel that
+surfaces the log is possible future work.
 
 ## See Also
 
