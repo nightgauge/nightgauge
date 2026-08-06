@@ -47,11 +47,19 @@ type VSCodeBundleScan struct {
 	SelectedPath    string         // newest EXECUTABLE bundle binary ("" when none is runnable)
 	SelectedVersion string
 	NewestVersion   string // newest bundle whose binary file exists, runnable or not
-	// Superseded reports that the selected bundle is not the newest one
-	// installed — i.e. the hooks would run a stale binary. Post-#356 this can
-	// only happen when the newer bundle's binary is present but not
-	// executable (partial install, lost exec bit), because selection is by
-	// version rather than by glob order.
+	// Superseded reports that the selected bundle is strictly OLDER than the
+	// newest one installed — i.e. the hooks would run a stale binary.
+	// Post-#356 this can only happen when the newer bundle's binary is present
+	// but not executable (partial install, lost exec bit), because selection is
+	// by version rather than by glob order.
+	//
+	// This is a NUMERIC comparison, deliberately: SelectedVersion and
+	// NewestVersion are chosen with compareBundleVersions, so testing them with
+	// string inequality mixes two orderings. Two versions that tie numerically
+	// but differ textually (e.g. the same release packaged for two target
+	// platforms) would then latch NewestVersion onto whichever bundle the glob
+	// happened to yield first and fire the warning BACKWARDS — naming an older
+	// bundle as "newer" on a machine that is in fact running the newest binary.
 	Superseded bool
 }
 
@@ -107,7 +115,7 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 	sort.SliceStable(scan.Bundles, func(i, j int) bool {
 		return compareBundleVersions(scan.Bundles[i].Version, scan.Bundles[j].Version) > 0
 	})
-	scan.Superseded = scan.SelectedPath != "" && scan.SelectedVersion != scan.NewestVersion
+	scan.Superseded = scan.SelectedPath != "" && compareBundleVersions(scan.SelectedVersion, scan.NewestVersion) < 0
 	return scan
 }
 
@@ -125,16 +133,52 @@ func bundleVersionFromPath(binaryPath string) string {
 	return strings.TrimPrefix(base, prefix)
 }
 
-// compareBundleVersions orders two dotted bundle versions component-wise and
-// numerically: -1 when a < b, 0 when equal, 1 when a > b. A missing or
-// non-numeric component counts as 0, matching guard.sh's comparator exactly.
+// bundleVersionNumericPrefix trims a trailing target-platform suffix from a
+// bundle directory's version segment, returning the bare dotted `x.y.z`.
+//
+// VS Code names platform-specific extension directories
+// `<publisher>.<name>-<version>-<targetPlatform>`, and
+// .github/workflows/release.yml packages EVERY released VSIX with
+// `vsce package --target <t>` (darwin-arm64, darwin-x64, linux-x64). So a
+// RELEASED bundle directory is `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`
+// and the raw version segment is `0.2.1-darwin-arm64`, not `0.2.1`.
+//
+// Without this trim the last dotted component is `1-darwin-arm64`, which is not
+// all-digits and so collapses to 0 in bundleVersionComponent. Every pair of
+// releases differing only in patch then compares EQUAL, the strict `>` guards
+// in ScanVSCodeBundles never fire, and newest-bundle selection silently
+// degrades to "first glob match wins" — #356 reproduced verbatim for the entire
+// released/marketplace population, while NewestVersion freezes on the same
+// wrong bundle so no staleness signal is emitted either.
+//
+// Only maintainer dev installs escaped it: packages/nightgauge-vscode/scripts/
+// dev-install.sh runs `vsce package` WITHOUT `--target`, producing the
+// unsuffixed `0.1.<epoch>` segment that every original #356 test and the
+// captured fixture used. That is why the whole suite was green over a fix that
+// did nothing on real installs.
+//
+// Splitting at the FIRST `-` is unambiguous: vsce requires a strict `x.y.z`
+// extension version and rejects a semver prerelease tag, so no `-` can appear
+// before the target platform. guard.sh's _ng_version_gt trims identically.
+func bundleVersionNumericPrefix(v string) string {
+	if i := strings.IndexByte(v, '-'); i >= 0 {
+		return v[:i]
+	}
+	return v
+}
+
+// compareBundleVersions orders two bundle versions component-wise and
+// numerically: -1 when a < b, 0 when equal, 1 when a > b. Each input is first
+// reduced to its dotted numeric prefix (see bundleVersionNumericPrefix); a
+// missing or non-numeric component counts as 0, matching guard.sh's comparator
+// exactly.
 //
 // String comparison would work today only by accident — the extension emits a
 // fixed-width 10-digit epoch suffix — and would silently invert the moment
 // that width changes.
 func compareBundleVersions(a, b string) int {
-	as := strings.Split(a, ".")
-	bs := strings.Split(b, ".")
+	as := strings.Split(bundleVersionNumericPrefix(a), ".")
+	bs := strings.Split(bundleVersionNumericPrefix(b), ".")
 	n := len(as)
 	if len(bs) > n {
 		n = len(bs)

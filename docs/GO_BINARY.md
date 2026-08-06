@@ -2290,11 +2290,33 @@ implementation. Modification time is not usable either; the captured real
 layout in `internal/doctor/testdata/vscode-bundles/` has the older-versioned
 bundle carrying the **later** mtime.
 
+Versions are reduced to their **dotted numeric prefix** — everything before the
+first `-` — before that comparison. Released bundles are not named `0.2.1`:
+VS Code appends the target platform to platform-specific extension directories
+and `.github/workflows/release.yml` packages every VSIX with
+`vsce package --target <t>`, so real users have
+`nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`. Without the trim, the
+trailing `1-darwin-arm64` is not all-digits, collapses to `0`, and any two
+releases differing only in patch compare **equal** — restoring
+first-glob-match, and with it #356, for every released install while the dev
+scheme (`0.1.<epoch>`, packaged without `--target`) stays green. `vsce`
+requires a strict `x.y.z` version and rejects prerelease tags, so the first `-`
+is always the platform boundary. See
+[docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#bundle-versions-carry-a-target-platform-suffix-356).
+
 When the selected bundle is still not the newest installed one — the newer
 bundle's binary exists but is not executable — `guard.sh` writes one
 `[stale-binary]` line naming both versions and the resolved path, and
 `nightgauge doctor` reports the same as a warning. A correctly resolved newest
 bundle stays silent: this path runs on every tool call.
+
+That staleness test is **numeric** in both implementations, never string
+inequality on the two version strings. Both versions were chosen with the
+numeric comparator, so mixing orderings lets a numeric tie that differs
+textually (one release packaged for two targets) latch the newest-tracker onto
+whichever bundle the glob yielded first and fire the warning backwards — a
+healthy machine running the newest binary reported as stale, naming an older
+non-runnable bundle as the newer one, on every tool call.
 
 #### `hook sanitize-prompt` — enforcement is opt-in
 

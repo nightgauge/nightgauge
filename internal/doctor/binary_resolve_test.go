@@ -280,6 +280,41 @@ func TestResolveBinary_GuardShParity(t *testing.T) {
 				return paths[newestVersion(t, versionsOf(paths))]
 			},
 		},
+		{
+			// #356: the RELEASE/marketplace install shape. VS Code appends the
+			// target platform to platform-specific extension directories, and
+			// .github/workflows/release.yml packages every released VSIX with
+			// `vsce package --target <t>` — so real users' bundle dirs look like
+			// `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`.
+			//
+			// The captured fixture and every other bundle case here use the
+			// maintainer-only dev scheme (dev-install.sh runs `vsce package`
+			// WITHOUT --target), whose version segment is pure dotted digits.
+			// That gap let the first #356 fix ship green while being a complete
+			// no-op for every non-dev install: the trailing component
+			// `1-darwin-arm64` is not all-digits, so it collapsed to 0, every
+			// release differing only in patch compared EQUAL, and both
+			// implementations fell back to first-glob-match = the OLDER bundle.
+			name: "vscode_extension_release_target_suffix",
+			setup: func(t *testing.T) string {
+				isolateCascade(t)
+				home := os.Getenv("HOME")
+				// These four differ only in PATCH, which is exactly what the
+				// collapsed trailing component destroyed: under the bug all
+				// four compare EQUAL, so the strict `>` guard never fires and
+				// first-glob-match wins. Collation order is 0.2.0, 0.2.1,
+				// 0.2.10, 0.2.9 — so the buggy answer is 0.2.0 (the OLDEST),
+				// and a naive "sort and take the last" would yield 0.2.9.
+				// Only numeric ordering of the suffix-trimmed version gives
+				// 0.2.10.
+				for _, v := range []string{"0.2.0", "0.2.1", "0.2.9", "0.2.10"} {
+					writeFakeBinary(t, filepath.Join(home, ".vscode", "extensions",
+						"nightgauge.nightgauge-vscode-"+v+"-darwin-arm64", "dist", "bin", "nightgauge"))
+				}
+				return filepath.Join(home, ".vscode", "extensions",
+					"nightgauge.nightgauge-vscode-0.2.10-darwin-arm64", "dist", "bin", "nightgauge")
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -606,6 +641,113 @@ func TestResolveBinary_VSCodeExtension_SkipsNonExecutableNewestBundle(t *testing
 	}
 	if resolved.Path != want {
 		t.Errorf("expected the newest EXECUTABLE bundle %q, got %q", want, resolved.Path)
+	}
+}
+
+// TestCompareBundleVersions_TargetPlatformSuffix pins the comparator against
+// the RELEASE bundle-directory shape.
+//
+// VS Code names platform-specific extension dirs
+// `<publisher>.<name>-<version>-<targetPlatform>` and release.yml packages
+// every VSIX with `vsce package --target <t>`, so the extracted version segment
+// carries a `-darwin-arm64` / `-darwin-x64` / `-linux-x64` tail. Splitting that
+// on "." puts a non-numeric final component in play; collapsing it to 0 made
+// every release differing only in patch compare EQUAL, which silently reduced
+// newest-bundle selection to first-glob-match for the entire released
+// population while every dev-scheme test stayed green.
+func TestCompareBundleVersions_TargetPlatformSuffix(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		// Differ only in patch — the pair the collapsed component made equal.
+		{"0.2.1-darwin-arm64", "0.2.0-darwin-arm64", 1},
+		{"0.2.0-darwin-arm64", "0.2.1-darwin-arm64", -1},
+		// Numeric, not lexicographic, ordering of the trimmed version.
+		{"0.2.10-darwin-arm64", "0.2.9-darwin-arm64", 1},
+		{"0.10.0-linux-x64", "0.9.0-linux-x64", 1},
+		// A suffixed bundle vs the same version unsuffixed (dev install).
+		{"0.2.1-darwin-x64", "0.2.1", 0},
+		{"0.2.1-darwin-arm64", "0.2.0", 1},
+		// Same release packaged for two targets ties — it is the same binary
+		// version, and a tie is what keeps Superseded from firing backwards.
+		{"0.2.1-darwin-arm64", "0.2.1-linux-x64", 0},
+		// The dev scheme must keep behaving exactly as before.
+		{"0.1.1785982325", "0.1.1785906439", 1},
+	}
+	for _, tc := range cases {
+		if got := compareBundleVersions(tc.a, tc.b); got != tc.want {
+			t.Errorf("compareBundleVersions(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// TestScanVSCodeBundles_SupersededIsNumericNotStringEquality guards against an
+// INVERTED staleness alarm on a healthy machine.
+//
+// SelectedVersion and NewestVersion are chosen with the numeric comparator, so
+// testing them for staleness with string inequality mixes two orderings. Here
+// two bundles tie numerically (same release, two target platforms) but differ
+// textually, and the non-executable one is the glob-first entry that
+// NewestVersion latches onto. Under string comparison this reported the
+// machine as running a stale binary and named the OLDER/broken bundle as the
+// "newer" one — turning a correct green check red with a reversed claim, and
+// writing that sentence to the side-channel log on every single tool call.
+func TestScanVSCodeBundles_SupersededIsNumericNotStringEquality(t *testing.T) {
+	isolateCascade(t)
+	home := os.Getenv("HOME")
+
+	// Collation puts -darwin-arm64 first; make that one non-executable so the
+	// tracker would latch onto it, and leave the numerically-equal -linux-x64
+	// bundle as the runnable selection.
+	broken := filepath.Join(home, ".vscode", "extensions",
+		"nightgauge.nightgauge-vscode-0.2.1-darwin-arm64", "dist", "bin", "nightgauge")
+	writeFakeBinary(t, broken)
+	if err := os.Chmod(broken, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	runnable := filepath.Join(home, ".vscode", "extensions",
+		"nightgauge.nightgauge-vscode-0.2.1-linux-x64", "dist", "bin", "nightgauge")
+	writeFakeBinary(t, runnable)
+
+	scan := ScanVSCodeBundles(home)
+	if scan.SelectedPath != runnable {
+		t.Fatalf("expected the runnable bundle %q, got %q", runnable, scan.SelectedPath)
+	}
+	if scan.Superseded {
+		t.Errorf("Superseded fired on a machine running the newest version: selected %q, newest %q — "+
+			"nothing newer is installed, so this is a false (and reversed) stale-binary alarm",
+			scan.SelectedVersion, scan.NewestVersion)
+	}
+}
+
+// TestScanVSCodeBundles_SupersededOnRealStaleness is the positive counterpart:
+// a genuinely newer bundle that is present but not executable must still be
+// reported, with the release-shaped (target-suffixed) directory names.
+func TestScanVSCodeBundles_SupersededOnRealStaleness(t *testing.T) {
+	isolateCascade(t)
+	home := os.Getenv("HOME")
+
+	newer := filepath.Join(home, ".vscode", "extensions",
+		"nightgauge.nightgauge-vscode-0.2.2-darwin-arm64", "dist", "bin", "nightgauge")
+	writeFakeBinary(t, newer)
+	if err := os.Chmod(newer, 0o644); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	older := filepath.Join(home, ".vscode", "extensions",
+		"nightgauge.nightgauge-vscode-0.2.1-darwin-arm64", "dist", "bin", "nightgauge")
+	writeFakeBinary(t, older)
+
+	scan := ScanVSCodeBundles(home)
+	if scan.SelectedPath != older {
+		t.Fatalf("expected the newest RUNNABLE bundle %q, got %q", older, scan.SelectedPath)
+	}
+	if !scan.Superseded {
+		t.Errorf("expected Superseded: selected %q while %q is installed but not executable",
+			scan.SelectedVersion, scan.NewestVersion)
+	}
+	if scan.NewestVersion != "0.2.2-darwin-arm64" {
+		t.Errorf("NewestVersion = %q, want %q", scan.NewestVersion, "0.2.2-darwin-arm64")
 	}
 }
 

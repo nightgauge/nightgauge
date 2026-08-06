@@ -65,6 +65,39 @@ to get wrong in an invented fixture:
   a fixed 10 digits. The implementations compare component-wise numerically so
   a digit-count change (or any other scheme) cannot silently flip the order.
 
+## What this fixture does NOT represent (read before adding a test)
+
+This capture is from a **maintainer dev install**, and its bundle versions are
+therefore the dev scheme: an unsuffixed, epoch-derived `0.1.<seconds>`.
+`packages/nightgauge-vscode/scripts/dev-install.sh` runs `vsce package`
+**without** `--target`, so its directory names carry no target platform.
+
+**Released and marketplace installs do not look like this.** VS Code names
+platform-specific extension directories
+`<publisher>.<name>-<version>-<targetPlatform>`, and
+`.github/workflows/release.yml` packages every released VSIX with
+`vsce package --target <t>` (`darwin-arm64`, `darwin-x64`, `linux-x64`). Real
+users have directories like
+`nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`, whose version segment is
+`0.2.1-darwin-arm64`.
+
+That gap is not hypothetical — it shipped. The first #356 fix collapsed the
+non-numeric trailing component (`1-darwin-arm64`) to `0`, so every pair of
+releases differing only in patch compared **equal**, newest-bundle selection
+fell back to first-glob-match, and the defect survived untouched for every
+non-dev install. The entire suite was green, because this fixture and every
+synthetic version in the tests were pure dotted digits and structurally could
+not express the shipped shape.
+
+So: **a fixture-derived test is necessary but never sufficient here.** Bundle
+cases that must hold for real users belong in the target-suffixed tests —
+`TestCompareBundleVersions_TargetPlatformSuffix`,
+`TestScanVSCodeBundles_Superseded*`, the
+`vscode_extension_release_target_suffix` parity case, and
+`TestGuardShellReleaseTargetSuffixedBundles` — which construct
+`-darwin-arm64` / `-linux-x64` directory names directly rather than reading
+this file.
+
 ## Note on `bash_version`
 
 The `bash_version` field records the shell that ran the capture script, which

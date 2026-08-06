@@ -146,6 +146,39 @@ to its side-channel log. Post-#356 selection is by bundle version, so this
 can only occur when the newer bundle's binary exists but is not executable
 (partial install, lost exec bit).
 
+#### Bundle versions carry a target-platform suffix (#356)
+
+VS Code names platform-specific extension directories
+`<publisher>.<name>-<version>-<targetPlatform>`, and
+`.github/workflows/release.yml` packages **every** released VSIX with
+`vsce package --target <t>` (`darwin-arm64`, `darwin-x64`, `linux-x64`). So a
+released bundle directory is
+`nightgauge.nightgauge-vscode-0.2.1-darwin-arm64` and the version segment the
+comparators see is `0.2.1-darwin-arm64`, not `0.2.1`.
+
+Both comparators therefore reduce a version to its **dotted numeric prefix**
+(everything before the first `-`) before comparing component-wise. `vsce`
+requires a strict `x.y.z` extension version and rejects semver prerelease
+tags, so the first `-` is unambiguously the target-platform boundary.
+
+This is not cosmetic. Without the trim, the trailing component
+(`1-darwin-arm64`) is not all-digits, collapses to `0`, and **any two releases
+differing only in patch compare equal** — which silently restores the
+first-glob-match behaviour #356 exists to fix, for the entire
+released/marketplace population, while leaving `NewestVersion` frozen on the
+same wrong bundle so no `[stale-binary]` line is emitted either. Only
+maintainer dev installs escape it, because
+`packages/nightgauge-vscode/scripts/dev-install.sh` runs `vsce package`
+**without** `--target` and produces an unsuffixed `0.1.<epoch>` segment.
+
+For the same reason, "is the selected bundle stale?" is a **numeric**
+comparison of the selected and newest versions in both implementations, never
+string inequality. Two versions that tie numerically but differ textually
+(one release packaged for two targets) would otherwise let the newest-tracker
+latch onto whichever bundle the glob yielded first and fire the warning
+_backwards_ — flagging a machine that is running the newest available binary
+as stale, and naming an older, non-runnable bundle as the newer one.
+
 `DoctorResult.FailedChecks` (`failed_checks` in JSON) lists every check
 name that contributed a required failure (`exit_code == 2`), in the order
 added — e.g. `["github_auth"]`. `skills/_shared/PREFLIGHT.md`'s exit-2

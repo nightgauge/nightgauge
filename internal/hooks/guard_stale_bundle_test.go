@@ -243,6 +243,103 @@ func TestGuardShellStaleBundleSignal(t *testing.T) {
 	})
 }
 
+// TestGuardShellReleaseTargetSuffixedBundles runs guard.sh against the
+// bundle-directory shape that every RELEASED / marketplace install actually
+// has, which no other test here exercises.
+//
+// VS Code appends the target platform to platform-specific extension folder
+// names, and .github/workflows/release.yml packages every released VSIX with
+// `vsce package --target <t>` (darwin-arm64, darwin-x64, linux-x64). So real
+// users have `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64`, and the version
+// guard.sh extracts is `0.2.1-darwin-arm64`.
+//
+// The captured fixture and every version above come from the maintainer-only
+// dev scheme (dev-install.sh runs `vsce package` WITHOUT --target), which is
+// pure dotted digits. Before the trim in _ng_version_gt, the trailing component
+// `1-darwin-arm64` was not all-digits and collapsed to 0, so any two releases
+// differing only in patch compared EQUAL — leaving selection at first glob
+// match (the OLDER bundle) and suppressing the staleness signal entirely. The
+// suite was green while the fix was inert everywhere it mattered.
+func TestGuardShellReleaseTargetSuffixedBundles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	const payload = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
+
+	t.Run("runs the newest release bundle, not the first glob match", func(t *testing.T) {
+		home := t.TempDir()
+		// Collation order is 0.2.0, 0.2.1, 0.2.10, 0.2.9 — so the buggy answer
+		// is the OLDEST (0.2.0) and "last match" would be 0.2.9. Only numeric
+		// ordering of the suffix-trimmed version yields 0.2.10.
+		for _, v := range []string{"0.2.0", "0.2.1", "0.2.9"} {
+			bundleStub(t, home, v+"-darwin-arm64", preToolUsePayload, true)
+		}
+		newest := "0.2.10-darwin-arm64"
+		bundleStub(t, home, newest, preToolUsePayload, true)
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
+
+		if !strings.Contains(run.marker, newest) {
+			t.Errorf("expected the newest release bundle %q to have run, invocations were %q", newest, run.marker)
+		}
+		for _, stale := range []string{"0.2.0-darwin-arm64", "0.2.1-darwin-arm64", "0.2.9-darwin-arm64"} {
+			if strings.Contains(run.marker, stale) {
+				t.Errorf("superseded bundle %q must not run, invocations were %q", stale, run.marker)
+			}
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("a correctly-resolved newest bundle must stay silent, got %q", run.log)
+		}
+	})
+
+	t.Run("no inverted stale alarm when two targets of one release tie", func(t *testing.T) {
+		home := t.TempDir()
+		// Same version, two target platforms; the glob-first one is the broken
+		// (non-executable) copy. Comparing the two version STRINGS for
+		// staleness fires the warning backwards here — reporting the machine as
+		// stale, and naming the non-runnable bundle as the "newer" one — while
+		// it is in fact running the newest binary available.
+		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, false)
+		runnable := "0.2.1-linux-x64"
+		bundleStub(t, home, runnable, preToolUsePayload, true)
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
+
+		if !strings.Contains(run.marker, runnable) {
+			t.Errorf("expected the runnable bundle %q to have run, invocations were %q", runnable, run.marker)
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("false stale-binary alarm on a healthy install (nothing newer is installed), log was %q", run.log)
+		}
+		if strings.TrimSpace(run.stderr) != "" {
+			t.Errorf("expected empty stderr, got %q", run.stderr)
+		}
+	})
+
+	t.Run("still signals genuine staleness with release-shaped dirs", func(t *testing.T) {
+		home := t.TempDir()
+		newest := "0.2.2-darwin-arm64"
+		bundleStub(t, home, newest, preToolUsePayload, false)
+		selected := "0.2.1-darwin-arm64"
+		resolved := bundleStub(t, home, selected, preToolUsePayload, true)
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, payload, nil)
+
+		for _, want := range []string{selected, newest, resolved} {
+			if !strings.Contains(run.log, want) {
+				t.Errorf("side-channel log must name %q, got %q", want, run.log)
+			}
+		}
+		if strings.TrimSpace(run.stderr) != "" {
+			t.Errorf("silent default must keep stderr empty (#3262), got %q", run.stderr)
+		}
+	})
+}
+
 // TestGuardShellStaleBundleStdoutContract covers #356 AC2: the staleness
 // signal must not put a single byte on hook stdout, for any hook event shape.
 // Each case asserts stdout is EXACTLY what the binary produced — not "starts

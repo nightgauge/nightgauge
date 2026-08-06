@@ -108,18 +108,32 @@ _log_to_side_channel() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$NIGHTGAUGE_HOOK_LOG" 2>/dev/null || true
 }
 
-# _ng_version_gt returns 0 (true) when dotted version $1 sorts strictly after
-# dotted version $2, comparing components left to right as integers. Missing or
-# non-numeric components count as 0.
+# _ng_version_gt returns 0 (true) when bundle version $1 sorts strictly after
+# bundle version $2, comparing dotted components left to right as integers.
+# Missing or non-numeric components count as 0.
+#
+# Each argument is first reduced to its dotted numeric prefix by trimming
+# everything from the FIRST `-`. VS Code names platform-specific extension
+# directories `<publisher>.<name>-<version>-<targetPlatform>`, and
+# .github/workflows/release.yml packages every released VSIX with
+# `vsce package --target <t>`, so a released bundle dir is
+# `nightgauge.nightgauge-vscode-0.2.1-darwin-arm64` and the extracted version is
+# `0.2.1-darwin-arm64`. Without the trim the final component `1-darwin-arm64` is
+# not all-digits, collapses to 0, and every pair of releases differing only in
+# patch compares EQUAL — so the strict `>` selection below keeps the FIRST glob
+# match (the older bundle) and #356 survives untouched on every non-dev install.
+# Only dev-install.sh's untargeted `0.1.<epoch>` builds were unaffected. vsce
+# requires a strict `x.y.z` version and rejects semver prerelease tags, so the
+# first `-` is always the target-platform boundary.
 #
 # Written to the macOS system bash floor (3.2.57): no arrays, no `mapfile`, no
 # `${var,,}`, no `[[ =~ ]]`. `sort -V` is deliberately avoided too — it exists
 # on macOS but is not guaranteed across BSD userlands, and this is three lines
-# of parameter expansion. Mirrors compareBundleVersions() in
-# internal/doctor/binary_resolve.go.
+# of parameter expansion. Mirrors compareBundleVersions() /
+# bundleVersionNumericPrefix() in internal/doctor/binary_resolve.go.
 _ng_version_gt() {
-  _ng_vg_a="$1"
-  _ng_vg_b="$2"
+  _ng_vg_a="${1%%-*}"
+  _ng_vg_b="${2%%-*}"
   while [ -n "$_ng_vg_a" ] || [ -n "$_ng_vg_b" ]; do
     _ng_vg_a_part="${_ng_vg_a%%.*}"
     _ng_vg_b_part="${_ng_vg_b%%.*}"
@@ -248,9 +262,17 @@ export NIGHTGAUGE_BINARY
 # Routing is the same as the skip notice and for the same reason (#3262):
 # side-channel log by default, stderr only in verbose mode. Never stdout — that
 # belongs to the hook's JSON contract (#354/#355).
+#
+# The gate is `_ng_version_gt newest selected` — a NUMERIC strictly-newer test,
+# not string inequality. Both versions were CHOSEN with the numeric comparator,
+# so testing them as strings mixes two orderings: two bundles that tie
+# numerically but differ textually (the same release packaged for two target
+# platforms) let the newest-tracker latch onto whichever the glob yielded first
+# and fire this warning BACKWARDS, naming an older bundle as "newer" on a
+# machine that is running the newest binary. Same comparator both places.
 if [ -n "$_ng_bundle_selected_version" ] &&
   [ -n "$_ng_bundle_newest_version" ] &&
-  [ "$_ng_bundle_selected_version" != "$_ng_bundle_newest_version" ]; then
+  _ng_version_gt "$_ng_bundle_newest_version" "$_ng_bundle_selected_version"; then
   _ng_stale_message="[stale-binary] hooks resolved VSCode extension bundle $_ng_bundle_selected_version but newer bundle $_ng_bundle_newest_version is installed (its binary is not executable); running $NIGHTGAUGE_BINARY"
   if [ "$NIGHTGAUGE_HOOK_SILENT" = "false" ]; then
     echo "$_ng_stale_message" >&2
