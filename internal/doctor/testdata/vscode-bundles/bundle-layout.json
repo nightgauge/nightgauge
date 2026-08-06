@@ -1,0 +1,37 @@
+{
+  "captured_at": "2026-08-06T14:19:20Z",
+  "captured_by": "scripts/capture-vscode-bundle-layout.sh",
+  "platform": "Darwin arm64",
+  "bash_version": "5.3.3(1)-release",
+  "glob": "~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge",
+  "extensions_index": "~/.vscode/extensions/extensions.json",
+  "recorded_relative_location": "nightgauge.nightgauge-vscode-0.1.1785982325",
+  "bundles": [
+    {
+      "dir": "~/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785906439",
+      "bundle_version": "0.1.1785906439",
+      "recorded_installed": false,
+      "binary": "~/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785906439/dist/bin/nightgauge",
+      "binary_exists": true,
+      "binary_executable": true,
+      "binary_mode": "-rwxr-xr-x",
+      "binary_mtime": "2026-08-06T02:15:40Z",
+      "binary_size_bytes": 25017906,
+      "binary_sha256": "e4e76b47d73f9bf32b491ae4ec3d4d32526436a10f394185035a93a83fbf5bad",
+      "version_output": "nightgauge v0.2.0-rc.23-103-gb43e2b76"
+    },
+    {
+      "dir": "~/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785982325",
+      "bundle_version": "0.1.1785982325",
+      "recorded_installed": true,
+      "binary": "~/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1785982325/dist/bin/nightgauge",
+      "binary_exists": true,
+      "binary_executable": true,
+      "binary_mode": "-rwxr-xr-x",
+      "binary_mtime": "2026-08-06T02:12:15Z",
+      "binary_size_bytes": 25017906,
+      "binary_sha256": "e4e76b47d73f9bf32b491ae4ec3d4d32526436a10f394185035a93a83fbf5bad",
+      "version_output": "nightgauge v0.2.0-rc.23-103-gb43e2b76"
+    }
+  ]
+}

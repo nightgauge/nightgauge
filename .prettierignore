@@ -15,6 +15,10 @@ coverage/
 package-lock.json
 # Test fixtures that may contain intentionally malformed content
 tests/fixtures/
+# The large VSCode index fixture is committed MINIFIED on purpose (#356): that
+# is the shape VSCode itself writes, and it is the worst case for guard.sh's
+# text extraction. Pretty-printing it would change what the test exercises.
+internal/doctor/testdata/vscode-bundles/extensions-index-large.json
 # Embedded templates emitted byte-for-byte by `nightgauge setup scaffold-tooling`
 internal/setup/templates/
 # Markdown files with template syntax (Handlebars, etc.)
