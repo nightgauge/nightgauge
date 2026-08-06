@@ -94,12 +94,17 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	hasRequiredFailure := false
 
 	// --- binary (warning) ---
-	// Self-check: is `nightgauge` callable by name from the shell PATH?
-	binaryCheck := checkBinary()
+	// Self-check: which binary would the hooks resolve from this directory?
+	binaryCheck, binaryResolved := checkBinary()
 	result.Checks["binary"] = binaryCheck
 	if !binaryCheck.OK {
-		warnings = append(warnings, "nightgauge binary not found in PATH")
-		result.InstallInstructions = installMsg
+		// The check's own Error is the warning — "not found" and "found but
+		// superseded" (#356) are different problems with different fixes, and
+		// only the former is solved by installing anything.
+		warnings = append(warnings, binaryCheck.Error)
+		if !binaryResolved {
+			result.InstallInstructions = installMsg
+		}
 	}
 
 	// --- gh (warning) ---
@@ -380,19 +385,78 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 	return result
 }
 
-// checkBinary reports whether the `nightgauge` binary is resolvable via the
-// six-step cascade documented in ResolveBinary (mirroring guard.sh):
-// $NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension
-// bundle, or ~/go/bin. This check is warning-only — never a required
-// failure — since discovering the binary is what this command itself is;
-// a missing binary can only be observed by the environment that ran `doctor`
-// in the first place.
-func checkBinary() CheckItem {
+// checkBinary reports which binary the HOOKS would resolve from the current
+// working directory, via the six-step cascade documented in ResolveBinary
+// (mirroring guard.sh): $NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/,
+// VSCode extension bundle, or ~/go/bin.
+//
+// The cascade is cwd-dependent — steps 2 and 3 run `git rev-parse` in the
+// caller's directory — so the same hook script legitimately runs different
+// binaries in different repos. #356: that was invisible, which let a merged
+// hook fix sit inert everywhere except the repo it was built in. Reporting the
+// resolved path, the resolving step, the binary's own version, and the
+// extension-bundle inventory makes it inspectable from wherever the operator
+// is standing.
+//
+// The second return value reports whether the binary resolved at all, so the
+// caller can distinguish "not installed" (install instructions apply) from
+// "installed but superseded" (they do not).
+//
+// This check is warning-only — never a required failure — since discovering
+// the binary is what this command itself is; a missing binary can only be
+// observed by the environment that ran `doctor` in the first place. A
+// superseded bundle is likewise a warning: a stale binary that mostly works
+// beats a hook that hard-fails.
+func checkBinary() (CheckItem, bool) {
 	resolved := ResolveBinary()
 	if resolved.Path == "" {
-		return CheckItem{OK: false, Error: "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin"}
+		return CheckItem{OK: false, Error: "nightgauge not found via NIGHTGAUGE_BIN, PATH, repo bin/, canonical-repo bin/, VSCode extension bundle, or ~/go/bin"}, false
 	}
-	return CheckItem{OK: true, Detail: fmt.Sprintf("%s (resolved via %s)", resolved.Path, resolved.Step)}
+
+	detail := fmt.Sprintf("hooks resolve %s from this directory (via %s)", resolved.Path, resolved.Step)
+	if version := binaryVersion(resolved.Path); version != "" {
+		detail += fmt.Sprintf("; reports version %s", version)
+	}
+	if n := len(resolved.Bundles.Bundles); n > 0 {
+		detail += fmt.Sprintf("; %d VSCode extension bundle(s) installed, newest %s", n, resolved.Bundles.NewestVersion)
+		if resolved.Bundles.SelectedVersion != "" {
+			detail += fmt.Sprintf(", newest runnable %s", resolved.Bundles.SelectedVersion)
+		}
+	}
+
+	if resolved.Step == StepVSCodeExtension && resolved.Bundles.Superseded {
+		return CheckItem{
+			OK: false,
+			Error: fmt.Sprintf(
+				"stale binary: hooks resolve VSCode extension bundle %s from this directory, but newer bundle %s is installed and its binary is not executable; running %s",
+				resolved.Bundles.SelectedVersion, resolved.Bundles.NewestVersion, resolved.Path,
+			),
+		}, true
+	}
+
+	return CheckItem{OK: true, Detail: detail}, true
+}
+
+// binaryVersion runs `<path> version` and returns its first line, or "" when
+// the probe fails or produces nothing. Bounded so a wedged binary cannot hang
+// `doctor`.
+//
+// The exec lives here and NOT in guard.sh on purpose: `doctor` runs on demand,
+// while guard.sh runs on every single tool call and already pays for one
+// subprocess. Note the verb is `version`, not `--version` — there is no such
+// flag.
+func binaryVersion(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").Output()
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	if len(line) > 120 {
+		line = line[:120]
+	}
+	return line
 }
 
 // checkGH reports whether the `gh` CLI is reachable via PATH.

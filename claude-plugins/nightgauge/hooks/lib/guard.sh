@@ -20,8 +20,33 @@
 #   4. ~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge
 #      — the binary that ships with the VSCode extension. Every user of the
 #      extension has a current copy here, so this is the most reliable
-#      machine-local fallback.
+#      machine-local fallback. When several bundles are installed, the NEWEST
+#      one wins (#356) — see the selection rule below.
 #   5. ~/go/bin/nightgauge — `go install` default path, common dev setup.
+#
+# Newest-bundle rule and staleness signal (#356): VSCode keeps older extension
+# versions on disk until it restarts, so step 4's glob routinely matches more
+# than one bundle. Pre-#356 the FIRST match won; bash globs are collation
+# sorted and the extension stamps an epoch-suffixed `0.1.<seconds>` version, so
+# "first" meant "oldest" — every hook in every repo outside a nightgauge
+# checkout silently ran a superseded binary, with no signal anywhere. Selection
+# is now by bundle version, compared component-wise and numerically (see
+# `_ng_version_gt`). The bundle version is the only totally ordered signal
+# available without an exec: the binary's own stamp is a `git describe` string
+# and the plugin version is hand-maintained, and neither is comparable to the
+# other or to the bundle version. Modification time is NOT usable either — a
+# real capture (internal/doctor/testdata/vscode-bundles/) has the older-
+# versioned bundle carrying the LATER mtime.
+#
+# When the selected bundle is nevertheless not the newest one installed (the
+# newer bundle's binary exists but is not executable — partial install, lost
+# exec bit), guard.sh emits ONE line naming both bundle versions and the
+# resolved path. It is routed exactly like the skip notice: side-channel log by
+# default, stderr only under `NIGHTGAUGE_HOOK_SILENT=false`. It never touches
+# stdout, which carries the hook's JSON contract (#354/#355), and it never
+# defaults to stderr, which the Claude CLI turns into a `stop-hook-error`
+# notification (#3262). Nothing here execs the binary: this hook runs on EVERY
+# tool call, and guard.sh already pays for one exec below.
 #
 # Sync contract with skills/_shared/PREFLIGHT.md (#3262 → #4029): the SHARED
 # resolution order ($NIGHTGAUGE_BIN → PATH → repo → canonical → ~/go/bin)
@@ -83,6 +108,35 @@ _log_to_side_channel() {
   printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$NIGHTGAUGE_HOOK_LOG" 2>/dev/null || true
 }
 
+# _ng_version_gt returns 0 (true) when dotted version $1 sorts strictly after
+# dotted version $2, comparing components left to right as integers. Missing or
+# non-numeric components count as 0.
+#
+# Written to the macOS system bash floor (3.2.57): no arrays, no `mapfile`, no
+# `${var,,}`, no `[[ =~ ]]`. `sort -V` is deliberately avoided too — it exists
+# on macOS but is not guaranteed across BSD userlands, and this is three lines
+# of parameter expansion. Mirrors compareBundleVersions() in
+# internal/doctor/binary_resolve.go.
+_ng_version_gt() {
+  _ng_vg_a="$1"
+  _ng_vg_b="$2"
+  while [ -n "$_ng_vg_a" ] || [ -n "$_ng_vg_b" ]; do
+    _ng_vg_a_part="${_ng_vg_a%%.*}"
+    _ng_vg_b_part="${_ng_vg_b%%.*}"
+    case "$_ng_vg_a" in *.*) _ng_vg_a="${_ng_vg_a#*.}" ;; *) _ng_vg_a="" ;; esac
+    case "$_ng_vg_b" in *.*) _ng_vg_b="${_ng_vg_b#*.}" ;; *) _ng_vg_b="" ;; esac
+    case "$_ng_vg_a_part" in '' | *[!0-9]*) _ng_vg_a_part=0 ;; esac
+    case "$_ng_vg_b_part" in '' | *[!0-9]*) _ng_vg_b_part=0 ;; esac
+    if [ "$_ng_vg_a_part" -gt "$_ng_vg_b_part" ]; then
+      return 0
+    fi
+    if [ "$_ng_vg_a_part" -lt "$_ng_vg_b_part" ]; then
+      return 1
+    fi
+  done
+  return 1
+}
+
 # 0. Host-exported binary (#4029) — the skillRunner / Go auto-CLI host resolves
 #    the binary authoritatively and exports it. Honored first so guard.sh and the
 #    skill PREFLIGHT cascade resolve identically. Ignore a stale/non-exec value.
@@ -123,15 +177,32 @@ if [ -z "$NIGHTGAUGE_BINARY" ]; then
 fi
 
 # 4. VSCode extension-bundled binary (every extension user has a fresh copy).
+#    Selects the NEWEST installed bundle, never the first glob match (#356).
+_ng_bundle_selected_version=""
+_ng_bundle_newest_version=""
 if [ -z "$NIGHTGAUGE_BINARY" ]; then
-  # `set -- glob` to expand without invoking find; the trailing /dist/bin path
-  # is the canonical location set by the extension's build script.
+  # Plain glob expansion, no `find`; the trailing /dist/bin path is the
+  # canonical location set by the extension's build script. An unmatched glob
+  # expands to the literal pattern, which the -f test rejects.
   for candidate in "$HOME"/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge; do
-    if [ -x "$candidate" ]; then
+    [ -f "$candidate" ] || continue
+    _ng_bundle_dir="${candidate%/dist/bin/nightgauge}"
+    _ng_bundle_version="${_ng_bundle_dir##*/nightgauge.nightgauge-vscode-}"
+    [ -n "$_ng_bundle_version" ] || continue
+
+    # Track the newest bundle PRESENT (runnable or not) so a newer-but-broken
+    # install is still reported rather than silently skipped.
+    if [ -z "$_ng_bundle_newest_version" ] || _ng_version_gt "$_ng_bundle_version" "$_ng_bundle_newest_version"; then
+      _ng_bundle_newest_version="$_ng_bundle_version"
+    fi
+
+    [ -x "$candidate" ] || continue
+    if [ -z "$_ng_bundle_selected_version" ] || _ng_version_gt "$_ng_bundle_version" "$_ng_bundle_selected_version"; then
+      _ng_bundle_selected_version="$_ng_bundle_version"
       NIGHTGAUGE_BINARY="$candidate"
-      break
     fi
   done
+  unset _ng_bundle_dir _ng_bundle_version candidate
 fi
 
 # 5. `go install` default location.
@@ -167,6 +238,28 @@ if [ -z "$NIGHTGAUGE_BINARY" ] || [ ! -x "$NIGHTGAUGE_BINARY" ]; then
 fi
 
 export NIGHTGAUGE_BINARY
+
+# Staleness signal (#356). Fires only when step 4 selected a bundle AND a newer
+# bundle is installed — i.e. the newer bundle's binary exists but is not
+# executable, so the hooks are about to run a superseded binary. A correctly
+# resolved newest bundle stays silent: this code runs on every tool call and a
+# per-call log line would be noise, not signal.
+#
+# Routing is the same as the skip notice and for the same reason (#3262):
+# side-channel log by default, stderr only in verbose mode. Never stdout — that
+# belongs to the hook's JSON contract (#354/#355).
+if [ -n "$_ng_bundle_selected_version" ] &&
+  [ -n "$_ng_bundle_newest_version" ] &&
+  [ "$_ng_bundle_selected_version" != "$_ng_bundle_newest_version" ]; then
+  _ng_stale_message="[stale-binary] hooks resolved VSCode extension bundle $_ng_bundle_selected_version but newer bundle $_ng_bundle_newest_version is installed (its binary is not executable); running $NIGHTGAUGE_BINARY"
+  if [ "$NIGHTGAUGE_HOOK_SILENT" = "false" ]; then
+    echo "$_ng_stale_message" >&2
+  else
+    _log_to_side_channel "$_ng_stale_message"
+  fi
+  unset _ng_stale_message
+fi
+unset _ng_bundle_selected_version _ng_bundle_newest_version
 
 # Per-repo GitHub token resolution.
 #
