@@ -2243,6 +2243,59 @@ re-evaluation, which would stall pipeline runs.
 `cmd/nightgauge/hook_output_schema_test.go` pins this contract so schema drift
 fails CI rather than silently disabling a guard.
 
+#### Hook diagnostics never touch stdout (#356)
+
+The stdout contract above covers what the **binary** prints. Everything the
+wrapper shell does before `exec` is equally load-bearing and was previously
+untested: `claude-plugins/nightgauge/hooks/*.sh` sources `lib/guard.sh` first,
+and a single stray byte written there prepends itself to the JSON document,
+which Claude Code reports as a _non-blocking_ error — the #354 shape exactly.
+
+Two rules, and one test that enforces them:
+
+- **stdout** carries only the hook's JSON. `guard.sh` diagnostics
+  (`[hook-skipped]`, `[hook-blocked]`, `[stale-binary]`) never go there.
+- **stderr is not a free channel either.** The Claude CLI surfaces hook stderr
+  to the parent agent as a `stop-hook-error` notification regardless of exit
+  code, and those notifications have caused agents to abort turns (#3262). So
+  the default (`NIGHTGAUGE_HOOK_SILENT=true`) destination is the side-channel
+  log at `${NIGHTGAUGE_HOOK_LOG:-$HOME/.nightgauge/hook-warnings.log}`, plus
+  `nightgauge doctor` for anything an operator would go looking for. stderr is
+  used only under `NIGHTGAUGE_HOOK_SILENT=false`, or for a blocking hook's
+  hard failure, which the user must see.
+
+`internal/hooks/guard_stale_bundle_test.go` runs the **real wrapper scripts**
+through bash — PreToolUse, PostToolUse and Stop shapes, silent and verbose —
+and asserts stdout is byte-identical to what the binary produced, including
+byte-empty for a silent allow. `hook_output_schema_test.go` cannot cover this:
+it invokes the cobra command in-process and never runs the shell.
+
+##### Newest-bundle selection
+
+`guard.sh`'s VSCode-extension fallback globs
+`~/.vscode/extensions/nightgauge.nightgauge-vscode-*`.
+VSCode keeps older extension versions on disk until it restarts, so that glob
+routinely matches several bundles. It used to take the **first** match; bash
+globs and `filepath.Glob` are both collation-sorted and the extension stamps an
+epoch-suffixed `0.1.<seconds>` version, so "first" meant "oldest" — hooks in
+every repo outside a nightgauge checkout silently ran a superseded binary.
+
+Selection is now by bundle version, compared component-wise and numerically, in
+`guard.sh` and `internal/doctor/binary_resolve.go` alike. The bundle version is
+the only totally ordered signal available without an exec: the binary's own
+stamp is a `git describe` string (`v0.2.0-rc.23-103-g<sha>`) and the plugin
+version is hand-maintained (`1.21.0`) — no two of the three are comparable, so
+"compare the binary's build stamp against the plugin version" has no sound
+implementation. Modification time is not usable either; the captured real
+layout in `internal/doctor/testdata/vscode-bundles/` has the older-versioned
+bundle carrying the **later** mtime.
+
+When the selected bundle is still not the newest installed one — the newer
+bundle's binary exists but is not executable — `guard.sh` writes one
+`[stale-binary]` line naming both versions and the resolved path, and
+`nightgauge doctor` reports the same as a warning. A correctly resolved newest
+bundle stays silent: this path runs on every tool call.
+
 #### `hook sanitize-prompt` — enforcement is opt-in
 
 The `PreToolUse:Task` prompt-injection screen honors `sanitization.mode`, the

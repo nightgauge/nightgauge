@@ -88,22 +88,63 @@ six-step cascade (mirrors `claude-plugins/nightgauge/hooks/lib/guard.sh`):
 4. `<canonical-repo-root>/bin/nightgauge` (`git rev-parse --git-common-dir`,
    for worktree checkouts)
 5. `~/.vscode/extensions/nightgauge.nightgauge-vscode-*/dist/bin/nightgauge`
+   — the **newest** installed bundle (#356), never the first glob match
 6. `~/go/bin/nightgauge`
 
 This is implemented once, in Go, at `internal/doctor/binary_resolve.go`
 (`ResolveBinary`), and is the canonical implementation the cascade is
 specified against; `internal/doctor/binary_resolve_test.go` pins
 `guard.sh`'s resolution order against it for the five filesystem-based
-steps, so the two cannot silently drift.
+steps, so the two cannot silently drift. Since #356 it also pins the
+**order** itself: `TestResolveBinary_Precedence` and
+`TestResolveBinary_GuardShParity_Precedence` satisfy each adjacent pair of
+steps simultaneously and assert the earlier one wins, in both
+implementations. The per-step tests alone could not catch a reorder — each
+isolates the cascade so exactly one step is satisfiable.
 
-The `binary` check is **warning-only** — an unresolved binary contributes
-to `warnings` and populates `install_instructions`, but never sets
-`exit_code` to `2`. A missing binary can only be observed by running
-`doctor` in the first place, so it cannot be a hard-required check. An
-extension-only install (binary resolvable via step 5 but never on `PATH`)
-reports `checks.binary.ok == true` with a `Detail` naming the resolving
-step (e.g. `"... (resolved via vscode_extension)"`), not a false "not
-found".
+### What the `binary` check reports (#356)
+
+The cascade is **cwd-dependent**: steps 3 and 4 shell out to `git rev-parse`
+in the caller's directory, so the same hook script legitimately runs
+different binaries in different repos. Inside a nightgauge checkout the
+hooks use `bin/nightgauge`; two directories over they use the extension
+bundle. Before #356 nothing reported that, which let a merged hook fix sit
+inert everywhere except the repo it was built in.
+
+`checks.binary.detail` therefore reads as _what the hooks resolve from
+here_, and carries:
+
+- the resolved path and the resolving step, e.g.
+  `hooks resolve /…/dist/bin/nightgauge from this directory (via vscode_extension)`
+- the binary's own version, from one bounded `<path> version` exec — note
+  the verb is `version`; there is no `--version` flag. The exec lives in
+  `doctor` (on demand) and deliberately **not** in `guard.sh`, which runs on
+  every tool call.
+- the extension-bundle inventory — how many bundles are installed, the
+  newest, and the newest runnable — **even when an earlier step wins**, so
+  running `doctor` from inside a checkout still tells you what other repos
+  will use.
+
+The `binary` check is **warning-only** — it contributes to `warnings` but
+never sets `exit_code` to `2`, and never appears in `failed_checks`. A
+missing binary can only be observed by running `doctor` in the first place,
+so it cannot be a hard-required check. An extension-only install (binary
+resolvable via step 5 but never on `PATH`) reports
+`checks.binary.ok == true`, not a false "not found".
+
+Two distinct warning-level outcomes exist and they are not interchangeable:
+
+| Outcome           | `ok`    | `install_instructions` | Meaning                                                                                    |
+| ----------------- | ------- | ---------------------- | ------------------------------------------------------------------------------------------ |
+| unresolved        | `false` | populated              | no step matched — installing something is the fix                                          |
+| superseded bundle | `false` | **empty**              | step 5 selected a bundle that is not the newest installed one — installing changes nothing |
+| resolved          | `true`  | empty                  | normal                                                                                     |
+
+A superseded bundle names **both** versions and the resolved path in
+`checks.binary.error`, matching the `[stale-binary]` line `guard.sh` writes
+to its side-channel log. Post-#356 selection is by bundle version, so this
+can only occur when the newer bundle's binary exists but is not executable
+(partial install, lost exec bit).
 
 `DoctorResult.FailedChecks` (`failed_checks` in JSON) lists every check
 name that contributed a required failure (`exit_code == 2`), in the order
