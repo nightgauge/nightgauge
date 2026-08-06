@@ -1,13 +1,15 @@
 # VSCode extension state fixtures (#356)
 
 Two **captured, redacted snapshots of a real machine**, not hand-authored
-examples. Together they are the artifact that exposes the #356 defect and the
-input the regression tests build their temporary `$HOME` from.
+examples, plus one synthetic file that exists purely to be **big**. Together
+they are the artifact that exposes the #356 defect and the input the regression
+tests build their temporary `$HOME` from.
 
-| File                    | What it is                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------------- |
-| `bundle-layout.json`    | what is on **disk**: every `nightgauge.nightgauge-vscode-*` bundle directory       |
-| `extensions-index.json` | what VSCode **records**: a redacted copy of `~/.vscode/extensions/extensions.json` |
+| File                          | What it is                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------- |
+| `bundle-layout.json`          | what is on **disk**: every `nightgauge.nightgauge-vscode-*` bundle directory        |
+| `extensions-index.json`       | what VSCode **records**: a redacted copy of `~/.vscode/extensions/extensions.json`  |
+| `extensions-index-large.json` | a **synthetic** 120-entry index in the same per-entry shape, minified onto one line |
 
 The second file is the one that matters most. Step 4 of the binary cascade
 selects the bundle VSCode records as installed — see
@@ -120,6 +122,33 @@ that must hold for real users belong in the tests that construct
 `TestScanVSCodeBundles_VsctmpOrphanNeverWins`, the record-authority parity
 cases in `TestResolveBinary_GuardShParity`, and
 `TestGuardShellRecordedBundleWins`.
+
+## `extensions-index-large.json` — the size case
+
+The captured index has 14 entries (~7 KB). That is a perfectly ordinary VS Code
+install, and it is small enough to hide two different defects:
+
+- **A superlinear parser.** The round-3 implementation of `guard.sh`'s record
+  reader scanned the file with shell builtins only, which is quadratic in file
+  size: 11.7 ms per record read at 14 entries, 109 ms at 60, 373 ms at 120 —
+  paid 2-3 times per tool call. No test could see it, because every fixture in
+  the suite was 1-14 entries.
+- **An extraction that only works near the head of the file.** The nightgauge
+  entry sits **100th of 120** here; `loadLargeExtensionsIndex` asserts it is not
+  in the first ten.
+
+The file is **synthetic and anonymized**, not a capture: a real 120-extension
+index cannot be published (third-party ids, marketplace GUIDs, install
+timestamps). Its per-entry shape is copied from the captured file, and it is
+committed **minified onto a single line**, which is what VS Code actually writes
+and the worst case for a text scan. It records exactly one nightgauge bundle,
+`nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64` — an RC + target-platform
+directory name, i.e. the release shape rather than the dev-install shape the
+capture carries.
+
+There are **no timing assertions in CI**: wall-clock thresholds are flaky on
+shared runners. The fixture pins _correctness_ at size; the measurements above
+were taken by hand under `/bin/bash` 3.2.57 and recorded in the PR.
 
 ## Note on `bash_version`
 

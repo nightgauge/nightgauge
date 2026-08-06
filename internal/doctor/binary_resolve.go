@@ -1,10 +1,10 @@
 package doctor
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -42,9 +42,9 @@ const (
 	// that could not be used: its directory is absent, its binary is missing,
 	// or the binary is not executable.
 	DivergenceRecordUnusable BundleDivergence = "record_unusable"
-	// DivergenceUnrecorded — no usable record exists (no extensions.json, an
-	// unparseable one, or zero/multiple nightgauge entries) AND more than one
-	// bundle is on disk, so the selection is a guess between real candidates.
+	// DivergenceUnrecorded — no usable record exists (no extensions.json, or
+	// zero/multiple nightgauge entries in it) AND more than one bundle is on
+	// disk, so the selection is a guess between real candidates.
 	DivergenceUnrecorded BundleDivergence = "unrecorded_ambiguous"
 )
 
@@ -129,8 +129,8 @@ type VSCodeBundleScan struct {
 //
 // # Fallback
 //
-// When there is no usable record (file absent, unparseable, or zero/multiple
-// nightgauge entries) or the recorded bundle cannot be used (absent, or its
+// When there is no usable record (file absent, or zero/multiple nightgauge
+// entries in it) or the recorded bundle cannot be used (absent, or its
 // binary is missing/non-executable), selection falls back to the FIRST
 // executable glob match — the behaviour that shipped before #356. It is
 // deterministic and needs no ordering. Divergence then records why, so the
@@ -205,11 +205,58 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 	return scan
 }
 
-// vscodeExtensionRecord is the minimal shape read out of extensions.json.
-// Everything else in the file (location, metadata, marketplace ids) is
-// deliberately not decoded.
-type vscodeExtensionRecord struct {
-	RelativeLocation string `json:"relativeLocation"`
+// recordedLocationPattern extracts a nightgauge `relativeLocation` value from
+// the RAW text of extensions.json. It is the exact expression guard.sh hands
+// to `grep -o -E`, deliberately so: whitespace is tolerated around the colon,
+// the value is bounded by the closing quote, and — because grep is
+// line-oriented — neither the whitespace runs nor the value may cross a
+// newline. Any drift between the two spellings is a parity break (#277).
+var recordedLocationPattern = regexp.MustCompile(`"relativeLocation"[ \t\f\v]*:[ \t\f\v]*"` + regexp.QuoteMeta(bundleDirPrefix) + `[^"\n]*"`)
+
+// scanRecordedBundleDir applies guard.sh's extraction to raw file bytes: take
+// the ONE nightgauge relativeLocation in the text, require it to be a plain
+// directory name, and treat zero or several matches as "no record".
+//
+// This is the single, shared definition of "what the record says" — the whole
+// answer on both sides, not a fallback.
+//
+// # Why not decode the JSON here
+//
+// The obvious Go implementation decodes extensions.json and reads the field.
+// It cannot satisfy the #277 parity contract, because a decoder and a text
+// scan disagree in BOTH directions, and each disagreement makes `doctor` name
+// a binary the hooks are not running:
+//
+//   - The decoder sees MORE. A truncated index — the shape VS Code transiently
+//     leaves while rewriting the file on install/uninstall — decodes to
+//     nothing while still carrying a perfectly readable record, so guard.sh
+//     honors the install and Go reports a stale-binary warning that is false.
+//     Escaped values (`a`, `\"`) and a newline between the key and its
+//     value are the same class: real to a decoder, invisible to a line-oriented
+//     scan.
+//   - The scan sees MORE. A `relativeLocation` NESTED inside another object is
+//     not an entry to the decoder, but it is one match to the scan.
+//
+// Every attempt to reconcile the two (require both to agree, fall back on
+// decode failure) leaves one of those directions broken. So there is one
+// algorithm, expressed twice, and TestGuardShParity_RecordedBundleDir asserts
+// the two spellings agree on the entire matrix — valid, malformed and
+// adversarial alike. Both are conservative the same way: the value must be a
+// plain directory name, and zero or several matches mean "no record".
+func scanRecordedBundleDir(raw []byte) string {
+	matches := recordedLocationPattern.FindAll(raw, 2)
+	if len(matches) != 1 {
+		return ""
+	}
+	value := string(matches[0])
+	value = strings.TrimSuffix(value, `"`)
+	if i := strings.LastIndex(value, `"`); i >= 0 {
+		value = value[i+1:]
+	}
+	if !isPlainDirName(value) {
+		return ""
+	}
+	return value
 }
 
 // readRecordedBundleDir returns the `relativeLocation` extensions.json records
@@ -217,8 +264,13 @@ type vscodeExtensionRecord struct {
 //
 // Conservative by construction: the record is used ONLY when exactly one entry
 // names a nightgauge bundle directory. Zero entries (never installed, or the
-// file is missing/unparseable) and multiple entries (a state VS Code does not
-// produce) both mean "no record", which falls back rather than guessing.
+// file is missing) and multiple entries both mean "no record", which falls
+// back rather than guessing. Multiple entries for one extension id are not
+// believed to be a state VS Code produces, but that is an assumption rather
+// than a documented guarantee — profiles and pinned installs are plausible
+// producers — so the comment states the consequence instead of the premise:
+// the fallback is first-executable-glob-match, i.e. the pre-#356 selection,
+// now accompanied by a divergence signal.
 //
 // Selection is by the relativeLocation VALUE rather than by identifier.id so
 // that this and guard.sh apply the same rule: guard.sh cannot walk a JSON
@@ -227,36 +279,14 @@ type vscodeExtensionRecord struct {
 // also validated as a plain directory name — no separators, no traversal —
 // before it is joined onto a path.
 //
-// One bounded, documented asymmetry: this side requires the file to PARSE,
-// while guard.sh scans its text. A truncated extensions.json can therefore
-// still yield a record in the shell and none here; both then resolve to a real
-// installed bundle, and both are conservative in the direction of the
-// pre-#356 behaviour.
+// The extraction itself is scanRecordedBundleDir, which is guard.sh's
+// algorithm expressed in Go; see there for why this does not decode the JSON.
 func readRecordedBundleDir(home string) string {
 	raw, err := os.ReadFile(filepath.Join(home, filepath.FromSlash(extensionsIndexRelPath)))
 	if err != nil {
 		return ""
 	}
-	var records []vscodeExtensionRecord
-	if err := json.Unmarshal(raw, &records); err != nil {
-		return ""
-	}
-	found := ""
-	hits := 0
-	for _, rec := range records {
-		if !strings.HasPrefix(rec.RelativeLocation, bundleDirPrefix) {
-			continue
-		}
-		if !isPlainDirName(rec.RelativeLocation) {
-			continue
-		}
-		hits++
-		found = rec.RelativeLocation
-	}
-	if hits != 1 {
-		return ""
-	}
-	return found
+	return scanRecordedBundleDir(raw)
 }
 
 // isPlainDirName rejects anything that is not a single directory name, so a

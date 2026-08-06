@@ -526,6 +526,22 @@ func TestReadRecordedBundleDir(t *testing.T) {
 			want:    "",
 		},
 		{
+			// A torn index — VS Code rewrites extensions.json in place on
+			// install/uninstall — still names the install unambiguously, and
+			// the hooks act on it. Answering "" here would make doctor report
+			// a divergence that does not exist (#277).
+			name:    "truncated but still carries a complete record",
+			content: `[{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.2.0"},{"identi`,
+			want:    "nightgauge.nightgauge-vscode-0.2.0",
+		},
+		{
+			// The value exists only after JSON unescaping, so it is not the
+			// text of any directory name in the file.
+			name:    "escaped value is not a record",
+			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\\b"}]`,
+			want:    "",
+		},
+		{
 			name:    "path traversal is rejected",
 			content: `[{"relativeLocation":"nightgauge.nightgauge-vscode-../../evil"}]`,
 			want:    "",
@@ -817,9 +833,16 @@ func TestResolveBinary_GuardShParity_Precedence(t *testing.T) {
 }
 
 // TestGuardShParity_RecordedBundleDir pins the two record PARSERS against each
-// other directly — guard.sh's builtin-only text scan and the Go JSON decode —
+// other directly — guard.sh's single `grep -o` extraction and the Go side —
 // over the whole malformed-input matrix. Whole-cascade parity would hide a
 // parser disagreement whenever both answers happen to reach the same binary.
+//
+// The matrix deliberately includes the inputs a JSON DECODER cannot read: a
+// truncated index (what VS Code transiently leaves while rewriting the file on
+// install/uninstall) and escaped values that only exist after unescaping.
+// Those are the exact shapes on which the two sides used to disagree, which
+// made `doctor` name a binary the hooks were not running — so they are
+// asserted here rather than documented as a known asymmetry.
 func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 	if bashBinPath == "" {
 		t.Skip("bash not available")
@@ -840,6 +863,25 @@ func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 		{"traversal rejected", `[{"relativeLocation":"nightgauge.nightgauge-vscode-../../evil"}]`},
 		{"separator rejected", `[{"relativeLocation":"nightgauge.nightgauge-vscode-x/y"}]`},
 		{"other publisher named similarly", `[{"relativeLocation":"nightgauge.nightgauge-vscode-companion-1.0.0"},{"relativeLocation":"notnightgauge.nightgauge-vscode-2.0.0"}]`},
+		// Invalid JSON that still carries a scannable record: the shape VS
+		// Code transiently leaves behind while rewriting extensions.json. A
+		// decode-only Go side answered "" here while guard.sh honored the
+		// record, so doctor reported a false stale-binary warning naming a
+		// binary the hooks were not running.
+		{"truncated mid-object after a complete entry", `[{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.2.0"},{"identi`},
+		{"truncated with no closing bracket", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.3.0-darwin-arm64"}`},
+		{"truncated before any record", `[{"identifier":{"id":"a.b"},"relativeLoc`},
+		// Escapes: the value exists only after JSON unescaping, so guard.sh —
+		// which reads the file's text — never sees it. Both sides must reject.
+		{"unicode escape in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-abc"}]`},
+		{"escaped quote in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\"b"}]`},
+		{"escaped backslash in the value", `[{"relativeLocation":"nightgauge.nightgauge-vscode-a\\b"}]`},
+		{"newline between the key and its value", "[{\"relativeLocation\":\n\"nightgauge.nightgauge-vscode-0.4.0\"}]"},
+		// The other direction: a nested relativeLocation is not an entry to a
+		// decoder, but it is one match to a text scan. Whatever the answer,
+		// both sides must give it — this is the case that proves the two
+		// cannot be reconciled by decoding on one side.
+		{"relativeLocation nested inside another object", `[{"metadata":{"relativeLocation":"nightgauge.nightgauge-vscode-9.9"}}]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -852,6 +894,23 @@ func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 			}
 		})
 	}
+
+	// The large fixture is in the matrix because size is where the two
+	// implementations were most likely to drift: the shell reads the file with
+	// one bounded `grep -o` and everything about that is O(n), while a 120-entry
+	// index is the first input that makes an O(n^2) scan visible (#356 round 4).
+	t.Run("large real-shaped index", func(t *testing.T) {
+		home := t.TempDir()
+		writeExtensionsIndexRaw(t, home, string(loadLargeExtensionsIndex(t)))
+		want := readRecordedBundleDir(home)
+		if want != largeIndexRecordedDir {
+			t.Fatalf("Go parsed %q from the large index, want %q", want, largeIndexRecordedDir)
+		}
+		got := guardShRecordedDir(t, guardPath, home)
+		if got != want {
+			t.Errorf("record parser disagreement on the large index: guard.sh %q, Go %q", got, want)
+		}
+	})
 
 	t.Run("file absent", func(t *testing.T) {
 		home := t.TempDir()
@@ -1051,6 +1110,99 @@ func writeCapturedExtensionsIndex(t *testing.T, home string) string {
 		t.Fatalf("captured extensions index has %d entries; the parser must be exercised against a real multi-publisher file", len(records))
 	}
 	return writeExtensionsIndexRaw(t, home, strings.ReplaceAll(text, "~/", home+"/"))
+}
+
+// vscodeExtensionRecord is the minimal shape of one extensions.json entry.
+// The RESOLVER does not decode this file at all — see scanRecordedBundleDir
+// for why a decoder cannot hold the #277 parity contract — so this type lives
+// here, where it is used to assert that the committed fixtures are still
+// well-formed VS Code indexes of the expected shape.
+type vscodeExtensionRecord struct {
+	RelativeLocation string `json:"relativeLocation"`
+}
+
+// largeIndexRecordedDir is the ONE nightgauge bundle directory recorded by
+// testdata/vscode-bundles/extensions-index-large.json.
+const largeIndexRecordedDir = bundleDirPrefix + "0.2.0-rc.23-darwin-arm64"
+
+// loadLargeExtensionsIndex reads the synthetic 120-entry index and asserts it
+// is still the thing the tests need it to be: a real-shaped, minified VS Code
+// index (the shape VS Code itself writes), 120 entries, with the nightgauge
+// entry buried deep in the list rather than sitting first.
+//
+// It exists because every other fixture here is 1-14 entries, and a 14-entry
+// file is small enough to hide a superlinear parser: the builtin-only scan
+// this branch shipped in round 3 cost ~23ms at 14 entries and ~958ms at 120,
+// which no test could see. The fixture is synthetic and anonymized on purpose —
+// a real 120-extension index cannot be published (third-party ids, marketplace
+// GUIDs, install timestamps) — but its per-entry shape is copied from the
+// captured one.
+func loadLargeExtensionsIndex(t *testing.T) []byte {
+	t.Helper()
+	path := filepath.Join(testdataDir, "vscode-bundles", "extensions-index-large.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read large extensions index %s: %v", path, err)
+	}
+	for _, leak := range []string{"/Users/", "/home/", "/root/"} {
+		if bytes.Contains(raw, []byte(leak)) {
+			t.Fatalf("large extensions index leaks a home directory (%q)", leak)
+		}
+	}
+	var records []vscodeExtensionRecord
+	if err := json.Unmarshal(raw, &records); err != nil {
+		t.Fatalf("large extensions index is not valid JSON: %v", err)
+	}
+	if len(records) != 120 {
+		t.Fatalf("large extensions index has %d entries, want 120 — the point of this fixture is size", len(records))
+	}
+	hits, at := 0, -1
+	for i, rec := range records {
+		if strings.HasPrefix(rec.RelativeLocation, bundleDirPrefix) {
+			hits++
+			at = i
+		}
+	}
+	if hits != 1 || records[at].RelativeLocation != largeIndexRecordedDir {
+		t.Fatalf("large extensions index must record exactly one nightgauge bundle (%s); found %d", largeIndexRecordedDir, hits)
+	}
+	if at < 10 {
+		t.Fatalf("the nightgauge entry sits at index %d; it must be deep in the list so a parser cannot pass by reading the head of the file", at)
+	}
+	if bytes.Contains(raw[:len(raw)-1], []byte("\n")) {
+		t.Fatal("the large index must stay minified on ONE line — that is what VS Code writes, and it is the worst case for a text scan")
+	}
+	return raw
+}
+
+// TestReadRecordedBundleDir_LargeIndex asserts extraction is CORRECT at size,
+// not merely fast: the recorded entry is the 100th of 120, so a parser that
+// stops early, mis-anchors, or trips over the surrounding entries is caught.
+func TestReadRecordedBundleDir_LargeIndex(t *testing.T) {
+	home := t.TempDir()
+	writeExtensionsIndexRaw(t, home, string(loadLargeExtensionsIndex(t)))
+
+	if got := readRecordedBundleDir(home); got != largeIndexRecordedDir {
+		t.Errorf("readRecordedBundleDir on the 120-entry index = %q, want %q", got, largeIndexRecordedDir)
+	}
+}
+
+// TestScanVSCodeBundles_LargeIndexSelectsRecorded runs the whole step-4
+// selection against the large index with a decoy bundle sorting FIRST in glob
+// order, so the assertion can only pass by honoring the record.
+func TestScanVSCodeBundles_LargeIndexSelectsRecorded(t *testing.T) {
+	home := t.TempDir()
+	writeExtensionsIndexRaw(t, home, string(loadLargeExtensionsIndex(t)))
+	installBundle(t, home, bundleDirPrefix+"0.1.0-darwin-arm64", true)
+	want := installBundle(t, home, largeIndexRecordedDir, true)
+
+	scan := ScanVSCodeBundles(home)
+	if scan.SelectedPath != want {
+		t.Errorf("large index resolved %q, want the recorded install %q", scan.SelectedPath, want)
+	}
+	if scan.Divergence != DivergenceNone {
+		t.Errorf("the recorded bundle is runnable; expected no divergence, got %q", scan.Divergence)
+	}
 }
 
 // materializeCapturedBundles recreates the captured bundle directories under

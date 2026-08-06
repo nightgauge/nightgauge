@@ -214,6 +214,16 @@ same states are queryable on demand via `nightgauge doctor`
 (`checks.binary`). No automatic consumer exists today; a VSCode panel that
 surfaces the log is possible future work.
 
+**An UNHEALTHY machine is bounded too.** `[stale-binary]` reports a _standing_
+condition — a leftover bundle directory survives days, a lost exec bit never
+heals itself — while `hooks.json` fires 2-3 guard.sh-sourcing wrappers per tool
+call. So the append is skipped when the identical message is already the log's
+last line: one line per condition per uninterrupted run of it, not one per tool
+call. A different condition, or the same one after something else was logged,
+still writes. `TestGuardShellDivergenceIsNotRepeatedPerToolCall` pins this.
+`[hook-skipped]` is deliberately not deduped: its standing condition means the
+hooks are visibly dead, which the operator repairs.
+
 ## See Also
 
 - Issue #3262 — fix: residual stop-hook-error sources after PR #3234

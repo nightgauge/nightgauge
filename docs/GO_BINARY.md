@@ -2296,22 +2296,53 @@ record, a JSON array in which each installed extension carries a
 higher-numbered directory sits beside it. A recorded downgrade resolves to the
 older bundle, silently, because that is what is installed.
 
-Neither implementation orders versions at all. Versions survive only as opaque
-display strings inside diagnostics.
+Neither of these two implementations orders versions at all. Versions survive
+only as opaque display strings inside diagnostics. (A third selector still
+does: `packages/nightgauge-vscode/src/utils/extensionBundle.ts` ranks surviving
+sibling bundles by the last dotted component when the running `extensionPath`
+has been garbage-collected. It answers a different question, inside the
+extension process, and is outside the #277 parity contract — but it is not
+covered by the sentence above.)
 
-**Fallback.** No usable record — file absent, unparseable, or zero/several
-nightgauge entries — or a recorded bundle that cannot be run: the first
-executable glob match, exactly as before #356. Deterministic, no ordering.
+**Fallback.** No usable record — file absent, or zero/several nightgauge
+entries in it — or a recorded bundle that cannot be run: the first executable
+glob match, exactly as before #356. Deterministic, no ordering. Multiple
+nightgauge entries are not believed to be a state VS Code produces for one
+extension id, but profiles and pinned installs are plausible producers and
+nothing here depends on the premise: that case degrades to the pre-#356
+selection **plus** a `[stale-binary]` line, rather than to silence.
 
-**Reading the record.** `internal/doctor/binary_resolve.go` decodes the JSON.
-`guard.sh` cannot: it runs under macOS's system bash 3.2 with no `jq`, on every
-tool call, so it scans the file's text with shell builtins alone — one `read`
-loop, then `case` + parameter expansion looking for a `"relativeLocation"` key
-whose value is a plain `nightgauge.nightgauge-vscode-…` directory name. No
-fork, no exec, and only on the branch where step 4 is reached. Both sides are
-conservative the same way — zero or multiple matches mean "no record" — and
-`TestGuardShParity_RecordedBundleDir` pins the two parsers against each other
-over the whole malformed-input matrix (#277).
+**Reading the record — one bounded fork, measured.** Both sides run the same
+extraction: find the ONE `"relativeLocation"` whose value is a plain
+`nightgauge.nightgauge-vscode-…` directory name (whitespace tolerated around
+the colon), and treat zero or several matches as "no record". `guard.sh` uses a
+single `grep -o -E`; `binary_resolve.go` uses the identical regular expression.
+`guard.sh` reads the record only when step 4 is reached AND the glob already
+matched a bundle, so a machine without the extension pays nothing.
+
+The Go side deliberately does **not** decode the JSON, and the shell side
+deliberately does **not** avoid the fork. Both were tried:
+
+- _A JSON decode on one side only_ cannot hold the parity contract, because a
+  decoder and a text scan disagree in both directions. The decoder sees more (a
+  truncated index — the shape VS Code transiently leaves while rewriting the
+  file on install/uninstall — still carries a readable record; so do escaped
+  values and a newline between key and value); the scan sees more (a nested
+  `relativeLocation` is one match but not an entry). Each disagreement makes
+  `doctor` report a false stale-binary warning naming a binary the hooks are not
+  running. One algorithm, expressed twice, is the only shape that closes it.
+- _"No fork at all"_ — read the file with a builtin loop, walk it with `case` +
+  `${var#*pat}` — is **quadratic**: every step re-copies and re-glob-matches the
+  whole remaining text. Measured under `/bin/bash` 3.2.57, per record read:
+  11.7 ms at 14 entries, 109 ms at 60, 373 ms at 120 — against 3.2 / 3.4 / 3.9 ms
+  for the fork it was avoiding. End to end through the real `workflow-gate.sh`
+  wrapper that is +14 / +115 / +384 ms over `main`, versus a flat +4 ms now. Since
+  2-3 guard.sh-sourcing wrappers run per tool call, the "optimization" cost about
+  a second of CPU per tool call on an ordinary VS Code install.
+
+`TestGuardShParity_RecordedBundleDir` pins the two spellings against each other
+over the whole matrix — valid, truncated, escaped, adversarial, and a committed
+120-entry real-shaped index (#277).
 
 ##### The divergence signal
 
@@ -2323,9 +2354,15 @@ resolved version and the resolved path — when either:
 - there is no record and several bundles are on disk.
 
 A confirmed resolution stays silent, and so does a single unrecorded bundle:
-there is nothing else it could be, and this path runs on every tool call.
+there is nothing else it could be, and this path runs on every tool call. Both
+signalled conditions are STANDING, so the line is not re-appended while it is
+already the log's last line — see the Side-Channel Log Contract in
+[docs/STOP_HOOK_AUDIT.md](STOP_HOOK_AUDIT.md#side-channel-log-contract).
+
 `nightgauge doctor` reports the same states, plus the bundle-directory count
-and the recorded version, on every outcome — see
+and the recorded version, on every outcome — including the diverging one, which
+keeps its full `detail` (resolved path, resolving step, the binary's own
+version, the inventory) alongside the error — see
 [docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#what-the-binary-check-reports-356).
 
 ##### Things that were tried and are wrong

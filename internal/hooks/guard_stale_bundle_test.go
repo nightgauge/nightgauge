@@ -140,6 +140,32 @@ func recordInstall(t *testing.T, home string, versions ...string) {
 	}
 }
 
+// largeIndexRecordedVersion is the bundle version recorded by the committed
+// 120-entry index (internal/doctor/testdata/vscode-bundles/).
+const largeIndexRecordedVersion = "0.2.0-rc.23-darwin-arm64"
+
+// installLargeExtensionsIndex copies the committed 120-entry extensions.json
+// into home. It is the same fixture the resolver parity tests use, so both
+// layers are pinned to one artifact.
+func installLargeExtensionsIndex(t *testing.T, repoRoot, home string) {
+	t.Helper()
+	src := filepath.Join(repoRoot, "internal", "doctor", "testdata", "vscode-bundles", "extensions-index-large.json")
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read large extensions index %s: %v", src, err)
+	}
+	if !strings.Contains(string(raw), bundleDirPrefix+largeIndexRecordedVersion) {
+		t.Fatalf("large extensions index no longer records %s%s", bundleDirPrefix, largeIndexRecordedVersion)
+	}
+	dst := filepath.Join(home, ".vscode", "extensions", "extensions.json")
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		t.Fatalf("create extensions dir: %v", err)
+	}
+	if err := os.WriteFile(dst, raw, 0o644); err != nil {
+		t.Fatalf("write extensions index: %v", err)
+	}
+}
+
 type wrapperRun struct {
 	stdout   string
 	stderr   string
@@ -313,6 +339,33 @@ func TestGuardShellRecordedBundleWins(t *testing.T) {
 		}
 	})
 
+	t.Run("large real-shaped index selects the recorded bundle", func(t *testing.T) {
+		// Every other fixture here is a 1-3 entry extensions.json, which is
+		// small enough to hide both a superlinear parser and an extraction
+		// that only works near the head of the file. This one is the committed
+		// 120-entry index with the nightgauge entry 100th, minified onto a
+		// single line exactly as VS Code writes it.
+		home := t.TempDir()
+		bundleStub(t, home, "0.1.0-darwin-arm64", preToolUsePayload, true) // sorts first
+		bundleStub(t, home, largeIndexRecordedVersion, preToolUsePayload, true)
+		installLargeExtensionsIndex(t, repoRoot, home)
+
+		run := runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, nil)
+
+		if !strings.Contains(run.marker, largeIndexRecordedVersion) {
+			t.Errorf("expected the recorded bundle %q to have run, invocations were %q", largeIndexRecordedVersion, run.marker)
+		}
+		if strings.Contains(run.marker, "0.1.0-darwin-arm64") {
+			t.Errorf("the first glob match must not run when the 120-entry index records another bundle, invocations were %q", run.marker)
+		}
+		if strings.Contains(run.log, "[stale-binary]") {
+			t.Errorf("a confirmed resolution must stay silent, got %q", run.log)
+		}
+		if strings.TrimSpace(run.stderr) != "" {
+			t.Errorf("expected empty stderr, got %q", run.stderr)
+		}
+	})
+
 	t.Run("single unrecorded bundle resolves silently", func(t *testing.T) {
 		home := t.TempDir()
 		bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, true)
@@ -401,6 +454,67 @@ func TestGuardShellDivergenceSignal(t *testing.T) {
 				t.Errorf("verbose mode must not ALSO write the log, got %q", run.log)
 			}
 		})
+	}
+}
+
+// TestGuardShellDivergenceIsNotRepeatedPerToolCall covers the other half of
+// "a signal, not noise": both divergences are STANDING conditions — a leftover
+// bundle directory survives days, a lost exec bit never heals — and hooks.json
+// fires 2-3 guard.sh-sourcing wrappers per tool call. Without a dedupe the same
+// ~250-byte line lands in an unrotated log thousands of times, which is exactly
+// the noise the healthy path stays silent to avoid.
+//
+// The rule is deliberately cheap and stateless: skip the append when the log's
+// LAST line already carries this exact message. A different condition, or the
+// same condition after something else was logged, still writes.
+func TestGuardShellDivergenceIsNotRepeatedPerToolCall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("guard.sh is bash-only")
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("findRepoRoot: %v", err)
+	}
+	const stdin = `{"tool_name":"Write","tool_input":{"file_path":"x.go"}}`
+
+	home := t.TempDir()
+	bundleStub(t, home, "0.2.0-darwin-arm64", preToolUsePayload, true)
+	bundleStub(t, home, "0.2.1-darwin-arm64", preToolUsePayload, false)
+	recordInstall(t, home, "0.2.1-darwin-arm64")
+
+	sharedLog := filepath.Join(t.TempDir(), "hook-warnings.log")
+	env := map[string]string{"NIGHTGAUGE_HOOK_LOG": sharedLog}
+	for i := 0; i < 3; i++ {
+		runWrapper(t, repoRoot, "workflow-gate.sh", home, stdin, env)
+	}
+
+	raw, err := os.ReadFile(sharedLog)
+	if err != nil {
+		t.Fatalf("the divergence signal must still be emitted at least once: %v", err)
+	}
+	lines := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		if strings.Contains(line, "[stale-binary]") {
+			lines++
+		}
+	}
+	if lines != 1 {
+		t.Errorf("3 tool calls against one standing condition wrote %d [stale-binary] lines, want exactly 1; log=%q", lines, raw)
+	}
+
+	// A different condition must still get through: the record becomes usable,
+	// so the next signal is the unrecorded-ambiguous one from a fresh $HOME.
+	other := t.TempDir()
+	bundleStub(t, other, "0.3.0-darwin-arm64", preToolUsePayload, true)
+	bundleStub(t, other, "0.3.1-darwin-arm64", preToolUsePayload, true)
+	runWrapper(t, repoRoot, "workflow-gate.sh", other, stdin, env)
+
+	raw, err = os.ReadFile(sharedLog)
+	if err != nil {
+		t.Fatalf("read shared log: %v", err)
+	}
+	if !strings.Contains(string(raw), "no usable VSCode install record") {
+		t.Errorf("a DIFFERENT standing condition must still be recorded, got %q", raw)
 	}
 }
 
