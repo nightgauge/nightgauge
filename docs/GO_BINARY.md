@@ -2243,6 +2243,24 @@ re-evaluation, which would stall pipeline runs.
 `cmd/nightgauge/hook_output_schema_test.go` pins this contract so schema drift
 fails CI rather than silently disabling a guard.
 
+#### `hook sanitize-prompt` — enforcement is opt-in
+
+The `PreToolUse:Task` prompt-injection screen honors `sanitization.mode`, the
+same setting `workflow-gate` already respects:
+
+| Mode             | Behavior                                                       |
+| ---------------- | -------------------------------------------------------------- |
+| `warn` (default) | Log the match to `.nightgauge/logs/sanitization.log` and allow |
+| `block`          | Deny the Task call with the matched pattern as the reason      |
+| `disabled`       | Skip screening entirely                                        |
+
+Repairing the stdin plumbing activated a hard-DENY guard that had **never once
+run**. Its patterns — `ignore all previous instructions`, `you are now a `,
+`new system prompt` — appear verbatim in legitimate orchestration and
+prompt-engineering prompts, so defaulting to `block` would trade a dead guard
+for one that silently blocks real work. Enforcement is therefore a deliberate
+opt-in.
+
 #### `hook stage-gate` — analysis-stage git/forge fence (#4145)
 
 A `PreToolUse:Bash` hook that stops pipeline **analysis** stages from advancing

@@ -4963,14 +4963,7 @@ func hookWorkflowGateCmd() *cobra.Command {
 		Short:        "Evaluate PreToolUse workflow gate (reads JSON from stdin)",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			input := readHookInput(cmd)
-			// Load sanitization mode from config (default: warn)
-			mode := config.SanitizationModeWarn
-			workdir, _ := os.Getwd()
-			if cfg, loadErr := config.Load(workdir); loadErr == nil && cfg != nil && cfg.Sanitization != nil {
-				mode = cfg.Sanitization.ResolvedMode()
-			}
-			return printPreToolUse(hooks.EvaluateGate(input, mode))
+			return printPreToolUse(hooks.EvaluateGate(readHookInput(cmd), resolveSanitizationMode()))
 		},
 	}
 }
@@ -5213,10 +5206,11 @@ As a PreToolUse hook for Task the payload arrives on stdin with no argv, so
 stdin is the path the hook itself uses.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			mode := resolveSanitizationMode()
 			if input != "" {
-				return printPreToolUse(hooks.EvaluateSanitizeText(input))
+				return printPreToolUse(hooks.EvaluateSanitizeText(input, mode))
 			}
-			return printPreToolUse(hooks.EvaluateSanitizePrompt(readHookInput(cmd)))
+			return printPreToolUse(hooks.EvaluateSanitizePrompt(readHookInput(cmd), mode))
 		},
 	}
 

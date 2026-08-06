@@ -2,9 +2,11 @@ package main
 
 import (
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 )
 
@@ -83,6 +85,20 @@ func printPreToolUse(decision hooks.GateDecision) error {
 //
 // A read failure yields nil, which every caller treats as "no payload" and
 // fails open — a hook that cannot read its input must not block the session.
+// resolveSanitizationMode reads the configured sanitization enforcement level,
+// defaulting to warn when there is no readable config.
+func resolveSanitizationMode() config.SanitizationMode {
+	workdir, err := os.Getwd()
+	if err != nil {
+		return config.SanitizationModeWarn
+	}
+	cfg, loadErr := config.Load(workdir)
+	if loadErr != nil || cfg == nil || cfg.Sanitization == nil {
+		return config.SanitizationModeWarn
+	}
+	return cfg.Sanitization.ResolvedMode()
+}
+
 func readHookInput(cmd *cobra.Command) []byte {
 	data, err := io.ReadAll(cmd.InOrStdin())
 	if err != nil {
