@@ -347,6 +347,9 @@ nightgauge preflight syntax --workdir . [--json]
 # Detect committed secrets (wraps `scan secrets`, gate exit codes)
 nightgauge preflight secrets --workdir . [--json]
 
+# Fail when a skill include directive points at a file that does not exist (#337)
+nightgauge preflight skill-includes --root . [--tree DIR] [--json]
+
 # Fail when a skill SKILL.md contains a direct `gh ` call (forge-abstraction gate)
 nightgauge preflight skill-no-direct-gh --root . [--json]
 
@@ -375,6 +378,7 @@ nightgauge preflight thinking-effort --model opus --effort max [--stage feature-
 | `links`               | `internal/docs.Run`    | `v, root, files_scanned, links_total, links_broken, findings, warnings`                            |
 | `syntax`              | `internal/preflight`   | `v, workdir, files_scanned, files_invalid, findings[{file, line, format, error}], warnings`        |
 | `secrets`             | `internal/scan.Run...` | `v, workdir, patterns{generic_kv,...}, total, warnings`                                            |
+| `skill-includes`      | `internal/preflight`   | `v, root, trees, files_checked, findings[{file, line, target, resolved, directive}], warnings`     |
 | `skill-no-direct-gh`  | `internal/preflight`   | `v, root, skills_checked, skills_exempted, findings[{skill, file, line, match}], warnings`         |
 | `skill-anti-patterns` | `internal/preflight`   | `v, root, files_checked, findings[{check, file, line, match}], warnings`                           |
 | `thinking-effort`     | `internal/preflight`   | `v, thinking_disabled, checked, findings[{source, model, effort, max_allowed, message}], warnings` |
@@ -391,6 +395,37 @@ points at another supporting file), `backslash_path` (a Windows `\` path
 separator), `missing_toc` (a long supporting file lacks a `## Contents`
 heading). The `skill-no-direct-gh` gate honors an allowlist
 (`scripts/lint-skills/allowlist.txt`) for the un-migrated forge tail.
+
+**`skill-includes` — the dead-include gate (#337).** Include expansion is
+fail-open by contract: `ExpandIncludes` leaves a directive in place when its
+target cannot be read, so the same document stays readable under a host that
+does not expand at all (Claude Code never does). The cost is that a **dead**
+include and a **deliberately unexpanded** one are byte-identical — the model
+receives the literal HTML comment where the shared content belonged, and
+nothing warns. Six shipped stage skills carried
+`<!-- include: ../_shared/BATCH_MODE.md -->` against a file that had never been
+written, for the whole life of the repository; `pr-merge` carried it as the
+entire body of its declared Phase 0.5.
+
+The gate resolves targets with the composer's **own** `IncludePattern`, not a
+copy, and reports the captured path **verbatim**. That matters for the second
+failure shape: capture group 1 is non-greedy to the first ` -->`, so
+`<!-- include: ../_shared/EPIC_HANDLING.md (sub-issue fetch section) -->`
+captures the annotation as part of the path. The file exists; the path does
+not. Printing the captured string back is what makes that obvious — "target not
+found" alone sends a reader hunting for a file sitting right there.
+
+Scope is `SKILL.md` plus supporting files under `_includes/` and `_shared/`,
+across both `skills/` and the generated `claude-plugins/nightgauge/skills/`
+mirror (a fix applied only to the canonical tree still ships the dead include
+to every plugin session until the mirror is regenerated). README files are NOT
+scanned — they document the directive shape rather than using it, and
+`skills/README.md` carries four such examples.
+
+Enforcement is `TestSkillIncludes_WorkingTreeIsClean`, so the gate runs under
+`go test ./...` in CI rather than depending on a workflow step that invokes the
+subcommand. The renderer-side companion is `TestRealSkillsRenderClean`, which
+now asserts that **no** directive survives expansion.
 
 **`skill-portability` check enum:** `vscode_extension_path` (a skill embeds a
 hardcoded `~/.vscode/extensions/nightgauge…` binary path that breaks
