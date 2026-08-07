@@ -5,6 +5,18 @@
 > size predictions. For a high-level overview of where outcome recording fits in
 > the pipeline, see [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
+> **Not to be confused with the learning outcome corpus.** Two subsystems are
+> both called "outcome recording". _This_ document covers the TypeScript/SDK
+> **complexity model** (`OutcomeRecorder` → `.nightgauge/complexity-model.yaml`,
+> success-only, driven by `PostPipelineAnalyzer`). The **learning/calibration
+> corpus** is a separate, Go-owned system
+> (`internal/intelligence/learning.Recorder` →
+> `.nightgauge/pipeline/history/outcomes.jsonl`) that feeds the self-improvement
+> loop verdicts and `nightgauge learn tune` — see
+> [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
+> Assuming one covers the other is exactly how the extension path went years
+> writing no learning outcomes at all (#304).
+
 ## Overview
 
 The outcome recording system closes the feedback loop between pipeline execution

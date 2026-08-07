@@ -2555,7 +2555,11 @@ and returning deterministic verdicts per loop.
 **Data files read** (missing files → `no-data` verdict, not an error):
 
 - `.nightgauge/pipeline/assessments/*.json` — skill-drift loop
-- `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops
+- `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops.
+  Workspace-scoped (not per-repo — these loops read one `--workdir`). Written by
+  `Scheduler.recordOutcome` on the autonomous path and by the `pipeline.notifyComplete`
+  handler in `internal/ipc/server.go` on the extension path (#304); both skip
+  blocked-dependency deferrals and `network_unavailable` failures.
 - `.nightgauge/health/trends.jsonl` — health-monitoring loop
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)

@@ -1,0 +1,166 @@
+{
+  "base_branch": "main",
+  "branch": "feat/1002-redacted",
+  "completed_at": "2026-07-29T09:42:51-06:00",
+  "execution_mode": "automatic",
+  "files": {
+    "read_count": 0,
+    "written_count": 0
+  },
+  "issue_number": 1002,
+  "outcome": "failed",
+  "record_type": "run",
+  "recorded_at": "2026-07-29T09:42:51-06:00",
+  "repo": "acme/widget",
+  "routing": {
+    "complexity_score": 0,
+    "path": "standard",
+    "skip_stages": []
+  },
+  "run_id": "2239c77c-56de-4476-8296-0e136f2dfc1f",
+  "schema_version": "3",
+  "size": null,
+  "stages": {
+    "feature-dev": {
+      "completed_at": "2026-07-29T09:20:53-06:00",
+      "duration_ms": 493292,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-29T09:12:39-06:00",
+      "status": "complete"
+    },
+    "feature-planning": {
+      "completed_at": "2026-07-29T09:12:39-06:00",
+      "duration_ms": 447955,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-29T09:05:11-06:00",
+      "status": "complete"
+    },
+    "feature-validate": {
+      "completed_at": "2026-07-29T09:26:49-06:00",
+      "duration_ms": 356124,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-29T09:20:53-06:00",
+      "status": "complete"
+    },
+    "issue-pickup": {
+      "completed_at": "2026-07-29T09:05:11-06:00",
+      "duration_ms": 1018,
+      "execution_path": "deterministic",
+      "started_at": "2026-07-29T09:05:10-06:00",
+      "status": "complete"
+    },
+    "pipeline-start": {
+      "completed_at": "2026-07-29T09:05:10-06:00",
+      "duration_ms": 26,
+      "started_at": "2026-07-29T09:05:10-06:00",
+      "status": "complete"
+    },
+    "pr-create": {
+      "completed_at": "2026-07-29T09:33:17-06:00",
+      "duration_ms": 387405,
+      "execution_path": "llm",
+      "model_selection": {
+        "model": "claude-haiku-4-5-20251001",
+        "source": "scheduler"
+      },
+      "punt_reason": "context-invalid-json",
+      "started_at": "2026-07-29T09:26:50-06:00",
+      "status": "complete"
+    },
+    "pr-merge": {
+      "completed_at": "2026-07-29T09:42:46-06:00",
+      "duration_ms": 556583,
+      "error": "pr-merge BLOCKED by repository configuration (non-retryable): unresolved branch ruleset blockers: required_pull_request_reviews. pr-merge reported success but PR #187 is not merged (state: OPEN). The skill may have exited without actually merging. Retrying once.",
+      "execution_path": "llm",
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "punt_reason": "dirty-merge-state: BLOCKED",
+      "started_at": "2026-07-29T09:33:30-06:00",
+      "status": "failed"
+    }
+  },
+  "started_at": "2026-07-29T09:05:07-06:00",
+  "terminal_failure_kind": "pr_merge_unmerged",
+  "title": "REDACTED \u2014 real issue title removed for public fixture",
+  "tokens": {
+    "estimated_cost_usd": 7.7457744,
+    "per_stage": {
+      "feature-dev": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999782223821447,
+        "cache_read": 4040758,
+        "cost_usd": 1.8991013999999997,
+        "input": 88,
+        "output": 13394
+      },
+      "feature-planning": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.99997923010448,
+        "cache_read": 4044231,
+        "cost_usd": 2.4443417999999997,
+        "input": 84,
+        "output": 23839
+      },
+      "feature-validate": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999730649672989,
+        "cache_read": 2004770,
+        "cost_usd": 1.1138039999999998,
+        "input": 54,
+        "output": 8951
+      },
+      "issue-pickup": {
+        "cache_creation": 0,
+        "cache_read": 0,
+        "cost_usd": 0,
+        "input": 0,
+        "output": 0
+      },
+      "pipeline-start": {
+        "cache_creation": 0,
+        "cache_read": 0,
+        "cost_usd": 0,
+        "input": 0,
+        "output": 0
+      },
+      "pr-create": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9998720555348676,
+        "cache_read": 2008427,
+        "cost_usd": 0.4307727,
+        "input": 257,
+        "output": 19783
+      },
+      "pr-merge": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999812944310403,
+        "cache_read": 3528295,
+        "cost_usd": 1.8577545000000002,
+        "input": 66,
+        "output": 12058
+      }
+    },
+    "total_cache_creation": 0,
+    "total_cache_read": 15626481,
+    "total_input": 15627030,
+    "total_output": 78025
+  },
+  "total_duration_ms": 2264309,
+  "type": "feature"
+}

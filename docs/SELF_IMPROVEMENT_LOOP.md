@@ -35,11 +35,36 @@ Runs after every successful pipeline completion:
 
 ### Outcome Recording
 
-**File**: `packages/nightgauge-sdk/src/services/OutcomeRecorder.ts`
+Two distinct systems both called "outcome recording". They write different
+files, are owned by different layers, and feed different consumers — conflating
+them is how #304 went unnoticed.
 
-Records pipeline outcomes to `.nightgauge/outcomes.jsonl` for complexity
-model calibration. Each outcome includes: issue number, size estimate, actual
-cost, duration, and success/failure status.
+**1. Learning / calibration outcome corpus** — Go-owned.
+
+**Writers**: `internal/intelligence/learning.Recorder`, called from
+`Scheduler.recordOutcome` (autonomous path) **and** from the Go side of
+`pipeline.notifyComplete` in `internal/ipc/server.go` (extension/interactive
+path, #304).
+
+**File**: `<workspaceRoot>/.nightgauge/pipeline/history/outcomes.jsonl` —
+workspace-scoped, NOT per-repo, because `nightgauge intelligence loop-verdicts`
+and `nightgauge learn tune` read a single `--workdir`.
+
+Each outcome includes: issue number, repo, predicted size, predicted/actual
+model, success, duration, tokens, cost, complexity score and failed stage.
+Consumers: the calibration, cost-optimization and reliability loop verdicts
+(`internal/intelligence/loopverdicts`) and `nightgauge learn tune`.
+
+Two terminal states deliberately record **nothing**, on both paths: a
+blocked-dependency deferral (#305 — a non-failure that did no work) and a
+`network_unavailable` failure (#3296 — environmental noise, not model signal).
+
+**2. Complexity-model calibration** — TypeScript/SDK-owned.
+
+**File**: `packages/nightgauge-sdk/src/services/OutcomeRecorder.ts`, driven by
+the extension's `PostPipelineAnalyzer`, writing
+`.nightgauge/complexity-model.yaml`. Success-only: it keys off a completed run
+record with a resolvable PR. See [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md).
 
 ### Complexity Calibration
 
@@ -310,7 +335,7 @@ Generate prioritized improvement proposals
 | File                                                    | Purpose                                                      |
 | ------------------------------------------------------- | ------------------------------------------------------------ |
 | `.nightgauge/execution-history.jsonl`                   | Pipeline execution records                                   |
-| `.nightgauge/outcomes.jsonl`                            | Outcome records for calibration                              |
+| `.nightgauge/pipeline/history/outcomes.jsonl`           | Learning outcome corpus (workspace-scoped, both exec paths)  |
 | `.nightgauge/analysis/latest.json`                      | Most recent analysis result                                  |
 | `.nightgauge/analysis/analysis-*.json`                  | Timestamped analysis history                                 |
 | `.nightgauge/gate-metrics.jsonl`                        | Gate invocation records                                      |

@@ -39,23 +39,23 @@ prevent those mistakes.
 Every mechanism in the pipeline learning system is classified below. When adding
 a new mechanism, add it to this table before implementing.
 
-| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                           | Status                 |
-| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------- | ---------------------- |
-| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`     | Phase 1 complete       |
-| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                           | Active                 |
-| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                           | Active                 |
-| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                   | Active                 |
-| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/outcomes.jsonl`            | Active                 |
-| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`     | Active                 |
-| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                 | Active                 |
-| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                   | Active                 |
-| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                   | Active                 |
-| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`        | Active                 |
-| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl` | Active                 |
-| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                   | Active                 |
-| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                           | Active (config-gated)  |
-| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                 | Active                 |
-| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                          | Removed from extension |
+| Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                                 | Status                 |
+| ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------------- | ---------------------- |
+| Skill Self-Assessment Epilogue      | INTERNAL    | No (writes assessment records)            | `.nightgauge/pipeline/assessments/`           | Phase 1 complete       |
+| Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                 |
+| Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                 |
+| Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                 |
+| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active                 |
+| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                 |
+| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                 |
+| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                 |
+| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                         | Active                 |
+| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`              | Active                 |
+| Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl`       | Active                 |
+| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                 |
+| Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)  |
+| Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                 |
+| Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension |
 
 ## Rules
 

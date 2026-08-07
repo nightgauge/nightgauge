@@ -29,6 +29,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/nightgauge/nightgauge/internal/intelligence/health"
+	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	knowledgepkg "github.com/nightgauge/nightgauge/internal/knowledge"
@@ -2810,8 +2811,79 @@ func (s *Server) registerMethods() {
 					record.TerminalFailureKind = ""
 					record.OutcomeType = orchestrator.OutcomeTypeDeferred
 				}
+				// #304: derive the learning/calibration outcome from the SAME
+				// record about to be written. Until this, the outcome corpus
+				// (.nightgauge/pipeline/history/outcomes.jsonl — the input to the
+				// calibration, cost-optimization and reliability loop verdicts and
+				// to `nightgauge learn tune`) had exactly ONE writer,
+				// scheduler.recordOutcome, reachable only from
+				// Scheduler.runPipeline. Extension runs go
+				// ConcurrentPipelineManager → HeadlessOrchestrator → this handler
+				// and never enter that loop, so in the mode the product is
+				// actually operated in NOTHING recorded an outcome and the
+				// self-improvement loops steered on autonomous-only evidence.
+				// Derived here rather than rebuilt: an independently-built mirror
+				// record is exactly what drifted in #261.
+				outcome, outcomeVerdict := learningOutcomeFor(record, snap, p.Repo, now)
+				if outcomeVerdict == outcomeRecord {
+					// Parity with the Go path, where recordOutcome's return value
+					// is threaded into recordV2History: the predicted-vs-actual
+					// routing fields belong on the run record too. Must be set
+					// BEFORE the write and the platform push below, both of which
+					// consume `record`.
+					record.OutcomePrediction = outcomePredictionFrom(outcome)
+				}
+
 				if err := hw.WriteV2Record(record, now); err != nil {
 					log.Printf("notifyComplete: write RunRecord failed (non-fatal): %v", err)
+				}
+
+				// Append the learning outcome. Best-effort — a corpus write
+				// failure is logged and never blocks the pipeline, same
+				// discipline as the RunRecord write above.
+				//
+				// The recorder is rooted at s.workspaceRoot, NOT `root`. Run
+				// records live in the run's TARGET repo (#215), but the outcome
+				// corpus is workspace-scoped: loopverdicts and `nightgauge learn
+				// tune` read a single --workdir. Sharding outcomes per-repo would
+				// leave the loops exactly as blind as they were before this fix
+				// while every test still passed.
+				//
+				// Idempotency is inherited, not enforced here: learning.Recorder
+				// .Record is a blind append with no dedup. This call sits inside
+				// `if ok` — the runtime is deleted at the end of this handler, so
+				// a repeated notifyComplete finds none and records nothing — and
+				// the scheduler path never calls notifyComplete. Moving this call
+				// outside the `if ok` guard would silently double the corpus.
+				switch outcomeVerdict {
+				case outcomeRecord:
+					if s.workspaceRoot == "" {
+						// Loud by design: a silently unrecorded outcome is the
+						// exact failure mode #304 fixes.
+						log.Printf(
+							"notifyComplete: #%d has no workspace root — learning outcome NOT recorded (#304)",
+							p.IssueNumber,
+						)
+						break
+					}
+					if outcome.PredictedModel == "" {
+						// Also loud: an outcome with no model attribution cannot
+						// feed model-routing calibration. The pre-#304 corpus was
+						// 100% model-less and nobody noticed.
+						log.Printf(
+							"notifyComplete: #%d recorded a learning outcome with no model attribution — no stage reported a served model (#304)",
+							p.IssueNumber,
+						)
+					}
+					if err := learning.NewRecorder(s.workspaceRoot).Record(outcome); err != nil {
+						log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
+					}
+				case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+					log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
+						p.IssueNumber, outcomeVerdict)
+				case outcomeUnset:
+					log.Printf("notifyComplete: #%d learning outcome decision was never made — this is a bug",
+						p.IssueNumber)
 				}
 
 				// Push the completed-run record to the platform telemetry sink

@@ -74,12 +74,14 @@
     },
     {
       "name": "learning-outcome-record",
+      "note": "Wired on both paths as of #304. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel)"
       },
       "extension": {
-        "pathSpecific": "NOT WIRED — extension-path runs record no learning outcomes; HeadlessOrchestrator's comment claiming the Go side covers it is false for this path. Tracked by #304."
+        "file": "internal/ipc/server.go",
+        "anchor": "learning.NewRecorder(s.workspaceRoot).Record(outcome)"
       }
     },
     {

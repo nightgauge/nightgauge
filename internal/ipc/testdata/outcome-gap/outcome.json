@@ -1,0 +1,16 @@
+{
+  "actualModel": "",
+  "completedAt": "2026-06-26T19:43:13.35885-06:00",
+  "complexityScore": 0,
+  "costUsd": 0,
+  "durationMs": 501172,
+  "failedStage": "issue-pickup",
+  "inputTokens": 0,
+  "issueNumber": 1003,
+  "outputTokens": 0,
+  "predictedModel": "",
+  "predictedSize": "small",
+  "repo": "acme/widget",
+  "retries": 0,
+  "success": false
+}
