@@ -1490,12 +1490,19 @@ backwards compatibility, but should not be used in new code
 
 **Batch mode contracts** (Issue #801):
 
-| Skill (batch mode)             | Input                     | Output                                  |
-| ------------------------------ | ------------------------- | --------------------------------------- |
-| `/nightgauge-issue-pickup`     | GitHub Epic + sub-issues  | `batch-{E}.json`                        |
-| `/nightgauge-feature-planning` | `batch-{E}.json`          | `planning-batch-{E}.json` + PLAN.md     |
-| `/nightgauge-feature-dev`      | `planning-batch-{E}.json` | `dev-batch-{E}.json` + code             |
-| `/nightgauge-pr-create`        | `dev-batch-{E}.json`      | `pr-{N}.json` + PR (multi-issue Closes) |
+| Skill (batch mode)             | Input                               | Output                                  |
+| ------------------------------ | ----------------------------------- | --------------------------------------- |
+| `/nightgauge-issue-pickup`     | GitHub Epic + sub-issues            | `batch-{E}.json`                        |
+| `/nightgauge-feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json` + PLAN.md     |
+| `/nightgauge-feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json` + code             |
+| `/nightgauge-feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`                     |
+| `/nightgauge-pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json` + PR (multi-issue Closes) |
+| `/nightgauge-pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | Removes the batch set (Step 7.8)        |
+
+Every batch context file is keyed on the **epic** number `E`, never a
+sub-issue number — including `validate-{E}.json` and `pr-{E}.json`, which reuse
+the single-issue schemas with `E` in the key slot. The canonical stage-by-stage
+contract is [skills/\_shared/BATCH_MODE.md](../skills/_shared/BATCH_MODE.md).
 
 ## Schema Versioning
 

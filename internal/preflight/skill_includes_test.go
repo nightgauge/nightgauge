@@ -139,6 +139,30 @@ func TestSkillIncludes_ScansSupportingFiles(t *testing.T) {
 	}
 }
 
+// TestSkillIncludes_SupportingFileResolvesAgainstSkillDir pins the gate to the
+// composer's resolution rule. skillrender.ExpandIncludes always joins the
+// captured path to the SKILL.md's directory (render.go), never to the directory
+// of the file carrying the directive — for a directive inside _includes/ those
+// differ by one level. A gate that used the carrying file's directory would
+// report a path the composer never tries, which is the gate/composer
+// disagreement this whole check exists to avoid.
+func TestSkillIncludes_SupportingFileResolvesAgainstSkillDir(t *testing.T) {
+	root := t.TempDir()
+	writeIncludeFile(t, root, "skills/nightgauge-x/SKILL.md", "clean\n")
+	writeIncludeFile(t, root, "skills/nightgauge-x/_includes/detail.md", "<!-- include: ../_shared/MISSING.md -->\n")
+
+	res := runIncludes(t, root)
+	if len(res.Findings) != 1 {
+		t.Fatalf("expected 1 finding, got %+v", res.Findings)
+	}
+	// skillDir is skills/nightgauge-x, so ../_shared/MISSING.md is
+	// skills/_shared/MISSING.md — NOT skills/nightgauge-x/_shared/MISSING.md.
+	want := filepath.Join("skills", "_shared", "MISSING.md")
+	if res.Findings[0].Resolved != want {
+		t.Errorf("resolved = %q, want %q (the composer's skillDir join)", res.Findings[0].Resolved, want)
+	}
+}
+
 // TestSkillIncludes_ScansPluginMirror — the generated Claude-plugin tree is
 // what plugin sessions are served from, so a fix applied only to skills/ still
 // ships the dead include until the mirror is regenerated.
@@ -191,10 +215,12 @@ func TestSkillIncludes_MissingRootErrors(t *testing.T) {
 // does run `go test ./...` — so this assertion is what actually stops a dead
 // include from shipping to a model (#337).
 //
-// Against the pre-fix tree it fails with 13 findings: six well-formed
-// `../_shared/BATCH_MODE.md` directives against a file that was never written,
-// the malformed `../_shared/EPIC_HANDLING.md (sub-issue fetch section)`, and
-// their six mirrors in the generated plugin tree.
+// Against the pre-fix tree it fails with 14 findings, reproduced against a
+// pristine `main` checkout (`files checked: 230  dead includes: 14`): seven
+// under skills/ — six well-formed `../_shared/BATCH_MODE.md` directives against
+// a file that was never written, plus the malformed
+// `../_shared/EPIC_HANDLING.md (sub-issue fetch section)` in assess-epic — and
+// all seven again in the generated plugin tree, the malformed one included.
 func TestSkillIncludes_WorkingTreeIsClean(t *testing.T) {
 	root := repoRoot(t)
 	if _, err := os.Stat(filepath.Join(root, "skills")); err != nil {

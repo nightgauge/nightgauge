@@ -2404,8 +2404,10 @@ version, the inventory) alongside the error — see
 
 - **Compare the binary's build stamp to the plugin version.** The bundle dir
   carries `0.1.<epoch>`, the binary carries a `git describe` string
-  (`v0.2.0-rc.23-103-g<sha>`), the plugin carries a hand-maintained `1.21.0`.
-  No two are comparable. (`nightgauge --version` also does not exist; the verb
+  (`v0.2.0-rc.23-103-g<sha>`), and the plugin carries a hand-maintained
+  `major.minor.patch` of its own, bumped per plugin release in
+  `claude-plugins/nightgauge/.claude-plugin/plugin.json` (the source of truth —
+  do not quote a literal here, it drifts). No two are comparable. (`nightgauge --version` also does not exist; the verb
   is `nightgauge version`.)
 - **Rank by mtime.** The captured real layout in
   `internal/doctor/testdata/vscode-bundles/` has the UNRECORDED bundle carrying

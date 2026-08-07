@@ -150,12 +150,15 @@ func RunSkillIncludesCheck(_ context.Context, opts SkillIncludesOptions) (*Skill
 			continue
 		}
 		content := string(data)
-		dir := filepath.Dir(path)
+		dir := skillDirFor(path)
 		for _, loc := range skillrender.IncludePattern.FindAllStringSubmatchIndex(content, -1) {
 			directive := content[loc[0]:loc[1]]
 			target := strings.TrimSpace(content[loc[2]:loc[3]])
-			// Resolution is the composer's: join the captured path to the
-			// directory of the file carrying the directive.
+			// Resolution is the composer's: ExpandIncludes always joins the
+			// captured path to the SKILL.md's directory, never to the directory
+			// of the file carrying the directive. For a directive inside
+			// _includes/ those differ by one level, and resolving against the
+			// wrong one reports a path the composer would never try.
 			resolved := filepath.Join(dir, target)
 			if info, statErr := os.Stat(resolved); statErr == nil && !info.IsDir() {
 				continue
@@ -171,6 +174,28 @@ func RunSkillIncludesCheck(_ context.Context, opts SkillIncludesOptions) (*Skill
 	}
 
 	return result, nil
+}
+
+// skillDirFor returns the directory a directive in path resolves against —
+// the composer's `skillDir`, i.e. the directory holding the owning SKILL.md.
+// For a SKILL.md that is its own directory; for a supporting file it is the
+// nearest ancestor containing a SKILL.md. A _shared/ file has no owning skill
+// (the composer never expands one), so its own directory is used.
+func skillDirFor(path string) string {
+	dir := filepath.Dir(path)
+	if filepath.Base(path) == "SKILL.md" {
+		return dir
+	}
+	for cur := dir; ; {
+		if _, err := os.Stat(filepath.Join(cur, "SKILL.md")); err == nil {
+			return cur
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return dir
+		}
+		cur = parent
+	}
 }
 
 // isScannedSkillFile reports whether a .md path is in scope: a SKILL.md, or a
