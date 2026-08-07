@@ -24,9 +24,11 @@ type Outcome struct {
 	IssueNumber int    `json:"issueNumber"`
 	Repo        string `json:"repo"`
 	// PredictedSize is the router's pre-run size estimate, as
-	// small|medium|large. Empty when the issue carried no size:* input — the
-	// complexity score defaults to the M base score in that case, so scoring it
-	// would record the default as a prediction.
+	// small|medium|large. Empty when the issue carried no size input to
+	// predict from (the board Size field or a size:* label —
+	// orchestrator.OutcomeSizeInput) — the complexity score defaults to the M
+	// base score in that case, so scoring it would record the default as a
+	// prediction.
 	PredictedSize string `json:"predictedSize"`
 	// ActualSize is how big the change the run produced turned out to be, in
 	// the same small|medium|large vocabulary, bucketed from lines ACTUALLY
