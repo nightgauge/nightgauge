@@ -113,12 +113,12 @@ already shipped into its plan.
 **Do not remove them here.** They must survive until the merge has succeeded
 and outcome recording has read them; deleting them in Phase 0.5 feeds the
 complexity model zero-line garbage, the same failure `cleanup-context-files.sh`
-causes for single-issue runs. Phase 7's context-file cleanup step owns the
-removal, and it **re-detects the batch from disk** — it inherits nothing from
-this phase, because nothing carries between phases. By then Step 7.0 has
-detached HEAD onto the base branch, so it cannot re-derive `E` from the branch
-either; it scans `dev-batch-*.json` and removes a set only once that epic's PR
-reports a merge.
+causes for single-issue runs. **Step 7.8** owns the removal — it sits after
+Step 7.7 (outcome recording) for exactly that reason — and it **re-detects the
+batch from disk**, inheriting nothing from this phase, because nothing carries
+between phases. By then Step 7.0 has detached HEAD onto the base branch, so it
+cannot re-derive `E` from the branch either; it scans `dev-batch-*.json` and
+removes a set only once that epic's PR reports a merge.
 
 Single-issue runs do none of this: their context files and plan artifacts are
 removed by the HeadlessOrchestrator during `pipeline-finish`.

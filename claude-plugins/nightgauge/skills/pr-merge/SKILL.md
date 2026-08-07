@@ -5,7 +5,7 @@ description: Wait for PR reviews, address feedback, and merge. Completes the Iss
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.15.0"
+  version: "1.16.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku

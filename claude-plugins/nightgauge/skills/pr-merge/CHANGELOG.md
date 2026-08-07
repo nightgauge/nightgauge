@@ -8,6 +8,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 0.5 has a real body, and batch cleanup actually runs** (#337). The
+  phase declared itself and printed its marker, but its entire body was a dead
+  `<!-- include: ../_shared/BATCH_MODE.md -->` against a file that never
+  existed — the model received the literal HTML comment. The shared contract is
+  now written and included at the head-of-file position the other five stages
+  use, and the phase body lives in the new
+  `_includes/batch-detection.md` (batch detection from git, multi-issue
+  `Closes` verification, cleanup delegation). New **Step 7.8** removes the
+  epic-keyed batch set — `batch-`, `planning-batch-`, `dev-batch-`,
+  `validate-` and `pr-{E}.json` plus `.nightgauge/plans/{E}-*.md` — after Step
+  7.7 has read the context files, and only once that epic's PR reports a
+  non-empty `mergedAt`, so an in-flight batch is never swept.
+
 ### Removed
 
 - **`--admin` argument and `pr.admin_merge` config deleted** (#186). The skill

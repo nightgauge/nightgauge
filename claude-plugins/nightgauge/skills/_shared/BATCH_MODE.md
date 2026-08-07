@@ -24,19 +24,24 @@ never look for, and the batch silently degrades to a single issue.
 
 ### The per-stage contract
 
-| Stage              | Batch input                         | Batch output              |
-| ------------------ | ----------------------------------- | ------------------------- |
-| `issue-pickup`     | `epic-assessment-{E}.json`          | `batch-{E}.json`          |
-| `feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json` |
-| `feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json`      |
-| `feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`       |
-| `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`             |
-| `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes the batch set) |
+| Stage              | Batch input                         | Batch output                      |
+| ------------------ | ----------------------------------- | --------------------------------- |
+| `issue-pickup`     | — (no producer; see below)          | `batch-{E}.json`                  |
+| `feature-planning` | `batch-{E}.json`                    | `planning-batch-{E}.json`         |
+| `feature-dev`      | `planning-batch-{E}.json`           | `dev-batch-{E}.json`              |
+| `feature-validate` | `dev-batch-{E}.json`                | `validate-{E}.json`               |
+| `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
+| `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
 
-All paths are relative to `.nightgauge/pipeline/`. The schemas — every field,
-every required key, worked examples — are in `docs/CONTEXT_ARCHITECTURE.md`
-under the batch context file sections. Do not improvise a shape: a batch file
-that does not match its schema is not detected by the next stage, which
+All paths are relative to `.nightgauge/pipeline/`. `batch-{E}.json`,
+`planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
+field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
+under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
+have no separate batch schema: they reuse the single-issue `validate-{N}` /
+`pr-{N}` shapes with the epic number in the key slot, which also means
+`pr-{E}.json` shares a namespace with a later single-issue run for issue #E —
+one more reason `pr-merge` must remove it. Do not improvise a shape: a batch
+file that does not match its schema is not detected by the next stage, which
 degrades to the single-issue path and silently drops the rest of the batch.
 
 **Nothing writes `batch-{E}.json` today.** `issue-pickup` has no batch producer
@@ -79,6 +84,7 @@ those phases share, not a substitute for any of them.
 - **A batch failure is not a batch-wide abort by default.** When validation
   fails the options are: retry the batch, split it into single-issue runs, or
   stop for a human. Splitting is preferred over discarding completed work.
-- **Batch context files are pipeline exhaust.** They are cleaned up at the end
-  of the run alongside the single-issue context files. Leaving them behind
+- **Batch context files are pipeline exhaust.** `pr-merge` removes them in Step
+  7.8, after outcome recording has read them — the epic-keyed files have no
+  `pipeline-finish` owner the way single-issue files do. Leaving them behind
   makes the next, unrelated run for that epic number detect a stale batch.
