@@ -87,11 +87,11 @@ func NewRetryEngine(cfg RetryConfig) *RetryEngine {
 // remediation instead.
 var downgradeLadder = []string{"fable", "opus", "sonnet", "haiku"}
 
-// normalizeTier maps a model reference (registry tier name like "opus", or a
+// NormalizeModelTier maps a model reference (registry tier name like "opus", or a
 // concrete ID like "claude-opus-4-8" / "gpt-5.5") onto its strongest registry
 // band. Returns "" when the model is unknown to the registry — user-defined
 // local models are never downgraded by this ladder.
-func normalizeTier(model string) string {
+func NormalizeModelTier(model string) string {
 	for _, tier := range downgradeLadder {
 		if model == tier {
 			return tier
@@ -125,7 +125,7 @@ type DowngradeDecision struct {
 // the registry (user-defined local models: one-rung ladder, no fallback) or
 // the ladder is exhausted — nothing weaker exists for that provider.
 func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision {
-	fromTier := normalizeTier(rejectedModel)
+	fromTier := NormalizeModelTier(rejectedModel)
 	if fromTier == "" {
 		return DowngradeDecision{Reason: "model_not_in_registry"}
 	}
@@ -174,7 +174,7 @@ func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision 
 // the run: every subsequent stage that resolves to the rejected tier is
 // rerouted to newTier by ApplyDowngrades. Cleared by Reset().
 func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier string) {
-	fromTier := normalizeTier(rejectedModel)
+	fromTier := NormalizeModelTier(rejectedModel)
 	if fromTier == "" || newTier == "" || fromTier == newTier {
 		return
 	}
@@ -191,7 +191,7 @@ func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier string) {
 // the Claude CLI accepts as a model alias) or the original model when no
 // substitution applies.
 func (r *RetryEngine) ApplyDowngrades(model string) string {
-	tier := normalizeTier(model)
+	tier := NormalizeModelTier(model)
 	if tier == "" {
 		return model
 	}

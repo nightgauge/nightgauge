@@ -1317,9 +1317,13 @@ export class PipelineStateService implements vscode.Disposable {
     _intermediateStages?: string[]
   ): Promise<void> {}
   async batchUpdate(_updater: (state: PipelineState) => PipelineState): Promise<void> {}
-  async recordExecutionOutcome(_outcome: string): Promise<{ success: boolean; error?: string }> {
-    return { success: true };
-  }
+  // recordExecutionOutcome was removed in #304. It returned {success:true}
+  // unconditionally — the same value a real recording would return — so its two
+  // callers in HeadlessOrchestrator logged success and wrote nothing, for years.
+  // The learning/calibration corpus for this path is written by the Go side of
+  // pipeline.notifyComplete (internal/ipc/server.go); complexity-model
+  // calibration is written by PostPipelineAnalyzer. Do not add a TS-side
+  // outcome writer back here.
   async setLabels(_labels: string[]): Promise<void> {}
   async setStageModelSelection(_stage: string, _selection: ModelStageSelection): Promise<void> {}
   async setStageAdapter(

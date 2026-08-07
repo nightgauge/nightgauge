@@ -277,6 +277,23 @@ var sizeBaseScore = map[string]int{
 	"XL": 8,
 }
 
+// SizeBaseScore returns the complexity base score a `size:*` bucket
+// (XS|S|M|L|XL, case-insensitive) contributes, or 0 when the label is empty or
+// unrecognized. 0 is NOT a valid score — every recognized bucket scores ≥ 1 —
+// so callers can distinguish "unknown size" from any real bucket.
+//
+// Exported as a PRESENCE check for the learning corpus (#304): it is how
+// orchestrator.OutcomeSizeInput decides whether an issue carried a size term
+// the router actually scored, in the router's own order (board Size field →
+// size:* label → absent). It is deliberately NOT used to derive a corpus
+// `actualSize` from the label — that would make the measured half a second
+// reading of one of the inputs the prediction is computed from, so the
+// comparison would score the arithmetic rather than the run. See the NOTE in
+// internal/orchestrator/outcome_semantics.go.
+func SizeBaseScore(size string) int {
+	return sizeBaseScore[strings.ToUpper(strings.TrimSpace(size))]
+}
+
 // priorityMultiplier mirrors PRIORITY_MULTIPLIER in changeAnalyzer.ts.
 var priorityMultiplier = map[string]float64{
 	"critical": 1.5,

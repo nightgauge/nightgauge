@@ -2508,6 +2508,24 @@ treats "main is red" as proof on its own. Window default: 7 days
 
 ### Intelligence Subcommands
 
+`learn tune` reads the learning corpus and emits `{calibration, tuning}`.
+`calibration.sizeAccuracy` / `.modelAccuracy` are `null` when their
+`sizeSamples` / `modelSamples` denominator is 0 — no row carried both halves of
+that pair — and `tuning` then reports `skipped` instead of adjusting a parameter
+toward its target from a substituted `0.0` (#304).
+
+**`learn tune` currently tunes nothing, on any corpus, by construction.**
+`size_accuracy` is its only tuning target and no writer in the tree records
+`actualSize`, so `sizeSamples` is always 0 and the command always emits
+`{"param":"size_accuracy","measurableToday":false,"skipped":…}` and writes no
+entry to the `tuning-audit.jsonl` that `learn audit` reads. The measurement that
+would close this (lines changed, bucketed by
+`github.OutcomeService.getActualSizeBucket`) is computed **pre-merge** at
+`pr-create` dispatch and is deliberately not threaded through to terminal
+recording yet — tracked as a follow-up. `modelAccuracy` is measurable and is
+reported, but is not a tuning target. See
+[SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
+
 ```bash
 nightgauge learn tune [--workdir <path>]
 nightgauge learn audit
@@ -2555,7 +2573,31 @@ and returning deterministic verdicts per loop.
 **Data files read** (missing files → `no-data` verdict, not an error):
 
 - `.nightgauge/pipeline/assessments/*.json` — skill-drift loop
-- `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops
+- `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops.
+  **Per-repo**, rooted at the run's TARGET repo — the same root as the run record
+  the outcome is derived from (#215/#232), and the same root `--workdir` reads
+  that repo's run history from. Written by `Scheduler.recordOutcome` on the
+  autonomous path and by the `pipeline.notifyComplete` handler in
+  `internal/ipc/server.go` on the extension path (#304); both skip
+  blocked-dependency deferrals (#305) and `network_unavailable` failures
+  (#3296) — the scheduler keys both on `terminal_failure_kind`, the extension
+  keys the deferral on `outcome_type` because #305's override clears the kind.
+  Neither writes to the IPC server's `workspaceRoot`: that is a mutable pointer to the
+  workspace's ACTIVE repo (reassigned by `workspace.setRoot`), so an outcome
+  filed there lands in whichever repo happened to own the focused editor.
+  Both writers derive the predicted/actual pairs through the shared helpers in
+  `internal/orchestrator/outcome_semantics.go`; the calibration loop counts a row
+  toward its accuracy only when BOTH halves of a pair are non-empty, reports the
+  denominator as `measuredPredictions` (split into `sizePairsMeasured` /
+  `modelPairsMeasured`), and returns `no-data` (never `0.0%`) when nothing in the
+  period is measurable. Its `recentAccuracy` is the newest 10 measurable
+  COMPARISONS — capped at half the period's comparisons so the window is always a
+  proper trailing slice and the `closing` / `degrading` branches stay reachable
+  at real corpus density. `sizePairsMeasured` is 0 on every corpus the current
+  code produces (nothing writes `actualSize`), and the evidence says so
+  explicitly rather than letting an unmeasurable pair look like a measured zero.
+  See
+  [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 - `.nightgauge/health/trends.jsonl` — health-monitoring loop
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)

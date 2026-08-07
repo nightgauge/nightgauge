@@ -29,6 +29,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
 	"github.com/nightgauge/nightgauge/internal/intelligence/health"
+	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	knowledgepkg "github.com/nightgauge/nightgauge/internal/knowledge"
@@ -2783,6 +2784,19 @@ func (s *Server) registerMethods() {
 				input.Labels = cls.Labels
 				input.IssueType = cls.Type
 				input.Size = cls.Size
+				// The routing PREDICTION the run was picked up under. It sits in
+				// the same issue-{N}.json read above and was being dropped: every
+				// record this handler wrote carried routing.complexity_score 0,
+				// while the scheduler path recorded the real score into the same
+				// corpus field, leaving one field with two meanings and no
+				// discriminator (#304).
+				input.ComplexityScore = cls.ComplexityScore
+				if cls.ComplexityScore <= 0 {
+					log.Printf(
+						"notifyComplete: #%d has no routing.complexity_score — no issue context reached this handler, so the run records no routing prediction at all (#304)",
+						p.IssueNumber,
+					)
+				}
 				if cls.Size == "" {
 					// Loud by design: a silently size-less record is exactly how
 					// the calibration path stayed switched off unnoticed (#112).
@@ -2810,8 +2824,91 @@ func (s *Server) registerMethods() {
 					record.TerminalFailureKind = ""
 					record.OutcomeType = orchestrator.OutcomeTypeDeferred
 				}
+				// #304: derive the learning/calibration outcome from the SAME
+				// record about to be written. Until this, the outcome corpus
+				// (.nightgauge/pipeline/history/outcomes.jsonl — the input to the
+				// calibration, cost-optimization and reliability loop verdicts and
+				// to `nightgauge learn tune`) had exactly ONE writer,
+				// scheduler.recordOutcome, reachable only from
+				// Scheduler.runPipeline. Extension runs go
+				// ConcurrentPipelineManager → HeadlessOrchestrator → this handler
+				// and never enter that loop, so in the mode the product is
+				// actually operated in NOTHING recorded an outcome and the
+				// self-improvement loops steered on autonomous-only evidence.
+				// Derived here rather than rebuilt: an independently-built mirror
+				// record is exactly what drifted in #261.
+				outcome, outcomeVerdict := learningOutcomeFor(record, cls, snap, p.Repo, now)
+				if outcomeVerdict == outcomeRecord {
+					// Parity with the Go path, where recordOutcome's return value
+					// is threaded into recordV2History: the predicted-vs-actual
+					// routing fields belong on the run record too. Must be set
+					// BEFORE the write and the platform push below, both of which
+					// consume `record`.
+					record.OutcomePrediction = outcomePredictionFrom(outcome)
+				}
+
 				if err := hw.WriteV2Record(record, now); err != nil {
 					log.Printf("notifyComplete: write RunRecord failed (non-fatal): %v", err)
+				}
+
+				// Append the learning outcome. Best-effort — a corpus write
+				// failure is logged and never blocks the pipeline, same
+				// discipline as the RunRecord write above.
+				//
+				// The recorder is rooted at `root` — s.repoRoot(p.Repo), the run's
+				// TARGET repo — the SAME root the run record above was written to.
+				// It is emphatically NOT s.workspaceRoot: that field is a mutable
+				// pointer to the workspace's ACTIVE repo (workspace.setRoot, sent
+				// by the extension from resolveActiveRepository — in a multi-repo
+				// workspace, whichever repo owns the focused editor), so rooting
+				// the corpus there would file repo B's outcome under repo A the
+				// moment the operator clicked into a different file. #215/#232
+				// already settled where a run's persisted state belongs: with its
+				// target repo, or the run's state is split across two repos. The
+				// outcome is derived from that record and follows it.
+				//
+				// `nightgauge intelligence loop-verdicts --workdir X` and
+				// `nightgauge learn tune --workdir X` read one root — and they read
+				// X's run history from that same root, so a per-repo corpus is
+				// exactly what makes their two inputs describe the same runs.
+				//
+				// Idempotency is inherited, not enforced here: learning.Recorder
+				// .Record is a blind append with no dedup. This call sits inside
+				// `if ok` — the runtime is deleted at the end of this handler, so
+				// a repeated notifyComplete finds none and records nothing — and
+				// the scheduler path never calls notifyComplete. Moving this call
+				// outside the `if ok` guard would silently double the corpus.
+				switch outcomeVerdict {
+				case outcomeRecord:
+					// Loud by design on EVERY unattributed field. An empty value
+					// really is recoverable — learning.Recorder.Calibrate and the
+					// calibration loop verdict both count a row toward an
+					// accuracy only when BOTH halves of that pair are non-empty,
+					// so an absent value is excluded rather than booked as a miss
+					// — but only if somebody knows it happened: the pre-#304
+					// corpus was 100% model-less and nobody noticed for the life
+					// of the product.
+					if outcome.PredictedModel == "" {
+						log.Printf(
+							"notifyComplete: #%d learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
+							p.IssueNumber, p.IssueNumber,
+						)
+					}
+					if outcome.ActualModel == "" {
+						log.Printf(
+							"notifyComplete: #%d learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
+							p.IssueNumber, orchestrator.OutcomeModelStage,
+						)
+					}
+					if err := learning.NewRecorder(root).Record(outcome); err != nil {
+						log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
+					}
+				case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+					log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
+						p.IssueNumber, outcomeVerdict)
+				case outcomeUnset:
+					log.Printf("notifyComplete: #%d learning outcome decision was never made — this is a bug",
+						p.IssueNumber)
 				}
 
 				// Push the completed-run record to the platform telemetry sink
@@ -2843,6 +2940,15 @@ func (s *Server) registerMethods() {
 						s.analyticsSvc.PushPipelineRun(context.Background(), runRecord)
 					}
 				}
+			} else {
+				// Loud by design: with no resolvable root the run produces
+				// NEITHER a history record NOR a learning outcome. Silence here
+				// is the shape of #304 — a terminal run that persists nothing
+				// and reports success.
+				log.Printf(
+					"notifyComplete: #%d repo %q resolves to no on-disk root — run record and learning outcome NOT written (#304)",
+					p.IssueNumber, p.Repo,
+				)
 			}
 		}
 

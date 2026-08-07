@@ -10279,44 +10279,23 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // 'ok' and 'warning' — continue normally
         }
 
-        // =================================================================
-        // PRE-MERGE MODEL RECORDING (Issue #1395)
-        // After pr-create succeeds, record the execution outcome (complexity
-        // model update) while still on the feature branch. The commit pushes
-        // to the feature branch via `git push origin HEAD`, so the model
-        // update merges with the PR — producing a single push to the base
-        // branch and eliminating the redundant CI run caused by a post-merge
-        // chore(model) commit.
-        //
-        // Safety:
-        // - Idempotent: OutcomeRecorder skips if already recorded for this issue.
-        // - Non-critical: failures are caught; pipeline-finish retries anyway.
-        // - CI: pushing to feature branch re-triggers PR CI; pr-merge already
-        //   waits for CI to pass before merging.
-        // =================================================================
-        if (stage === "pr-create" && this.stateService) {
-          try {
-            this.logger.info("Recording execution outcome pre-merge (on feature branch)", {
-              issueNumber,
-            });
-            const outcomeResult = await this.stateService.recordExecutionOutcome("success");
-            if (outcomeResult.success) {
-              this.logger.info("Pre-merge model recording complete — update will merge with PR", {
-                issueNumber,
-              });
-            } else {
-              this.logger.warn(
-                "Pre-merge model recording returned failure — pipeline-finish will retry",
-                { issueNumber, error: outcomeResult.error }
-              );
-            }
-          } catch (err) {
-            this.logger.warn("Pre-merge model recording failed — will retry at pipeline-finish", {
-              issueNumber,
-              err: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+        // NO OUTCOME RECORDING HERE. The "pre-merge model recording" block that
+        // used to sit at this point (#1395) called
+        // stateService.recordExecutionOutcome(), which has been a no-op
+        // returning {success:true} ever since #1899 moved pipeline state to the
+        // Go binary — it logged "Pre-merge model recording complete" on every
+        // run and wrote nothing. Removed with the stub in #304. The two things
+        // it claimed to do are both done elsewhere, on live code paths:
+        //   - complexity-model calibration → PostPipelineAnalyzer (#1395's real
+        //     replacement), which reads the completed run's history record and
+        //     drives the SDK OutcomeRecorder;
+        //   - the learning/calibration outcome corpus → the Go side of this
+        //     path's terminal funnel, `pipeline.notifyComplete` in
+        //     internal/ipc/server.go, which derives the outcome from the same
+        //     V2 run record it writes.
+        // Do not reintroduce a TypeScript outcome writer here: this class is the
+        // execution path the product is primarily operated in, and a second
+        // writer over the same corpus is what #261 had to unpick.
 
         // After issue-pickup completes successfully, perform stage-specific
         // checks: branch validation and routing decision loading.
@@ -10938,26 +10917,31 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
     }
 
-    // Record execution outcome for FAILURE case (Issue #650, #1177, #1199).
-    // The TS-side recordExecutionOutcome is a no-op stub since #1899 moved
-    // pipeline state to the Go binary, which records outcomes via
-    // scheduler.recordOutcome on every pipeline completion (success +
-    // failure). Calling it here is harmless and we drop the prior pr-create
-    // guard — the message ("no PR data to capture") was misleading because
-    // (a) the call is a no-op anyway and (b) the Go-side recorder DOES
-    // capture pre-PR failures with stage + cost data. Issue board recovery
-    // for terminal kills happens in the Go orchestrator's onPipelineComplete
-    // (revertFailedIssueStatus).
-    if (this.stateService && failedStage) {
-      try {
-        await this.stateService.recordExecutionOutcome("failure");
-      } catch (err) {
-        this.logger.warn("Failed to record execution outcome", {
-          issueNumber,
-          err: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    // NO FAILURE-OUTCOME RECORDING HERE (#304). What stood here called
+    // stateService.recordExecutionOutcome("failure") under a comment asserting
+    // that the Go binary "records outcomes via scheduler.recordOutcome on every
+    // pipeline completion (success + failure)" and that "the Go-side recorder
+    // DOES capture pre-PR failures with stage + cost data".
+    //
+    // Both claims were false FOR THIS PATH, which is the path the product is
+    // primarily operated in. `scheduler.recordOutcome` is reachable only from
+    // Scheduler.runPipeline; ConcurrentPipelineManager → HeadlessOrchestrator
+    // runs never enter that loop (see the PATH WARNING in
+    // ConcurrentPipelineManager.runSlotPipeline). The comment described the
+    // path this code is NOT on as if it covered the one it IS on — #254's
+    // inverted-primary-path misreading — and the call it justified was a no-op
+    // stub returning {success:true}. Net effect: the learning corpus received
+    // nothing from interactive runs and nothing went red.
+    //
+    // Outcomes for THIS path are now recorded where this path's terminal event
+    // actually lands: the Go side of `pipeline.notifyComplete`
+    // (internal/ipc/server.go), for both success and failure, derived from the
+    // same V2 run record it writes. Parity is enforced by the
+    // `learning-outcome-record` entry in
+    // internal/orchestrator/testdata/terminal_behaviors.json.
+    //
+    // Issue board recovery for terminal kills remains in the Go orchestrator's
+    // onPipelineComplete (revertFailedIssueStatus).
 
     // Classify pipeline outcome for cost tracking (Issue #709)
     // Skip classification if early-exit already set the outcome (Issue #708)

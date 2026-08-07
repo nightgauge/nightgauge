@@ -1,0 +1,177 @@
+{
+  "base_branch": "main",
+  "branch": "feat/1001-redacted",
+  "completed_at": "2026-07-28T18:34:47-06:00",
+  "execution_mode": "automatic",
+  "files": {
+    "read_count": 0,
+    "written_count": 0
+  },
+  "issue_number": 1001,
+  "outcome": "complete",
+  "record_type": "run",
+  "recorded_at": "2026-07-28T18:34:47-06:00",
+  "repo": "acme/widget",
+  "routing": {
+    "complexity_score": 0,
+    "path": "standard",
+    "skip_stages": []
+  },
+  "run_id": "00000000-0000-7000-8000-000000000000",
+  "schema_version": "2",
+  "size": null,
+  "stages": {
+    "feature-dev": {
+      "completed_at": "2026-07-28T18:11:33-06:00",
+      "duration_ms": 703000,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-28T17:59:50-06:00",
+      "status": "complete"
+    },
+    "feature-planning": {
+      "completed_at": "2026-07-28T17:59:50-06:00",
+      "duration_ms": 347000,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-28T17:54:03-06:00",
+      "status": "complete"
+    },
+    "feature-validate": {
+      "completed_at": "2026-07-28T18:22:26-06:00",
+      "duration_ms": 652000,
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "started_at": "2026-07-28T18:11:34-06:00",
+      "status": "complete"
+    },
+    "issue-pickup": {
+      "completed_at": "2026-07-28T17:54:03-06:00",
+      "duration_ms": 1000,
+      "execution_path": "deterministic",
+      "started_at": "2026-07-28T17:54:02-06:00",
+      "status": "complete"
+    },
+    "pipeline-finish": {
+      "completed_at": "2026-07-28T18:34:46-06:00",
+      "duration_ms": 1000,
+      "started_at": "2026-07-28T18:34:46-06:00",
+      "status": "complete"
+    },
+    "pipeline-start": {
+      "completed_at": "2026-07-28T17:54:02-06:00",
+      "duration_ms": 0,
+      "started_at": "2026-07-28T17:54:02-06:00",
+      "status": "complete"
+    },
+    "pr-create": {
+      "completed_at": "2026-07-28T18:28:46-06:00",
+      "duration_ms": 380000,
+      "execution_path": "llm",
+      "model_selection": {
+        "model": "claude-haiku-4-5-20251001",
+        "source": "scheduler"
+      },
+      "punt_reason": "manual-checklist-unverified",
+      "started_at": "2026-07-28T18:22:26-06:00",
+      "status": "complete"
+    },
+    "pr-merge": {
+      "completed_at": "2026-07-28T18:34:45-06:00",
+      "duration_ms": 348000,
+      "execution_path": "llm",
+      "model_selection": {
+        "model": "claude-sonnet-5",
+        "source": "scheduler"
+      },
+      "punt_reason": "REDACTED",
+      "started_at": "2026-07-28T18:28:57-06:00",
+      "status": "complete"
+    }
+  },
+  "started_at": "2026-07-28T17:54:00-06:00",
+  "title": "REDACTED \u2014 real issue title removed for public fixture",
+  "tokens": {
+    "estimated_cost_usd": 11.977663099999997,
+    "per_stage": {
+      "feature-dev": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999733921608468,
+        "cache_read": 1653604,
+        "cost_usd": 3.042758249999999,
+        "input": 44,
+        "output": 5853
+      },
+      "feature-planning": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999800400786149,
+        "cache_read": 4408747,
+        "cost_usd": 3.134345,
+        "input": 88,
+        "output": 28014
+      },
+      "feature-validate": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.999968581123539,
+        "cache_read": 636540,
+        "cost_usd": 3.0093706499999997,
+        "input": 20,
+        "output": 4376
+      },
+      "issue-pickup": {
+        "cache_creation": 0,
+        "cache_read": 0,
+        "cost_usd": 0,
+        "input": 0,
+        "output": 0
+      },
+      "pipeline-finish": {
+        "cache_creation": 0,
+        "cache_read": 0,
+        "cost_usd": 0,
+        "input": 0,
+        "output": 0
+      },
+      "pipeline-start": {
+        "cache_creation": 0,
+        "cache_read": 0,
+        "cost_usd": 0,
+        "input": 0,
+        "output": 0
+      },
+      "pr-create": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9998800059148599,
+        "cache_read": 2474825,
+        "cost_usd": 0.5219475,
+        "input": 297,
+        "output": 18762
+      },
+      "pr-merge": {
+        "adapter": "claude",
+        "cache_creation": 0,
+        "cache_hit_rate": 0.9999832457622533,
+        "cache_read": 4416719,
+        "cost_usd": 2.2692416999999994,
+        "input": 74,
+        "output": 14170
+      }
+    },
+    "total_cache_creation": 0,
+    "total_cache_read": 13590435,
+    "total_input": 13590958,
+    "total_output": 71175
+  },
+  "total_duration_ms": 2447000,
+  "type": null
+}

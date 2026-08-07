@@ -74,12 +74,14 @@
     },
     {
       "name": "learning-outcome-record",
+      "note": "Wired on both paths as of #304, and rooted identically — the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305) and a network_unavailable failure (#3296). The scheduler keys both on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network case on terminal_failure_kind. Same two states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
-        "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel)"
+        "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)"
       },
       "extension": {
-        "pathSpecific": "NOT WIRED — extension-path runs record no learning outcomes; HeadlessOrchestrator's comment claiming the Go side covers it is false for this path. Tracked by #304."
+        "file": "internal/ipc/server.go",
+        "anchor": "learning.NewRecorder(root).Record(outcome)"
       }
     },
     {
@@ -240,7 +242,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "d39c8923ae662162664c3beedacd82f004998e78e21237b8e21584ffcc86db4c"
+      "sha256": "3e655fd4e52304b64223038c37a77a9a3466ff5e569a9a49e5391322fde84e8d"
     },
     {
       "id": "extension-runSlotPipeline-finally",

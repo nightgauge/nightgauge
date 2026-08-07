@@ -29,6 +29,57 @@ func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 	}
 }
 
+// TestResolveDispatchModelDefaultsAnUnroutedStage pins the seam #304 nearly
+// broke. The corpus must record an unrouted run's prediction as ABSENT, but
+// dispatch must still resolve a concrete tier, because four mechanisms here
+// key on tier recognition and no-op silently on "": the floor returns the
+// selection untouched (tierRank("") == -1), the sticky downgrade reports
+// model_not_in_registry, RecordStageModel drops the empty value, and
+// CalculateCost("") is $0. ~1 in 6 real context files on a working machine
+// carry no pickup_recommendation.dev_model, so "" is not a rare shape.
+func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
+	s := testScheduler(t)
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "", nil); got != "sonnet" {
+		t.Errorf("model = %q, want the general-purpose default for an unrouted stage", got)
+	}
+
+	// The floor must SEE that default. This is the #366 regression in one
+	// assertion: with "" the floor is silently skipped and a stage the operator
+	// floored to opus runs the provider default, with no log line.
+	floors := map[string]string{string(state.StageFeatureDev): "opus"}
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "", floors); got != "opus" {
+		t.Errorf("floored model = %q, want opus — the minimum_model floor must apply to an unrouted stage", got)
+	}
+
+	// So must the sticky #42 downgrade: an API rejection of sonnet has to
+	// reroute the unrouted stage too, or the run re-fails identically.
+	down := testScheduler(t)
+	down.retryEngine.RecordDowngrade("sonnet", "haiku")
+	if got := down.resolveDispatchModel(state.StageFeatureDev, 1, t.TempDir(), "", nil); got != "haiku" {
+		t.Errorf("downgraded model = %q, want haiku", got)
+	}
+}
+
+// TestDefaultDispatchModelIsALadderBand guards the specific mistake that makes
+// the default look right and break escalation: spelling it as a concrete model
+// id. Every consumer of the resolved value reads the band vocabulary, and
+// NextModel walks a literal ladder a dated id is not a member of — so a
+// concrete id would resolve the floor and the downgrade while silently pinning
+// an escalated stage to its ceiling.
+func TestDefaultDispatchModelIsALadderBand(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+	next, ok := engine.NextModel(defaultDispatchModel)
+	if !ok || next != "opus" {
+		t.Errorf("NextModel(%q) = (%q, %v), want (\"opus\", true) — the default must escalate", defaultDispatchModel, next, ok)
+	}
+	if got := tierRank(defaultDispatchModel); got < 0 {
+		t.Errorf("tierRank(%q) = %d, want a recognized tier — an unrecognized default disables the floor", defaultDispatchModel, got)
+	}
+	if defaultDispatchModel == routing.ModelSonnet {
+		t.Errorf("defaultDispatchModel is the concrete id %q; it must be the band alias", routing.ModelSonnet)
+	}
+}
+
 func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	s := testScheduler(t)
 	s.retryEngine.RecordEscalation(string(state.StageFeatureDev), "opus")

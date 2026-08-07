@@ -5340,17 +5340,46 @@ func learnTuneCmd() *cobra.Command {
 				return err
 			}
 
+			output := map[string]interface{}{"calibration": report}
+
+			// Tune only a MEASURED target. report.SizeAccuracy is nil when no
+			// row in the corpus carried both a predicted and an actual size, and
+			// substituting 0.0 there made the optimizer chase the gap between
+			// "we cannot measure this" and its 0.8 goal — i.e. it adjusted the
+			// parameter in proportion to how many issues lacked a size label
+			// (#304). Say so instead, and leave the parameter alone.
+			//
+			// The skip is UNCONDITIONAL today and the output says so outright.
+			// size_accuracy is this command's only tuning target, and no writer
+			// in the tree records actualSize: both terminal recording boundaries
+			// leave it empty because neither carries a lines-changed measurement
+			// (the pipeline computes one PRE-merge, at pr-create dispatch, and it
+			// is deliberately not threaded through to terminal recording yet —
+			// tracked as a follow-up). So `learn tune` cannot tune anything on
+			// any corpus the current code produces. A command that quietly no-ops
+			// while printing a calibration report reads as if it tuned; this one
+			// has to state the reason and the scope every time it runs.
+			if report.SizeAccuracy == nil {
+				output["tuning"] = map[string]interface{}{
+					"param":           "size_accuracy",
+					"measurableToday": false,
+					"skipped": "size_accuracy is UNMEASURABLE: no writer in the pipeline records actualSize, " +
+						"so the corpus can never contain a predicted-vs-actual size pair and this command " +
+						"tunes nothing on any corpus the current code produces. The non-circular measurement " +
+						"(lines changed, bucketed by github.OutcomeService.getActualSizeBucket) is computed " +
+						"pre-merge at pr-create dispatch and is deliberately not threaded to terminal recording " +
+						"yet — tracked as a follow-up. See docs/SELF_IMPROVEMENT_LOOP.md § Outcome Recording.",
+					"measuredAlternate": "modelAccuracy (reported above; not a tuning target)",
+				}
+				return printJSON(output)
+			}
+
 			tuner := learning.NewTuner(workdir, learning.DefaultTunerConfig())
 			param := learning.TuningParam{
-				Name: "size_accuracy", Current: report.SizeAccuracy,
+				Name: "size_accuracy", Current: *report.SizeAccuracy,
 				Target: 0.8, MinValue: 0.0, MaxValue: 1.0,
 			}
-			result := tuner.Tune(param, report.SizeAccuracy, nil)
-
-			output := map[string]interface{}{
-				"calibration": report,
-				"tuning":      result,
-			}
+			output["tuning"] = tuner.Tune(param, *report.SizeAccuracy, nil)
 			return printJSON(output)
 		},
 	}

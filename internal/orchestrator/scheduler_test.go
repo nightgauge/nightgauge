@@ -152,22 +152,25 @@ func TestQueueOperations(t *testing.T) {
 func TestOutcomeRecording(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	recorder := learning.NewRecorder(tmpDir)
-	s := &Scheduler{recorder: recorder}
+	s := &Scheduler{recordOutcomes: true}
 
 	item := types.BoardItem{
 		Number: 42,
 		Repo:   "nightgauge/nightgauge",
+		Size:   types.SizeM,
 	}
 
 	// Build a minimal runtime state snapshot
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
 	snap.BeginStage(state.StageFeatureDev)
+	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-4-6")
 	snap.CompleteStage(0, 100, 200, "claude-sonnet-4-6")
 	snapshot := snap.Snapshot()
 
-	// Record a successful outcome
-	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6")
+	// Record a successful outcome. tmpDir stands in for the run's TARGET repo
+	// root — the corpus lands beside that repo's run records, not at the
+	// daemon's launch root (#304).
+	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6", tmpDir)
 
 	outcomesFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
 	data, err := os.ReadFile(outcomesFile)
@@ -192,6 +195,13 @@ func TestOutcomeRecording(t *testing.T) {
 	if outcome.PredictedSize != "medium" {
 		t.Errorf("PredictedSize = %q, want %q", outcome.PredictedSize, "medium")
 	}
+	// The model pair is a MEASUREMENT, not a copy: predicted is the router's
+	// recommendation normalized to its band, actual is the band the
+	// implementation stage served (#304).
+	if outcome.PredictedModel != "sonnet" || outcome.ActualModel != "sonnet" {
+		t.Errorf("model pair = predicted %q / actual %q, want sonnet / sonnet (both normalized onto the registry band)",
+			outcome.PredictedModel, outcome.ActualModel)
+	}
 	if outcome.ComplexityScore != 5 {
 		t.Errorf("ComplexityScore = %d, want 5", outcome.ComplexityScore)
 	}
@@ -206,7 +216,7 @@ func TestOutcomeRecording(t *testing.T) {
 	snap2 := state.NewRuntimeState(item.Repo, item.Number, "item-id-2")
 	snap2.BeginStage(state.StageFeatureValidate)
 	snapshot2 := snap2.Snapshot()
-	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001")
+	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001", tmpDir)
 
 	data2, err := os.ReadFile(outcomesFile)
 	if err != nil {
@@ -232,6 +242,15 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 	if failedOutcome.PredictedSize != "small" {
 		t.Errorf("PredictedSize = %q, want %q", failedOutcome.PredictedSize, "small")
+	}
+	// The failed run's dev stage never reported a model, so the actual half is
+	// absent — never a copy of the prediction, which would score a routing HIT
+	// for a run whose implementation stage never ran.
+	if failedOutcome.PredictedModel != "haiku" {
+		t.Errorf("PredictedModel = %q, want %q", failedOutcome.PredictedModel, "haiku")
+	}
+	if failedOutcome.ActualModel != "" {
+		t.Errorf("ActualModel = %q, want empty", failedOutcome.ActualModel)
 	}
 }
 
@@ -284,9 +303,9 @@ func TestPredictedSizeLabel(t *testing.T) {
 		{10, "large"},
 	}
 	for _, tc := range tests {
-		got := predictedSizeLabel(tc.score)
+		got := SizeBucketForScore(tc.score)
 		if got != tc.want {
-			t.Errorf("predictedSizeLabel(%d) = %q, want %q", tc.score, got, tc.want)
+			t.Errorf("SizeBucketForScore(%d) = %q, want %q", tc.score, got, tc.want)
 		}
 	}
 }

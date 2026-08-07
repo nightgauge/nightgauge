@@ -345,11 +345,17 @@ func V2RunRecordToExecutionHistoryRunRecord(record state.V2RunRecord, input Exec
 		actualModel = nonEmptyTruncatedPtr(record.OutcomePrediction.ActualModel, executionHistoryFieldMax)
 	}
 
-	// predictedSize is intentionally left nil: the local predictedSizeLabel()
-	// vocabulary (small|medium|large, from learning.Outcome) does not overlap
-	// the platform's TELEMETRY_SIZES (XS|S|M|L|XL) — validTelemetrySize would
-	// always reject it. This is a real local/platform vocabulary mismatch, not
-	// a mapper bug; reconciling the two vocabularies is out of scope here.
+	// predictedSize is intentionally left nil: the local
+	// orchestrator.SizeBucketForScore vocabulary (small|medium|large, from
+	// learning.Outcome) does not overlap the platform's TELEMETRY_SIZES
+	// (XS|S|M|L|XL) — validTelemetrySize would always reject it. This is a real
+	// local/platform vocabulary mismatch, not a mapper bug; reconciling the two
+	// vocabularies is out of scope here.
+	//
+	// predictedModel/actualModel above carry the corpus's meanings unchanged
+	// (see internal/orchestrator/outcome_semantics.go): both are registry bands,
+	// actual is what the implementation stage SERVED, and either may be absent —
+	// nonEmptyTruncatedPtr leaves those null rather than inventing a value.
 
 	return ExecutionHistoryRunRecord{
 		SchemaVersion:       executionHistoryRunRecordSchemaVersion,

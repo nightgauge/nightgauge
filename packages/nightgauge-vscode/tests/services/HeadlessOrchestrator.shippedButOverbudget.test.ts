@@ -166,7 +166,6 @@ function createMockStateService(): PipelineStateService {
     clearBatchState: vi.fn().mockResolvedValue(undefined),
     batchUpdate: vi.fn().mockResolvedValue(undefined),
     isPaused: vi.fn().mockResolvedValue(false),
-    recordExecutionOutcome: vi.fn().mockResolvedValue({ success: true }),
     setOutcomeType: vi.fn().mockResolvedValue(undefined),
     getBatchState: vi.fn().mockResolvedValue(null),
     clearRetrying: vi.fn().mockResolvedValue(undefined),
@@ -254,11 +253,12 @@ describe("HeadlessOrchestrator shipped-but-overbudget broadening (Issue #3274)",
     // pr-merge promoted into completedStages by the override
     expect(result.completedStages).toContain("pr-merge");
 
-    // AC2: failure outcome NOT recorded (Go-side LifetimeIssueFailures stays put)
-    const failureCall = vi
-      .mocked(mockState.recordExecutionOutcome)
-      .mock.calls.find((args) => args[0] === "failure");
-    expect(failureCall).toBeUndefined();
+    // AC2 used to be asserted here as "recordExecutionOutcome was not called
+    // with 'failure'". That method was a `{success: true}` no-op stub and is
+    // gone (#304): the assertion mocked a method production no longer calls, so
+    // it could never fail. The real AC2 guarantee is the reclassification
+    // itself, asserted above and below — a run booked as
+    // shipped-but-overbudget is not a failure, so the Go side never sees one.
 
     // setOutcomeType was called with the reused enum value
     expect(mockState.setOutcomeType).toHaveBeenCalledWith("shipped-but-overbudget");
