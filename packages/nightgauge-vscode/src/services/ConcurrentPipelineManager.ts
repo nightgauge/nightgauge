@@ -139,7 +139,7 @@ interface PipelineSlot {
    * runtime registry is keyed by bare issue number, and re-keying it by run
    * identity is an ADR-scale change with its own failure modes (a lost
    * `initialized` message would silently lock a live run out of every write).
-   * That work is tracked separately; see the KNOWN EXPOSURE paragraph in
+   * That work is tracked as issue #370; see the KNOWN EXPOSURE paragraph in
    * docs/GO_BINARY.md § "Force-Clear Terminal Bookkeeping (Issue #307)".
    */
   generation: string;

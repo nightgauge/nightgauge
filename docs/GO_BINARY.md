@@ -4312,8 +4312,10 @@ per-issue lifetime cap. Two mechanisms make the outcome exactly-once:
 **KNOWN EXPOSURE — Go-side late settlement is exactly main's behavior.**
 
 This change is deliberately extension-only. The generation token is never sent
-to Go, the force-clear makes no IPC call, and `internal/ipc` is byte-identical
-to `main`. A force-cleared run that later unwedges therefore reaches the IPC
+to Go, the force-clear makes no pipeline-runtime IPC call — its only IPC
+traffic is `queue.complete` (releasing the processing mark) and
+`autonomous.complete` (freeing the scheduler seat), neither of which touches
+`s.activeRuntimes` — and `internal/ipc` is byte-identical to `main`. A force-cleared run that later unwedges therefore reaches the IPC
 server exactly as it does today: `s.activeRuntimes` is keyed by **bare issue
 number**, which is not a run identity, so once the operator has re-queued the
 issue the dead run's `notifyStageTransition`, `notifyComplete`,
@@ -4330,10 +4332,12 @@ per-dispatch identity on the wire makes one at-most-once message
 a lost or slow one silently locks a live run out of every write — no run record,
 no learning outcome, no telemetry, frozen UI. Re-keying the runtime registry by
 run identity, with a handshake that is self-healing rather than
-single-message-fatal, is ADR-scale work tracked as its own follow-up.
+single-message-fatal, is ADR-scale work tracked as issue #370.
 
-One consequence worth naming: because the force-clear makes no IPC call, the
-dead run keeps its `activeRuntimes` entry for the life of the server. Orphan
+One consequence worth naming: because the force-clear makes no pipeline-runtime
+IPC call (`queue.complete` and `autonomous.complete` never touch the runtime
+registry), the dead run keeps its `activeRuntimes` entry for the life of the
+server. Orphan
 reconciliation (#44) skips issues with a live runtime, so a force-cleared hung
 run's `pipeline_done` is emitted from the preserved `runtime-<issue>.json` **at
 the next server start only** — the `workspace.setRoot` reconcile call site skips
