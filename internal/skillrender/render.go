@@ -328,15 +328,20 @@ func inject(body, block string) (string, string) {
 	return "\n" + strings.TrimRight(block, "\n") + "\n\n" + trimmed, SiteTopOfBody
 }
 
-// includePattern matches `<!-- include: path -->` directives.
-var includePattern = regexp.MustCompile(`<!-- include: (.+?) -->`)
+// IncludePattern matches `<!-- include: path -->` directives. Exported so the
+// dead-include gate (internal/preflight) resolves targets against the exact
+// pattern the composer expands — a gate with its own copy of this regex would
+// disagree about what the captured path IS, which is the whole bug in #337's
+// malformed `EPIC_HANDLING.md (sub-issue fetch section)` directive: the
+// parenthetical is part of capture group 1.
+var IncludePattern = regexp.MustCompile(`<!-- include: (.+?) -->`)
 
 // ExpandIncludes replaces include directives with file content, resolved
 // relative to the SKILL.md's directory. A missing target is left as-is: the
 // same document must remain readable under a host that does not expand.
 func ExpandIncludes(content string, skillDir string) string {
-	return includePattern.ReplaceAllStringFunc(content, func(match string) string {
-		subs := includePattern.FindStringSubmatch(match)
+	return IncludePattern.ReplaceAllStringFunc(content, func(match string) string {
+		subs := IncludePattern.FindStringSubmatch(match)
 		if len(subs) < 2 {
 			return match
 		}

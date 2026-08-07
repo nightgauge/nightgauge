@@ -14,6 +14,7 @@ context-file handling, and outcome recording.
 - [Step 7.5: Final State](#step-75-final-state)
 - [Step 7.6: Context File Cleanup](#step-76-context-file-cleanup)
 - [Step 7.7: Record Outcome to Complexity Model](#step-77-record-outcome-to-complexity-model)
+- [Step 7.8: Batch Context File Cleanup](#step-78-batch-context-file-cleanup)
 
 #### Step 7.0: Post-Merge Build Verification
 
@@ -302,10 +303,14 @@ reads the context files for the complexity model feedback loop. Do NOT run
 `pr-{N}.json` and `issue-{N}.json` before outcome recording can read them,
 causing 0-line garbage data in the complexity model.
 
-**Plan artifact cleanup:** For batch PRs, batch context files and plan artifacts
-are cleaned up in Phase 0.5 (Batch Path). For single-issue PRs, plan artifacts
+**Plan artifact cleanup:** For single-issue PRs, plan artifacts
 (`.nightgauge/plans/{N}-*.md`) are cleaned up automatically by the
 HeadlessOrchestrator during `pipeline-finish`.
+
+Batch runs have no `pipeline-finish` owner for their epic-keyed files, so
+`pr-merge` removes them — but only in [Step 7.8](#step-78-batch-context-file-cleanup),
+after Step 7.7 has read the context files for the complexity model. Removing
+them here would reintroduce the zero-line garbage this step exists to prevent.
 
 #### Step 7.7: Record Outcome to Complexity Model
 
@@ -379,3 +384,70 @@ fi
 `HeadlessOrchestrator`, `PipelineStateService.recordExecutionOutcome()` also
 fires after pipeline completion. The Go binary's idempotency check (by
 `issue_number`) prevents double-recording.
+
+#### Step 7.8: Batch Context File Cleanup
+
+Batch context files and the epic's plan artifacts are pipeline exhaust once the
+batch PR has merged: `pr-merge` is the terminal stage of a batch and nothing
+downstream reads them. This runs **after** Step 7.7 so outcome recording sees
+the files first.
+
+Re-detect the batch from disk. Nothing set in Phase 0.5 is visible here (each
+Bash call is a fresh shell), and Step 7.0 detached HEAD onto
+`origin/$MERGED_INTO`, so the current checkout no longer names the feature
+branch either. The batch files carry their own key, and the PR they belong to
+is the merge test — remove a set only once its PR reports a merge:
+
+```bash
+# Re-resolve $BINARY: this block runs in a fresh shell. Same cascade as Step
+# 7.1 — a short form that skips $REPO_ROOT/bin and the canonical-repo lookup
+# resolves to nothing inside a pipeline worktree, and the merge test below then
+# fails closed on every batch, leaving exactly the stale files this step exists
+# to remove.
+BINARY="${NIGHTGAUGE_BIN:-}"
+[ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
+[ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+if [ -z "$BINARY" ]; then
+  REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+  [ -x "$REPO_ROOT/bin/nightgauge" ] && BINARY="$REPO_ROOT/bin/nightgauge"
+fi
+if [ -z "$BINARY" ]; then
+  GIT_COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+  if [ -n "$GIT_COMMON_DIR" ]; then
+    CANONICAL_REPO="$(cd "$GIT_COMMON_DIR/.." 2>/dev/null && pwd)"
+    [ -n "$CANONICAL_REPO" ] && [ -x "$CANONICAL_REPO/bin/nightgauge" ] && BINARY="$CANONICAL_REPO/bin/nightgauge"
+  fi
+fi
+[ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
+[ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+
+if [ -z "$BINARY" ]; then
+  echo "WARNING: batch cleanup skipped — nightgauge binary not found; batch context files remain"
+else
+  for BATCH_DEV in .nightgauge/pipeline/dev-batch-*.json; do
+    [ -f "$BATCH_DEV" ] || continue                     # no batch files at all
+    E=$(jq -r '.epic_number // empty' "$BATCH_DEV")
+    [ -n "$E" ] || continue
+    BATCH_PR=$(jq -r '.pr_number // empty' ".nightgauge/pipeline/pr-${E}.json" 2>/dev/null)
+    [ -n "$BATCH_PR" ] || continue                      # PR not created yet — keep
+    MERGED_AT=$("$BINARY" pr view "$BATCH_PR" --json 2>/dev/null | jq -r '.mergedAt // empty')
+    [ -n "$MERGED_AT" ] || continue                     # not merged — another run owns it
+
+    # Every epic-keyed artifact the batch path produces (see
+    # skills/_shared/BATCH_MODE.md). pr-{E}.json is the consequential one: it
+    # shares a namespace with a later single-issue run for issue #E.
+    rm -f ".nightgauge/pipeline/batch-${E}.json" \
+          ".nightgauge/pipeline/planning-batch-${E}.json" \
+          ".nightgauge/pipeline/validate-${E}.json" \
+          ".nightgauge/pipeline/pr-${E}.json" \
+          "$BATCH_DEV"
+    rm -f .nightgauge/plans/${E}-*.md
+    echo "Batch cleanup: removed context files and plan artifacts for epic #${E} (PR #${BATCH_PR})"
+  done
+fi
+```
+
+`mergedAt` is empty until the PR actually merges, so an in-flight batch — this
+run's or a concurrent one's — is never swept. A batch whose PR merged in an
+earlier run is exhaust by definition and is removed here, which is what keeps a
+later unrelated run for the same epic number from detecting a stale batch.

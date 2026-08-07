@@ -531,24 +531,26 @@ func TestRealSkillsRenderClean(t *testing.T) {
 			if err != nil {
 				t.Fatalf("render: %v", err)
 			}
-			// A surviving directive is only acceptable when its target genuinely
-			// does not exist — that is the documented portability behavior. If a
-			// directive survives while its file IS present, expansion is broken.
+			// NO directive may survive expansion. Every surviving one ships the
+			// literal HTML comment to the model in place of the shared content,
+			// and the two ways that happens are indistinguishable in the output:
+			// expansion broke, or the target never resolved.
 			//
-			// Asserting "no directive survives" would be wrong and would have to
-			// be weakened on day one: every shipped stage skill includes
-			// `../_shared/BATCH_MODE.md`, which has never existed in this repo's
-			// history, so all six ship that literal comment to the model instead
-			// of batch-mode instructions. Tracked separately; this assertion is
-			// written to catch a real expansion regression without going green on
-			// that pre-existing hole.
+			// This assertion used to be the weaker "a surviving directive must
+			// correspond to a genuinely missing file", carved out because all six
+			// stage skills included `../_shared/BATCH_MODE.md` against a file that
+			// had never been written (#337). The file now exists, so the carve-out
+			// is gone. Do not reintroduce it: `preflight skill-includes`
+			// (TestSkillIncludes_WorkingTreeIsClean) is where a missing target is
+			// caught, and weakening this one is how the hole stayed open.
 			skillDir := filepath.Dir(res.SkillPath)
-			for _, m := range includePattern.FindAllStringSubmatch(res.Content, -1) {
+			for _, m := range IncludePattern.FindAllStringSubmatch(res.Content, -1) {
 				target := filepath.Join(skillDir, strings.TrimSpace(m[1]))
-				if _, err := os.Stat(target); err == nil {
-					t.Errorf("include %q survived expansion although %s exists — expansion is broken",
-						m[0], target)
+				reason := "expansion is broken"
+				if _, err := os.Stat(target); err != nil {
+					reason = "target does not resolve: " + target
 				}
+				t.Errorf("include %q survived expansion — %s", m[0], reason)
 			}
 			if res.SkillName == "" {
 				t.Error("frontmatter name not parsed")
@@ -695,5 +697,64 @@ func TestRelativeRootStillYieldsAbsoluteDirectives(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, root) {
 		t.Errorf("expected directives rewritten under %s, got:\n%s", root, res.Content)
+	}
+}
+
+// ─── #337: the dead-include capture, before and after ────────────────────────
+
+const deadIncludeFixture = "testdata/dead-include/pr-merge.pre-fix.rendered.md"
+
+// TestDeadIncludeFixture_StillExhibitsThePreFixDefect pins the captured
+// artifact. It is a real `nightgauge skill render --stage pr-merge` capture
+// from main @ 8c942971 — the composed text the model was handed — and its
+// value is entirely in the fact that it is NOT current. If someone
+// re-captures it against the fixed tree, the before/after below becomes a
+// tautology and the evidence for #337 is gone, silently. Provenance and
+// redaction rules: testdata/dead-include/README.md.
+func TestDeadIncludeFixture_StillExhibitsThePreFixDefect(t *testing.T) {
+	data, err := os.ReadFile(deadIncludeFixture)
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	captured := string(data)
+
+	if !strings.Contains(captured, "<!-- include: ../_shared/BATCH_MODE.md -->") {
+		t.Fatal("the captured pre-fix render no longer contains the dead directive — " +
+			"it has been regenerated against fixed code; restore the original capture")
+	}
+	// The directive was the ENTIRE body of a declared phase: the marker prints,
+	// the phase tracker advances, and the model receives a comment.
+	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
+	mi := strings.Index(captured, marker)
+	di := strings.Index(captured, "<!-- include: ../_shared/BATCH_MODE.md -->")
+	if mi < 0 || di < mi {
+		t.Fatalf("expected the dead directive to follow the batch-detection phase marker (marker=%d directive=%d)", mi, di)
+	}
+	if between := captured[mi+len(marker) : di]; strings.TrimSpace(strings.Trim(between, "`\n")) != "" {
+		t.Errorf("expected an empty phase body between the marker and the directive, got %q", between)
+	}
+	// Public repository: the capture script rewrites the repo root and $HOME.
+	// Re-assert it here so a careless re-capture cannot land a home path.
+	for _, leak := range []string{"/Users/", "/home/", "/root/"} {
+		if strings.Contains(captured, leak) {
+			t.Errorf("fixture leaks a host path containing %q — redact before committing", leak)
+		}
+	}
+}
+
+// TestDeadIncludeFixture_SameStageRendersCleanNow is the "after" half: the
+// stage the fixture captured, rendered from the working tree, hands the model
+// the shared batch contract instead of the comment.
+func TestDeadIncludeFixture_SameStageRendersCleanNow(t *testing.T) {
+	root := filepath.Join("..", "..", "skills")
+	if _, err := os.Stat(root); err != nil {
+		t.Skipf("skills/ not present: %v", err)
+	}
+	res := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}})
+	if strings.Contains(res.Content, "<!-- include: ../_shared/BATCH_MODE.md -->") {
+		t.Error("the dead directive is still in the live pr-merge render")
+	}
+	if !strings.Contains(res.Content, "## Batch Mode") {
+		t.Error("expected the expanded batch contract in the live pr-merge render")
 	}
 }

@@ -122,7 +122,11 @@ echo "Epic #$EPIC_NUMBER: $EPIC_TITLE"
 
 #### Step 1.3: Fetch Sub-Issues via GraphQL
 
-<!-- include: ../_shared/EPIC_HANDLING.md (sub-issue fetch section) -->
+Use the sub-issue fetch section of the shared epic-handling reference,
+`skills/_shared/EPIC_HANDLING.md` (read it directly — `assess-epic` is not a
+pipeline stage, so the composer does not expand the directive below).
+
+<!-- include: ../_shared/EPIC_HANDLING.md -->
 
 ```bash
 # Detect owner/repo from git remote

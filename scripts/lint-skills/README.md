@@ -94,6 +94,21 @@ nightgauge preflight skill-anti-patterns --json
 skills tree, runs the linter, and asserts it exits 1 with one finding per check
 — guaranteeing each check actually fires.
 
+## Dead includes — Go only, no shell mirror
+
+`nightgauge preflight skill-includes` fails when a `<!-- include: path -->`
+directive names a file that does not exist (#337). It has **no** sibling script
+here on purpose: its enforcement is a Go test
+(`TestSkillIncludes_WorkingTreeIsClean`), so it runs in `go test ./...` on
+every CI run, and it resolves targets with the composer's own
+`skillrender.IncludePattern` rather than a second copy of the regex — a shell
+mirror would reintroduce exactly the divergence the check exists to catch. Run
+it locally with:
+
+```bash
+nightgauge preflight skill-includes            # or --json
+```
+
 ## Adding a new skill linter
 
 1. Add a shell script in this directory with a sibling Go implementation in
