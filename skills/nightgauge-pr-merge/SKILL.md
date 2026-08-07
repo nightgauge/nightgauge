@@ -207,8 +207,9 @@ it is the terminal stage, and nothing downstream reads them.
 > **Read `skills/nightgauge-pr-merge/_includes/batch-detection.md` now and follow its instructions before continuing this phase.**
 
 **Single-issue path**: when `.nightgauge/pipeline/dev-batch-{E}.json` does not
-exist — the common case — set `BATCH_MODE=false` and continue to Phase 1
-unchanged.
+exist — the common case — continue to Phase 1 unchanged. The epic key is
+derived from git inside that phase, not inherited: `$BRANCH` is not assigned
+until Phase 1, and each Bash call is a fresh shell regardless.
 
 ---
 

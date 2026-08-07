@@ -304,19 +304,47 @@ causing 0-line garbage data in the complexity model.
 
 **Plan artifact cleanup:** For single-issue PRs, plan artifacts
 (`.nightgauge/plans/{N}-*.md`) are cleaned up automatically by the
-HeadlessOrchestrator during `pipeline-finish`. For batch PRs (`BATCH_MODE=true`
-from Phase 0.5), remove the batch context files and the epic's plan artifacts
-here — `pr-merge` is the terminal stage of a batch and nothing downstream
-reads them, so this is the only place they are removed:
+HeadlessOrchestrator during `pipeline-finish`. For batch PRs, remove the batch
+context files and the epic's plan artifacts here — `pr-merge` is the terminal
+stage of a batch and nothing downstream reads them, so this is the only place
+they are removed.
+
+Re-detect the batch from disk. Nothing set in Phase 0.5 is visible here (each
+Bash call is a fresh shell), and Step 7.0 detached HEAD onto
+`origin/$MERGED_INTO`, so the current checkout no longer names the feature
+branch either. The batch files carry their own key, and the PR they belong to
+is the merge test — remove a set only once its PR reports a merge:
 
 ```bash
-if [ "${BATCH_MODE:-false}" = "true" ]; then
-  rm -f ".nightgauge/pipeline/batch-${EPIC_NUMBER}.json" \
-        ".nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json" \
-        ".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
-  rm -f .nightgauge/plans/${EPIC_NUMBER}-*.md
+# Re-resolve $BINARY if this block runs in a fresh shell (short form of the
+# Step 7.1 cascade). An unresolved binary makes the merge test below fail
+# closed: nothing is removed, which is the safe direction.
+if [ ! -x "${BINARY:-}" ]; then
+  BINARY="${NIGHTGAUGE_BIN:-}"
+  [ -x "$BINARY" ] || BINARY=$(command -v nightgauge 2>/dev/null || echo "")
+  [ -x "$BINARY" ] || { [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"; }
 fi
+
+for BATCH_DEV in .nightgauge/pipeline/dev-batch-*.json; do
+  [ -f "$BATCH_DEV" ] || continue                       # no batch files at all
+  E=$(jq -r '.epic_number // empty' "$BATCH_DEV")
+  [ -n "$E" ] || continue
+  BATCH_PR=$(jq -r '.pr_number // empty' ".nightgauge/pipeline/pr-${E}.json" 2>/dev/null)
+  [ -n "$BATCH_PR" ] || continue                        # PR not created yet — keep
+  MERGED_AT=$("$BINARY" pr view "$BATCH_PR" --json 2>/dev/null | jq -r '.mergedAt // empty')
+  [ -n "$MERGED_AT" ] || continue                       # not merged — another run owns it
+
+  rm -f ".nightgauge/pipeline/batch-${E}.json" \
+        ".nightgauge/pipeline/planning-batch-${E}.json" \
+        "$BATCH_DEV"
+  rm -f .nightgauge/plans/${E}-*.md
+done
 ```
+
+`mergedAt` is empty until the PR actually merges, so an in-flight batch — this
+run's or a concurrent one's — is never swept. A batch whose PR merged in an
+earlier run is exhaust by definition and is removed here, which is what keeps a
+later unrelated run for the same epic number from detecting a stale batch.
 
 #### Step 7.7: Record Outcome to Complexity Model
 
