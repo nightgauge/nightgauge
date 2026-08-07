@@ -544,8 +544,8 @@ const STAGE_STATUS_VALUES: Partial<Record<PipelineStage, ProjectStatusValue>> = 
  * Build the synthetic Error used when a stage is forcibly terminated by the
  * idle-stall watchdog. Preserves any upstream kill marker text (e.g.
  * `[rate-limit-quota-exhausted]` from #3386) that arrived on the original
- * skillRunner error so downstream classifiers (bootstrap/services.ts
- * terminalFailureKind regex, Go ClassifyTerminalKind fallback) can still
+ * skillRunner error so downstream classifiers (the extension's signal ladder in
+ * services/terminalKindSignal.ts, Go's ClassifyTerminalKind fallback) can still
  * match. See Issue #3442 — pre-fix this code discarded `result.error` and
  * synthesized a generic message, which broke the global quota cooldown
  * (#3434) by routing every quota-exhausted kill into the GENERIC failure

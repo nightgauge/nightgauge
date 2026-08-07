@@ -192,9 +192,151 @@ func TestTerminalKindCorpus_CoversEveryKind(t *testing.T) {
 	}
 }
 
-// TestTerminalKindCorpus_CapturedRowsAreEvidence enforces #166 mechanically:
-// a row may claim to be real telemetry only if the capture script actually
-// emitted it, and a captured shape may not be quietly dropped from the corpus.
+var classifierLiteralRe = regexp.MustCompile(`strings\.Contains\(t,\s*"((?:[^"\\]|\\.)*)"\)`)
+
+// unexercisableLiterals names every matcher literal that CANNOT appear in a
+// corpus input, with the reason. It is an allowlist of exactly one entry, and
+// the test below fails if a listed literal disappears from the source or turns
+// out to be exercisable after all — so this stays a documented exception rather
+// than a place to park inconvenient coverage gaps.
+var unexercisableLiterals = map[string]string{
+	"exitSignalSource": "ClassifyTerminalKind lowercases its input before matching, so a " +
+		"literal carrying capitals can never match: this branch is dead. It is deliberately " +
+		"NOT mirrored in the SDK, and corpus row " +
+		"`runaway-progress-exit-signal-source-dead-branch` pins the kind the dead branch " +
+		"leaves behind.",
+}
+
+// classifierMatcherLiterals returns every `strings.Contains(t, "…")` literal in
+// the two functions that make up the classifier, in source order, deduped.
+func classifierMatcherLiterals(t *testing.T, src string) []string {
+	t.Helper()
+	body := goFuncBody(t, src, "ClassifyTerminalKind") + goFuncBody(t, src, "isModelUnavailableText")
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range classifierLiteralRe.FindAllStringSubmatch(body, -1) {
+		if seen[m[1]] {
+			continue
+		}
+		seen[m[1]] = true
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// goFuncBody returns the brace-balanced body of a top-level Go function.
+func goFuncBody(t *testing.T, src, name string) string {
+	t.Helper()
+	start := strings.Index(src, "func "+name+"(")
+	if start < 0 {
+		t.Fatalf("func %s not found — the classifier was renamed and this guard now checks nothing", name)
+	}
+	open := strings.Index(src[start:], "{")
+	if open < 0 {
+		t.Fatalf("func %s has no body", name)
+	}
+	open += start
+	depth := 0
+	for i := open; i < len(src); i++ {
+		switch src[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return src[open : i+1]
+			}
+		}
+	}
+	t.Fatalf("func %s body is unbalanced", name)
+	return ""
+}
+
+// TestTerminalKindCorpus_ExercisesEveryMatcherLiteral is the PATTERN-level half
+// of the guard. CoversEveryKind above pins the kind VOCABULARY, but adding or
+// deleting a pattern ALTERNATIVE introduces no new kind — so before this test a
+// one-sided edit to any of the ~114 matcher literals passed all three suites.
+// That was not theoretical: 39 of them had no corpus input at all, including
+// the canonical stall markers (`exceeded stage_hard_cap`, `hard cap`), the
+// whole `push rejected` + `fetch first` conjunction, and every underscore kind
+// alias.
+//
+// The literals are read out of the source rather than listed here, so a new
+// alternative is covered by this guard the moment it is written.
+func TestTerminalKindCorpus_ExercisesEveryMatcherLiteral(t *testing.T) {
+	corpus := loadTerminalKindCorpus(t)
+
+	src, err := os.ReadFile("failure_handler.go")
+	if err != nil {
+		t.Fatalf("read failure_handler.go: %v", err)
+	}
+	literals := classifierMatcherLiterals(t, string(src))
+	if len(literals) < 80 {
+		t.Fatalf("extracted only %d matcher literals — the extraction regex has drifted from the source", len(literals))
+	}
+
+	inputs := make([]string, 0, len(corpus.Cases))
+	for _, tc := range corpus.Cases {
+		inputs = append(inputs, strings.ToLower(tc.Input))
+	}
+
+	present := map[string]bool{}
+	for _, lit := range literals {
+		present[lit] = true
+	}
+	for lit, why := range unexercisableLiterals {
+		if !present[lit] {
+			t.Errorf("unexercisableLiterals lists %q, which no longer appears in the classifier.\n"+
+				"Delete the exception — it now excuses nothing. Recorded reason: %s", lit, why)
+		}
+	}
+
+	var uncovered []string
+	for _, lit := range literals {
+		if why, exempt := unexercisableLiterals[lit]; exempt {
+			// Guard the exception itself: it is only legitimate while the
+			// literal genuinely cannot match lowercased text.
+			if lit == strings.ToLower(lit) {
+				t.Errorf("literal %q is listed as unexercisable but is all-lowercase, so it CAN "+
+					"match. Give it a corpus row instead. Recorded reason: %s", lit, why)
+			}
+			continue
+		}
+		covered := false
+		for _, in := range inputs {
+			if strings.Contains(in, lit) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			uncovered = append(uncovered, lit)
+		}
+	}
+
+	if len(uncovered) > 0 {
+		t.Errorf("matcher literals that no corpus input exercises (%d of %d):\n  %s\n\n"+
+			"Each one can be deleted from either ladder today with every suite green. Add a row "+
+			"to %s/corpus.json whose input contains the literal (with a rationale saying what "+
+			"the literal is for), or — if it genuinely cannot fire — add it to "+
+			"unexercisableLiterals with the reason.",
+			len(uncovered), len(literals), strings.Join(uncovered, "\n  "), corpusDir)
+	}
+}
+
+// TestTerminalKindCorpus_CapturedRowsAreEvidence ties #166's evidence rule to
+// something checkable: a row may claim to be real telemetry only if it appears
+// verbatim in the committed capture output, and a captured shape may not be
+// quietly dropped from the corpus.
+//
+// Be precise about the strength of this. captured-shapes.json is a tracked,
+// generated file with no checksum, and the capture script cannot run in CI (it
+// needs the operator's local workspace roots), so this does not PROVE the
+// script emitted a string — appending to that file would satisfy it. What it
+// buys is that the evidence and its use move together in one reviewable diff:
+// promoting a hand-authored string to `captured` requires editing the evidence
+// file next to the row that claims it, where a reviewer sees both. It is a
+// review gate, not a signature.
 func TestTerminalKindCorpus_CapturedRowsAreEvidence(t *testing.T) {
 	corpus := loadTerminalKindCorpus(t)
 	shapes := loadCapturedShapes(t)

@@ -31,9 +31,32 @@ Three suites read this one file, so drift fails whichever CI reaches first:
 - `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
 - `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`
 
+### What is actually pinned
+
+Behaviour on a fixed set of inputs is the weakest of the three guarantees, so it
+is not the only one:
+
+| Guard                                                                | What a violation looks like                                                       |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Every row classifies to `expected` (all three suites)                | A ladder answers differently from the run record on a real failure shape.         |
+| Every `TerminalKind*` constant has a row (Go + SDK)                  | A **kind** is added to one side and forgotten on the others.                      |
+| Every matcher **literal** appears in some row's input (Go)           | A **pattern alternative** exists that no test would notice being deleted.         |
+| Go's and the SDK's literal lists are identical, in order (SDK)       | The mirror stops mirroring — reordered, added or dropped alternative.             |
+| `captured` rows exist in `captured-shapes.json`, and vice versa (Go) | A hand-authored string claims to be telemetry, or a real shape goes unclassified. |
+
+The kind-level guard alone is not enough, and that is the lesson of #306's own
+review: adding or deleting a pattern alternative introduces no new kind, so 39
+of the classifier's ~114 literals could be edited on one side with every suite
+green. The literal-coverage and literal-sequence guards close that; the only
+literal deliberately exempt is `exitSignalSource` (a dead branch — Go lowercases
+its input, and that literal carries capitals), and the exemption is itself
+asserted rather than assumed.
+
 ## Captured
 
-- **Date (UTC)**: 2026-08-07
+- **Capture date (UTC)**: 2026-08-07
+- **Telemetry window**: 2026-04-02 → 2026-08-03 (recorded in the fixture as
+  `telemetry_first_seen` / `telemetry_last_seen`)
 - **Workspace roots scanned**: **21** (every root on this machine with a
   `.nightgauge/logs/` directory, across public and private repositories)
 - **Log files scanned**: **1112**
@@ -41,13 +64,19 @@ Three suites read this one file, so drift fails whichever CI reaches first:
 - **Distinct redacted failure shapes observed**: **35**
 - **Shapes emitted** (minimal covering set): **18** — 13 pipeline-logger lines,
   5 adapter result envelopes
-- **Go classifier literals**: 99, of which **22** were observed in live
-  telemetry
+- **Mineable Go classifier literals**: 99 (of 114 total; the rest are too
+  generic to mine on — see `GENERIC` in the script), of which **22** were
+  observed in live telemetry
 
 Re-running the script against the same roots and the same logs reproduces the
-file byte-for-byte: selection is deterministic (highest occurrence count, ties
-broken lexicographically, iterated in the Go classifier's literal-declaration
-order).
+file byte-for-byte. Two things make that true and neither is incidental:
+selection is deterministic (highest occurrence count, ties broken
+lexicographically, iterated in the Go classifier's literal-declaration order),
+and **no emitted field comes from the wall clock** — the dated fields describe
+the telemetry, so they move only when the telemetry does. The capture date above
+is hand-written here precisely because it does not belong in the generated file:
+stamping it there made every re-run on a later day a spurious diff, which is
+what a byte-for-byte claim cannot survive.
 
 ```bash
 scripts/capture-terminal-kind-fixture.sh $(ls -d ~/Repositories/*/*/.nightgauge/logs | sed 's#/.nightgauge/logs##')
@@ -132,9 +161,16 @@ directions:
   `` `[stall-killed] ${stage} terminated` ``, `HeadlessOrchestrator`'s quota and
   approval messages, and so on).
 
+Both directions are checks over this **tracked, generated file**. The script
+cannot run in CI — it needs the operator's 21 local workspace roots — so what
+they buy is that the evidence and its use move together in one reviewable diff:
+promoting a hand-authored string to `captured` requires appending it here, in
+the diff, next to the row that claims it. That is a review gate, not a
+signature.
+
 Synthetic rows **extend** coverage to markers, ordering overlaps and negatives
 the live window happens not to contain. They never stand in for the real
-population. Current split: **18 captured / 50 synthetic**.
+population. Current split: **18 captured / 95 synthetic**.
 
 ## Why the captured set is smaller than the failure population
 

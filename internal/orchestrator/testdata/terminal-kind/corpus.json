@@ -49,7 +49,25 @@
     "`no_matcher_kinds` are the kinds set structurally (a gate override, a recovery action) and",
     "never derived from error text. Every OTHER kind must have at least one row — that coverage",
     "assertion is what makes 'a kind added to one side fails the other side's test' true instead of",
-    "aspirational."
+    "aspirational.",
+    "",
+    "KIND COVERAGE IS NOT ENOUGH, and that is why the row count is what it is. Adding or deleting a",
+    "pattern ALTERNATIVE introduces no new kind, so the coverage assertion above cannot see it; 39 of",
+    "the classifier's ~114 matcher literals could once be edited on one side with all three suites",
+    "green. TestTerminalKindCorpus_ExercisesEveryMatcherLiteral now requires every literal to appear",
+    "in some row's input, which is what these synthetic row families are for:",
+    "",
+    "  order-*-beats-subagent-crash  Text carrying `exit `, which the generic subagent_crash",
+    "                                fallback would claim. Seven blocks carry a comment saying they",
+    "                                MUST be matched first; these rows are what make that comment a",
+    "                                test (#289: one rejected tool call, read as a process death,",
+    "                                became a permanently killed run and a fleet-wide pause).",
+    "  kind-token-*                  The bare resolved kind token. Both text classifiers declare it",
+    "                                as an alias of the marker so a kind that reaches a classifier",
+    "                                as TEXT resolves back to itself instead of falling through.",
+    "  the remaining marker rows     One per otherwise-unexercised alternative — transport wordings,",
+    "                                stall phrasings, JSON-parse spellings, the plan/cap phrases,",
+    "                                and the `push rejected` + `fetch first` conjunction."
   ],
   "no_matcher_kinds": ["orchestrator_crash", "abandoned_commit"],
   "cases": [
@@ -179,7 +197,6 @@
       "source": "captured",
       "rationale": "The five-hour sibling of the row above, also real, also unclassified. Kept alongside it because the two differ only by the word `weekly`, which is exactly the kind of near-miss a future matcher will get half-right."
     },
-
     {
       "id": "network-unavailable",
       "input": "Stage feature-dev cancelled: network unavailable: extended github connectivity loss (5 consecutive probe failures)",
@@ -437,7 +454,7 @@
       "rationale": "A genuine machine-readable-output failure, distinct from feature-validate's quality gate. Kept narrow — the `did not write expected output context` phrase deliberately moved OUT of this kind to premature_turn_end, and this row holds what remains."
     },
     {
-      "id": "validation-error-invalid-json",
+      "id": "validation-error-not-valid-json",
       "input": "Stage handoff was not valid json",
       "expected": "validation_error",
       "source": "synthetic",
@@ -564,7 +581,6 @@
       "producer": "Empty errorText guard",
       "rationale": "Empty input short-circuits before any matcher runs. Trivial, and pinned anyway because it is the one input where an early-return refactor could start returning the fallback kind and quietly attribute a crash to every run with no error text."
     },
-
     {
       "id": "divergence-signal-usage-limit-with-model",
       "input": "Claude Opus 4.5 usage limit reached; resets at 5pm",
@@ -590,6 +606,366 @@
         "why": "The signal ladder ranks the explicit quota marker above the generic `overloaded` substring — arguably the better precedence, which is exactly why the question is a taxonomy decision rather than a bug to patch.",
         "tracked": "#306 concerns → #305/#370"
       }
+    },
+    {
+      "id": "order-adapter-auth-failed-beats-subagent-crash",
+      "input": "exit 1: [adapter-auth-failed] claude-headless=auth probe timed out after 5s",
+      "expected": "adapter_auth_failed",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.preCheckAuth's [adapter-auth-failed] marker, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, a transient auth-probe starvation would be recorded as a process death, fed to the cascade breaker and counted against the lifetime failure cap instead of taking the short-backoff retry."
+    },
+    {
+      "id": "order-no-changes-produced-beats-subagent-crash",
+      "input": "exit 1: [no-changes-produced] pr-create confirmed the feature branch has zero commits ahead of base",
+      "expected": "no_changes_produced",
+      "source": "synthetic",
+      "producer": "pr-create's deterministic create fallback, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, a dispatch that produced nothing to open a PR for would be recorded as a crash, hiding the planning/scope defect it actually is."
+    },
+    {
+      "id": "order-validation-failed-beats-subagent-crash",
+      "input": "exit 1: [validation-failed] feature-validate wrote validation_status=failed and left the work uncommitted for retry",
+      "expected": "validation_failed",
+      "source": "synthetic",
+      "producer": "feature-validate's quality-gate exit, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, an honest quality-gate failure — the pipeline's own gate working — would be recorded as a subagent process death."
+    },
+    {
+      "id": "order-validation-inconclusive-beats-subagent-crash",
+      "input": "exit 1: [validation-inconclusive] feature-validate unit tier ran but executed zero tests",
+      "expected": "validation_inconclusive",
+      "source": "synthetic",
+      "producer": "feature-validate's zero-test guard, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, a gate that learned nothing would be recorded as a crash, and the environmental misconfiguration behind it would never be triaged."
+    },
+    {
+      "id": "order-branch-forked-beats-subagent-crash",
+      "input": "exit 1: PUSH REJECTED: non-fast-forward — updates were rejected because the remote contains work you do not have locally",
+      "expected": "branch_forked",
+      "source": "synthetic",
+      "producer": "the skills' push-rejection sentence surfacing from a failed `git push`, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, every retry of the same unrecoverable fork would look like a fresh crash — the exact misreading #163 was filed for."
+    },
+    {
+      "id": "order-commit-orphaned-beats-subagent-crash",
+      "input": "exit 1: [commit-orphaned] HEAD is on temp-pre-push-2 instead of the expected feature branch and self-heal could not recover it",
+      "expected": "commit_orphaned",
+      "source": "synthetic",
+      "producer": "feature-validate's Step 5.1 branch-identity guard, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, stranded but valid work would be recorded as a crash and swept, instead of being reported as unrecoverable-by-retry."
+    },
+    {
+      "id": "order-permission-denied-beats-subagent-crash",
+      "input": "exit 1: [permission-denied] the harness refused a foreground sleep wait loop",
+      "expected": "permission_denied",
+      "source": "synthetic",
+      "producer": "the harness denial surfaced through the adapter result envelope, wrapped by internal/orchestrator/scheduler.go, which records a failed stage as `exit <N>: <text>` via runtime.SetStageError",
+      "rationale": "ORDERING. failure_handler.go says this block MUST be matched before the generic subagent_crash fallback, whose `exit ` substring would otherwise claim the text. Nothing pinned that until this row: the only corpus input containing `exit ` was the crash row itself, so moving this block below the fallback left all three suites green. If it regressed, one rejected tool call becomes a permanently killed run and a fleet-wide pause — #289's incident verbatim."
+    },
+    {
+      "id": "kind-token-blocked-dependency",
+      "input": "blocked_dependency",
+      "expected": "blocked_dependency",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `blocked_dependency` as an alias of the marker for the scheduler's blockedBy deferral, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-architecture-approval-required",
+      "input": "architecture_approval_required",
+      "expected": "architecture_approval_required",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `architecture_approval_required` as an alias of the marker for the architecture-approval gate halt, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-github-quota-low",
+      "input": "github_quota_low",
+      "expected": "github_quota_low",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `github_quota_low` as an alias of the marker for the pipeline-start GitHub quota preflight, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-github-network-outage",
+      "input": "github_network_outage",
+      "expected": "github_network_outage",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `github_network_outage` as an alias of the marker for the pipeline-start GitHub connectivity preflight, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-api-connection-lost",
+      "input": "api_connection_lost",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `api_connection_lost` as an alias of the marker for an Anthropic API transport drop, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-pr-merge-unmerged",
+      "input": "pr_merge_unmerged",
+      "expected": "pr_merge_unmerged",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `pr_merge_unmerged` as an alias of the marker for pr-merge completing without the PR actually merging, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-containment-breach",
+      "input": "containment_breach",
+      "expected": "containment_breach",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `containment_breach` as an alias of the marker for the write-containment check, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-dev-produced-no-changes",
+      "input": "dev_produced_no_changes",
+      "expected": "dev_produced_no_changes",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `dev_produced_no_changes` as an alias of the marker for feature-dev's empty-workspace gate, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-dev-handoff-missing",
+      "input": "dev_handoff_missing",
+      "expected": "dev_handoff_missing",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `dev_handoff_missing` as an alias of the marker for feature-dev's missing-handoff gate, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-premature-turn-end",
+      "input": "premature_turn_end",
+      "expected": "premature_turn_end",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `premature_turn_end` as an alias of the marker for a no-op post-condition gate, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-adapter-auth-failed",
+      "input": "adapter_auth_failed",
+      "expected": "adapter_auth_failed",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `adapter_auth_failed` as an alias of the marker for the pipeline-start adapter auth gate, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-no-changes-produced",
+      "input": "no_changes_produced",
+      "expected": "no_changes_produced",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `no_changes_produced` as an alias of the marker for pr-create's zero-commits-ahead fallback, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-validation-failed",
+      "input": "validation_failed",
+      "expected": "validation_failed",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `validation_failed` as an alias of the marker for feature-validate's honest quality-gate failure, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-validation-inconclusive",
+      "input": "validation_inconclusive",
+      "expected": "validation_inconclusive",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `validation_inconclusive` as an alias of the marker for feature-validate's zero-test run, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-branch-forked",
+      "input": "branch_forked",
+      "expected": "branch_forked",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `branch_forked` as an alias of the marker for a branch that diverged from its remote, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-commit-orphaned",
+      "input": "commit_orphaned",
+      "expected": "commit_orphaned",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `commit_orphaned` as an alias of the marker for a commit stranded on the wrong branch, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "kind-token-permission-denied",
+      "input": "permission_denied",
+      "expected": "permission_denied",
+      "source": "synthetic",
+      "producer": "the resolved kind token itself — skillRunner stamps exactly this shape for api_connection_lost (`[api_connection_lost] <message>`), and autonomous.go NotifyComplete re-classifies whatever failureDetail text it is handed",
+      "rationale": "Both text classifiers declare `permission_denied` as an alias of the marker for a harness tool-call denial, so a resolved kind that reaches a classifier as TEXT resolves back to the same kind instead of falling through to the `exit `/subagent_crash fallback. No other corpus row contains this literal, so before this row the alias could be deleted from either ladder with all three suites green."
+    },
+    {
+      "id": "api-connection-lost-socket-hang-up",
+      "input": "API Error: socket hang up",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "the Node transport error surfaced verbatim by the Claude CLI result envelope",
+      "rationale": "`socket hang up` is a separate alternative from `socket connection was closed` — the words share no substring, so deleting it from one ladder is invisible to the other. It is also one of only two patterns the extension's signal ladder recognises for this kind, and that ladder's answer is used by Go verbatim."
+    },
+    {
+      "id": "api-connection-lost-fetch-failed",
+      "input": "API Error: fetch failed (cause: connect ECONNREFUSED)",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "undici's `TypeError: fetch failed` with its connect cause, relayed by the adapter",
+      "rationale": "pins two alternatives at once (`fetch failed`, `econnrefused`) AND the `api error` conjunction that gates them: without the gate an integration test that merely mentions ECONNREFUSED would be bucketed as an Anthropic transport drop and retried instead of failed."
+    },
+    {
+      "id": "api-connection-lost-connection-reset",
+      "input": "API Error: connection reset by peer while streaming the response",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "the raw transport error relayed by the Claude CLI result envelope",
+      "rationale": "`connection reset` is a distinct verb from `connection closed` and from the `econnreset` error code — #227 landed because a wording nobody had pinned fell through to the crash fallback and halted the fleet on a blip."
+    },
+    {
+      "id": "api-connection-lost-connection-refused",
+      "input": "API Error: connection refused while opening the stream to the model endpoint",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "the raw transport error relayed by the Claude CLI result envelope",
+      "rationale": "the prose sibling of `econnrefused`: the captured shape `API Error: Unable to connect to API (ConnectionRefused)` proves the CLI does phrase this failure in prose, and that shape (no space) does NOT match this literal — so nothing else exercises it."
+    },
+    {
+      "id": "architecture-approval-required-bracket-marker",
+      "input": "[architecture-approval-required] feature-planning halted — a human must approve the storage-engine change",
+      "expected": "architecture_approval_required",
+      "source": "synthetic",
+      "producer": "the bracketed form both text classifiers match alongside the human-readable ARCHITECTURE APPROVAL REQUIRED sentinel",
+      "rationale": "the human-readable sentinel is load-bearing in failureComment.ts, so the bracketed form exists precisely so a future emitter change cannot silently re-route a human gate into subagent_crash — which cost ~$5 per re-dispatch and tripped the scheduler on the second attempt (#4098/#4222). The extension's signal ladder keys only on the sentinel, so it correctly returns nothing here and defers to Go."
+    },
+    {
+      "id": "stall-kill-stalled-and-killed",
+      "input": "Stage feature-dev stalled and killed after 30m 0s without output",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "the auto-mode (CLI) stall wording, as opposed to the IPC stage runner's `exceeded stall idle threshold`",
+      "rationale": "one of three real phrasings for the single most common failure this machine produces; each differs by a word, so a matcher written for one leaves the others unclassified — which is exactly the drift #306 found on the SDK side."
+    },
+    {
+      "id": "stall-kill-stage-hard-cap",
+      "input": "Stage feature-dev exceeded stage_hard_cap (45m 0s) — forcibly terminating process.",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "PipelineBridge's stage hard-cap kill, reported in the IPC stage result errorText",
+      "rationale": "the canonical hard-cap marker, and unexercised before this row: deleting it from either ladder left every corpus suite green while Go said stall_kill and the SDK said nothing for the same kill."
+    },
+    {
+      "id": "stall-kill-hard-cap-wording",
+      "input": "Stage feature-validate terminated: hard cap of 45m 0s reached",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "the auto-mode hard-cap wording (a space, not the `stage_hard_cap` identifier)",
+      "rationale": "`hard cap` and `exceeded stage_hard_cap` look like the same rule but share no substring — the identifier spells it `hard_cap` — so they are two independently deletable alternatives and need two rows."
+    },
+    {
+      "id": "budget-exceeded-pipeline-enforcer",
+      "input": "pipeline_budget_exceeded: the run consumed its entire pipeline token budget",
+      "expected": "budget_exceeded",
+      "source": "synthetic",
+      "producer": "budget_enforcer.go's BudgetDecision.Reason for the pipeline-level token budget",
+      "rationale": "the sibling of stage_budget_exceeded and the one that was unpinned: it must land on budget_exceeded rather than the USD budget_ceiling_hit above it, because the two have different recoveries and the ceiling block is deliberately matched first."
+    },
+    {
+      "id": "validation-error-invalid-json",
+      "input": "Stage handoff could not be parsed: invalid json at position 412",
+      "expected": "validation_error",
+      "source": "synthetic",
+      "producer": "the context-file parse failure reported by the stage output validator",
+      "rationale": "`invalid json`, `not valid json` and `unparseable json` are three separately deletable spellings of the same fault and only one of them had a row; a parse failure that stops matching falls through to the crash fallback and gets a retry policy meant for process deaths."
+    },
+    {
+      "id": "validation-error-unparseable-json",
+      "input": "Stage context is unparseable json — the writer was interrupted mid-flush",
+      "expected": "validation_error",
+      "source": "synthetic",
+      "producer": "the context-file parse failure reported by the stage output validator",
+      "rationale": "the third spelling (see validation-error-invalid-json). Pinning all three is what makes 'the SDK mirrors Go literal for literal' a checked claim rather than a comment."
+    },
+    {
+      "id": "validation-error-missing-prerequisite",
+      "input": "Stage feature-validate refused to start: missing prerequisite context from feature-dev",
+      "expected": "validation_error",
+      "source": "synthetic",
+      "producer": "the stage pre-condition check that refuses to run a stage whose input context is absent",
+      "rationale": "a missing prerequisite is a pipeline-plumbing fault, not an implementation failure: misbucketing it into the crash fallback charges an organic failure to code that was never run."
+    },
+    {
+      "id": "branch-forked-push-rejected-fetch-first",
+      "input": "PUSH REJECTED: updates were rejected because the tip of your current branch is behind its remote counterpart; fetch first before pushing again",
+      "expected": "branch_forked",
+      "source": "synthetic",
+      "producer": "git's own rejection text surfaced by the skills' push step",
+      "rationale": "this is the ONLY row that exercises the `push rejected` AND `fetch first` conjunction — the other fork rows match on the bare `non-fast-forward` phrase, and the negative row proves only that `push rejected` alone must miss. Deleting the conjunction from either side was invisible before this row."
+    },
+    {
+      "id": "subagent-crash-explicit-phrase",
+      "input": "subagent crash: the stage process died without writing a result envelope",
+      "expected": "subagent_crash",
+      "source": "synthetic",
+      "producer": "the explicit crash wording used by the auto-mode execution manager",
+      "rationale": "the fallback block has three alternatives and only `exit ` and `killed by signal` had rows. It is the block every unmatched failure lands in, so its own literals must be pinned too — a deletion here silently converts real crashes into the unknown/default case."
+    },
+    {
+      "id": "model-unavailable-not-found-error",
+      "input": "API Error: 404 not_found_error — model: claude-opus-4-5",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's 404 error body when the requested model is not resolvable",
+      "rationale": "the canonical 404 shape for #42's tier-downgrade fallback, and the one gated on a co-occurring `model` mention so an unrelated not_found_error cannot trigger a model downgrade. Neither half was exercised before this row."
+    },
+    {
+      "id": "model-unavailable-invalid-model",
+      "input": "API Error: invalid model: claude-sonnet-9-preview",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's rejection of an unrecognised model identifier",
+      "rationale": "`invalid model` and `unknown model` are ungated (the phrase itself names a model), unlike the plan/cap phrases below — so they are the two literals whose deletion would silently disable the downgrade for the most direct rejection shape there is."
+    },
+    {
+      "id": "model-unavailable-unknown-model",
+      "input": "API Error: unknown model requested by the adapter",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "the adapter-side rejection when a configured model is not in the provider's catalogue",
+      "rationale": "the second ungated spelling (see model-unavailable-invalid-model). Without it the adapter's own wording is unpinned while the API's is pinned."
+    },
+    {
+      "id": "model-unavailable-not-included-in-plan",
+      "input": "claude-opus-4-5 is not included in your current plan",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's plan-restriction wording",
+      "rationale": "one of four interchangeable plan phrasings, each independently deletable, and all four gated on a registry model mention so an unrelated 'not included in your' sentence cannot trigger a tier downgrade. Only `not available on your` had a row."
+    },
+    {
+      "id": "model-unavailable-not-offered-on-plan",
+      "input": "claude-opus-4-5 is not offered on your plan",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's plan-restriction wording",
+      "rationale": "the third of the four plan phrasings (see model-unavailable-not-included-in-plan). The set exists because the provider's wording is not stable; an unpinned member is a downgrade that quietly stops firing."
+    },
+    {
+      "id": "model-unavailable-not-supported-on-plan",
+      "input": "claude-opus-4-5 is not supported on your plan",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's plan-restriction wording",
+      "rationale": "the fourth of the four plan phrasings (see model-unavailable-not-included-in-plan), pinned for the same reason."
+    },
+    {
+      "id": "model-unavailable-usage-cap",
+      "input": "Model usage cap reached for claude-opus-4-5; resets at 5pm",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic's model-specific usage-cap message",
+      "rationale": "`usage cap` is the cap-phrase sibling of `usage limit` and `weekly limit`, and the only one with no row. Note the extension's signal ladder matches `usage limit`/`session limit` but NOT `usage cap`, so it correctly returns nothing here — the divergence recorded on divergence-signal-usage-limit-with-model does not extend to this wording."
     }
   ]
 }

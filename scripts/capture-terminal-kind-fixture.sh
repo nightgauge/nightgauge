@@ -15,17 +15,33 @@
 # script emits — captured-shapes.json — which is how #166's evidence rule stops
 # being a claim and starts being a test.
 #
-# Reproducible: re-running against the same roots and the same log corpus
-# reproduces byte-identical shapes (selection is deterministic — highest
-# occurrence count, ties broken lexicographically, iterated in the Go
-# classifier's own literal-declaration order).
+# Reproducible: the emitted file is a pure function of (roots, log corpus, Go
+# classifier source). Selection is deterministic — highest occurrence count,
+# ties broken lexicographically, iterated in the Go classifier's own
+# literal-declaration order — and NO field is taken from the wall clock, so
+# re-running on a different day against the same logs produces a byte-identical
+# file. The dated fields (`telemetry_first_seen` / `telemetry_last_seen`, and
+# each shape's own `first_seen` / `last_seen`) come from the log lines
+# themselves; they move only when the telemetry does.
 #
 # ------------------------------------------------------------------------
-# WHAT IS MINED
+# WHAT IS MINED — two miners, both requiring machine-emitted structure:
 #
-# Only STRUCTURED pipeline logger lines:
+#  1. STRUCTURED pipeline logger lines:
 #
-#     [<ISO8601>] [LEVEL] [stage] [#issue] <message>
+#         [<ISO8601>] [LEVEL] [stage] [#issue] <message>
+#
+#     kept only when the message carries a classifier marker AND survives the
+#     source-code denylist below.
+#
+#  2. ADAPTER RESULT ENVELOPES — `{"type":"result", …,"is_error":true}`, whose
+#     `result` field is the terminal error text exactly as the CLI handed it to
+#     the pipeline. This is the highest-grade evidence available (it is
+#     literally the classifier's input) and it is the only reason the raw
+#     session JSON is read at all. Envelopes are kept even when they match no
+#     marker: an unmatched real envelope is the only honest evidence for the
+#     unknown/default case. Shapes record which miner produced them in
+#     `origin` ("pipeline-log" / "result-envelope").
 #
 # The `.nightgauge/logs/*_session.log` files also contain raw agent session
 # output — which includes agents READING AND EDITING the classifier source.
@@ -86,7 +102,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 
 out_dir = os.environ["OUT_DIR"]
 classifier_src = os.environ["CLASSIFIER_SRC"]
@@ -443,9 +458,16 @@ payload = {
         "Strings are redacted (see the script header); identity-shaped constructs are replaced",
         "with fixed placeholders and a fail-closed verification pass re-scans every emitted string.",
     ],
-    "captured_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    # Dates describe the TELEMETRY, never the run: a wall-clock stamp would
+    # make every re-capture a diff and turn the reproducibility claim in the
+    # header (and in .prettierignore) into a lie one calendar day later.
+    "telemetry_first_seen": min((r["first_seen"] for r in selected), default=""),
+    "telemetry_last_seen": max((r["last_seen"] for r in selected), default=""),
     "generator": "scripts/capture-terminal-kind-fixture.sh",
-    "source": ".nightgauge/logs/*.log — structured pipeline logger lines only",
+    "source": (
+        ".nightgauge/logs/*.log — structured pipeline-logger lines and adapter "
+        "result envelopes (see `origin` on each shape)"
+    ),
     "roots_scanned": len(roots),
     "log_files_scanned": log_files,
     "structured_log_lines_scanned": structured_lines,

@@ -9,9 +9,10 @@
     "Strings are redacted (see the script header); identity-shaped constructs are replaced",
     "with fixed placeholders and a fail-closed verification pass re-scans every emitted string."
   ],
-  "captured_utc": "2026-08-07",
+  "telemetry_first_seen": "2026-04-02",
+  "telemetry_last_seen": "2026-08-03",
   "generator": "scripts/capture-terminal-kind-fixture.sh",
-  "source": ".nightgauge/logs/*.log — structured pipeline logger lines only",
+  "source": ".nightgauge/logs/*.log — structured pipeline-logger lines and adapter result envelopes (see `origin` on each shape)",
   "roots_scanned": 21,
   "log_files_scanned": 1112,
   "structured_log_lines_scanned": 956903,

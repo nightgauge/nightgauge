@@ -32,8 +32,10 @@ claude-plugins/docs/
 
 # Generated test snapshots — never prettier-formatted
 **/__snapshots__/
-# Generated evidence fixture (#306): scripts/capture-terminal-kind-fixture.sh must
-# reproduce this file byte-for-byte from the same telemetry, and the Go parity
-# suite diffs corpus rows against it. Prettier collapses its short arrays, which
-# would make every re-run of the capture show a spurious diff.
+# Generated evidence fixture (#306): scripts/capture-terminal-kind-fixture.sh
+# emits this file, and the Go parity suite diffs corpus rows against it. The
+# script writes no wall-clock field, so re-running it over the same telemetry
+# reproduces the file byte for byte — but only if nothing reformats it in
+# between. Prettier collapses its short arrays, which would make every re-run
+# show a spurious diff.
 internal/orchestrator/testdata/terminal-kind/captured-shapes.json

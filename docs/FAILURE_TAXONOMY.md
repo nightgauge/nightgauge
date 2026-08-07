@@ -519,13 +519,24 @@ Working rules:
 - Every row carries a mandatory `rationale`. Changing an expectation means
   editing the argument for it in the same diff.
 - The core rows are **real** failure text captured from live telemetry by
-  `scripts/capture-terminal-kind-fixture.sh` (#166); the Go suite enforces that
-  a row marked `captured` actually appears in the capture output, and that no
-  captured shape is left unclassified. Synthetic rows extend coverage and must
-  name the producing call site.
-- A coverage assertion fails when a `TerminalKind*` constant has no row (unless
-  it is listed in `no_matcher_kinds` because it is set structurally). So a kind
-  or pattern added to one ladder fails the others until the corpus is updated.
+  `scripts/capture-terminal-kind-fixture.sh` (#166). The Go suite enforces that
+  a row marked `captured` appears verbatim in the committed capture output
+  (`testdata/terminal-kind/captured-shapes.json`), and that no shape in that
+  file is left unclassified. Both directions are checks over a **tracked,
+  generated file** — the capture script needs the operator's local workspace
+  roots and is not run in CI — so the guarantee is "this string is in the
+  reviewed evidence file", enforced in the diff, not a cryptographic proof of
+  provenance. Synthetic rows extend coverage and must name the producing call
+  site.
+- Two coverage assertions make the pinning structural rather than
+  best-effort. One fails when a `TerminalKind*` constant has no row (unless it
+  is listed in `no_matcher_kinds` because it is set structurally); the other
+  fails when a matcher **literal** — read out of the Go source, not listed by
+  hand — appears in no corpus input. Patterns are additionally diffed
+  literal-for-literal, in order, between Go and the SDK mirror by
+  `failureClassifier.corpusParity.test.ts`. So a kind _or a pattern
+  alternative_ added to one ladder fails the others until the corpus is
+  updated.
 - Deliberate disagreements are recorded as `known_divergence`, which **pins**
   them: the divergent side must still produce exactly that kind, so the gap is
   visible and any new one is red.

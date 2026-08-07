@@ -33,9 +33,11 @@
  * whenever this ladder answers, its answer matches Go's — except for the
  * disagreements the corpus records explicitly as `known_divergence.signal`.
  *
- * This ladder covers 9 of the ~32 kinds on purpose: it exists to catch the
- * environmental failures the TS layer sees first, not to be a second complete
- * taxonomy.
+ * This ladder covers 8 of the 32 declared kinds on purpose: it exists to catch
+ * the environmental failures the TS layer sees first, not to be a second
+ * complete taxonomy. The eight are enumerated in the corpus suite's "covers the
+ * environmental kinds it exists to catch" case, which fails if this ladder ever
+ * stops producing one of them — so the count above is checked, not asserted.
  */
 
 import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../utils/failureComment";

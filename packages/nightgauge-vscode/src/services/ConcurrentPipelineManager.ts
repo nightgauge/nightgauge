@@ -37,8 +37,14 @@ const ABORT_ALL_TIMEOUT_MS = 30_000;
  * (`github_network_outage`). Both auto-recover via the Go scheduler's
  * environmental routing (short backoff / global cooldown, board→Ready, no
  * lifetime-cap increment), so they must neither halt the queue nor post a
- * failure comment. Match strings mirror Go's ClassifyTerminalKind and
- * bootstrap/services.ts — keep aligned.
+ * failure comment. Match strings mirror Go's ClassifyTerminalKind and the
+ * extension's signal ladder in services/terminalKindSignal.ts (#306 moved the
+ * ladder out of bootstrap/services.ts, which now just calls it).
+ *
+ * NOT PINNED by the #306 corpus: this predicate re-derives a kind-shaped
+ * ROUTING decision from raw text instead of consuming the resolved kind, so it
+ * can still drift from the three classifiers. Pinning it properly means routing
+ * on the resolved kind — a flow change, #305/#370 territory.
  */
 function isTransientNetworkFailureText(errMsg: string): boolean {
   return (
@@ -2105,8 +2111,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // expires (~4h for a quota miss), which defeats the purpose of the
       // environmental classification path.
       //
-      // Match strings are the same patterns used in bootstrap/services.ts
-      // (terminalFailureKind classification). Keep aligned.
+      // Match strings are the same patterns used by the extension's signal
+      // ladder in services/terminalKindSignal.ts (#306 extracted it from
+      // bootstrap/services.ts). Keep aligned — and note that, like
+      // isTransientNetworkFailureText above, this ladder re-derives a routing
+      // decision from raw text rather than consuming the resolved kind, so the
+      // #306 corpus does NOT pin it (#305/#370).
       const haltErrMsg = pipelineResult?.error?.message ?? "";
       const isEnvironmentalFailure =
         /stream idle timeout/i.test(haltErrMsg) ||
