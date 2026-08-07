@@ -226,6 +226,17 @@
       }
     },
     {
+      "name": "force-clear-terminal-bookkeeping",
+      "note": "SECOND extension-side terminal funnel (#307), fenced as force-settle-funnel. It exists because the runSlotPipeline finally is unreachable for a run whose promise NEVER SETTLES (wedged adapter, a stage awaiting an IPC/gh call that ignores the AbortController), and abortAll's 30s deadline force-clears such a slot. It performs THREE of the behaviors below and deliberately omits five; the omissions are recorded here because the fence-hash guard cannot infer them. PERFORMS: queue-item-completion (completeQueueItem, #254's invariant); autonomous-terminal-notify (onSlotFailed -> autonomousComplete, with the [user-abort] marker so the Go scheduler routes it to TerminalKindUserAbort instead of the generic failure branch that would feed the cascade breaker and charge the lifetime cap for an operator's Stop); worktree-cleanup, but only its disposal half — the worktree is PRESERVED unconditionally (a wedged process may still hold it) and the separate worktreeReleased latch lets a later honest settlement finish the teardown. OMITS: history-record-write, learning-outcome-record and pipeline-done-telemetry, all three of which live behind pipeline.notifyComplete, which a never-settling run never reaches — so a force-cleared run produces no run record and no learning outcome, and the Go scheduler correspondingly books it as a NON-failure (no lifetime-cap increment, no cascade feed) so the two surfaces agree that no outcome was observed rather than disagreeing about a failure (#304's shape); board-status-failure-sync, because the issue's status is deliberately left where it is — the run's process may still be alive and a revert to Ready would re-dispatch a second run into the first one's worktree and IPC runtime; stage-exit-records, which are written by the stage runner per stage and have no meaning for a stage that never exited. The GO path has no counterpart by construction: Scheduler.runPipeline owns its stage loop synchronously, so its terminal defer always runs and there is no unsettled-promise state to force-clear.",
+      "go": {
+        "pathSpecific": "NOT APPLICABLE — Scheduler.runPipeline drives its stage loop synchronously and its terminal defer always runs, so there is no 'the run promise never settled' state for a deadline to force-clear. The extension path hands runPipeline to a detached promise, which is what creates the gap."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "private async runForceSettleBookkeeping("
+      }
+    },
+    {
       "name": "auto-retro-on-failure",
       "go": {
         "pathSpecific": "Extension-only (#3926): auto-retro analysis runs in the interactive mode; the Go path's failures are analyzed by the batch retro skill instead."
@@ -250,6 +261,13 @@
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
       "sha256": "4e2a04aa322678b4a0b20db308f32b6b554d5af0742846494fe0308e368aae67"
+    },
+    {
+      "id": "extension-force-settle-funnel",
+      "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+      "begin": "terminal-parity:begin force-settle-funnel",
+      "end": "terminal-parity:end force-settle-funnel",
+      "sha256": "8c30c8ef96ea77145de34faecf8dd50a3c8779c759a6f1814b465dd9c8b977a2"
     }
   ]
 }

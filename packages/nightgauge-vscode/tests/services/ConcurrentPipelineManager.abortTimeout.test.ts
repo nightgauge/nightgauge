@@ -38,7 +38,7 @@ vi.mock("vscode", () => ({
   Uri: { parse: vi.fn((s: string) => ({ toString: () => s })) },
 }));
 
-const { worktreeCreate } = vi.hoisted(() => ({
+const { worktreeCreate, worktreeCleanupCalls } = vi.hoisted(() => ({
   // Swappable so a test can wedge `git worktree add` — the state in which
   // abortAll's deadline fires with isFilling=true and zero slots (#307).
   worktreeCreate: {
@@ -50,6 +50,10 @@ const { worktreeCreate } = vi.hoisted(() => ({
         exists: true,
       }),
   },
+  // Every `WorktreeManager.cleanup(issueNumber, deleteBranch)` across all
+  // instances — the only observable proof that a worktree was actually torn
+  // down rather than preserved forever (#307 / #110).
+  worktreeCleanupCalls: [] as Array<{ issueNumber: number; deleteBranch: boolean }>,
 }));
 
 vi.mock("../../src/utils/WorktreeManager", () => ({
@@ -60,7 +64,10 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
         .mockImplementation((issueNumber: number, branchName: string) =>
           worktreeCreate.impl(issueNumber, branchName)
         ),
-      cleanup: vi.fn().mockResolvedValue(undefined),
+      cleanup: vi.fn().mockImplementation((issueNumber: number, deleteBranch: boolean) => {
+        worktreeCleanupCalls.push({ issueNumber, deleteBranch });
+        return Promise.resolve(undefined);
+      }),
       cleanupOrphans: vi.fn().mockResolvedValue(0),
       cleanupAll: vi.fn().mockResolvedValue(undefined),
       listActive: vi.fn().mockResolvedValue([]),
@@ -81,7 +88,21 @@ vi.mock("../../src/utils/skillRunner", () => ({
   killAllActiveProcesses: vi.fn(),
 }));
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
+
+/**
+ * Real run outcomes captured from a local pipeline history index — see
+ * tests/fixtures/terminal/README.md for provenance and the capture script.
+ * The settlement shape these tests ride on has to be the real one (#166).
+ */
+const RUN_OUTCOMES = JSON.parse(
+  readFileSync(path.join(__dirname, "../fixtures/terminal/run-outcomes.json"), "utf-8")
+) as {
+  complete: { cost_usd: number; duration_ms: number; stage_count: number };
+  cancelled: { cost_usd: number; duration_ms: number };
+};
 
 function makeQueueItem(issueNumber: number) {
   return {
@@ -214,6 +235,7 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
     mockQueue = createMockQueueService();
     mockLogger = createMockLogger();
     showWarningMessage.mockClear();
+    worktreeCleanupCalls.length = 0;
     worktreeCreate.impl = (issueNumber: number, branchName: string) =>
       Promise.resolve({
         path: `/test-repo/.worktrees/issue-${issueNumber}`,
@@ -327,6 +349,14 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
       expect(onSlotFailed).toHaveBeenCalledTimes(1);
       expect(onSlotFailed.mock.calls[0][1]).toBe(282);
       expect((onSlotFailed.mock.calls[0][2] as Error).message).toMatch(/abort deadline/);
+      // The `[user-abort]` marker is what routes this to the Go scheduler's
+      // user_abort kind. Without it the text classifies to nothing on either
+      // side and lands in the GENERIC failure branch: N wedged slots on one
+      // Stop All feed N failures into the cascade breaker (tripping it pauses
+      // the fleet), each charging the per-issue lifetime cap that survives
+      // Resume(), and the board reverts to Ready so the issue is re-dispatched
+      // while its process may still hold the worktree.
+      expect((onSlotFailed.mock.calls[0][2] as Error).message).toContain("[user-abort]");
 
       // The slot was disposed through the normal cleanup path, not just
       // dropped from the map.
@@ -472,7 +502,7 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
         expect.objectContaining({ booked: 0, alreadyBooked: 0, bookkeepingFailed: 1 })
       );
       expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining("TIMED OUT"),
+        expect.stringContaining("ABANDONED"),
         expect.objectContaining({ issueNumber: 282, completedQueueItem: false })
       );
       // Partial progress is honestly reported: the outcome callback never fired.
@@ -485,12 +515,29 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
       );
     });
 
-    it("releases the processing mark for items still mid-dispatch at the deadline", async () => {
+    it("keeps the in-flight guard for a dispatch the deadline abandoned, and books it when it unwinds", async () => {
       // Wedge `git worktree add` so startSlot never returns: the item has been
       // dequeued (and marked `processing`) and holds a reservation, but never
       // becomes a slot. abortAll's deadline fires with isFilling=true and zero
-      // slots — before #307 nothing released that mark either.
-      worktreeCreate.impl = () => new Promise(() => {});
+      // slots.
+      //
+      // The reservation must SURVIVE. It is the #188 per-issue in-flight
+      // guard, and a reservation exists if and only if a `startSlot` call is
+      // executing right now — so clearing it erases the guard for a dispatch
+      // that is still running, and the resuming dispatch (with abortAll's
+      // finally having already reset isShuttingDown to false) writes its slot
+      // over whatever run owns the issue by then.
+      let releaseWorktree: ((v: unknown) => void) | undefined;
+      worktreeCreate.impl = (issueNumber: number, branchName: string) =>
+        new Promise((resolve) => {
+          releaseWorktree = () =>
+            resolve({
+              path: `/test-repo/.worktrees/issue-${issueNumber}`,
+              branch: branchName,
+              issueNumber,
+              exists: true,
+            });
+        });
       const factory = createStuckFactory();
       const manager = new ConcurrentPipelineManager(
         "/test-repo",
@@ -502,7 +549,7 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
       // Deliberately not awaited — fillSlots is wedged inside startSlot.
-      void manager.fillSlots();
+      const fillPromise = manager.fillSlots();
       await Promise.resolve();
       expect(manager.activeSlotCount).toBe(0);
 
@@ -510,12 +557,187 @@ describe("ConcurrentPipelineManager.abortAll — timeout (Issue #3111)", () => {
       await vi.advanceTimersByTimeAsync(31_000);
       await abortPromise;
 
+      expect(manager.isShutdownInProgress).toBe(false);
+      // The reservation is still held: one seat of the two is still spoken for
+      // by the dispatch that has not finished. Releasing capacity we do not
+      // have is how the guard gets defeated.
+      expect(manager.availableSlotCount).toBe(1);
+      // Nothing was completed on the in-flight dispatch's behalf — that would
+      // be an unbounded IPC round-trip per reservation, pushing abortAll past
+      // its own deadline with isShuttingDown=true (#3111's symptom).
+      expect(mockQueue.complete).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "abortAll force-clear complete",
+        expect.objectContaining({ abandonedReservations: [282] })
+      );
+
+      // Now the wedge clears. The dispatch must bail rather than start, and
+      // do its own bookkeeping.
+      releaseWorktree!(undefined);
+      await fillPromise;
+
+      expect(manager.activeSlotCount).toBe(0);
+      expect(manager.availableSlotCount).toBe(2);
       expect(mockQueue.complete).toHaveBeenCalledTimes(1);
       expect(mockQueue.complete).toHaveBeenCalledWith("", 282);
+      // Released, NOT re-queued: the operator stopped the pipeline and was
+      // told so; re-enqueueing restarts the very issue they stopped.
+      expect(mockQueue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("stays bounded even when a stranded reservation's dispatch never unwinds", async () => {
+      // The reservation loop must not await anything per-reservation. With K
+      // reservations and an IPC request timeout of 30s, awaiting a completion
+      // apiece put abortAll K*30s past its own deadline with isShuttingDown
+      // true throughout — the exact #3111 condition the deadline exists to
+      // prevent, reintroduced by the fix for #307.
+      worktreeCreate.impl = () => new Promise(() => {});
+      mockQueue.complete.mockImplementation(() => new Promise(() => {}));
+      const factory = createStuckFactory();
+      const manager = new ConcurrentPipelineManager(
+        "/test-repo",
+        mockQueue as any,
+        factory,
+        mockLogger as any,
+        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      );
+
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+      void manager.fillSlots();
+      await Promise.resolve();
+
+      let settled = false;
+      const abortPromise = manager.abortAll().then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(31_000);
+      await abortPromise;
+
+      expect(settled).toBe(true);
       expect(manager.isShutdownInProgress).toBe(false);
-      // Capacity is reclaimed — the whole point of the branch is to declare
-      // the pipeline ready for new work.
-      expect(manager.availableSlotCount).toBe(2);
+    });
+
+    it("does not let abandoned bookkeeping evict a slot that was re-dispatched", async () => {
+      // THE regression this fix exists for. `Promise.race` abandons the
+      // loser's RESULT, never its WORK: when FORCE_SETTLE_TIMEOUT_MS wins, the
+      // bookkeeping chain keeps running detached. Its first step is an IPC
+      // round-trip bounded only by the client's own 30s request timeout, so it
+      // reliably resumes ~25s AFTER abortAll returned and reset isShuttingDown
+      // — squarely inside the window in which the same issue is re-dispatched.
+      // Every remaining step then mutates state keyed by ISSUE NUMBER:
+      // `onSlotFailed` books autonomousComplete(false) against the LIVE run
+      // (freeing the Go scheduler's slot for a run that is still executing)
+      // and `cleanupSlot`'s `this.slots.delete(issueNumber)` evicts it from the
+      // manager entirely — defeating the #188 duplicate-dispatch guard,
+      // killing the live run's tree item and state subscription, and making
+      // availableSlotCount over-report.
+      let releaseComplete: (() => void) | undefined;
+      let completeCalls = 0;
+      mockQueue.complete.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            completeCalls++;
+            if (completeCalls === 1) {
+              releaseComplete = resolve; // wedge the FIRST call only
+            } else {
+              resolve();
+            }
+          })
+      );
+      const factory = createStuckFactory();
+      const manager = new ConcurrentPipelineManager(
+        "/test-repo",
+        mockQueue as any,
+        factory,
+        mockLogger as any,
+        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      );
+      const onSlotFailed = vi.fn();
+      const onSlotCleaned = vi.fn();
+      manager.setCallbacks({ onSlotFailed, onSlotCleaned });
+
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+      await manager.fillSlots();
+      expect(manager.activeSlotCount).toBe(1);
+
+      const abortPromise = manager.abortAll();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(6_000); // blow the per-slot budget
+      await abortPromise;
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "abortAll force-clear complete",
+        expect.objectContaining({ bookkeepingFailed: 1 })
+      );
+      expect(manager.activeSlotCount).toBe(0);
+      expect(manager.isShutdownInProgress).toBe(false);
+
+      // The operator restarts, and the autonomous scheduler re-picks the same
+      // still-Ready issue.
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+      await manager.fillSlots();
+      expect(manager.activeSlotCount).toBe(1);
+
+      onSlotFailed.mockClear();
+      onSlotCleaned.mockClear();
+
+      // The wedged IPC finally answers and the abandoned chain resumes.
+      releaseComplete!();
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The LIVE run is untouched.
+      expect(manager.activeSlotCount).toBe(1);
+      expect(manager.availableSlotCount).toBe(1);
+      expect(onSlotFailed).not.toHaveBeenCalled();
+      expect(onSlotCleaned).not.toHaveBeenCalled();
+    });
+
+    it("books a SUCCESS that lands after the force-clear, and tears the worktree down", async () => {
+      // The abort deadline books "outcome unknown" as a placeholder. When the
+      // wedged run then delivers a real success — the classic case is a PR
+      // that already merged while the run wedged in post-merge `gh`
+      // bookkeeping — the truth must supersede the placeholder. Suppressing it
+      // books a merged run as an abort, and `promoteUnblockedToReady` (Go's
+      // success branch only) never runs, so every issue blockedBy this one
+      // stays stuck in Backlog. The worktree must come down too: the
+      // force-settle's preserveWorktree=true is "not yet", not "never", and
+      // leaving it is #110's condition.
+      const { factory, settleRun } = createDeferredFactory();
+      const manager = new ConcurrentPipelineManager(
+        "/test-repo",
+        mockQueue as any,
+        factory,
+        mockLogger as any,
+        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      );
+      const onSlotFailed = vi.fn();
+      const onSlotCompleted = vi.fn();
+      manager.setCallbacks({ onSlotFailed, onSlotCompleted });
+
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+      await manager.fillSlots();
+
+      const abortPromise = manager.abortAll();
+      await vi.advanceTimersByTimeAsync(31_000);
+      await abortPromise;
+
+      expect(onSlotFailed).toHaveBeenCalledTimes(1); // the provisional abort booking
+      expect(worktreeCleanupCalls).toEqual([]); // preserved, as designed
+
+      // Real shape from a run that actually completed (fixtures/terminal).
+      settleRun({
+        success: true,
+        totalDurationMs: RUN_OUTCOMES.complete.duration_ms,
+        stages: [],
+      });
+      await manager.settleForTest(282);
+
+      expect(onSlotCompleted).toHaveBeenCalledTimes(1);
+      expect(onSlotCompleted.mock.calls[0][1]).toBe(282);
+      expect(onSlotFailed).toHaveBeenCalledTimes(1); // not re-fired
+      expect(worktreeCleanupCalls).toEqual([{ issueNumber: 282, deleteBranch: false }]);
     });
   });
 });

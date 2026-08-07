@@ -1,0 +1,24 @@
+{
+  "_provenance": "Captured + redacted by scripts/capture-terminal-run-outcomes.mjs from a local .nightgauge/pipeline/history/index.json written by the Go binary. Free-text and identity fields (title, branch, labels, run_id, issue_number, timestamps) are dropped.",
+  "totalRunsInSource": 483,
+  "complete": {
+    "outcome": "complete",
+    "cost_usd": 24.431024400000002,
+    "total_input_tokens": 310,
+    "total_output_tokens": 118072,
+    "total_cache_read_tokens": 33544198,
+    "total_cache_creation_tokens": 565530,
+    "duration_ms": 3094605,
+    "stage_count": 8
+  },
+  "cancelled": {
+    "outcome": "cancelled",
+    "cost_usd": 15.199620750000001,
+    "total_input_tokens": 232,
+    "total_output_tokens": 85580,
+    "total_cache_read_tokens": 18609863,
+    "total_cache_creation_tokens": 582613,
+    "duration_ms": 1918762,
+    "stage_count": 8
+  }
+}

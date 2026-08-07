@@ -132,7 +132,16 @@ export function classifyFailureCategory(
     // score makes the dogfooding metric describe Anthropic's uptime rather
     // than the pipeline's.
     t.includes("api_connection_lost") ||
-    (t.includes("api error") && t.includes("connection closed"))
+    (t.includes("api error") && t.includes("connection closed")) ||
+    // Operator abort the run ignored (#307): abortAll's deadline expired with
+    // the slot's pipeline promise still unsettled, so the extension
+    // force-cleared it. The outcome is UNKNOWN — nothing observed a result —
+    // and the cause is the operator pressing Stop, so it says nothing about
+    // the quality of the work. Counts at the 0.05 infrastructure weight rather
+    // than depressing reliability like an organic failure; matched before the
+    // "timeout"/"api error" agent block so the deadline wording can't claim it.
+    t.includes("[user-abort]") ||
+    t.includes("user_abort")
   ) {
     return "infrastructure";
   }
@@ -248,6 +257,7 @@ export type TerminalFailureKind =
   // classifyTerminalKind has no matcher for it either.
   | "abandoned_commit" // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
   | "commit_orphaned" // Issue #266 — a killed stage's commit landed on the wrong branch (a stray temp-pre-push-<n> left by a SIGKILL bypassing the pre-push restore-defer) and feature-validate's branch-identity self-heal could not recover it; unrecoverable by retry
+  | "user_abort" // Issue #307 — the operator pressed Stop and the run did not stop with it: abortAll's deadline expired with the slot's pipeline promise still unsettled, so the extension force-cleared the slot and booked its terminal state. The outcome is UNKNOWN, not failed — nothing observed a result. Routed like branch_forked: no lifetime-cap increment, no cascade feed, no pause, and deliberately no board revert (the wedged process may still hold the worktree and the IPC runtime, so re-dispatch would walk a second run into the first one's state)
   | "permission_denied"; // Issue #289 — the harness denied a tool call outright (commonly a foreground `sleep` wait loop, reported as "User rejected tool use"). A denial is the harness saying "not that way", not a defect: the stage had turns left and could pick another approach. Routed like adapter_auth_failed — short backoff, board → Ready, no lifetime-cap increment, no cascade feed, no pause — but bounded by a max-attempt cap so a stage that keeps reaching for the same denied pattern stops re-dispatching
 
 /**
@@ -287,6 +297,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "validation_inconclusive",
   "abandoned_commit",
   "commit_orphaned",
+  "user_abort",
   "permission_denied",
 ];
 
@@ -305,6 +316,14 @@ export function classifyTerminalKind(
 ): TerminalFailureKind | undefined {
   if (!errorText) return undefined;
   const t = errorText.toLowerCase();
+
+  // Operator abort the run ignored (Issue #307). Matched FIRST, mirroring Go:
+  // the operator's own Stop outranks every heuristic below, and the
+  // force-clear text carries "abort", "cancel" and a millisecond deadline that
+  // would otherwise invite a stall/timeout misread.
+  if (t.includes("[user-abort]") || t.includes("user_abort")) {
+    return "user_abort";
+  }
 
   // Network-unavailable abort (Issue #3296). Matched first, mirroring Go —
   // the cancellation message shouldn't accidentally match a generic

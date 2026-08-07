@@ -410,6 +410,38 @@ const (
 	// instead of looping forever. Classified `infrastructure` (harness
 	// behavior, not a code or issue defect) in docs/FAILURE_TAXONOMY.md.
 	TerminalKindPermissionDenied = "permission_denied"
+	// TerminalKindUserAbort is set when the OPERATOR stopped the run and the
+	// run did not stop with it: abortAll's deadline expired with a slot's
+	// pipeline promise still unsettled, so the extension force-cleared the slot
+	// and booked its terminal state on the run's behalf (#307).
+	//
+	// The defining property is that the run's outcome is UNKNOWN — not failed.
+	// Nothing observed a result: the process may still be alive, the PR may
+	// already have merged, or the stage may have died silently. Routing that
+	// through the generic failure branch was wrong three times over, and every
+	// consequence was caused by the operator pressing Stop:
+	//   - N wedged slots on ONE Stop All feed N failures into the cascade
+	//     circuit breaker inside one window, tripping it (status
+	//     "safety_tripped", fleet paused, Discord notification, cascade-pause
+	//     card) as a direct result of a deliberate operator action;
+	//   - LifetimeIssueFailures charges a deliberate stop against the
+	//     chronically-failing-issue cap, which survives Resume();
+	//   - the board revert to Ready re-dispatches the issue while its previous
+	//     process may still hold the worktree and the IPC server's runtime, so
+	//     the next run adopts the dead run's identity (the #313/#316 shape).
+	//
+	// So: NO LifetimeIssueFailures increment, NO cascade feed, NO pause, NO
+	// board revert, NO automatic re-dispatch. Same "sideline the issue, leave
+	// it exactly where it is" shape as TerminalKindBranchForked — the way back
+	// in is the operator re-queueing, the only actor that knows whether the
+	// wedged process is actually gone. Emitted by
+	// ConcurrentPipelineManager.forceSettleUnsettledSlot with the
+	// `[user-abort]` marker embedded in the failure text (mirrors the
+	// `[blocked-dependency]` / `[adapter-auth-failed]` marker pattern).
+	//
+	// Classified `infrastructure` in docs/FAILURE_TAXONOMY.md: an operator stop
+	// that a run ignored says nothing about the quality of the work.
+	TerminalKindUserAbort = "user_abort"
 )
 
 // ClassifyTerminalKind returns the terminal failure kind for the given error
@@ -423,6 +455,16 @@ func ClassifyTerminalKind(errorText string) string {
 		return ""
 	}
 	t := strings.ToLower(errorText)
+
+	// Operator abort that the run ignored (#307). Matched FIRST: the operator's
+	// own Stop outranks every heuristic below, and the force-clear text carries
+	// "abort", "cancel" and a millisecond deadline that would otherwise invite
+	// a stall/timeout misread. The extension stamps `[user-abort]`; the
+	// underscore form is also matched so the NotifyComplete defense-in-depth
+	// reclassify lands on the same kind.
+	if strings.Contains(t, "[user-abort]") || strings.Contains(t, "user_abort") {
+		return TerminalKindUserAbort
+	}
 
 	// Network-unavailable abort (Issue #3296). Set when the TS-side stall
 	// watchdog observes ≥ N consecutive connectivity failures and the Go

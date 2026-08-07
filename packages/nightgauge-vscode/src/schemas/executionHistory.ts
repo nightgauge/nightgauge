@@ -392,6 +392,7 @@ export const TerminalFailureKindSchema = z.enum([
   // override), never derived from error text.
   "abandoned_commit", // Issue #191 — a stage committed valid, unmerged work but was killed/crashed before pr-create ran
   "commit_orphaned", // Issue #266 — a killed stage's commit landed on the wrong branch and self-heal could not recover it; unrecoverable by retry
+  "user_abort", // Issue #307 — the operator pressed Stop and the run did not stop with it; abortAll force-cleared the slot with its pipeline promise still unsettled, so the outcome is UNKNOWN, not failed
 ]);
 export type TerminalFailureKind = z.infer<typeof TerminalFailureKindSchema>;
 
