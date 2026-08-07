@@ -39,56 +39,6 @@ type orphanedRun struct {
 	Event    platform.PipelineEvent
 }
 
-// unobservedRunDoneEvent builds the terminal pipeline_done for a run whose own
-// terminal event will never arrive, from the runtime snapshot that outlived it.
-// Returns ok=false for a snapshot with no RunID (nothing the platform can
-// transition).
-//
-// Two producers, one definition (#307): the orphan reconciler below (the
-// extension host died mid-run) and pipeline.notifyStageTransition's supersede
-// branch (a new dispatch claimed the issue while the previous run was still
-// registered). Both need the same event and the same duration semantics, and
-// two hand-rolled copies is how the second one drifts.
-func unobservedRunDoneEvent(snap *state.RuntimeState, now time.Time) (platform.PipelineEvent, bool) {
-	if snap == nil {
-		return platform.PipelineEvent{}, false
-	}
-	stagesRun := make([]string, 0, len(snap.CompletedStages))
-	var totalDuration time.Duration
-	for _, sr := range snap.CompletedStages {
-		stagesRun = append(stagesRun, string(sr.Stage))
-		totalDuration += sr.Duration
-	}
-	return buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
-		Repo:        snap.Repo,
-		IssueNumber: snap.IssueNumber,
-		Success:     false,
-		// Sum of completed-stage durations, NOT wall clock since start — the
-		// run has been dead for an unknowable stretch of that wall time (the
-		// 42h-elapsed-timer symptom this reconciler fixes).
-		TotalDurationMs: int(totalDuration.Milliseconds()),
-		StagesRun:       stagesRun,
-	}, now)
-}
-
-// emitSupersededRunDone closes the platform row of a run whose issue was taken
-// over by a later dispatch (#307). Fire-and-forget, like every other emission
-// on this path: AnalyticsService buffers offline, and a lost event is caught by
-// the platform-side stale-run reaper.
-//
-// Deliberately does NOT touch the on-disk runtime-{N}.json: the successor's own
-// next persist rewrites it, and removing it here would race that write.
-func (s *Server) emitSupersededRunDone(snap *state.RuntimeState) {
-	if s.analyticsSvc == nil {
-		return
-	}
-	event, ok := unobservedRunDoneEvent(snap, time.Now())
-	if !ok {
-		return
-	}
-	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
-}
-
 // collectOrphanedRuns scans stateDir for persisted runtime-{N}.json snapshots
 // left behind by interrupted runs and builds the terminal pipeline_done event
 // for each. Skipped: paused snapshots (resumable — see package comment),
@@ -124,7 +74,23 @@ func collectOrphanedRuns(stateDir string, skipIssue func(int) bool, now time.Tim
 			continue
 		}
 
-		event, ok := unobservedRunDoneEvent(rt.Snapshot(), now)
+		snap := rt.Snapshot()
+		stagesRun := make([]string, 0, len(snap.CompletedStages))
+		var totalDuration time.Duration
+		for _, sr := range snap.CompletedStages {
+			stagesRun = append(stagesRun, string(sr.Stage))
+			totalDuration += sr.Duration
+		}
+		event, ok := buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
+			Repo:        snap.Repo,
+			IssueNumber: snap.IssueNumber,
+			Success:     false,
+			// Sum of completed-stage durations, NOT wall clock since start —
+			// the run has been dead for an unknowable stretch of that wall
+			// time (the 42h-elapsed-timer symptom this reconciler fixes).
+			TotalDurationMs: int(totalDuration.Milliseconds()),
+			StagesRun:       stagesRun,
+		}, now)
 		if !ok {
 			continue
 		}

@@ -456,20 +456,6 @@ export class PipelineStateService implements vscode.Disposable {
    * materialises the live `pipeline_runs` row). Empty until a run starts.
    */
   private runRepo = "";
-  /**
-   * Per-DISPATCH identity for the run this state service belongs to (#307),
-   * stamped by ConcurrentPipelineManager.startSlot via {@link setDispatchToken}
-   * and carried on every stage transition and on the terminal completion.
-   *
-   * The Go runtime registry is keyed by issue number, which is not a run
-   * identity: the abort deadline can force-clear a wedged run and the operator
-   * can re-queue the same issue inside one extension-host session. Without this
-   * token the wedged run's eventual `pipeline.notifyComplete` is
-   * indistinguishable from its successor's and gets written under the
-   * successor's RunID. Empty for runs dispatched outside the slot path, which
-   * make no identity claim.
-   */
-  private dispatchToken = "";
 
   // Event emitters for UI subscribers
   private readonly _onStateChanged = new vscode.EventEmitter<PipelineState | null>();
@@ -712,15 +698,6 @@ export class PipelineStateService implements vscode.Disposable {
     this.runRepo = repo ?? "";
   }
 
-  /**
-   * Stamp this run's per-dispatch identity (#307). Called once, by
-   * `ConcurrentPipelineManager.startSlot`, before the pipeline runs. See
-   * {@link dispatchToken}.
-   */
-  setDispatchToken(token: string): void {
-    this.dispatchToken = token ?? "";
-  }
-
   async initializePipeline(
     issueNumber: number,
     title: string,
@@ -731,7 +708,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber,
         stage: "init",
         status: "initialized",
@@ -759,7 +735,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "running",
@@ -800,7 +775,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "complete",
@@ -839,7 +813,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "failed",
@@ -887,7 +860,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "model-resolved",
@@ -904,7 +876,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "skipped",
@@ -924,7 +895,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "deferred",
@@ -986,7 +956,6 @@ export class PipelineStateService implements vscode.Disposable {
     try {
       await this.ipc.call("pipeline.notifyComplete", {
         repo: this.runRepo,
-        dispatchToken: this.dispatchToken,
         issueNumber: this.issueNumber ?? 0,
         success: result.success,
         totalDurationMs: Math.max(0, Math.round(result.totalDurationMs)),

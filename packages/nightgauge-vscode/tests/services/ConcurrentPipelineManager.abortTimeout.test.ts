@@ -4,15 +4,21 @@
  * the IssueQueueService shutdownGuard silently refuses every subsequent
  * enqueue (looking like "drag-to-queue does nothing after disconnect").
  *
- * Issue #307 — and that deadline must BOOK the dead run's terminal state.
+ * Issue #307 — and that deadline must BOOK the dead dispatch's terminal state.
  * `this.slots.clear()` used to be the branch's only mutation: no queue-mark
  * release (so the issue stayed `processing` and became permanently
  * undispatchable — #254's outcome through a second door), no terminal outcome
  * (so bootstrap's autonomousComplete never freed the Go scheduler's
- * running-slot entry), no slot teardown. The fix books all three and then
- * TOMBSTONES the dispatch generation, so the wedged run settling later cannot
- * double-book or — once the operator has re-queued the issue — book against
- * the successor.
+ * running-slot entry), no slot teardown. The fix books all three — for slots
+ * AND for stranded reservations, which hold a Go scheduler seat from dispatch
+ * time even though they never became a slot — and then TOMBSTONES the dispatch
+ * generation, so the wedged run settling later cannot double-book or, once the
+ * operator has re-queued the issue, book against the successor.
+ *
+ * The exactly-once invariant is the point of races (a)–(f) below: a dispatch
+ * fires exactly one terminal outcome callback, because bootstrap turns each
+ * into `autonomousComplete`, which is not idempotent (cascade breaker,
+ * per-issue lifetime cap, Go running-seat release).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -183,7 +189,6 @@ function createControllableFactory() {
         initEmpty: vi.fn(),
         initializePipeline: vi.fn().mockResolvedValue(undefined),
         setMeta: vi.fn(),
-        setDispatchToken: vi.fn(),
         dispose: stateDispose,
       },
     };
@@ -270,7 +275,9 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
       "abortAll exceeded deadline — force-clearing slots",
       expect.objectContaining({ stuckIssues: [282] })
     );
-    expect(showWarningMessage).toHaveBeenCalledWith(expect.stringContaining("force-cleared"));
+    expect(showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("force-cleared 1 stuck dispatch(es)")
+    );
   });
 
   it("does not warn or force-clear when slots drain normally", async () => {
@@ -484,6 +491,53 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     );
   });
 
+  // ------------------------------------------------------------ race (c3)
+
+  it("(c3) a run already past the tombstone check tears its slot down exactly once", async () => {
+    // Same interleaving as (c2) but with NO successor, so `stillOwnsIssue`
+    // answers "nobody holds the issue → true" for both callers. Without the
+    // at-most-once latch the finally's second cleanupSlot fires onSlotCleaned
+    // again and — because the run SUCCEEDED, so preserveWorktree is false —
+    // deletes the tree the force-clear deliberately preserved for a process
+    // that may still hold it.
+    const { factory, handles } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+    await manager.fillSlots();
+
+    let releaseQueueComplete!: () => void;
+    mockQueue.complete.mockImplementationOnce(
+      () =>
+        new Promise<void>((res) => {
+          releaseQueueComplete = () => res();
+        })
+    );
+
+    handles.get(282)!.resolveRun(successResult());
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callbacks.onSlotCompleted).toHaveBeenCalledTimes(1);
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    // The force-clear tore the slot down, preserving the worktree.
+    expect(callbacks.onSlotCleaned).toHaveBeenCalledTimes(1);
+    expect(worktreeCleanupCalls).toEqual([]);
+
+    releaseQueueComplete();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await manager.settleForTest(282);
+
+    expect(callbacks.onSlotCleaned).toHaveBeenCalledTimes(1);
+    expect(worktreeCleanupCalls).toEqual([]);
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      "cleanupSlot skipped — this slot was already torn down (#307)",
+      expect.objectContaining({ issueNumber: 282 })
+    );
+  });
+
   // ------------------------------------------------------------ race (d)
 
   it("(d) abortAll called twice force-clears once and stays clean", async () => {
@@ -540,9 +594,109 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     expect(mockQueue.complete).toHaveBeenCalledWith("", 291);
   });
 
+  // ------------------------------------------------------------ race (f)
+
+  it("(f) the deadline landing INSIDE a settled run's terminal boundary does not double-book", async () => {
+    // The TOCTOU the round-3 shape lost: the run passes the tombstone check at
+    // terminal boundary 1 and then AWAITS getState() before dispatching its
+    // outcome. If the claim is taken after that await, the deadline sees an
+    // unclaimed slot, books its own onSlotFailed, and the run books a SECOND
+    // outcome on resume — two autonomousComplete calls for one run (round 3
+    // measured `final: failed=1 completed=1`). The claim is now taken
+    // synchronously with the check, so the force-clear reads it and stands down.
+    const { factory, handles } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+    await manager.fillSlots();
+
+    // Park the run inside terminal boundary 1's getState() await.
+    let releaseState!: () => void;
+    handles
+      .get(282)!
+      .getState.mockReturnValueOnce(
+        new Promise((res) => (releaseState = () => res({ tokens: { estimated_cost_usd: 1.5 } })))
+      );
+    handles.get(282)!.resolveRun(successResult());
+    await vi.advanceTimersByTimeAsync(10);
+
+    // Nothing dispatched yet — the run holds the claim and is mid-await.
+    expect(callbacks.onSlotCompleted).not.toHaveBeenCalled();
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    // The force-clear read the claim and did NOT book a second outcome.
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+
+    releaseState();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await manager.settleForTest(282);
+
+    // Exactly one terminal outcome for this dispatch, total.
+    expect(callbacks.onSlotCompleted).toHaveBeenCalledTimes(1);
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+  });
+
+  it("(f2) the same interleaving on the CATCH path books onSlotFailed exactly once", async () => {
+    // Round 3's PROBE-Y: reject the run, park in the catch's getState() await,
+    // fire the deadline. Observed then: `final onSlotFailed=2`.
+    const { factory, handles } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(283)]);
+    await manager.fillSlots();
+
+    let releaseState!: () => void;
+    handles
+      .get(283)!
+      .getState.mockReturnValueOnce(
+        new Promise((res) => (releaseState = () => res({ tokens: { estimated_cost_usd: 0.5 } })))
+      );
+    handles.get(283)!.rejectRun(new Error("adapter died"));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+
+    releaseState();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await manager.settleForTest(283).catch(() => undefined);
+
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
+    expect(callbacks.onSlotFailed.mock.calls[0][1]).toBe(283);
+    // The run's REAL error, not the force-clear's "Cancelled by user": the
+    // claim was the run's, so the run books what actually happened.
+    expect((callbacks.onSlotFailed.mock.calls[0][2] as Error).message).toBe("adapter died");
+  });
+
+  it("books the force-cleared slot's real spend so the health snapshot is recorded", async () => {
+    // bootstrap gates dashboard.recordHealthSnapshotForRun behind costUsd > 0
+    // and paints the Output Window badge with it, so a hard-coded 0 silently
+    // drops the reliability snapshot for every force-cleared run.
+    const { factory } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+    await manager.fillSlots();
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
+    expect(callbacks.onSlotFailed.mock.calls[0][3]).toBe(RUN_OUTCOMES.cancelled.cost_usd);
+  });
+
   // ------------------------------------------------- stranded reservations
 
-  it("releases the queue mark of a reservation whose dispatch never became a slot", async () => {
+  it("books a stranded reservation's terminal state: queue mark AND the Go scheduler seat", async () => {
     const { factory } = createControllableFactory();
     const manager = newManager(factory);
 
@@ -550,7 +704,9 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     // dequeued (and marked `processing`) but its startSlot wedged inside
     // worktree creation.
     worktreeGate.blockCreate = new Promise<void>(() => {});
-    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([
+      { ...makeQueueItem(282), repoName: "nightgauge/acmeapp" },
+    ]);
     void manager.fillSlots();
     await vi.advanceTimersByTimeAsync(10);
     expect(manager.activeSlotCount).toBe(0);
@@ -559,7 +715,22 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     await vi.advanceTimersByTimeAsync(31_000);
     await abortPromise;
 
-    expect(mockQueue.complete).toHaveBeenCalledWith("", 282);
+    // 1. the dequeue's `processing` mark.
+    expect(mockQueue.complete).toHaveBeenCalledWith("nightgauge/acmeapp", 282);
+    // 2. THE GO SCHEDULER SEAT. AutonomousScheduler.enqueueItem appended this
+    //    item to state.Running at DISPATCH time; the only in-session release is
+    //    OnPipelineComplete, reachable solely through IpcClient.autonomousComplete,
+    //    which bootstrap calls from onSlotCompleted / onSlotFailed /
+    //    onSlotDeferred. Releasing only the queue mark leaves one MaxConcurrent
+    //    seat gone for the life of the scheduler and makes the issue permanently
+    //    ineligible via isRunning() — the leaked-seat defect #307 is named after.
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
+    expect(callbacks.onSlotFailed.mock.calls[0][1]).toBe(282);
+    // The repo slug is what bootstrap splits into owner/repo for
+    // autonomousComplete; without it the seat is not released at all.
+    expect(callbacks.onSlotFailed.mock.calls[0][4]).toBe("nightgauge/acmeapp");
+    expect((callbacks.onSlotFailed.mock.calls[0][2] as Error).message).toBe("Cancelled by user");
+
     expect(manager.isShutdownInProgress).toBe(false);
     // The reservation is deliberately NOT cleared: it is what stops a
     // re-dispatch from colliding with the still-running startSlot, and that
@@ -567,7 +738,7 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     expect(manager.availableSlotCount).toBe(1);
   });
 
-  it("a force-cleared reservation whose dispatch unwinds is not re-enqueued", async () => {
+  it("a force-cleared reservation whose dispatch unwinds is not re-enqueued and books no second outcome", async () => {
     const { factory } = createControllableFactory();
     const manager = newManager(factory);
 
@@ -583,6 +754,7 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     await vi.advanceTimersByTimeAsync(31_000);
     await abortPromise;
 
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
     mockQueue.complete.mockClear();
     releaseCreate();
     await vi.advanceTimersByTimeAsync(10);
@@ -592,8 +764,40 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     // queue mark again could strip a successor's.
     expect(mockQueue.enqueue).not.toHaveBeenCalled();
     expect(mockQueue.complete).not.toHaveBeenCalled();
+    // And the seat is released exactly once — the dispatch's own unwind must
+    // not fire a second autonomousComplete for the same generation.
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
     expect(manager.activeSlotCount).toBe(0);
     // The reservation is released by its own dispatch, so the seat comes back.
     expect(manager.availableSlotCount).toBe(2);
+  });
+
+  it("a reservation whose worktree creation FAILS after the force-clear books no second outcome", async () => {
+    // startSlotInner's own worktree-failure exit also fires onSlotFailed. Once
+    // the deadline has booked the reservation, that exit must stand down or the
+    // Go scheduler's lifetime cap is charged twice for one dispatch.
+    const { factory } = createControllableFactory();
+    const manager = newManager(factory);
+
+    let failCreate!: () => void;
+    worktreeGate.blockCreate = new Promise<void>((_res, rej) => {
+      failCreate = () => rej(new Error("fatal: could not lock .git/config"));
+    });
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
+    const filling = manager.fillSlots();
+    await vi.advanceTimersByTimeAsync(10);
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
+
+    failCreate();
+    // Worktree creation retries with backoff before giving up.
+    await vi.advanceTimersByTimeAsync(120_000);
+    await filling;
+
+    expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
   });
 });

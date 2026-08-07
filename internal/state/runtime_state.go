@@ -42,12 +42,6 @@ type RuntimeState struct {
 	Body   string `json:"body,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	RunID  string `json:"runId,omitempty"` // UUID v7 from runstate, threaded into all PipelineEvent emissions (#3557)
-	// DispatchToken is the extension's per-DISPATCH identity for the run that
-	// owns this runtime (#307). Set from the first pipeline.notifyStageTransition
-	// that carries one, and used by pipeline.notifyComplete to reject a stale
-	// completion instead of writing it under a successor's RunID. Empty for the
-	// Go-scheduler path and for any producer that makes no identity claim.
-	DispatchToken string `json:"dispatchToken,omitempty"`
 
 	// Current stage
 	Stage      PipelineStage `json:"stage"`
@@ -1012,7 +1006,6 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		Body:                     rs.Body,
 		Branch:                   rs.Branch,
 		RunID:                    rs.RunID,
-		DispatchToken:            rs.DispatchToken,
 		Stage:                    rs.Stage,
 		StartedAt:                rs.StartedAt,
 		StageStart:               rs.StageStart,

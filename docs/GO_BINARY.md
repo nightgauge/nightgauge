@@ -4276,46 +4276,70 @@ nightgauge pipeline repair-history --workdir .
 nightgauge pipeline repair-history --workdir . --apply
 ```
 
-#### Dispatch-Token Identity Guard (Issue #307)
+#### Force-Clear Terminal Bookkeeping (Issue #307)
 
-`repair-history` collapses duplicates after the fact. This guard is what stops
-one class of them being created.
+`ConcurrentPipelineManager.abortAll` waits 30 seconds for running slots to
+settle. When a dispatch never settles — a wedged adapter, a stage awaiting an
+IPC/`gh` call that ignores the `AbortController`, a hung `git worktree add` —
+the deadline force-clears it. Before #307 that branch did nothing but
+`slots.clear()`: the issue kept its `processing` queue mark (undispatchable for
+good), Go's scheduler never freed its running-slot entry, and no slot teardown
+ran.
 
-The IPC server's runtime registry (`activeRuntimes`) is keyed by **issue
-number**, which is not a run identity. `ConcurrentPipelineManager.abortAll` has
-a 30-second deadline: when a slot's pipeline promise never settles, the deadline
-force-clears the slot, and the operator can re-queue that same issue in the same
-extension-host session. Two producers then reach `pipeline.notifyStageTransition`
-and `pipeline.notifyComplete` under one key — the still-alive dead run and its
-live successor.
+The force-clear now books the dispatch's terminal state on its behalf, on both
+arms of the deadline — slots and *stranded reservations* (a dispatch still
+inside worktree creation, which holds a Go scheduler seat from
+`AutonomousScheduler.enqueueItem` even though it has no slot yet). What it
+performs, omits, delegates, and leaves open is enumerated behavior-by-behavior
+in the `force-clear-terminal-bookkeeping` row of
+`internal/orchestrator/testdata/terminal_behaviors.json`; that row is the
+contract, this section is the summary.
 
-Each dispatch therefore carries a **dispatch token**, minted per dispatch by
-`ConcurrentPipelineManager.startSlot`, stamped on the slot's
-`PipelineStateService`, and sent on every stage transition and on the terminal
-completion. The server binds the first token it sees to the runtime and applies
-three rules:
+**The extension-side guarantee: exactly one terminal outcome per dispatch.**
 
-| Situation | Behavior |
-| --------- | -------- |
-| Token matches the runtime's identity | Normal — record, outcome, telemetry as before |
-| `initialized` arrives with a **different** token | A new dispatch is claiming the issue: the superseded run's `pipeline_done` is emitted from its own snapshot (the same terminal event orphan reconciliation builds), then a fresh `RunID` is minted. The successor never inherits the dead run's stages, spend or identity. |
-| Any other transition with a different token, or a completion whose token is not the runtime's identity (including **no runtime at all**) | Rejected, logged loudly, **nothing written and nothing deleted** — no run record, no learning outcome, no telemetry, no runtime delete, no snapshot removal |
+Two claimants can reach a dispatch's terminal outcome — the run's own
+`runSlotPipeline` and the deadline's force-clear — and the outcome callbacks are
+not idempotent: bootstrap turns each into `IpcClient.autonomousComplete`, which
+frees the Go scheduler seat, feeds the cascade breaker, and charges the
+per-issue lifetime cap. Two mechanisms make the outcome exactly-once:
 
-A missing runtime is a rejection, not an invitation: the identity the run claims
-is gone, and adopting whatever occupies the key next is precisely the
-cross-contamination the guard exists to stop.
+| Mechanism | What it does |
+| --------- | ------------ |
+| **Per-dispatch generation** | `startSlot` mints one token per dispatch and stamps it on the slot and its reservation. Issue numbers are not identities — the same issue can be force-cleared and re-queued in one extension-host session — so everything that must tell "this run" from "a later run of the same issue" keys off the generation. |
+| **Permanent tombstone** | The deadline records each force-cleared generation in `forceClearedGenerations`, synchronously, before its first `await`. Every terminal boundary in `runSlotPipeline` (outcome dispatch, `catch`, the fenced `finally`) checks it first, so a run that settles an hour later books nothing, releases no re-queued successor's queue mark, and deletes no successor's worktree. There is no release path: a tombstone that can be revoked expires exactly when the wedge is worst. |
+| **Synchronous check-and-claim** | At every boundary the tombstone check and the claim of `terminalOutcomeDispatched` are adjacent statements with **no `await` between them**. The extension host is single-threaded, so that pair is atomic — no other task can observe "not tombstoned, not claimed". The force-clear reads the same claim before booking, and stands down when the run took it first. |
 
-The force-clear deliberately leaves `runtime-<issue>.json` on disk. For a run
-that stays hung forever — never completing, never emitting another transition —
-that snapshot is the only remaining path to a terminal event: orphan
-reconciliation (#44) emits the missing `pipeline_done` from it at the next
-server start or workspace-root switch. Paused snapshots are still skipped there,
-so a force-clear never destroys the pause-restore prompt's state.
+**KNOWN EXPOSURE — Go-side late settlement is exactly main's behavior.**
 
-The extension side of the same boundary is recorded as
-`force-clear-terminal-bookkeeping` in
-`internal/orchestrator/testdata/terminal_behaviors.json`, whose `accounting`
-field reconciles the force-clear against every other terminal behavior.
+This change is deliberately extension-only. The generation token is never sent
+to Go, the force-clear makes no IPC call, and `internal/ipc` is byte-identical
+to `main`. A force-cleared run that later unwedges therefore reaches the IPC
+server exactly as it does today: `s.activeRuntimes` is keyed by **bare issue
+number**, which is not a run identity, so once the operator has re-queued the
+issue the dead run's `notifyStageTransition`, `notifyComplete`,
+`notifyPhaseTransition`, `notifyStageProgress` and `setPaused` all resolve to
+the *successor's* runtime — its history record and learning outcome can be
+written under the successor's `RunID`, and its completion deletes the
+successor's runtime and `runtime-<issue>.json`.
+
+That is a pre-existing defect, not a regression introduced here, and
+`repair-history` is the after-the-fact repair for the duplicate records it
+produces. It is not fixed in this change because the obvious fix is not small: a
+per-dispatch identity on the wire makes one at-most-once message
+(`status:"initialized"`) load-bearing for a run's entire Go-side existence, and
+a lost or slow one silently locks a live run out of every write — no run record,
+no learning outcome, no telemetry, frozen UI. Re-keying the runtime registry by
+run identity, with a handshake that is self-healing rather than
+single-message-fatal, is ADR-scale work tracked as its own follow-up.
+
+One consequence worth naming: because the force-clear makes no IPC call, the
+dead run keeps its `activeRuntimes` entry for the life of the server. Orphan
+reconciliation (#44) skips issues with a live runtime, so a force-cleared hung
+run's `pipeline_done` is emitted from the preserved `runtime-<issue>.json` **at
+the next server start only** — the `workspace.setRoot` reconcile call site skips
+it. The force-clear deliberately does not delete that snapshot: for a run that
+stays hung forever it is the only remaining path to a terminal event, and a
+paused snapshot additionally powers the pause-restore prompt.
 
 ### Modernize — Assessment Aggregation
 

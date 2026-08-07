@@ -2462,43 +2462,8 @@ func (s *Server) registerMethods() {
 		}
 		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
 
-		var supersededSnap *state.RuntimeState
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
-		// #307: the runtime map is keyed by ISSUE NUMBER, which is not a run
-		// identity — the abort deadline can force-clear a wedged run and the
-		// operator can re-queue the same issue inside one session, so two live
-		// producers share this key. DispatchToken tells them apart.
-		if ok && p.DispatchToken != "" && rt.DispatchToken != "" && rt.DispatchToken != p.DispatchToken {
-			if p.Status == "initialized" {
-				// A NEW dispatch is claiming the issue. `initialized` is emitted
-				// exactly once per dispatch, at the top of runSlotPipeline, so it
-				// is the one transition that can only come from a fresh run.
-				// Close the superseded run's platform row from its own snapshot
-				// before handing the key over (emitted after the lock is
-				// released, below) — the same terminal event #44's orphan
-				// reconciler builds — then mint a fresh identity. Without this
-				// the successor would either adopt the dead run's RunID
-				// (cross-contamination, #313/#316) or silently strand it
-				// 'running' forever.
-				supersededSnap = rt.Snapshot()
-				rt = nil
-				ok = false
-			} else {
-				// A STALE producer: this run's runtime was already taken over by
-				// a later dispatch. Mutating it would rewrite the live run's
-				// stage history, cost totals and on-disk snapshot with the dead
-				// run's. Drop the transition — loudly, and writing nothing.
-				staleRunID := rt.RunID
-				staleToken := rt.DispatchToken
-				s.runtimesMu.Unlock()
-				log.Printf(
-					"notifyStageTransition: REJECTED stale transition for #%d (%s/%s) — token %q is not the active runtime's identity %q (run %s); nothing recorded",
-					p.IssueNumber, p.Stage, p.Status, p.DispatchToken, staleToken, staleRunID,
-				)
-				return map[string]string{"status": "stale"}, nil
-			}
-		}
 		if !ok {
 			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "")
 			// Generate a stable run UUID for the extension/HeadlessOrchestrator
@@ -2508,12 +2473,6 @@ func (s *Server) registerMethods() {
 			// stays stable across every stage of the run.
 			rt.RunID = uuid.NewString()
 			s.activeRuntimes[runtimeKey] = rt
-		}
-		// Bind this dispatch's identity to the runtime. Latched on first sight:
-		// a runtime minted by another producer (pipeline.setPaused, the
-		// scheduler) carries no token and adopts the first one it is told.
-		if p.DispatchToken != "" && rt.DispatchToken == "" {
-			rt.DispatchToken = p.DispatchToken
 		}
 		// Propagate title/branch from the transition params so that stateChanged
 		// events carry the real GitHub issue title instead of an empty string.
@@ -2532,14 +2491,6 @@ func (s *Server) registerMethods() {
 		runID := rt.RunID
 		repo := rt.Repo
 		s.runtimesMu.Unlock()
-
-		if supersededSnap != nil {
-			log.Printf(
-				"notifyStageTransition: #%d superseded by a new dispatch — closing run %s (token %q -> %q); new run is %s",
-				p.IssueNumber, supersededSnap.RunID, supersededSnap.DispatchToken, p.DispatchToken, runID,
-			)
-			s.emitSupersededRunDone(supersededSnap)
-		}
 
 		stage := state.PipelineStage(p.Stage)
 
@@ -2712,35 +2663,11 @@ func (s *Server) registerMethods() {
 		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
-		var runID, activeToken string
+		var runID string
 		if ok {
 			runID = rt.RunID
-			activeToken = rt.DispatchToken
 		}
 		s.runtimesMu.Unlock()
-
-		// IDENTITY GUARD (#307). This handler is authoritative: it writes the V2
-		// run record, appends the learning outcome, emits the terminal telemetry,
-		// drops the runtime and removes the crash snapshot. Every one of those is
-		// resolved from the BARE ISSUE NUMBER, which is not a run identity — the
-		// abort deadline can force-clear a wedged run and the operator can
-		// re-queue the same issue, so the wedged process finishing an hour later
-		// would find the SUCCESSOR's runtime and write its own failure under the
-		// successor's RunID, then delete the live run's identity and snapshot.
-		//
-		// So a completion that carries a dispatch token must match the runtime's
-		// current identity, and a MISS is a rejection too: an absent runtime
-		// means the identity this run claims is gone, never an invitation to
-		// adopt whatever appears next. Reject loudly and write NOTHING — the
-		// preserved runtime-{N}.json still lets orphan reconciliation (#44) close
-		// the run at the next server start.
-		if p.DispatchToken != "" && activeToken != p.DispatchToken {
-			log.Printf(
-				"notifyComplete: REJECTED stale completion for #%d (success=%v) — token %q is not the active runtime's identity %q; no run record, no learning outcome, no telemetry, nothing deleted",
-				p.IssueNumber, p.Success, p.DispatchToken, activeToken,
-			)
-			return map[string]string{"status": "stale"}, nil
-		}
 
 		// #266 ground-truth reconciliation. A run whose PR merged must never be
 		// booked as failed by a late per-stage kill (progress-runaway / stall /

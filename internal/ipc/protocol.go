@@ -892,19 +892,6 @@ type PipelineNotifyStageTransitionParams struct {
 	// (the source of the dashboard's Adapter Mix donut). Empty maps to
 	// adapter-unknown, never defaulted to claude.
 	Adapter string `json:"adapter,omitempty"`
-	// DispatchToken is the extension's per-DISPATCH identity for this run
-	// (#307): ConcurrentPipelineManager mints it in startSlot, stamps it on the
-	// slot's PipelineStateService, and every notification that state service
-	// makes carries it. The issue number alone is not an identity — the same
-	// issue can be force-cleared by the abort deadline and re-queued inside one
-	// extension-host session, so a still-alive dead run and its live successor
-	// are indistinguishable when keyed by issue.
-	//
-	// The handler binds the token to the runtime it mints and uses it to tell
-	// a NEW dispatch (which supersedes the runtime) from a STALE one (which is
-	// rejected). Empty for producers outside the slot path, which make no
-	// identity claim and are handled exactly as before.
-	DispatchToken string `json:"dispatchToken,omitempty"`
 }
 
 // PipelineNotifyStageProgressParams are parameters for pipeline.notifyStageProgress.
@@ -977,16 +964,6 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
-	// DispatchToken is the extension's per-dispatch identity for the run being
-	// completed (#307) — see PipelineNotifyStageTransitionParams.DispatchToken.
-	// The handler REJECTS a completion whose token is not the active runtime's
-	// current identity, writing nothing: without it, a force-cleared run that
-	// finishes anyway resolves the bare issue key, finds the SUCCESSOR's
-	// runtime, and writes an authoritative V2 record plus a learning outcome
-	// under the successor's RunID carrying the dead run's outcome — then
-	// deletes the successor's runtime and crash snapshot, so the live run
-	// re-mints a third identity and writes a second, truncated record.
-	DispatchToken string `json:"dispatchToken,omitempty"`
 }
 
 // PipelineNotifyPhaseTransitionParams are parameters for pipeline.notifyPhaseTransition.
