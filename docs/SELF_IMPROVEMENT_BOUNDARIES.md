@@ -45,7 +45,7 @@ a new mechanism, add it to this table before implementing.
 | Skill Drift Synthesis               | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active                 |
 | Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                                 | Active                 |
 | Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                         | Active                 |
-| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active                 |
+| Outcome Recording                   | SHARED      | No                                        | `.nightgauge/pipeline/history/outcomes.jsonl` | Active (see note)      |
 | Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`           | Active                 |
 | Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                       | Active                 |
 | Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                         | Active                 |
@@ -56,6 +56,16 @@ a new mechanism, add it to this table before implementing.
 | Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                                 | Active (config-gated)  |
 | Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `.nightgauge/pipeline/`                       | Active                 |
 | Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                                | Removed from extension |
+
+**Note — Outcome Recording (#304).** Both writers are wired and the corpus is
+written on every terminal run, but one of its consumers is currently inert:
+`nightgauge learn tune` has `size_accuracy` as its only target, no writer records
+`actualSize`, so the command reports `skipped` on every corpus and
+`learning.Tuner` is unreachable from production. That is deliberate — tuning a
+circular metric was worse — and is tracked as a follow-up to thread the
+pre-merge lines-changed measurement through to terminal recording. Recording,
+`Calibrate` and the loop verdicts are unaffected. See
+[SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 
 ## Rules
 

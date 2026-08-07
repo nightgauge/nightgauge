@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"strings"
+
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -90,20 +92,58 @@ func OutcomeServedDevModel(snap *state.RuntimeState) string {
 	return snap.StageModel(OutcomeModelStage)
 }
 
+// OutcomeSizeInput resolves the size term the router itself scored the issue
+// on, in the router's OWN order: the project board Size field, then a `size:*`
+// label, then "" — nothing recognized, so `complexity_score`'s size term was
+// the M default (routing.resolveSize, internal/intelligence/routing/derive.go).
+//
+// It exists because a shared helper whose ARGUMENT differs per caller is not
+// shared. Round 3's writers both called OutcomePredictedSize and still keyed
+// absence on two routinely-disagreeing sources: the scheduler passed the board
+// Size field, the extension passed the size:* label. For one issue with board
+// Size=L and no label that is "medium" on one writer and "" on the other — one
+// corpus field, two presence rules, no discriminator to tell the rows apart.
+//
+// INPUT AVAILABILITY IS NOT THE SAME AS THE RULE, and only the rule is shared.
+// The autonomous scheduler has both terms (the board item it dispatched). The
+// extension path has only the labels: issue-{N}.json carries `labels` and
+// `routing`, never the board Size field, so its board term is always "" and a
+// board-sized, unlabelled issue records no size prediction there. That gap is
+// an input the extension does not receive, not a second definition — see
+// docs/SELF_IMPROVEMENT_LOOP.md § Outcome Recording for the follow-up.
+func OutcomeSizeInput(boardSize string, labels []string) string {
+	if routing.SizeBaseScore(boardSize) > 0 {
+		return boardSize
+	}
+	for _, l := range labels {
+		lower := strings.ToLower(strings.TrimSpace(l))
+		if !strings.HasPrefix(lower, "size:") {
+			continue
+		}
+		if size := strings.TrimPrefix(lower, "size:"); routing.SizeBaseScore(size) > 0 {
+			return size
+		}
+	}
+	return ""
+}
+
 // OutcomePredictedSize expresses the router's pre-run size prediction in the
 // corpus's small|medium|large vocabulary, or "" when the run carried no size
 // input to predict from.
 //
+// Takes the RAW inputs, not a pre-resolved size, so neither writer can feed it
+// a different quantity than the other (see OutcomeSizeInput).
+//
 // Absence is derived from the INPUTS, not from a score sentinel. complexity
 // scores are clamped to [1,8] and default to 3 (the M base score) for an issue
-// with no size:* label — both in routing.CoerceRouting and in the extension's
+// with no size input — both in routing.CoerceRouting and in the extension's
 // changeAnalyzer — so score==0 essentially never occurs in the field and a
 // guard keyed on it is dead code that lets ~95% of real runs record a
 // fabricated "small". A run whose size term was the router's default has no
 // size prediction to score, so it records none.
-func OutcomePredictedSize(sizeLabel string, complexityScore int) string {
-	if routing.SizeBaseScore(sizeLabel) <= 0 {
-		return "" // no recognized size:* input — the score's size term is a default
+func OutcomePredictedSize(boardSize string, labels []string, complexityScore int) string {
+	if OutcomeSizeInput(boardSize, labels) == "" {
+		return "" // no recognized size input — the score's size term is a default
 	}
 	if complexityScore <= 0 {
 		return "" // unscored

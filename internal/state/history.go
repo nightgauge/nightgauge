@@ -358,7 +358,6 @@ type Anomaly struct {
 	Timestamp              string  `json:"timestamp"`                         // ISO 8601
 }
 
-// OutcomePrediction captures predicted vs actual routing decisions for calibration.
 // OutcomePrediction mirrors the predicted-vs-actual pairs written to the
 // learning corpus (learning.Outcome) for the same run. Each pair uses ONE
 // vocabulary on both sides — the consumers compare them for equality, so a
@@ -370,7 +369,8 @@ type Anomaly struct {
 type OutcomePrediction struct {
 	// PredictedSize / ActualSize: small|medium|large. Predicted is the router's
 	// complexity score bucketed by orchestrator.SizeBucketForScore, empty when
-	// the issue carried no size:* input to predict from. Deliberately NOT the
+	// the issue carried no size input to predict from (the board Size field or
+	// a size:* label — orchestrator.OutcomeSizeInput). Deliberately NOT the
 	// XS|S|M|L|XL label vocabulary — see V2RunRecord.Size for that, and the
 	// platform mapper for why the two cannot be conflated.
 	//

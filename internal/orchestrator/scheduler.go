@@ -2968,17 +2968,33 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// Skip calibration / outcome recording for network-unavailable failures
-		// (Issue #3296). The cost / duration / token data from a half-completed
-		// network-killed run is environmental noise, not signal about model or
-		// stage performance — feeding it to the learning recorder skews future
-		// model/size predictions for no benefit.
+		// Two terminal kinds record NOTHING, and the extension path skips the
+		// same two (internal/ipc/outcome_record.go) — one corpus, one meaning
+		// per field, or `success` and `costUsd` carry two meanings across the
+		// file's two writers with no discriminator to tell them apart.
+		//
+		//   network_unavailable (#3296) — the cost / duration / token data from
+		//   a half-completed network-killed run is environmental noise, not
+		//   signal about model or stage performance.
+		//
+		//   blocked_dependency (#305) — a deferral is not a failure and did no
+		//   work: no AI stage ran, so the row would book success:false at ~$0.
+		//   Left in, five such deferrals in the recent half of a 20-run corpus
+		//   flip the cost-optimization loop to `closing` ("cost per run
+		//   decreasing") and the reliability loop to `degrading` ("failure rate
+		//   increasing") — credit for savings and blame for failures from runs
+		//   that never executed a stage. Both verdict strings feed Phase 4
+		//   proposal generation in the continuous-improvement skill.
 		var outcomePrediction *state.OutcomePrediction
-		if terminalFailureKind != TerminalKindNetworkUnavailable {
-			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)
-		} else {
+		switch terminalFailureKind {
+		case TerminalKindNetworkUnavailable:
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — environmental, not model)",
 				item.Number, TerminalKindNetworkUnavailable)
+		case TerminalKindBlockedDependency:
+			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — deferral, no work done)",
+				item.Number, TerminalKindBlockedDependency)
+		default:
+			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)
 		}
 
 		// Write V2/V3-format execution history to daily JSONL (dashboard reads
@@ -5138,13 +5154,19 @@ func clipRunes(s string, n int) string {
 // or malformed.
 //
 // predictedModel is the router's recommendation VERBATIM and is EMPTY when the
-// context names none. It used to default to "sonnet" here, which put a
+// context names none. It used to default to "sonnet" HERE, which put a
 // fabricated prediction into the learning corpus on every unrouted run — and
 // the corpus's readers cannot tell a fabricated prediction from a measured one,
-// so it was counted as a routing measurement of nothing (#304). Nothing
-// downstream needed the default: a missing context file already returned ""
-// through the early error return above, so "" is the path the dispatcher and
-// the retry ladder were already handling.
+// so it was counted as a routing measurement of nothing (#304).
+//
+// The default was not deleted, it MOVED: resolveDispatchModel applies
+// defaultDispatchModel to the value it dispatches on, so the minimum-model
+// floor, the sticky model-unavailable downgrade, per-stage model attribution
+// and cost accounting all behave exactly as they did when the default lived
+// here. What changed is only that the recording path sees the raw value. Do not
+// reintroduce a default in this function: one caller wants "what did the router
+// say" and the other wants "what will we run", and they are not the same
+// question.
 func loadIssueContext(workspaceRoot string, issueNumber int) (complexityScore int, routingPath string, predictedModel string) {
 	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
 		fmt.Sprintf("issue-%d.json", issueNumber))
@@ -5630,7 +5652,7 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	outcome := learning.Outcome{
 		IssueNumber:     item.Number,
 		Repo:            item.Repo,
-		PredictedSize:   OutcomePredictedSize(string(item.Size), complexityScore),
+		PredictedSize:   OutcomePredictedSize(string(item.Size), item.Labels, complexityScore),
 		PredictedModel:  OutcomeModelBand(predictedModel),
 		ActualModel:     OutcomeModelBand(OutcomeServedDevModel(snap)),
 		Success:         success,
@@ -5641,6 +5663,27 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		ComplexityScore: complexityScore,
 		FailedStage:     failedStage,
 		CompletedAt:     time.Now(),
+	}
+	// Loud on every unattributed field, matching the extension writer
+	// (internal/ipc/server.go). An empty value is recoverable — every consumer
+	// excludes a pair with an empty half rather than booking it as a miss — but
+	// only if somebody knows it happened: the pre-#304 corpus was 100%
+	// model-less for the life of the product and nobody noticed. On this
+	// machine's canonical roots the autonomous writer is the blind one:
+	// loadIssueContext reads <runRoot>/.nightgauge/pipeline/issue-{N}.json and
+	// stages write that file into the run's WORKTREE, so an autonomous row can
+	// carry score 0 and no prediction at all.
+	if outcome.PredictedModel == "" {
+		log.Printf("#%d: learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
+			item.Number, item.Number)
+	}
+	if outcome.ActualModel == "" {
+		log.Printf("#%d: learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
+			item.Number, OutcomeModelStage)
+	}
+	if complexityScore <= 0 {
+		log.Printf("#%d: learning outcome has no routing.complexity_score — no issue context reached this handler, so the run records no size prediction at all (#304)",
+			item.Number)
 	}
 	if err := learning.NewRecorder(runRoot).Record(outcome); err != nil {
 		log.Printf("#%d: failed to record outcome: %v", item.Number, err)
@@ -5763,6 +5806,23 @@ func isHaikuModel(model string) bool {
 	return strings.Contains(model, "haiku")
 }
 
+// defaultDispatchModel is the tier an autonomous stage dispatches on when the
+// router recommended no model for it — the general-purpose default, spelled as
+// a registry BAND so the floor, the downgrade ladder and the escalation ladder
+// all recognize it. Applied in exactly one place (resolveDispatchModel), and
+// never on the corpus-recording path: what the pipeline chose in the absence of
+// a recommendation is a dispatch decision, not a prediction to score (#304).
+//
+// ONE rule for every unresolved model, deliberately. Before #304 the default
+// was applied inside loadIssueContext, so it covered a context file that named
+// no dev_model but NOT a context file that was missing or unparseable — that
+// rarer population reached dispatch as "" and silently lost the floor, the
+// sticky downgrade, per-stage attribution and cost accounting. Both populations
+// now resolve here. That is a deliberate behavior change for the missing-file
+// case; a stage the operator floored to a premium tier should not run the
+// provider default, with no log line, because a context file failed to parse.
+const defaultDispatchModel = "sonnet"
+
 // resolveDispatchModel returns the model a stage will actually dispatch on,
 // after every override the run can apply: escalation, the configured minimum
 // floor, sticky model-unavailable downgrades, and the three stage-specific
@@ -5783,18 +5843,30 @@ func (s *Scheduler) resolveDispatchModel(
 	predictedModel string,
 	modelFloors map[string]string,
 ) string {
-	// Escalation override if set, otherwise the predicted model.
+	// An unrouted run dispatches on the general-purpose default tier. This
+	// default lives HERE and nowhere else (#304): it used to live in
+	// loadIssueContext, where the same value also reached the learning corpus
+	// and was recorded as a routing prediction the router never made. Deleting
+	// it there was right; deleting it outright was not, because four mechanisms
+	// below key on tier RECOGNITION and silently no-op on "" — the
+	// model_routing.minimum_model floor (#366) returns the selection untouched,
+	// the sticky model-unavailable downgrade (#42) reports
+	// model_not_in_registry, RecordStageModel drops the empty value so the run
+	// record carries no per-stage attribution, and tokens.CalculateCost("")
+	// returns a truthful-looking $0.
 	//
-	// predictedModel is "" when the issue context named no dev model, and that
-	// empty string is carried through deliberately: the dispatcher below already
-	// resolves an unspecified model to the provider's general-purpose default,
-	// and RetryEngine.NextModel treats "" as "was running the default, escalate
-	// past sonnet". Substituting a literal "sonnet" here would break the latter
-	// (the ladder holds tier bands, and the resolved value at this point is a
-	// concrete id like claude-sonnet-5, which NextModel cannot find). The
-	// corresponding default used to live in loadIssueContext, where it also
-	// leaked into the learning corpus as a fabricated prediction (#304).
+	// It is the tier BAND ("sonnet"), never routing.ModelSonnet's concrete id:
+	// every consumer downstream — enforceMinimumModel, ApplyDowngrades and
+	// RetryEngine.NextModel — reads the band vocabulary, and NextModel in
+	// particular walks a literal ladder ([haiku sonnet opus]) that a dated id
+	// is not a member of. A concrete id here would resolve the floor and the
+	// downgrade but silently break escalation past the default
+	// (TestScheduler_BudgetAwareEscalationOnStallKill).
 	model := predictedModel
+	if model == "" {
+		model = defaultDispatchModel
+	}
+	// Escalation override if set, otherwise the (defaulted) predicted model.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
 	}

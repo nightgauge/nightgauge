@@ -456,19 +456,27 @@ LOOP: Pipeline run → Outcome recorded → Model calibrated →
 
 **Metrics**:
 
-- Overall prediction accuracy (correct / total)
-- Recent accuracy (last 10 outcomes) vs historical accuracy
-- Per-bucket accuracy (are certain sizes consistently mis-predicted?)
-- Sample size adequacy (enough observations per bucket?)
+- Overall prediction accuracy over MEASURABLE pairs (both halves non-empty) —
+  a row missing a half measured nothing and is excluded, not counted as a miss
+- Recent accuracy (newest 10 measurable comparisons, capped at half the
+  period's comparisons) vs historical accuracy over all of them
+- Which pair produced the number (`sizePairsMeasured` / `modelPairsMeasured`).
+  **Today `sizePairsMeasured` is always 0** — no writer records `actualSize`, so
+  the published accuracy is entirely model-band accuracy and the evidence says so
+- Sample size adequacy (enough measurable comparisons to trend at all?)
 
 **Verdicts**:
 
-| Verdict         | Condition                                   |
-| --------------- | ------------------------------------------- |
-| `closing`       | Recent accuracy > historical AND > 60%      |
-| `stalling`      | Recent accuracy ≈ historical (within 5%)    |
-| `degrading`     | Recent accuracy < historical by > 10%       |
-| `bootstrapping` | Total observations < 10 (insufficient data) |
+| Verdict         | Condition                                                 |
+| --------------- | --------------------------------------------------------- |
+| `closing`       | Recent accuracy > historical AND > 60%                    |
+| `stalling`      | Recent accuracy ≈ historical (within 10%)                 |
+| `degrading`     | Recent accuracy < historical by > 10%                     |
+| `bootstrapping` | Fewer than 10 measurable comparisons (insufficient data)  |
+| `no-data`       | No measurable pair at all — every row is missing one half |
+
+Per-bucket size accuracy is not reported: it needs `actualSize`, which has no
+writer (see `docs/SELF_IMPROVEMENT_LOOP.md` § Outcome Recording).
 
 ### Analysis 3.3 — Health Monitoring Loop (fallback)
 

@@ -639,27 +639,101 @@ func TestLearningOutcomeFor_UnknownSizeAndScoreStayEmpty(t *testing.T) {
 	}
 }
 
+// CROSS-WRITER SIZE PARITY, actually driving both writers' resolution.
+//
+// The orchestrator-side test cannot do this: internal/ipc imports orchestrator,
+// so the assertion has to sit on this side of the edge. Round 3's guard test
+// was named "…MatchesTheIPCPath" and never invoked this writer at all, which is
+// exactly how the two writers kept two presence rules — the scheduler keyed on
+// the board Size field, this writer on the size:* label — under a file whose
+// header says "the two writers must agree on WHAT each field means".
+//
+// Both writers now call ONE function with the RAW inputs, so presence follows
+// the router's own order (board field → size:* label → absent) on both. The
+// remaining asymmetry is an input this path never receives, not a second rule:
+// issue-{N}.json carries `labels` and `routing`, never the board Size field, so
+// the board term is always "" here. That is asserted below so it cannot become
+// a silent second definition.
+func TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter(t *testing.T) {
+	rec := loadCapturedRunRecord(t, "run-record.json")
+
+	cases := []struct {
+		name   string
+		labels []string
+		score  int
+		want   string
+	}{
+		{"size:* label is a size input on this writer too", []string{"type:bug", "size:M"}, 5, "medium"},
+		{"lowercase label", []string{"size:xl"}, 8, "large"},
+		{"no size input", []string{"type:bug"}, 3, ""},
+		{"unrecognized label", []string{"size:HUGE"}, 5, ""},
+		{"unscored", []string{"size:M"}, 0, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cls := issueClassification{Labels: tc.labels, ComplexityScore: tc.score}
+			o, decision := learningOutcomeFor(rec, cls, nil, "acme/widget", time.Now())
+			if decision != outcomeRecord {
+				t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
+			}
+			if o.PredictedSize != tc.want {
+				t.Errorf("PredictedSize = %q, want %q", o.PredictedSize, tc.want)
+			}
+			// The scheduler writer, given the SAME raw inputs, must land on the
+			// same value — one rule, expressed once.
+			if peer := orchestrator.OutcomePredictedSize("", tc.labels, tc.score); peer != o.PredictedSize {
+				t.Errorf("this writer recorded %q where the shared resolver yields %q — the argument diverged again",
+					o.PredictedSize, peer)
+			}
+		})
+	}
+
+	// The board field is genuinely unavailable on this path; if that ever
+	// changes, this assertion fails and the doc claim gets updated with it.
+	if rec.Size != nil && *rec.Size != "" {
+		t.Errorf("captured run record carries a size %q — the wire contract now supplies a board term this writer ignores", *rec.Size)
+	}
+}
+
 // The size prediction is recorded only when the router had a size to predict
 // from, and the actual half is never re-derived from that same input.
 //
 // The absence rule keys on the INPUT, not on a score sentinel: complexity scores
-// are clamped to [1,8] and default to the M base score (3) for an unlabelled
+// are clamped to [1,8] and default to the M base score (3) for a sizeless
 // issue, so a `score <= 0` guard is dead code and ~95% of real runs record a
 // fabricated "small" through it.
 func TestOutcomePredictedSize_AbsenceComesFromMissingInputs(t *testing.T) {
-	if got := orchestrator.OutcomePredictedSize("", 3); got != "" {
-		t.Errorf("no size:* label with the DEFAULT score 3 = %q, want \"\" — that score's size term is the router's default, not a prediction; a guard on score<=0 never fires because nothing writes 0", got)
+	if got := orchestrator.OutcomePredictedSize("", nil, 3); got != "" {
+		t.Errorf("no size input with the DEFAULT score 3 = %q, want \"\" — that score's size term is the router's default, not a prediction; a guard on score<=0 never fires because nothing writes 0", got)
 	}
-	if got := orchestrator.OutcomePredictedSize("M", 0); got != "" {
+	if got := orchestrator.OutcomePredictedSize("M", nil, 0); got != "" {
 		t.Errorf("unscored run = %q, want \"\"", got)
 	}
-	if got := orchestrator.OutcomePredictedSize("HUGE", 5); got != "" {
-		t.Errorf("unrecognized size label = %q, want \"\"", got)
+	if got := orchestrator.OutcomePredictedSize("HUGE", nil, 5); got != "" {
+		t.Errorf("unrecognized board size = %q, want \"\"", got)
+	}
+	if got := orchestrator.OutcomePredictedSize("", []string{"type:bug", "size:HUGE"}, 5); got != "" {
+		t.Errorf("unrecognized size:* label = %q, want \"\"", got)
 	}
 	for label, want := range map[string]string{"XS": "small", "M": "medium", "XL": "large"} {
-		if got := orchestrator.OutcomePredictedSize(label, map[string]int{"XS": 1, "M": 5, "XL": 8}[label]); got != want {
-			t.Errorf("OutcomePredictedSize(%q, …) = %q, want %q", label, got, want)
+		score := map[string]int{"XS": 1, "M": 5, "XL": 8}[label]
+		// Board field and size:* label are two spellings of ONE input, resolved
+		// in the router's own order — so both writers agree on presence.
+		if got := orchestrator.OutcomePredictedSize(label, nil, score); got != want {
+			t.Errorf("board size %q = %q, want %q", label, got, want)
 		}
+		if got := orchestrator.OutcomePredictedSize("", []string{"size:" + label}, score); got != want {
+			t.Errorf("size:%s label = %q, want %q", label, got, want)
+		}
+	}
+	// Board field wins over a disagreeing label, exactly as routing.resolveSize
+	// does — otherwise the corpus's presence rule and the router's scoring
+	// would key on different terms.
+	if got := orchestrator.OutcomeSizeInput("XL", []string{"size:XS"}); got != "XL" {
+		t.Errorf("OutcomeSizeInput(board XL, label XS) = %q, want XL — board field first", got)
+	}
+	if got := orchestrator.OutcomeSizeInput("", []string{"Size:L"}); got != "l" {
+		t.Errorf("OutcomeSizeInput(no board, label Size:L) = %q, want a case-insensitive match", got)
 	}
 }
 

@@ -86,29 +86,48 @@ func TestRecordOutcome_NoRootRecordsNothing(t *testing.T) {
 // predict from, and the ACTUAL half is never a second reading of that same
 // input.
 //
+// PRESENCE FOLLOWS THE ROUTER'S OWN RESOLUTION ORDER — board Size field, then a
+// size:* label, then absent (routing.resolveSize) — because the router scored
+// the issue on exactly that term. Round 3 shared the helper but not its
+// ARGUMENT: this writer passed the board field, the extension writer passed the
+// label, so one corpus field had two presence rules and an issue with board
+// Size=L and no label recorded "medium" here and "" there.
+//
 // The absence rule keys on the input, not on a score sentinel: routing clamps
-// complexity scores to [1,8] and defaults an unlabelled issue to the M base
-// score, so a `score <= 0` guard never fires in the field and the ~95% of real
-// issues with no size:* label would all record a fabricated bucket.
-func TestRecordOutcome_SizeVocabularyMatchesTheIPCPath(t *testing.T) {
+// complexity scores to [1,8] and defaults a sizeless issue to the M base score,
+// so a `score <= 0` guard never fires in the field and the ~95% of real issues
+// with no size input would all record a fabricated bucket.
+//
+// This test drives ONE writer; the cross-writer assertion has to live on the
+// other side of the import edge (internal/ipc imports orchestrator, not the
+// reverse) — see TestLearningOutcomeFor_SizePresenceMatchesTheSchedulerWriter
+// in internal/ipc.
+func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T) {
 	tests := []struct {
 		name              string
 		score             int
 		size              types.Size
+		labels            []string
 		wantPredicted     string
 		wantScoreRecorded int
 	}{
-		{"labelled and scored", 3, types.SizeM, "small", 3},
-		{"labelled and scored higher", 5, types.SizeM, "medium", 5},
-		{"large issue", 8, types.SizeXL, "large", 8},
-		{"unscored run predicts nothing", 0, types.SizeM, "", 0},
-		{"unlabelled run predicts nothing, even at the default score", 3, "", "", 3},
+		{"board-sized and scored", 3, types.SizeM, nil, "small", 3},
+		{"board-sized and scored higher", 5, types.SizeM, nil, "medium", 5},
+		{"large issue", 8, types.SizeXL, nil, "large", 8},
+		{"unscored run predicts nothing", 0, types.SizeM, nil, "", 0},
+		{"no size input predicts nothing, even at the default score", 3, "", nil, "", 3},
+		// The label is the router's SECOND term, so it must count here too —
+		// this writer used to ignore it, dropping the prediction for every
+		// label-sized issue whose board field was unset.
+		{"label-sized with no board field", 5, "", []string{"type:bug", "size:M"}, "medium", 5},
+		{"board field wins over a disagreeing label", 8, types.SizeXL, []string{"size:XS"}, "large", 8},
+		{"unrecognized label is not a size input", 5, "", []string{"size:HUGE"}, "", 5},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			s := &Scheduler{recordOutcomes: true}
-			item := types.BoardItem{Number: 79, Repo: "acme/widget", Size: tc.size}
+			item := types.BoardItem{Number: 79, Repo: "acme/widget", Size: tc.size, Labels: tc.labels}
 			snap := state.NewRuntimeState(item.Repo, item.Number, "item-id").Snapshot()
 
 			s.recordOutcome(item, snap, true, tc.score, "sonnet", root)

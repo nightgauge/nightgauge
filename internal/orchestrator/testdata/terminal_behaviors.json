@@ -74,7 +74,7 @@
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304, and rooted identically — the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path.",
+      "note": "Wired on both paths as of #304, and rooted identically — the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path. SKIP PARITY: both paths record NOTHING for a blocked-dependency deferral (#305) and a network_unavailable failure (#3296). The scheduler keys both on terminal_failure_kind; the extension keys the deferral on record.outcome_type (which #305 sets from the wire flag and which clears terminal_failure_kind) and the network case on terminal_failure_kind. Same two states, different fields, because the deferral override on the extension path erases the kind.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)"
@@ -242,7 +242,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "afebd4c8e2206734181e31967e48522589e7371ff7cfa8a2201c8d4e0a390eb4"
+      "sha256": "3e655fd4e52304b64223038c37a77a9a3466ff5e569a9a49e5391322fde84e8d"
     },
     {
       "id": "extension-runSlotPipeline-finally",

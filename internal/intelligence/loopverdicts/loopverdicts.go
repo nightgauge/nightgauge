@@ -212,48 +212,111 @@ type outcomeRecord struct {
 	CompletedAt    time.Time `json:"completedAt"`
 }
 
+// routingPair is one MEASURABLE predicted-vs-actual comparison: which pair it
+// came from, and whether the two halves agreed. Carrying the kind is what lets
+// the loop publish a decomposable number instead of one blended figure under a
+// label that describes only half of it.
+type routingPair struct {
+	kind string // pairKindSize | pairKindModel
+	hit  bool
+}
+
+const (
+	pairKindSize  = "size"
+	pairKindModel = "model"
+)
+
+// calibrationRecentWindow is the size of the trailing trend window, in
+// MEASURABLE comparisons. It is capped at half the corpus's comparisons by
+// recentWindowSize below — see there for why.
+const calibrationRecentWindow = 10
+
 // routingComparisons returns one entry per MEASURABLE predicted-vs-actual pair
-// on a row: true when the two halves agree, false when they disagree, and
-// nothing at all when either half is absent.
+// on a row, and nothing at all for a pair with an absent half.
 //
 // The absent case is the whole point. The corpus writes "" for unknown, so a
 // pair with an empty half measured nothing — but the loop used to divide its
 // match count by the row count, which turned every such pair into a recorded
-// MISS. With ~95% of real issues carrying no size:* label that pinned the
+// MISS. With ~95% of real issues carrying no size input that pinned the
 // reported accuracy near zero regardless of routing quality, and a corpus whose
 // router was PERFECT could still flip the verdict to `degrading` purely because
 // the ten most recent issues were unlabelled — steering the improvement loop at
 // label hygiene as if it were routing error (#304).
 //
-// Both pairs count, because both are routing predictions and either can be the
-// measurable one: the size pair has no measurement source at the recording
-// boundary today, while the model pair does.
-func (o outcomeRecord) routingComparisons() []bool {
-	var out []bool
+// Both pairs are checked, because both are routing predictions and either can
+// be the measurable one. Today only the model pair ever is: no writer records
+// actualSize (deferred follow-up — see docs/SELF_IMPROVEMENT_LOOP.md § Outcome
+// Recording), so the size branch yields nothing on every real corpus. That is
+// reported as no-data in the evidence rather than left to look like a measured
+// contribution of zero.
+func (o outcomeRecord) routingComparisons() []routingPair {
+	var out []routingPair
 	if o.PredictedSize != "" && o.ActualSize != "" {
-		out = append(out, o.PredictedSize == o.ActualSize)
+		out = append(out, routingPair{kind: pairKindSize, hit: o.PredictedSize == o.ActualSize})
 	}
 	if o.PredictedModel != "" && o.ActualModel != "" {
-		out = append(out, o.PredictedModel == o.ActualModel)
+		out = append(out, routingPair{kind: pairKindModel, hit: o.PredictedModel == o.ActualModel})
 	}
 	return out
 }
 
-// accuracyOver folds a run of comparisons into (accuracy, sampleCount).
-func accuracyOver(outcomes []outcomeRecord) (float64, int) {
-	matches, samples := 0, 0
+// measurablePairs flattens the period's rows into their measurable comparisons,
+// oldest first (the corpus is an append-only JSONL, so row order is time
+// order).
+func measurablePairs(outcomes []outcomeRecord) []routingPair {
+	var out []routingPair
 	for _, o := range outcomes {
-		for _, hit := range o.routingComparisons() {
-			samples++
-			if hit {
-				matches++
-			}
+		out = append(out, o.routingComparisons()...)
+	}
+	return out
+}
+
+// accuracyOf folds comparisons into a hit fraction. Callers must guard len == 0
+// themselves: "no measurable pair" is not accuracy 0.
+func accuracyOf(pairs []routingPair) float64 {
+	if len(pairs) == 0 {
+		return 0
+	}
+	matches := 0
+	for _, p := range pairs {
+		if p.hit {
+			matches++
 		}
 	}
-	if samples == 0 {
-		return 0, 0
+	return float64(matches) / float64(len(pairs))
+}
+
+// countKind returns how many comparisons came from one pair.
+func countKind(pairs []routingPair, kind string) int {
+	n := 0
+	for _, p := range pairs {
+		if p.kind == kind {
+			n++
+		}
 	}
-	return float64(matches) / float64(samples), samples
+	return n
+}
+
+// recentWindowSize returns how many of the newest comparisons form the "recent"
+// half of the trend, given the total number of measurable comparisons.
+//
+// It is the trailing window of calibrationRecentWindow comparisons — the same
+// shape as the original last-N window, except N counts MEASUREMENTS instead of
+// rows, so a period of mostly-unmeasurable rows no longer produces a "recent
+// accuracy" computed from two of them.
+//
+// The cap at half the corpus is load-bearing. Without it the window swallows
+// the whole corpus whenever there are ≤ N comparisons, recentAccuracy becomes
+// definitionally EQUAL to historicalAccuracy, and only the `default:` (stalling)
+// branch is reachable — a verdict with zero information content, credited +5
+// into the composite score forever. At the corpus's real density that state
+// would persist past any plausible 30-day window.
+func recentWindowSize(samples int) int {
+	n := calibrationRecentWindow
+	if half := samples / 2; n > half {
+		n = half
+	}
+	return n
 }
 
 func analyzeCalibration(root string, since time.Time) LoopResult {
@@ -264,7 +327,8 @@ func analyzeCalibration(root string, since time.Time) LoopResult {
 	}
 
 	total := len(outcomes)
-	historicalAccuracy, samples := accuracyOver(outcomes)
+	pairs := measurablePairs(outcomes)
+	samples := len(pairs)
 
 	// No measurable pair is NOT "accuracy 0" — it is no data. Reporting a
 	// number here is what let the loop assert a confident 5.0% computed
@@ -273,6 +337,22 @@ func analyzeCalibration(root string, since time.Time) LoopResult {
 		return noDataResult("calibration",
 			"no measurable predicted-vs-actual pairs — every outcome in the period is missing one half")
 	}
+
+	sizePairs := countKind(pairs, pairKindSize)
+	modelPairs := countKind(pairs, pairKindModel)
+	// Which pair produced the number. Without this the published accuracy is a
+	// blend of two quantities under one label — and the size pair, which no
+	// writer can measure today, is indistinguishable from a pair that was
+	// measured and happened to contribute nothing.
+	pairEvidence := func(e map[string]string) map[string]string {
+		e["sizePairsMeasured"] = itoa(sizePairs)
+		e["modelPairsMeasured"] = itoa(modelPairs)
+		if sizePairs == 0 {
+			e["sizeCalibration"] = "no-data — no writer records actualSize yet, so predicted size is never scored"
+		}
+		return e
+	}
+
 	if samples < 10 {
 		v := VerdictBootstrapping
 		return LoopResult{
@@ -280,31 +360,27 @@ func analyzeCalibration(root string, since time.Time) LoopResult {
 			Verdict: v,
 			Points:  verdictPoints(v),
 			Reason:  "fewer than 10 measurable predictions — calibration loop bootstrapping",
-			Evidence: map[string]string{
+			Evidence: pairEvidence(map[string]string{
 				"totalOutcomes":       itoa(total),
 				"measuredPredictions": itoa(samples),
-			},
+			}),
 		}
 	}
 
-	// Recent = the most recent rows carrying at least 10 measurable pairs
-	// between them, so "recent" is 10 measurements rather than 10 rows of which
-	// two measured anything.
-	recentStart := total
-	recentSamples := 0
-	for recentStart > 0 && recentSamples < 10 {
-		recentStart--
-		recentSamples += len(outcomes[recentStart].routingComparisons())
-	}
-	recentAccuracy, recentSamples := accuracyOver(outcomes[recentStart:])
+	historicalAccuracy := accuracyOf(pairs)
+	// Recent = the newest measurable comparisons (see recentWindowSize), so the
+	// trend compares measurements against measurements instead of dividing a
+	// match count by a row count that mostly measured nothing.
+	recentSamples := recentWindowSize(samples)
+	recentAccuracy := accuracyOf(pairs[samples-recentSamples:])
 
-	evidence := map[string]string{
+	evidence := pairEvidence(map[string]string{
 		"totalOutcomes":             itoa(total),
 		"measuredPredictions":       itoa(samples),
 		"recentMeasuredPredictions": itoa(recentSamples),
 		"historicalAccuracy":        pct(historicalAccuracy),
 		"recentAccuracy":            pct(recentAccuracy),
-	}
+	})
 
 	switch {
 	case recentAccuracy > historicalAccuracy && recentAccuracy > 0.60:

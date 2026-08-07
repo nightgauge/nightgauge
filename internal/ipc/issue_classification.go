@@ -34,10 +34,12 @@ type issueClassification struct {
 	// a real one.
 	ComplexityScore int
 	// PredictedModel is routing.pickup_recommendation.dev_model — the model
-	// tier the router chose for the implementation stage. Empty when unknown;
-	// deliberately NOT defaulted to "sonnet" the way the scheduler's
-	// loadIssueContext does, because a fabricated prediction is worse for
-	// calibration than an absent one.
+	// tier the router chose for the implementation stage. Empty when unknown,
+	// and deliberately NOT defaulted: a fabricated prediction is worse for
+	// calibration than an absent one, because no reader can tell the two apart.
+	// The scheduler's loadIssueContext returns the same raw value for the same
+	// reason; its general-purpose DISPATCH default lives at the dispatch site
+	// (orchestrator.defaultDispatchModel), where it never reaches the corpus.
 	PredictedModel string
 }
 

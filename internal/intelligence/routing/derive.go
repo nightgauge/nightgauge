@@ -282,11 +282,14 @@ var sizeBaseScore = map[string]int{
 // unrecognized. 0 is NOT a valid score — every recognized bucket scores ≥ 1 —
 // so callers can distinguish "unknown size" from any real bucket.
 //
-// Exported so the learning corpus can express an issue's size label in the
-// SAME small|medium|large vocabulary the router's predicted size uses
-// (#304): both sides run through this table and then the same bucket
-// thresholds, instead of comparing XS|S|M|L|XL against small|medium|large and
-// reporting a permanent 0% calibration accuracy.
+// Exported as a PRESENCE check for the learning corpus (#304): it is how
+// orchestrator.OutcomeSizeInput decides whether an issue carried a size term
+// the router actually scored, in the router's own order (board Size field →
+// size:* label → absent). It is deliberately NOT used to derive a corpus
+// `actualSize` from the label — that would make the measured half a second
+// reading of one of the inputs the prediction is computed from, so the
+// comparison would score the arithmetic rather than the run. See the NOTE in
+// internal/orchestrator/outcome_semantics.go.
 func SizeBaseScore(size string) int {
 	return sizeBaseScore[strings.ToUpper(strings.TrimSpace(size))]
 }

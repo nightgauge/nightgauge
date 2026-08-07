@@ -100,7 +100,14 @@ func learningOutcomeFor(
 		// ActualSize is deliberately unset: no lines-changed measurement reaches
 		// this boundary, and the size:* label is one of the same pre-run inputs
 		// the prediction is derived from.
-		PredictedSize:   orchestrator.OutcomePredictedSize(sizeLabel(record.Size), cls.ComplexityScore),
+		//
+		// The size input goes in RAW, through the same resolver the scheduler
+		// uses (board Size field → size:* label → absent). The board term is
+		// empty here and always will be under the current wire contract:
+		// issue-{N}.json carries `labels` and `routing`, never the board field.
+		// Passing a pre-resolved label instead is how the two writers ended up
+		// keying one corpus field's presence on two different sources.
+		PredictedSize:   orchestrator.OutcomePredictedSize("", cls.Labels, cls.ComplexityScore),
 		PredictedModel:  orchestrator.OutcomeModelBand(cls.PredictedModel),
 		ActualModel:     servedDevModel(record, snap),
 		Success:         success,
@@ -133,15 +140,6 @@ func resolveOutcomeRepo(record state.V2RunRecord, repo string) string {
 		return record.Repo
 	}
 	return repo
-}
-
-// sizeLabel dereferences the record's size:* label, returning "" for both a nil
-// pointer and an empty string — "unknown", never a plausible-looking default.
-func sizeLabel(size *string) string {
-	if size == nil {
-		return ""
-	}
-	return *size
 }
 
 // servedDevModel resolves the model the run's IMPLEMENTATION stage actually
