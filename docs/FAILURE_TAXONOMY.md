@@ -492,6 +492,56 @@ lockstep — the `TerminalFailureKindSchema` test in
 `packages/nightgauge-vscode/tests/views/dashboard/FailedRun.test.ts`
 guards against drift.
 
+### Classifier parity — the shared corpus (Issue #306)
+
+Terminal-kind classification exists in **three** places, and each one decides
+how the fleet reacts to a failure:
+
+| Site       | Implementation                                                                                    | Authority                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **Go**     | `ClassifyTerminalKind` — `internal/orchestrator/failure_handler.go`                               | **Authoritative.** Writes `terminal_kind` into the run record; drives recovery. |
+| **SDK**    | `classifyTerminalKind` — `packages/nightgauge-sdk/.../failureClassifier.ts`                       | Published mirror, pinned to Go block-for-block.                                 |
+| **Signal** | `classifyTerminalKindForSignal` — `packages/nightgauge-vscode/src/services/terminalKindSignal.ts` | Sent to Go with `autonomousComplete`; a **non-empty** answer is used verbatim.  |
+
+Alignment used to be maintained by "keep aligned" comments, which is how the
+same run could be recorded as one kind and reacted to as another while all
+three sides stayed individually green. They are now pinned to one shared
+corpus, `internal/orchestrator/testdata/terminal-kind/corpus.json`, read by
+three suites:
+
+- `internal/orchestrator/terminal_kind_corpus_parity_test.go`
+- `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
+- `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`
+
+Working rules:
+
+- `expected` in the corpus is **Go's** answer, because Go writes the record.
+- Every row carries a mandatory `rationale`. Changing an expectation means
+  editing the argument for it in the same diff.
+- The core rows are **real** failure text captured from live telemetry by
+  `scripts/capture-terminal-kind-fixture.sh` (#166); the Go suite enforces that
+  a row marked `captured` actually appears in the capture output, and that no
+  captured shape is left unclassified. Synthetic rows extend coverage and must
+  name the producing call site.
+- A coverage assertion fails when a `TerminalKind*` constant has no row (unless
+  it is listed in `no_matcher_kinds` because it is set structurally). So a kind
+  or pattern added to one ladder fails the others until the corpus is updated.
+- Deliberate disagreements are recorded as `known_divergence`, which **pins**
+  them: the divergent side must still produce exactly that kind, so the gap is
+  visible and any new one is red.
+
+`ClassifyTerminalKind` is an ordered ladder and **the order is the contract** —
+many real failure strings match two blocks, and the earlier one wins. The corpus
+carries explicit ordering rows for the overlaps that matter (cost-cap versus
+stall, USD ceiling versus token budget, `pr_merge_unmerged` and the three
+narrower no-op kinds versus `premature_turn_end`). It also carries negative rows
+for gates that must NOT be relaxed — notably `EACCES: permission denied`, which
+is an infrastructure fault and must never match the `permission_denied` harness
+denial.
+
+See [`internal/orchestrator/testdata/terminal-kind/README.md`](../internal/orchestrator/testdata/terminal-kind/README.md)
+for capture provenance and the redaction rules.
+
 ---
 
 ## Informational Outcomes

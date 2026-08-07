@@ -1,0 +1,595 @@
+{
+  "$comment": [
+    "Terminal-kind classification parity corpus (#306).",
+    "",
+    "Terminal-kind classification exists THREE times, and every copy of it decides how the fleet",
+    "reacts to a failure — failure weighting (docs/FAILURE_TAXONOMY.md), cascade feeding, lifetime",
+    "caps, board reverts, backoff length:",
+    "",
+    "  1. Go      ClassifyTerminalKind  internal/orchestrator/failure_handler.go   AUTHORITATIVE.",
+    "                                   Writes terminal_kind into the run record and drives the",
+    "                                   scheduler's recovery routing.",
+    "  2. SDK     classifyTerminalKind  packages/nightgauge-sdk/src/analysis/health/",
+    "                                   failureClassifier.ts — the published mirror; its own",
+    "                                   docstrings claim to mirror Go.",
+    "  3. Signal  classifyTerminalKindForSignal",
+    "                                   packages/nightgauge-vscode/src/services/",
+    "                                   terminalKindSignal.ts — the extension's defense-in-depth",
+    "                                   kind sent over IPC with autonomousComplete. A NON-EMPTY",
+    "                                   kind from here is used VERBATIM by Go (autonomous.go",
+    "                                   NotifyComplete only re-classifies when it received \"\"),",
+    "                                   so this ladder can override the authoritative one.",
+    "",
+    "Before this corpus the three were held aligned by comments. `expected` below is GO's answer,",
+    "because Go writes the record: a disagreement is by definition the other side being wrong about",
+    "what the pipeline recorded.",
+    "",
+    "HOW TO CHANGE A ROW. `rationale` is mandatory and is the reason the row exists — not a",
+    "restatement of `expected`. Editing an expectation means editing the argument for it, in the",
+    "same diff, which is the point: a classifier edit that silently changes an outcome has to argue",
+    "with a written claim rather than update a string.",
+    "",
+    "`source`:",
+    "  captured  — the string was mined from this machine's live telemetry by",
+    "              scripts/capture-terminal-kind-fixture.sh and appears verbatim in",
+    "              captured-shapes.json. The parity test ENFORCES that link in both directions, so",
+    "              a hand-authored string cannot be labelled evidence and a newly observed real",
+    "              shape cannot be quietly dropped (#166).",
+    "  synthetic — not observed in the captured window, so built from the PRODUCER's own template;",
+    "              `producer` names the emitting call site. Synthetic rows EXTEND coverage to",
+    "              markers, ordering overlaps and negatives the live corpus happens not to contain;",
+    "              they never stand in for the real population.",
+    "",
+    "`known_divergence` records a site that deliberately disagrees with `expected` today. It pins",
+    "the disagreement rather than hiding it: the divergent side must produce exactly the stated",
+    "kind, so the gap is visible in the test output and any NEW divergence is red. Resolving one is",
+    "a taxonomy decision about how the fleet should react, which is #305/#370 territory, not a",
+    "parity fix.",
+    "",
+    "`no_matcher_kinds` are the kinds set structurally (a gate override, a recovery action) and",
+    "never derived from error text. Every OTHER kind must have at least one row — that coverage",
+    "assertion is what makes 'a kind added to one side fails the other side's test' true instead of",
+    "aspirational."
+  ],
+  "no_matcher_kinds": ["orchestrator_crash", "abandoned_commit"],
+  "cases": [
+    {
+      "id": "captured-api-overloaded",
+      "input": "API Error: Overloaded",
+      "expected": "api_overloaded",
+      "source": "captured",
+      "rationale": "The Anthropic 529 as the CLI actually surfaces it — a result envelope with is_error:true whose whole message is these three words. It must NOT read as a code fault: api_overloaded routes to a short per-issue backoff with no lifetime-cap increment and no queue pause, while the subagent_crash fallback below would pause the fleet on a capacity blip."
+    },
+    {
+      "id": "captured-api-internal-server-error",
+      "input": "API Error: Internal server error",
+      "expected": "",
+      "source": "captured",
+      "rationale": "A real is_error envelope that matches nothing. `api error` alone is deliberately not a kind: Go only treats it as transport loss when a specific error code co-occurs, so a bare 5xx falls through to the caller's subagent_crash default. Pinned because it is the honest current behaviour and because it is the negative half of the api_connection_lost gate — a matcher added for `api error` alone would turn this row red."
+    },
+    {
+      "id": "captured-api-connection-refused",
+      "input": "API Error: Unable to connect to API (ConnectionRefused)",
+      "expected": "",
+      "source": "captured",
+      "rationale": "A real transport failure that classifies as NOTHING: Go's api_connection_lost gate looks for `econnrefused` or `connection refused` (with a space) and this wording has neither — the CLI renders it CamelCase and unspaced. Pinned at the current answer rather than fixed here, because widening the gate changes live recovery routing on the authoritative side; it is listed in this PR's concerns."
+    },
+    {
+      "id": "captured-rate-limit-quota-exhausted",
+      "input": "Stage [rate-limit-quota-exhausted] idle 2m 14s after rate_limit_event with overage rejected (five_hour bucket; resetsAt=0) — forcibly terminating process after 4m 0s",
+      "expected": "rate_limit_quota_exhausted",
+      "source": "captured",
+      "rationale": "The marker skillRunner stamps when an idle stall coincides with a quota-exhausted rate_limit_event. The kill is stall-SHAPED — the text says `idle` and `forcibly terminating` — so it must be claimed before the stall-kill heuristics or the fleet retries in 30 minutes against a bucket that resets hours later. This row is the reason the rate-limit block outranks stall_kill on every ladder."
+    },
+    {
+      "id": "captured-stall-idle-threshold",
+      "input": "Stage exceeded stall idle threshold (12m 0s without output) — forcibly terminating process after 18m 0s (idle for 13m 22s).",
+      "expected": "stall_kill",
+      "source": "captured",
+      "rationale": "The single most common real kill in the captured window and, before #306, a silent SDK miss: the SDK ladder knew `stall kill threshold` but not `exceeded stall idle threshold`, so the most frequent failure on the machine classified as undefined on one side and stall_kill on the other."
+    },
+    {
+      "id": "captured-stall-kill-threshold",
+      "input": "Stage exceeded stall kill threshold (15m 0s) — forcibly terminating process after 15m 0s.",
+      "expected": "stall_kill",
+      "source": "captured",
+      "rationale": "The sibling wording of the row above, from the same watchdog on a different code path. Both are pinned because the two phrasings differ by one word and a matcher written for either alone leaves the other unclassified."
+    },
+    {
+      "id": "captured-heartbeat-stall",
+      "input": "Stage no progress for 1m 19s (heartbeat stall) — forcibly terminating process after 3m 30s.",
+      "expected": "stall_kill",
+      "source": "captured",
+      "rationale": "The third real stall wording. It carries neither `stall kill threshold` nor `exceeded stall idle threshold`; only the parenthetical `heartbeat stall` identifies it, which is why that literal is load-bearing rather than decorative."
+    },
+    {
+      "id": "captured-budget-exceeded-hard-limit",
+      "input": "[BUDGET EXCEEDED] Stage pr-create terminated: $0.18 exceeds hard limit of $0.15",
+      "expected": "budget_exceeded",
+      "source": "captured",
+      "rationale": "The most frequently observed shape of all (68 occurrences). It says `hard limit`, one character-class away from the stall ladder's `hard cap` literal — if that literal is ever loosened to `hard limit`, a per-stage budget stop starts reading as a stall and stops counting against the budget the operator set."
+    },
+    {
+      "id": "captured-pipeline-budget-ceiling",
+      "input": "[PIPELINE BUDGET CEILING] Pipeline stopped: $107.02 exceeds ceiling of $75.00",
+      "expected": "budget_ceiling_hit",
+      "source": "captured",
+      "rationale": "The USD run-level ceiling, and a real ordering trap: lowercased it contains the substring `budget ceiling`, which the generic budget_exceeded block also matches. Go orders budget_ceiling_hit first; the SDK's block carried a comment saying exactly that while sitting BELOW budget_exceeded, so a real ceiling stop was recorded as budget_ceiling_hit and published as budget_exceeded — two different recovery stories for one event."
+    },
+    {
+      "id": "captured-cost-cap-exceeded",
+      "input": "[cost-cap-exceeded] Stage feature-dev terminated: cost cap exceeded. Cost $23.0333 exceeded the configured cap ($15.00) after 26m 45s.",
+      "expected": "budget_exceeded",
+      "source": "captured",
+      "rationale": "A per-stage cost cap kill. The underlying mechanism is a stall-shaped SIGTERM on a polling tick, so it must be claimed by the cost-cap block BEFORE the stall heuristics — otherwise a run that deliberately spent its cap is retried as a transient stall and spends it again. The SDK had no cost-cap block at all."
+    },
+    {
+      "id": "captured-blocked-dependency",
+      "input": "[blocked-dependency] issue #000 deferred — blocked by open dependencies: REDACTED-OWNER/REDACTED-REPO#000 (REDACTED)",
+      "expected": "blocked_dependency",
+      "source": "captured",
+      "rationale": "A deferral, not a failure: no lifetime-cap increment, no cascade feed, board stays Ready. Real text, and the reason the marker must beat the generic ladder — the word `deferred` matches nothing, so without the marker this non-failure would land in the caller's subagent_crash default and count against the issue."
+    },
+    {
+      "id": "captured-runaway-progress",
+      "input": "[runaway-progress-exceeded] Stage feature-validate terminated: cost $0.0000 below activation threshold $0.5. Cost $0.0000, signals seen: 117, ms since last progress: 0. Treated as transient (stall-kill path). (Issue #000)",
+      "expected": "runaway_progress",
+      "source": "captured",
+      "rationale": "The progress-based runaway monitor. Its own text says `stall-kill path`, and it is recovered like a stall, but it keeps a distinct kind so the monitor's own false-positive rate stays measurable — collapsing it into stall_kill would erase the only signal that the monitor is firing on $0.00 runs."
+    },
+    {
+      "id": "captured-containment-breach",
+      "input": "[stage:worktree-containment] Stage feature-dev wrote outside its worktree into 1 REDACTED-OWNER/REDACTED-REPO it does not own.",
+      "expected": "containment_breach",
+      "source": "captured",
+      "rationale": "A breaching stage exits 0 and reports success, so nothing else marks the run failed. Matched before the stage-behaviour kinds because premature_turn_end would otherwise claim the same exit-0 shape and describe the wrong problem to the operator."
+    },
+    {
+      "id": "captured-adapter-auth-failed-bare",
+      "input": "[pipeline-start-failure] adapter-auth-failed: claude-headless=auth probe timed out after 5s",
+      "expected": "adapter_auth_failed",
+      "source": "captured",
+      "rationale": "The wrapped pipeline-start form, which carries the marker BARE — no brackets, no underscore. Go matches all three spellings; the SDK matched only the bracketed and underscored ones, so this real, observed shape classified as adapter_auth_failed on the authoritative side and undefined on the mirror. A transient probe timeout under a dispatch burst must not feed the cascade breaker as a crash."
+    },
+    {
+      "id": "captured-github-quota-low",
+      "input": "[pipeline-start-failure] github-auth-failed: GitHub API quota too low to start pipeline (8/5000 remaining, need ≥200). Resets in ~1 min. (isAuthenticated=true, hasRequiredScopes=false)",
+      "expected": "github_quota_low",
+      "source": "captured",
+      "rationale": "Real preflight refusal, and the row that pins a CONJUNCTIVE rule: neither `pipeline-start-failure` nor `github api quota too low` classifies alone — both are required. Dropping either half of the conjunction leaves an environmental, self-clearing condition counted as a pipeline defect."
+    },
+    {
+      "id": "captured-issue-closed",
+      "input": "[pipeline-start-failure] issue-closed: Issue #000 is already CLOSED. Pipeline halted before any AI stages. Use forceRerun: true to override.",
+      "expected": "issue_closed",
+      "source": "captured",
+      "rationale": "Not a failure — the issue was closed before any AI stage ran. Same conjunctive shape as the quota row above, and pinned for the same reason: the hyphenated `issue-closed` token only classifies together with the `pipeline-start-failure` wrapper."
+    },
+    {
+      "id": "captured-anthropic-weekly-limit",
+      "input": "You've hit your weekly limit · resets Jul 24 at 10pm (REDACTED-OWNER/REDACTED-REPO)",
+      "expected": "",
+      "source": "captured",
+      "rationale": "A REAL account-level limit envelope that classifies as nothing anywhere. `weekly limit` is a model_unavailable cap-phrase but is gated on the text naming a registry model, and this message names none — deliberate, so an ACCOUNT limit does not trigger #42's model-tier downgrade. The gap is that no quota kind claims it either; recorded as-is and raised in concerns rather than papered over here."
+    },
+    {
+      "id": "captured-anthropic-session-limit",
+      "input": "You've hit your limit · resets 10am (REDACTED-OWNER/REDACTED-REPO)",
+      "expected": "",
+      "source": "captured",
+      "rationale": "The five-hour sibling of the row above, also real, also unclassified. Kept alongside it because the two differ only by the word `weekly`, which is exactly the kind of near-miss a future matcher will get half-right."
+    },
+
+    {
+      "id": "network-unavailable",
+      "input": "Stage feature-dev cancelled: network unavailable: extended github connectivity loss (5 consecutive probe failures)",
+      "expected": "network_unavailable",
+      "source": "synthetic",
+      "producer": "Scheduler stage cancellation with cause ErrNetworkUnavailable (#3296)",
+      "rationale": "First on every ladder. The text arrives through context.Cause and contains `cancelled` and `failures`; classified first so it cannot be captured by a generic heuristic, since the correct reaction is to stop dispatching entirely rather than retry one issue."
+    },
+    {
+      "id": "stream-idle-timeout",
+      "input": "API Error: Stream idle timeout - partial response received",
+      "expected": "stream_idle_timeout",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope, is_error:true (#3398)",
+      "rationale": "Matched before the stall heuristics: the message contains `timeout` and describes an idle stream, so the stall ladder would otherwise claim an API-side cut and blame the agent for the provider's disconnect."
+    },
+    {
+      "id": "api-connection-lost-socket",
+      "input": "API Error: The socket connection was closed unexpectedly",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope carrying the raw transport error (#4002)",
+      "rationale": "The canonical transport drop. Distinct from api_overloaded (capacity) but recovered the same way, and it must beat the crash fallback: a seconds-long local network blip is not a code fault and must not pause the fleet."
+    },
+    {
+      "id": "api-connection-lost-connection-closed",
+      "input": "API Error: Connection closed mid-response",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "Live wording that motivated #227",
+      "rationale": "The wording that fell through in production: `socket connection was closed` needs the `socket` prefix and `connection reset`/`refused` are different verbs, so this matched nothing and halted the fleet on a blip. Gated on `api error` co-occurring so an unrelated stage error mentioning a closed connection is not excused as a transport fault."
+    },
+    {
+      "id": "api-connection-lost-dns",
+      "input": "API Error: getaddrinfo EAI_AGAIN while contacting the model endpoint",
+      "expected": "api_connection_lost",
+      "source": "synthetic",
+      "producer": "Node DNS failure surfaced through the CLI result envelope (#4002)",
+      "rationale": "A DNS-class transport failure. Pinned because the SDK mirror knew only the `connection closed` alternative and none of the error-code alternatives, so every DNS blip classified one way in the record and another way in the published SDK."
+    },
+    {
+      "id": "api-connection-lost-negative-unrelated-econnreset",
+      "input": "Integration test failed: ECONNRESET while connecting to the local fixture server",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Negative case for the api_connection_lost `api error` gate",
+      "rationale": "The gate exists so that a failing integration test that merely mentions a socket error is not excused as a provider outage. This row is the reason the error-code alternatives are conjunctive with `api error`; delete that conjunction and real test failures start being retried as transient infrastructure."
+    },
+    {
+      "id": "rate-limit-quota-exhausted-underscore",
+      "input": "rate_limit_quota_exhausted: five-hour bucket exhausted, overage rejected",
+      "expected": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "Underscore kind form, matched for the NotifyComplete defense-in-depth re-classify",
+      "rationale": "Go re-classifies a forwarded failureDetail whose kind arrived empty, and by then the kind may appear only in its underscore spelling. Every marker family is matched in bracketed, hyphenated and underscored form for that round trip; this row pins the underscore leg."
+    },
+    {
+      "id": "model-unavailable-not-found",
+      "input": "API Error: model not found: claude-sonnet-5",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic 404 not_found_error naming the model (#42)",
+      "rationale": "Routes to the tier-downgrade fallback rather than a retry of the same rejected model. Matched after the explicit quota marker — an explicit stamp beats a heuristic — and before every generic block, because the message also contains `api error` and would otherwise read as a transport drop."
+    },
+    {
+      "id": "model-unavailable-plan-phrase",
+      "input": "Your plan does not include claude-opus-4-5: this model is not available on your current plan",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic plan-restriction wording (#42)",
+      "rationale": "A plan phrase only classifies when the text also names a registry model — that gate is what keeps ACCOUNT-level limit messages routing to the quota path instead of downgrading a model that was never the problem. This row exercises the positive half; the two captured `You've hit your…limit` rows exercise the negative half."
+    },
+    {
+      "id": "issue-closed-underscore",
+      "input": "issue_closed: pickup found the issue already closed",
+      "expected": "issue_closed",
+      "source": "synthetic",
+      "producer": "Underscore kind form for the NotifyComplete re-classify",
+      "rationale": "The conjunctive `pipeline-start-failure` + `issue-closed` rule cannot fire on a re-classify that only sees the kind name, so the underscore spelling is matched on its own. Without it a deliberate non-failure is re-derived as a crash on the second pass."
+    },
+    {
+      "id": "architecture-approval-required",
+      "input": "ARCHITECTURE APPROVAL REQUIRED: feature-dev halted — a human must approve the storage-engine change before implementation proceeds.",
+      "expected": "architecture_approval_required",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.verifyArchitectureApproval, ARCHITECTURE_APPROVAL_REQUIRED_MARKER (#4098/#4222)",
+      "rationale": "The sentinel is human-readable rather than bracketed because failureComment.ts and the extension's pause rendering already key on that exact text. A deliberate human gate must not be re-dispatched: before it had a kind, each attempt cost a full stage and the second one tripped the lifetime cap on a gate only a human can open."
+    },
+    {
+      "id": "github-quota-low-marker",
+      "input": "[github-quota-low] GitHub API quota too low — pipeline deferred before AI stages (transient; resetInSec=180).",
+      "expected": "github_quota_low",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator quota preflight, the error.message form (#3896)",
+      "rationale": "The SECOND wording for one condition, and the only one the extension's signal ladder recognises. The captured row for this kind carries the stderr phrasing (`[pipeline-start-failure] github-auth-failed: GitHub API quota too low …`), which Go classifies through its conjunction while the signal ladder — which keys on the `github-quota-low` token — misses it entirely. The miss is safe (Go re-classifies the forwarded detail) but it means the real captured shape never exercises that rule, so this row does. Two producers, one condition, two spellings: exactly the shape that lets a matcher rot unnoticed."
+    },
+    {
+      "id": "github-network-outage",
+      "input": "[pipeline-start-failure] github-network-outage: api.github.com unreachable at preflight (ENOTFOUND)",
+      "expected": "github_network_outage",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.preCheckAuth (#4002)",
+      "rationale": "The connectivity sibling of github_quota_low: environmental, self-clearing, and routed to a short GLOBAL cooldown rather than a per-issue one, because if GitHub is unreachable no issue will fare better. Note it does NOT read as api_connection_lost — that gate needs `api error`, and this text says `api.github.com`."
+    },
+    {
+      "id": "pr-merge-unmerged-marker",
+      "input": "[pr-merge-unmerged:ci_failures] pr-merge session completed but the PR is still open",
+      "expected": "pr_merge_unmerged",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator.diagnosePrMergeBlocker (#3691)",
+      "rationale": "The stamp carries the blocker classification inside the marker, so the prefix is matched without its closing bracket. Ordered before the budget and stall heuristics so the rich diagnostic survives instead of being flattened into a generic kind."
+    },
+    {
+      "id": "order-pr-merge-unmerged-beats-premature-turn-end",
+      "input": "premature turn end: pr-merge reported success but PR #000 is not merged (state: OPEN). blocked by required checks",
+      "expected": "pr_merge_unmerged",
+      "source": "synthetic",
+      "producer": "Post-merge verification gate, whose wording carries no marker (#3691)",
+      "rationale": "ORDERING ROW. The post-merge verification gate is a second route to this state and phrases it without the stamp, while the scheduler wraps every no-op gate reason in `premature turn end:`. Both matchers see this string; pr_merge_unmerged must win, or each CI-blocked merge increments the lifetime failure counter and re-dispatches into the same red check until the cap trips the whole scheduler. Go wins it by ordering, the SDK by an explicit exclusion — different mechanisms, same answer, which is exactly why it needs a row."
+    },
+    {
+      "id": "order-containment-breach-beats-premature-turn-end",
+      "input": "[stage:worktree-containment] premature turn end: stage exited 0 with a clean worktree",
+      "expected": "containment_breach",
+      "source": "synthetic",
+      "producer": "Composite of the containment marker and the scheduler's no-op wrapper",
+      "rationale": "ORDERING ROW. A breaching stage usually ALSO exits 0 with nothing in its own tree, so both matchers fire. Containment wins because it names the actual problem — work landed in a repository the run does not own — whereas premature_turn_end would tell the operator the agent did nothing."
+    },
+    {
+      "id": "order-dev-produced-no-changes-beats-premature-turn-end",
+      "input": "premature turn end: [dev-produced-no-changes] feature-dev gate found a clean tree and a branch level with base",
+      "expected": "dev_produced_no_changes",
+      "source": "synthetic",
+      "producer": "feature-dev stage gate wrapped by the scheduler's no-op wrapper (#202)",
+      "rationale": "ORDERING ROW. dev_produced_no_changes is a NARROWER premature turn end and is always delivered inside that wrapper, so if the generic block ran first this kind could never appear on a text-classified path — only the gate path would ever report it, and the two paths would disagree about the same run."
+    },
+    {
+      "id": "order-dev-handoff-missing-beats-premature-turn-end",
+      "input": "premature turn end: [dev-handoff-missing] dev context absent but git reports changed files in the worktree",
+      "expected": "dev_handoff_missing",
+      "source": "synthetic",
+      "producer": "feature-dev stage gate wrapped by the scheduler's no-op wrapper (#223)",
+      "rationale": "ORDERING ROW, and the inverse of the one above. The distinction is not cosmetic: this kind means there IS work on disk worth preserving before the next worktree sweep, and the generic kind means there is not."
+    },
+    {
+      "id": "premature-turn-end-gate",
+      "input": "premature turn end: feature-planning gate reported no state change",
+      "expected": "premature_turn_end",
+      "source": "synthetic",
+      "producer": "Gate hook stamping gates.KindNoOp (#74)",
+      "rationale": "The generic form, once the three narrower kinds above have had their chance. Pinned to hold the boundary between them: this row must stay generic while those stay specific, or the ordering above is untested."
+    },
+    {
+      "id": "premature-turn-end-no-output-context",
+      "input": "Stage feature-planning exited 0 but did not write expected output context",
+      "expected": "premature_turn_end",
+      "source": "synthetic",
+      "producer": "validateStageOutput (#2870)",
+      "rationale": "Its only producer runs exclusively on exit-0 paths, so the phrase always means the agent ended its turn without writing state. It previously bucketed into validation_error, which sent an operator hunting a schema problem that did not exist."
+    },
+    {
+      "id": "worktree-uncommitted",
+      "input": "worktree_uncommitted: recovered 3 uncommitted files into a recovery commit",
+      "expected": "worktree_uncommitted",
+      "source": "synthetic",
+      "producer": "Scheduler auto-recovery marker (#3542)",
+      "rationale": "A failure whose WORK SURVIVED — the distinction the operator needs before deciding whether to re-run. Matched early so the generic exit/stall heuristics do not shadow it."
+    },
+    {
+      "id": "worktree-uncommitted-stop-hook-alias",
+      "input": "stop_hook_uncommitted: stop hook found uncommitted changes at stage exit",
+      "expected": "worktree_uncommitted",
+      "source": "synthetic",
+      "producer": "Stop-hook kill marker alias (#3542)",
+      "rationale": "A second marker deliberately mapped onto one kind. Pinned so a future reader does not 'tidy' the alias away and silently create a fourth unclassified failure shape."
+    },
+    {
+      "id": "order-budget-ceiling-beats-budget-exceeded",
+      "input": "PIPELINE BUDGET CEILING exceeded — pipeline budget ceiling of $30.00 reached; budget exceeded for this run",
+      "expected": "budget_ceiling_hit",
+      "source": "synthetic",
+      "producer": "Composite of the USD ceiling wording and the token-budget enforcer wording",
+      "rationale": "ORDERING ROW, and the exact drift #306 found: the SDK's budget_ceiling_hit block carried a comment stating it must be matched before budget_exceeded while physically sitting after it. The run-level USD ceiling and the per-run token budget are different limits with different operator responses, and the ceiling is the larger, more specific claim."
+    },
+    {
+      "id": "budget-ceiling-underscore",
+      "input": "budget_ceiling_hit: run stopped at the configured USD ceiling",
+      "expected": "budget_ceiling_hit",
+      "source": "synthetic",
+      "producer": "Underscore kind form for the NotifyComplete re-classify",
+      "rationale": "The re-classify leg for the ceiling kind. Without it the round trip degrades a ceiling stop into the generic budget kind, which is the same silent downgrade the ordering row above pins from the other direction."
+    },
+    {
+      "id": "runaway-progress-exit-signal-source-dead-branch",
+      "input": "exitSignalSource=runaway-progress; stage terminated by the progress monitor",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Exit-signal telemetry path (#3783) — failure_handler.go's second runaway-progress alternative",
+      "rationale": "RECORDS A DEFECT, does not fix it. Go intends a second route to runaway_progress via the conjunction of `exitSignalSource` and `runaway-progress`, but the classifier lowercases its input before matching while that literal carries capitals, so the branch cannot fire for ANY input — verified for both casings. The corpus pins the behaviour that actually ships (unclassified, falling through to the caller's crash default) rather than the behaviour the source implies; correcting the literal would change the authoritative classifier's live routing, which is outside a parity fix and is raised in this PR's concerns. The SDK deliberately does NOT grow this alternative, because mirroring a dead branch would make both sides agree on nothing."
+    },
+    {
+      "id": "stall-kill-runaway-ceiling",
+      "input": "[runaway-ceiling-exceeded] Stage feature-dev terminated: runaway cost ceiling exceeded",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "Runaway-ceiling kill (#3508)",
+      "rationale": "Deliberately mapped onto stall_kill rather than a budget kind: recovery is identical to a stall (backoff, no lifetime-cap increment) because the ceiling is a safety rail, not the operator's spending decision. Matched before the cost-cap block so the two ceilings do not swap recoveries."
+    },
+    {
+      "id": "order-cost-cap-beats-stall",
+      "input": "[cost-cap-exceeded] Stage feature-dev terminated after it exceeded stall idle threshold",
+      "expected": "budget_exceeded",
+      "source": "synthetic",
+      "producer": "Composite of the cost-cap marker and the stall watchdog wording",
+      "rationale": "ORDERING ROW. The cost-cap kill IS delivered as an idle SIGTERM, so its text can legitimately carry both. Budget must win: a run that deliberately spent its cap should not be retried as a transient stall and spend it again."
+    },
+    {
+      "id": "stall-kill-stale-slot-orphan",
+      "input": "[stale-slot-orphan] slot 2 swept on extension reload — the run's process died without its close handler",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "StaleSlotRecoveryService zombie-run guard (#252)",
+      "rationale": "A zombie run, classified transient-stall because retry with backoff is the correct recovery and it must not count against the lifetime cap. Neither this marker nor its sibling below existed in the SDK mirror."
+    },
+    {
+      "id": "stall-kill-stage-no-output-timeout",
+      "input": "[stage-no-output-timeout] Stage feature-dev produced no session output within 10m 0s",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "First-output watchdog (#252)",
+      "rationale": "A stage wedged before it ever spoke — a pre-spawn await or a silent session. Grouped with stall_kill for recovery, kept as its own marker so the pre-first-output case stays distinguishable in triage."
+    },
+    {
+      "id": "stall-kill-marker-only",
+      "input": "[stall-killed] pr-create terminated",
+      "expected": "stall_kill",
+      "source": "synthetic",
+      "producer": "SkillRunner.ts stall-kill errorText (#3207)",
+      "rationale": "The bare marker with no descriptive tail — the shortest real form the stall path emits. It is the row that proves membership rather than prose: strip the marker literal from a ladder and only this row goes red."
+    },
+    {
+      "id": "budget-exceeded-stage-enforcer",
+      "input": "stage_budget_exceeded: feature-dev consumed its entire stage token budget",
+      "expected": "budget_exceeded",
+      "source": "synthetic",
+      "producer": "budget_enforcer.go BudgetDecision.Reason",
+      "rationale": "The Go-side enforcer reason, as opposed to the extension's cost-cap marker. Both mean the run stopped on a limit the operator set; pinning both keeps the two producers from drifting into different kinds."
+    },
+    {
+      "id": "validation-error-schema",
+      "input": "Stage output failed schema validation: required field 'summary' missing",
+      "expected": "validation_error",
+      "source": "synthetic",
+      "producer": "Stage output schema check",
+      "rationale": "A genuine machine-readable-output failure, distinct from feature-validate's quality gate. Kept narrow — the `did not write expected output context` phrase deliberately moved OUT of this kind to premature_turn_end, and this row holds what remains."
+    },
+    {
+      "id": "validation-error-invalid-json",
+      "input": "Stage handoff was not valid json",
+      "expected": "validation_error",
+      "source": "synthetic",
+      "producer": "Stage output parse failure",
+      "rationale": "The parse-failure leg of the same kind. Pinned separately because it and the schema leg are matched by different literals, and a ladder that keeps only one of them fails silently on the other."
+    },
+    {
+      "id": "adapter-auth-failed-bracket",
+      "input": "[adapter-auth-failed] Auth pre-flight failed — probe timed out after retry",
+      "expected": "adapter_auth_failed",
+      "source": "synthetic",
+      "producer": "HeadlessOrchestrator auth pre-flight (#312)",
+      "rationale": "The bracketed spelling, alongside the captured bare one. Both must classify: a transient probe timeout under a concurrent dispatch burst is not a process death, and three burst false-negatives fed to the cascade breaker as crashes pause the whole fleet."
+    },
+    {
+      "id": "no-changes-produced",
+      "input": "[no-changes-produced] pr-create confirmed the feature branch has zero commits ahead of base",
+      "expected": "no_changes_produced",
+      "source": "synthetic",
+      "producer": "pr-create deterministic fallback (#317)",
+      "rationale": "There is genuinely nothing to open a PR for — a dispatched human-only issue, not a defect. Deliberately NOT matched on the bare phrase `no commits ahead of`, which also appears in feature-validate's unrelated lost-implementation check and must keep its organic classification."
+    },
+    {
+      "id": "validation-failed",
+      "input": "[validation-failed] feature-validate wrote validation_status=failed and left the work uncommitted for retry",
+      "expected": "validation_failed",
+      "source": "synthetic",
+      "producer": "feature-validate quality gate (#326)",
+      "rationale": "An HONEST failure: the pipeline's own gate caught a real implementation problem. It carries full organic weight, unlike the transient kinds around it — misfiling it as a crash would both excuse the code and pause the queue."
+    },
+    {
+      "id": "validation-inconclusive",
+      "input": "[validation-inconclusive] feature-validate unit tier ran but executed zero tests",
+      "expected": "validation_inconclusive",
+      "source": "synthetic",
+      "producer": "feature-validate zero-test detection (#221)",
+      "rationale": "The opposite claim to validation_failed: the gate learned nothing, usually from an environmental misconfiguration. Keeping the two apart is what stops an unrun suite from being recorded as a passing one or as a code defect."
+    },
+    {
+      "id": "branch-forked-marker",
+      "input": "[branch-forked] pre-stage fork pre-flight: the run's branch has diverged from its remote",
+      "expected": "branch_forked",
+      "source": "synthetic",
+      "producer": "Go scheduler fork pre-flight (#163)",
+      "rationale": "Detected before the stage spends a token. No retry clears a fork, so classifying it as a crash produces an infinite loop of identical failures — which is precisely what happened before the kind existed."
+    },
+    {
+      "id": "branch-forked-push-rejected",
+      "input": "PUSH REJECTED: non-fast-forward — updates were rejected because the remote contains work you do not have locally",
+      "expected": "branch_forked",
+      "source": "synthetic",
+      "producer": "Skill push failure wording (#163)",
+      "rationale": "The second entry point to one kind, recognised by git's own phrase. `non-fast-forward` is sufficient on its own because git emits it for exactly this condition and nothing else, and it must beat the crash fallback whose `exit ` substring would otherwise read a push rejection as a process death."
+    },
+    {
+      "id": "branch-forked-negative-plain-push-rejection",
+      "input": "Stage feature-validate: push rejected by the pre-receive hook (branch protection)",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Negative case for the `push rejected` + `fetch first` conjunction",
+      "rationale": "`push rejected` alone is NOT a fork — a protected-branch refusal has a different remedy entirely. This row is why the phrase is conjunctive with `fetch first`, and it goes red the moment someone relaxes that."
+    },
+    {
+      "id": "commit-orphaned",
+      "input": "[commit-orphaned] HEAD is on temp-pre-push-2 instead of the expected feature branch and self-heal could not recover it",
+      "expected": "commit_orphaned",
+      "source": "synthetic",
+      "producer": "feature-validate branch-identity guard (#266)",
+      "rationale": "Valid work exists but sits where nobody will look for it, after a SIGKILL bypassed the pre-push restore-defer. Unrecoverable by retry, so it must not be classified as anything retryable."
+    },
+    {
+      "id": "permission-denied-marker",
+      "input": "[permission-denied] the harness refused a foreground sleep wait loop",
+      "expected": "permission_denied",
+      "source": "synthetic",
+      "producer": "Harness tool-call denial (#289)",
+      "rationale": "A denial is the harness saying 'not that way', not a defect: the stage had turns left and could have chosen another approach. It routes to a short backoff with no cascade feed — where the crash fallback would have paused the fleet over one rejected tool call. The SDK mirror had NO permission_denied matcher at all."
+    },
+    {
+      "id": "permission-denied-tool-use-result",
+      "input": "Stage feature-dev result envelope is_error=true, tool_use_result: User rejected tool use",
+      "expected": "permission_denied",
+      "source": "synthetic",
+      "producer": "Claude CLI result envelope for a denied tool call (#289)",
+      "rationale": "The shape the CLI actually reports, matched both by the literal sentence and by the conjunction of `tool_use_result` and `rejected`. Two spellings, one kind, because the envelope wording is not ours to stabilise."
+    },
+    {
+      "id": "permission-denied-negative-eacces",
+      "input": "EACCES: permission denied while writing the stage context file",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Negative case protecting the permission_denied matcher's shape",
+      "rationale": "THE TRAP ROW. A filesystem EACCES is an infrastructure fault, not a harness denial, and the two have opposite recoveries. This is why the matcher keys on `[permission-denied]`, `permission_denied`, `user rejected tool use` and the tool_use_result conjunction — and never on the bare phrase `permission denied`. Implementing the block with /permission denied/ would classify every EACCES as a harness denial on one side only, creating a NEW divergence while claiming to close one."
+    },
+    {
+      "id": "subagent-crash-exit-code",
+      "input": "exit 1: unexpected end of input while reading the session stream",
+      "expected": "subagent_crash",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError's `exit N: …` prefix",
+      "rationale": "The fallback, and the reason ordering matters everywhere above: SetStageError prefixes almost every stage error with `exit N: `, so the crash matcher can claim any string that reached it. Every specific kind is therefore matched BEFORE this one — a rule appended after it is dead code."
+    },
+    {
+      "id": "subagent-crash-signal",
+      "input": "Stage feature-dev killed by signal SIGKILL",
+      "expected": "subagent_crash",
+      "source": "synthetic",
+      "producer": "Process supervision",
+      "rationale": "The genuine process-death leg of the fallback — a real crash, correctly weighted and correctly fed to the cascade breaker. Pinned so the fallback keeps meaning something after everything else was taken out of it."
+    },
+    {
+      "id": "unknown-operator-stop",
+      "input": "Cancelled by user",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Stop All / abortAll cancellation text",
+      "rationale": "THE DEFAULT CASE, and a deliberate one. An operator Stop matches nothing on any ladder and books as a generic failure on BOTH execution paths — the terminal_behaviors.json force-clear accounting names this and declines to fix only the wedged variant, since marking one Stop path and not the other would make them disagree about what a Stop costs."
+    },
+    {
+      "id": "unknown-empty-error-text",
+      "input": "",
+      "expected": "",
+      "source": "synthetic",
+      "producer": "Empty errorText guard",
+      "rationale": "Empty input short-circuits before any matcher runs. Trivial, and pinned anyway because it is the one input where an early-return refactor could start returning the fallback kind and quietly attribute a crash to every run with no error text."
+    },
+
+    {
+      "id": "divergence-signal-usage-limit-with-model",
+      "input": "Claude Opus 4.5 usage limit reached; resets at 5pm",
+      "expected": "model_unavailable",
+      "source": "synthetic",
+      "producer": "Anthropic model-specific cap wording (#42); signal-ladder rule /\\b(?:session|usage)\\s+limit\\b/",
+      "rationale": "KNOWN DIVERGENCE, recorded not fixed. The text names a registry model AND says `usage limit`, so both text classifiers call it model_unavailable and route to #42's tier downgrade. The extension's signal ladder maps any `session|usage limit` to rate_limit_quota_exhausted and Go uses a non-empty signal VERBATIM, so on the extension path the run RECORD says model_unavailable while the fleet REACTION is a quota cooldown, and the tier downgrade never fires. Which taxonomy is right is a routing decision (#305/#370), so the row pins today's behaviour on both sides instead of quietly picking a winner.",
+      "known_divergence": {
+        "signal": "rate_limit_quota_exhausted",
+        "why": "The signal ladder treats every session/usage limit as the Anthropic quota class so Go applies the cooldown-until-reset backoff; it has no model-aware branch.",
+        "tracked": "#306 concerns → #305/#370"
+      }
+    },
+    {
+      "id": "divergence-signal-overloaded-with-quota-marker",
+      "input": "API Error: Overloaded, and [rate-limit-quota-exhausted] resetsAt=0",
+      "expected": "api_overloaded",
+      "source": "synthetic",
+      "producer": "Composite of the 529 envelope and the quota stall marker",
+      "rationale": "KNOWN DIVERGENCE and an ORDERING ROW. Go tests `overloaded` before the quota marker, so an incidental capacity word beats a deliberate stamp; the extension's signal ladder tests them the other way round. The recoveries are opposites — a five-minute retry versus a cooldown until the bucket resets — so this is not cosmetic. The text classifiers are aligned to Go here because Go writes the record; changing WHICH order is correct means changing the authoritative side's live routing, which is out of scope for a parity fix.",
+      "known_divergence": {
+        "signal": "rate_limit_quota_exhausted",
+        "why": "The signal ladder ranks the explicit quota marker above the generic `overloaded` substring — arguably the better precedence, which is exactly why the question is a taxonomy decision rather than a bug to patch.",
+        "tracked": "#306 concerns → #305/#370"
+      }
+    }
+  ]
+}

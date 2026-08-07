@@ -83,7 +83,7 @@ import { QueryService } from "../services/QueryService";
 import { SavedQueriesService } from "../services/SavedQueriesService";
 import { getInitialExecutionMode } from "../utils/incrediConfig";
 import { createStreamOutputHandler } from "../utils/streamOutputHandler";
-import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER } from "../utils/failureComment";
+import { classifyTerminalKindForSignal } from "../services/terminalKindSignal";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
 import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
@@ -1634,71 +1634,12 @@ export async function initializeServices(
           // defense-in-depth signal for IPC-mode runs where the TS layer
           // observed the result envelope first.
           const errMsg = error?.message ?? "";
-          let terminalFailureKind: string | undefined;
-          if (/stream idle timeout/i.test(errMsg)) {
-            terminalFailureKind = "stream_idle_timeout";
-          } else if (/github-quota-low/i.test(errMsg)) {
-            // #3896: transient GitHub-API quota dip at pipeline-start. Forward
-            // the explicit kind so Go applies the GitHub-quota cooldown (issue
-            // stays Ready, no lifetime-cap increment) rather than treating it
-            // as a real failure. The Go fallback also matches the embedded
-            // token, but sending the kind keeps IPC-mode runs unambiguous.
-            terminalFailureKind = "github_quota_low";
-          } else if (
-            /rate-limit-quota-exhausted/i.test(errMsg) ||
-            // Anthropic session/usage limit — same environmental-quota class,
-            // so Go applies the cooldown-until-reset backoff and skips the
-            // lifetime-failure-cap increment. #3792.
-            /\b(?:session|usage)\s+limit\b/i.test(errMsg)
-          ) {
-            terminalFailureKind = "rate_limit_quota_exhausted";
-          } else if (/overloaded/i.test(errMsg)) {
-            // Anthropic API 529 "Overloaded" — a transient capacity blip. Go's
-            // ClassifyTerminalKind already matches "overloaded" from the
-            // forwarded failureDetail, but sending the explicit kind keeps
-            // IPC-mode runs unambiguous (matches the other branches) and routes
-            // to the api_overloaded recovery path: 5-minute per-issue backoff,
-            // board→Ready, no lifetime-cap increment, no pause.
-            terminalFailureKind = "api_overloaded";
-          } else if (/github-network-outage/i.test(errMsg)) {
-            // #4002: api.github.com unreachable at pipeline-start. Routes to
-            // the github_network_outage recovery path: short GLOBAL cooldown,
-            // board→Ready, no lifetime-cap increment, no pause.
-            terminalFailureKind = "github_network_outage";
-          } else if (
-            /socket connection was closed/i.test(errMsg) ||
-            /socket hang up/i.test(errMsg)
-          ) {
-            // #4002: Anthropic API transport drop (local network blip killed
-            // the stream mid-stage). Same recovery path as api_overloaded:
-            // 5-minute per-issue backoff, board→Ready, no lifetime-cap
-            // increment, no pause.
-            terminalFailureKind = "api_connection_lost";
-          } else if (/\[adapter-auth-failed\]|adapter_auth_failed/i.test(errMsg)) {
-            // #312: the pipeline-start adapter auth gate refused to launch — a
-            // probe timed out under a concurrent dispatch burst (transient
-            // starvation; auth was never broken) or the adapter CLI is logged
-            // out. Forward the explicit kind so the Go scheduler routes it to
-            // the adapter_auth_failed recovery path (short backoff, board→Ready,
-            // NO lifetime-cap increment, NO cascade feed, NO pause) instead of
-            // the generic subagent_crash path that would pause the queue and
-            // count three burst false-negatives toward the cascade breaker.
-            terminalFailureKind = "adapter_auth_failed";
-          } else if (errMsg.includes(ARCHITECTURE_APPROVAL_REQUIRED_MARKER)) {
-            // #4098/#4222: the architecture-approval gate halted the run before
-            // feature-dev because a human must approve a high-impact decision.
-            // The TS layer already treats this as an actionable pause (see
-            // failureComment.ts and ConcurrentPipelineManager), but the Go
-            // scheduler never heard about it — so it bucketed a deliberate
-            // human gate into subagent_crash, counted it toward the lifetime
-            // failure cap, and reverted the issue to Ready, re-dispatching it
-            // into a gate only a human can open (~$5/attempt, and the second
-            // attempt trips the whole scheduler). Forward the explicit kind so
-            // Go routes it to the architecture_approval_required path:
-            // board → In review, NO lifetime-cap increment, NO cascade feed,
-            // NO pause, and no automatic re-dispatch.
-            terminalFailureKind = "architecture_approval_required";
-          }
+          // The ladder itself lives in services/terminalKindSignal.ts (#306).
+          // It was inline here, which meant the one classifier whose answer Go
+          // uses VERBATIM was the only one no test could drive. It is now a
+          // pure function pinned against the shared corpus that also pins Go
+          // and the SDK — see terminalKindSignal.corpusParity.test.ts.
+          const terminalFailureKind = classifyTerminalKindForSignal(errMsg);
           // #3431: forward the raw failure text so the autonomous
           // scheduler can extract `resetsAt=<unix>` from the
           // `[rate-limit-quota-exhausted]` kill marker and run the
