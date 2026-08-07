@@ -1635,26 +1635,7 @@ export async function initializeServices(
           // observed the result envelope first.
           const errMsg = error?.message ?? "";
           let terminalFailureKind: string | undefined;
-          if (/\[user-abort\]|user_abort/i.test(errMsg)) {
-            // #307: the operator pressed Stop and this run did not stop with
-            // it — abortAll's deadline expired with the slot's pipeline
-            // promise still unsettled, so forceSettleUnsettledSlot booked the
-            // terminal state on the run's behalf. The outcome is UNKNOWN, not
-            // failed. Matched FIRST because the operator's own action outranks
-            // every heuristic below, and because the force-clear text carries
-            // "abort"/"cancel"/a millisecond deadline that would otherwise
-            // invite a stall or timeout misread.
-            //
-            // Routes to the Go scheduler's user_abort path: frees the running
-            // slot, NO lifetime-cap increment, NO cascade-breaker feed (N
-            // wedged slots on ONE Stop All would otherwise trip the breaker
-            // and halt the fleet as a direct consequence of pressing Stop), NO
-            // pause, and deliberately NO board revert — the force-cleared
-            // run's process may still hold the worktree and the IPC server's
-            // runtime entry, so re-dispatching walks a second run into the
-            // first one's state.
-            terminalFailureKind = "user_abort";
-          } else if (/stream idle timeout/i.test(errMsg)) {
+          if (/stream idle timeout/i.test(errMsg)) {
             terminalFailureKind = "stream_idle_timeout";
           } else if (/github-quota-low/i.test(errMsg)) {
             // #3896: transient GitHub-API quota dip at pipeline-start. Forward

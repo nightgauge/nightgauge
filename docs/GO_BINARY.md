@@ -4276,6 +4276,47 @@ nightgauge pipeline repair-history --workdir .
 nightgauge pipeline repair-history --workdir . --apply
 ```
 
+#### Dispatch-Token Identity Guard (Issue #307)
+
+`repair-history` collapses duplicates after the fact. This guard is what stops
+one class of them being created.
+
+The IPC server's runtime registry (`activeRuntimes`) is keyed by **issue
+number**, which is not a run identity. `ConcurrentPipelineManager.abortAll` has
+a 30-second deadline: when a slot's pipeline promise never settles, the deadline
+force-clears the slot, and the operator can re-queue that same issue in the same
+extension-host session. Two producers then reach `pipeline.notifyStageTransition`
+and `pipeline.notifyComplete` under one key — the still-alive dead run and its
+live successor.
+
+Each dispatch therefore carries a **dispatch token**, minted per dispatch by
+`ConcurrentPipelineManager.startSlot`, stamped on the slot's
+`PipelineStateService`, and sent on every stage transition and on the terminal
+completion. The server binds the first token it sees to the runtime and applies
+three rules:
+
+| Situation | Behavior |
+| --------- | -------- |
+| Token matches the runtime's identity | Normal — record, outcome, telemetry as before |
+| `initialized` arrives with a **different** token | A new dispatch is claiming the issue: the superseded run's `pipeline_done` is emitted from its own snapshot (the same terminal event orphan reconciliation builds), then a fresh `RunID` is minted. The successor never inherits the dead run's stages, spend or identity. |
+| Any other transition with a different token, or a completion whose token is not the runtime's identity (including **no runtime at all**) | Rejected, logged loudly, **nothing written and nothing deleted** — no run record, no learning outcome, no telemetry, no runtime delete, no snapshot removal |
+
+A missing runtime is a rejection, not an invitation: the identity the run claims
+is gone, and adopting whatever occupies the key next is precisely the
+cross-contamination the guard exists to stop.
+
+The force-clear deliberately leaves `runtime-<issue>.json` on disk. For a run
+that stays hung forever — never completing, never emitting another transition —
+that snapshot is the only remaining path to a terminal event: orphan
+reconciliation (#44) emits the missing `pipeline_done` from it at the next
+server start or workspace-root switch. Paused snapshots are still skipped there,
+so a force-clear never destroys the pause-restore prompt's state.
+
+The extension side of the same boundary is recorded as
+`force-clear-terminal-bookkeeping` in
+`internal/orchestrator/testdata/terminal_behaviors.json`, whose `accounting`
+field reconciles the force-clear against every other terminal behavior.
+
 ### Modernize — Assessment Aggregation
 
 #### modernize aggregate-findings

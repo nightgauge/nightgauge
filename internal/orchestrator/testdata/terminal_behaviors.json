@@ -20,6 +20,11 @@
     "     the point: updating this file is the moment you answer 'which of the two paths",
     "     reaches the behavior I just added, and is the other one intentionally excluded?'",
     "",
+    "A behavior row may carry an `accounting` array (see force-clear-terminal-bookkeeping): a",
+    "line-by-line reconciliation of that row against EVERY other behavior in this file. Use it",
+    "when a row describes a SECOND funnel on one path — a partial enumeration presented as",
+    "complete is exactly the silent divergence this manifest exists to prevent.",
+    "",
     "To update a fence hash after a deliberate change: run the failing test; it prints the",
     "new hash. Record it here together with any behavior rows the change added or removed.",
     "Normalization (identical in both suites): per line, trim whitespace; drop empty lines;",
@@ -226,17 +231,6 @@
       }
     },
     {
-      "name": "force-clear-terminal-bookkeeping",
-      "note": "SECOND extension-side terminal funnel (#307), fenced as force-settle-funnel. It exists because the runSlotPipeline finally is unreachable for a run whose promise NEVER SETTLES (wedged adapter, a stage awaiting an IPC/gh call that ignores the AbortController), and abortAll's 30s deadline force-clears such a slot. It performs THREE of the behaviors below and deliberately omits five; the omissions are recorded here because the fence-hash guard cannot infer them. PERFORMS: queue-item-completion (completeQueueItem, #254's invariant); autonomous-terminal-notify (onSlotFailed -> autonomousComplete, with the [user-abort] marker so the Go scheduler routes it to TerminalKindUserAbort instead of the generic failure branch that would feed the cascade breaker and charge the lifetime cap for an operator's Stop); worktree-cleanup, but only its disposal half — the worktree is PRESERVED unconditionally (a wedged process may still hold it) and the separate worktreeReleased latch lets a later honest settlement finish the teardown. OMITS: history-record-write, learning-outcome-record and pipeline-done-telemetry, all three of which live behind pipeline.notifyComplete, which a never-settling run never reaches — so a force-cleared run produces no run record and no learning outcome, and the Go scheduler correspondingly books it as a NON-failure (no lifetime-cap increment, no cascade feed) so the two surfaces agree that no outcome was observed rather than disagreeing about a failure (#304's shape); board-status-failure-sync, because the issue's status is deliberately left where it is — the run's process may still be alive and a revert to Ready would re-dispatch a second run into the first one's worktree and IPC runtime; stage-exit-records, which are written by the stage runner per stage and have no meaning for a stage that never exited. The GO path has no counterpart by construction: Scheduler.runPipeline owns its stage loop synchronously, so its terminal defer always runs and there is no unsettled-promise state to force-clear.",
-      "go": {
-        "pathSpecific": "NOT APPLICABLE — Scheduler.runPipeline drives its stage loop synchronously and its terminal defer always runs, so there is no 'the run promise never settled' state for a deadline to force-clear. The extension path hands runPipeline to a detached promise, which is what creates the gap."
-      },
-      "extension": {
-        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
-        "anchor": "private async runForceSettleBookkeeping("
-      }
-    },
-    {
       "name": "auto-retro-on-failure",
       "go": {
         "pathSpecific": "Extension-only (#3926): auto-retro analysis runs in the interactive mode; the Go path's failures are analyzed by the batch retro skill instead."
@@ -244,6 +238,99 @@
       "extension": {
         "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
         "anchor": "void AutoRetroService.runAfterFailure("
+      }
+    },
+    {
+      "name": "force-clear-terminal-bookkeeping",
+      "note": "SECOND terminal funnel on the extension path (#307), for slots whose pipeline promise never settles and which therefore never reach runSlotPipeline's finally. The EXHAUSTIVE per-behavior accounting is in this row's `accounting` field — every behavior in this manifest appears there exactly once, as performed / omitted / not-performed / delegated. A partial list presented as complete is the silent-divergence this manifest exists to prevent, so when you add a behavior row above, add its disposition to `accounting` too.",
+      "accounting": [
+        "SECOND terminal funnel on the extension path (#307). abortAll waits 30s for slots to settle;",
+        "when a slot's pipeline promise never settles (wedged adapter, a stage awaiting an IPC/gh call",
+        "that ignores the AbortController, a hung poll loop) the deadline force-clears it. That run never",
+        "reaches runSlotPipeline's finally, so the funnel above books NOTHING for it — this row is the",
+        "accounting of what the force-clear books instead. It is keyed by a per-DISPATCH generation token,",
+        "and a force-cleared generation is TOMBSTONED permanently: every terminal boundary in",
+        "runSlotPipeline (try-block outcome dispatch, catch, and the fenced finally) checks the tombstone",
+        "first and exits silently, so a run that settles an hour later cannot double-book or, once the",
+        "operator has re-queued the issue, book against the successor.",
+        "",
+        "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you",
+        "add a behavior row above, add its disposition here.",
+        "",
+        "PERFORMED (3):",
+        "  queue-item-completion       — completeQueueItem releases the dequeue's `processing` mark; without",
+        "                                it the issue is permanently undispatchable (#254's outcome).",
+        "  autonomous-terminal-notify  — onSlotFailed fires, so bootstrap's autonomousComplete frees the Go",
+        "                                scheduler's running-slot entry. SKIPPED (not omitted) when the run",
+        "                                already dispatched its own outcome and was merely mid-teardown when",
+        "                                the deadline fired: autonomousComplete is not idempotent.",
+        "  worktree-cleanup            — cleanupSlot(preserveWorktree=true): state service disposed,",
+        "                                onSlotCleaned fired (tree item + subscriptions released), TREE KEPT.",
+        "                                A killed process may still hold it and uncommitted agent work must",
+        "                                survive (#66); reclaiming the tree itself is #110's sweep.",
+        "",
+        "OMITTED — same gate as the SETTLED Stop All path, which sets slot.userCancelled on every slot (4):",
+        "  board-status-failure-sync   — both paths gate the In-review safety net on !slot.userCancelled, so",
+        "                                the issue keeps its current status and the operator can resume. If",
+        "                                that gate ever changes, this row changes with it.",
+        "  merged-branch-cleanup       — deleteMergedBranch is `pipelineSucceeded && !userCancelled`: false",
+        "                                here twice over. The local branch is kept for resume/recovery.",
+        "  queue-halt-on-failure       — abortAll already cleared the queue; halting a queue the operator",
+        "                                just emptied is a no-op with a modal attached.",
+        "  failure-issue-comment       — no public comment narrating the operator's own stop.",
+        "",
+        "OMITTED — not reachable from this funnel (5):",
+        "  stage-gate-evaluation       — per-stage, inside HeadlessOrchestrator. A force-clear happens",
+        "                                between/inside stages and runs no stage.",
+        "  stage-exit-records          — written by the stage runner at each stage exit, not at run terminal.",
+        "  auto-retro-on-failure       — runs inside HeadlessOrchestrator's own failure path, which a",
+        "                                never-settling runPipeline never reaches.",
+        "  terminating-stage-cost-booking — booked by Go's notifyStageTransition 'failed' transition, which a",
+        "                                wedged stage never emits. Spend through the last COMPLETED stage is",
+        "                                already booked; the wedged stage's spend was never reported by",
+        "                                anything, so there is nothing to book, not something withheld.",
+        "  orphaned-remote-branch-reclaim — already NOT WIRED on the extension path at all (see its row);",
+        "                                the force-clear does not change that.",
+        "",
+        "NOT PERFORMED — real gaps, owned elsewhere (3):",
+        "  run-scoped-attention        — no `raise` verb exists on IPC or the CLI (#305). A force-cleared",
+        "                                issue's only surfacing is the Stop toast and the warn log. This is",
+        "                                the same hole every extension-path run has, not one this adds.",
+        "  terminal-kind-classification— the error handed to onSlotFailed is byte-identical to the SETTLED",
+        "                                Stop All path's (`Cancelled by user`), which neither classifier",
+        "                                matches, so an operator Stop books as a generic failure on BOTH",
+        "                                paths. Deliberately not fixed here: marking only the wedged variant",
+        "                                would make the two Stop paths disagree about what a Stop costs, and",
+        "                                the classifier ladders are #306's scope.",
+        "  uncommitted-work-recovery   — the wedged process may still be writing in the worktree, so",
+        "                                stashing/committing it is unsafe. Preserving the tree keeps the work",
+        "                                intact; recovery happens at reclamation time.",
+        "",
+        "DELEGATED — produced later, by an existing subsystem (3):",
+        "  history-record-write        — Go's pipeline.notifyComplete is the sole writer and is unreachable",
+        "  learning-outcome-record       for a run whose promise never settles. If the run later completes",
+        "                                and still owns its runtime identity, it writes BOTH under its OWN",
+        "                                RunID. If a successor has taken the identity, the completion is",
+        "                                REJECTED and neither is written — recording the dead run's outcome",
+        "                                under the live run's RunID is strictly worse than not recording it.",
+        "  pipeline-done-telemetry     — the force-clear cannot emit it (Go mints the RunID; the extension",
+        "                                has no verb to ask for one). Two existing producers close it: the",
+        "                                supersede branch of pipeline.notifyStageTransition emits it the",
+        "                                moment a new dispatch claims the issue, and #44 orphan",
+        "                                reconciliation emits it from the PRESERVED runtime-{N}.json at the",
+        "                                next server start or workspace-root switch. The force-clear",
+        "                                deliberately does NOT delete that snapshot — it is the only",
+        "                                remaining path to a terminal event for a run that stays hung, and a",
+        "                                PAUSED snapshot additionally powers the pause-restore prompt.",
+        "",
+        "  lifecycle-decision-trace    — Go-only by design (ADR 013 / #179); unchanged here."
+      ],
+      "go": {
+        "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare the run abandoned while that defer is still owed. There is no Go-side force-clear, and therefore no second Go funnel to keep in parity."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await this.forceClearStuckSlots()"
       }
     }
   ],
@@ -260,14 +347,14 @@
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
-      "sha256": "4e2a04aa322678b4a0b20db308f32b6b554d5af0742846494fe0308e368aae67"
+      "sha256": "212d96c95190a586d927448fbc55de3dfd5ffeb06344d6a34eb4a581a0d45ed6"
     },
     {
-      "id": "extension-force-settle-funnel",
+      "id": "extension-force-clear-funnel",
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
-      "begin": "terminal-parity:begin force-settle-funnel",
-      "end": "terminal-parity:end force-settle-funnel",
-      "sha256": "8c30c8ef96ea77145de34faecf8dd50a3c8779c759a6f1814b465dd9c8b977a2"
+      "begin": "terminal-parity:begin force-clear-funnel",
+      "end": "terminal-parity:end force-clear-funnel",
+      "sha256": "3a7bfd918c280f938710086497841dd6404cb015912d1f99e5fbd7586217c2cd"
     }
   ]
 }

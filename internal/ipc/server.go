@@ -71,23 +71,7 @@ type Server struct {
 	// activeRuntimes holds RuntimeState for HeadlessOrchestrator-initiated pipelines.
 	// Keyed by "repo#issueNumber". Protected by runtimesMu.
 	activeRuntimes map[string]*state.RuntimeState
-	// abandonedRuntimes holds runtimes evicted from activeRuntimes by
-	// abandonRunRuntime (#307): a run the extension declared terminal without
-	// ever reaching pipeline.notifyComplete, because abortAll's deadline
-	// force-cleared its slot while the pipeline promise was still unsettled.
-	//
-	// Two things must both stay true, and one map keyed by bare issue number
-	// cannot do both. A NEXT dispatch of the same issue must NOT adopt the dead
-	// run's RunID/started_at/CompletedStages/token totals — notifyStageTransition
-	// reuses whatever entry it finds, so leaving the corpse in activeRuntimes
-	// stamps the authoritative V2 record of run N+1 with run N's identity, which
-	// is exactly the cross-contamination the #313/#316 guards exist for. And a
-	// force-cleared run that DOES eventually complete must still write its own
-	// record, so its runtime cannot simply be deleted. Moving it aside satisfies
-	// both: fresh runs miss, late completions fall back and find their own.
-	// Protected by runtimesMu.
-	abandonedRuntimes map[string]*state.RuntimeState
-	runtimesMu        sync.Mutex
+	runtimesMu     sync.Mutex
 
 	// autonomousScheduler is the cross-repo autonomous scheduler (optional).
 	autonomousScheduler *orchestrator.AutonomousScheduler
@@ -177,9 +161,7 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		methods:        make(map[string]Handler),
 		userClients:    make(map[string]*gh.Client),
 		activeRuntimes: make(map[string]*state.RuntimeState),
-		// #307 — runtimes moved aside by abandonRunRuntime.
-		abandonedRuntimes: make(map[string]*state.RuntimeState),
-		forgeRegistry:     make(map[string]ForgeInstanceConfig),
+		forgeRegistry:  make(map[string]ForgeInstanceConfig),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -643,47 +625,6 @@ func (s *Server) repoRoot(repo string) string {
 // pipelineStateDir resolves the .nightgauge/pipeline directory a run's
 // runtime-{N}.json belongs in, scoped to the run's target repo via repoRoot.
 // Returns "" when no root resolves (e.g. an unconfigured server).
-// abandonRunRuntime moves a run's RuntimeState out of activeRuntimes so the
-// NEXT dispatch of the same issue mints a fresh RunID instead of adopting a
-// dead run's identity (#307).
-//
-// pipeline.notifyComplete is the only place that drops a runtime, and it is
-// unreachable for a run whose promise never settles: HeadlessOrchestrator's
-// firePipelineComplete is called only on paths that return a result. But
-// ConcurrentPipelineManager's abort-deadline force-clear DOES declare such a
-// run terminal — it releases the queue mark, frees the Go scheduler's slot and
-// disposes the slot — which makes the issue immediately re-dispatchable while
-// the runtime lives on. notifyStageTransition reuses an existing entry rather
-// than minting one, so the next run would inherit the dead run's RunID,
-// started_at, CompletedStages, StageErrors and token totals, and stamp them
-// onto its own authoritative V2 record.
-//
-// The runtime is MOVED, not deleted: the force-cleared process may still be
-// alive and may still reach notifyComplete, and that run is entitled to write
-// its own record with its own identity (notifyComplete falls back to this map).
-// The on-disk crash snapshot is removed here because the run is terminal from
-// the manager's point of view — orphan reconciliation (#44) must not
-// re-terminate it a second time.
-func (s *Server) abandonRunRuntime(repo string, issueNumber int) {
-	runtimeKey := fmt.Sprintf("%d", issueNumber)
-	s.runtimesMu.Lock()
-	rt, existed := s.activeRuntimes[runtimeKey]
-	if existed {
-		delete(s.activeRuntimes, runtimeKey)
-		if s.abandonedRuntimes == nil {
-			s.abandonedRuntimes = make(map[string]*state.RuntimeState)
-		}
-		s.abandonedRuntimes[runtimeKey] = rt
-	}
-	s.runtimesMu.Unlock()
-
-	if stateDir := s.pipelineStateDir(repo); stateDir != "" {
-		_ = os.Remove(filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", issueNumber)))
-	}
-	log.Printf("abandonRunRuntime: %s#%d force-cleared by the abort deadline — runtime moved aside (had active runtime: %v) so the next dispatch starts with a fresh run id (#307)",
-		repo, issueNumber, existed)
-}
-
 func (s *Server) pipelineStateDir(repo string) string {
 	root := s.repoRoot(repo)
 	if root == "" {
@@ -2521,8 +2462,43 @@ func (s *Server) registerMethods() {
 		}
 		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
 
+		var supersededSnap *state.RuntimeState
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
+		// #307: the runtime map is keyed by ISSUE NUMBER, which is not a run
+		// identity — the abort deadline can force-clear a wedged run and the
+		// operator can re-queue the same issue inside one session, so two live
+		// producers share this key. DispatchToken tells them apart.
+		if ok && p.DispatchToken != "" && rt.DispatchToken != "" && rt.DispatchToken != p.DispatchToken {
+			if p.Status == "initialized" {
+				// A NEW dispatch is claiming the issue. `initialized` is emitted
+				// exactly once per dispatch, at the top of runSlotPipeline, so it
+				// is the one transition that can only come from a fresh run.
+				// Close the superseded run's platform row from its own snapshot
+				// before handing the key over (emitted after the lock is
+				// released, below) — the same terminal event #44's orphan
+				// reconciler builds — then mint a fresh identity. Without this
+				// the successor would either adopt the dead run's RunID
+				// (cross-contamination, #313/#316) or silently strand it
+				// 'running' forever.
+				supersededSnap = rt.Snapshot()
+				rt = nil
+				ok = false
+			} else {
+				// A STALE producer: this run's runtime was already taken over by
+				// a later dispatch. Mutating it would rewrite the live run's
+				// stage history, cost totals and on-disk snapshot with the dead
+				// run's. Drop the transition — loudly, and writing nothing.
+				staleRunID := rt.RunID
+				staleToken := rt.DispatchToken
+				s.runtimesMu.Unlock()
+				log.Printf(
+					"notifyStageTransition: REJECTED stale transition for #%d (%s/%s) — token %q is not the active runtime's identity %q (run %s); nothing recorded",
+					p.IssueNumber, p.Stage, p.Status, p.DispatchToken, staleToken, staleRunID,
+				)
+				return map[string]string{"status": "stale"}, nil
+			}
+		}
 		if !ok {
 			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "")
 			// Generate a stable run UUID for the extension/HeadlessOrchestrator
@@ -2532,6 +2508,12 @@ func (s *Server) registerMethods() {
 			// stays stable across every stage of the run.
 			rt.RunID = uuid.NewString()
 			s.activeRuntimes[runtimeKey] = rt
+		}
+		// Bind this dispatch's identity to the runtime. Latched on first sight:
+		// a runtime minted by another producer (pipeline.setPaused, the
+		// scheduler) carries no token and adopts the first one it is told.
+		if p.DispatchToken != "" && rt.DispatchToken == "" {
+			rt.DispatchToken = p.DispatchToken
 		}
 		// Propagate title/branch from the transition params so that stateChanged
 		// events carry the real GitHub issue title instead of an empty string.
@@ -2550,6 +2532,14 @@ func (s *Server) registerMethods() {
 		runID := rt.RunID
 		repo := rt.Repo
 		s.runtimesMu.Unlock()
+
+		if supersededSnap != nil {
+			log.Printf(
+				"notifyStageTransition: #%d superseded by a new dispatch — closing run %s (token %q -> %q); new run is %s",
+				p.IssueNumber, supersededSnap.RunID, supersededSnap.DispatchToken, p.DispatchToken, runID,
+			)
+			s.emitSupersededRunDone(supersededSnap)
+		}
 
 		stage := state.PipelineStage(p.Stage)
 
@@ -2722,23 +2712,34 @@ func (s *Server) registerMethods() {
 		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
-		fromAbandoned := false
-		if !ok {
-			// #307: this run's slot was force-cleared by abortAll's deadline,
-			// so abandonRunRuntime moved its runtime aside to keep the next
-			// dispatch's identity clean. The run finished anyway — it is still
-			// entitled to write its own record under its OWN RunID.
-			rt, ok = s.abandonedRuntimes[runtimeKey]
-			fromAbandoned = ok
-		}
-		var runID string
+		var runID, activeToken string
 		if ok {
 			runID = rt.RunID
+			activeToken = rt.DispatchToken
 		}
 		s.runtimesMu.Unlock()
-		if fromAbandoned {
-			log.Printf("notifyComplete: #%d completed AFTER its slot was force-cleared — writing its record from the abandoned runtime (run %s) rather than a fresh skeleton (#307)",
-				p.IssueNumber, runID)
+
+		// IDENTITY GUARD (#307). This handler is authoritative: it writes the V2
+		// run record, appends the learning outcome, emits the terminal telemetry,
+		// drops the runtime and removes the crash snapshot. Every one of those is
+		// resolved from the BARE ISSUE NUMBER, which is not a run identity — the
+		// abort deadline can force-clear a wedged run and the operator can
+		// re-queue the same issue, so the wedged process finishing an hour later
+		// would find the SUCCESSOR's runtime and write its own failure under the
+		// successor's RunID, then delete the live run's identity and snapshot.
+		//
+		// So a completion that carries a dispatch token must match the runtime's
+		// current identity, and a MISS is a rejection too: an absent runtime
+		// means the identity this run claims is gone, never an invitation to
+		// adopt whatever appears next. Reject loudly and write NOTHING — the
+		// preserved runtime-{N}.json still lets orphan reconciliation (#44) close
+		// the run at the next server start.
+		if p.DispatchToken != "" && activeToken != p.DispatchToken {
+			log.Printf(
+				"notifyComplete: REJECTED stale completion for #%d (success=%v) — token %q is not the active runtime's identity %q; no run record, no learning outcome, no telemetry, nothing deleted",
+				p.IssueNumber, p.Success, p.DispatchToken, activeToken,
+			)
+			return map[string]string{"status": "stale"}, nil
 		}
 
 		// #266 ground-truth reconciliation. A run whose PR merged must never be
@@ -3026,12 +3027,8 @@ func (s *Server) registerMethods() {
 
 		// Drop the runtime now the run is terminal so a subsequent run of the
 		// same issue starts with a fresh UUID rather than reusing this one.
-		// Both maps: a force-cleared run (#307) parks its runtime in
-		// abandonedRuntimes, and once it has written its record that copy is
-		// spent too.
 		s.runtimesMu.Lock()
 		delete(s.activeRuntimes, runtimeKey)
-		delete(s.abandonedRuntimes, runtimeKey)
 		s.runtimesMu.Unlock()
 
 		// The run reached its terminal event — remove the crash-recovery
@@ -4021,21 +4018,12 @@ func (s *Server) registerMethods() {
 
 	//ipc:method autonomousComplete params:AutonomousCompleteParams result:AutonomousStatusResult
 	s.methods["autonomous.complete"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		if s.autonomousScheduler == nil {
+			return nil, fmt.Errorf("autonomous scheduler not configured")
+		}
 		var p AutonomousCompleteParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		// #307: the extension force-cleared this slot on the abort deadline
-		// with its pipeline promise still unsettled, so the run never reached
-		// pipeline.notifyComplete and its runtime is still parked under the
-		// issue number. Move it aside BEFORE anything can re-dispatch the
-		// issue, and before the scheduler-nil bail below — the runtime map is
-		// the IPC server's own state and is contaminated either way.
-		if p.TerminalFailureKind == orchestrator.TerminalKindUserAbort {
-			s.abandonRunRuntime(p.Owner+"/"+p.Repo, p.IssueNumber)
-		}
-		if s.autonomousScheduler == nil {
-			return nil, fmt.Errorf("autonomous scheduler not configured")
 		}
 		repo := p.Owner + "/" + p.Repo
 		s.autonomousScheduler.NotifyComplete(repo, p.IssueNumber, p.Success, p.ConflictRestart, p.TerminalFailureKind, p.FailureDetail)

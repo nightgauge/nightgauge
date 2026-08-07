@@ -3951,48 +3951,6 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			return
 		}
 
-		// Issue #307: the OPERATOR pressed Stop and this run did not stop with
-		// it — abortAll's deadline expired while the slot's pipeline promise
-		// was still unsettled, so the extension force-cleared the slot and
-		// booked its terminal state on the run's behalf. The outcome is
-		// UNKNOWN, not failed: nothing observed a result, so the work may have
-		// merged, died silently, or still be running.
-		//
-		// Booking that as a generic failure made the operator's own Stop the
-		// cause of a fleet halt — N wedged slots on ONE Stop All feed N
-		// failures into the cascade breaker inside one window, which trips it
-		// (safety_tripped + Discord + cascade-pause card) — while charging each
-		// one against the per-issue lifetime cap that survives Resume().
-		//
-		// Same shape as branch_forked/commit_orphaned: no lifetime-cap
-		// increment, no cascade feed (an ignored Stop says nothing about the
-		// health of the factory), no pause, and deliberately NO board revert to
-		// Ready. The revert is not merely unnecessary here, it is harmful: the
-		// force-cleared run's process may still hold the worktree and the IPC
-		// server's runtime entry, so re-dispatching walks a second run into the
-		// first one's state. The operator re-queueing is the way back in —
-		// they are the only actor who knows the wedged process is gone.
-		if terminalFailureKind == TerminalKindUserAbort {
-			detail := failureDetail
-			if detail == "" {
-				detail = "operator abort — slot force-cleared with its pipeline promise still unsettled; run outcome unknown"
-			}
-			as.recordFailureLocked(repo, issue, title, now, detail)
-			log.Printf("autonomous: %s#%d user-abort (operator Stop the run ignored — outcome unknown, left where it is, no lifetime-cap increment, no cascade feed, no pause, no board revert) — %s",
-				repo, issue, detail)
-			if as.safetyRails != nil {
-				as.safetyRails.RecordNonFaultOutcome(0)
-				safetySnap := as.safetyRails.State()
-				as.state.Safety = &safetySnap
-			}
-			as.persistStateLocked()
-			select {
-			case as.rescanCh <- struct{}{}:
-			default:
-			}
-			return
-		}
-
 		// Issue #3691: pr-merge "completed but PR not merged" is an
 		// externally-blocked state, not a generic failure. The TS-side
 		// diagnostic in HeadlessOrchestrator.diagnosePrMergeBlocker has

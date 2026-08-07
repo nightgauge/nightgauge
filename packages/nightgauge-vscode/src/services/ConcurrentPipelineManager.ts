@@ -30,21 +30,6 @@ const execFileAsync = promisify(execFile);
 const ABORT_ALL_TIMEOUT_MS = 30_000;
 
 /**
- * Per-slot budget for the terminal bookkeeping abortAll runs on a slot it is
- * about to force-clear (#307).
- *
- * That bookkeeping makes IPC calls (queue completion, active-slot update) and
- * reads per-slot state. Every one of those is bounded on its own — but they
- * run against a manager that is already wedged, serially, once per stuck slot.
- * Without a budget here, N slots × the IPC request timeout would once again
- * leave `isShuttingDown = true` for minutes, which is the exact condition the
- * abort deadline exists to prevent (#3111). A slot that blows the budget is
- * reported as `bookkeeping-failed` and named in the log; the reconcile sweep
- * catches whatever was missed.
- */
-const FORCE_SETTLE_TIMEOUT_MS = 5_000;
-
-/**
  * Transient network-blip detector (#4002): true when the failure text carries
  * one of the two network terminal-kind signatures — an Anthropic transport
  * drop (`api_connection_lost`: "API Error: The socket connection was closed
@@ -100,11 +85,36 @@ export type OrchestratorFactory = (
 };
 
 /**
+ * Result of one `startSlot` dispatch.
+ *
+ * Three states, not a boolean, because "failed" and "abandoned" need opposite
+ * handling and a boolean forces them together (#307). `failed` means the
+ * dispatch could not start and the item should go back on the queue;
+ * `abandoned` means the abort deadline force-cleared this dispatch while it was
+ * still inside worktree creation — its queue mark is already released and the
+ * operator asked for it to stop, so re-enqueueing would silently undo the stop.
+ */
+type StartSlotOutcome = "started" | "failed" | "abandoned";
+
+/**
  * Slot state for a single concurrent pipeline execution
  */
 interface PipelineSlot {
   /** Slot index (0-based) */
   index: number;
+  /**
+   * Per-DISPATCH identity, minted in `startSlot` before the reservation is
+   * taken and never reused (#307). The issue number is NOT an identity: the
+   * same issue can be force-cleared and re-queued within one extension-host
+   * session, so a late event from the dead run and a live event from its
+   * successor are indistinguishable when keyed by issue. Everything that must
+   * tell "this run" from "a later run of the same issue" keys off this:
+   * `forceClearedGenerations` (the abort tombstone), `stillOwnsIssue` (the
+   * supersede check in `cleanupSlot`), the reservation record, and the
+   * `dispatchToken` threaded to Go so `pipeline.notifyComplete` can reject a
+   * stale completion instead of writing it under the successor's RunID.
+   */
+  generation: string;
   /** Platform run ID from ack — used to route cancel commands to the right slot */
   runId?: string;
   /** Issue number being processed */
@@ -141,93 +151,23 @@ interface PipelineSlot {
    */
   userCancelled?: boolean;
   /**
-   * Settle-once latch for this slot's terminal bookkeeping (#307).
+   * INVOCATION-LOCAL: set synchronously by `runSlotPipeline` immediately
+   * before it fires exactly one of onSlotCompleted / onSlotDeferred /
+   * onSlotFailed, and read only by the abort deadline's force-clear so it does
+   * not book a second terminal outcome for a run that already booked its own
+   * (the callbacks are not idempotent — `autonomousComplete` feeds the
+   * cascade breaker and the per-issue lifetime cap).
    *
-   * Two producers can reach the terminal path for one slot: the normal
-   * `runSlotPipeline` settlement, and `abortAll`'s deadline branch when the
-   * run promise is still unsettled after {@link ABORT_ALL_TIMEOUT_MS}.
-   * Whichever arrives first sets this flag SYNCHRONOUSLY, before any await;
-   * the loser skips the outcome dispatch and the cleanup. Without it the
-   * force-clear either skips the bookkeeping entirely (the original defect) or
-   * — once a latched force-clear exists — double-fires `onSlotFailed`, whose
-   * `autonomousComplete` → `NotifyComplete` → `onPipelineComplete` chain is
-   * NOT idempotent (it charges the per-issue lifetime failure cap and feeds
-   * the cascade breaker).
+   * Deliberately NOT the same thing as the force-clear tombstone. Conflating
+   * the two is what made round 1 regress: the catch block treated "the latch
+   * is set" as "a force-clear booked this run", but the latch had been set two
+   * lines earlier by the very invocation now in the catch, so an ordinary
+   * failing run whose `getState()` rejected skipped `onSlotFailed` entirely.
+   * "This invocation already dispatched" and "a force-clear booked this
+   * generation" are different questions and have separate answers.
    */
-  terminalBookkeepingDone?: boolean;
-  /**
-   * Idempotence flag for the DISPOSAL half of
-   * {@link ConcurrentPipelineManager.cleanupSlot} (#307) — map removal, state-
-   * service disposal, `onSlotCleaned`. Distinct from
-   * {@link PipelineSlot.terminalBookkeepingDone} on purpose: "the outcome was
-   * dispatched" and "the slot was torn down" can be claimed by different
-   * producers in the same run.
-   */
-  disposed?: boolean;
-  /**
-   * Idempotence flag for the WORKTREE half of `cleanupSlot`, latched
-   * separately from {@link PipelineSlot.disposed} (#307).
-   *
-   * `preserveWorktree = true` means "not yet", not "never": the force-settle
-   * preserves unconditionally (a wedged process may still hold the tree), but
-   * if that run later resolves `success: true` the fenced finally must still
-   * be able to remove the worktree and its branch. Folding both halves into
-   * one latch leaked a worktree + local branch forever on exactly that path —
-   * #110's condition, which #307 must not produce.
-   */
-  worktreeReleased?: boolean;
+  terminalOutcomeDispatched?: boolean;
 }
-
-/**
- * Result of {@link ConcurrentPipelineManager.forceSettleUnsettledSlot}.
- *
- * Three genuinely different states get three values — "nothing to do" must
- * never be indistinguishable from "booked successfully", which is how a
- * silent-skip regression hides.
- */
-type ForceSettleOutcome =
-  /** This call performed the slot's terminal bookkeeping. */
-  | "booked"
-  /** Another producer already booked it; this call did nothing, by design. */
-  | "already-booked"
-  /** This call owned the bookkeeping and it threw partway through. */
-  | "bookkeeping-failed";
-
-/**
- * How far a force-settle got, plus its cancellation token (#307).
- *
- * `abandoned` exists because `Promise.race` abandons the loser's RESULT, never
- * its WORK: when {@link FORCE_SETTLE_TIMEOUT_MS} wins, the bookkeeping chain
- * keeps running detached and — since its first step is an IPC round-trip
- * bounded at the client's own 30s request timeout — reliably resumes long
- * after `abortAll` returned. Every remaining step consults this flag first, so
- * the abandoned chain can no longer mutate issue-number-keyed state belonging
- * to whatever run owns that issue by then.
- */
-interface ForceSettleProgress {
-  completedQueueItem: boolean;
-  notifiedFailure: boolean;
-  disposedSlot: boolean;
-  abandoned: boolean;
-}
-
-/**
- * Result of {@link ConcurrentPipelineManager.startSlot} (#307).
- *
- * Three genuinely different states, three values — a boolean forced
- * "abandoned" to share a value with "failed", and the caller's response to
- * those two is opposite: a failed start is re-enqueued so the work is not
- * lost, while a dispatch the abort deadline abandoned must be released and
- * left alone (the operator has already been told the pipeline stopped, and
- * re-enqueueing restarts the very issue they stopped).
- */
-type StartSlotOutcome =
-  /** The slot is live and its pipeline is running. */
-  | "started"
-  /** The start failed; the item is still wanted and gets re-enqueued. */
-  | "failed"
-  /** `abortAll`'s deadline force-cleared this dispatch mid-flight. */
-  | "abandoned";
 
 /**
  * Callbacks for ConcurrentPipelineManager events
@@ -369,16 +309,41 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * `repoInFlight` without the in-flight item → the per-repo cap can be
    * exceeded across passes. Reserving here makes both the workspace ceiling
    * and the per-repo running set reflect intent-to-run immediately. #3874.
-   *
-   * `abandoned` is set by `abortAll`'s deadline branch (#307) instead of
-   * clearing the map: the reservation IS the #188 in-flight guard, and erasing
-   * it while `startSlot` is still executing lets the resuming dispatch write
-   * its slot over a newer live one. The flag makes that dispatch bail at its
-   * next checkpoint and release the reservation itself.
    */
-  private reservedSlots: Map<number, { index: number; repo: string; abandoned?: boolean }> =
+  private reservedSlots: Map<number, { index: number; repo: string; generation: string }> =
     new Map();
   private pendingRunIds: Map<number, string> = new Map(); // runId from ack, applied when slot opens
+
+  /** Monotonic source for {@link PipelineSlot.generation}. */
+  private dispatchCounter = 0;
+
+  /**
+   * TOMBSTONES: dispatch generations the abort deadline force-cleared (#307).
+   *
+   * `abortAll`'s deadline branch books a force-cleared slot's terminal state on
+   * the run's behalf (queue mark, terminal outcome callback, slot teardown) and
+   * then records the generation here. Every terminal boundary in
+   * `runSlotPipeline` — the try-block outcome dispatch, the catch, and the
+   * fenced finally — checks this FIRST and exits silently, so the wedged run
+   * settling minutes later cannot fire a second `onSlotFailed`
+   * (→ `autonomousComplete`, which charges the lifetime cap and feeds the
+   * cascade breaker), release a successor's queue mark, or delete a
+   * successor's worktree.
+   *
+   * PERMANENT for the generation, by design. There is no release path and no
+   * budget that un-claims an entry: a tombstone that can be revoked is a
+   * tombstone that expires exactly when the wedge is worst, and round 1 proved
+   * that shape re-opens the original defect (the release ran on the LIKELY
+   * path — the first bookkeeping IPC call outliving a 5s budget — and handed
+   * the dead run back the un-guarded ordinary exits). Growth is one short
+   * string per force-cleared slot, and a force-clear costs a 30s abort
+   * deadline, so this is operator-rate-bounded, not request-rate-bounded.
+   *
+   * Keyed by GENERATION, never by issue number: the whole point is to stay
+   * correct while a live successor for the same issue sits in `slots` or in
+   * `reservedSlots`.
+   */
+  private readonly forceClearedGenerations = new Set<string>();
 
   /**
    * In-flight slot lifecycle promises, keyed by issue number. Unlike
@@ -680,16 +645,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           if (outcome === "started") {
             totalStarted++;
           } else if (outcome === "abandoned") {
-            // #307: abortAll's deadline force-cleared this dispatch while it
-            // was wedged in worktree creation. Release the `processing` mark
-            // (#254) but do NOT re-enqueue — the operator stopped the pipeline
-            // and was told so; putting the item back would restart the very
-            // issue they stopped. `fillAgain` deliberately stays false for the
-            // same reason.
-            this.logger.warn("Released an abort-abandoned dispatch without re-queueing it", {
+            // #307: the abort deadline force-cleared this dispatch while it was
+            // inside worktree creation. It already released this dispatch's
+            // queue mark and told the operator. Re-enqueueing here would undo
+            // the stop they asked for, and `completeQueueItem` would clear a
+            // mark that may now belong to a successor.
+            this.logger.info("Dispatch abandoned by the abort deadline — not re-enqueued (#307)", {
               issueNumber: item.issueNumber,
             });
-            await this.completeQueueItem(item, "dispatch abandoned by abort deadline");
           } else {
             // Re-enqueue failed items so they aren't lost.
             // Set fillAgain so the do-while loop re-dequeues after this batch
@@ -825,6 +788,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private async startSlot(item: QueueItem): Promise<StartSlotOutcome> {
     const slotIndex = this.findAvailableSlotIndex();
     const branchName = `feat/${item.issueNumber}-${this.slugify(item.title)}`;
+    // Per-dispatch identity (#307). Minted BEFORE the reservation so the
+    // reservation record and the eventual PipelineSlot carry the same token —
+    // that is what lets a late event prove whether the thing currently holding
+    // this issue number is still itself or a later dispatch.
+    const generation = this.mintDispatchGeneration(item.issueNumber);
 
     // Reserve this slot's identity (index + repo) synchronously, before any
     // async work below (worktree creation). This makes `availableSlotCount`
@@ -835,16 +803,37 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.reservedSlots.set(item.issueNumber, {
       index: slotIndex,
       repo: item.repoName ?? "",
+      generation,
     });
     let reservationReleased = false;
     const releaseReservation = () => {
-      if (!reservationReleased) {
+      if (reservationReleased) return;
+      reservationReleased = true;
+      // Release only OUR reservation (#307). A dispatch that wedged inside
+      // worktree creation can unwind long after the abort deadline force-cleared
+      // it and the operator re-queued the issue; deleting by issue number alone
+      // would strip the successor's reservation, which is what makes the #188
+      // duplicate-dispatch guard and the per-repo concurrency cap correct.
+      if (this.reservedSlots.get(item.issueNumber)?.generation === generation) {
         this.reservedSlots.delete(item.issueNumber);
-        reservationReleased = true;
       }
     };
     try {
-      return await this.startSlotInner(item, slotIndex, branchName);
+      const outcome = await this.startSlotInner(item, slotIndex, branchName, generation);
+      // The dispatch may have been force-cleared while it was awaiting worktree
+      // creation. Report `abandoned` so fillSlots neither re-enqueues the item
+      // (the operator stopped it — silently putting it back is not a stop) nor
+      // clears a queue mark that now belongs to a successor: the force-clear
+      // already released this dispatch's own mark.
+      if (this.forceClearedGenerations.has(generation)) {
+        this.logger.debug("startSlot unwound after its dispatch was force-cleared (#307)", {
+          issueNumber: item.issueNumber,
+          generation,
+          innerOutcome: outcome,
+        });
+        return "abandoned";
+      }
+      return outcome;
     } finally {
       // Always drop the reservation. On success the slot is already in
       // `this.slots` (set inside startSlotInner), so accounting is unchanged;
@@ -853,10 +842,44 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
   }
 
+  /**
+   * Mint a fresh per-dispatch generation token (#307). Unique within the
+   * extension host: a monotonic counter makes it collision-free even for two
+   * dispatches of the same issue in the same millisecond, and the issue number
+   * and timestamp are carried only so the token reads usefully in a log line.
+   */
+  private mintDispatchGeneration(issueNumber: number): string {
+    this.dispatchCounter += 1;
+    return `${issueNumber}:${this.dispatchCounter}:${Date.now()}`;
+  }
+
+  /**
+   * True when `slot` is still the dispatch that owns its issue number.
+   *
+   * False as soon as ANOTHER dispatch holds the issue — in `this.slots` OR in
+   * `this.reservedSlots`. Both halves matter: the manager's own in-flight
+   * predicate (the #188 duplicate-dispatch guard) is
+   * `slots.has(n) || reservedSlots.has(n)`, so a re-dispatch that is still
+   * inside `startSlot`'s worktree creation owns the issue while being absent
+   * from `slots`. A supersede check that reads `slots` alone treats that window
+   * as "nobody else is here" and lets a dead run delete the tree the successor
+   * is being created in.
+   */
+  private stillOwnsIssue(slot: PipelineSlot): boolean {
+    const liveSlot = this.slots.get(slot.issueNumber);
+    if (liveSlot) return liveSlot.generation === slot.generation;
+    const reservation = this.reservedSlots.get(slot.issueNumber);
+    if (reservation) return reservation.generation === slot.generation;
+    // Nobody holds the issue: this slot was already torn out of the map by its
+    // own cleanup (or by the abort deadline). Nothing to protect.
+    return true;
+  }
+
   private async startSlotInner(
     item: QueueItem,
     slotIndex: number,
-    branchName: string
+    branchName: string,
+    generation: string
   ): Promise<StartSlotOutcome> {
     // Resolve the correct WorktreeManager for this item (cross-repo aware).
     // Returns null if the item targets a repo not present in this workspace.
@@ -995,33 +1018,22 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         return "failed";
       }
     }
-    // All retry failures return "failed" above, so worktree is always assigned here.
+    // All retry failures return false above, so worktree is always assigned here.
     if (!worktree) return "failed";
-
-    // This dispatch was force-cleared by abortAll's deadline while it was
-    // wedged in worktree creation (#307). `isShuttingDown` cannot catch it:
-    // abortAll's own finally reset that flag to false, so without the durable
-    // per-dispatch signal the resuming dispatch would sail past the check
-    // below and `this.slots.set()` over whatever run owns the issue by now.
-    // Distinct from the stop case: the operator has already been told the
-    // pipeline is ready for new work, so this item is released, NOT re-queued.
-    if (this.reservedSlots.get(item.issueNumber)?.abandoned) {
-      this.logger.warn("Dispatch abandoned by the abort deadline — unwinding without starting", {
-        issueNumber: item.issueNumber,
-      });
-      try {
-        await slotWorktreeManager.cleanup(item.issueNumber, true);
-      } catch {
-        // Best effort cleanup
-      }
-      return "abandoned";
-    }
 
     // Check if stop was pressed during the async worktree creation.
     // Without this, a slot can start running after the user already hit stop.
-    if (this.isShuttingDown) {
+    //
+    // The tombstone half (#307) covers the case `isShuttingDown` no longer
+    // does: the abort deadline force-cleared THIS dispatch and then reset
+    // `isShuttingDown` on its way out, so a worktree creation that unwedges
+    // afterwards would otherwise open a live slot for a run the operator
+    // stopped — and, if the issue was re-queued in between, a SECOND live slot
+    // for an issue that already has one.
+    if (this.isShuttingDown || this.forceClearedGenerations.has(generation)) {
       this.logger.info("Stop pressed during worktree creation — aborting slot", {
         issueNumber: item.issueNumber,
+        forceCleared: this.forceClearedGenerations.has(generation),
       });
       try {
         await slotWorktreeManager.cleanup(item.issueNumber, true);
@@ -1038,6 +1050,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
     // any IPC pipeline.notifyStageTransition fires for this worktree slot.
     stateService.initEmpty();
+    // Stamp this dispatch's identity onto the run's own state service (#307) so
+    // every pipeline.notifyStageTransition and pipeline.notifyComplete it makes
+    // carries the token. The Go handler binds the token to the runtime it mints
+    // and rejects a completion whose token is not the runtime's current
+    // identity — otherwise a force-cleared run that finishes anyway writes its
+    // record and its learning outcome under a live successor's RunID.
+    stateService.setDispatchToken?.(generation);
 
     // Cross-repo override: if the queued item belongs to a different repo,
     // set the repo override so all gh CLI calls target the correct repo.
@@ -1061,6 +1080,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
     const slot: PipelineSlot = {
       index: slotIndex,
+      generation,
       issueNumber: item.issueNumber,
       title: item.title,
       epicNumber: item.epicNumber,
@@ -1218,56 +1238,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         durationMs: Date.now() - startMs,
       });
 
-      // #307: abortAll's deadline branch already booked this slot's terminal
-      // bookkeeping and force-cleared it — the run promise settled afterwards
-      // (the wedged adapter finally died). For a NON-success result, dispatching
-      // the outcome callbacks again would fire `autonomousComplete` a second
-      // time for one run, and that chain is not idempotent. Return the result
-      // so `slot.runPromise` consumers still observe it; the fenced `finally`
-      // below is already inert for a force-cleared slot (its remaining work is
-      // gated on `!slot.userCancelled`, and `completeQueueItem` no-ops when the
-      // item is no longer `processing`).
-      if (slot.terminalBookkeepingDone && !result.success) {
-        this.logger.warn(
-          "[SlotLifecycle] run settled after force-clear — terminal bookkeeping already booked, skipping outcome dispatch",
-          {
-            slotIndex: slot.index,
-            issueNumber: slot.issueNumber,
-            success: result.success,
-            durationMs: Date.now() - startMs,
-          }
-        );
+      // TERMINAL BOUNDARY 1 of 3 (#307). The abort deadline already booked this
+      // generation's terminal state and tombstoned it, so there is nothing left
+      // to dispatch: firing an outcome now would double-charge the Go
+      // scheduler's per-issue lifetime cap and cascade breaker, and — once the
+      // operator has re-queued the issue — would charge them against the
+      // SUCCESSOR's run. Checked before the `getState()` await below so a
+      // rejecting state file cannot route the dead run into the catch block.
+      if (this.isForceCleared(slot)) {
+        this.logger.debug("Force-cleared run settled — outcome dropped (#307)", {
+          issueNumber: slot.issueNumber,
+          generation: slot.generation,
+          success: result.success,
+        });
         return result;
       }
-      // A SUCCESS after the force-clear is a different animal: the force-settle
-      // booked "outcome unknown" as a placeholder, and this is the outcome. It
-      // must supersede, not be deduplicated away — suppressing it books a
-      // merged run as an abort, and `promoteUnblockedToReady` (success branch
-      // only) never runs, so every issue blockedBy this one stays stuck in
-      // Backlog. Guarded on still owning the issue: if a successor already has
-      // it, this dispatch would credit the wrong run.
-      if (slot.terminalBookkeepingDone) {
-        if (!this.stillOwnsSlot(slot)) {
-          this.logger.error(
-            "[SlotLifecycle] run SUCCEEDED after force-clear but the issue was re-dispatched — dropping the outcome rather than crediting a newer run",
-            { slotIndex: slot.index, issueNumber: slot.issueNumber }
-          );
-          return result;
-        }
-        this.logger.warn(
-          "[SlotLifecycle] run SUCCEEDED after force-clear — booking the success over the provisional abort outcome",
-          {
-            slotIndex: slot.index,
-            issueNumber: slot.issueNumber,
-            durationMs: Date.now() - startMs,
-          }
-        );
-      }
-      // Claim the latch synchronously, before the `getState()` await below. The
-      // deadline can fire in that window with the slot still in `this.slots`
-      // (its promise settled at T-0.1s and the finally has not run cleanupSlot
-      // yet) — the mirror image of the race above, and just as double-firing.
-      slot.terminalBookkeepingDone = true;
 
       // Extract cost from per-slot state for health snapshot recording
       const slotState = await slot.stateService.getState();
@@ -1281,6 +1266,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         cacheCreation: slotState?.tokens?.cacheCreation ?? 0,
         estimated_cost_usd: slotCostUsd,
       };
+
+      // Exactly one of the four branches below fires exactly one outcome
+      // callback. Claim that synchronously (#307) so a force-clear that lands
+      // while this dispatch is mid-flight books the queue mark and the slot
+      // teardown WITHOUT firing a second terminal outcome. Invocation-local: it
+      // says "this run booked its own outcome", never "a force-clear booked it".
+      slot.terminalOutcomeDispatched = true;
 
       if (result.success) {
         this.logger.info("Concurrent pipeline slot completed successfully", {
@@ -1378,19 +1370,22 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
       return result;
     } catch (error) {
-      // #307: same settle-once latch as the resolve path — a run that rejects
-      // after abortAll force-cleared its slot must not re-fire the outcome
-      // callbacks. Checked and claimed BEFORE the `getState()` await below, so
-      // the deadline cannot slip through that window. Rethrow unchanged so
-      // `slot.runPromise` still rejects for its consumers.
-      if (slot.terminalBookkeepingDone) {
-        this.logger.warn(
-          "[SlotLifecycle] run threw after force-clear — terminal bookkeeping already booked, skipping outcome dispatch",
-          { slotIndex: slot.index, issueNumber: slot.issueNumber }
-        );
+      // TERMINAL BOUNDARY 2 of 3 (#307). Only a FORCE-CLEARED generation exits
+      // silently here. Deliberately NOT gated on `terminalOutcomeDispatched`:
+      // that flag is set by this same invocation a few lines above the throw
+      // site, so reading it here would make an ordinary failing run whose
+      // `getState()` rejects (missing/corrupt state JSON) — or a throwing
+      // onSlotCompleted callback — skip `onSlotFailed` entirely, which is
+      // #307's own symptom (no autonomousComplete, Go's running-slot entry
+      // never freed) manufactured on a path with no relationship to abortAll.
+      if (this.isForceCleared(slot)) {
+        this.logger.debug("Force-cleared run threw — failure dropped (#307)", {
+          issueNumber: slot.issueNumber,
+          generation: slot.generation,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
         throw error;
       }
-      slot.terminalBookkeepingDone = true;
 
       // Extract cost even on throw — may have partial data
       const throwState = await slot.stateService.getState().catch(() => null);
@@ -1402,6 +1397,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         error: error instanceof Error ? error.message : "Unknown error",
         durationMs: Date.now() - startMs,
       });
+      slot.terminalOutcomeDispatched = true;
       this.callbacks.onSlotFailed?.(
         slot.index,
         slot.issueNumber,
@@ -1416,195 +1412,223 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // any edit fails tests/services/terminalParity.test.ts until the manifest
       // is updated, which is the moment to check the Go path for the same
       // behavior)
-      this.logger.info("[SlotLifecycle] FINALLY block entered", {
-        slotIndex: slot.index,
-        issueNumber: slot.issueNumber,
-        pipelineSucceeded,
-        slotsBeforeCleanup: this.slots.size,
-        isShuttingDown: this.isShuttingDown,
-      });
-
-      // Clear the dequeue's "processing" mark — the terminal counterpart to
-      // fillSlots' dequeueIndependent, covering success, failure, throw and
-      // cancellation alike (#254). Done FIRST: everything below is best-effort
-      // recovery work, and `cleanupSlot` is not itself wrapped in a try, so a
-      // throw down there would skip this and strand the item.
-      await this.completeQueueItem(
-        { issueNumber: slot.issueNumber, repoName: slot.repo },
-        "run reached terminal state"
-      );
-
-      // Safety net: move board status to "In review" on pipeline failure.
-      // HeadlessOrchestrator.markStatusInReviewOnFailure() handles most cases,
-      // but it can be skipped by early returns (epic detection, closed issue,
-      // auth failure) or fail silently for cross-repo items that resolve the
-      // wrong workspace root. This catch-all ensures no failed issue gets
-      // permanently stuck at "In progress" AND no failed issue silently
-      // re-enters the Ready tree for re-dequeue.
-      // @see Issue #563 post-mortem, Issue #2967
-      // User-cancelled slots skip this — the issue should stay at its current
-      // status (typically "In progress") so the user can resume cleanly.
-      // Deferred slots skip this too (#305): a blockedBy deferral is not a
-      // failure — the issue stays Ready/eligible, not moved to In review.
-      if (!pipelineSucceeded && !pipelineDeferred && !this.isShuttingDown && !slot.userCancelled) {
-        try {
-          // Use the slot's worktreeManager repo root — this is already resolved
-          // to the correct repo for cross-repo items (not the workspace default).
-          const cwd =
-            slot.worktreeManager.getRepoRoot() ||
-            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
-            "";
-          if (cwd) {
-            const revertResult = await updateProjectItemStatus(
-              slot.issueNumber,
-              "In review",
-              cwd,
-              this.logger
-            );
-            if (revertResult.success) {
-              this.logger.info(
-                "Safety net: moved board status to In review after pipeline failure",
-                { issueNumber: slot.issueNumber, repo: slot.repo }
-              );
-            }
-            // Silent on failure — HeadlessOrchestrator may have already moved it
-          }
-        } catch {
-          // Best effort — never block cleanup
-        }
-      }
-
-      // Post a diagnostic comment on the GitHub issue so failures are visible
-      // and actionable without digging through local logs. Skip when the user
-      // cancelled — they don't need a public comment narrating their own stop.
-      // Also skip transient network blips (#4002): they auto-retry without
-      // operator action, the comment's recommendations don't apply, and during
-      // a GitHub outage the post can't succeed anyway (the original incident
-      // tried to post "run `gh auth login`" over the dead network).
-      if (
-        !pipelineSucceeded &&
-        !pipelineDeferred &&
-        !this.isShuttingDown &&
-        !slot.userCancelled &&
-        pipelineResult &&
-        !isTransientNetworkFailureText(pipelineResult.error?.message ?? "")
-      ) {
-        try {
-          const slotState = await slot.stateService.getState().catch(() => null);
-          const commentCwd = slot.worktreeManager.getRepoRoot();
-          await postFailureComment({
-            issueNumber: slot.issueNumber,
-            result: pipelineResult,
-            state: slotState,
-            repoOverride: slot.repo,
-            cwd: commentCwd,
-            logger: this.logger,
-          });
-        } catch {
-          // Best effort — never block cleanup
-        }
-      }
-
-      // A failed pipeline may leave valuable uncommitted agent work in the
-      // worktree. Never force-remove that work before an operator can inspect
-      // or resume it. Deferred runs are also resumable by definition. See #66.
-      const preserveWorktree = !pipelineSucceeded || pipelineDeferred;
-      // #3969: delete the local feature branch only on a clean success (PR
-      // merged). On failure/cancel the branch is preserved for resume/recovery.
-      const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;
-      await this.cleanupSlot(slot, preserveWorktree, deleteMergedBranch);
-
-      // If the pipeline failed and was part of a sequential epic, drain all
-      // successor items from the queue. Without this, fillSlots() would dequeue
-      // the next epic issue even though the predecessor failed — leading to
-      // merge conflicts and wasted compute.
-      // Skip drain when the issue was already closed (already-resolved) — that
-      // means the work is done and successors should proceed, not be drained.
-      // Also skip when the user cancelled — the user can manually drain or
-      // resume; auto-draining is the wrong default for deliberate stops.
-      // @see Issue #1819 - sequential epic ordering
-      // Skip on a deferral (#305): the predecessor didn't fail, so successors
-      // stay queued — draining them would strand work behind a transient block.
-      if (
-        !pipelineSucceeded &&
-        !pipelineDeferred &&
-        !isAlreadyResolved &&
-        !this.isShuttingDown &&
-        !slot.userCancelled
-      ) {
-        try {
-          const drained = await this.queueService.drainBlockedSuccessors(
-            slot.issueNumber,
-            slot.epicOrder
-          );
-          if (drained.length > 0) {
-            this.logger.info("Drained blocked successor issues after slot failure", {
-              failedIssue: slot.issueNumber,
-              drainedIssues: drained,
-              drainedCount: drained.length,
-            });
-          }
-        } catch (drainError) {
-          this.logger.warn("Failed to drain blocked successors", {
-            failedIssue: slot.issueNumber,
-            error: drainError instanceof Error ? drainError.message : "Unknown error",
-          });
-        }
-      }
-
-      // Route post-cleanup behavior based on slot outcome.
       //
-      // On SUCCESS: fill the now-available slot with the next queued issue.
-      //
-      // On FAILURE (stall-killed, stage error, network drop, etc.): do NOT
-      // auto-continue. Clear the pending queue and surface a modal so the
-      // user is aware and can triage. Without this, a single failure would
-      // silently auto-start the next epic sibling, producing cross-issue
-      // merge conflicts — see Issue #2967.
-      //
-      // Running slots that are still alive are NOT aborted here; they drain
-      // naturally. Only future fills are suppressed.
-      //
-      // A DEFERRAL (#305) is not a failure: fall through to fillSlots() so the
-      // scheduler continues to the next candidate instead of halting the queue
-      // / pausing autonomous. The onSlotDeferred handler already freed the Go
-      // slot with a non-failure `blocked_dependency` signal.
-      if (!pipelineSucceeded && !pipelineDeferred && !this.isShuttingDown && !slot.userCancelled) {
-        await this.haltQueueOnSlotFailure(slot, pipelineResult);
-      } else if (!this.isShuttingDown) {
-        await this.fillSlots();
-      }
-
-      // If this was a "stop after current" drain (pauseFilling, not abortAll),
-      // reset isShuttingDown once the last slot finishes so new issues can be
-      // enqueued immediately without requiring a window reload.
-      if (
-        this.slots.size === 0 &&
-        !this.isFilling &&
-        this.isShuttingDown &&
-        !this.isAbortAllInProgress
-      ) {
-        this.logger.info("[SlotLifecycle] Drain complete — resetting shutdown guard", {
+      // TERMINAL BOUNDARY 3 of 3 (#307). FIRST act of the funnel: a generation
+      // the abort deadline force-cleared has already had this whole block run
+      // on its behalf by `forceClearStuckSlots`, so running it again is not
+      // idempotent repair — it is corruption once the operator has re-queued
+      // the issue. `completeQueueItem` would strip the SUCCESSOR's `processing`
+      // mark (Scheduler.completeQueueItemLocked matches on repo+number), and
+      // `cleanupSlot` would delete the successor's worktree (one worktree path
+      // per issue number). See the `force-clear-terminal-bookkeeping` row in
+      // terminal_behaviors.json for the full accounting of what the force-clear
+      // performs, omits, and delegates.
+      if (this.isForceCleared(slot)) {
+        this.logger.debug("Force-cleared run reached its finally — skipped (#307)", {
           issueNumber: slot.issueNumber,
+          generation: slot.generation,
         });
-        this.isShuttingDown = false;
-        void vscode.commands.executeCommand(
-          "setContext",
-          "nightgauge.stopAfterCurrentQueue",
-          false
-        );
-      }
-
-      // Check if all done — only fire when no slots remain AND no fillSlots
-      // is in progress (which may be about to create new slots from the queue).
-      // Skip during shutdown: user pressed stop, don't trigger epic sweep.
-      if (this.slots.size === 0 && !this.isFilling && !this.isShuttingDown) {
-        this.logger.info("[SlotLifecycle] ALL SLOTS DONE → onAllComplete", {
+      } else {
+        this.logger.info("[SlotLifecycle] FINALLY block entered", {
+          slotIndex: slot.index,
           issueNumber: slot.issueNumber,
           pipelineSucceeded,
-          durationMs: Date.now() - startMs,
+          slotsBeforeCleanup: this.slots.size,
+          isShuttingDown: this.isShuttingDown,
         });
-        this.callbacks.onAllComplete?.();
+
+        // Clear the dequeue's "processing" mark — the terminal counterpart to
+        // fillSlots' dequeueIndependent, covering success, failure, throw and
+        // cancellation alike (#254). Done FIRST: everything below is best-effort
+        // recovery work, and `cleanupSlot` is not itself wrapped in a try, so a
+        // throw down there would skip this and strand the item.
+        await this.completeQueueItem(
+          { issueNumber: slot.issueNumber, repoName: slot.repo },
+          "run reached terminal state"
+        );
+
+        // Safety net: move board status to "In review" on pipeline failure.
+        // HeadlessOrchestrator.markStatusInReviewOnFailure() handles most cases,
+        // but it can be skipped by early returns (epic detection, closed issue,
+        // auth failure) or fail silently for cross-repo items that resolve the
+        // wrong workspace root. This catch-all ensures no failed issue gets
+        // permanently stuck at "In progress" AND no failed issue silently
+        // re-enters the Ready tree for re-dequeue.
+        // @see Issue #563 post-mortem, Issue #2967
+        // User-cancelled slots skip this — the issue should stay at its current
+        // status (typically "In progress") so the user can resume cleanly.
+        // Deferred slots skip this too (#305): a blockedBy deferral is not a
+        // failure — the issue stays Ready/eligible, not moved to In review.
+        if (
+          !pipelineSucceeded &&
+          !pipelineDeferred &&
+          !this.isShuttingDown &&
+          !slot.userCancelled
+        ) {
+          try {
+            // Use the slot's worktreeManager repo root — this is already resolved
+            // to the correct repo for cross-repo items (not the workspace default).
+            const cwd =
+              slot.worktreeManager.getRepoRoot() ||
+              vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ||
+              "";
+            if (cwd) {
+              const revertResult = await updateProjectItemStatus(
+                slot.issueNumber,
+                "In review",
+                cwd,
+                this.logger
+              );
+              if (revertResult.success) {
+                this.logger.info(
+                  "Safety net: moved board status to In review after pipeline failure",
+                  { issueNumber: slot.issueNumber, repo: slot.repo }
+                );
+              }
+              // Silent on failure — HeadlessOrchestrator may have already moved it
+            }
+          } catch {
+            // Best effort — never block cleanup
+          }
+        }
+
+        // Post a diagnostic comment on the GitHub issue so failures are visible
+        // and actionable without digging through local logs. Skip when the user
+        // cancelled — they don't need a public comment narrating their own stop.
+        // Also skip transient network blips (#4002): they auto-retry without
+        // operator action, the comment's recommendations don't apply, and during
+        // a GitHub outage the post can't succeed anyway (the original incident
+        // tried to post "run `gh auth login`" over the dead network).
+        if (
+          !pipelineSucceeded &&
+          !pipelineDeferred &&
+          !this.isShuttingDown &&
+          !slot.userCancelled &&
+          pipelineResult &&
+          !isTransientNetworkFailureText(pipelineResult.error?.message ?? "")
+        ) {
+          try {
+            const slotState = await slot.stateService.getState().catch(() => null);
+            const commentCwd = slot.worktreeManager.getRepoRoot();
+            await postFailureComment({
+              issueNumber: slot.issueNumber,
+              result: pipelineResult,
+              state: slotState,
+              repoOverride: slot.repo,
+              cwd: commentCwd,
+              logger: this.logger,
+            });
+          } catch {
+            // Best effort — never block cleanup
+          }
+        }
+
+        // A failed pipeline may leave valuable uncommitted agent work in the
+        // worktree. Never force-remove that work before an operator can inspect
+        // or resume it. Deferred runs are also resumable by definition. See #66.
+        const preserveWorktree = !pipelineSucceeded || pipelineDeferred;
+        // #3969: delete the local feature branch only on a clean success (PR
+        // merged). On failure/cancel the branch is preserved for resume/recovery.
+        const deleteMergedBranch = pipelineSucceeded && !slot.userCancelled;
+        await this.cleanupSlot(slot, preserveWorktree, deleteMergedBranch);
+
+        // If the pipeline failed and was part of a sequential epic, drain all
+        // successor items from the queue. Without this, fillSlots() would dequeue
+        // the next epic issue even though the predecessor failed — leading to
+        // merge conflicts and wasted compute.
+        // Skip drain when the issue was already closed (already-resolved) — that
+        // means the work is done and successors should proceed, not be drained.
+        // Also skip when the user cancelled — the user can manually drain or
+        // resume; auto-draining is the wrong default for deliberate stops.
+        // @see Issue #1819 - sequential epic ordering
+        // Skip on a deferral (#305): the predecessor didn't fail, so successors
+        // stay queued — draining them would strand work behind a transient block.
+        if (
+          !pipelineSucceeded &&
+          !pipelineDeferred &&
+          !isAlreadyResolved &&
+          !this.isShuttingDown &&
+          !slot.userCancelled
+        ) {
+          try {
+            const drained = await this.queueService.drainBlockedSuccessors(
+              slot.issueNumber,
+              slot.epicOrder
+            );
+            if (drained.length > 0) {
+              this.logger.info("Drained blocked successor issues after slot failure", {
+                failedIssue: slot.issueNumber,
+                drainedIssues: drained,
+                drainedCount: drained.length,
+              });
+            }
+          } catch (drainError) {
+            this.logger.warn("Failed to drain blocked successors", {
+              failedIssue: slot.issueNumber,
+              error: drainError instanceof Error ? drainError.message : "Unknown error",
+            });
+          }
+        }
+
+        // Route post-cleanup behavior based on slot outcome.
+        //
+        // On SUCCESS: fill the now-available slot with the next queued issue.
+        //
+        // On FAILURE (stall-killed, stage error, network drop, etc.): do NOT
+        // auto-continue. Clear the pending queue and surface a modal so the
+        // user is aware and can triage. Without this, a single failure would
+        // silently auto-start the next epic sibling, producing cross-issue
+        // merge conflicts — see Issue #2967.
+        //
+        // Running slots that are still alive are NOT aborted here; they drain
+        // naturally. Only future fills are suppressed.
+        //
+        // A DEFERRAL (#305) is not a failure: fall through to fillSlots() so the
+        // scheduler continues to the next candidate instead of halting the queue
+        // / pausing autonomous. The onSlotDeferred handler already freed the Go
+        // slot with a non-failure `blocked_dependency` signal.
+        if (
+          !pipelineSucceeded &&
+          !pipelineDeferred &&
+          !this.isShuttingDown &&
+          !slot.userCancelled
+        ) {
+          await this.haltQueueOnSlotFailure(slot, pipelineResult);
+        } else if (!this.isShuttingDown) {
+          await this.fillSlots();
+        }
+
+        // If this was a "stop after current" drain (pauseFilling, not abortAll),
+        // reset isShuttingDown once the last slot finishes so new issues can be
+        // enqueued immediately without requiring a window reload.
+        if (
+          this.slots.size === 0 &&
+          !this.isFilling &&
+          this.isShuttingDown &&
+          !this.isAbortAllInProgress
+        ) {
+          this.logger.info("[SlotLifecycle] Drain complete — resetting shutdown guard", {
+            issueNumber: slot.issueNumber,
+          });
+          this.isShuttingDown = false;
+          void vscode.commands.executeCommand(
+            "setContext",
+            "nightgauge.stopAfterCurrentQueue",
+            false
+          );
+        }
+
+        // Check if all done — only fire when no slots remain AND no fillSlots
+        // is in progress (which may be about to create new slots from the queue).
+        // Skip during shutdown: user pressed stop, don't trigger epic sweep.
+        if (this.slots.size === 0 && !this.isFilling && !this.isShuttingDown) {
+          this.logger.info("[SlotLifecycle] ALL SLOTS DONE → onAllComplete", {
+            issueNumber: slot.issueNumber,
+            pipelineSucceeded,
+            durationMs: Date.now() - startMs,
+          });
+          this.callbacks.onAllComplete?.();
+        }
       }
       // terminal-parity:end runSlotPipeline-finally
     }
@@ -1657,75 +1681,38 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     preserveWorktree = false,
     deleteBranch = false
   ): Promise<void> {
-    // #307 IDENTITY GUARD. `this.slots` is keyed by ISSUE NUMBER, not by slot
-    // identity, and this method now has a caller that can arrive arbitrarily
-    // late: the abort deadline's force-settle abandons its bookkeeping after a
-    // budget but cannot CANCEL it, and the queue-completion IPC it parks on
-    // has its own 30s request timeout. By then abortAll has returned,
-    // `isShuttingDown` is false, the toast says "ready for new work", and the
-    // same issue may already own a NEW slot object. A bare
-    // `this.slots.delete(issueNumber)` there evicts the LIVE successor: the
-    // #188 duplicate-dispatch guard stops seeing it (so one issue can run
-    // twice concurrently), `onSlotCleaned` kills its tree item and state
-    // subscription, and `availableSlotCount` over-reports capacity — all
-    // against a run that is still executing.
-    const currentOwner = this.slots.get(slot.issueNumber);
-    if (currentOwner !== undefined && currentOwner !== slot) {
-      this.logger.error(
-        "Slot cleanup SUPERSEDED — a newer slot owns this issue; skipping every shared teardown",
-        {
-          slotIndex: slot.index,
-          issueNumber: slot.issueNumber,
-          supersededByIndex: currentOwner.index,
-        }
-      );
-      // Only this slot's OWN resources are safe to release. The map entry, the
-      // worktree (one path per issue number) and every callback now belong to
-      // the successor.
-      if (!slot.disposed) {
-        slot.disposed = true;
-        try {
-          slot.stateService.dispose();
-        } catch {
-          // Best effort
-        }
-      }
-      return;
-    }
-
-    // Disposal half — idempotent (#307): cleanup now has two callers, the
-    // fenced finally and the abort deadline's force-settle. Running it twice
-    // would re-dispose an already-disposed EventEmitter and double-fire
-    // onSlotCleaned, which drives tree-item removal and slot subscriptions.
-    // A dedicated flag, NOT `terminalBookkeepingDone`: the two mean different
-    // things, and inferring "already cleaned" from the bookkeeping latch skips
-    // real cleanup in the race where the normal path claims the latch first
-    // and the deadline clears `this.slots` before its finally gets there.
-    if (!slot.disposed) {
-      slot.disposed = true;
-      this.slots.delete(slot.issueNumber);
-      this.emitSlotsChanged();
-
-      // Dispose the per-slot state service to release its EventEmitter resources
+    // SUPERSEDE GUARD (#307). Every destructive step below is keyed by ISSUE
+    // NUMBER — `slots.delete(n)`, `worktreeManager.cleanup(n)` (one worktree
+    // path per issue), the tree item, the queue's active-slot list. If a later
+    // dispatch of the same issue holds it, this slot is a ghost and every one
+    // of those steps hits the successor instead. Release only what is
+    // unambiguously ours (this slot's own state service) and stand down.
+    if (!this.stillOwnsIssue(slot)) {
+      this.logger.warn("cleanupSlot stood down — a newer dispatch owns this issue (#307)", {
+        issueNumber: slot.issueNumber,
+        generation: slot.generation,
+        successorGeneration:
+          this.slots.get(slot.issueNumber)?.generation ??
+          this.reservedSlots.get(slot.issueNumber)?.generation,
+      });
       try {
         slot.stateService.dispose();
       } catch {
         // Best effort
       }
-      // Fired here rather than after the worktree step so the tree item and
-      // the state subscription are never hostage to a worktree removal that
-      // failed or was deliberately deferred (#307).
-      this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
+      return;
     }
 
-    // Worktree half — latched SEPARATELY (#307). `preserveWorktree` means "not
-    // yet", not "never": the abort deadline's force-settle preserves
-    // unconditionally (a wedged process may still hold the tree), and when
-    // that run later resolves `success: true` — the classic case, a PR that
-    // merged before the run wedged in post-merge bookkeeping — the fenced
-    // finally must still be able to remove the tree and its local branch.
-    // One shared latch leaked both forever on exactly that path, which is
-    // #110's condition and something #307 explicitly must not produce.
+    this.slots.delete(slot.issueNumber);
+    this.emitSlotsChanged();
+
+    // Dispose the per-slot state service to release its EventEmitter resources
+    try {
+      slot.stateService.dispose();
+    } catch {
+      // Best effort
+    }
+
     if (preserveWorktree) {
       this.logger.info("Preserving worktree — context files kept for resume on re-queue", {
         issueNumber: slot.issueNumber,
@@ -1733,7 +1720,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // managers implement only the cleanup surface.
         worktreePath: slot.worktreeManager.getWorktreePath?.(slot.issueNumber),
       });
-    } else if (!slot.worktreeReleased) {
+      this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
+    } else {
       try {
         // #3969: on a SUCCESSFUL pipeline (PR merged) tear down the local branch
         // too — WorktreeManager.cleanup removes the worktree first, then runs
@@ -1745,7 +1733,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // Use the slot's own worktreeManager (not this.worktreeManager) so
         // cleanup targets the correct repo even after updateRepoRoot().
         await slot.worktreeManager.cleanup(slot.issueNumber, deleteBranch);
-        slot.worktreeReleased = true;
+        this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
       } catch (error) {
         this.logger.warn("Failed to clean up worktree after pipeline", {
           issueNumber: slot.issueNumber,
@@ -1761,250 +1749,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // Non-critical
     }
   }
-
-  /**
-   * True while `this.slots` has not handed this slot's issue number to a
-   * DIFFERENT slot object (#307).
-   *
-   * `undefined` counts as owned: the abort deadline clears the whole map after
-   * force-settling, and a late settlement of a force-cleared run must still be
-   * able to finish its own teardown. Only a live successor — a re-dispatch of
-   * the same issue — makes the issue-number-keyed shared state (map entry,
-   * worktree path, queue `processing` mark, Go running-slot entry, tree item)
-   * somebody else's to mutate.
-   */
-  private stillOwnsSlot(slot: PipelineSlot): boolean {
-    const current = this.slots.get(slot.issueNumber);
-    return current === undefined || current === slot;
-  }
-
-  /**
-   * Run the terminal bookkeeping for a slot that `abortAll` is about to
-   * force-clear because its run promise never settled (#307).
-   *
-   * `runSlotPipeline`'s finally block is the only place a slot's terminal
-   * bookkeeping normally happens, and it is unreachable when the promise never
-   * settles — a wedged adapter, a stage awaiting an IPC/`gh` call that ignores
-   * the AbortController, a hung poll loop. Before this method existed, the
-   * deadline branch did nothing but `slots.clear()`: the slot vanished from
-   * the manager while its queue item stayed `processing` forever (the #254
-   * outcome through a second door), the Go scheduler's running-slot entry for
-   * the issue was never released, and the UI/state-service disposal chain
-   * never ran.
-   *
-   * Emits the DEDICATED `user_abort` terminal kind via the `[user-abort]`
-   * marker (#307) rather than reusing the settled-cancel "Cancelled by user"
-   * text. That text classifies to nothing on either side, so it fell into the
-   * generic failure branch of the Go scheduler's `onPipelineComplete`: N
-   * wedged slots on ONE Stop All fed N failures into the cascade circuit
-   * breaker inside a single window (tripping it pauses the whole fleet), each
-   * one charged the per-issue lifetime failure cap that survives Resume(), and
-   * the board revert to Ready re-dispatched an issue whose process may still
-   * hold its worktree and the IPC server's runtime entry. Every one of those
-   * would have been caused by the operator pressing Stop. The kind is added on
-   * both classifier implementations at once so the #306 Go↔TS parity gap is
-   * not widened; see `TerminalKindUserAbort` for the routing contract.
-   *
-   * The worktree is preserved unconditionally: a process may still hold it (we
-   * are here precisely because something would not die), and the settled Stop
-   * All path preserves it too (`preserveWorktree = !pipelineSucceeded || …`,
-   * #66). Force-removing a tree that may hold uncommitted agent work is the
-   * one irreversible action on this path. Preservation is NOT final — the
-   * separate `worktreeReleased` latch lets a later, honest settlement complete
-   * the teardown.
-   *
-   * @returns `"booked"` when this call did the bookkeeping, `"already-booked"`
-   *   when another producer got there first (no work done), or
-   *   `"bookkeeping-failed"` when this call owned it and it threw or blew
-   *   {@link FORCE_SETTLE_TIMEOUT_MS}. Three distinct states, three values —
-   *   "nothing to do" must never read as "done".
-   */
-  private async forceSettleUnsettledSlot(
-    slot: PipelineSlot,
-    reason: string
-  ): Promise<ForceSettleOutcome> {
-    if (slot.terminalBookkeepingDone) {
-      this.logger.info("Force-settle skipped — terminal bookkeeping already booked", {
-        slotIndex: slot.index,
-        issueNumber: slot.issueNumber,
-        reason,
-      });
-      return "already-booked";
-    }
-    // Claim the latch SYNCHRONOUSLY, before the first await. A run promise that
-    // settles inside any await below must see the flag already set, or both
-    // producers book the same slot.
-    slot.terminalBookkeepingDone = true;
-
-    const progress: ForceSettleProgress = {
-      completedQueueItem: false,
-      notifiedFailure: false,
-      disposedSlot: false,
-      abandoned: false,
-    };
-    let budgetHandle: NodeJS.Timeout | undefined;
-    try {
-      const outcome = await Promise.race([
-        this.runForceSettleBookkeeping(slot, reason, progress).then(() => "completed" as const),
-        new Promise<"timed-out">((resolve) => {
-          budgetHandle = setTimeout(() => resolve("timed-out"), FORCE_SETTLE_TIMEOUT_MS);
-        }),
-      ]);
-      if (outcome === "timed-out") {
-        this.abandonForceSettle(slot, progress, "budget expired", {
-          budgetMs: FORCE_SETTLE_TIMEOUT_MS,
-          reason,
-        });
-        return "bookkeeping-failed";
-      }
-      this.logger.warn("Force-settled unsettled slot on abort deadline", {
-        slotIndex: slot.index,
-        issueNumber: slot.issueNumber,
-        repo: slot.repo ?? "",
-        reason,
-        cleaned: "queue mark cleared, terminal outcome notified, slot disposed",
-        notCleaned: "worktree preserved (a process may still hold it) and branch kept",
-        worktreePath: slot.worktree?.path,
-      });
-      return "booked";
-    } catch (err) {
-      // Never let one wedged slot abort the loop over the remaining slots.
-      this.abandonForceSettle(slot, progress, "threw partway through", {
-        reason,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return "bookkeeping-failed";
-    } finally {
-      if (budgetHandle) clearTimeout(budgetHandle);
-    }
-  }
-
-  /**
-   * Stop a force-settle that could not finish, and make sure nothing it left
-   * running can act later (#307).
-   *
-   * `Promise.race` abandons the loser's RESULT, never its WORK. The losing
-   * chain here is not hypothetical: step 1 is an IPC round-trip whose request
-   * timeout defaults to 30s, six times this budget, so the abandoned sequence
-   * typically resumes ~25s AFTER `abortAll` returned and reset
-   * `isShuttingDown` — squarely inside the window in which the operator or the
-   * autonomous scheduler re-dispatches the same issue. Setting `abandoned`
-   * makes every remaining step a no-op instead.
-   *
-   * The settle-once latch is also RELEASED when no outcome was dispatched: this
-   * call did not do the bookkeeping, so the run's own settlement (if it ever
-   * arrives) must be free to do it honestly rather than be suppressed by a
-   * latch nobody honoured.
-   */
-  private abandonForceSettle(
-    slot: PipelineSlot,
-    progress: ForceSettleProgress,
-    cause: string,
-    extra: Record<string, unknown>
-  ): void {
-    progress.abandoned = true;
-    if (!progress.notifiedFailure) {
-      slot.terminalBookkeepingDone = false;
-    }
-    this.logger.error(
-      "Force-settle of unsettled slot ABANDONED — remaining steps disarmed, slot may be partially leaked",
-      {
-        slotIndex: slot.index,
-        issueNumber: slot.issueNumber,
-        repo: slot.repo ?? "",
-        cause,
-        latchReleased: !progress.notifiedFailure,
-        completedQueueItem: progress.completedQueueItem,
-        notifiedFailure: progress.notifiedFailure,
-        disposedSlot: progress.disposedSlot,
-        ...extra,
-      }
-    );
-  }
-
-  /**
-   * Guard run before EVERY force-settle step: refuses to proceed once the
-   * budget expired, or once a newer slot has taken over this issue number
-   * (#307). Returns true when the caller must stop.
-   */
-  private forceSettleStepBlocked(
-    slot: PipelineSlot,
-    progress: ForceSettleProgress,
-    step: string
-  ): boolean {
-    if (progress.abandoned) {
-      this.logger.warn("Force-settle step skipped — this bookkeeping was already abandoned", {
-        slotIndex: slot.index,
-        issueNumber: slot.issueNumber,
-        step,
-      });
-      return true;
-    }
-    if (!this.stillOwnsSlot(slot)) {
-      progress.abandoned = true;
-      this.logger.error(
-        "Force-settle step skipped — the issue was re-dispatched into a newer slot; this bookkeeping would corrupt a LIVE run",
-        { slotIndex: slot.index, issueNumber: slot.issueNumber, step }
-      );
-      return true;
-    }
-    return false;
-  }
-
-  // terminal-parity:begin force-settle-funnel (#307 — this region is
-  // content-pinned by internal/orchestrator/testdata/terminal_behaviors.json;
-  // any edit fails tests/services/terminalParity.test.ts until the manifest is
-  // updated, which is the moment to check what this SECOND extension-side
-  // terminal funnel does and does not perform relative to the fenced
-  // runSlotPipeline finally and the Go runPipeline defer)
-  /**
-   * The three bookkeeping steps a force-cleared slot owes, in order. Split out
-   * of {@link forceSettleUnsettledSlot} so the budget race there wraps the
-   * whole sequence; `progress` records how far it got for the failure log and
-   * carries the abandonment token that disarms the steps this call no longer
-   * owns.
-   */
-  private async runForceSettleBookkeeping(
-    slot: PipelineSlot,
-    reason: string,
-    progress: ForceSettleProgress
-  ): Promise<void> {
-    // 1. Release the dequeue's "processing" mark (#254's invariant).
-    if (this.forceSettleStepBlocked(slot, progress, "complete-queue-item")) return;
-    await this.completeQueueItem({ issueNumber: slot.issueNumber, repoName: slot.repo }, reason);
-    progress.completedQueueItem = true;
-
-    // 2. Fire the terminal outcome callback. This is what frees the Go
-    //    scheduler's running slot (bootstrap wires onSlotFailed →
-    //    IpcClient.autonomousComplete), tears down the slot's phase
-    //    trackers/subscriptions and invalidates the board status cache.
-    //    The `[user-abort]` marker is load-bearing: it is what routes this to
-    //    the user_abort terminal kind instead of the generic failure branch
-    //    that would feed the cascade breaker and charge the lifetime cap for
-    //    an operator's Stop.
-    if (this.forceSettleStepBlocked(slot, progress, "notify-terminal-outcome")) return;
-    const slotState = await slot.stateService.getState().catch(() => null);
-    const costUsd = slotState?.tokens?.estimated_cost_usd ?? 0;
-    if (this.forceSettleStepBlocked(slot, progress, "notify-terminal-outcome")) return;
-    this.callbacks.onSlotFailed?.(
-      slot.index,
-      slot.issueNumber,
-      new Error(
-        `[user-abort] Cancelled by user — abort deadline exceeded after ${ABORT_ALL_TIMEOUT_MS}ms; ` +
-          `slot force-cleared while its pipeline promise was still unsettled, so this run's outcome is unknown`
-      ),
-      costUsd,
-      slot.repo
-    );
-    progress.notifiedFailure = true;
-
-    // 3. Remove the slot, dispose its state service, notify the tree. The
-    //    worktree is preserved (not released) — see the method doc.
-    if (this.forceSettleStepBlocked(slot, progress, "dispose-slot")) return;
-    await this.cleanupSlot(slot, /* preserveWorktree */ true, /* deleteBranch */ false);
-    progress.disposedSlot = true;
-  }
-  // terminal-parity:end force-settle-funnel
 
   /**
    * Halt the queue in response to a slot failure and notify the user.
@@ -2726,10 +2470,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     try {
       const result = await Promise.race([waitForIdle(), timeoutPromise]);
       if (result === TIMEOUT_SENTINEL) {
-        // Snapshot the slot OBJECTS, not just their keys (#307): each one still
-        // owes its terminal bookkeeping, and the map is mutated below.
-        const stuckSlots = Array.from(this.slots.values());
-        const stuckIssues = stuckSlots.map((s) => s.issueNumber);
+        const stuckIssues = Array.from(this.slots.keys());
         this.logger.warn("abortAll exceeded deadline — force-clearing slots", {
           timeoutMs: ABORT_ALL_TIMEOUT_MS,
           stuckIssues,
@@ -2742,69 +2483,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         } catch {
           // Best effort
         }
-
-        // #307: book each stuck slot's terminal state BEFORE dropping it. A
-        // force-cleared slot whose promise never settles never reaches
-        // runSlotPipeline's finally, so without this its queue item stays
-        // `processing` forever and the Go scheduler never frees its running
-        // slot. Sequential on purpose — these are IPC round-trips against a
-        // manager that is already in trouble, and the tally must be exact.
-        const tally: Record<ForceSettleOutcome, number> = {
-          booked: 0,
-          "already-booked": 0,
-          "bookkeeping-failed": 0,
-        };
-        for (const slot of stuckSlots) {
-          tally[await this.forceSettleUnsettledSlot(slot, "abort deadline — promise unsettled")]++;
-        }
-
-        // Items dequeued (and therefore marked `processing`) whose startSlot
-        // never got far enough to become a slot — the deadline can fire with
-        // isFilling=true and zero slots when worktree creation is what wedged.
-        //
-        // MARKED, never cleared, and deliberately NOT completed here (#307). A
-        // reservation exists if and only if a `startSlot` call is executing
-        // right now, so:
-        //   - Clearing the map erases the #188 per-issue in-flight guard for a
-        //     dispatch that is STILL RUNNING. The wedge then unblocks,
-        //     `startSlotInner` finds `isShuttingDown` already reset to false by
-        //     abortAll's own finally, and writes its slot over a newer live
-        //     one — two pipelines sharing one worktree, the newer run
-        //     unreachable and uncleanable.
-        //   - Completing the queue item releases the `processing` mark on
-        //     behalf of a dispatch that has not finished with it, and each
-        //     call is an IPC round-trip bounded only by the client's 30s
-        //     request timeout: K reservations would put abortAll K*30s past
-        //     its own deadline with isShuttingDown=true throughout — #3111's
-        //     exact symptom, reintroduced by the fix for #307.
-        // Marking abandoned makes the resuming `startSlotInner` bail and do its
-        // own bookkeeping, which is the only actor that knows when the dispatch
-        // is genuinely over. The cost is leaked capacity until it unwinds; the
-        // reconcile sweep covers a dispatch that never unwinds at all.
-        const abandonedReservations: number[] = [];
-        for (const [issueNumber, reservation] of this.reservedSlots) {
-          reservation.abandoned = true;
-          abandonedReservations.push(issueNumber);
-        }
-
-        this.slots.clear();
-        this.emitSlotsChanged();
-        this.logger.warn("abortAll force-clear complete", {
-          stuckIssues,
-          booked: tally.booked,
-          alreadyBooked: tally["already-booked"],
-          bookkeepingFailed: tally["bookkeeping-failed"],
-          abandonedReservations,
-        });
+        // Book the dead runs' terminal state (#307). Before this, `slots.clear()`
+        // was the ONLY mutation on this branch: no queue-mark release, no
+        // terminal outcome, no slot teardown — so the issue stayed `processing`
+        // forever (undispatchable, #254's outcome through a second door), Go's
+        // scheduler never freed its running-slot entry, and the state
+        // service/tree teardown chain never ran. forceClearStuckSlots tombstones
+        // and empties the slot map itself, synchronously, before its first await.
+        await this.forceClearStuckSlots();
         void vscode.window.showWarningMessage(
-          `Stop took longer than ${Math.round(ABORT_ALL_TIMEOUT_MS / 1000)}s — force-cleared ${stuckIssues.length} stuck slot(s)` +
-            (tally["bookkeeping-failed"] > 0
-              ? ` (${tally["bookkeeping-failed"]} could not be fully cleaned — see the Nightgauge log)`
-              : "") +
-            (abandonedReservations.length > 0
-              ? ` (${abandonedReservations.length} dispatch(es) still unwinding — their slots free up when they do)`
-              : "") +
-            `. Worktrees preserved. Pipeline ready for new work.`
+          `Stop took longer than ${Math.round(ABORT_ALL_TIMEOUT_MS / 1000)}s — force-cleared ${stuckIssues.length} stuck slot(s). Pipeline ready for new work.`
         );
       }
     } finally {
@@ -2812,6 +2500,160 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       this.isShuttingDown = false;
       this.isAbortAllInProgress = false;
     }
+  }
+
+  /**
+   * True when the abort deadline force-cleared THIS dispatch (#307).
+   *
+   * Keyed by generation, never by issue number: by the time a wedged run
+   * settles, the operator may have re-queued the issue, so a live successor can
+   * be sitting in `slots` or in `reservedSlots` under the same number.
+   */
+  private isForceCleared(slot: PipelineSlot): boolean {
+    return this.forceClearedGenerations.has(slot.generation);
+  }
+
+  /**
+   * Book the terminal state of every slot the abort deadline gave up on, then
+   * tombstone it (#307).
+   *
+   * The order is load-bearing. Tombstones and the slot-map clear happen
+   * SYNCHRONOUSLY, before the first await, so a wedged run that settles during
+   * the bookkeeping cannot re-enter its own terminal funnel behind us. The
+   * bookkeeping then runs the same three steps the settled path runs, per slot,
+   * each guarded independently: a step that throws is logged and the next step
+   * still runs, because a partially-booked dead run beats an unbooked one and
+   * the tombstone stands either way.
+   *
+   * NOT bounded by a per-slot timeout. Round 1 had one, and it was the defect:
+   * the budget released the settle-once claim on the LIKELY path (the first
+   * step is an IPC round-trip against a manager that is wedged by definition),
+   * handing the dead run back the un-guarded ordinary exits and re-opening both
+   * #307 and the successor corruption. The bound here is the IPC client's own
+   * request timeout, paid once across all slots rather than once per slot:
+   * slots are booked concurrently precisely so `isShuttingDown` — which makes
+   * IssueQueueService refuse every enqueue — is not held for N × that timeout
+   * (the #3111 condition this whole deadline exists to bound).
+   */
+  private async forceClearStuckSlots(): Promise<void> {
+    const stuckSlots = Array.from(this.slots.values());
+    const strandedReservations = Array.from(this.reservedSlots.entries());
+
+    // --- synchronous prologue: no await until every generation is tombstoned
+    for (const slot of stuckSlots) {
+      this.forceClearedGenerations.add(slot.generation);
+    }
+    for (const [, reservation] of strandedReservations) {
+      this.forceClearedGenerations.add(reservation.generation);
+    }
+    this.slots.clear();
+    this.emitSlotsChanged();
+    // --- end synchronous prologue
+
+    // allSettled, not all: every step below already swallows its own failure,
+    // but the force-clear must never be the thing that makes `abortAll` reject
+    // — that is the #3111 condition (a Stop that does not return) arriving
+    // through the fix for it.
+    await Promise.allSettled([
+      ...stuckSlots.map((slot) => this.bookForceClearedSlot(slot)),
+      ...strandedReservations.map(([issueNumber, reservation]) =>
+        // A reservation is an item the dequeue already marked `processing`
+        // whose `startSlot` never became a slot (the deadline can fire with
+        // `isFilling: true` and zero slots — a dispatch wedged inside worktree
+        // creation). Releasing the mark is the whole of its terminal state:
+        // there is no slot, no orchestrator and no state service to tear down.
+        // The map entry is deliberately left in place — it is what stops a
+        // re-dispatch from colliding with the still-running `startSlot`, and
+        // that dispatch removes its own entry when it unwinds.
+        this.completeQueueItem(
+          { issueNumber, repoName: reservation.repo },
+          "abort deadline force-cleared a stranded reservation"
+        )
+      ),
+    ]);
+  }
+
+  /**
+   * Run the settled path's terminal bookkeeping for one force-cleared slot.
+   *
+   * Three steps, each independently guarded:
+   *   1. `completeQueueItem` — release the dequeue's `processing` mark, the
+   *      terminal counterpart to `dequeueIndependent` (#254). Without it the
+   *      issue is undispatchable for good.
+   *   2. the terminal outcome callback — `onSlotFailed`, which is what
+   *      bootstrap turns into `autonomousComplete` (frees the Go scheduler's
+   *      running-slot entry), plus the phase-tracker / state-subscription /
+   *      tree / notifier teardown. Skipped when this run already dispatched its
+   *      own outcome and was merely mid-teardown when the deadline fired —
+   *      `autonomousComplete` is not idempotent (it feeds the cascade breaker
+   *      and the per-issue lifetime cap), so booking twice double-charges.
+   *   3. `cleanupSlot` with the worktree PRESERVED — a killed process may still
+   *      hold the tree, and the settled Stop All path preserves it too (#66).
+   *
+   * The error handed to `onSlotFailed` is byte-identical to the one the SETTLED
+   * Stop All path emits (`runSlotPipeline`'s `slot.userCancelled` branch). Both
+   * Stop paths must book the same thing; giving only the wedged variant a
+   * distinguishing marker would make the two disagree about what an operator
+   * Stop costs. Neither is classified as an operator abort today — see
+   * `force-clear-terminal-bookkeeping` in terminal_behaviors.json.
+   */
+  private async bookForceClearedSlot(slot: PipelineSlot): Promise<void> {
+    // terminal-parity:begin force-clear-funnel (#257/#307 — this is the SECOND
+    // terminal funnel on the extension path. It is content-pinned by
+    // internal/orchestrator/testdata/terminal_behaviors.json exactly like the
+    // runSlotPipeline finally, so a behavior added to one funnel and not the
+    // other cannot land silently. See the force-clear-terminal-bookkeeping row
+    // for the full performed/omitted/delegated accounting.)
+    const alreadyDispatched = slot.terminalOutcomeDispatched === true;
+    this.logger.warn("Force-clearing stuck slot — booking its terminal state (#307)", {
+      slotIndex: slot.index,
+      issueNumber: slot.issueNumber,
+      generation: slot.generation,
+      alreadyDispatchedOwnOutcome: alreadyDispatched,
+    });
+
+    try {
+      await this.completeQueueItem(
+        { issueNumber: slot.issueNumber, repoName: slot.repo },
+        "abort deadline force-cleared an unsettled slot"
+      );
+    } catch (err) {
+      this.logger.error("Force-clear: queue mark NOT released — issue stays undispatchable", {
+        issueNumber: slot.issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (!alreadyDispatched) {
+      slot.terminalOutcomeDispatched = true;
+      try {
+        this.callbacks.onSlotFailed?.(
+          slot.index,
+          slot.issueNumber,
+          new Error(`Cancelled by user`),
+          0,
+          slot.repo
+        );
+      } catch (err) {
+        this.logger.error(
+          "Force-clear: terminal outcome NOT booked — Go scheduler slot stays held",
+          {
+            issueNumber: slot.issueNumber,
+            error: err instanceof Error ? err.message : String(err),
+          }
+        );
+      }
+    }
+
+    try {
+      await this.cleanupSlot(slot, /* preserveWorktree */ true, /* deleteBranch */ false);
+    } catch (err) {
+      this.logger.error("Force-clear: slot teardown failed — state service/tree item may leak", {
+        issueNumber: slot.issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    // terminal-parity:end force-clear-funnel
   }
 
   /**

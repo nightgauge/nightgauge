@@ -241,7 +241,6 @@ record may carry both fields, neither, or only one.
 | `abandoned_commit`           | A stage upstream of pr-create was killed/crashed after committing valid, unmerged work (clean tree, ahead of base) — the `abandoned-commit-recoverable` action matched but could neither self-heal nor set up a resume (Issue #191)                                                                               |
 | `commit_orphaned`            | A killed stage's commit landed on the wrong branch (a stray `temp-pre-push-<n>` left by a SIGKILL bypassing pre_push.go's restore-defer) and feature-validate's branch-identity self-heal could not check out the expected feature branch to recover it (Issue #266) — unrecoverable by retry, needs human action |
 | `permission_denied`          | Harness denied a tool call outright — most commonly a stage's foreground `sleep` wait loop (Issue #289) — harness fault, retryable                                                                                                                                                                                |
-| `user_abort`                 | The operator pressed Stop and the run did not stop with it: `abortAll`'s deadline expired with the slot's pipeline promise still unsettled, so the slot was force-cleared (Issue #307) — outcome UNKNOWN, not failed                                                                                              |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
@@ -262,26 +261,6 @@ than looping forever. Emitted with the `[permission-denied]` marker /
 `user rejected tool use` text, matched BEFORE the generic subagent-crash
 fallback so the "exit " substring in the rejection text doesn't misclassify it
 as a process death.
-
-`user_abort` (Issue #307) is the only kind whose **cause is the operator**.
-`abortAll` bounds its wait at 30s; when a slot's pipeline promise is still
-unsettled at the deadline — a wedged adapter, a stage awaiting an IPC/`gh` call
-that ignores the AbortController — the extension force-clears the slot and
-books its terminal state on the run's behalf. The run's outcome is **unknown**,
-not failed: nothing observed a result, so the work may have merged, died
-silently, or still be running. Pre-fix that landed in the generic
-`subagent_crash` branch, which made pressing Stop the cause of a fleet halt —
-N wedged slots feed N failures into the cascade breaker inside one window,
-tripping it (`safety_tripped`, Discord embed, cascade-pause card) — while
-charging each against the per-issue lifetime cap that survives `Resume()`.
-Routed like `branch_forked`: **no `LifetimeIssueFailures` increment, no
-cascade-breaker feed, no pause, and no board revert**. The missing revert is
-the load-bearing part: the force-cleared run's process may still hold its
-worktree and the IPC server's runtime entry, so an automatic re-dispatch walks
-a second run into the first one's state. The way back in is the operator
-re-queueing — they are the only actor who knows the wedged process is gone.
-Emitted with the `[user-abort]` marker, matched FIRST on both classifiers so
-the "abort"/"cancel"/millisecond-deadline wording cannot be misread as a stall.
 
 `branch_forked` (Issue #163) is the one kind that is **strictly harmful to
 retry**. The remote branch head is not reachable from the run's local tip, so
@@ -787,9 +766,6 @@ live and correct but sits on a path the operating mode never takes; the guard
 is a path-parity assertion, not a value or shape check.
 
 Known intentional divergences (board terminal status, queue-halt semantics,
-worktree preservation on failure) and the remaining alignment gap (#306 —
-the two terminal-kind classifier implementations are still held together by
-comments rather than a shared-fixture test) are recorded in the manifest and
-its notes. The abort-deadline gap (#307) is closed: the force-clear path is
-now its own fenced funnel with a `force-clear-terminal-bookkeeping` row that
-names the three behaviors it performs and the five it deliberately omits.
+worktree preservation on failure) and remaining alignment gaps (#306
+terminal-kind classifiers, #307 abort-deadline bookkeeping) are recorded in
+the manifest and its notes.
