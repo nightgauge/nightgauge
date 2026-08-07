@@ -19,6 +19,9 @@ tests/fixtures/
 # is the shape VSCode itself writes, and it is the worst case for guard.sh's
 # text extraction. Pretty-printing it would change what the test exercises.
 internal/doctor/testdata/vscode-bundles/extensions-index-large.json
+# The pre-fix skill render (#337) is a verbatim capture of what the model was
+# handed. Reformatting it would rewrite the artifact under test.
+internal/skillrender/testdata/dead-include/pr-merge.pre-fix.rendered.md
 # Embedded templates emitted byte-for-byte by `nightgauge setup scaffold-tooling`
 internal/setup/templates/
 # Markdown files with template syntax (Handlebars, etc.)

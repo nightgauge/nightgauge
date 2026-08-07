@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/preflight"
@@ -24,7 +25,7 @@ import (
 func preflightCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "preflight",
-		Short: "Pre-submission gates (links, syntax, secrets, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard)",
+		Short: "Pre-submission gates (links, syntax, secrets, skill-includes, skill-no-direct-gh, skill-anti-patterns, skill-portability, dependency-guard)",
 		Long: `Deterministic pre-submission validation gates. Each subcommand inspects the
 working tree for a specific class of defect and exits non-zero when findings
 exist, so they can be chained in CI or git pre-push hooks. Replaces the
@@ -34,6 +35,7 @@ fragile bash + python3 + sed chains in skills/pr-preflight/SKILL.md
 	cmd.AddCommand(preflightLinksCmd())
 	cmd.AddCommand(preflightSyntaxCmd())
 	cmd.AddCommand(preflightSecretsCmd())
+	cmd.AddCommand(preflightSkillIncludesCmd())
 	cmd.AddCommand(preflightSkillNoDirectGHCmd())
 	cmd.AddCommand(preflightSkillAntiPatternsCmd())
 	cmd.AddCommand(preflightSkillPortabilityCmd())
@@ -193,6 +195,94 @@ scope narrowing. Consumes zero LLM tokens.`,
 	cmd.Flags().StringVar(&outPath, "out", "", "Write the ac-reconcile-{N}.json report to this path")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Print the report JSON to stdout")
 	return cmd
+}
+
+// preflightSkillIncludesCmd wraps `internal/preflight.RunSkillIncludesCheck`
+// and exits 1 when any shipped skill carries an `<!-- include: ... -->`
+// directive whose target does not resolve (#337). Include expansion is
+// fail-open by design, so a dead include is silent: the model receives the
+// literal HTML comment where the shared content should have been.
+func preflightSkillIncludesCmd() *cobra.Command {
+	var (
+		jsonOutput bool
+		root       string
+		trees      []string
+	)
+	cmd := &cobra.Command{
+		Use:   "skill-includes",
+		Short: "Fail when a skill include directive points at a file that does not exist",
+		Long: `Walk the skill trees and emit a finding for each '<!-- include: path -->'
+directive whose target does not resolve to an existing file (#337).
+
+Include expansion is deliberately fail-open: skillrender.ExpandIncludes leaves
+a directive in place when its target cannot be read, so the document stays
+readable under a host that does not expand includes at all. The cost is that a
+DEAD include and a DELIBERATELY UNEXPANDED one are byte-identical — the model
+gets the literal HTML comment, and nothing says so.
+
+Targets are resolved with the composer's own regex, so the captured path is
+exactly what expansion would try to open, and the finding echoes it VERBATIM.
+That is what makes a malformed directive obvious: a trailing annotation inside
+the comment, as in '<!-- include: ../_shared/EPIC_HANDLING.md (sub-issue fetch
+section) -->', becomes part of the path even though the file it names exists.
+
+Scope is SKILL.md plus supporting files under _includes/ and _shared/, across
+both skills/ and the generated claude-plugins/nightgauge/skills/ mirror.
+README files are NOT scanned — they document the directive shape rather than
+using it.
+
+Schema version 1 — field names (v, root, trees, files_checked, findings,
+warnings) are stable and consumed by callers via fixed jq paths.
+
+Exit codes:
+  0  every include target resolves
+  1  one or more dead includes (gate fails)
+  2  hard error (e.g. unresolvable root)`,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			result, err := preflight.RunSkillIncludesCheck(cmd.Context(), preflight.SkillIncludesOptions{
+				Root:  root,
+				Trees: trees,
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "preflight skill-includes: %v\n", err)
+				os.Exit(2)
+			}
+			if jsonOutput {
+				if err := printJSON(result); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
+				}
+			} else {
+				printPreflightSkillIncludesHuman(result)
+			}
+			if len(result.Findings) > 0 {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().StringVar(&root, "root", "", "Repository root (default: current working directory)")
+	cmd.Flags().StringSliceVar(&trees, "tree", nil, "Root-relative skill tree to scan (repeatable; default: skills, claude-plugins/nightgauge/skills)")
+	return cmd
+}
+
+func printPreflightSkillIncludesHuman(r *preflight.SkillIncludesResult) {
+	fmt.Printf("nightgauge preflight skill-includes — schema v%d\n", r.V)
+	fmt.Printf("root: %s\n", r.Root)
+	fmt.Printf("trees: %s\n", strings.Join(r.Trees, ", "))
+	fmt.Printf("files checked: %d  dead includes: %d\n", r.FilesChecked, len(r.Findings))
+	for _, f := range r.Findings {
+		fmt.Printf("  ✗ %s:%d  %s\n", f.File, f.Line, f.Directive)
+		fmt.Printf("      captured path: %s\n", f.Target)
+		fmt.Printf("      resolves to:   %s (does not exist)\n", f.Resolved)
+	}
+	for _, w := range r.Warnings {
+		fmt.Printf("  ! %s\n", w)
+	}
+	if len(r.Findings) == 0 {
+		fmt.Println("every include target resolves ✓")
+	}
 }
 
 // preflightSkillAntiPatternsCmd wraps `internal/preflight.RunSkillAntiPatternsCheck`
