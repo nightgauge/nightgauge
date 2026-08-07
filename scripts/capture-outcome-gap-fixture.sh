@@ -96,11 +96,62 @@ def placeholder_branch(issue_number):
 def scrub(value):
     """Deny-by-default scrub of every string in an arbitrary JSON value."""
     if isinstance(value, str):
+        # An EMPTY string carries nothing to redact, and rewriting it to
+        # "REDACTED" destroys the evidence these fixtures exist for: the whole
+        # point of the captured legacy outcome is that its model fields were
+        # never populated, and a reader cannot tell "" from a scrubbed value.
+        # SAFE_TOKEN requires at least one character, so this needs its own case.
+        if value == "":
+            return value
         return value if SAFE_TOKEN.match(value) else REDACTED
     if isinstance(value, list):
         return [scrub(v) for v in value]
     if isinstance(value, dict):
         return {k: scrub(v) for k, v in value.items()}
+    return value
+
+
+RFC3339_MICROS = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.\d+((?:Z|[+-]\d{2}:\d{2}))$"
+)
+UUID_ANY = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+PLACEHOLDER_RUN_ID = "00000000-0000-7000-8000-000000000000"
+
+
+def blunt_join_keys(value):
+    """Strip the high-resolution identifiers that re-join a fixture to its source.
+
+    SAFE_TOKEN passes an RFC3339 timestamp and a UUID by construction (both are
+    bare tokens), and it never inspects numbers at all — so the deny-by-default
+    string scrub cannot see these. A microsecond-precision `completed_at`, a
+    millisecond `duration_ms` and the platform's `run_id` join key together
+    identify one run in the source workspace exactly. This repo is the public
+    Apache-2.0 core; fixtures must carry the record SHAPE, not a pointer back to
+    a private workspace's telemetry.
+
+    Timestamps keep second precision (readers only need a parseable RFC3339),
+    durations are rounded to the second, and run ids become one fixed
+    placeholder.
+    """
+    if isinstance(value, str):
+        m = RFC3339_MICROS.match(value)
+        if m:
+            return m.group(1) + m.group(2)
+        if UUID_ANY.match(value):
+            return PLACEHOLDER_RUN_ID
+        return value
+    if isinstance(value, list):
+        return [blunt_join_keys(v) for v in value]
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k.endswith("duration_ms") or k == "durationMs":
+                out[k] = int(round((v or 0) / 1000.0)) * 1000 if isinstance(v, (int, float)) else v
+            else:
+                out[k] = blunt_join_keys(v)
+        return out
     return value
 
 
@@ -118,7 +169,7 @@ def safe_labels(labels):
 
 
 def redact_run(record, issue_number):
-    r = scrub(dict(record))
+    r = blunt_join_keys(scrub(dict(record)))
     # Identity fields read as REDACTED after the scrub; give them stable,
     # record-shaped placeholders so the fixture still looks like a run record.
     r["repo"] = PLACEHOLDER_REPO
@@ -133,7 +184,7 @@ def redact_run(record, issue_number):
 
 
 def redact_outcome(record, issue_number):
-    o = scrub(dict(record))
+    o = blunt_join_keys(scrub(dict(record)))
     o["repo"] = PLACEHOLDER_REPO
     o["issueNumber"] = issue_number
     return o
@@ -171,6 +222,7 @@ APPROVED_PLACEHOLDERS = {
     PLACEHOLDER_REPO,
     PLACEHOLDER_TITLE,
     PLACEHOLDER_BASE_BRANCH,
+    PLACEHOLDER_RUN_ID,
     "",
 }
 
@@ -182,6 +234,19 @@ class Unredacted(Exception):
 def verify(name, value, path="$"):
     """Fail closed: raise unless every string is a bare token or a placeholder."""
     if isinstance(value, str):
+        # Join keys FIRST: both shapes are bare tokens, so SAFE_TOKEN accepts
+        # them and the check below would pass a microsecond timestamp or a real
+        # run_id straight through to a public fixture.
+        if RFC3339_MICROS.match(value):
+            raise Unredacted(
+                "%s%s would publish a sub-second timestamp — a join key back to the "
+                "source workspace's run: %r" % (name, path, value)
+            )
+        if UUID_ANY.match(value) and value != PLACEHOLDER_RUN_ID:
+            raise Unredacted(
+                "%s%s would publish a real UUID — the platform's run join key: %r"
+                % (name, path, value)
+            )
         if value in APPROVED_PLACEHOLDERS or SAFE_TOKEN.match(value):
             return
         if re.match(r"^(feat|fix|docs)/\d+-redacted$", value):
@@ -208,6 +273,10 @@ def self_test_verifier():
         "repo": "RealOrg/private-service",
         "path": "/Users/someone/Repositories/private-service",
         "email": "someone@example.com",
+        # Join keys: bare tokens, so the string allowlist accepts them by
+        # construction. These two escaped the first deny-by-default rewrite.
+        "completed_at": "2026-06-26T19:43:13.35885-06:00",
+        "run_id": "7405b02e-3ca1-4915-91b3-95661028dc6c",
     }
     for key, value in poison.items():
         try:
@@ -228,16 +297,18 @@ def self_test_verifier():
 def is_extension_path(record):
     """A run record written by the extension funnel (pipeline.notifyComplete).
 
-    Two independent signals, both required:
-      - no outcome_prediction: the Go scheduler always threads one in via
-        recordOutcome; the extension path never did (that IS the #304 defect).
-      - at least one stage carries execution_path: only the TypeScript
-        HeadlessOrchestrator's deterministic-first hooks produce that (#309),
-        replayed onto the runtime by the notifyComplete handler.
+    POSITIVE signal only: at least one stage carries `execution_path`, which
+    only the TypeScript HeadlessOrchestrator's deterministic-first hooks produce
+    (#309), replayed onto the runtime by the notifyComplete handler.
+
+    This deliberately does NOT also require `outcome_prediction` to be absent.
+    That was true only of pre-#304 records — the fix makes this handler set the
+    field on every extension run — so the absence test would have quietly
+    narrowed to "extension-path runs recorded before the fix" and then matched
+    nothing at all once those aged out of the scanned window, hard-failing the
+    regeneration path this README documents.
     """
     if record.get("record_type") != "run":
-        return False
-    if record.get("outcome_prediction") is not None:
         return False
     stages = record.get("stages") or {}
     return any(isinstance(v, dict) and "execution_path" in v for v in stages.values())
@@ -373,7 +444,9 @@ model_less = sum(1 for o in outcomes if not o.get("predictedModel"))
 size_small = sum(1 for o in outcomes if o.get("predictedSize") == "small")
 score_zero = sum(1 for o in outcomes if not o.get("complexityScore"))
 no_actual_size = sum(1 for o in outcomes if not o.get("actualSize"))
-last_outcome = max(o.get("completedAt", "") for o in outcomes)
+# Blunted: the README is published too, and a microsecond timestamp there is the
+# same join key back to a private run as one inside a fixture.
+last_outcome = blunt_join_keys(max(o.get("completedAt", "") for o in outcomes))
 first_day = os.path.basename(daily_files[0])[:10]
 last_day = os.path.basename(daily_files[-1])[:10]
 
@@ -393,11 +466,13 @@ redacted copies of records this machine's pipeline actually wrote.
 - **Learning outcome records in the corpus, all time**: **{n_outcomes}**
 - **Most recent outcome record**: `{last_outcome}`
 
-Extension-path identification (both signals required, see the script):
-no `outcome_prediction` (the Go scheduler always sets one) **and** at least one
-stage carrying `execution_path` (only the TypeScript HeadlessOrchestrator
-produces that, #309). The gap #304 fixes is the whole distance between those
-last two numbers: every extension-path run wrote a run record and no outcome.
+Extension-path identification (positive signal only, see the script): at least
+one stage carrying `execution_path`, which only the TypeScript
+HeadlessOrchestrator produces (#309). It deliberately does not also require
+`outcome_prediction` to be absent — that held only for pre-#304 records, so the
+selector would have matched nothing once those aged out of the scanned window.
+The gap #304 fixes is the whole distance between those last two numbers: every
+extension-path run wrote a run record and no outcome.
 
 ## The corpus was not just small — it was degenerate
 
@@ -460,7 +535,8 @@ neither a bare token nor one of its own placeholders. The publication-boundary
 guard scans the tracked tree but does not inspect fixture string contents, so
 this check is the only mechanical gate — it fails closed by design, and it
 self-tests against a poison document (a forge reference inside a stage error, a
-real repo slug, a home path, an e-mail) before it is trusted to accept anything.
+real repo slug, a home path, an e-mail, a sub-second timestamp and a real
+`run_id`) before it is trusted to accept anything.
 
 ## Regenerating
 

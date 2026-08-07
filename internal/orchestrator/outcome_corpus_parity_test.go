@@ -82,25 +82,27 @@ func TestRecordOutcome_NoRootRecordsNothing(t *testing.T) {
 	}
 }
 
-// Predicted and actual size must be comparable, and unknown must be empty.
-// Consumers test the two for equality; a predicted size in the complexity
-// vocabulary against an actual size in the size:* label vocabulary reports a
-// measured 0% forever, and an unscored run spelled "small" is
-// indistinguishable from a genuinely small issue.
+// The size PREDICTION is recorded only when the router actually had a size to
+// predict from, and the ACTUAL half is never a second reading of that same
+// input.
+//
+// The absence rule keys on the input, not on a score sentinel: routing clamps
+// complexity scores to [1,8] and defaults an unlabelled issue to the M base
+// score, so a `score <= 0` guard never fires in the field and the ~95% of real
+// issues with no size:* label would all record a fabricated bucket.
 func TestRecordOutcome_SizeVocabularyMatchesTheIPCPath(t *testing.T) {
 	tests := []struct {
 		name              string
 		score             int
 		size              types.Size
 		wantPredicted     string
-		wantActual        string
 		wantScoreRecorded int
 	}{
-		{"scored and labelled agree", 3, types.SizeM, "small", "small", 3},
-		{"scored and labelled disagree", 5, types.SizeM, "medium", "small", 5},
-		{"large issue", 8, types.SizeXL, "large", "large", 8},
-		{"unscored run predicts nothing", 0, types.SizeM, "", "small", 0},
-		{"unlabelled run has no actual", 5, "", "medium", "", 5},
+		{"labelled and scored", 3, types.SizeM, "small", 3},
+		{"labelled and scored higher", 5, types.SizeM, "medium", 5},
+		{"large issue", 8, types.SizeXL, "large", 8},
+		{"unscored run predicts nothing", 0, types.SizeM, "", 0},
+		{"unlabelled run predicts nothing, even at the default score", 3, "", "", 3},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -118,12 +120,85 @@ func TestRecordOutcome_SizeVocabularyMatchesTheIPCPath(t *testing.T) {
 			if got[0].PredictedSize != tc.wantPredicted {
 				t.Errorf("PredictedSize = %q, want %q", got[0].PredictedSize, tc.wantPredicted)
 			}
-			if got[0].ActualSize != tc.wantActual {
-				t.Errorf("ActualSize = %q, want %q", got[0].ActualSize, tc.wantActual)
+			// ACTUAL size is always absent at this boundary: nothing here
+			// measures how big the change turned out to be, and rebucketing the
+			// issue's own size:* label makes the pair a function of the same
+			// pre-run inputs the prediction came from — a "measurement" no
+			// routing improvement could move (#304 round 2).
+			if got[0].ActualSize != "" {
+				t.Errorf("ActualSize = %q, want empty — the size:* label is an INPUT to the prediction, not a measurement of the run", got[0].ActualSize)
 			}
 			if got[0].ComplexityScore != tc.wantScoreRecorded {
 				t.Errorf("ComplexityScore = %d, want %d", got[0].ComplexityScore, tc.wantScoreRecorded)
 			}
 		})
+	}
+}
+
+// THE MODEL PAIR, on this writer. It used to be actualModel := predictedModel —
+// a copy, so every row this writer ever wrote was a tautological routing HIT,
+// in raw model-id vocabulary while the corpus's other writer wrote normalized
+// bands. Both halves must now be independent, normalized, and absent when
+// unknown.
+func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
+	tests := []struct {
+		name          string
+		predicted     string
+		devStageModel string
+		wantPredicted string
+		wantActual    string
+	}{
+		{"routed right", "sonnet", "claude-sonnet-5", "sonnet", "sonnet"},
+		{"mis-routed", "sonnet", "claude-opus-5", "sonnet", "opus"},
+		{"concrete id normalizes to the same band as the alias", "claude-sonnet-4-6", "claude-sonnet-5", "sonnet", "sonnet"},
+		{"dev stage never reported a model", "sonnet", "", "sonnet", ""},
+		{"no router prediction", "", "claude-sonnet-5", "", "sonnet"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &Scheduler{recordOutcomes: true}
+			item := types.BoardItem{Number: 80, Repo: "acme/widget"}
+			rs := state.NewRuntimeState(item.Repo, item.Number, "item-id")
+			if tc.devStageModel != "" {
+				rs.RecordStageModel(state.StageFeatureDev, tc.devStageModel)
+			}
+
+			s.recordOutcome(item, rs.Snapshot(), true, 5, tc.predicted, root)
+
+			got := readCorpus(t, root)
+			if len(got) != 1 {
+				t.Fatalf("expected 1 outcome, got %d", len(got))
+			}
+			if got[0].PredictedModel != tc.wantPredicted {
+				t.Errorf("PredictedModel = %q, want %q", got[0].PredictedModel, tc.wantPredicted)
+			}
+			if got[0].ActualModel != tc.wantActual {
+				t.Errorf("ActualModel = %q, want %q — actual must be what the %s stage SERVED, never a copy of the prediction",
+					got[0].ActualModel, tc.wantActual, OutcomeModelStage)
+			}
+		})
+	}
+}
+
+// loadIssueContext must not invent a prediction. A context file with no
+// pickup_recommendation.dev_model used to yield "sonnet", which reached the
+// corpus indistinguishable from a router that genuinely chose sonnet.
+func TestLoadIssueContext_DoesNotFabricateAPrediction(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "issue-81.json"),
+		[]byte(`{"routing":{"complexity_score":5,"path":"standard"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	score, _, model := loadIssueContext(root, 81)
+	if score != 5 {
+		t.Errorf("complexityScore = %d, want 5", score)
+	}
+	if model != "" {
+		t.Errorf("predictedModel = %q, want empty — the context names no dev model, and a default recorded as a prediction is counted by every reader as a routing measurement", model)
 	}
 }

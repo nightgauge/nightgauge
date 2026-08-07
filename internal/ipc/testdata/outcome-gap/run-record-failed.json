@@ -17,13 +17,13 @@
     "path": "standard",
     "skip_stages": []
   },
-  "run_id": "2239c77c-56de-4476-8296-0e136f2dfc1f",
+  "run_id": "00000000-0000-7000-8000-000000000000",
   "schema_version": "3",
   "size": null,
   "stages": {
     "feature-dev": {
       "completed_at": "2026-07-29T09:20:53-06:00",
-      "duration_ms": 493292,
+      "duration_ms": 493000,
       "model_selection": {
         "model": "claude-sonnet-5",
         "source": "scheduler"
@@ -33,7 +33,7 @@
     },
     "feature-planning": {
       "completed_at": "2026-07-29T09:12:39-06:00",
-      "duration_ms": 447955,
+      "duration_ms": 448000,
       "model_selection": {
         "model": "claude-sonnet-5",
         "source": "scheduler"
@@ -43,7 +43,7 @@
     },
     "feature-validate": {
       "completed_at": "2026-07-29T09:26:49-06:00",
-      "duration_ms": 356124,
+      "duration_ms": 356000,
       "model_selection": {
         "model": "claude-sonnet-5",
         "source": "scheduler"
@@ -53,20 +53,20 @@
     },
     "issue-pickup": {
       "completed_at": "2026-07-29T09:05:11-06:00",
-      "duration_ms": 1018,
+      "duration_ms": 1000,
       "execution_path": "deterministic",
       "started_at": "2026-07-29T09:05:10-06:00",
       "status": "complete"
     },
     "pipeline-start": {
       "completed_at": "2026-07-29T09:05:10-06:00",
-      "duration_ms": 26,
+      "duration_ms": 0,
       "started_at": "2026-07-29T09:05:10-06:00",
       "status": "complete"
     },
     "pr-create": {
       "completed_at": "2026-07-29T09:33:17-06:00",
-      "duration_ms": 387405,
+      "duration_ms": 387000,
       "execution_path": "llm",
       "model_selection": {
         "model": "claude-haiku-4-5-20251001",
@@ -78,7 +78,7 @@
     },
     "pr-merge": {
       "completed_at": "2026-07-29T09:42:46-06:00",
-      "duration_ms": 556583,
+      "duration_ms": 557000,
       "error": "REDACTED",
       "execution_path": "llm",
       "model_selection": {
@@ -161,6 +161,6 @@
     "total_input": 15627030,
     "total_output": 78025
   },
-  "total_duration_ms": 2264309,
+  "total_duration_ms": 2264000,
   "type": "feature"
 }

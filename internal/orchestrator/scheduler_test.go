@@ -157,11 +157,13 @@ func TestOutcomeRecording(t *testing.T) {
 	item := types.BoardItem{
 		Number: 42,
 		Repo:   "nightgauge/nightgauge",
+		Size:   types.SizeM,
 	}
 
 	// Build a minimal runtime state snapshot
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
 	snap.BeginStage(state.StageFeatureDev)
+	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-4-6")
 	snap.CompleteStage(0, 100, 200, "claude-sonnet-4-6")
 	snapshot := snap.Snapshot()
 
@@ -192,6 +194,13 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 	if outcome.PredictedSize != "medium" {
 		t.Errorf("PredictedSize = %q, want %q", outcome.PredictedSize, "medium")
+	}
+	// The model pair is a MEASUREMENT, not a copy: predicted is the router's
+	// recommendation normalized to its band, actual is the band the
+	// implementation stage served (#304).
+	if outcome.PredictedModel != "sonnet" || outcome.ActualModel != "sonnet" {
+		t.Errorf("model pair = predicted %q / actual %q, want sonnet / sonnet (both normalized onto the registry band)",
+			outcome.PredictedModel, outcome.ActualModel)
 	}
 	if outcome.ComplexityScore != 5 {
 		t.Errorf("ComplexityScore = %d, want 5", outcome.ComplexityScore)
@@ -233,6 +242,15 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 	if failedOutcome.PredictedSize != "small" {
 		t.Errorf("PredictedSize = %q, want %q", failedOutcome.PredictedSize, "small")
+	}
+	// The failed run's dev stage never reported a model, so the actual half is
+	// absent — never a copy of the prediction, which would score a routing HIT
+	// for a run whose implementation stage never ran.
+	if failedOutcome.PredictedModel != "haiku" {
+		t.Errorf("PredictedModel = %q, want %q", failedOutcome.PredictedModel, "haiku")
+	}
+	if failedOutcome.ActualModel != "" {
+		t.Errorf("ActualModel = %q, want empty", failedOutcome.ActualModel)
 	}
 }
 

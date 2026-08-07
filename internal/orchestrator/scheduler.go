@@ -5136,6 +5136,15 @@ func clipRunes(s string, n int) string {
 // loadIssueContext reads the issue context JSON and extracts complexity score,
 // routing path, and predicted model. Returns zero values if the file is missing
 // or malformed.
+//
+// predictedModel is the router's recommendation VERBATIM and is EMPTY when the
+// context names none. It used to default to "sonnet" here, which put a
+// fabricated prediction into the learning corpus on every unrouted run — and
+// the corpus's readers cannot tell a fabricated prediction from a measured one,
+// so it was counted as a routing measurement of nothing (#304). Nothing
+// downstream needed the default: a missing context file already returned ""
+// through the early error return above, so "" is the path the dispatcher and
+// the retry ladder were already handling.
 func loadIssueContext(workspaceRoot string, issueNumber int) (complexityScore int, routingPath string, predictedModel string) {
 	path := filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
 		fmt.Sprintf("issue-%d.json", issueNumber))
@@ -5155,11 +5164,8 @@ func loadIssueContext(workspaceRoot string, issueNumber int) (complexityScore in
 	if err := json.Unmarshal(data, &ctx); err != nil {
 		return 0, "", ""
 	}
-	model := ctx.Routing.PickupRecommendation.DevModel
-	if model == "" {
-		model = "sonnet" // Default: sonnet is the general-purpose model
-	}
-	return ctx.Routing.ComplexityScore, ctx.Routing.Path, model
+	return ctx.Routing.ComplexityScore, ctx.Routing.Path,
+		ctx.Routing.PickupRecommendation.DevModel
 }
 
 // deriveRoutingDecision computes the authoritative routing Decision for a queued
@@ -5605,34 +5611,28 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	if !success {
 		failedStage = string(snap.Stage)
 	}
-	// ActualModel: predicted is the proxy — EXCEPT when the CLI's refusal
-	// fallback swapped models mid-run (#91), in which case the last served
-	// model is recorded so learning/eval data isn't attributed to a model
-	// that never produced the output.
-	actualModel := predictedModel
-	if m := snap.LastRefusalServedModel(); m != "" {
-		actualModel = m
-	}
-	// PredictedSize vs ActualSize, in ONE vocabulary, both empty when unknown.
-	// Every consumer compares the two for equality: an unscored run spelled
-	// "small" (SizeBucketForScore(0)) is indistinguishable from a genuinely
-	// small issue, and an ActualSize no writer ever populated meant the
-	// comparison had never once run. Identical rules on the IPC path (#304).
-	predictedSize := ""
-	if complexityScore > 0 {
-		predictedSize = SizeBucketForScore(complexityScore)
-	}
-	actualSize := ""
-	if score := routing.SizeBaseScore(string(item.Size)); score > 0 {
-		actualSize = SizeBucketForScore(score)
-	}
+	// Predicted vs actual, in the vocabulary the corpus's OTHER writer uses —
+	// see internal/orchestrator/outcome_semantics.go for the three rules both
+	// paths obey. The helpers are shared precisely so they cannot drift: this
+	// writer used to record actualModel := predictedModel (a copy — a
+	// guaranteed match on every row, in raw model-id vocabulary) against an IPC
+	// writer that recorded a normalized measurement, so one corpus field
+	// carried two meanings with no discriminator (#304 round 2).
+	//
+	// ActualModel is what the IMPLEMENTATION stage actually served, because
+	// PredictedModel is the router's recommendation FOR that stage. Empty when
+	// it never ran — an absent value is excluded from the accuracy denominator,
+	// a copied one is counted as a measurement of nothing.
+	//
+	// ActualSize is deliberately unset: no lines-changed measurement exists at
+	// this boundary, and the size:* label it used to be derived from is one of
+	// the same pre-run inputs the prediction came from.
 	outcome := learning.Outcome{
 		IssueNumber:     item.Number,
 		Repo:            item.Repo,
-		PredictedSize:   predictedSize,
-		ActualSize:      actualSize,
-		PredictedModel:  predictedModel,
-		ActualModel:     actualModel,
+		PredictedSize:   OutcomePredictedSize(string(item.Size), complexityScore),
+		PredictedModel:  OutcomeModelBand(predictedModel),
+		ActualModel:     OutcomeModelBand(OutcomeServedDevModel(snap)),
 		Success:         success,
 		DurationMs:      snap.TotalDuration().Milliseconds(),
 		InputTokens:     snap.InputTokens,
@@ -5742,9 +5742,11 @@ func (s *Scheduler) recordV2History(
 // calibration loop compares the two for equality, so a second vocabulary in
 // the same field can only ever report 0% accuracy (#304).
 //
-// A score of 0 means "unknown", never "small": callers must not call this with
-// an unscored run. Exported so the IPC extension path derives the identical
-// bucket rather than inventing a parallel mapping.
+// It is a pure bucketing of whatever score it is handed, INCLUDING 0 (→
+// "small") — so corpus writers must not call it directly. They call
+// OutcomePredictedSize, which decides whether the run had a size to predict at
+// all before bucketing; diagnostic callers (the stage-exit record) may bucket
+// unconditionally because nothing compares that value to a measurement.
 func SizeBucketForScore(score int) string {
 	switch {
 	case score <= 3:
@@ -5782,6 +5784,16 @@ func (s *Scheduler) resolveDispatchModel(
 	modelFloors map[string]string,
 ) string {
 	// Escalation override if set, otherwise the predicted model.
+	//
+	// predictedModel is "" when the issue context named no dev model, and that
+	// empty string is carried through deliberately: the dispatcher below already
+	// resolves an unspecified model to the provider's general-purpose default,
+	// and RetryEngine.NextModel treats "" as "was running the default, escalate
+	// past sonnet". Substituting a literal "sonnet" here would break the latter
+	// (the ladder holds tier bands, and the resolved value at this point is a
+	// concrete id like claude-sonnet-5, which NextModel cannot find). The
+	// corresponding default used to live in loadIssueContext, where it also
+	// leaked into the learning corpus as a fabricated prediction (#304).
 	model := predictedModel
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override

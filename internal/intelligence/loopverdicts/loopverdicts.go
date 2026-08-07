@@ -204,10 +204,56 @@ func analyzeSkillDrift(root string, since time.Time) LoopResult {
 // --- Calibration Loop ---
 
 type outcomeRecord struct {
-	PredictedSize string    `json:"predictedSize"`
-	ActualSize    string    `json:"actualSize"`
-	Success       bool      `json:"success"`
-	CompletedAt   time.Time `json:"completedAt"`
+	PredictedSize  string    `json:"predictedSize"`
+	ActualSize     string    `json:"actualSize"`
+	PredictedModel string    `json:"predictedModel"`
+	ActualModel    string    `json:"actualModel"`
+	Success        bool      `json:"success"`
+	CompletedAt    time.Time `json:"completedAt"`
+}
+
+// routingComparisons returns one entry per MEASURABLE predicted-vs-actual pair
+// on a row: true when the two halves agree, false when they disagree, and
+// nothing at all when either half is absent.
+//
+// The absent case is the whole point. The corpus writes "" for unknown, so a
+// pair with an empty half measured nothing — but the loop used to divide its
+// match count by the row count, which turned every such pair into a recorded
+// MISS. With ~95% of real issues carrying no size:* label that pinned the
+// reported accuracy near zero regardless of routing quality, and a corpus whose
+// router was PERFECT could still flip the verdict to `degrading` purely because
+// the ten most recent issues were unlabelled — steering the improvement loop at
+// label hygiene as if it were routing error (#304).
+//
+// Both pairs count, because both are routing predictions and either can be the
+// measurable one: the size pair has no measurement source at the recording
+// boundary today, while the model pair does.
+func (o outcomeRecord) routingComparisons() []bool {
+	var out []bool
+	if o.PredictedSize != "" && o.ActualSize != "" {
+		out = append(out, o.PredictedSize == o.ActualSize)
+	}
+	if o.PredictedModel != "" && o.ActualModel != "" {
+		out = append(out, o.PredictedModel == o.ActualModel)
+	}
+	return out
+}
+
+// accuracyOver folds a run of comparisons into (accuracy, sampleCount).
+func accuracyOver(outcomes []outcomeRecord) (float64, int) {
+	matches, samples := 0, 0
+	for _, o := range outcomes {
+		for _, hit := range o.routingComparisons() {
+			samples++
+			if hit {
+				matches++
+			}
+		}
+	}
+	if samples == 0 {
+		return 0, 0
+	}
+	return float64(matches) / float64(samples), samples
 }
 
 func analyzeCalibration(root string, since time.Time) LoopResult {
@@ -218,45 +264,46 @@ func analyzeCalibration(root string, since time.Time) LoopResult {
 	}
 
 	total := len(outcomes)
-	if total < 10 {
+	historicalAccuracy, samples := accuracyOver(outcomes)
+
+	// No measurable pair is NOT "accuracy 0" — it is no data. Reporting a
+	// number here is what let the loop assert a confident 5.0% computed
+	// entirely from rows that carried one half of a pair.
+	if samples == 0 {
+		return noDataResult("calibration",
+			"no measurable predicted-vs-actual pairs — every outcome in the period is missing one half")
+	}
+	if samples < 10 {
 		v := VerdictBootstrapping
 		return LoopResult{
 			Loop:    "calibration",
 			Verdict: v,
 			Points:  verdictPoints(v),
-			Reason:  "fewer than 10 observations — calibration loop bootstrapping",
+			Reason:  "fewer than 10 measurable predictions — calibration loop bootstrapping",
 			Evidence: map[string]string{
-				"totalOutcomes": itoa(total),
+				"totalOutcomes":       itoa(total),
+				"measuredPredictions": itoa(samples),
 			},
 		}
 	}
 
-	// Compute historical vs recent accuracy
-	var sizeMatches int
-	for _, o := range outcomes {
-		if o.PredictedSize != "" && o.ActualSize != "" && o.PredictedSize == o.ActualSize {
-			sizeMatches++
-		}
+	// Recent = the most recent rows carrying at least 10 measurable pairs
+	// between them, so "recent" is 10 measurements rather than 10 rows of which
+	// two measured anything.
+	recentStart := total
+	recentSamples := 0
+	for recentStart > 0 && recentSamples < 10 {
+		recentStart--
+		recentSamples += len(outcomes[recentStart].routingComparisons())
 	}
-	historicalAccuracy := float64(sizeMatches) / float64(total)
-
-	// Recent = last 10
-	recentStart := total - 10
-	if recentStart < 0 {
-		recentStart = 0
-	}
-	var recentMatches int
-	for _, o := range outcomes[recentStart:] {
-		if o.PredictedSize != "" && o.ActualSize != "" && o.PredictedSize == o.ActualSize {
-			recentMatches++
-		}
-	}
-	recentAccuracy := float64(recentMatches) / float64(total-recentStart)
+	recentAccuracy, recentSamples := accuracyOver(outcomes[recentStart:])
 
 	evidence := map[string]string{
-		"totalOutcomes":      itoa(total),
-		"historicalAccuracy": pct(historicalAccuracy),
-		"recentAccuracy":     pct(recentAccuracy),
+		"totalOutcomes":             itoa(total),
+		"measuredPredictions":       itoa(samples),
+		"recentMeasuredPredictions": itoa(recentSamples),
+		"historicalAccuracy":        pct(historicalAccuracy),
+		"recentAccuracy":            pct(recentAccuracy),
 	}
 
 	switch {

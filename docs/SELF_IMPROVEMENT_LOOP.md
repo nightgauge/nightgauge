@@ -66,32 +66,86 @@ predicted/actual model, success, duration, tokens, cost, complexity score and
 failed stage. Consumers: the calibration, cost-optimization and reliability loop
 verdicts (`internal/intelligence/loopverdicts`) and `nightgauge learn tune`.
 
-**Predicted vs actual, one vocabulary per pair.** Every consumer compares the
-two halves for equality, so a pair written in two vocabularies reports a
-_measured_ 0% forever — strictly worse than no data, because the reader stops
-saying "bootstrapping" and starts asserting a number that can never move.
+#### Predicted vs actual — the corpus contract
 
-| Field                            | Predicted                                      | Actual                                                                          |
-| -------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
-| `predictedSize` / `actualSize`   | `SizeBucketForScore(routing.complexity_score)` | the issue's `size:*` label through `routing.SizeBaseScore` and the same buckets |
-| `predictedModel` / `actualModel` | `routing.pickup_recommendation.dev_model`      | the served model of the stage that dominated the run's **cost**                 |
+Both writers derive these four fields through the **same** helpers, in
+`internal/orchestrator/outcome_semantics.go`. Read that file before changing any
+of them. Three rules hold everywhere:
 
-Both sides use `small｜medium｜large` for size and registry model bands
-(`haiku｜sonnet｜opus｜fable`) for models; unregistered models pass through
-verbatim. Unknown values are written **empty**, never defaulted — an absent
-value is excluded from the accuracy denominators, a fabricated one is counted as
-a measurement. `SizeBucketForScore(0)` is `"small"`, which is why an unscored
-run must not be run through it.
+1. **One vocabulary per pair.** Sizes are `small｜medium｜large`; models are
+   registry bands (`haiku｜sonnet｜opus｜fable`), with unregistered models passed
+   through verbatim. A pair written in two vocabularies reports a _measured_ 0%
+   forever — worse than no data, because the reader stops saying "bootstrapping"
+   and starts asserting a number that can never move.
+2. **Absent means empty.** Unknown is `""`, never a plausible default. Every
+   consumer counts a row toward an accuracy only when **both** halves of that
+   pair are non-empty, so an absent value is excluded rather than booked as a
+   miss — and a fabricated one would be counted as a measurement of nothing.
+3. **An `actual` is a measurement.** It must be something the run produced,
+   never a second reading of the same pre-run inputs the prediction came from.
 
-Model attribution follows **cost**, not stage order. A run that spends $6.00 on
-an opus `feature-validate` and closes on a $0.01 haiku `pr-merge` is an opus
-run; resolving the model from the terminal stage (or from the alphabetically
-first one) yields a plausible model id that is not the model that did the work —
-and unlike an empty value, a wrong one is never logged.
+| Field            | Meaning                                                              | Absent when                                                                  |
+| ---------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                       | the issue carries no `size:*` label, or is unscored                          |
+| `actualSize`     | how big the change turned out to be, bucketed from lines **changed** | **always, today** — no terminal boundary carries a lines-changed measurement |
+| `predictedModel` | `routing.pickup_recommendation.dev_model`, normalized to its band    | the router made no recommendation                                            |
+| `actualModel`    | the band the **`feature-dev`** stage actually served, normalized     | that stage never ran or reported no model                                    |
+
+**Why `predictedSize` needs a `size:*` label.** Complexity scores are clamped to
+`[1,8]` and default to the `M` base score for an unlabelled issue, so `score==0`
+essentially never occurs in the field — a guard keyed on it is dead code, and
+~95% of real issues (measured on this repo's own history) would record a
+fabricated `"small"` through it. Absence is derived from the missing input.
+
+**Why `actualSize` is empty.** The non-circular definition already exists —
+`github.OutcomeService.getActualSizeBucket` buckets by lines actually changed —
+but nothing at either terminal recording boundary carries that number: the run
+record has file _counts_ (`files.read_count` / `files.written_count`), never line
+counts, and computing a diff at terminal time is not a substitute, because on the
+success path `pr-merge` has already landed the branch and `git diff <base>`
+reports ~0. What must never come back is bucketing the issue's own `size:*`
+label: that is one of the same inputs `complexity_score` is computed from
+(`fib_round(SIZE_MAP[size] × PRIORITY_MULT[priority])`), so the comparison
+measures the arithmetic and produces permanent structural misses — `size:M` +
+`priority:critical` scores 5, i.e. predicted `medium` against an "actual" of
+`small`, for a run the router sized exactly right. Until a real measurement is
+threaded in, size accuracy reports **no measurable rows** rather than a number.
+
+**Why `actualModel` is the `feature-dev` model.** `predictedModel` is the
+router's recommendation _for the implementation stage_, so the measured half has
+to be what that stage served, or the two halves are about different things. It is
+deliberately **not** the model of whichever stage dominated the run's cost: on
+this machine's real history the dominant-cost stage is `feature-dev` in well
+under half of runs, so a run that died in `issue-pickup` on opus booked a routing
+miss against a dev-stage prediction for a stage that never ran — and no routing
+improvement could move it. It is also never a **copy** of `predictedModel`, which
+is what `Scheduler.recordOutcome` used to write: that made every autonomous row a
+tautological routing hit, and mixed with the extension path's real measurement in
+one undiscriminated file. The CLI's `model_refusal_fallback` served model (#91)
+still wins when the swap happened **in `feature-dev`** — that is a real
+measurement of what produced the code.
 
 Two terminal states deliberately record **nothing**, on both paths: a
 blocked-dependency deferral (#305 — a non-failure that did no work) and a
 `network_unavailable` failure (#3296 — environmental noise, not model signal).
+
+#### Guarded denominators, and what mixed history does
+
+`learning.Recorder.Calibrate` reports `sizeSamples` / `modelSamples` alongside
+`sizeAccuracy` / `modelAccuracy`, and the accuracies are **`null` when their
+sample count is zero** — "nothing measurable" is a different finding from
+"measured, and wrong every time", and `nightgauge learn tune` now declines to
+tune an unmeasurable target instead of optimizing toward its goal from a
+substituted `0.0`. The calibration loop verdict likewise counts only measurable
+pairs, reports `measuredPredictions`, and returns `no-data` when there are none.
+
+**Mixed old/new history needs no discriminator field.** Rows written before this
+contract carry `predictedModel: ""`, `actualModel: ""`, `predictedSize: "small"`
+(fabricated from an unscored run) and no `actualSize` — so the same
+both-halves-present guard excludes them from every accuracy while still counting
+them as runs for cost, success rate and totals. On this repo's real eight-row
+legacy corpus that is the difference between `modelAccuracy 1.0` (eight `"" ==
+""` hits) and `modelAccuracy: null` over `modelSamples: 0`.
 
 **2. Complexity-model calibration** — TypeScript/SDK-owned.
 

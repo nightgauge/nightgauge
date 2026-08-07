@@ -2786,16 +2786,14 @@ func (s *Server) registerMethods() {
 				input.Size = cls.Size
 				// The routing PREDICTION the run was picked up under. It sits in
 				// the same issue-{N}.json read above and was being dropped: every
-				// record this handler wrote carried routing.complexity_score 0 —
-				// in-range, so SizeBucketForScore(0)=="small" and it is
-				// indistinguishable from a genuinely trivial issue — while the
-				// scheduler path recorded the real score into the same corpus
-				// field, leaving one field with two meanings and no discriminator
-				// (#304).
+				// record this handler wrote carried routing.complexity_score 0,
+				// while the scheduler path recorded the real score into the same
+				// corpus field, leaving one field with two meanings and no
+				// discriminator (#304).
 				input.ComplexityScore = cls.ComplexityScore
 				if cls.ComplexityScore <= 0 {
 					log.Printf(
-						"notifyComplete: #%d has no routing.complexity_score — its run record and learning outcome cannot calibrate size prediction (#304)",
+						"notifyComplete: #%d has no routing.complexity_score — no issue context reached this handler, so the run records no routing prediction at all (#304)",
 						p.IssueNumber,
 					)
 				}
@@ -2883,10 +2881,13 @@ func (s *Server) registerMethods() {
 				switch outcomeVerdict {
 				case outcomeRecord:
 					// Loud by design on EVERY unattributed field. An empty value
-					// is recoverable — it is excluded from the accuracy
-					// denominators — but only if somebody knows it happened: the
-					// pre-#304 corpus was 100% model-less and nobody noticed for
-					// the life of the product.
+					// really is recoverable — learning.Recorder.Calibrate and the
+					// calibration loop verdict both count a row toward an
+					// accuracy only when BOTH halves of that pair are non-empty,
+					// so an absent value is excluded rather than booked as a miss
+					// — but only if somebody knows it happened: the pre-#304
+					// corpus was 100% model-less and nobody noticed for the life
+					// of the product.
 					if outcome.PredictedModel == "" {
 						log.Printf(
 							"notifyComplete: #%d learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
@@ -2895,14 +2896,8 @@ func (s *Server) registerMethods() {
 					}
 					if outcome.ActualModel == "" {
 						log.Printf(
-							"notifyComplete: #%d learning outcome has no ACTUAL model — no stage reported a served model (#304)",
-							p.IssueNumber,
-						)
-					}
-					if outcome.ActualSize == "" {
-						log.Printf(
-							"notifyComplete: #%d learning outcome has no ACTUAL size — no recognized size:* label, so size calibration skips this run (#304)",
-							p.IssueNumber,
+							"notifyComplete: #%d learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
+							p.IssueNumber, orchestrator.OutcomeModelStage,
 						)
 					}
 					if err := learning.NewRecorder(root).Record(outcome); err != nil {

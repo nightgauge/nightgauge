@@ -12,12 +12,41 @@ import (
 )
 
 // Outcome records the result of a pipeline run for calibration.
+//
+// The predicted/actual pairs are the whole point of the corpus, and both of
+// their writers derive them through the shared helpers in
+// internal/orchestrator/outcome_semantics.go — read that file before changing
+// any of these four fields. The contract in one line: ONE vocabulary per pair,
+// EMPTY means unknown (never a plausible default), and an `Actual*` is a
+// MEASUREMENT of what the run produced, never a second reading of the same
+// pre-run inputs the prediction came from.
 type Outcome struct {
-	IssueNumber     int       `json:"issueNumber"`
-	Repo            string    `json:"repo"`
-	PredictedSize   string    `json:"predictedSize"`
-	ActualSize      string    `json:"actualSize,omitempty"`
-	PredictedModel  string    `json:"predictedModel"`
+	IssueNumber int    `json:"issueNumber"`
+	Repo        string `json:"repo"`
+	// PredictedSize is the router's pre-run size estimate, as
+	// small|medium|large. Empty when the issue carried no size:* input — the
+	// complexity score defaults to the M base score in that case, so scoring it
+	// would record the default as a prediction.
+	PredictedSize string `json:"predictedSize"`
+	// ActualSize is how big the change the run produced turned out to be, in
+	// the same small|medium|large vocabulary, bucketed from lines ACTUALLY
+	// changed (the definition in github.OutcomeService.getActualSizeBucket).
+	//
+	// No terminal recording boundary carries that measurement today, so both
+	// writers leave it empty and every consumer excludes the pair. It is NOT
+	// the issue's size:* label rebucketed: that is one of the same pre-run
+	// inputs PredictedSize is derived from, so the comparison would measure the
+	// scoring arithmetic rather than the run.
+	ActualSize string `json:"actualSize,omitempty"`
+	// PredictedModel is the router's pickup recommendation for the
+	// implementation stage, as a registry band (haiku|sonnet|opus|fable) with
+	// unregistered models passed through verbatim. Empty when the router made
+	// no recommendation.
+	PredictedModel string `json:"predictedModel"`
+	// ActualModel is the band the IMPLEMENTATION stage actually served — the
+	// stage PredictedModel is a recommendation for. Empty when that stage never
+	// ran or reported no model. Never a copy of PredictedModel: that made every
+	// row of this writer's history a tautological routing HIT.
 	ActualModel     string    `json:"actualModel"`
 	Success         bool      `json:"success"`
 	DurationMs      int64     `json:"durationMs"`
@@ -96,16 +125,38 @@ func (r *Recorder) LoadAll() ([]Outcome, error) {
 }
 
 // CalibrationReport summarizes prediction accuracy for tuning.
+//
+// The two accuracies are POINTERS, and nil is load-bearing: it means "no row in
+// this corpus carried both halves of that pair, so there is nothing to measure"
+// — which a 0.0 cannot express and every consumer previously read as "the
+// router is wrong every time". `nightgauge learn tune` emits them as JSON
+// `null` and declines to tune an unmeasurable target.
 type CalibrationReport struct {
-	TotalRuns      int     `json:"totalRuns"`
-	SizeAccuracy   float64 `json:"sizeAccuracy"`  // Pct where predicted == actual
-	ModelAccuracy  float64 `json:"modelAccuracy"` // Pct where predicted model was optimal
-	AvgCostPerRun  float64 `json:"avgCostPerRun"`
-	SuccessRate    float64 `json:"successRate"`
-	TrendImproving bool    `json:"trendImproving"`
+	TotalRuns int `json:"totalRuns"`
+	// SizeSamples / ModelSamples are the DENOMINATORS: rows where both halves
+	// of the pair are non-empty. Always reported, so a caller can tell a
+	// confident number from one computed over three rows.
+	SizeSamples    int      `json:"sizeSamples"`
+	SizeAccuracy   *float64 `json:"sizeAccuracy"` // fraction of SizeSamples where predicted == actual; nil when SizeSamples == 0
+	ModelSamples   int      `json:"modelSamples"`
+	ModelAccuracy  *float64 `json:"modelAccuracy"` // fraction of ModelSamples where predicted == actual; nil when ModelSamples == 0
+	AvgCostPerRun  float64  `json:"avgCostPerRun"`
+	SuccessRate    float64  `json:"successRate"`
+	TrendImproving bool     `json:"trendImproving"`
 }
 
 // Calibrate analyzes recorded outcomes and produces a calibration report.
+//
+// A row counts toward an accuracy ONLY when BOTH halves of that pair are
+// non-empty. Without that guard the corpus's own conventions poisoned the
+// numbers in both directions: rows with two empty model fields scored a HIT
+// ("" == ""), so pre-#304 history reported modelAccuracy 1.0 from eight rows
+// that measured nothing, while rows with an unmeasurable actual size were
+// counted as size MISSES, dragging sizeAccuracy toward 0 in proportion to how
+// many issues lacked a size label rather than to how well the router predicted.
+// Mixed old/new history needs no discriminator field for this: a legacy row is
+// excluded by the same guard, because its halves are exactly the ones that are
+// empty.
 func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 	outcomes, err := r.LoadAll()
 	if err != nil {
@@ -115,15 +166,21 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 		return &CalibrationReport{}, nil
 	}
 
-	var sizeMatches, modelMatches, successes int
+	var sizeMatches, sizeSamples, modelMatches, modelSamples, successes int
 	var totalCost float64
 
 	for _, o := range outcomes {
-		if o.PredictedSize == o.ActualSize && o.ActualSize != "" {
-			sizeMatches++
+		if o.PredictedSize != "" && o.ActualSize != "" {
+			sizeSamples++
+			if o.PredictedSize == o.ActualSize {
+				sizeMatches++
+			}
 		}
-		if o.PredictedModel == o.ActualModel {
-			modelMatches++
+		if o.PredictedModel != "" && o.ActualModel != "" {
+			modelSamples++
+			if o.PredictedModel == o.ActualModel {
+				modelMatches++
+			}
 		}
 		if o.Success {
 			successes++
@@ -134,8 +191,10 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 	n := len(outcomes)
 	report := &CalibrationReport{
 		TotalRuns:     n,
-		SizeAccuracy:  float64(sizeMatches) / float64(n),
-		ModelAccuracy: float64(modelMatches) / float64(n),
+		SizeSamples:   sizeSamples,
+		SizeAccuracy:  ratio(sizeMatches, sizeSamples),
+		ModelSamples:  modelSamples,
+		ModelAccuracy: ratio(modelMatches, modelSamples),
 		AvgCostPerRun: totalCost / float64(n),
 		SuccessRate:   float64(successes) / float64(n),
 	}
@@ -160,6 +219,17 @@ func (r *Recorder) Calibrate() (*CalibrationReport, error) {
 	}
 
 	return report, nil
+}
+
+// ratio returns matches/samples, or nil when there are no samples. Callers must
+// not substitute 0: "nothing measurable" and "measured, and always wrong" are
+// different findings and the loops act on them differently.
+func ratio(matches, samples int) *float64 {
+	if samples == 0 {
+		return nil
+	}
+	v := float64(matches) / float64(samples)
+	return &v
 }
 
 func splitLines(data []byte) [][]byte {

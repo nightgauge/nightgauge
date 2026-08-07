@@ -183,19 +183,24 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	if o.ComplexityScore <= 0 {
 		t.Errorf("ComplexityScore = %d, want > 0 — the run's issue-304.json carries routing.complexity_score, and 0 is indistinguishable from a trivial issue (#304)", o.ComplexityScore)
 	}
-	// PredictedSize vs ActualSize must be POPULATED and in ONE vocabulary, or
-	// the calibration loop reports a measured 0% forever.
+	// PredictedSize: the captured context carries size:M AND a real complexity
+	// score, so the router made a size prediction and it must be recorded in the
+	// small|medium|large vocabulary both writers share.
 	if o.PredictedSize == "" {
-		t.Error("PredictedSize is empty despite a known complexity score")
-	}
-	if o.ActualSize == "" {
-		t.Error("ActualSize is empty — no production code has ever written this field, so predicted-vs-actual size has never once been compared (#304)")
+		t.Error("PredictedSize is empty despite a size:* label and a known complexity score")
 	}
 	if !isSizeBucket(o.PredictedSize) {
 		t.Errorf("PredictedSize = %q — not a small|medium|large bucket; the size:* vocabulary (XS|S|M|L|XL) can never equal the bucket vocabulary the other writer uses, so calibration would report a measured 0%% forever", o.PredictedSize)
 	}
-	if !isSizeBucket(o.ActualSize) {
-		t.Errorf("ActualSize = %q — not a small|medium|large bucket", o.ActualSize)
+	// ActualSize: no lines-changed measurement reaches this boundary, so the
+	// honest value is ABSENT. It must never be re-derived from the issue's
+	// size:* label — that is one of the same pre-run inputs PredictedSize comes
+	// from, so the "accuracy" would measure the scoring arithmetic. This run is
+	// exactly the case that exposed it: size:M + priority:critical scores 5, so
+	// the label-derived version books a MISS ("medium" vs "small") for a run the
+	// router sized correctly.
+	if o.ActualSize != "" {
+		t.Errorf("ActualSize = %q, want empty — nothing here measures how big the change actually was, and rebucketing the size:* label makes the pair circular (#304)", o.ActualSize)
 	}
 	if o.DurationMs <= 0 {
 		t.Errorf("DurationMs = %d, want > 0", o.DurationMs)
@@ -232,8 +237,59 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	if got := records[0].OutcomePrediction.PredictedModel; got != o.PredictedModel {
 		t.Errorf("RunRecord.OutcomePrediction.PredictedModel = %q, outcome says %q — the two sinks disagree", got, o.PredictedModel)
 	}
-	if got := records[0].OutcomePrediction.ActualSize; got != o.ActualSize {
-		t.Errorf("RunRecord.OutcomePrediction.ActualSize = %q, outcome says %q — the two sinks disagree", got, o.ActualSize)
+	if got := records[0].OutcomePrediction.ActualModel; got != o.ActualModel {
+		t.Errorf("RunRecord.OutcomePrediction.ActualModel = %q, outcome says %q — the two sinks disagree", got, o.ActualModel)
+	}
+}
+
+// THE FLAGSHIP MATCH/MISS PAIR (#304). The corpus's only measurable pair is
+// predicted-vs-actual MODEL, and the captured fixtures make both verdicts
+// reachable: a run routed to sonnet that ran feature-dev on sonnet is a HIT, and
+// the same run with a different model served is a MISS.
+//
+// This is the test that fails if either round-2 defect comes back. Reintroduce
+// the tautology (actual := predicted) and the mis-routed case reports a match.
+// Reintroduce dominant-cost attribution and the mis-routed case reports a match
+// too, because the run's most expensive stage is not the one the prediction is
+// about.
+func TestLearningOutcomeFor_ModelPairMatchesWhenRoutedRight_MissesWhenNot(t *testing.T) {
+	base := loadCapturedRunRecord(t, "run-record.json")
+	cls := capturedClassification(t, base.IssueNumber)
+	if cls.PredictedModel != "sonnet" {
+		t.Fatalf("precondition: captured context predicts %q, expected sonnet", cls.PredictedModel)
+	}
+
+	// The run as captured: the router said sonnet, feature-dev served
+	// claude-sonnet-5. Correctly routed → the pair must AGREE.
+	hit, decision := learningOutcomeFor(base, cls, nil, "acme/widget", time.Now())
+	if decision != outcomeRecord {
+		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
+	}
+	if hit.PredictedModel == "" || hit.ActualModel == "" {
+		t.Fatalf("unmeasurable pair: predicted=%q actual=%q", hit.PredictedModel, hit.ActualModel)
+	}
+	if hit.PredictedModel != hit.ActualModel {
+		t.Errorf("correctly-routed run records a MISS: predicted %q, actual %q — the calibration loop can never report a hit and no routing improvement could move it",
+			hit.PredictedModel, hit.ActualModel)
+	}
+
+	// Now mis-route it: the router still said sonnet, but the implementation
+	// stage ran on opus. The pair must DISAGREE.
+	misrouted := loadCapturedRunRecord(t, "run-record.json")
+	dev := misrouted.Stages[string(orchestrator.OutcomeModelStage)]
+	if dev.ModelSelection == nil {
+		t.Fatalf("precondition: captured record has no %s model_selection", orchestrator.OutcomeModelStage)
+	}
+	dev.ModelSelection = &state.V2ModelSelect{Model: "claude-opus-5", Source: dev.ModelSelection.Source}
+	misrouted.Stages[string(orchestrator.OutcomeModelStage)] = dev
+
+	miss, _ := learningOutcomeFor(misrouted, cls, nil, "acme/widget", time.Now())
+	if miss.ActualModel != "opus" {
+		t.Errorf("ActualModel = %q, want %q — actual must be the model the implementation stage served", miss.ActualModel, "opus")
+	}
+	if miss.PredictedModel == miss.ActualModel {
+		t.Errorf("mis-routed run records a MATCH: predicted %q, actual %q — a routing miss the corpus cannot see is the tautology this field had before (#304)",
+			miss.PredictedModel, miss.ActualModel)
 	}
 }
 
@@ -298,17 +354,19 @@ func TestNotifyComplete_RecordsOutcomeInTargetRepoNotActiveRepo(t *testing.T) {
 	}
 }
 
-// Model attribution follows the money, not the stage order.
+// Predicted and actual must be about the SAME STAGE.
 //
-// This run spends effectively everything on an opus feature-planning stage and
-// then closes on a near-free haiku pr-merge; feature-dev never reports a model.
-// Resolving "the run's model" from the terminal stage books the whole $6 run —
-// its cost, its success verdict, and the OutcomePrediction pushed to the
-// platform — against haiku. That value is not empty, so the "no model
-// attribution" log never fires: the failure is silent and confidently wrong.
+// predictedModel is routing.pickup_recommendation.dev_model — the router's
+// choice for the implementation stage. So actualModel must be what THAT stage
+// served. Attributing the run to whichever stage dominated its COST compares two
+// different quantities: this run spends $6.00 on an opus feature-validate while
+// feature-dev, the stage the prediction is about, never reported a model at all.
+// Cost attribution books the run as an opus routing MISS against a sonnet
+// prediction — a plausible-looking value that measures a stage the prediction
+// never referred to, and unlike an empty one it is never logged.
 //
-// Against the pre-fix code this fails with ActualModel = "haiku".
-func TestNotifyComplete_AttributesModelToDominantCostStage(t *testing.T) {
+// Against the round-2 code this fails with ActualModel = "opus".
+func TestNotifyComplete_AttributesModelToTheStageThePredictionIsAbout(t *testing.T) {
 	dir := t.TempDir()
 	writeCapturedIssueContext(t, dir, 3045)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
@@ -317,7 +375,8 @@ func TestNotifyComplete_AttributesModelToDominantCostStage(t *testing.T) {
 	complete := s.methods["pipeline.notifyComplete"]
 
 	// feature-dev runs but never reports a served model (a non-Claude adapter,
-	// or resolved-then-killed) — so the implementation-stage shortcut misses.
+	// or resolved-then-killed) — so the run measures NOTHING about the model the
+	// prediction was for.
 	for _, msg := range []string{
 		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"running"}`,
 		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"complete","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
@@ -339,11 +398,37 @@ func TestNotifyComplete_AttributesModelToDominantCostStage(t *testing.T) {
 		t.Fatalf("expected exactly one learning outcome (exists=%v, n=%d)", exists, len(outcomes))
 	}
 	o := outcomes[0]
-	if o.ActualModel != "opus" {
-		t.Errorf("ActualModel = %q, want %q — the run spent $6.00 of $6.011 on opus and closed on a $0.01 haiku bookend; attributing the run's cost and success verdict to the last stage is silently wrong, not empty", o.ActualModel, "opus")
+	if o.ActualModel != "" {
+		t.Errorf("ActualModel = %q, want empty — %s served no model, and naming the run's most expensive stage instead records a routing miss for a stage the prediction was never about",
+			o.ActualModel, orchestrator.OutcomeModelStage)
+	}
+	if o.PredictedModel != "sonnet" {
+		t.Errorf("PredictedModel = %q, want sonnet — the prediction is still known and worth recording", o.PredictedModel)
 	}
 	if o.CostUSD < 6 {
-		t.Errorf("CostUSD = %f, want ≈6.011 — precondition: the opus stage dominates the run's spend", o.CostUSD)
+		t.Errorf("CostUSD = %f, want ≈6.011 — the run's spend is still recorded in full for the cost loop", o.CostUSD)
+	}
+}
+
+// The refusal fallback is a real measurement and must survive, scoped to the
+// implementation stage: when the CLI silently retried a safety-refused
+// feature-dev turn on another model, the fallback is what produced the code
+// (#91). A swap in some OTHER stage is not evidence about the dev prediction.
+func TestServedDevModel_RefusalFallbackIsScopedToTheDevStage(t *testing.T) {
+	rec := loadCapturedRunRecord(t, "run-record.json")
+	rec.Stages = map[string]state.V2StageDetail{} // force the runtime fallback path
+
+	snap := state.NewRuntimeState("acme/widget", 1, "item")
+	snap.RecordStageModel(state.StagePRMerge, "claude-haiku-4-5-20251001")
+	snap.RecordModelRefusalFallback(state.StagePRMerge, "claude-sonnet-5", "claude-haiku-4-5-20251001", "safety")
+	if got := servedDevModel(rec, snap.Snapshot()); got != "" {
+		t.Errorf("servedDevModel = %q, want empty — a pr-merge refusal swap says nothing about the model feature-dev served", got)
+	}
+
+	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-5")
+	snap.RecordModelRefusalFallback(state.StageFeatureDev, "claude-sonnet-5", "claude-opus-5", "safety")
+	if got := servedDevModel(rec, snap.Snapshot()); got != "opus" {
+		t.Errorf("servedDevModel = %q, want %q — the model that actually served the refused dev turn is the one that produced the output (#91)", got, "opus")
 	}
 }
 
@@ -494,8 +579,8 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 	if o.ComplexityScore <= 0 {
 		t.Errorf("ComplexityScore = %d, want > 0", o.ComplexityScore)
 	}
-	if !isSizeBucket(o.PredictedSize) || !isSizeBucket(o.ActualSize) {
-		t.Errorf("PredictedSize=%q ActualSize=%q — both must use the small|medium|large bucket vocabulary", o.PredictedSize, o.ActualSize)
+	if !isSizeBucket(o.PredictedSize) {
+		t.Errorf("PredictedSize=%q — must use the small|medium|large bucket vocabulary", o.PredictedSize)
 	}
 	if o.CostUSD <= 0 {
 		t.Errorf("CostUSD = %f, want > 0 — the captured record reports %f", o.CostUSD, rec.Tokens.EstimatedCostUSD)
@@ -516,10 +601,12 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 		t.Error("CompletedAt is the zero time")
 	}
 
-	// Attribution follows cost. The captured record's most expensive
-	// model-bearing stage is the one the run must be booked against.
-	if want := modelTier(stageModel(rec, dominantCostStage(rec))); o.ActualModel != want {
-		t.Errorf("ActualModel = %q, want %q (the captured record's dominant-cost stage)", o.ActualModel, want)
+	// Attribution follows the PREDICTION's stage. The captured record's
+	// implementation stage is the one the run must be booked against.
+	want := orchestrator.OutcomeModelBand(stageModel(rec, string(orchestrator.OutcomeModelStage)))
+	if o.ActualModel != want {
+		t.Errorf("ActualModel = %q, want %q (the band the captured record's %s stage served)",
+			o.ActualModel, want, orchestrator.OutcomeModelStage)
 	}
 }
 
@@ -552,63 +639,49 @@ func TestLearningOutcomeFor_UnknownSizeAndScoreStayEmpty(t *testing.T) {
 	}
 }
 
-// Predicted and actual sizes must be expressed in ONE vocabulary derived from
-// the product's own size→score table, with the same bucket thresholds on both
-// sides. A size:* label ("L") compared against a complexity bucket ("medium")
-// can never match, so the calibration loop would report a *measured* 0%
-// accuracy — strictly worse than "no data", because the reader stops saying
-// "bootstrapping" and starts asserting a number that can never move.
-func TestOutcomeSizeVocabulary_PredictedAndActualAreComparable(t *testing.T) {
-	// Every recognized size bucket, through the production mapper.
-	for _, label := range []string{"XS", "S", "M", "L", "XL"} {
-		size := label
-		got := actualSizeBucket(&size)
-		if !isSizeBucket(got) {
-			t.Errorf("actualSizeBucket(%q) = %q, want one of small|medium|large", label, got)
+// The size prediction is recorded only when the router had a size to predict
+// from, and the actual half is never re-derived from that same input.
+//
+// The absence rule keys on the INPUT, not on a score sentinel: complexity scores
+// are clamped to [1,8] and default to the M base score (3) for an unlabelled
+// issue, so a `score <= 0` guard is dead code and ~95% of real runs record a
+// fabricated "small" through it.
+func TestOutcomePredictedSize_AbsenceComesFromMissingInputs(t *testing.T) {
+	if got := orchestrator.OutcomePredictedSize("", 3); got != "" {
+		t.Errorf("no size:* label with the DEFAULT score 3 = %q, want \"\" — that score's size term is the router's default, not a prediction; a guard on score<=0 never fires because nothing writes 0", got)
+	}
+	if got := orchestrator.OutcomePredictedSize("M", 0); got != "" {
+		t.Errorf("unscored run = %q, want \"\"", got)
+	}
+	if got := orchestrator.OutcomePredictedSize("HUGE", 5); got != "" {
+		t.Errorf("unrecognized size label = %q, want \"\"", got)
+	}
+	for label, want := range map[string]string{"XS": "small", "M": "medium", "XL": "large"} {
+		if got := orchestrator.OutcomePredictedSize(label, map[string]int{"XS": 1, "M": 5, "XL": 8}[label]); got != want {
+			t.Errorf("OutcomePredictedSize(%q, …) = %q, want %q", label, got, want)
 		}
-	}
-	if got := actualSizeBucket(nil); got != "" {
-		t.Errorf("actualSizeBucket(nil) = %q, want \"\"", got)
-	}
-	unknown := "HUGE"
-	if got := actualSizeBucket(&unknown); got != "" {
-		t.Errorf("actualSizeBucket(%q) = %q, want \"\" — an unrecognized label must not be bucketed", unknown, got)
-	}
-	if got := predictedSizeBucket(0); got != "" {
-		t.Errorf("predictedSizeBucket(0) = %q, want \"\" — 0 means unscored", got)
-	}
-
-	// An issue whose size label and complexity score agree must produce a
-	// MATCHING pair — the calibration loop's equality test is the whole point.
-	m := "M"
-	if p, a := predictedSizeBucket(3), actualSizeBucket(&m); p != a {
-		t.Errorf("size:M scores 3, so predicted=%q and actual=%q should match; they do not, and no routing improvement could ever make them", p, a)
-	}
-	xl := "XL"
-	if p, a := predictedSizeBucket(8), actualSizeBucket(&xl); p != a {
-		t.Errorf("size:XL scores 8, so predicted=%q and actual=%q should match", p, a)
 	}
 }
 
-// modelTier has three outcomes and they must stay three: a registry-known
+// OutcomeModelBand has three outcomes and they must stay three: a registry-known
 // reference collapses to its band (so predicted "sonnet" and actual
 // "claude-sonnet-5" are comparable), an unknown model is passed through
 // VERBATIM (a user-defined local model is still attribution), and only an
 // absent model yields "". Collapsing "unknown model" into "" would relabel real
 // attribution as missing data.
-func TestModelTier_KnownUnknownAndAbsentAreDistinct(t *testing.T) {
-	if got := modelTier("claude-sonnet-5"); got != "sonnet" {
-		t.Errorf("modelTier(%q) = %q, want %q — a concrete id must normalize onto its band", "claude-sonnet-5", got, "sonnet")
+func TestOutcomeModelBand_KnownUnknownAndAbsentAreDistinct(t *testing.T) {
+	if got := orchestrator.OutcomeModelBand("claude-sonnet-5"); got != "sonnet" {
+		t.Errorf("OutcomeModelBand(%q) = %q, want %q — a concrete id must normalize onto its band", "claude-sonnet-5", got, "sonnet")
 	}
-	if got := modelTier("sonnet"); got != "sonnet" {
-		t.Errorf("modelTier(%q) = %q, want %q — the router's alias is already a band", "sonnet", got, "sonnet")
+	if got := orchestrator.OutcomeModelBand("sonnet"); got != "sonnet" {
+		t.Errorf("OutcomeModelBand(%q) = %q, want %q — the router's alias is already a band", "sonnet", got, "sonnet")
 	}
 	const local = "my-local-llm-7b"
-	if got := modelTier(local); got != local {
-		t.Errorf("modelTier(%q) = %q, want it passed through — an unregistered model is still attribution, and dropping it to \"\" reports real data as missing", local, got)
+	if got := orchestrator.OutcomeModelBand(local); got != local {
+		t.Errorf("OutcomeModelBand(%q) = %q, want it passed through — an unregistered model is still attribution, and dropping it to \"\" reports real data as missing", local, got)
 	}
-	if got := modelTier(""); got != "" {
-		t.Errorf("modelTier(\"\") = %q, want \"\"", got)
+	if got := orchestrator.OutcomeModelBand(""); got != "" {
+		t.Errorf("OutcomeModelBand(\"\") = %q, want \"\"", got)
 	}
 }
 

@@ -364,19 +364,29 @@ type Anomaly struct {
 // vocabulary on both sides — the consumers compare them for equality, so a
 // mixed pair can only ever report a measured 0% (#304). Empty means unknown and
 // is excluded from accuracy denominators; it is never defaulted.
+// The authoritative definitions live in
+// internal/orchestrator/outcome_semantics.go — this type mirrors them onto the
+// run record and must not drift.
 type OutcomePrediction struct {
 	// PredictedSize / ActualSize: small|medium|large. Predicted is the router's
-	// complexity score bucketed by orchestrator.SizeBucketForScore; actual is
-	// the issue's size:* label put through the same table and thresholds.
-	// Deliberately NOT the XS|S|M|L|XL label vocabulary — see V2RunRecord.Size
-	// for that, and the platform mapper for why the two cannot be conflated.
+	// complexity score bucketed by orchestrator.SizeBucketForScore, empty when
+	// the issue carried no size:* input to predict from. Deliberately NOT the
+	// XS|S|M|L|XL label vocabulary — see V2RunRecord.Size for that, and the
+	// platform mapper for why the two cannot be conflated.
+	//
+	// ActualSize is how big the change turned out to be, from lines actually
+	// changed. Nothing at the terminal recording boundary carries that
+	// measurement, so it is currently always empty — and it is emphatically NOT
+	// the issue's size:* label rebucketed, which would make it a second reading
+	// of one of the inputs PredictedSize is computed from.
 	PredictedSize string `json:"predicted_size"`
 	ActualSize    string `json:"actual_size,omitempty"`
 	// PredictedModel / ActualModel: registry model bands
 	// (haiku|sonnet|opus|fable), with unregistered models passed through
-	// verbatim. Predicted is the router's pickup recommendation; actual is the
-	// model the run's dominant-cost stage served (or the refusal-fallback
-	// served model, #91).
+	// verbatim. Predicted is the router's pickup recommendation for the
+	// implementation stage; actual is the model THAT stage served (including a
+	// #91 CLI refusal-fallback swap in it), empty when it never ran. Never a
+	// copy of the prediction, and never another stage's model.
 	PredictedModel string `json:"predicted_model"`
 	ActualModel    string `json:"actual_model,omitempty"`
 }

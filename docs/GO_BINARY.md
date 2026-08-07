@@ -2508,6 +2508,12 @@ treats "main is red" as proof on its own. Window default: 7 days
 
 ### Intelligence Subcommands
 
+`learn tune` reads the learning corpus and emits `{calibration, tuning}`.
+`calibration.sizeAccuracy` / `.modelAccuracy` are `null` when their
+`sizeSamples` / `modelSamples` denominator is 0 — no row carried both halves of
+that pair — and `tuning` then reports `skipped` instead of adjusting a parameter
+toward its target from a substituted `0.0` (#304).
+
 ```bash
 nightgauge learn tune [--workdir <path>]
 nightgauge learn audit
@@ -2565,6 +2571,12 @@ and returning deterministic verdicts per loop.
   writes to the IPC server's `workspaceRoot`: that is a mutable pointer to the
   workspace's ACTIVE repo (reassigned by `workspace.setRoot`), so an outcome
   filed there lands in whichever repo happened to own the focused editor.
+  Both writers derive the predicted/actual pairs through the shared helpers in
+  `internal/orchestrator/outcome_semantics.go`; the calibration loop counts a row
+  toward its accuracy only when BOTH halves of a pair are non-empty, reports the
+  denominator as `measuredPredictions`, and returns `no-data` (never `0.0%`) when
+  nothing in the period is measurable. See
+  [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 - `.nightgauge/health/trends.jsonl` — health-monitoring loop
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)
