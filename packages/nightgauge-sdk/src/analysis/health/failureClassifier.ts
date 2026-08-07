@@ -16,6 +16,11 @@
  */
 
 import { MODEL_REGISTRY } from "../../eval/modelRegistry.js";
+import {
+  TERMINAL_KIND_PREDICATE_REF,
+  TERMINAL_KIND_TABLE,
+  type TerminalKindRule,
+} from "./terminalKindTable.generated.js";
 
 export type FailureCategory = "infrastructure" | "agent" | "organic";
 
@@ -291,25 +296,88 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
 ];
 
 /**
+ * TERMINAL-KIND CLASSIFICATION — the interpreter side (#306).
+ *
+ * There is no ladder here to keep aligned with Go, because there is no ladder
+ * anywhere: the ordered rule table lives in `internal/terminalkind/table.json`,
+ * Go embeds it, and `terminalKindTable.generated.ts` is its generated
+ * TypeScript view. Everything below reads that table.
+ *
+ * Before this, the SDK carried a hand-written mirror whose docstring said it
+ * reproduced Go "block for block". It did not: it had drifted on 14 of 113
+ * inputs, including the four most common real failures on a live machine, and
+ * had ordered `budget_ceiling_hit` below `budget_exceeded` while carrying a
+ * comment saying it must come first. A mirror is only as good as the last
+ * person who remembered it existed.
+ */
+
+/**
+ * MATCHER_HAS_NO_LITERALS. The two functions below are the whole of terminal-kind
+ * matching in TypeScript, and neither contains a single string literal — every
+ * marker they compare against comes out of the generated table. That is asserted
+ * by failureClassifier.corpusParity.test.ts, and it is the last hole the corpus
+ * and the derived stress set cannot see on their own: both are built FROM the
+ * table's vocabulary, so a rule invented here for a marker the table has never
+ * heard of would be invisible to them. Twelve lines with no literals in them is
+ * a claim a reader can check at a glance; a 33-block ladder was not.
+ */
+const UNKNOWN_PREDICATE =
+  "terminal-kind table references a predicate with no TypeScript implementation in failureClassifier.ts: ";
+
+/** A rule matched against an error text, or `undefined` when nothing matched. */
+function matchTerminalKindRule(errorText: string | undefined): TerminalKindRule | undefined {
+  if (!errorText) return undefined;
+  const t = errorText.toLowerCase();
+  for (const rule of TERMINAL_KIND_TABLE.rules) {
+    for (const clause of rule.clauses) {
+      if (clauseSatisfied(t, clause)) return rule;
+    }
+  }
+  return undefined;
+}
+
+function clauseSatisfied(lowered: string, clause: string[]): boolean {
+  for (const term of clause) {
+    if (term.startsWith(TERMINAL_KIND_PREDICATE_REF)) {
+      const name = term.slice(TERMINAL_KIND_PREDICATE_REF.length);
+      const predicate = TERMINAL_KIND_PREDICATES[name];
+      // Fail loudly on an unknown predicate. Silently evaluating to false would
+      // disable a rule with no visible symptom — exactly the class of silent
+      // divergence the table exists to remove. The message is assembled from
+      // constants so this whole matcher stays free of string literals, which is
+      // itself asserted (see MATCHER_HAS_NO_LITERALS above).
+      if (!predicate) throw new Error(UNKNOWN_PREDICATE + name);
+      if (!predicate(lowered)) return false;
+      continue;
+    }
+    if (!lowered.includes(term)) return false;
+  }
+  return true;
+}
+
+/**
+ * Named predicates the table may reference as `@name` terms.
+ *
+ * One entry, deliberately: a predicate exists only for a condition that cannot
+ * be written as literal containment. Everything else is a literal in
+ * table.json, where review and the generated module can both see it. Each
+ * predicate declares probes_true / probes_false in the table, and BOTH
+ * languages assert them — that is what keeps the two implementations from
+ * answering differently inside a rule that otherwise cannot drift.
+ */
+const TERMINAL_KIND_PREDICATES: Record<string, (lowered: string) => boolean> = {
+  mentions_registry_model: mentionsRegistryModel,
+};
+
 /**
  * Classify the *kind* of terminal failure from an error message.
  *
- * MIRROR OF GO. `ClassifyTerminalKind` in
- * `internal/orchestrator/failure_handler.go` is the authoritative classifier —
- * it writes `terminal_kind` into the run record and drives the scheduler's
- * recovery routing. This function reproduces it block for block, IN THE SAME
- * ORDER and with the same literals, because order is the whole contract: many
- * real failure strings match two blocks and the earlier one wins.
+ * Interprets the canonical table, so this returns exactly what Go's
+ * `ClassifyTerminalKind` returns for the same input — not by mirroring it, but
+ * by reading the same rules in the same order. `terminal_kind` in the run
+ * record is Go's answer; this is how an SDK consumer reproduces it.
  *
- * The two are pinned by a shared corpus rather than by this comment
- * (`internal/orchestrator/testdata/terminal-kind/corpus.json`, #306). Before
- * that corpus existed the ladders had drifted 14 ways, including on the four
- * most common real failures on a live machine: `exceeded stall idle threshold`,
- * `[cost-cap-exceeded]`, a bare `adapter-auth-failed`, and the USD ceiling,
- * which this side ordered below the generic budget block despite a comment
- * saying it must come first.
- *
- * Returns `undefined` when no pattern matches; callers can fall back to
+ * Returns `undefined` when no rule matches; callers can fall back to
  * `"subagent_crash"` (the most generic kind) or leave the field absent.
  *
  * @param errorText - Error message or stack trace from the failed stage
@@ -318,387 +386,38 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
 export function classifyTerminalKind(
   errorText: string | undefined
 ): TerminalFailureKind | undefined {
-  if (!errorText) return undefined;
-  const t = errorText.toLowerCase();
+  return matchTerminalKindRule(errorText)?.kind as TerminalFailureKind | undefined;
+}
 
-  // Network-unavailable abort (Issue #3296). Classified before everything else
-  // because the message surfaces from the cancellation cause and shouldn't
-  // accidentally match a generic "exit"/"stall" pattern below.
-  if (t.includes("network unavailable: extended github connectivity loss")) {
-    return "network_unavailable";
-  }
-
-  // Stream idle timeout from the Anthropic API (Issue #3398). Matched before
-  // the stall-kill heuristics — the literal "timeout" substring appears in the
-  // text and would otherwise bucket into a stall.
-  if (t.includes("stream idle timeout")) {
-    return "stream_idle_timeout";
-  }
-
-  // API "Overloaded" (Anthropic 529) — a transient capacity blip (#3835 WS4).
-  // Matched before the generic stall-kill / crash heuristics so a momentary
-  // overload routes to the transient recovery path (short backoff, no pause)
-  // instead of being misread as a code fault.
-  if (t.includes("overloaded")) {
-    return "api_overloaded";
-  }
-
-  // Anthropic API transport drop (#4002) — the stream died on a socket close,
-  // a DNS failure or a refused connection. Matched before the crash fallback so
-  // a seconds-long blip isn't misread as a process death. The bare error-code
-  // variants are gated on "api error" so an unrelated stage error that merely
-  // mentions ECONNRESET (a failing integration test, say) doesn't misclassify.
-  // #227 added "connection closed": the live failure read `API Error:
-  // Connection closed mid-response`, which matched none of the socket patterns
-  // and fell through to subagent_crash, halting the fleet on a blip.
-  if (
-    t.includes("socket connection was closed") ||
-    t.includes("socket hang up") ||
-    t.includes("api_connection_lost") ||
-    (t.includes("api error") &&
-      (t.includes("econnreset") ||
-        t.includes("econnrefused") ||
-        t.includes("enotfound") ||
-        t.includes("eai_again") ||
-        t.includes("getaddrinfo") ||
-        t.includes("fetch failed") ||
-        t.includes("connection reset") ||
-        t.includes("connection refused") ||
-        t.includes("connection closed")))
-  ) {
-    return "api_connection_lost";
-  }
-
-  // Rate-limit quota exhausted (Issue #3386). Set by skillRunner when an idle
-  // stall coincides with a quota-exhausted rate_limit_event. Matched before the
-  // stall-kill heuristics — the kill reason includes "idle" / "stall idle
-  // threshold" and would otherwise bucket into stall_kill, retrying in minutes
-  // against a bucket that resets in hours.
-  if (
-    t.includes("[rate-limit-quota-exhausted]") ||
-    t.includes("rate-limit-quota-exhausted") ||
-    t.includes("rate_limit_quota_exhausted")
-  ) {
-    return "rate_limit_quota_exhausted";
-  }
-
-  // Model rejected by the API (#42). Matched AFTER the explicit quota marker
-  // (an explicit signal beats this heuristic) and before the generic blocks.
-  // Every pattern is gated on a model reference so unrelated failures that
-  // merely mention "limit" or "not found" don't misclassify.
-  if (isModelUnavailableText(t)) {
-    return "model_unavailable";
-  }
-
-  // Issue-closed non-failure (Issue #3661). Matched before the generic
-  // heuristics so the "exit" substring in the error text doesn't bucket this
-  // into subagent_crash.
-  if (
-    (t.includes("pipeline-start-failure") && t.includes("issue-closed")) ||
-    t.includes("issue_closed")
-  ) {
-    return "issue_closed";
-  }
-
-  // Blocked-dependency deferral (Issue #305). NOT a failure — the scheduler
-  // dispatched an issue whose blockedBy dependencies are still open. The
-  // underscore form is matched too so Go's NotifyComplete defense-in-depth
-  // re-classify lands on the same kind.
-  if (t.includes("[blocked-dependency]") || t.includes("blocked_dependency")) {
-    return "blocked_dependency";
-  }
-
-  // Architecture-approval gate halt (#4098/#4222). NOT a failure — a human must
-  // approve a high-impact decision. The sentinel is the human-readable marker
-  // text rather than a bracketed token (failureComment.ts and
-  // ConcurrentPipelineManager.ts already key on it); the bracketed and
-  // underscore forms are matched for the re-classify round trip.
-  if (
-    t.includes("architecture approval required") ||
-    t.includes("[architecture-approval-required]") ||
-    t.includes("architecture_approval_required")
-  ) {
-    return "architecture_approval_required";
-  }
-
-  // GitHub API quota too low at the pipeline-start preflight (#3896) —
-  // environmental and transient, the bucket resets within the hour.
-  if (
-    t.includes("github-quota-low") ||
-    t.includes("github_quota_low") ||
-    (t.includes("pipeline-start-failure") && t.includes("github api quota too low"))
-  ) {
-    return "github_quota_low";
-  }
-
-  // GitHub unreachable at the pipeline-start preflight (#4002) — the
-  // connectivity sibling of github_quota_low.
-  if (t.includes("github-network-outage") || t.includes("github_network_outage")) {
-    return "github_network_outage";
-  }
-
-  // pr-merge "completed but PR not merged" (#3691). The stamp carries the
-  // blocker classification inside the marker, so the prefix is matched without
-  // its closing bracket. The post-merge verification gate is a SECOND route to
-  // the same state and phrases it without the stamp — pre-fix that route fell
-  // through to the generic failure path and each CI-blocked merge incremented
-  // the lifetime failure counter until the cap tripped the whole scheduler.
-  // Matched before premature_turn_end, which would otherwise claim the same
-  // no-op shape and describe the wrong problem.
-  if (
-    t.includes("[pr-merge-unmerged") ||
-    t.includes("pr_merge_unmerged") ||
-    (t.includes("pr-merge reported success") && t.includes("is not merged"))
-  ) {
-    return "pr_merge_unmerged";
-  }
-
-  // Write-containment breach (#129, classified in #230). Matched before the
-  // stage-behaviour kinds because a breaching stage usually ALSO exits 0
-  // cleanly, and premature_turn_end would otherwise claim it.
-  if (t.includes("[stage:worktree-containment]") || t.includes("containment_breach")) {
-    return "containment_breach";
-  }
-
-  // Dev produced no changes (#202) — a NARROWER premature turn end, so it MUST
-  // be matched first: the scheduler wraps every no-op gate reason in a
-  // "premature turn end:" string, which means the generic block below would
-  // otherwise swallow this kind on every text-classified path while the gate
-  // path still reported it. Two classifiers disagreeing about one failure is
-  // how a kind stops being trustworthy.
-  if (t.includes("[dev-produced-no-changes]") || t.includes("dev_produced_no_changes")) {
-    return "dev_produced_no_changes";
-  }
-
-  // Dev handoff missing (#223) — the inverse kind, matched here for the same
-  // reason. The distinction is what tells a triager whether there is anything
-  // on disk worth saving before the next worktree sweep.
-  if (t.includes("[dev-handoff-missing]") || t.includes("dev_handoff_missing")) {
-    return "dev_handoff_missing";
-  }
-
-  // Premature turn end (#74): the stage exited 0 but produced no state change.
-  // Two structural producers: the gate hook stamps `premature turn end:` on a
-  // no-op gate, and validateStageOutput (#2870) emits `exited 0 but did not
-  // write expected output context` (exit-0 paths only, previously bucketed as
-  // validation_error). The pr-merge no-op shape already took its richer
-  // classification above, so no exclusion is needed here.
-  if (
-    t.includes("premature turn end") ||
-    t.includes("premature_turn_end") ||
-    t.includes("exited 0 but did not write expected output context")
-  ) {
-    return "premature_turn_end";
-  }
-
-  // Worktree-uncommitted recovery (Issue #3542) — a failure whose WORK
-  // SURVIVED. `stop_hook_uncommitted` is the stop-hook marker carrying the same
-  // meaning. Matched early so the generic exit/stall heuristics don't shadow it.
-  if (t.includes("worktree_uncommitted") || t.includes("stop_hook_uncommitted")) {
-    return "worktree_uncommitted";
-  }
-
-  // USD-based pipeline budget ceiling kill (Issue #3542). MUST be matched
-  // before the token-based budget heuristic below — "PIPELINE BUDGET CEILING"
-  // lowercased contains the substring "budget ceiling" and would otherwise
-  // bucket into budget_exceeded. This block previously sat BELOW that one
-  // while carrying this very comment (#306).
-  if (t.includes("budget_ceiling_hit") || t.includes("pipeline budget ceiling")) {
-    return "budget_ceiling_hit";
-  }
-
-  // Progress-based runaway kill (Issue #3783). Treated as a transient stall —
-  // same recovery as stall_kill (backoff, no lifetime-cap increment) — but kept
-  // as its own kind so the monitor's false-positive rate stays measurable.
-  // Go carries a second alternative here, the conjunction of `exitSignalSource`
-  // and `runaway-progress`; it is deliberately NOT mirrored because Go
-  // lowercases its input before matching and that literal carries capitals, so
-  // the branch cannot fire for any input. Mirroring dead code would make both
-  // sides agree on nothing (#306, corpus row
-  // `runaway-progress-exit-signal-source-dead-branch`).
-  if (t.includes("[runaway-progress-exceeded]") || t.includes("runaway-progress-exceeded")) {
-    return "runaway_progress";
-  }
-
-  // Runaway-ceiling kill (Issue #3508) — a safety rail, not the operator's
-  // spending decision, so it recovers like a stall. MUST be matched before the
-  // cost-cap block below so the two ceilings don't swap recoveries.
-  if (
-    t.includes("[runaway-ceiling-exceeded]") ||
-    t.includes("runaway-ceiling-exceeded") ||
-    t.includes("runaway cost ceiling exceeded")
-  ) {
-    return "stall_kill";
-  }
-
-  // Cost-cap kills are budget_exceeded even though the underlying kill path is
-  // stall-shaped (an idle SIGTERM on a polling tick), so they must be claimed
-  // before the stall heuristics — otherwise a run that deliberately spent its
-  // cap is retried as a transient stall and spends it again (#3002/#3207).
-  if (
-    t.includes("[cost-cap-exceeded]") ||
-    t.includes("cost-cap-exceeded") ||
-    t.includes("cost cap exceeded")
-  ) {
-    return "budget_exceeded";
-  }
-
-  // Zombie-run guards (#252). `[stale-slot-orphan]` is written when a reload
-  // sweeps a run whose process died without its close handler;
-  // `[stage-no-output-timeout]` is the first-output watchdog killing a stage
-  // that never produced any session output. Both are transient-stall shaped:
-  // retry with backoff is the right recovery and neither should count against
-  // the lifetime failure cap.
-  if (t.includes("stale-slot-orphan") || t.includes("stage-no-output-timeout")) {
-    return "stall_kill";
-  }
-
-  // Stall-kill heuristics — aligned with classifyFailureCategory's "agent"
-  // bucket. `[stall-killed]` / `exceeded stall idle threshold` /
-  // `exceeded stage_hard_cap` are the canonical markers the stage runner emits
-  // (#3207); the remaining substrings cover the auto-mode wordings. All three
-  // real phrasings differ by a word, so a matcher written for one of them
-  // leaves the others unclassified — which is exactly what happened here
-  // before #306, on the most common failure the machine produces.
-  if (
-    t.includes("[stall-killed]") ||
-    t.includes("stall-killed") ||
-    t.includes("stall kill threshold") ||
-    t.includes("stalled and killed") ||
-    t.includes("heartbeat stall") ||
-    t.includes("exceeded stall idle threshold") ||
-    t.includes("exceeded stage_hard_cap") ||
-    t.includes("hard cap")
-  ) {
-    return "stall_kill";
-  }
-
-  // Budget-enforcer reasons (see internal/orchestrator/budget_enforcer.go
-  // BudgetDecision.Reason).
-  if (
-    t.includes("pipeline_budget_exceeded") ||
-    t.includes("stage_budget_exceeded") ||
-    t.includes("budget exceeded") ||
-    t.includes("budget ceiling")
-  ) {
-    return "budget_exceeded";
-  }
-
-  // Schema / output-validation failures. (The "did not write expected output
-  // context" phrase moved to premature_turn_end above — its only producer,
-  // validateStageOutput, runs exclusively on exit-0 paths.)
-  if (
-    t.includes("schema validation") ||
-    t.includes("invalid json") ||
-    t.includes("not valid json") ||
-    t.includes("unparseable json") ||
-    t.includes("missing prerequisite")
-  ) {
-    return "validation_error";
-  }
-
-  // Adapter auth pre-flight failure (#312) — a probe timed out after a retry
-  // (transient starvation under a concurrent dispatch burst) or the adapter CLI
-  // is logged out. Matched before the crash fallback, whose "exit " substring
-  // would otherwise feed the cascade breaker a false crash. All three
-  // spellings: the wrapped pipeline-start form carries the marker BARE, which
-  // this side previously missed on a real, observed failure (#306).
-  if (
-    t.includes("[adapter-auth-failed]") ||
-    t.includes("adapter-auth-failed") ||
-    t.includes("adapter_auth_failed")
-  ) {
-    return "adapter_auth_failed";
-  }
-
-  // No changes produced (#317) — pr-create's deterministic fallback confirmed
-  // zero commits ahead of base: genuinely nothing to open a PR for. Deliberately
-  // NOT matched on bare "no commits ahead of" — that phrase also appears in
-  // feature-validate's unrelated lost-implementation check, which must keep its
-  // organic classification.
-  if (t.includes("[no-changes-produced]") || t.includes("no_changes_produced")) {
-    return "no_changes_produced";
-  }
-
-  // Feature-validate honest quality-gate failure (#326). The skill exited 0 but
-  // wrote validation_status="failed" and left the code uncommitted for retry — a
-  // real organic implementation failure caught by the pipeline's own gate, not a
-  // process death.
-  if (t.includes("[validation-failed]") || t.includes("validation_failed")) {
-    return "validation_failed";
-  }
-
-  // Feature-validate zero-test run (#221) — the gate learned nothing, usually
-  // from an environmental misconfiguration. Kept adjacent to validation_failed:
-  // the two validation-status outcomes make opposite claims about the code.
-  if (t.includes("[validation-inconclusive]") || t.includes("validation_inconclusive")) {
-    return "validation_inconclusive";
-  }
-
-  // Branch forked from its remote (#163). Two entry points, one kind: the Go
-  // scheduler's pre-stage fork pre-flight stamps `[branch-forked]` before the
-  // stage spends a token, and a fork that first surfaces at push time is
-  // recognised by the skills' `PUSH REJECTED: non-fast-forward` sentence.
-  // Matched before the crash fallback, whose "exit " substring would otherwise
-  // read a push rejection as a process death — which is how every retry looked
-  // like a fresh crash instead of the same unrecoverable fork. "non-fast-forward"
-  // is enough on its own (git emits it for exactly this condition); "rejected"
-  // is not, so it must co-occur with a push.
-  if (
-    t.includes("[branch-forked]") ||
-    t.includes("branch_forked") ||
-    t.includes("non-fast-forward") ||
-    (t.includes("push rejected") && t.includes("fetch first"))
-  ) {
-    return "branch_forked";
-  }
-
-  // Commit stranded on the wrong branch after a SIGKILL bypassed the pre-push
-  // restore-defer (#266). Emitted by feature-validate's branch-identity guard
-  // when HEAD isn't on the issue's expected feature branch and self-heal can't
-  // recover it. Unrecoverable by retry.
-  if (t.includes("[commit-orphaned]") || t.includes("commit_orphaned")) {
-    return "commit_orphaned";
-  }
-
-  // Harness tool-call denial (#289) — most commonly a stage reaching for a
-  // forbidden foreground `sleep` wait loop, surfaced as
-  // `tool_use_result: "User rejected tool use"`. A denial is the harness saying
-  // "not that way", not a defect. Matched before the crash fallback, whose
-  // "exit " substring turned one rejected tool call into a permanently killed
-  // run and a fleet-wide pause.
-  //
-  // Deliberately NOT matched on the bare phrase "permission denied": a
-  // filesystem `EACCES: permission denied` is an infrastructure fault with the
-  // opposite recovery, and matching it here would create a divergence while
-  // claiming to close one (#306, corpus row `permission-denied-negative-eacces`).
-  if (
-    t.includes("[permission-denied]") ||
-    t.includes("permission_denied") ||
-    t.includes("user rejected tool use") ||
-    (t.includes("tool_use_result") && t.includes("rejected"))
-  ) {
-    return "permission_denied";
-  }
-
-  // Subagent process death / non-zero exit fallback. Everything specific is
-  // matched above because scheduler.SetStageError prefixes almost every stage
-  // error with `exit N: `, so this block can claim any string that reaches it —
-  // a rule appended after it is dead code.
-  if (t.includes("subagent crash") || t.includes("exit ") || t.includes("killed by signal")) {
-    return "subagent_crash";
-  }
-
-  return undefined;
+/**
+ * The kind a consumer may forward to the Go scheduler as a signal, or
+ * `undefined` to defer to Go's own classification.
+ *
+ * Runs the FULL ladder and answers only when the WINNING rule is declared
+ * `signal: true` in the table. That is what makes the signal side incapable of
+ * contradicting the record: its answer is either nothing or exactly
+ * `classifyTerminalKind`'s answer. Skipping non-signal rules instead would
+ * reintroduce disagreement, because a lower-precedence signal rule could then
+ * claim text that a higher-precedence non-signal rule owns.
+ *
+ * The VSCode extension consumes this through
+ * `services/terminalKindSignal.ts`; Go's NotifyComplete uses a non-empty
+ * answer VERBATIM, which is why the bound has to be structural.
+ */
+export function signalTerminalKind(errorText: string | undefined): TerminalFailureKind | undefined {
+  const rule = matchTerminalKindRule(errorText);
+  return rule?.signal ? (rule.kind as TerminalFailureKind) : undefined;
 }
 
 /**
  * Prefers a gate-sourced structured terminal kind over prose classification
  * of the synthesized error text (Issue #9). Mirrors Go's
- * `ResolveTerminalKind` in `internal/orchestrator/failure_handler.go`. Falls
- * back to `classifyTerminalKind` for non-gate failures and for gate failures
- * that didn't set a structured kind (including all historical records
- * persisted before `terminal_kind` existed on `StageGateResult`).
+ * `ResolveTerminalKind` in `internal/orchestrator/failure_handler.go` — a
+ * two-line precedence rule with no matching in it, which is why it is written
+ * out rather than tabulated. Falls back to `classifyTerminalKind` for non-gate
+ * failures and for gate failures that didn't set a structured kind (including
+ * all historical records persisted before `terminal_kind` existed on
+ * `StageGateResult`).
  */
 export function resolveTerminalKind(
   gateRan: boolean,
@@ -712,26 +431,12 @@ export function resolveTerminalKind(
 }
 
 /**
- * Mirror of the Go matcher in internal/orchestrator/failure_handler.go (#42).
- * Anthropic shapes covered: 404 `not_found_error` naming the model, invalid /
- * unknown model wording, plan restrictions, and model-specific usage caps.
+ * Registry-derived "names a specific model" gate — IDs, display names, tiers.
+ * The Go twin is `mentionsRegistryModel` in internal/terminalkind/predicates.go
+ * and iterates `models.All()`; the two registries are the same file
+ * (packages/nightgauge-sdk/src/eval/model-registry.json is canonical,
+ * internal/models/model-registry.json is a byte copy with a Go parity test).
  */
-function isModelUnavailableText(t: string): boolean {
-  if (t.includes("not_found_error") && t.includes("model")) return true;
-  if (t.includes("model not found") || t.includes("invalid model") || t.includes("unknown model")) {
-    return true;
-  }
-  const planPhrase =
-    t.includes("not available on your") ||
-    t.includes("not included in your") ||
-    t.includes("not offered on your") ||
-    t.includes("not supported on your");
-  const capPhrase =
-    t.includes("usage limit") || t.includes("usage cap") || t.includes("weekly limit");
-  return (planPhrase || capPhrase) && mentionsRegistryModel(t);
-}
-
-/** Registry-derived "names a specific model" gate — IDs, display names, tiers. */
 function mentionsRegistryModel(t: string): boolean {
   const tiers = new Set<string>();
   for (const m of MODEL_REGISTRY) {
@@ -743,4 +448,69 @@ function mentionsRegistryModel(t: string): boolean {
     if (t.includes(tier)) return true;
   }
   return false;
+}
+
+/**
+ * Derive a deterministic input set FROM the table — the verbatim TypeScript
+ * twin of `StressInputs` in internal/terminalkind/stress.go.
+ *
+ * Both languages derive the same list and compare their answers against one
+ * committed golden (internal/terminalkind/testdata/stress-golden.json), which is
+ * how the two interpreters are proved equivalent without a live bridge between
+ * them: if the derivations differed the input lists would not match, and if the
+ * interpreters differed the answers would not.
+ *
+ * THE ALGORITHM IS PART OF THE CONTRACT. Changing it here means changing
+ * stress.go and regenerating the golden. Order is significant and stable, and
+ * duplicates keep their FIRST occurrence.
+ */
+export function terminalKindStressInputs(): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (s: string): void => {
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  };
+
+  add("");
+  add("nothing in this sentence resembles a terminal marker");
+
+  for (const rule of TERMINAL_KIND_TABLE.rules) {
+    for (const clause of rule.clauses) {
+      const s = sampleClause(clause);
+      add(s);
+      add("exit 1: " + s);
+      add(s.toUpperCase());
+      for (const term of clause) add(sampleClause([term]));
+    }
+  }
+
+  for (const a of TERMINAL_KIND_TABLE.rules) {
+    for (const b of TERMINAL_KIND_TABLE.rules) {
+      if (a.id === b.id) continue;
+      add(sampleClause(a.clauses[0]) + " | " + sampleClause(b.clauses[0]));
+    }
+  }
+
+  return out;
+}
+
+function sampleClause(clause: string[]): string {
+  return clause
+    .map((term) =>
+      term.startsWith(TERMINAL_KIND_PREDICATE_REF)
+        ? probeTrue(term.slice(TERMINAL_KIND_PREDICATE_REF.length))
+        : term
+    )
+    .join(" ");
+}
+
+function probeTrue(name: string): string {
+  const p = TERMINAL_KIND_TABLE.predicates.find((x) => x.name === name);
+  if (!p || p.probes_true.length === 0) {
+    throw new Error(`terminal-kind predicate "${name}" declares no probes_true`);
+  }
+  return p.probes_true[0];
 }

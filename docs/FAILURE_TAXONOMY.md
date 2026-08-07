@@ -406,12 +406,12 @@ failures worded `"...is not valid JSON"` (`issue-pickup`, `feature-planning`,
 `ClassifyTerminalKind` only matched the literal substring `"invalid json"` —
 none of the actual gate Reason strings contained it, so every JSON-parse gate
 failure fell through to the generic `subagent_crash` bucket instead of
-`validation_error`. The matcher itself is now also fixed to catch both real
+`validation_error`. The rule itself is now also fixed to catch both real
 phrasings, so the prose-fallback path is correct too (this matters for
-historical records with no `terminal_kind` to prefer). The TypeScript SDK
-mirrors both the matcher fix and the precedence rule as `classifyTerminalKind`
-/ `resolveTerminalKind` in
-`packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`.
+historical records with no `terminal_kind` to prefer). Since #306 the SDK does
+not mirror that fix — it interprets the same rule table, so it has it by
+construction (`classifyTerminalKind` / `resolveTerminalKind` in
+`packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`).
 
 ### Relationship to `failure_category`
 
@@ -484,73 +484,94 @@ export const ExecutionHistoryRunRecordV3Schema = ExecutionHistoryRunRecordV2Sche
 });
 ```
 
-The Go mirror lives in `internal/orchestrator/failure_handler.go` (constants
-`TerminalKind*`) and the classifier in
-`packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`
-(`classifyTerminalKind`). When changing the enum, update **all three** in
-lockstep — the `TerminalFailureKindSchema` test in
+The `TerminalKind*` constants live in
+`internal/orchestrator/failure_handler.go`; the rules that produce them live in
+`internal/terminalkind/table.json` (see below). When changing the enum, update
+**all three** in lockstep — the `TerminalFailureKindSchema` test in
 `packages/nightgauge-vscode/tests/views/dashboard/FailedRun.test.ts`
 guards against drift.
 
-### Classifier parity — the shared corpus (Issue #306)
+### One rule table, three interpreters (Issue #306)
 
-Terminal-kind classification exists in **three** places, and each one decides
-how the fleet reacts to a failure:
+Terminal-kind classification used to exist in **three** places, each deciding
+how the fleet reacts to a failure, held aligned by "keep aligned" comments —
+which is how the same run could be recorded as one kind and reacted to as
+another while all three sides stayed individually green. On a corpus of 98 real
+and synthetic inputs the ladders disagreed 19 times.
 
-| Site       | Implementation                                                                                    | Authority                                                                       |
-| ---------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| **Go**     | `ClassifyTerminalKind` — `internal/orchestrator/failure_handler.go`                               | **Authoritative.** Writes `terminal_kind` into the run record; drives recovery. |
-| **SDK**    | `classifyTerminalKind` — `packages/nightgauge-sdk/.../failureClassifier.ts`                       | Published mirror, pinned to Go block-for-block.                                 |
-| **Signal** | `classifyTerminalKindForSignal` — `packages/nightgauge-vscode/src/services/terminalKindSignal.ts` | Sent to Go with `autonomousComplete`; a **non-empty** answer is used verbatim.  |
+It is now written down **once**, as an ordered rule table, and every consumer
+interprets it:
 
-Alignment used to be maintained by "keep aligned" comments, which is how the
-same run could be recorded as one kind and reacted to as another while all
-three sides stayed individually green. They are now pinned to one shared
-corpus, `internal/orchestrator/testdata/terminal-kind/corpus.json`, read by
-three suites:
+| Site       | How it gets the rules                                                                            | Authority                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| **Table**  | `internal/terminalkind/table.json` — the canonical, ordered ladder                               | The definition. Nothing else contains a matching literal.                       |
+| **Go**     | `internal/terminalkind` embeds it; `ClassifyTerminalKind` delegates                              | **Authoritative.** Writes `terminal_kind` into the run record; drives recovery. |
+| **SDK**    | `terminalKindTable.generated.ts`, generated from the table; `classifyTerminalKind` interprets it | Published classifier — reproduces Go by reading the same rules.                 |
+| **Signal** | `classifyTerminalKindForSignal` projects the same table                                          | Sent to Go with `autonomousComplete`; a **non-empty** answer is used verbatim.  |
 
-- `internal/orchestrator/terminal_kind_corpus_parity_test.go`
-- `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
-- `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`
+**Rule shape.** A rule is a kind plus an OR of ANDs: it fires when any clause is
+satisfied, and a clause is satisfied when every term holds. A term is a literal
+(the lowercased error text contains it) or a named predicate — used exactly once,
+for "does this text name a model?", which depends on the model registry and
+cannot be a literal. Rules are evaluated in order and the first match wins.
 
-Working rules:
+**The order is the contract.** Many real failure strings satisfy two rules and
+the earlier one wins on purpose: cost-cap versus stall, the USD ceiling versus
+the token budget, `pr_merge_unmerged` and the three narrower no-op kinds versus
+`premature_turn_end`. Moving a rule is a routing change.
 
-- `expected` in the corpus is **Go's** answer, because Go writes the record.
-- Every row carries a mandatory `rationale`. Changing an expectation means
-  editing the argument for it in the same diff.
-- The core rows are **real** failure text captured from live telemetry by
-  `scripts/capture-terminal-kind-fixture.sh` (#166). The Go suite enforces that
-  a row marked `captured` appears verbatim in the committed capture output
-  (`testdata/terminal-kind/captured-shapes.json`), and that no shape in that
-  file is left unclassified. Both directions are checks over a **tracked,
-  generated file** — the capture script needs the operator's local workspace
-  roots and is not run in CI — so the guarantee is "this string is in the
-  reviewed evidence file", enforced in the diff, not a cryptographic proof of
-  provenance. Synthetic rows extend coverage and must name the producing call
-  site.
-- Two coverage assertions make the pinning structural rather than
-  best-effort. One fails when a `TerminalKind*` constant has no row (unless it
-  is listed in `no_matcher_kinds` because it is set structurally); the other
-  fails when a matcher **literal** — read out of the Go source, not listed by
-  hand — appears in no corpus input. Patterns are additionally diffed
-  literal-for-literal, in order, between Go and the SDK mirror by
-  `failureClassifier.corpusParity.test.ts`. So a kind _or a pattern
-  alternative_ added to one ladder fails the others until the corpus is
-  updated.
-- Deliberate disagreements are recorded as `known_divergence`, which **pins**
-  them: the divergent side must still produce exactly that kind, so the gap is
-  visible and any new one is red.
+**The signal side cannot override the record.** Go's `NotifyComplete` uses a
+non-empty kind from the extension verbatim, so the extension runs the _full_
+ladder and returns the winning rule's kind only when that rule is declared
+`signal: true`. Its answer is therefore either nothing or exactly what Go
+records — bounded above and below. (Skipping non-signal rules instead would
+reintroduce disagreement: a lower-precedence signal rule could claim text a
+higher-precedence non-signal rule owns. That is the bug the old ladder had.)
 
-`ClassifyTerminalKind` is an ordered ladder and **the order is the contract** —
-many real failure strings match two blocks, and the earlier one wins. The corpus
-carries explicit ordering rows for the overlaps that matter (cost-cap versus
-stall, USD ceiling versus token budget, `pr_merge_unmerged` and the three
-narrower no-op kinds versus `premature_turn_end`). It also carries negative rows
-for gates that must NOT be relaxed — notably `EACCES: permission denied`, which
-is an infrastructure fault and must never match the `permission_denied` harness
-denial.
+**What keeps it honest:**
 
-See [`internal/orchestrator/testdata/terminal-kind/README.md`](../internal/orchestrator/testdata/terminal-kind/README.md)
+- **Behaviour** — `internal/terminalkind/testdata/corpus.json`, read by
+  `internal/terminalkind/corpus_test.go`,
+  `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
+  and
+  `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`.
+  `expected` is Go's answer because Go writes the record; `expected_signal` is
+  what the extension may forward. Every row carries a mandatory `rationale`, so
+  changing an expectation means editing the argument for it in the same diff.
+- **Evidence** — the core rows are real failure text captured from live
+  telemetry by `scripts/capture-terminal-kind-fixture.sh` (#166). A row marked
+  `captured` must appear verbatim in the committed capture output, and no shape
+  in that file may be left unclassified. Both are checks over a **tracked,
+  generated file** — the script needs the operator's local workspace roots and
+  is not run in CI — so the guarantee is "this string is in the reviewed
+  evidence file", enforced in the diff, not a proof of provenance.
+- **Equivalence** — `internal/terminalkind/stress.go` and its verbatim
+  TypeScript twin derive ~1,400 inputs _from the table_ (every clause, every
+  term, every ordered rule pair) and all three suites must reproduce
+  `testdata/stress-golden.json`. Deleting a clause, widening a literal or
+  swapping two rules changes a committed answer, so it lands in review as an
+  explicit before/after of the inputs whose routing changed.
+- **Distribution** — the generated SDK module and the golden are byte-compared
+  by `TestGeneratedTypeScriptIsInSync` / `TestStressGoldenIsInSync`,
+  `.husky/pre-commit` and `scripts/ci-local.sh`. A consumer cannot be edited on
+  its own; `make generate-terminal-kind-table` is the only way to change one.
+- **Taxonomy** — a `TerminalKind*` constant with no rule and no corpus row is
+  red, unless it is listed in the table's `kinds_without_rules` because it is
+  set structurally and never derived from text.
+
+**Downstream text matchers.** `ConcurrentPipelineManager` decides whether a
+failure halts the queue. Those branches used to be four more private regex
+ladders with their own "keep aligned" comments; they now resolve the kind
+through the table and test set membership, with the kind sets pinned by
+`tests/services/concurrentPipelineManager.haltPolicy.test.ts`. One deliberate
+raw-text condition remains and is documented in place: a bare Anthropic
+`session limit` / `usage limit` with **no model named** is a shape the taxonomy
+does not classify at all (the table returns no kind for it), so it cannot be
+expressed as a kind. Teaching the table about it would change the authoritative
+classifier's live routing — a taxonomy decision, not a parity fix, and
+deliberately out of scope here.
+
+See [`internal/terminalkind/testdata/README.md`](../internal/terminalkind/testdata/README.md)
 for capture provenance and the redaction rules.
 
 ---
@@ -827,6 +848,8 @@ live and correct but sits on a path the operating mode never takes; the guard
 is a path-parity assertion, not a value or shape check.
 
 Known intentional divergences (board terminal status, queue-halt semantics,
-worktree preservation on failure) and remaining alignment gaps (#306
-terminal-kind classifiers, #307 abort-deadline bookkeeping) are recorded in
-the manifest and its notes.
+worktree preservation on failure) and remaining alignment gaps (#307
+abort-deadline bookkeeping) are recorded in the manifest and its notes.
+Terminal-kind classification is no longer among them: #306 replaced the three
+ladders with one interpreted rule table (see
+[One rule table, three interpreters](#one-rule-table-three-interpreters-issue-306)).

@@ -28,8 +28,9 @@ describe("inferProcessError", () => {
     const err = inferProcessError(false, stderr, "", 143 /* SIGTERM */);
     expect(err).toBeDefined();
     expect(err!.message).toContain("[rate-limit-quota-exhausted]");
-    // Bootstrap's terminalFailureKind regex (services.ts) must match this
-    // exact substring or the Go-side exemption path won't engage.
+    // The `rate-limit-quota-exhausted` rule in internal/terminalkind/table.json
+    // must match this exact substring or the Go-side exemption path won't
+    // engage.
     expect(/rate-limit-quota-exhausted/i.test(err!.message)).toBe(true);
   });
 

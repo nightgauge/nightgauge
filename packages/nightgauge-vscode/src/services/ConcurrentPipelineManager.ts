@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
-import type { PipelineStage } from "@nightgauge/sdk";
+import { classifyTerminalKind, type PipelineStage } from "@nightgauge/sdk";
 import { WorktreeManager, type WorktreeInfo } from "../utils/WorktreeManager";
 import { killAllActiveProcesses } from "../utils/skillRunner";
 import { getPRForIssue } from "../utils/prDetection";
@@ -30,37 +30,50 @@ const execFileAsync = promisify(execFile);
 const ABORT_ALL_TIMEOUT_MS = 30_000;
 
 /**
- * Transient network-blip detector (#4002): true when the failure text carries
- * one of the two network terminal-kind signatures — an Anthropic transport
- * drop (`api_connection_lost`: "API Error: The socket connection was closed
- * unexpectedly" / "socket hang up") or the pipeline-start GitHub outage marker
+ * Terminal kinds that must NOT halt the queue (#3444/#3835/#3508/#4002/#4222).
+ *
+ * haltQueueOnSlotFailure exists to surface REAL bugs — validation errors,
+ * subagent crashes, gate failures — where a human should triage before the
+ * queue auto-continues. For everything here the Go scheduler already
+ * auto-recovers (per-issue backoff, global quota cooldown, board→Ready, no
+ * lifetime-cap increment, explicitly no pause), so halting overrides that
+ * decision and forces a manual Resume after a blip.
+ *
+ * WHY THIS IS A SET AND NOT A LADDER (#306). Every entry used to be its own
+ * pile of regexes carrying a "Match strings mirror Go's ClassifyTerminalKind —
+ * keep aligned" comment, with nothing checking the claim; the manifest's own
+ * note said they could still drift. They now resolve the kind through the
+ * canonical table and test membership. What stays local is only the POLICY —
+ * which kinds skip the halt — which is genuinely this layer's decision and is
+ * pinned by tests/services/concurrentPipelineManager.haltPolicy.test.ts against
+ * the kinds the table can actually produce.
+ */
+const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
+  "stream_idle_timeout",
+  "rate_limit_quota_exhausted",
+  "network_unavailable",
+]);
+const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
+
+/**
+ * Transient network-blip detector (#4002): true when the failure text resolves
+ * to one of the two network terminal kinds — an Anthropic transport drop
+ * (`api_connection_lost`) or the pipeline-start GitHub outage
  * (`github_network_outage`). Both auto-recover via the Go scheduler's
  * environmental routing (short backoff / global cooldown, board→Ready, no
  * lifetime-cap increment), so they must neither halt the queue nor post a
- * failure comment. Match strings mirror Go's ClassifyTerminalKind and the
- * extension's signal ladder in services/terminalKindSignal.ts (#306 moved the
- * ladder out of bootstrap/services.ts, which now just calls it).
+ * failure comment.
  *
- * NOT PINNED by the #306 corpus: this predicate re-derives a kind-shaped
- * ROUTING decision from raw text instead of consuming the resolved kind, so it
- * can still drift from the three classifiers. Pinning it properly means routing
- * on the resolved kind — a flow change, #305/#370 territory.
+ * PINNED BY THE #306 TABLE. This used to be a private ladder of six regexes
+ * carrying a "keep aligned with Go" comment and nothing that checked it. It now
+ * asks the canonical classifier for the kind and tests membership, so the only
+ * thing local to this file is the SET of kinds that skip the halt — a routing
+ * policy, which is genuinely this layer's decision. The vocabulary it names is
+ * pinned by TERMINAL_KINDS_SKIPPING_HALT below.
  */
 function isTransientNetworkFailureText(errMsg: string): boolean {
-  return (
-    /socket connection was closed/i.test(errMsg) ||
-    /socket hang up/i.test(errMsg) ||
-    /api_connection_lost/i.test(errMsg) ||
-    // #227: `API Error: Connection closed mid-response` matched none of the
-    // three above and this function returned false, so the blip took the
-    // full halt path — queue paused, lifetime failure charged to two issues
-    // that had done nothing wrong. skillRunner now stamps the
-    // `[api_connection_lost]` marker from the envelope's terminal_reason so
-    // the third pattern catches it; this keeps the raw wording covered too.
-    /api error[\s\S]*connection closed/i.test(errMsg) ||
-    /github-network-outage/i.test(errMsg) ||
-    /github_network_outage/i.test(errMsg)
-  );
+  const kind = classifyTerminalKind(errMsg);
+  return kind === "api_connection_lost" || kind === "github_network_outage";
 }
 
 import type { IssueQueueService } from "./IssueQueueService";
@@ -70,7 +83,7 @@ import type { PipelineStateService } from "./PipelineStateService";
 import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
-import { ARCHITECTURE_APPROVAL_REQUIRED_MARKER, postFailureComment } from "../utils/failureComment";
+import { postFailureComment } from "../utils/failureComment";
 import { getConcurrentPipelineConfig } from "../utils/incrediConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { IpcClient } from "./IpcClient";
@@ -2101,32 +2114,26 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     try {
       // #3444: Skip the halt for environmental terminal kinds — failures
       // caused by upstream conditions (Anthropic API quota, idle stream
-      // timeouts mid-token-output, extended GitHub connectivity loss) that
-      // the autonomous scheduler already auto-recovers from via per-issue
-      // backoff + the global quota cooldown set in onPipelineComplete. The
-      // halt is meant to surface REAL bugs (validation errors, subagent
-      // crashes, stall kills, gate failures) where the user must triage
-      // before the queue auto-continues. Tripping it on environmental
-      // kinds forces the user to manually click Resume after the cooldown
+      // timeouts mid-token-output, extended GitHub connectivity loss) that the
+      // autonomous scheduler already auto-recovers from via per-issue backoff +
+      // the global quota cooldown set in onPipelineComplete. Tripping the halt
+      // on them forces the user to manually click Resume after the cooldown
       // expires (~4h for a quota miss), which defeats the purpose of the
       // environmental classification path.
       //
-      // Match strings are the same patterns used by the extension's signal
-      // ladder in services/terminalKindSignal.ts (#306 extracted it from
-      // bootstrap/services.ts). Keep aligned — and note that, like
-      // isTransientNetworkFailureText above, this ladder re-derives a routing
-      // decision from raw text rather than consuming the resolved kind, so the
-      // #306 corpus does NOT pin it (#305/#370).
+      // The kind comes from the canonical #306 table, so this branch and the
+      // run record can no longer describe the same failure differently. The one
+      // raw-text condition that survives is NOT a duplicated matcher: a bare
+      // Anthropic "session/usage limit" with no model named is a shape the
+      // TAXONOMY does not classify at all (Go returns "" for it), and skipping
+      // the halt for it is a local policy call the operator has been relying on
+      // since #3792. Teaching the table about it would change the authoritative
+      // classifier's live routing — a taxonomy decision, not a parity fix.
       const haltErrMsg = pipelineResult?.error?.message ?? "";
+      const haltKind = classifyTerminalKind(haltErrMsg);
       const isEnvironmentalFailure =
-        /stream idle timeout/i.test(haltErrMsg) ||
-        /rate-limit-quota-exhausted/i.test(haltErrMsg) ||
-        /rate_limit_quota_exhausted/i.test(haltErrMsg) ||
-        // Anthropic session/usage limit — transient, recovers at reset. #3792.
-        // (Normalized to the quota-exhausted marker in skillRunner; matched
-        // raw here as defense-in-depth for non-stream-json error paths.)
-        /\b(?:session|usage)\s+limit\b/i.test(haltErrMsg) ||
-        /network unavailable: extended github connectivity loss/i.test(haltErrMsg);
+        (haltKind !== undefined && HALT_SKIP_ENVIRONMENTAL.has(haltKind)) ||
+        /\b(?:session|usage)\s+limit\b/i.test(haltErrMsg);
       if (isEnvironmentalFailure) {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — environmental failure auto-retries via cooldown",
@@ -2140,23 +2147,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
       // Anthropic API 529 "Overloaded" is a transient capacity blip — nothing
       // is wrong in our code or the issue, and it clears within minutes. The Go
-      // scheduler already classifies it as TerminalKindApiOverloaded and
-      // auto-recovers: per-issue 5-minute backoff, board→Ready, NO lifetime-cap
-      // increment, NO global cooldown, and — per its own log — explicitly NO
-      // queue pause. Without this branch the 529 fell through to the halt path
-      // below, which cleared the queue and called autonomousPause(), OVERRIDING
-      // the Go layer's "no pause" decision and forcing a manual Resume after a
+      // scheduler already classifies it as api_overloaded and auto-recovers:
+      // per-issue 5-minute backoff, board→Ready, NO lifetime-cap increment, NO
+      // global cooldown, and — per its own log — explicitly NO queue pause.
+      // Without this branch the 529 fell through to the halt path below, which
+      // cleared the queue and called autonomousPause(), OVERRIDING the Go
+      // layer's "no pause" decision and forcing a manual Resume after a
       // momentary overload (the original incident: acmeapp #100 paused the
       // whole queue while #34/#85 — same 529 window — correctly retried). Skip
       // the halt and surface a non-blocking toast so the operator sees the
       // retry without the queue grinding to a stop; the issue is already
-      // surfaced in the Autonomous panel's retry list by Go's recordFailure.
-      // Match string mirrors Go's ClassifyTerminalKind (strings.Contains
-      // "overloaded") against the 529 result envelope ("API Error: 529
-      // Overloaded" / "API Error: Overloaded"). It is NOT folded into
-      // isEnvironmentalFailure because that path returns silently; an overload
-      // deserves the same visible-but-non-blocking treatment as a stall-kill.
-      const isApiOverloaded = /overloaded/i.test(haltErrMsg);
+      // surfaced in the Autonomous panel's retry list by Go's recordFailure. It
+      // is NOT folded into isEnvironmentalFailure because that path returns
+      // silently; an overload deserves the same visible-but-non-blocking
+      // treatment as a stall-kill.
+      const isApiOverloaded = haltKind === "api_overloaded";
       if (isApiOverloaded) {
         const failedStage = pipelineResult?.failedStage ?? "unknown";
         this.logger.info(
@@ -2204,19 +2209,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // manual intervention for what is essentially an infrastructure hiccup.
       // Show a non-blocking warning toast instead so the user is aware, then
       // let autonomous continue working on other ready issues uninterrupted.
-      const isStallKill =
-        /exceeded stall idle threshold/i.test(haltErrMsg) ||
-        /\[stall-killed\]/i.test(haltErrMsg) ||
-        /stall-killed/i.test(haltErrMsg) ||
-        /stall kill threshold/i.test(haltErrMsg) ||
-        /stalled and killed/i.test(haltErrMsg) ||
-        /heartbeat stall/i.test(haltErrMsg) ||
-        /exceeded stage_hard_cap/i.test(haltErrMsg) ||
-        // Issue #3508: runaway ceiling kills are treated as stall-kills —
-        // no queue halt, no autonomous pause, 30m backoff via Go layer.
-        /\[runaway-ceiling-exceeded\]/i.test(haltErrMsg) ||
-        /runaway-ceiling-exceeded/i.test(haltErrMsg) ||
-        /runaway cost ceiling exceeded/i.test(haltErrMsg);
+      // Runaway-ceiling kills (#3508) resolve to stall_kill in the table and are
+      // covered by the same set: no queue halt, no autonomous pause, 30m backoff
+      // via the Go layer.
+      const isStallKill = haltKind !== undefined && HALT_SKIP_TRANSIENT_STALL.has(haltKind);
       if (isStallKill) {
         const failedStage = pipelineResult?.failedStage ?? "unknown";
         this.logger.info(
@@ -2245,7 +2241,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // Surface a visible-but-non-blocking toast and keep the queue flowing;
       // the issue re-enters when a human adds `approved:architecture` (or the
       // approval file) and re-queues it.
-      if (haltErrMsg.includes(ARCHITECTURE_APPROVAL_REQUIRED_MARKER)) {
+      if (haltKind === "architecture_approval_required") {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — architecture-approval pause is an actionable human decision, not a failure",
           {

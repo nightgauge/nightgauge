@@ -49,6 +49,8 @@ export {
 export {
   classifyFailureCategory,
   classifyTerminalKind,
+  signalTerminalKind,
+  terminalKindStressInputs,
   FAILURE_CATEGORY_WEIGHTS,
   type FailureCategory,
   type TerminalFailureKind,

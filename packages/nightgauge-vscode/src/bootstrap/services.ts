@@ -1634,11 +1634,12 @@ export async function initializeServices(
           // defense-in-depth signal for IPC-mode runs where the TS layer
           // observed the result envelope first.
           const errMsg = error?.message ?? "";
-          // The ladder itself lives in services/terminalKindSignal.ts (#306).
-          // It was inline here, which meant the one classifier whose answer Go
-          // uses VERBATIM was the only one no test could drive. It is now a
-          // pure function pinned against the shared corpus that also pins Go
-          // and the SDK — see terminalKindSignal.corpusParity.test.ts.
+          // #306: this was an inline ladder — the one classifier whose answer
+          // Go uses VERBATIM was the only one no test could drive, and it
+          // disagreed with the authoritative one on real inputs. It now
+          // projects the canonical rule table (internal/terminalkind/table.json)
+          // through services/terminalKindSignal.ts: the answer is either
+          // nothing, or exactly the kind Go will write into the run record.
           const terminalFailureKind = classifyTerminalKindForSignal(errMsg);
           // #3431: forward the raw failure text so the autonomous
           // scheduler can extract `resetsAt=<unix>` from the

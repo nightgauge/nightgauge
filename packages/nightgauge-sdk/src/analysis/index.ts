@@ -196,6 +196,8 @@ export {
 export {
   classifyFailureCategory,
   classifyTerminalKind,
+  signalTerminalKind,
+  terminalKindStressInputs,
   FAILURE_CATEGORY_WEIGHTS,
 } from "./health/index.js";
 export type {

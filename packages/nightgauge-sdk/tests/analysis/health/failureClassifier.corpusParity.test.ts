@@ -1,90 +1,66 @@
 /**
- * Terminal-kind classification parity — SDK side (#306).
+ * failureClassifier.corpusParity.test.ts
  *
- * Terminal-kind classification exists three times (Go's `ClassifyTerminalKind`,
- * this SDK mirror, and the extension's `classifyTerminalKindForSignal`), and
- * each copy decides how the fleet reacts to a failure: failure weighting,
- * cascade feeding, lifetime caps, board reverts, backoff length. Before this
- * suite they were held aligned by comments, so a pattern added to one ladder
- * silently diverged the others while both sides stayed individually green.
+ * Terminal-kind classification — SDK side (#306).
  *
- * This suite pins THIS side against the shared corpus in
- * `internal/orchestrator/testdata/terminal-kind/corpus.json` — the same file
- * read by `internal/orchestrator/terminal_kind_corpus_parity_test.go` and
- * `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`.
+ * There is nothing here to keep "aligned" with Go any more: both languages
+ * interpret ONE ordered rule table (internal/terminalkind/table.json, generated
+ * into terminalKindTable.generated.ts with a byte-equality drift check). What
+ * this suite proves is that the interpretation is the same, on three axes:
  *
- * The corpus holds GO's answer, because Go writes the run record: a
- * disagreement is by definition this side being wrong about what the pipeline
- * recorded. Rows carrying `known_divergence.sdk` are the deliberate exception —
- * they pin a disagreement that is a taxonomy decision rather than a bug.
+ *   1. BEHAVIOUR — the shared corpus, whose `expected` is Go's answer because
+ *      Go writes the run record.
+ *   2. EQUIVALENCE — the derived stress set. Both languages derive the same
+ *      inputs from the table (every clause, every term, every ordered rule
+ *      pair) and must reproduce the golden Go generated from it.
+ *   3. PREDICATES — the one term kind that is code rather than a literal, held
+ *      to the probes the table declares. Go asserts the same probes.
  *
- * Sibling of `failureClassifier.parity.test.ts` (#229), which diffs the kind
- * VOCABULARY against Go. Names were in sync while behaviour had drifted; this
- * suite covers behaviour.
- *
- * It also diffs the matcher LITERALS, in order, against Go's — see the second
- * describe block. The corpus pins behaviour on the inputs it contains; the
- * literal diff pins the ladder itself, so a pattern alternative added or
- * removed on one side is red even before anyone thinks to write a row for it.
+ * Complements failureClassifier.parity.test.ts (#229), which diffs the kind
+ * VOCABULARY. Names were in sync while behaviour had drifted 19 ways; this
+ * covers behaviour.
  */
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   classifyTerminalKind,
-  resolveTerminalKind,
-  ALL_TERMINAL_FAILURE_KINDS,
-  type TerminalFailureKind,
+  signalTerminalKind,
+  terminalKindStressInputs,
 } from "../../../src/analysis/health/failureClassifier.js";
+import { TERMINAL_KIND_TABLE } from "../../../src/analysis/health/terminalKindTable.generated.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../..");
-const CORPUS_PATH = path.join(
-  REPO_ROOT,
-  "internal/orchestrator/testdata/terminal-kind/corpus.json"
-);
-
-interface KnownDivergence {
-  sdk?: string;
-  signal?: string;
-  why: string;
-  tracked: string;
-}
+const CORPUS_PATH = path.join(REPO_ROOT, "internal/terminalkind/testdata/corpus.json");
+const GOLDEN_PATH = path.join(REPO_ROOT, "internal/terminalkind/testdata/stress-golden.json");
 
 interface CorpusCase {
   id: string;
   input: string;
   expected: string;
+  expected_signal: string;
   source: "captured" | "synthetic";
   producer?: string;
   rationale: string;
-  known_divergence?: KnownDivergence;
 }
 
-interface TerminalKindCorpus {
-  no_matcher_kinds: string[];
-  cases: CorpusCase[];
-}
-
-const corpus: TerminalKindCorpus = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
-
-/** The corpus encodes an unmatched input as `""`; this classifier returns undefined. */
-const expectedFor = (c: CorpusCase): string => c.known_divergence?.sdk ?? c.expected;
+const corpus: { cases: CorpusCase[] } = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
+const golden: { cases: { input: string; kind: string; signal: string }[] } = JSON.parse(
+  readFileSync(GOLDEN_PATH, "utf-8")
+);
 
 describe("terminal-kind corpus parity (SDK)", () => {
-  it("classifies every corpus input to the kind the corpus pins", () => {
+  it("classifies every corpus input the way the run record will", () => {
     const mismatches: string[] = [];
 
     for (const c of corpus.cases) {
       const got = classifyTerminalKind(c.input) ?? "";
-      const want = expectedFor(c);
-      if (got !== want) {
+      if (got !== c.expected) {
         mismatches.push(
           `${c.id}\n    input:    ${JSON.stringify(c.input)}\n` +
             `    got:      ${JSON.stringify(got)}\n` +
-            `    expected: ${JSON.stringify(want)}\n` +
+            `    expected: ${JSON.stringify(c.expected)}\n` +
             `    why this row exists: ${c.rationale}`
         );
       }
@@ -93,162 +69,181 @@ describe("terminal-kind corpus parity (SDK)", () => {
     expect(
       mismatches,
       `The SDK classifier disagrees with the shared corpus on ${mismatches.length} of ` +
-        `${corpus.cases.length} inputs. The corpus holds Go's answer because Go writes the run ` +
-        `record, so each mismatch is a run the record and the published SDK describe ` +
-        `differently:\n\n${mismatches.join("\n\n")}\n`
+        `${corpus.cases.length} inputs. Both sides interpret the same table, so a mismatch here ` +
+        `is an interpreter bug, not drift — check clause evaluation and rule order before ` +
+        `touching the fixture:\n\n${mismatches.join("\n\n")}\n`
     ).toEqual([]);
   });
 
-  it("records each declared divergence as an actual, current disagreement", () => {
-    // A recorded divergence that has quietly been resolved is worse than none:
-    // it documents a gap that no longer exists and hides the next real one.
+  it("projects the signal subset exactly as the corpus pins it", () => {
+    // Both bounds. A non-empty signal must equal the recorded kind (it is the
+    // same winning rule), and a rule declared `signal: true` must produce one.
+    const mismatches: string[] = [];
     for (const c of corpus.cases) {
-      const sdk = c.known_divergence?.sdk;
-      if (!sdk) continue;
-      expect(
-        classifyTerminalKind(c.input) ?? "",
-        `${c.id} declares an SDK divergence to "${sdk}" (${c.known_divergence?.tracked}); ` +
-          `if the classifier no longer produces it, delete the divergence from the corpus.`
-      ).toBe(sdk);
+      const got = signalTerminalKind(c.input) ?? "";
+      if (got !== c.expected_signal) {
+        mismatches.push(
+          `${c.id}: signal ${JSON.stringify(got)}, corpus pins ${JSON.stringify(c.expected_signal)}`
+        );
+      }
+      if (got !== "" && got !== c.expected) {
+        mismatches.push(`${c.id}: signal ${got} contradicts the record ${c.expected}`);
+      }
     }
+    expect(mismatches).toEqual([]);
   });
+});
 
-  it("prefers a gate-sourced kind over prose classification", () => {
-    for (const c of corpus.cases) {
-      expect(resolveTerminalKind(false, undefined, c.input) ?? "").toBe(expectedFor(c));
-      expect(resolveTerminalKind(true, "abandoned_commit", c.input)).toBe("abandoned_commit");
-    }
-  });
+describe("interpreter equivalence (SDK vs Go, over the derived stress set)", () => {
+  const inputs = terminalKindStressInputs();
 
-  it("covers every terminal kind that is derived from error text", () => {
-    const exempt = new Set(corpus.no_matcher_kinds);
-    const covered = new Set(corpus.cases.map((c) => c.expected).filter(Boolean));
-
-    const missing = ALL_TERMINAL_FAILURE_KINDS.filter(
-      (kind) => !covered.has(kind) && !exempt.has(kind)
-    );
-
+  it("derives exactly the inputs Go derived", () => {
+    // If this fails the two derivations have diverged, which would quietly
+    // shrink what the equivalence check below covers.
+    expect(inputs.length).toBe(golden.cases.length);
+    const mismatched = inputs.filter((s, i) => s !== golden.cases[i].input).slice(0, 5);
     expect(
-      missing,
-      "Terminal kinds with no corpus row. Add a row (with a rationale) to " +
-        "internal/orchestrator/testdata/terminal-kind/corpus.json, or list the kind in " +
-        "no_matcher_kinds if it is set structurally and never derived from error text."
+      mismatched,
+      "terminalKindStressInputs no longer matches StressInputs in internal/terminalkind/stress.go"
     ).toEqual([]);
   });
 
-  it("expects only kinds this classifier can actually return", () => {
-    const known = new Set<string>(ALL_TERMINAL_FAILURE_KINDS as readonly string[]);
-    for (const c of corpus.cases) {
-      const want = expectedFor(c);
-      if (want === "") continue;
-      expect(known.has(want as TerminalFailureKind), `${c.id} expects unknown kind "${want}"`).toBe(
-        true
-      );
+  it("answers exactly what Go answered, for every derived input", () => {
+    const diffs: string[] = [];
+    for (const c of golden.cases) {
+      const kind = classifyTerminalKind(c.input) ?? "";
+      const signal = signalTerminalKind(c.input) ?? "";
+      if (kind !== c.kind || signal !== c.signal) {
+        diffs.push(
+          `${JSON.stringify(c.input)}\n    SDK: kind=${JSON.stringify(kind)} ` +
+            `signal=${JSON.stringify(signal)}\n    Go:  kind=${JSON.stringify(c.kind)} ` +
+            `signal=${JSON.stringify(c.signal)}`
+        );
+      }
+    }
+    expect(
+      diffs.slice(0, 10),
+      `The two interpreters disagree on ${diffs.length} of ${golden.cases.length} derived inputs. ` +
+        `The stress set covers every clause, every term and every ordered rule pair, so any ` +
+        `divergence in clause evaluation or precedence lands here.`
+    ).toEqual([]);
+  });
+
+  it("never signals a kind that contradicts the record", () => {
+    for (const c of golden.cases) {
+      const signal = signalTerminalKind(c.input);
+      if (signal !== undefined) {
+        expect(signal, `signal for ${JSON.stringify(c.input)}`).toBe(classifyTerminalKind(c.input));
+      }
     }
   });
 });
 
-/**
- * The corpus pins BEHAVIOUR on the inputs it happens to contain. This block
- * pins the LADDER: every matcher literal, in order, must be the same on both
- * sides. Adding or deleting a pattern alternative introduces no new kind, so
- * the kind-coverage assertions above cannot see it — which is how a stale
- * mirror re-forms.
- *
- * Direction of authority is unchanged: Go is the source, this file is the
- * mirror. Go's own suite additionally requires every one of these literals to
- * be exercised by a corpus input
- * (`TestTerminalKindCorpus_ExercisesEveryMatcherLiteral`); with the sequences
- * proven identical here, that coverage carries over to this side for free.
- *
- * NOT covered: the extension's `classifyTerminalKindForSignal`, which is a
- * deliberately partial regex ladder rather than a mirror. Its corpus suite
- * pins it by outcome instead.
- */
-const GO_CLASSIFIER_PATH = path.join(REPO_ROOT, "internal/orchestrator/failure_handler.go");
-const SDK_CLASSIFIER_PATH = path.join(
-  REPO_ROOT,
-  "packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts"
-);
+describe("named predicates", () => {
+  // The table's one predicate is the only part of a rule that is code rather
+  // than a literal, so it is the only remaining way the two languages could
+  // answer differently. Go asserts these same probes in TestPredicateProbes.
+  it("accepts every declared true-probe and rejects every false-probe", () => {
+    for (const p of TERMINAL_KIND_TABLE.predicates) {
+      expect(p.probes_true.length, `${p.name} declares no true-probes`).toBeGreaterThan(0);
+      expect(p.probes_false.length, `${p.name} declares no false-probes`).toBeGreaterThan(0);
 
-const GO_LITERAL_RE = /strings\.Contains\(t,\s*"((?:[^"\\]|\\.)*)"\)/g;
-const SDK_LITERAL_RE = /t\.includes\(\s*"((?:[^"\\]|\\.)*)"\s*\)/g;
+      for (const probe of p.probes_true) {
+        // Exercised through the classifier rather than by reaching into the
+        // predicate: what matters is the rule it gates.
+        expect(
+          classifyTerminalKind(`usage limit reached for ${probe}`),
+          `${p.name} should accept ${JSON.stringify(probe)}`
+        ).toBe("model_unavailable");
+      }
+      for (const probe of p.probes_false) {
+        expect(
+          classifyTerminalKind(`usage limit reached ${probe}`),
+          `${p.name} should reject ${JSON.stringify(probe)}`
+        ).not.toBe("model_unavailable");
+      }
+    }
+  });
+});
 
-/**
- * Go carries one alternative this side deliberately does not: the
- * `exitSignalSource` + `runaway-progress` conjunction. Go lowercases its input
- * before matching and that literal carries capitals, so the branch cannot fire
- * for any input — mirroring dead code would make both sides agree on nothing.
- * Pinned as a contiguous run so that deleting it from Go (the right eventual
- * fix, #305/#370) fails here and forces this exception to be deleted with it.
- */
-const GO_ONLY_DEAD_BRANCH = ["exitSignalSource", "runaway-progress"];
-
-/** Brace-balanced body of a top-level function, located by its signature. */
-function functionBody(source: string, signature: string): string {
-  const start = source.indexOf(signature);
-  if (start < 0) {
-    throw new Error(`${signature} not found — the classifier was renamed and this guard is blind`);
-  }
-  const open = source.indexOf("{", start);
-  let depth = 0;
-  for (let i = open; i < source.length; i++) {
-    if (source[i] === "{") depth++;
-    else if (source[i] === "}" && --depth === 0) return source.slice(open, i + 1);
-  }
-  throw new Error(`${signature} body is unbalanced`);
-}
-
-function matcherLiterals(body: string, pattern: RegExp): string[] {
-  return [...body.matchAll(pattern)].map((m) => m[1]);
-}
-
-describe("terminal-kind matcher parity (#306)", () => {
-  const goSource = readFileSync(GO_CLASSIFIER_PATH, "utf-8");
-  const sdkSource = readFileSync(SDK_CLASSIFIER_PATH, "utf-8");
-
-  const goLiterals = matcherLiterals(
-    functionBody(goSource, "func ClassifyTerminalKind(") +
-      functionBody(goSource, "func isModelUnavailableText("),
-    GO_LITERAL_RE
+describe("the interpreter itself", () => {
+  // THE LAST HOLE, closed structurally. The corpus and the derived stress set
+  // are both built FROM the table's vocabulary, so neither can see a rule
+  // invented HERE for a marker the table has never heard of — insert
+  // `if (t.includes("[baseline-ci-deferred]")) return …` at the top of
+  // matchTerminalKindRule and every behavioural assertion above stays green.
+  // (That is round 2's finding 1/8 in its new home; the marker is not invented
+  // either, it is live in classifyFailureCategory.)
+  //
+  // So the matcher is asserted to contain NO string literal and NO regex at
+  // all: every marker it compares against must come out of the generated
+  // table. That is checkable at a glance on twelve lines, which is exactly why
+  // the ladder had to become data first — the same assertion over a 33-block
+  // hand-written ladder would be meaningless.
+  const SOURCE_PATH = path.join(
+    REPO_ROOT,
+    "packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts"
   );
-  const sdkLiterals = matcherLiterals(
-    functionBody(sdkSource, "export function classifyTerminalKind(") +
-      functionBody(sdkSource, "function isModelUnavailableText("),
-    SDK_LITERAL_RE
-  );
+  const source = readFileSync(SOURCE_PATH, "utf-8");
 
-  it("extracted a non-trivial literal ladder from both sides (sanity check on the regexes)", () => {
-    expect(goLiterals.length).toBeGreaterThan(100);
-    expect(sdkLiterals.length).toBeGreaterThan(100);
+  function matcherSource(): string {
+    const start = source.indexOf("function matchTerminalKindRule");
+    const end = source.indexOf("const TERMINAL_KIND_PREDICATES");
+    expect(start, "matchTerminalKindRule is gone — this guard now checks nothing").toBeGreaterThan(
+      0
+    );
+    expect(end, "TERMINAL_KIND_PREDICATES is gone — this guard now checks nothing").toBeGreaterThan(
+      start
+    );
+    // Strip comments; prose is allowed to contain anything.
+    return source
+      .slice(start, end)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+  }
+
+  it("contains no string literal and no regex — every marker comes from the table", () => {
+    const body = matcherSource();
+    const literals = body.match(/"[^"]*"|'[^']*'|`[^`]*`/g) ?? [];
+    expect(
+      literals,
+      "a string literal appeared inside the terminal-kind matcher. Markers belong in " +
+        "internal/terminalkind/table.json, where Go reads them too; a literal here is a rule " +
+        "only this language has, and neither the corpus nor the derived stress set can see it."
+    ).toEqual([]);
+    const regexes = body.match(/[=(,[\s]\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n])+\/[gimsuy]*/g) ?? [];
+    expect(regexes, "a regex appeared inside the terminal-kind matcher").toEqual([]);
   });
 
-  it("mirrors Go's matcher literals exactly, in order", () => {
-    const at = goLiterals.indexOf(GO_ONLY_DEAD_BRANCH[0]);
-    expect(
-      at,
-      `Go no longer carries the documented dead branch ${JSON.stringify(GO_ONLY_DEAD_BRANCH)}. ` +
-        `If it was deleted, delete GO_ONLY_DEAD_BRANCH here too (and the corpus row ` +
-        `runaway-progress-exit-signal-source-dead-branch).`
-    ).toBeGreaterThanOrEqual(0);
-    expect(
-      goLiterals.slice(at, at + GO_ONLY_DEAD_BRANCH.length),
-      "the dead branch is no longer a contiguous run in Go; re-check the exception before trusting it"
-    ).toEqual(GO_ONLY_DEAD_BRANCH);
+  it("implements exactly the predicates the table declares — no more", () => {
+    // An extra predicate would be a second place to put behaviour that the
+    // table does not describe.
+    const declared = TERMINAL_KIND_TABLE.predicates.map((p) => p.name).sort();
+    const block = source.slice(
+      source.indexOf("const TERMINAL_KIND_PREDICATES"),
+      source.indexOf("Classify the *kind* of terminal failure")
+    );
+    const implemented = [...block.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort();
+    expect(implemented).toEqual(declared);
+  });
+});
 
-    const goWithoutDeadBranch = [
-      ...goLiterals.slice(0, at),
-      ...goLiterals.slice(at + GO_ONLY_DEAD_BRANCH.length),
-    ];
-
-    expect(
-      goWithoutDeadBranch,
-      "The SDK mirror and Go's ClassifyTerminalKind no longer match literal for literal. Order " +
-        "is the contract — many real failure strings match two blocks and the earlier one wins " +
-        "— so a reordered or missing alternative is a run the record and the published SDK " +
-        "describe differently, even when every corpus row still passes. Mirror the change (and " +
-        "add a corpus row exercising the new literal: Go's " +
-        "TestTerminalKindCorpus_ExercisesEveryMatcherLiteral requires one)."
-    ).toEqual(sdkLiterals);
+describe("the table itself", () => {
+  it("references no predicate this language cannot evaluate", () => {
+    // A missing implementation must throw rather than silently evaluate false,
+    // which would disable a rule with no visible symptom.
+    for (const rule of TERMINAL_KIND_TABLE.rules) {
+      for (const clause of rule.clauses) {
+        for (const term of clause) {
+          if (!term.startsWith("@")) continue;
+          const name = term.slice(1);
+          expect(
+            TERMINAL_KIND_TABLE.predicates.some((p) => p.name === name),
+            `rule ${rule.id} references undeclared predicate ${name}`
+          ).toBe(true);
+          expect(() => classifyTerminalKind("probe")).not.toThrow();
+        }
+      }
+    }
   });
 });

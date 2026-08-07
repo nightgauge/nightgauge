@@ -13367,9 +13367,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // stderr via inferProcessError). Pre-fix this branch synthesized
             // a generic `[stall-killed] {stage} terminated...` message and
             // discarded `result.error`, which destroyed the
-            // `[rate-limit-quota-exhausted]` marker (#3386) that
-            // bootstrap/services.ts depends on for terminalFailureKind
-            // classification. Without that classification the autonomous
+            // `[rate-limit-quota-exhausted]` marker (#3386) that the
+            // terminal-kind rule table (internal/terminalkind/table.json)
+            // keys on. Without that classification the autonomous
             // scheduler's global quota cooldown (#3434) is bypassed and
             // every quota-exhausted kill increments the lifetime failure
             // cap — exactly the regression #3440 was supposed to close but

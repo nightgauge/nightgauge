@@ -38,4 +38,8 @@ claude-plugins/docs/
 # reproduces the file byte for byte — but only if nothing reformats it in
 # between. Prettier collapses its short arrays, which would make every re-run
 # show a spurious diff.
-internal/orchestrator/testdata/terminal-kind/captured-shapes.json
+internal/terminalkind/testdata/captured-shapes.json
+# Generated from internal/terminalkind/table.json by
+# `make generate-terminal-kind-table` (#306). Reformatting it would make every
+# regeneration show a spurious drift, and the drift check compares bytes.
+internal/terminalkind/testdata/stress-golden.json
