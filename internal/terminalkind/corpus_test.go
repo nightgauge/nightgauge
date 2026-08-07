@@ -126,18 +126,22 @@ func TestCorpus_SignalProjection(t *testing.T) {
 				t.Errorf("SignalKind(%q)\n  got:      %q\n  expected: %q",
 					tc.Input, got, tc.ExpectedSignal)
 			}
-			if got != "" && got != tc.Expected {
-				t.Errorf("%s: the signal (%q) disagrees with the record (%q) — impossible by "+
-					"construction, so the interpreter is broken", tc.ID, got, tc.Expected)
-			}
 			r, ok := tb.Match(tc.Input)
 			wantSignal := ""
+			source := ""
 			if ok && r.Signal {
-				wantSignal = r.Kind
+				wantSignal, source = r.Kind, r.ID
+			} else if e, isExt := tb.MatchSignalExtension(tc.Input); isExt {
+				wantSignal, source = e.Kind, e.ID
 			}
 			if got != wantSignal {
 				t.Errorf("%s: signal projection %q does not follow from the winning rule %q",
 					tc.ID, got, r.ID)
+			}
+			if got != "" && got != tc.Expected && source != extensionSourceOf(tb, tc.Input) {
+				t.Errorf("%s: the signal (%q) disagrees with the record (%q) and no declared "+
+					"signal extension produces it — the interpreter is broken",
+					tc.ID, got, tc.Expected)
 			}
 		})
 	}
@@ -173,6 +177,97 @@ func TestCorpus_ExercisesEveryRule(t *testing.T) {
 			"Every rung needs at least one input it actually claims, with a rationale saying why "+
 			"that text must route that way. Add rows to %s/corpus.json.", missing, corpusDir)
 	}
+}
+
+// TestEveryConjunctionHalfIsPinnedByANegativeRow makes the README's guarantee
+// TRUE BY CONSTRUCTION instead of by fixture diligence.
+//
+// The failure it exists for is round 2's finding 6 and round 3's finding 2: an
+// AND quietly widened into an OR. `["api error", "connection refused"]` becoming
+// `["connection refused"]` is a live routing change on a signal:true rule — any
+// stage failure mentioning a refused port now classifies api_connection_lost and
+// the fleet applies transient-blip recovery — and after regenerating the golden
+// it left every suite green, visible only as three shortened lines and one
+// deletion inside a 7,000-line generated file.
+//
+// So the requirement is DERIVED from the table rather than remembered: for every
+// multi-term clause and every term in it, widen that clause to the term alone
+// and re-classify the whole corpus. At least one row must change its answer. If
+// none does, the corpus cannot see that half of that conjunction, and the test
+// prints the exact row to add.
+//
+// A @predicate half is handled the same way: widening
+// `["usage limit", "@mentions_registry_model"]` to `["@mentions_registry_model"]`
+// demands a row that names a model and is NOT model_unavailable, and widening it
+// to `["usage limit"]` demands one with the phrase and no model named.
+func TestEveryConjunctionHalfIsPinnedByANegativeRow(t *testing.T) {
+	corpus := loadTerminalKindCorpus(t)
+	tb := Load()
+
+	dead := map[string]bool{}
+	for _, d := range tb.DeadTerms {
+		dead[d.Term] = true
+	}
+
+	conjunctions := 0
+	for ri, rule := range tb.Rules {
+		for ci, clause := range rule.Clauses {
+			if len(clause) < 2 {
+				continue
+			}
+			conjunctions++
+			for _, term := range clause {
+				// A declared dead term cannot fire even alone, so no input can
+				// pin it. TestDeadTermsAreUnreachable proves that separately;
+				// the live half of the same clause is still required below.
+				if dead[term] {
+					continue
+				}
+				widened := widenClause(tb, ri, ci, term)
+				changed := ""
+				for _, tc := range corpus.Cases {
+					got := ""
+					if r, ok := widened.Match(tc.Input); ok {
+						got = r.Kind
+					}
+					if got != tc.Expected {
+						changed = tc.ID
+						break
+					}
+				}
+				if changed != "" {
+					continue
+				}
+				t.Errorf("clause %v of rule %q has NO corpus row pinning the half %q.\n"+
+					"Widening the clause to just that term changes no expectation, so the "+
+					"conjunction could be turned into a disjunction — a live routing change — with "+
+					"every suite green.\n"+
+					"Add a row whose input satisfies %q WITHOUT satisfying the rest of the clause; "+
+					"the derived probe %q classifies as %q today, which is the expectation to pin.",
+					clause, rule.ID, term, term,
+					tb.sampleClause([]string{term}), Classify(tb.sampleClause([]string{term})))
+			}
+		}
+	}
+	if conjunctions == 0 {
+		t.Fatal("no multi-term clause found — either the table lost every conjunction or this " +
+			"guard stopped finding them")
+	}
+}
+
+// widenClause returns a copy of tb in which one clause is replaced by a single
+// one of its terms — the AND→OR mutation, applied one half at a time.
+func widenClause(tb *Table, ruleIdx, clauseIdx int, term string) *Table {
+	out := *tb
+	out.Rules = make([]Rule, len(tb.Rules))
+	copy(out.Rules, tb.Rules)
+	r := out.Rules[ruleIdx]
+	clauses := make([][]string, len(r.Clauses))
+	copy(clauses, r.Clauses)
+	clauses[clauseIdx] = []string{term}
+	r.Clauses = clauses
+	out.Rules[ruleIdx] = r
+	return &out
 }
 
 var terminalKindConstRe = regexp.MustCompile(`(?m)^\s*TerminalKind\w+\s*=\s*"([a-z_]+)"`)
@@ -299,8 +394,10 @@ func TestCorpus_CapturedRowsAreEvidence(t *testing.T) {
 // carries a reason, so changing one means changing an argument.
 func TestCorpus_RowsAreWellFormed(t *testing.T) {
 	corpus := loadTerminalKindCorpus(t)
+	tb := Load()
 
 	seen := map[string]bool{}
+	extensionRows := map[string]int{}
 	sawDefault := false
 	for _, tc := range corpus.Cases {
 		if tc.ID == "" {
@@ -319,10 +416,22 @@ func TestCorpus_RowsAreWellFormed(t *testing.T) {
 		}
 
 		if tc.ExpectedSignal != "" && tc.ExpectedSignal != tc.Expected {
-			t.Errorf("case %q declares expected_signal %q against expected %q. The signal side "+
-				"projects the SAME winning rule, so the two can only differ by the signal being "+
-				"empty — a row asserting otherwise is asserting something impossible.",
-				tc.ID, tc.ExpectedSignal, tc.Expected)
+			// The ONLY legal way for the two to differ: a declared signal
+			// extension claimed the input. Anything else is a row asserting
+			// something the projection cannot produce.
+			e, ok := tb.MatchSignalExtension(tc.Input)
+			switch {
+			case !ok:
+				t.Errorf("case %q declares expected_signal %q against expected %q, and no declared "+
+					"signal extension matches its input. The signal side projects the SAME winning "+
+					"rule, so outside signal_extensions the two can only differ by the signal being "+
+					"empty.", tc.ID, tc.ExpectedSignal, tc.Expected)
+			case e.Kind != tc.ExpectedSignal:
+				t.Errorf("case %q declares expected_signal %q, but the signal extension that claims "+
+					"its input (%q) produces %q", tc.ID, tc.ExpectedSignal, e.ID, e.Kind)
+			default:
+				extensionRows[e.ID]++
+			}
 		}
 
 		if tc.Expected == "" {
@@ -334,4 +443,24 @@ func TestCorpus_RowsAreWellFormed(t *testing.T) {
 		t.Error("the corpus must pin the unknown/default case (expected \"\") — " +
 			"it is what every unmatched failure in production falls back to")
 	}
+
+	// Every declared extension must be EXERCISED by a row that shows the
+	// divergence, not merely permitted by the rule above. Without this, deleting
+	// the extension would only shrink the golden.
+	for _, e := range tb.SignalExtensions {
+		if extensionRows[e.ID] == 0 {
+			t.Errorf("signal extension %q has no corpus row where expected_signal differs from "+
+				"expected. The divergence it exists to create is unpinned, so deleting it would "+
+				"change no expectation anywhere.", e.ID)
+		}
+	}
+}
+
+// extensionSourceOf reports the id of the declared signal extension that claims
+// errorText, or "" when none does.
+func extensionSourceOf(tb *Table, errorText string) string {
+	if e, ok := tb.MatchSignalExtension(errorText); ok {
+		return e.ID
+	}
+	return ""
 }

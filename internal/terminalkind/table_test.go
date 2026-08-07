@@ -1,10 +1,13 @@
 package terminalkind
 
 import (
-	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -38,6 +41,7 @@ func TestTableIsWellFormed(t *testing.T) {
 				if strings.HasPrefix(term, PredicateRef) {
 					continue
 				}
+				term = strings.TrimPrefix(term, WordBoundaryRef)
 				if term != strings.ToLower(term) {
 					d, ok := declaredDead[term]
 					if !ok {
@@ -150,56 +154,233 @@ func TestSignalSubsetIsDeclared(t *testing.T) {
 
 // TestSignalNeverContradictsTheRecord is the structural statement of #306's
 // acceptance, over the derived stress set rather than over hand-written rows:
-// for EVERY input the table can describe, the signal is either silent or
-// identical to the record.
+// for EVERY input the table can describe, the signal is either silent, or
+// identical to the record, or the kind of a DECLARED signal extension.
+//
+// The third branch is the only way the two can differ, it is data rather than
+// code, and it is bounded: an extension is consulted only when the rule ladder
+// projects no signal, so it can never overrule a kind the record names through
+// a signal rule.
 func TestSignalNeverContradictsTheRecord(t *testing.T) {
 	tb := Load()
 	for _, in := range StressInputs(tb) {
-		if s := SignalKind(in); s != "" && s != Classify(in) {
-			t.Fatalf("signal %q contradicts record %q for %q", s, Classify(in), in)
+		s := SignalKind(in)
+		if s == "" || s == Classify(in) {
+			continue
+		}
+		e, ok := tb.MatchSignalExtension(in)
+		if !ok || e.Kind != s {
+			t.Fatalf("signal %q contradicts record %q for %q, and no declared signal extension "+
+				"produces it", s, Classify(in), in)
+		}
+		if r, matched := tb.Match(in); matched && r.Signal {
+			t.Fatalf("signal extension %q claimed %q, which the signal RULE %q already answers for "+
+				"— extensions must never overrule a kind the record names", e.ID, in, r.ID)
 		}
 	}
 }
 
-// TestMatcherHasNoLiterals closes the one hole the corpus and the derived
-// stress set structurally cannot see: both are built FROM the table's
-// vocabulary, so a rule hand-written into an INTERPRETER for a marker the table
-// has never heard of is invisible to them. Round 2's evasion was exactly that,
-// on the highest-authority ladder.
-//
-// So the matcher is required to contain no string literal at all: every marker
-// it compares against must come out of table.json. The assertion is only
-// meaningful because the matcher is now twenty lines of data-walking — the same
-// check over a 33-block hand-written ladder would be absurd. The SDK asserts the
-// same thing about its own interpreter.
-func TestMatcherHasNoLiterals(t *testing.T) {
-	src, err := os.ReadFile("table.go")
-	if err != nil {
-		t.Fatalf("read table.go: %v", err)
-	}
-	for _, fn := range []string{"func (tb *Table) Match(", "func satisfied("} {
-		body := goFuncBody(t, string(src), fn)
-		for _, lit := range stringLiteralRe.FindAllString(body, -1) {
-			// The empty string is allowed: it is the "no input" / "no match"
-			// sentinel, and it cannot be a marker.
-			if lit == `""` {
+// TestSignalExtensionsAreDeclaredAndBounded keeps the one deliberate divergence
+// honest at the table level.
+func TestSignalExtensionsAreDeclaredAndBounded(t *testing.T) {
+	tb := Load()
+	for _, e := range tb.SignalExtensions {
+		if strings.TrimSpace(e.Why) == "" {
+			t.Errorf("signal extension %q has no `why`. It is the only place the fleet's reaction "+
+				"may differ from the run record; the argument for it is the whole justification.",
+				e.ID)
+		}
+		// An extension that duplicates a signal rule's kind for text that rule
+		// already claims would be unreachable; one that duplicates a NON-signal
+		// rule's kind would be a signal flag written the long way round.
+		for _, r := range tb.Rules {
+			if r.Kind != e.Kind || r.Signal {
 				continue
 			}
-			t.Errorf("%s contains the string literal %s. Markers belong in table.json, where "+
-				"every language reads them; a literal here is a rule only Go has, and neither the "+
-				"corpus nor the derived stress set can see it.", fn, lit)
+			t.Errorf("signal extension %q produces %q, which the non-signal rule %q also produces. "+
+				"Mark that rule `signal: true` instead of routing around it.", e.ID, e.Kind, r.ID)
+		}
+		fired := false
+		for _, clause := range e.Clauses {
+			if SignalKind(tb.sampleClause(clause)) == e.Kind {
+				fired = true
+			}
+		}
+		if !fired {
+			t.Errorf("no clause of signal extension %q can fire — a rule above it claims every "+
+				"input it describes, so it is dead code", e.ID)
 		}
 	}
 }
 
-var stringLiteralRe = regexp.MustCompile("\"(?:[^\"\\\\]|\\\\.)*\"|`[^`]*`")
+// packageLiteralAllowlist is the COMPLETE set of string literals this package's
+// non-test source is allowed to contain — declared here, in one place, and
+// asserted as an exact set (see TestMatchingSurfaceHasNoUndeclaredLiterals).
+//
+// Not one of them is a failure-text marker: they are error-message formats, the
+// predicate-reference prefix, one rule ID that two recovery paths ask for by
+// name, and the derivation vocabulary the stress generator composes inputs
+// from. Every marker the classifier compares an input against comes out of
+// table.json.
+var packageLiteralAllowlist = map[string]bool{
+	// table.go — Parse/Load diagnostics and the schema's own vocabulary.
+	"":                  true,
+	"@":                 true,
+	"~":                 true,
+	"cost-cap-exceeded": true,
+	// predicates.go — the one predicate NAME, which table.json references as
+	// `@mentions_registry_model` and Parse refuses to accept without.
+	"mentions_registry_model":                               true,
+	"terminalkind: embedded table.json is invalid: %v":      true,
+	"unsupported schema_version %d":                         true,
+	"table has no rules":                                    true,
+	"rule with empty id or kind":                            true,
+	"duplicate rule id %q":                                  true,
+	"signal extension with empty id or kind":                true,
+	"rule %q has no clauses":                                true,
+	"rule %q has an empty clause":                           true,
+	"rule %q has an empty term":                             true,
+	"rule %q references unknown predicate %q":               true,
+	"table declares predicate %q with no Go implementation": true,
+	"terminalkind: no rule with id %q":                      true,
+	// stress.go — the derived-input vocabulary. Mirrored verbatim in the
+	// TypeScript twin; changing either without the other fails the golden.
+	"nothing in this sentence resembles a terminal marker": true,
+	"exit 1: ": true,
+	" | ":      true,
+	" ":        true,
+	"terminalkind: predicate %q declares no probes_true":                                       true,
+	"GENERATED by `make generate-terminal-kind-table` from internal/terminalkind/table.json.":  true,
+	"Do not edit by hand — the drift check regenerates it and compares byte for byte.":         true,
+	"Every input is derived from the table itself (see StressInputs in stress.go and its":      true,
+	"verbatim TypeScript twin), so this file is the table's complete behaviour under its own":  true,
+	"vocabulary: `kind` is what the run record will say, `signal` is what the extension may":   true,
+	"forward over IPC — the winning rule's kind when that rule is in the signal subset, else":  true,
+	"a declared signal_extension's kind, else empty. The rows where `signal` is non-empty and": true,
+	"differs from `kind` are exactly the declared extensions.":                                 true,
+	"Go, the SDK and the extension each derive the same inputs and must reproduce these":       true,
+	"answers exactly. A table edit shows up here as an explicit before/after of every input":   true,
+	"whose routing changed, which is the review surface a hand-written ladder never had.":      true,
+}
+
+// TestMatchingSurfaceHasNoUndeclaredLiterals closes the one hole the corpus and
+// the derived stress set structurally cannot see: both are built FROM the
+// table's vocabulary, so a rule hand-written into an INTERPRETER for a marker
+// the table has never heard of is invisible to them.
+//
+// Round 3 guarded two functions by name — `Match` and `satisfied` — and both of
+// round 3's own evasions went around that fence rather than through it: one by
+// putting the branch in `Classify` (the function that WRITES the run record),
+// the other by declaring `const deferredMarker = "…"` one line above the
+// window and referencing it from inside. So the guard is now the whole package,
+// as an EXACT SET: every string literal in every non-test file here must appear
+// in packageLiteralAllowlist above, and every allowlist entry must still be
+// present. There is no line to hoist to, and no function to move to.
+//
+// Literals are collected with go/parser rather than a regex, so comments,
+// escapes and raw strings cannot be used to smuggle one past the scan. Rendering
+// the generated TypeScript — which is nothing but literals — was moved to
+// internal/terminalkind/codegen for exactly this reason.
+func TestMatchingSurfaceHasNoUndeclaredLiterals(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse package: %v", err)
+	}
+	if len(pkgs) != 1 {
+		t.Fatalf("expected exactly one non-test package here, found %d", len(pkgs))
+	}
+
+	found := map[string]bool{}
+	files := 0
+	for _, pkg := range pkgs {
+		for name, file := range pkg.Files {
+			files++
+			// Import paths and struct tags are string literals the language
+			// requires and that no expression can compare an input against.
+			// Everything else is in scope.
+			structural := map[token.Pos]bool{}
+			ast.Inspect(file, func(n ast.Node) bool {
+				switch v := n.(type) {
+				case *ast.ImportSpec:
+					if v.Path != nil {
+						structural[v.Path.Pos()] = true
+					}
+				case *ast.Field:
+					if v.Tag != nil {
+						structural[v.Tag.Pos()] = true
+					}
+				}
+				return true
+			})
+			ast.Inspect(file, func(n ast.Node) bool {
+				lit, ok := n.(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING || structural[lit.Pos()] {
+					return true
+				}
+				v, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Errorf("%s: unparseable string literal %s", name, lit.Value)
+					return true
+				}
+				found[v] = true
+				if !packageLiteralAllowlist[v] {
+					t.Errorf("%s:%d contains the undeclared string literal %q.\n"+
+						"Markers belong in table.json, where every language reads them; a literal "+
+						"here is a rule only Go has, and neither the corpus nor the derived stress "+
+						"set can see it. If it is genuinely not a marker, add it to "+
+						"packageLiteralAllowlist and say why in the comment above it.",
+						filepath.Base(name), fset.Position(lit.Pos()).Line, v)
+				}
+				return true
+			})
+		}
+	}
+	if files < 3 {
+		t.Fatalf("only %d non-test files scanned — the walk is broken and this guard now "+
+			"checks almost nothing", files)
+	}
+	for lit := range packageLiteralAllowlist {
+		if !found[lit] {
+			t.Errorf("packageLiteralAllowlist declares %q, which no longer appears in the "+
+				"package. Delete the entry — a stale allowlist is a hole waiting for the string "+
+				"to come back somewhere else.", lit)
+		}
+	}
+}
+
+// TestOrchestratorEntryPointIsAPureDelegation guards the function that actually
+// writes `terminal_kind` into the run record. It lives outside this package, so
+// the literal scan above cannot see it, and round 3 asserted nothing about it at
+// all: inserting `if strings.Contains(…) { return TerminalKindStallKill }` at the
+// top of it passed the entire Go suite.
+func TestOrchestratorEntryPointIsAPureDelegation(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "orchestrator", "failure_handler.go"))
+	if err != nil {
+		t.Fatalf("read failure_handler.go: %v", err)
+	}
+	for decl, want := range map[string]string{
+		"func ClassifyTerminalKind(errorText string) string {": "return terminalkind.Classify(errorText)",
+	} {
+		body := goFuncBody(t, string(src), decl)
+		got := strings.Join(strings.Fields(body), " ")
+		if got != "{ "+want+" }" {
+			t.Errorf("%s must be exactly `%s` and nothing else.\n  got: %s\n"+
+				"This is the function whose answer becomes the run record. A condition here is a "+
+				"rule only Go has, on the authoritative side, invisible to the table, the corpus "+
+				"and the derived stress set alike.", decl, want, got)
+		}
+	}
+}
 
 // goFuncBody returns the brace-balanced body of a function, comments stripped.
 func goFuncBody(t *testing.T, src, decl string) string {
 	t.Helper()
 	start := strings.Index(src, decl)
 	if start < 0 {
-		t.Fatalf("%s not found — the matcher was renamed and this guard now checks nothing", decl)
+		t.Fatalf("%s not found — it was renamed and this guard now checks nothing", decl)
 	}
 	open := strings.Index(src[start:], "{")
 	if open < 0 {
@@ -266,51 +447,6 @@ func panics(f func()) (did bool) {
 	return false
 }
 
-// TestStressGoldenIsInSync is the behaviour drift check. It is the reason a
-// clause cannot be deleted or two rules swapped without a visible diff: the
-// golden holds an answer for every input derived from the table.
-func TestStressGoldenIsInSync(t *testing.T) {
-	want, err := RenderStressGolden(Load())
-	if err != nil {
-		t.Fatalf("render golden: %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join("testdata", "stress-golden.json"))
-	if err != nil {
-		t.Fatalf("read stress-golden.json: %v", err)
-	}
-	if string(got) != string(want) {
-		var a, b StressGolden
-		_ = json.Unmarshal(got, &a)
-		_ = json.Unmarshal(want, &b)
-		t.Errorf("testdata/stress-golden.json is out of sync with table.json "+
-			"(committed %d cases, table produces %d).\n"+
-			"Run `make generate-terminal-kind-table` and review the diff: every line that changed "+
-			"is an input whose routing changed.", len(a.Cases), len(b.Cases))
-	}
-}
-
-// TestGeneratedTypeScriptIsInSync is the cross-language drift check. Together
-// with .husky/pre-commit and scripts/ci-local.sh it makes "add a rule to one
-// consumer" impossible: the SDK's copy of the table is generated, and a hand
-// edit fails here.
-func TestGeneratedTypeScriptIsInSync(t *testing.T) {
-	want, err := RenderTypeScript(Load())
-	if err != nil {
-		t.Fatalf("render TypeScript: %v", err)
-	}
-	path := filepath.Join("..", "..", GeneratedTSPath)
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", GeneratedTSPath, err)
-	}
-	if string(got) != string(want) {
-		t.Errorf("%s is out of sync with internal/terminalkind/table.json.\n"+
-			"Run `make generate-terminal-kind-table` and commit the result. Terminal-kind "+
-			"classification is defined ONCE; the generated module is only how TypeScript sees it, "+
-			"and hand-editing it is the exact drift #306 removed.", GeneratedTSPath)
-	}
-}
-
 // TestStressInputsAreDerivedFromTheTable guards the generator itself: the SDK
 // reimplements it and both sides compare against the same golden, so silently
 // shrinking the derivation would weaken all three suites at once.
@@ -336,6 +472,7 @@ func TestStressInputsAreDerivedFromTheTable(t *testing.T) {
 				if strings.HasPrefix(term, PredicateRef) {
 					continue
 				}
+				term = strings.TrimPrefix(term, WordBoundaryRef)
 				if !seen[term] && !seen[strings.Join(clause, " ")] {
 					t.Errorf("no stress input isolates term %q of rule %q", term, r.ID)
 				}

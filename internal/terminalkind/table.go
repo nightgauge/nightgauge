@@ -16,6 +16,22 @@
 // Before #306 those were three hand-written ladders held aligned by comments,
 // and they disagreed on 19 of 98 real and synthetic inputs. A ladder that is
 // data cannot drift, because there is only one of it.
+//
+// TWO QUALIFICATIONS ON "THE SIGNAL CANNOT DISAGREE WITH THE RECORD", both
+// stated here because the bound is quoted elsewhere and an unqualified version
+// of it would be false:
+//
+//   - The table declares `signal_extensions`: reaction-only rules, consulted
+//     only when the rule table itself projects no signal. They are the ONE
+//     deliberate record-vs-reaction divergence, each carrying its reason and
+//     pinned by corpus rows. See SignalExtension and SignalKind.
+//   - The bound is per-language and assumes ASCII matching text. Go folds with
+//     strings.ToLower and TypeScript with String.prototype.toLowerCase; the two
+//     disagree on 56 code points, and on U+0130 the fold changes length, which
+//     can split an ASCII literal in one language and not the other. Every term
+//     in the table is ASCII and no producer in this repo emits
+//     Turkish-locale-uppercased failure text, so this is a stated assumption
+//     rather than an observed defect.
 package terminalkind
 
 import (
@@ -71,20 +87,60 @@ type Rule struct {
 	Why     string     `json:"why"`
 }
 
+// SignalExtension is a rule the REACTION path has and the RECORD path does not.
+//
+// It is the one declared way the kind the fleet reacts to may differ from the
+// kind the run record carries, and it exists because deleting the difference
+// silently was itself a regression: the pre-#306 extension ladder mapped a bare
+// Anthropic session/usage-limit line to rate_limit_quota_exhausted (#3792) as
+// defense-in-depth for the non-stream-json paths, where the record ladder
+// answers nothing at all and the run would otherwise book a lifetime failure
+// and a cascade strike for an upstream quota window that clears on its own.
+//
+// Extensions are consulted ONLY when the rule table projects no signal of its
+// own (see SignalKind), so an extension can never overrule a kind the record
+// actually names — the widest it can reach is text the signal subset ignores.
+// Every extension is pinned by corpus rows whose expected_signal deliberately
+// differs from expected, which the corpus well-formedness test permits for
+// declared extensions and for nothing else.
+type SignalExtension struct {
+	ID      string     `json:"id"`
+	Kind    string     `json:"kind"`
+	Clauses [][]string `json:"clauses"`
+	Why     string     `json:"why"`
+}
+
 // Table is the parsed canonical rule table.
 type Table struct {
-	Comment           []string    `json:"$comment"`
-	SchemaVersion     int         `json:"schema_version"`
-	Predicates        []Predicate `json:"predicates"`
-	DeadTerms         []DeadTerm  `json:"dead_terms"`
-	KindsWithoutRules []string    `json:"kinds_without_rules"`
-	Rules             []Rule      `json:"rules"`
+	Comment           []string          `json:"$comment"`
+	SchemaVersion     int               `json:"schema_version"`
+	Predicates        []Predicate       `json:"predicates"`
+	DeadTerms         []DeadTerm        `json:"dead_terms"`
+	KindsWithoutRules []string          `json:"kinds_without_rules"`
+	Rules             []Rule            `json:"rules"`
+	SignalExtensions  []SignalExtension `json:"signal_extensions"`
 }
 
 // PredicateRef is the prefix that marks a term as a named-predicate reference
 // rather than a literal. No literal in the table may start with it — the
-// schema lint enforces that, so the two term kinds can never be confused.
+// schema lint enforces that, so the term kinds can never be confused.
 const PredicateRef = "@"
+
+// WordBoundaryRef marks a term as a WORD-BOUNDED literal: satisfied only when
+// the text contains it with a non-word character (or nothing) on each side.
+//
+// It exists for exactly one reason, and the reason is behaviour preservation.
+// The pre-#306 extension ladder matched the session/usage-limit wording with
+// `/\b(?:session|usage)\s+limit\b/i`, and plain containment is a strictly wider
+// test: `usage limits`, `usage limited` and `session limits` all contain
+// `usage limit`/`session limit` while the regex rejects them. That widening is
+// not free — the kind it produces triggers a GLOBAL quota cooldown — so the
+// restored rule keeps the boundary the original had.
+//
+// A word character is [0-9a-z_] against the already-lowercased text. Anything
+// else, including any byte outside ASCII, is a boundary; the TypeScript twin
+// makes the same test on UTF-16 code units and agrees for the same reason.
+const WordBoundaryRef = "~"
 
 var load = sync.OnceValue(func() *Table {
 	tb, err := Parse(tableJSON)
@@ -110,7 +166,7 @@ func Parse(b []byte) (*Table, error) {
 	if err := dec.Decode(&tb); err != nil {
 		return nil, err
 	}
-	if tb.SchemaVersion != 1 {
+	if tb.SchemaVersion != 2 {
 		return nil, fmt.Errorf("unsupported schema_version %d", tb.SchemaVersion)
 	}
 	if len(tb.Rules) == 0 {
@@ -125,23 +181,20 @@ func Parse(b []byte) (*Table, error) {
 			return nil, fmt.Errorf("duplicate rule id %q", r.ID)
 		}
 		seen[r.ID] = true
-		if len(r.Clauses) == 0 {
-			return nil, fmt.Errorf("rule %q has no clauses", r.ID)
+		if err := validateClauses(r.ID, r.Clauses); err != nil {
+			return nil, err
 		}
-		for _, clause := range r.Clauses {
-			if len(clause) == 0 {
-				return nil, fmt.Errorf("rule %q has an empty clause", r.ID)
-			}
-			for _, term := range clause {
-				if term == "" {
-					return nil, fmt.Errorf("rule %q has an empty term", r.ID)
-				}
-				if name, ok := strings.CutPrefix(term, PredicateRef); ok {
-					if _, known := predicates[name]; !known {
-						return nil, fmt.Errorf("rule %q references unknown predicate %q", r.ID, name)
-					}
-				}
-			}
+	}
+	for _, e := range tb.SignalExtensions {
+		if e.ID == "" || e.Kind == "" {
+			return nil, fmt.Errorf("signal extension with empty id or kind")
+		}
+		if seen[e.ID] {
+			return nil, fmt.Errorf("duplicate rule id %q", e.ID)
+		}
+		seen[e.ID] = true
+		if err := validateClauses(e.ID, e.Clauses); err != nil {
+			return nil, err
 		}
 	}
 	for _, p := range tb.Predicates {
@@ -150,6 +203,32 @@ func Parse(b []byte) (*Table, error) {
 		}
 	}
 	return &tb, nil
+}
+
+func validateClauses(id string, clauses [][]string) error {
+	if len(clauses) == 0 {
+		return fmt.Errorf("rule %q has no clauses", id)
+	}
+	for _, clause := range clauses {
+		if len(clause) == 0 {
+			return fmt.Errorf("rule %q has an empty clause", id)
+		}
+		for _, term := range clause {
+			if term == "" {
+				return fmt.Errorf("rule %q has an empty term", id)
+			}
+			if name, ok := strings.CutPrefix(term, PredicateRef); ok {
+				if _, known := predicates[name]; !known {
+					return fmt.Errorf("rule %q references unknown predicate %q", id, name)
+				}
+				continue
+			}
+			if lit, ok := strings.CutPrefix(term, WordBoundaryRef); ok && lit == "" {
+				return fmt.Errorf("rule %q has an empty term", id)
+			}
+		}
+	}
+	return nil
 }
 
 // Match returns the first rule whose clauses are satisfied by errorText, in
@@ -178,11 +257,44 @@ func satisfied(lowered string, clause []string) bool {
 			}
 			continue
 		}
+		if lit, ok := strings.CutPrefix(term, WordBoundaryRef); ok {
+			if !containsWordBounded(lowered, lit) {
+				return false
+			}
+			continue
+		}
 		if !strings.Contains(lowered, term) {
 			return false
 		}
 	}
 	return true
+}
+
+// containsWordBounded reports whether lowered contains lit with a non-word
+// character (or a string edge) on both sides. The TypeScript twin in
+// terminalKind.ts is character-for-character the same test.
+func containsWordBounded(lowered, lit string) bool {
+	for from := 0; from <= len(lowered)-len(lit); {
+		i := strings.Index(lowered[from:], lit)
+		if i < 0 {
+			return false
+		}
+		i += from
+		end := i + len(lit)
+		if !isWordByte(lowered, i-1) && !isWordByte(lowered, end) {
+			return true
+		}
+		from = i + 1
+	}
+	return false
+}
+
+func isWordByte(s string, i int) bool {
+	if i < 0 || i >= len(s) {
+		return false
+	}
+	c := s[i]
+	return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
 }
 
 // RuleCostCapExceeded is the rule that the per-stage cost-cap circuit breaker
@@ -234,20 +346,50 @@ func Classify(errorText string) string {
 	return ""
 }
 
+// MatchSignalExtension returns the first declared signal extension satisfied by
+// errorText. It is the reaction path's second stage and is never consulted by
+// Classify.
+func (tb *Table) MatchSignalExtension(errorText string) (SignalExtension, bool) {
+	if errorText == "" {
+		return SignalExtension{}, false
+	}
+	t := strings.ToLower(errorText)
+	for _, e := range tb.SignalExtensions {
+		for _, clause := range e.Clauses {
+			if satisfied(t, clause) {
+				return e, true
+			}
+		}
+	}
+	return SignalExtension{}, false
+}
+
 // SignalKind returns the kind the extension may forward to the Go scheduler
 // over IPC, or "" to defer.
 //
-// It runs the FULL ladder and then answers only when the WINNING rule is
-// declared `signal: true`. That is what makes the signal side incapable of
-// disagreeing with the record: its answer is either "" or exactly Classify's
-// answer — bounded above (it can never name a different kind) and below (when
-// the winning rule is in the declared subset it MUST answer). Skipping
-// non-signal rules instead would reintroduce disagreement, because a
-// lower-precedence signal rule could then claim text that a higher-precedence
-// non-signal rule owns.
+// TWO STAGES, IN THIS ORDER.
+//
+// First the FULL rule ladder runs and the answer is the WINNING rule's kind
+// only when that rule is declared `signal: true`. That is what makes the signal
+// side incapable of disagreeing with a record kind it can see: its answer is
+// either "" or exactly Classify's answer — bounded above (it can never name a
+// different kind than the winner) and below (when the winner is in the declared
+// subset it MUST answer). Skipping non-signal rules instead would reintroduce
+// disagreement, because a lower-precedence signal rule could then claim text
+// that a higher-precedence non-signal rule owns.
+//
+// Only if that yields nothing are the declared signal_extensions consulted.
+// They are the ONE deliberate record-vs-reaction divergence in the system,
+// declared as data with their reason (see SignalExtension), and their placement
+// after the projection is what bounds them: an extension can only claim text
+// the signal subset already ignores.
 func SignalKind(errorText string) string {
-	if r, ok := Load().Match(errorText); ok && r.Signal {
+	tb := Load()
+	if r, ok := tb.Match(errorText); ok && r.Signal {
 		return r.Kind
+	}
+	if e, ok := tb.MatchSignalExtension(errorText); ok {
+		return e.Kind
 	}
 	return ""
 }

@@ -9,19 +9,33 @@
  * classification of the same failure. That split is the defect #306 exists to
  * make impossible.
  *
- * IT IS NOW IMPOSSIBLE BY CONSTRUCTION, not by testing. This is no longer a
- * ladder: `signalTerminalKind` runs the SAME ordered rule table Go embeds
- * (internal/terminalkind/table.json, generated into the SDK) and returns the
- * winning rule's kind only when that rule is declared `signal: true`. So the
- * answer is either nothing or exactly what Go will record — bounded above (it
- * can never name a different kind) and below (when the winning rule is in the
- * declared subset it must answer, which the corpus suite asserts per row).
+ * ON EVERY RULE THE ANSWER IS BOUNDED, and by construction rather than by
+ * testing. This is no longer a ladder: `signalTerminalKind` runs the SAME
+ * ordered rule table Go embeds (internal/terminalkind/table.json, generated into
+ * the SDK) and returns the winning rule's kind only when that rule is declared
+ * `signal: true`. So for rules the answer is either nothing or exactly what Go
+ * will record — bounded above (it can never name a different kind) and below
+ * (when the winning rule is in the declared subset it must answer, which the
+ * corpus suite asserts per row).
  *
  * Note the shape of the bound: the full ladder runs first and only the WINNER
  * is projected. Skipping non-signal rules would reintroduce disagreement — a
  * lower-precedence signal rule could claim text that a higher-precedence
- * non-signal rule owns, which is how the old hand-written ladder answered
- * `rate_limit_quota_exhausted` for text Go recorded as `model_unavailable`.
+ * non-signal rule owns.
+ *
+ * ONE DECLARED EXCEPTION, and it is data. When the ladder projects nothing, the
+ * table's `signal_extensions` are consulted; today there is one, for a bare
+ * Anthropic/Codex session-or-usage-limit line that no rule classifies (#3792).
+ * That is the single place the fleet's reaction may name a kind the record does
+ * not, it carries its reason in the table, and it is pinned by corpus rows whose
+ * `expected_signal` differs from `expected` — which the corpus well-formedness
+ * test permits for declared extensions and for nothing else. See
+ * docs/FAILURE_TAXONOMY.md.
+ *
+ * THE VALUE THIS RETURNS IS NOT THE ONLY THING THAT MATTERS. It is assembled
+ * into the IPC argument in bootstrap/services.ts, and that call site is asserted
+ * to be a bare single-assignment delegation by terminalKindSignal.corpusParity.
+ * test.ts — guarding this file alone left the actual producer unguarded.
  *
  * Returning `undefined` is safe by design: the caller forwards the raw failure
  * text as `failureDetail` unconditionally (#3442) and Go classifies from it. A

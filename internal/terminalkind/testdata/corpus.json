@@ -43,7 +43,6 @@
     "answers are committed in testdata/stress-golden.json. A fixture should carry evidence and",
     "argument; deriving mechanical coverage from the table is the table's job."
   ],
-  "no_matcher_kinds": ["orchestrator_crash", "abandoned_commit"],
   "cases": [
     {
       "id": "captured-api-overloaded",
@@ -155,7 +154,7 @@
       "expected": "adapter_auth_failed",
       "expected_signal": "adapter_auth_failed",
       "source": "captured",
-      "rationale": "The wrapped pipeline-start form, which carries the marker BARE — no brackets, no underscore. Go matches all three spellings; the SDK matched only the bracketed and underscored ones, so this real, observed shape classified as adapter_auth_failed on the authoritative side and undefined on the mirror. A transient probe timeout under a dispatch burst must not feed the cascade breaker as a crash."
+      "rationale": "The wrapped pipeline-start form, which carries the marker BARE — no brackets, no underscore. Go matched all three spellings and the SDK mirror matched only the bracketed and underscored ones, so this real, observed shape classified as adapter_auth_failed on the authoritative side and undefined on the mirror. All three are now clauses of one signal:true rule, so the record and the reaction agree on every spelling. A transient probe timeout under a dispatch burst must not feed the cascade breaker as a crash."
     },
     {
       "id": "captured-github-quota-low",
@@ -295,7 +294,7 @@
       "expected_signal": "github_quota_low",
       "source": "synthetic",
       "producer": "HeadlessOrchestrator quota preflight, the error.message form (#3896)",
-      "rationale": "The SECOND wording for one condition, and the only one the extension's signal ladder recognises. The captured row for this kind carries the stderr phrasing (`[pipeline-start-failure] github-auth-failed: GitHub API quota too low …`), which Go classifies through its conjunction while the signal ladder — which keys on the `github-quota-low` token — misses it entirely. The miss is safe (Go re-classifies the forwarded detail) but it means the real captured shape never exercises that rule, so this row does. Two producers, one condition, two spellings: exactly the shape that lets a matcher rot unnoticed."
+      "rationale": "The SECOND wording for one condition. The captured row for this kind carries the stderr phrasing (`[pipeline-start-failure] github-auth-failed: GitHub API quota too low …`), which the table claims through the `pipeline-start-failure` + `github api quota too low` conjunction; this row carries the bare token, which the first clause claims. Both are signal:true and both now project the same kind on every side — before #306 the extension's ladder keyed on the token alone and missed the captured shape entirely. Two producers, one condition, two spellings: exactly the shape that let a matcher rot unnoticed."
     },
     {
       "id": "github-network-outage",
@@ -412,7 +411,7 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "Exit-signal telemetry path (#3783) — failure_handler.go's second runaway-progress alternative",
-      "rationale": "RECORDS A DEFECT, does not fix it. Go intends a second route to runaway_progress via the conjunction of `exitSignalSource` and `runaway-progress`, but the classifier lowercases its input before matching while that literal carries capitals, so the branch cannot fire for ANY input — verified for both casings. The corpus pins the behaviour that actually ships (unclassified, falling through to the caller's crash default) rather than the behaviour the source implies; correcting the literal would change the authoritative classifier's live routing, which is outside a parity fix and is raised in this PR's concerns. The SDK deliberately does NOT grow this alternative, because mirroring a dead branch would make both sides agree on nothing."
+      "rationale": "RECORDS A DEFECT, does not fix it. Go intends a second route to runaway_progress via the conjunction of `exitSignalSource` and `runaway-progress`, but matching is done against the LOWERCASED text while that literal carries capitals, so the clause cannot fire for ANY input — TestDeadTermsAreUnreachable proves it rather than asserting it. The corpus pins what actually ships (unclassified, falling through to the caller's crash default) rather than what the source implies; lowercasing the literal would change the authoritative classifier's live routing, which is a taxonomy decision, not a parity fix, and is raised in this PR's concerns. The clause is now in the table, so BOTH languages carry the dead branch and its declaration in `dead_terms` — before #306 the SDK silently omitted it, which is the one-sided difference this change exists to remove."
     },
     {
       "id": "stall-kill-runaway-ceiling",
@@ -625,10 +624,10 @@
       "id": "order-model-unavailable-beats-quota-wording",
       "input": "Claude Opus 4.5 usage limit reached; resets at 5pm",
       "expected": "model_unavailable",
-      "expected_signal": "",
+      "expected_signal": "rate_limit_quota_exhausted",
       "source": "synthetic",
-      "producer": "Anthropic model-specific cap wording (#42); signal-ladder rule /\\b(?:session|usage)\\s+limit\\b/",
-      "rationale": "ORDERING ROW, and one of the two record-vs-reaction splits #306 closed. The text names a registry model AND says `usage limit`, so the model-unavailable rule claims it and #42's tier downgrade fires. Before the table, the extension's own ladder mapped every `session|usage limit` to rate_limit_quota_exhausted and Go used that non-empty signal VERBATIM, so the record said model_unavailable while the fleet ran a quota cooldown. The signal side now runs this same ladder and answers only for rules in the declared subset; model-unavailable is not one, so it defers and Go decides. Note what that costs: Go has no rule for a bare session/usage limit with no model named, so such text is unclassified rather than quota-exhausted. Adding one is a taxonomy change to the authoritative side, deliberately out of scope for a unification — see docs/FAILURE_TAXONOMY.md."
+      "producer": "the Anthropic CLI's plain-text limit line, surfaced by SkillRunner.extractTailError",
+      "rationale": "Both the model-unavailable cap wording and the quota extension describe this text, and they answer differently ON PURPOSE — this is the one declared record-vs-reaction divergence. The RECORD says model_unavailable: a named model plus a cap phrase is a plan restriction, and the rule sits above the generic rungs so it wins. The REACTION says rate_limit_quota_exhausted, because signal_extensions restores the #3792 defense-in-depth the extension ladder carried before #306, and the model-unavailable rule is not in the signal subset so nothing of the record's is being overruled. Delete the extension and this row's expected_signal goes red."
     },
     {
       "id": "order-api-overloaded-beats-quota-marker",
@@ -709,7 +708,7 @@
       "expected_signal": "api_connection_lost",
       "source": "synthetic",
       "producer": "the Node transport error surfaced verbatim by the Claude CLI result envelope",
-      "rationale": "`socket hang up` is a separate alternative from `socket connection was closed` — the words share no substring, so deleting it from one ladder is invisible to the other. It is also one of only two patterns the extension's signal ladder recognises for this kind, and that ladder's answer is used by Go verbatim."
+      "rationale": "`socket hang up` is a separate alternative from `socket connection was closed` — the words share no substring, so a matcher written for one leaves the other unclassified, which is how the SDK mirror lost patterns before #306. It is also one of twelve clauses on a signal:true rule, so the kind it produces is forwarded to Go and used VERBATIM: the whole rule has to be right on both sides, not just readable on one."
     },
     {
       "id": "api-connection-lost-fetch-failed",
@@ -745,7 +744,7 @@
       "expected_signal": "architecture_approval_required",
       "source": "synthetic",
       "producer": "the bracketed form both text classifiers match alongside the human-readable ARCHITECTURE APPROVAL REQUIRED sentinel",
-      "rationale": "the human-readable sentinel is load-bearing in failureComment.ts, so the bracketed form exists precisely so a future emitter change cannot silently re-route a human gate into subagent_crash — which cost ~$5 per re-dispatch and tripped the scheduler on the second attempt (#4098/#4222). The extension's signal ladder keys only on the sentinel, so it correctly returns nothing here and defers to Go."
+      "rationale": "The human-readable sentinel is load-bearing in failureComment.ts, so the bracketed form exists precisely so a future emitter change cannot silently re-route a human gate into subagent_crash — which cost ~$5 per re-dispatch and tripped the scheduler on the second attempt (#4098/#4222). The rule is signal:true and all three spellings belong to it, so this row's reaction side is the kind itself: before #306 the extension keyed only on the sentinel and this bracketed form deferred to Go, which is the asymmetry the table removes."
     },
     {
       "id": "stall-kill-stalled-and-killed",
@@ -799,7 +798,7 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "the context-file parse failure reported by the stage output validator",
-      "rationale": "the third spelling (see validation-error-invalid-json). Pinning all three is what makes 'the SDK mirrors Go literal for literal' a checked claim rather than a comment."
+      "rationale": "The third spelling (see validation-error-invalid-json). All three are alternatives of one clause set, and pinning each separately is what stops a partial deletion: the derived stress set proves every clause is reachable, and these rows prove each spelling means the same thing to a reader. The kind is not in the signal subset, so the reaction defers to Go."
     },
     {
       "id": "validation-error-missing-prerequisite",
@@ -889,16 +888,16 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "Anthropic's model-specific usage-cap message",
-      "rationale": "`usage cap` is the cap-phrase sibling of `usage limit` and `weekly limit`, and the only one with no row. Note the extension's signal ladder matches `usage limit`/`session limit` but NOT `usage cap`, so it correctly returns nothing here — the divergence recorded on divergence-signal-usage-limit-with-model does not extend to this wording."
+      "rationale": "`usage cap` is the cap-phrase sibling of `usage limit` and `weekly limit`, and the only one with no row. Note the boundary of the declared session-usage-limit-quota extension: it claims `usage limit` and `session limit` and NOT `usage cap`, so this row's reaction side is empty even though its record is model_unavailable. The extension is deliberately no wider than the wording the pre-#306 ladder carried."
     },
     {
       "id": "model-unavailable-predicate-by-model-id",
       "input": "API Error: usage limit reached for gpt-5.6-terra",
       "expected": "model_unavailable",
-      "expected_signal": "",
+      "expected_signal": "rate_limit_quota_exhausted",
       "source": "synthetic",
       "producer": "Anthropic-style cap wording naming a concrete registry id (#42). Written to exercise the mentions_registry_model predicate's ID branch specifically: this id contains no tier word, so the row fails if the ID lookup breaks even though the tier lookup still works.",
-      "rationale": "PREDICATE ROW. `usage limit` alone must never mean model_unavailable — the whole point of the gate is that a plain quota message is not a model rejection — so this clause fires only when the text also names a registry model. Pinning the ID branch on both sides matters because it is the one place the table cannot express the rule as a literal: Go iterates models.All() and the SDK iterates MODEL_REGISTRY, and if those ever disagreed every model_unavailable classification could diverge with the rest of the table identical."
+      "rationale": "Exercises the mentions_registry_model predicate through its ID branch: `gpt-5.6-terra` is a registry id, not a display name and not a tier, so deleting the id branch in either language turns this row red on its own. The record is model_unavailable; the reaction is the declared session-usage-limit-quota extension, which claims every `usage limit` line the signal subset does not, including this one."
     },
     {
       "id": "model-unavailable-predicate-by-display-name",
@@ -953,6 +952,186 @@
       "source": "synthetic",
       "producer": "The legacy descriptive wording of the quota preflight, quoted outside a pipeline-start failure — e.g. a doctor or preflight advisory line.",
       "rationale": "CONJUNCTION ROW. The legacy wording is matched only in conjunction with the `pipeline-start-failure` wrapper, because on its own it is a advisory sentence that any diagnostic can print; the stamped `github-quota-low` token is what a real preflight abort carries. Dropping the wrapper from that clause would let an informational line halt-exempt a run that failed for an unrelated reason."
+    },
+    {
+      "id": "conjunction-negative-econnrefused-without-api-error",
+      "input": "exit 1: [validation-failed] integration suite could not reach the local API: connect ECONNREFUSED 127.0.0.1:8787",
+      "expected": "validation_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skills/nightgauge-feature-validate stamps `[validation-failed]`; the ECONNREFUSED text is the Node client's own wording, wrapped by scheduler.SetStageError's `exit N: ` prefix.",
+      "rationale": "The NEGATIVE half of `api error AND econnrefused`. A refused local port is an ordinary test failure, and api_connection_lost would route it to transient-blip recovery (short backoff, no lifetime-cap increment) instead of surfacing a real defect — which is exactly what that rule's own `why` says the conjunction prevents. Widen the clause to a bare `econnrefused` and this row flips to api_connection_lost."
+    },
+    {
+      "id": "conjunction-negative-connection-refused-without-api-error",
+      "input": "exit 1: [validation-failed] docker compose up postgres: dial tcp 127.0.0.1:5432: connect: connection refused",
+      "expected": "validation_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skills/nightgauge-feature-validate stamps `[validation-failed]`; the dial text is Docker's own wording under the `exit N: ` prefix.",
+      "rationale": "The NEGATIVE half of `api error AND connection refused` — the exact widening a round-3 evasion performed with every suite green. A refused docker service is an environment problem for THIS repo's tests, not a dropped Anthropic connection, and the fleet must see the validation failure rather than a transient network blip."
+    },
+    {
+      "id": "conjunction-negative-connection-reset-without-api-error",
+      "input": "exit 1: git push failed: fatal: unable to access remote repository: Connection reset by peer",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError wrapping a git transport failure; `Connection reset by peer` is git/curl's wording.",
+      "rationale": "The NEGATIVE half of `api error AND connection reset`. A reset against the git remote is not an Anthropic transport drop: it falls through to the crash fallback, where the operator sees a push failure. Widening the clause to a bare `connection reset` would relabel every git network hiccup as api_connection_lost."
+    },
+    {
+      "id": "conjunction-negative-connection-closed-without-api-error",
+      "input": "exit 1: [validation-failed] postgres: server closed the connection unexpectedly — connection closed while loading fixtures",
+      "expected": "validation_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skills/nightgauge-feature-validate stamps `[validation-failed]`; the wording is libpq's, under the `exit N: ` prefix.",
+      "rationale": "The NEGATIVE half of `api error AND connection closed`, the clause #227 added for the live `API Error: Connection closed mid-response` wording. Without the conjunction, any database or proxy that closes a socket during a test run would be recorded as a model-API blip and retried instead of reported."
+    },
+    {
+      "id": "conjunction-negative-getaddrinfo-eai-again-without-api-error",
+      "input": "exit 1: npm error: request to https://redacted.invalid/ failed, reason: getaddrinfo EAI_AGAIN redacted.invalid",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError wrapping an `npm install` failure; the reason string is undici's.",
+      "rationale": "The NEGATIVE half of BOTH `api error AND getaddrinfo` and `api error AND eai_again` — one input, because npm's DNS failure carries both tokens exactly as the resolver emits them. A registry outage during install is a stage failure to fix, not an Anthropic transport drop to retry silently."
+    },
+    {
+      "id": "conjunction-negative-fetch-failed-without-api-error",
+      "input": "exit 1: [validation-failed] playwright: TypeError: fetch failed — the dev server on port 5173 never came up",
+      "expected": "validation_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "skills/nightgauge-feature-validate stamps `[validation-failed]`; `TypeError: fetch failed` is undici's message as Playwright surfaces it.",
+      "rationale": "The NEGATIVE half of `api error AND fetch failed`. `fetch failed` is undici's generic message and appears in any Node test that talks to a local service, so unqualified it would swallow whole classes of real validation failures into the transient-network bucket."
+    },
+    {
+      "id": "conjunction-negative-not-found-error-without-model",
+      "input": "exit 1: gh api graphql: {\"type\":\"not_found_error\",\"message\":\"Could not resolve to a ProjectV2\"}",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError wrapping a board-sync failure; `not_found_error` is the GitHub GraphQL error type, which shares its spelling with the Anthropic 404 shape.",
+      "rationale": "The NEGATIVE half of `not_found_error AND model`. Two different APIs use that token, and only the one that also names a model means the configured model is gone. Without the conjunction every 404 from the forge would book as model_unavailable and the scheduler would start rotating models to fix a missing project board."
+    },
+    {
+      "id": "conjunction-negative-bare-model-word",
+      "input": "exit 1: schema validation failed for the model context file",
+      "expected": "validation_error",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "gates/validate stamps `schema validation failed`; the phrase `model context file` is ordinary prose about a pipeline artifact.",
+      "rationale": "The NEGATIVE half of `not_found_error AND model`, and the one with the widest blast radius: `model` is an English word that appears in stall kills, cost-cap kills and validation errors alike, and the model-unavailable rule sits at rung 6 of 33 — above stall_kill, budget_exceeded, validation_error and subagent_crash. Widening the clause to a bare `model` moved 69 of 1,410 derived inputs in the round-3 review, and this row is what turns that red."
+    },
+    {
+      "id": "conjunction-negative-plan-phrase-not-available-no-model",
+      "input": "exit 1: API Error: extended prompt caching is not available on your current plan",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Anthropic plan-restriction wording as the CLI surfaces it, under scheduler.SetStageError's `exit N: ` prefix — with a FEATURE named rather than a model.",
+      "rationale": "The NEGATIVE half of `not available on your AND @mentions_registry_model`. Anthropic uses this sentence for every plan restriction, most of which have nothing to do with the model: only the model-named variant means the pipeline must stop asking for that model. Without the predicate half, a caching or tier restriction would send the scheduler off rotating models."
+    },
+    {
+      "id": "conjunction-negative-plan-phrase-not-included-no-model",
+      "input": "exit 1: API Error: the batch API is not included in your plan",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Anthropic plan-restriction wording (the `not included in your` variant), under the `exit N: ` prefix, naming an API rather than a model.",
+      "rationale": "The NEGATIVE half of `not included in your AND @mentions_registry_model`. Same argument as the sibling phrase and pinned separately because each wording is its own clause: deleting the predicate from any one of the four leaves the other three still gated, so one row per phrase is what makes each half red on its own."
+    },
+    {
+      "id": "conjunction-negative-plan-phrase-not-offered-no-model",
+      "input": "exit 1: API Error: priority tier throughput is not offered on your plan",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Anthropic plan-restriction wording (the `not offered on your` variant), under the `exit N: ` prefix, naming a throughput tier rather than a model.",
+      "rationale": "The NEGATIVE half of `not offered on your AND @mentions_registry_model`. A throughput-tier restriction is an account fact the pipeline cannot act on by changing models, so it must fall through to the generic path rather than book as model_unavailable."
+    },
+    {
+      "id": "conjunction-negative-plan-phrase-not-supported-no-model",
+      "input": "exit 1: API Error: the files endpoint is not supported on your plan",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Anthropic plan-restriction wording (the `not supported on your` variant), under the `exit N: ` prefix, naming an endpoint rather than a model.",
+      "rationale": "The NEGATIVE half of `not supported on your AND @mentions_registry_model`. Completes the four plan-phrase clauses: each is pinned from both sides, so neither the phrase nor the predicate can be dropped from any of them without a red row."
+    },
+    {
+      "id": "conjunction-negative-usage-cap-no-model",
+      "input": "exit 1: API Error: your organisation has reached its monthly usage cap",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Anthropic org-level cap wording under the `exit N: ` prefix — a cap on the ACCOUNT, with no model named.",
+      "rationale": "The NEGATIVE half of `usage cap AND @mentions_registry_model`. An org-wide cap is not a statement about any particular model, so model_unavailable would be the wrong record and would send the scheduler rotating models against a limit that applies to all of them. Note this wording is deliberately NOT claimed by the session-usage-limit-quota extension either: `usage cap` is not one of its clauses."
+    },
+    {
+      "id": "conjunction-negative-registry-model-named-in-a-stall-kill",
+      "input": "exit 1: [stall-killed] feature-dev terminated: opus produced no output for 15m",
+      "expected": "stall_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "SkillRunner's `[stall-killed] ${stage} terminated` template, with the model tier named in the diagnostic tail.",
+      "rationale": "The NEGATIVE half of the @mentions_registry_model term in ALL SIX model-unavailable clauses at once: naming a model is normal in failure text — stall diagnostics, cost lines and routing logs all do it — and it means nothing on its own. Drop any of those clauses' literal halves and this row flips from stall_kill to model_unavailable, because model-unavailable sits at rung 6 and stall-kill at rung 23."
+    },
+    {
+      "id": "conjunction-negative-issue-closed-token-without-the-wrapper",
+      "input": "exit 1: board sync failed: the issue-closed webhook handler returned 502",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError wrapping a board-sync failure whose message happens to name the `issue-closed` handler.",
+      "rationale": "The NEGATIVE half of `pipeline-start-failure AND issue-closed`. The issue_closed kind means the run DEFERRED because the issue was already closed — a non-failure that books no lifetime failure. A webhook error that merely names the same token is a real failure, and without the wrapper half it would be silently written off as a deferral."
+    },
+    {
+      "id": "conjunction-negative-fetch-first-without-push-rejected",
+      "input": "exit 1: git pull --rebase: hint: you may want to fetch first and integrate the remote changes",
+      "expected": "subagent_crash",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError wrapping a git failure; `fetch first` is git's own hint text, which appears on pulls as well as on rejected pushes.",
+      "rationale": "The NEGATIVE half of `push rejected AND fetch first`. branch_forked is unrecoverable by retry and changes the recovery path, so it must require evidence that a PUSH was rejected — git prints the same hint in situations a retry does resolve."
+    },
+    {
+      "id": "signal-extension-bare-usage-limit",
+      "input": "success: You've hit your usage limit · resets 3pm",
+      "expected": "",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "The Anthropic CLI's plain-text limit line as SkillRunner.extractTailError surfaces it on the non-stream-json path (skillRunner.ts quotes this shape verbatim).",
+      "rationale": "THE DECLARED DIVERGENCE, from the side where it is load-bearing. No rule classifies a bare quota line with no model named, so the RECORD is empty and Go's NotifyComplete falls back to subagent_crash — a lifetime-failure increment and a cascade strike for a window that clears on its own. The REACTION is the session-usage-limit-quota extension, restoring #3792: applyQuotaCooldownLocked until the real bucket reset, board→Ready, RecordNonFaultOutcome. This row is also the negative half of `usage limit AND @mentions_registry_model`: widen that clause and the record flips to model_unavailable."
+    },
+    {
+      "id": "signal-extension-bare-session-limit",
+      "input": "You've hit your session limit · resets 10:30am (America/Denver)",
+      "expected": "",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "The Anthropic CLI's session-limit line; the identical regex still lives in tokenParser.isAnthropicSessionLimit and in ConcurrentPipelineManager's halt policy.",
+      "rationale": "The `session limit` clause of the extension, which the `usage limit` rows do not exercise. Same class as its sibling: an environmental quota window with no model named, invisible to the record ladder. Two other call sites in this repo still key on this exact wording, so a table that never heard of it would leave three components disagreeing about one shape."
+    },
+    {
+      "id": "signal-extension-usage-limit-under-the-crash-wrapper",
+      "input": "exit 1: usage limit",
+      "expected": "subagent_crash",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "scheduler.SetStageError's `exit N: ` prefix around the shortest quota wording the CLI emits.",
+      "rationale": "The extension firing while the record says something SPECIFIC and generic at once: `exit ` makes the crash fallback claim it, so the record is subagent_crash. That is the case the reviewer measured as the real cost of deleting the branch — a counted crash plus a cascade strike per quota window. Pinned here so the extension cannot be dropped without a red row on the exact shape that motivated it."
+    },
+    {
+      "id": "signal-extension-codex-usage-limit",
+      "input": "codex: usage limit reached for this account",
+      "expected": "",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "The Codex CLI's account-limit wording, surfaced through SkillRunner.extractTailError (Codex has no stream-json result envelope to normalise, which is why the extension matters most here).",
+      "rationale": "The non-Anthropic half of the same class. skillRunner normalises quota text to `[rate-limit-quota-exhausted]` only on the Claude stream-json result-envelope path, so for every other adapter the extension IS the routing. Deleting it silently converts each Codex quota window into a counted crash."
     }
   ]
 }

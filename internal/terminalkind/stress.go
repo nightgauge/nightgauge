@@ -59,6 +59,20 @@ func StressInputs(tb *Table) []string {
 		}
 	}
 
+	// The signal extensions are matched by the reaction path only, so they need
+	// the same per-clause coverage or the golden would say nothing about them.
+	for _, e := range tb.SignalExtensions {
+		for _, clause := range e.Clauses {
+			s := tb.sampleClause(clause)
+			add(s)
+			add("exit 1: " + s)
+			add(strings.ToUpper(s))
+			for _, term := range clause {
+				add(tb.sampleClause([]string{term}))
+			}
+		}
+	}
+
 	// Precedence matrix: every ordered pair of rules, composed. Any reordering,
 	// insertion or deletion changes at least one of these answers.
 	for _, a := range tb.Rules {
@@ -82,7 +96,7 @@ func (tb *Table) sampleClause(clause []string) string {
 			parts = append(parts, tb.probeTrue(name))
 			continue
 		}
-		parts = append(parts, term)
+		parts = append(parts, strings.TrimPrefix(term, WordBoundaryRef))
 	}
 	return strings.Join(parts, " ")
 }
@@ -122,6 +136,11 @@ func BuildStressGolden(tb *Table) StressGolden {
 				signal = r.Kind
 			}
 		}
+		if signal == "" {
+			if e, ok := tb.MatchSignalExtension(in); ok {
+				signal = e.Kind
+			}
+		}
 		cases = append(cases, StressCase{Input: in, Kind: kind, Signal: signal})
 	}
 	return StressGolden{
@@ -132,7 +151,9 @@ func BuildStressGolden(tb *Table) StressGolden {
 			"Every input is derived from the table itself (see StressInputs in stress.go and its",
 			"verbatim TypeScript twin), so this file is the table's complete behaviour under its own",
 			"vocabulary: `kind` is what the run record will say, `signal` is what the extension may",
-			"forward over IPC (empty when the winning rule is not in the signal subset).",
+			"forward over IPC — the winning rule's kind when that rule is in the signal subset, else",
+			"a declared signal_extension's kind, else empty. The rows where `signal` is non-empty and",
+			"differs from `kind` are exactly the declared extensions.",
 			"",
 			"Go, the SDK and the extension each derive the same inputs and must reproduce these",
 			"answers exactly. A table edit shows up here as an explicit before/after of every input",

@@ -1,0 +1,312 @@
+/**
+ * terminalKind.ts — the TypeScript interpreter for the canonical terminal-kind
+ * rule table (#306).
+ *
+ * THIS WHOLE FILE IS THE GUARDED SURFACE, and that is why it is a file of its
+ * own rather than a region of failureClassifier.ts.
+ *
+ * The corpus and the derived stress set are both built FROM the table's
+ * vocabulary, so neither can see a rule invented HERE for a marker the table has
+ * never heard of. Round 2's evasion was exactly that. Round 3 answered it with a
+ * text scan over a window — from `function matchTerminalKindRule` to
+ * `const TERMINAL_KIND_PREDICATES` — and round 3's review walked around the
+ * window twice: once by putting the branch in `signalTerminalKind` (below the
+ * lower edge, and the highest-authority function in the system), once by
+ * declaring `const DEFERRED_MARKER = "…"` one line ABOVE the upper edge and
+ * referencing it from inside. Both left every suite green while the fleet
+ * reacted to a kind the run record did not carry.
+ *
+ * So the scan is now the entire module against an explicit allowlist
+ * (terminalKind.corpusParity.test.ts): every string literal in this file must be
+ * one of a handful of declared, non-marker strings, and there is no line to
+ * hoist to. Everything that matches an error text lives here — the matcher, the
+ * predicates, the three public entry points and the stress derivation — so
+ * "guarded" and "does matching" are the same set. `classifyFailureCategory`
+ * stayed in failureClassifier.ts precisely because it is a different taxonomy
+ * with its own literals, and mixing the two would make the allowlist meaningless.
+ *
+ * Both languages read one table: Go embeds internal/terminalkind/table.json and
+ * terminalKindTable.generated.ts is its generated view, byte-checked against it.
+ */
+
+import { MODEL_REGISTRY } from "../../eval/modelRegistry.js";
+import {
+  TERMINAL_KIND_TABLE,
+  TERMINAL_KIND_PREDICATE_REF,
+  TERMINAL_KIND_WORD_BOUNDARY_REF,
+  type TerminalKindRule,
+} from "./terminalKindTable.generated.js";
+import type { TerminalFailureKind } from "./failureClassifier.js";
+
+/**
+ * Diagnostics, assembled from constants so no message has to be spelled inline
+ * at a throw site. Neither is a marker: nothing compares an error text against
+ * them.
+ */
+const UNKNOWN_PREDICATE =
+  "terminal-kind table references a predicate with no TypeScript implementation in terminalKind.ts: ";
+const NO_PROBES_TRUE = "terminal-kind predicate declares no probes_true: ";
+
+/** The derived-input vocabulary — the verbatim twin of stress.go's. */
+const EMPTY = "";
+const NO_MARKER_SENTENCE = "nothing in this sentence resembles a terminal marker";
+const CRASH_PREFIX = "exit 1: ";
+const PAIR_SEPARATOR = " | ";
+const TERM_SEPARATOR = " ";
+
+/** A rule matched against an error text, or `undefined` when nothing matched. */
+function matchTerminalKindRule(errorText: string | undefined): TerminalKindRule | undefined {
+  if (!errorText) return undefined;
+  const t = errorText.toLowerCase();
+  for (const rule of TERMINAL_KIND_TABLE.rules) {
+    for (const clause of rule.clauses) {
+      if (clauseSatisfied(t, clause)) return rule;
+    }
+  }
+  return undefined;
+}
+
+function clauseSatisfied(lowered: string, clause: string[]): boolean {
+  for (const term of clause) {
+    if (term.startsWith(TERMINAL_KIND_PREDICATE_REF)) {
+      const name = term.slice(TERMINAL_KIND_PREDICATE_REF.length);
+      const predicate = TERMINAL_KIND_PREDICATES[name];
+      // Fail loudly on an unknown predicate. Silently evaluating to false would
+      // disable a rule with no visible symptom — exactly the class of silent
+      // divergence the table exists to remove.
+      if (!predicate) throw new Error(UNKNOWN_PREDICATE + name);
+      if (!predicate(lowered)) return false;
+      continue;
+    }
+    if (term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)) {
+      if (!containsWordBounded(lowered, term.slice(TERMINAL_KIND_WORD_BOUNDARY_REF.length))) {
+        return false;
+      }
+      continue;
+    }
+    if (!lowered.includes(term)) return false;
+  }
+  return true;
+}
+
+/**
+ * Contains `lit` with a non-word character (or a string edge) on each side —
+ * the twin of `containsWordBounded` in internal/terminalkind/table.go.
+ *
+ * The table uses it for the one rule whose pre-#306 implementation was a
+ * `\b…\b` regex, so that restoring the rule restores its precision too: plain
+ * containment would also fire on `usage limits` and `usage limited`, and the
+ * kind it produces triggers a global quota cooldown.
+ */
+function containsWordBounded(lowered: string, lit: string): boolean {
+  for (let from = 0; from + lit.length <= lowered.length;) {
+    const i = lowered.indexOf(lit, from);
+    if (i < 0) return false;
+    if (!isWordChar(lowered, i - 1) && !isWordChar(lowered, i + lit.length)) return true;
+    from = i + 1;
+  }
+  return false;
+}
+
+function isWordChar(s: string, i: number): boolean {
+  if (i < 0 || i >= s.length) return false;
+  const c = s.charCodeAt(i);
+  return c === 95 || (c >= 48 && c <= 57) || (c >= 97 && c <= 122);
+}
+
+/**
+ * Registry-derived "names a specific model" gate — IDs, display names, tiers.
+ * The Go twin is `mentionsRegistryModel` in internal/terminalkind/predicates.go
+ * and iterates `models.All()`; the two registries are the same file
+ * (packages/nightgauge-sdk/src/eval/model-registry.json is canonical,
+ * internal/models/model-registry.json is a byte copy with a Go parity test).
+ *
+ * It is inside the guarded module deliberately: round 3 left it outside the
+ * fence, and a single `if (t.includes("…")) return true;` here silently made
+ * every one of the six clauses that reference it fire for a marker the table
+ * never declared.
+ */
+function mentionsRegistryModel(t: string): boolean {
+  const tiers = new Set<string>();
+  for (const m of MODEL_REGISTRY) {
+    if (m.id && t.includes(m.id.toLowerCase())) return true;
+    if (m.display_name && t.includes(m.display_name.toLowerCase())) return true;
+    for (const tier of m.tiers ?? []) tiers.add(tier.toLowerCase());
+  }
+  for (const tier of tiers) {
+    if (t.includes(tier)) return true;
+  }
+  return false;
+}
+
+/**
+ * Named predicates the table may reference as `@name` terms.
+ *
+ * One entry, deliberately: a predicate exists only for a condition that cannot
+ * be written as literal containment. Everything else is a literal in
+ * table.json, where review and the generated module can both see it. Each
+ * predicate declares probes_true / probes_false in the table, and BOTH
+ * languages assert them.
+ */
+const TERMINAL_KIND_PREDICATES: Record<string, (lowered: string) => boolean> = {
+  mentions_registry_model: mentionsRegistryModel,
+};
+
+/**
+ * Classify the *kind* of terminal failure from an error message.
+ *
+ * Interprets the canonical table, so this returns exactly what Go's
+ * `ClassifyTerminalKind` returns for the same input — not by mirroring it, but
+ * by reading the same rules in the same order. `terminal_kind` in the run
+ * record is Go's answer; this is how an SDK consumer reproduces it.
+ *
+ * Returns `undefined` when no rule matches; callers can fall back to
+ * `"subagent_crash"` (the most generic kind) or leave the field absent.
+ *
+ * @param errorText - Error message or stack trace from the failed stage
+ * @returns The terminal failure kind, or undefined when unclassifiable
+ */
+export function classifyTerminalKind(
+  errorText: string | undefined
+): TerminalFailureKind | undefined {
+  return matchTerminalKindRule(errorText)?.kind as TerminalFailureKind | undefined;
+}
+
+/**
+ * The kind a consumer may forward to the Go scheduler as a signal, or
+ * `undefined` to defer to Go's own classification.
+ *
+ * TWO STAGES, IN THIS ORDER — the twin of `SignalKind` in
+ * internal/terminalkind/table.go.
+ *
+ * First the FULL ladder runs and the answer is the WINNING rule's kind only when
+ * that rule is declared `signal: true`. Skipping non-signal rules instead would
+ * reintroduce disagreement, because a lower-precedence signal rule could then
+ * claim text a higher-precedence non-signal rule owns.
+ *
+ * Only if that yields nothing are the table's declared `signal_extensions`
+ * consulted. They are the ONE deliberate record-vs-reaction divergence, they are
+ * data rather than code, and their position AFTER the projection is the bound:
+ * an extension can only claim text the signal subset already ignores.
+ *
+ * The VSCode extension consumes this through `services/terminalKindSignal.ts`;
+ * Go's NotifyComplete uses a non-empty answer VERBATIM, which is why both the
+ * bound and its one exception have to be structural.
+ */
+export function signalTerminalKind(errorText: string | undefined): TerminalFailureKind | undefined {
+  const rule = matchTerminalKindRule(errorText);
+  if (rule?.signal) return rule.kind as TerminalFailureKind;
+  return matchSignalExtension(errorText)?.kind as TerminalFailureKind | undefined;
+}
+
+function matchSignalExtension(
+  errorText: string | undefined
+): { id: string; kind: string } | undefined {
+  if (!errorText) return undefined;
+  const t = errorText.toLowerCase();
+  for (const extension of TERMINAL_KIND_TABLE.signal_extensions) {
+    for (const clause of extension.clauses) {
+      if (clauseSatisfied(t, clause)) return extension;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Prefers a gate-sourced structured terminal kind over prose classification
+ * of the synthesized error text (Issue #9). Mirrors Go's
+ * `ResolveTerminalKind` in `internal/orchestrator/failure_handler.go` — a
+ * two-line precedence rule with no matching in it, which is why it is written
+ * out rather than tabulated. Falls back to `classifyTerminalKind` for non-gate
+ * failures and for gate failures that didn't set a structured kind (including
+ * all historical records persisted before `terminal_kind` existed on
+ * `StageGateResult`).
+ */
+export function resolveTerminalKind(
+  gateRan: boolean,
+  gateTerminalKind: string | undefined,
+  errorText: string | undefined
+): TerminalFailureKind | undefined {
+  if (gateRan && gateTerminalKind) {
+    return gateTerminalKind as TerminalFailureKind;
+  }
+  return classifyTerminalKind(errorText);
+}
+
+/**
+ * Derive a deterministic input set FROM the table — the verbatim TypeScript
+ * twin of `StressInputs` in internal/terminalkind/stress.go.
+ *
+ * Both languages derive the same list and compare their answers against one
+ * committed golden (internal/terminalkind/testdata/stress-golden.json), which is
+ * how the two interpreters are proved equivalent without a live bridge between
+ * them: if the derivations differed the input lists would not match, and if the
+ * interpreters differed the answers would not.
+ *
+ * THE ALGORITHM IS PART OF THE CONTRACT. Changing it here means changing
+ * stress.go and regenerating the golden. Order is significant and stable, and
+ * duplicates keep their FIRST occurrence.
+ */
+export function terminalKindStressInputs(): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (s: string): void => {
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  };
+
+  add(EMPTY);
+  add(NO_MARKER_SENTENCE);
+
+  for (const rule of TERMINAL_KIND_TABLE.rules) {
+    for (const clause of rule.clauses) {
+      const s = sampleClause(clause);
+      add(s);
+      add(CRASH_PREFIX + s);
+      add(s.toUpperCase());
+      for (const term of clause) add(sampleClause([term]));
+    }
+  }
+
+  for (const extension of TERMINAL_KIND_TABLE.signal_extensions) {
+    for (const clause of extension.clauses) {
+      const s = sampleClause(clause);
+      add(s);
+      add(CRASH_PREFIX + s);
+      add(s.toUpperCase());
+      for (const term of clause) add(sampleClause([term]));
+    }
+  }
+
+  for (const a of TERMINAL_KIND_TABLE.rules) {
+    for (const b of TERMINAL_KIND_TABLE.rules) {
+      if (a.id === b.id) continue;
+      add(sampleClause(a.clauses[0]) + PAIR_SEPARATOR + sampleClause(b.clauses[0]));
+    }
+  }
+
+  return out;
+}
+
+function sampleClause(clause: string[]): string {
+  return clause
+    .map((term) => {
+      if (term.startsWith(TERMINAL_KIND_PREDICATE_REF)) {
+        return probeTrue(term.slice(TERMINAL_KIND_PREDICATE_REF.length));
+      }
+      return term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)
+        ? term.slice(TERMINAL_KIND_WORD_BOUNDARY_REF.length)
+        : term;
+    })
+    .join(TERM_SEPARATOR);
+}
+
+function probeTrue(name: string): string {
+  const p = TERMINAL_KIND_TABLE.predicates.find((x) => x.name === name);
+  if (!p || p.probes_true.length === 0) {
+    throw new Error(NO_PROBES_TRUE + name);
+  }
+  return p.probes_true[0];
+}

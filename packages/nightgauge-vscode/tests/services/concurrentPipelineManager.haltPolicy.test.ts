@@ -25,7 +25,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { classifyTerminalKind } from "@nightgauge/sdk";
+import { classifyTerminalKind, signalTerminalKind } from "@nightgauge/sdk";
 
 const CPM_PATH = path.resolve(__dirname, "../../src/services/ConcurrentPipelineManager.ts");
 const source = readFileSync(CPM_PATH, "utf-8");
@@ -73,6 +73,25 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     kind: "architecture_approval_required",
     branch: "approval pause",
   },
+  // WIDENED vs the pre-#306 regexes, deliberately. main's isStallKill matched
+  // `[stall-killed]`/`stall idle threshold`/`exceeded stage_hard_cap` and none
+  // of these, so a zombie-run guard halted the queue; the table routes all three
+  // to stall_kill, which is the recovery they already got from the Go side.
+  {
+    text: "[stale-slot-orphan] reload swept a run whose process died",
+    kind: "stall_kill",
+    branch: "transient stall (widened: #252 zombie-run guard)",
+  },
+  {
+    text: "[stage-no-output-timeout] feature-dev produced no session output",
+    kind: "stall_kill",
+    branch: "transient stall (widened: #252 first-output watchdog)",
+  },
+  {
+    text: "exit 1: stage stopped after the hard cap",
+    kind: "stall_kill",
+    branch: "transient stall (widened: bare `hard cap`, main required `exceeded stage_hard_cap`)",
+  },
 ];
 
 /** Failures that MUST reach the halt — the bugs the halt exists to surface. */
@@ -84,6 +103,18 @@ const HALT_CASES: { text: string; kind: string }[] = [
     kind: "validation_failed",
   },
   { text: "[commit-orphaned] HEAD is not on the expected feature branch", kind: "commit_orphaned" },
+  // NARROWED vs the pre-#306 regexes, deliberately. main's isStallKill fired on
+  // any text containing stall wording, so a cost-cap kill that also mentioned
+  // the stall skipped the halt with a toast. The table gives cost-cap-exceeded
+  // precedence, budget_exceeded is in neither skip set, and a run that
+  // deliberately spent its cap SHOULD stop the queue rather than be retried
+  // into spending it again. No producer composes this shape today
+  // (SkillRunner composes cost-cap text without stall wording), which is why it
+  // is listed here rather than fixed.
+  {
+    text: "[cost-cap-exceeded] stage feature-dev [stall-killed] terminated",
+    kind: "budget_exceeded",
+  },
 ];
 
 describe("queue-halt policy (ConcurrentPipelineManager)", () => {
@@ -117,18 +148,60 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     expect(source).toContain("const haltKind = classifyTerminalKind(haltErrMsg);");
   });
 
-  it("keeps exactly one deliberate raw-text condition, and says why", () => {
+  it("keeps exactly one deliberate raw-text condition, in any form, and says why", () => {
     // A bare Anthropic "session/usage limit" with no model named is a shape the
-    // TAXONOMY does not classify — Go returns "" for it — so this branch cannot
-    // be expressed as a kind. It is an addition to the table's answer, not a
-    // duplicate of it, and it must stay documented rather than quietly grow
-    // back into a ladder.
-    const rawTextTests = source.match(/\/[^/\n]*\/i\.test\(haltErrMsg\)/g) ?? [];
+    // RECORD does not classify — Go returns "" for it — so the halt branch
+    // cannot be expressed as a kind. It is an addition to the table's answer,
+    // not a duplicate of it.
+    //
+    // The previous version of this guard grepped for the regex FORM
+    // (`/…/i.test(haltErrMsg)`) and therefore passed for
+    // `haltErrMsg.toLowerCase().includes("[baseline-ci]")` — executed, green.
+    // So it now scans the whole method body for BOTH: every regex literal, and
+    // every method called on the raw text.
+    const body = methodBody(source, "private async haltQueueOnSlotFailure(");
+
+    // String and template literals are blanked first: a log message containing
+    // a slash otherwise reads as a regex and makes this assertion noise.
+    const scannable = body.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+    const regexes = scannable.match(/\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n])+\/[gimsuy]*/g) ?? [];
     expect(
-      rawTextTests,
-      "a new raw-text matcher appeared in haltQueueOnSlotFailure — resolve the kind through the " +
-        "canonical table instead, or document the addition here"
-    ).toEqual(["/\\b(?:session|usage)\\s+limit\\b/i.test(haltErrMsg)"]);
+      regexes,
+      "a new regex appeared in haltQueueOnSlotFailure — resolve the kind through the canonical " +
+        "table instead, or document the addition here"
+    ).toEqual(["/\\b(?:session|usage)\\s+limit\\b/i"]);
+
+    const textOps = [...body.matchAll(/haltErrMsg\s*\.\s*(\w+)/g)].map((m) => m[1]);
+    expect(
+      [...new Set(textOps)].sort(),
+      "haltQueueOnSlotFailure called a string method on the raw failure text other than slice(). " +
+        "Any of includes/match/test/startsWith/toLowerCase is a matcher the table cannot see."
+    ).toEqual(["slice"]);
+
+    // And the two halves of the story stay tied: the RECORD says nothing for
+    // this wording, while the REACTION does — via the declared signal
+    // extension, which is why the halt policy is not the only thing keeping it
+    // alive any more.
     expect(classifyTerminalKind("You've hit your usage limit · resets 10am")).toBeUndefined();
+    expect(signalTerminalKind("You've hit your usage limit · resets 10am")).toBe(
+      "rate_limit_quota_exhausted"
+    );
   });
 });
+
+/** The brace-balanced body of a method, comments stripped. */
+function methodBody(src: string, decl: string): string {
+  const start = src.indexOf(decl);
+  expect(start, `${decl} is gone — this guard now checks nothing`).toBeGreaterThan(0);
+  let depth = 0;
+  for (let i = src.indexOf("{", start); i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) {
+      return src
+        .slice(start, i + 1)
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/[^\n]*/g, "");
+    }
+  }
+  throw new Error(`${decl} body is unbalanced`);
+}

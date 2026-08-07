@@ -559,17 +559,56 @@ higher-precedence non-signal rule owns. That is the bug the old ladder had.)
   red, unless it is listed in the table's `kinds_without_rules` because it is
   set structurally and never derived from text.
 
+### The one deliberate record-vs-reaction divergence
+
+The run **record** and the fleet's **reaction** are produced by two different
+paths: Go writes `terminal_kind` from `Classify`, and the extension forwards a
+kind over IPC that `NotifyComplete` uses **verbatim** when non-empty. #306 exists
+because those two disagreed. They now read one table, and on every RULE the
+reaction is either silent or exactly the record's kind.
+
+There is exactly one declared exception, and it lives in the table as data —
+`signal_extensions` in `internal/terminalkind/table.json`:
+
+| Extension                   | Kind                         | Fires on                                       |
+| --------------------------- | ---------------------------- | ---------------------------------------------- |
+| `session-usage-limit-quota` | `rate_limit_quota_exhausted` | a word-bounded `session limit` / `usage limit` |
+
+**Why it exists (#3792).** A bare Anthropic or Codex quota line — `You've hit
+your usage limit · resets 3pm`, `Claude AI usage limit reached|<unix>`,
+`usage limit reached for this account` — names no model, so no rule classifies
+it: the table's `usage limit` / `weekly limit` clauses belong to
+`model_unavailable` and are gated on a model actually being named. The record is
+therefore empty and `NotifyComplete` falls back to `subagent_crash`, which
+increments the lifetime failure cap and feeds the cascade breaker for a window
+that clears on its own — instead of the quota cooldown, board→Ready and
+`RecordNonFaultOutcome` the condition deserves. `SkillRunner` normalises this
+shape to `[rate-limit-quota-exhausted]` **only** on the Claude stream-json
+result-envelope path, so for plain-text and Codex runs this branch _is_ the
+routing.
+
+**Why it is bounded.** Extensions are consulted only after the rule ladder has
+projected nothing, so an extension can never overrule a kind the record names
+through a signal rule. It is pinned from both sides: corpus rows where
+`expected_signal` differs from `expected`, which the corpus well-formedness test
+permits **only** for a declared extension, plus a table-level test requiring
+every declared extension to actually produce such a row.
+
+**Where it still diverges from the record, on purpose.** A usage-limit line that
+_does_ name a model records `model_unavailable` (a plan restriction) and reacts
+`rate_limit_quota_exhausted` (an environmental window). That pair is exactly what
+the pre-#306 ladders did, and it is now written down with a reason instead of
+being an accident of two hand-maintained lists.
+
 **Downstream text matchers.** `ConcurrentPipelineManager` decides whether a
 failure halts the queue. Those branches used to be four more private regex
 ladders with their own "keep aligned" comments; they now resolve the kind
 through the table and test set membership, with the kind sets pinned by
 `tests/services/concurrentPipelineManager.haltPolicy.test.ts`. One deliberate
-raw-text condition remains and is documented in place: a bare Anthropic
-`session limit` / `usage limit` with **no model named** is a shape the taxonomy
-does not classify at all (the table returns no kind for it), so it cannot be
-expressed as a kind. Teaching the table about it would change the authoritative
-classifier's live routing — a taxonomy decision, not a parity fix, and
-deliberately out of scope here.
+raw-text condition remains and is documented in place — the same session/usage
+limit wording the signal extension carries. It stays raw there because a
+queue-halt decision is a local policy, not a kind: the halt branch has to answer
+for text whose kind is empty.
 
 See [`internal/terminalkind/testdata/README.md`](../internal/terminalkind/testdata/README.md)
 for capture provenance and the redaction rules.

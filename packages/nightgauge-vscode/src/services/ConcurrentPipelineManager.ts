@@ -2125,10 +2125,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // run record can no longer describe the same failure differently. The one
       // raw-text condition that survives is NOT a duplicated matcher: a bare
       // Anthropic "session/usage limit" with no model named is a shape the
-      // TAXONOMY does not classify at all (Go returns "" for it), and skipping
-      // the halt for it is a local policy call the operator has been relying on
-      // since #3792. Teaching the table about it would change the authoritative
-      // classifier's live routing — a taxonomy decision, not a parity fix.
+      // RECORD does not classify at all (Go returns "" for it), and skipping the
+      // halt for it is a local policy call the operator has relied on since
+      // #3792.
+      //
+      // The REACTION side does classify it, via the table's declared
+      // `signal_extensions` — but a halt decision is not a kind, and reaching
+      // for signalTerminalKind here would make a queue-halt policy depend on
+      // which rules happen to be in the signal subset. So this stays raw, and
+      // the whole method body is fenced by
+      // tests/services/concurrentPipelineManager.haltPolicy.test.ts: exactly one
+      // regex, and no string method on haltErrMsg other than slice().
       const haltErrMsg = pipelineResult?.error?.message ?? "";
       const haltKind = classifyTerminalKind(haltErrMsg);
       const isEnvironmentalFailure =

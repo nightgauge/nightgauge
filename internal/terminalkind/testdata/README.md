@@ -22,33 +22,55 @@ three times, hand-written and held aligned by comments; the ladders disagreed on
 | **Table**  | `internal/terminalkind/table.json`                                  | The definition. Nothing else holds a matching literal.                          |
 | **Go**     | `internal/terminalkind` embeds it; `ClassifyTerminalKind` delegates | **Authoritative.** Writes `terminal_kind` into the run record; drives recovery. |
 | **SDK**    | `terminalKindTable.generated.ts`, generated from the table          | Published classifier; reproduces Go by reading the same rules.                  |
-| **Signal** | the extension projects the same table's `signal: true` rules        | Sent to Go with `autonomousComplete`; a **non-empty** answer is used verbatim.  |
+| **Signal** | the same table's `signal: true` rules, then its `signal_extensions` | Sent to Go with `autonomousComplete`; a **non-empty** answer is used verbatim.  |
 
 `expected` in `corpus.json` is **Go's** answer, because Go writes the record.
 `expected_signal` is what the extension may forward — the winning rule's kind
-when that rule is in the signal subset, and empty otherwise, so it can never
-contradict `expected`.
+when that rule is in the signal subset, else a declared `signal_extension`'s
+kind, else empty. Outside those declared extensions it can never contradict
+`expected`, and the extensions themselves are consulted only when the rule
+ladder projects nothing.
 
 Three suites read this one file, so a bad expectation fails whichever CI reaches
 first:
 
 - `internal/terminalkind/corpus_test.go`
-- `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
+- `packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts`
 - `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`
 
 ### What is actually pinned
 
-| Guard                                                                | What a violation looks like                                                           |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Every row classifies to `expected` (all three suites)                | The table is wrong about a real failure shape.                                        |
-| Every row projects to `expected_signal` (all three suites)           | A rule joined or left the signal subset without anyone deciding to.                   |
-| Every rule WINS at least one corpus row (Go)                         | A rung of the ladder with no argued example behind it.                                |
-| Every multi-term clause has a negative row for each half             | An AND quietly widened into an OR — round 2's blind spot, now red rather than diffed. |
-| Every `TerminalKind*` constant has a rule and a row (Go)             | A **kind** added to the taxonomy and never routed to.                                 |
-| The derived stress set reproduces `stress-golden.json` (all three)   | A clause deleted, a literal widened, or two rules swapped.                            |
-| The generated SDK module is byte-identical to the table (Go + hooks) | A consumer edited on its own.                                                         |
-| Predicate probes hold in both languages (Go + SDK)                   | The one non-literal term answering differently in the two runtimes.                   |
-| `captured` rows exist in `captured-shapes.json`, and vice versa (Go) | A hand-authored string claims to be telemetry, or a real shape goes unclassified.     |
+| Guard                                                                                            | What a violation looks like                                                       |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Every row classifies to `expected` (all three suites)                                            | The table is wrong about a real failure shape.                                    |
+| Every row projects to `expected_signal` (all three suites)                                       | A rule joined or left the signal subset without anyone deciding to.               |
+| Every rule WINS at least one corpus row (Go)                                                     | A rung of the ladder with no argued example behind it.                            |
+| Every half of every multi-term clause changes a row when widened (Go)                            | An AND quietly widened into an OR — derived from the table, not remembered.       |
+| A row's `expected_signal` may differ from `expected` only for a declared `signal_extension` (Go) | The reaction quietly leaving the record behind.                                   |
+| Every `TerminalKind*` constant has a rule and a row (Go)                                         | A **kind** added to the taxonomy and never routed to.                             |
+| The derived stress set reproduces `stress-golden.json` (all three)                               | A clause deleted, a literal widened, or two rules swapped.                        |
+| The generated SDK module is byte-identical to the table (Go + hooks)                             | A consumer edited on its own.                                                     |
+| Predicate probes hold in both languages (Go + SDK)                                               | The one non-literal term answering differently in the two runtimes.               |
+| `captured` rows exist in `captured-shapes.json`, and vice versa (Go)                             | A hand-authored string claims to be telemetry, or a real shape goes unclassified. |
+
+### The conjunction guard is derived, not remembered
+
+`TestEveryConjunctionHalfIsPinnedByANegativeRow` builds its own requirement from
+the table. For every multi-term clause and every term in it, it widens that
+clause to the term alone — the AND→OR mutation — re-classifies the whole corpus,
+and requires at least one row to change its answer. When none does it prints the
+exact row to add, with the kind the derived probe classifies as today.
+
+This replaces a sentence that used to sit in the table above and was simply not
+true: round 3 claimed "every multi-term clause has a negative row for each half"
+while 15 of the 46 halves had none, and widening
+`["api error", "connection refused"]` to a bare `["connection refused"]` — a live
+routing change on a `signal: true` rule — left all three suites green after
+regeneration, visible only as three shortened lines and one deletion inside a
+7,000-line generated file. Sixteen rows were added to satisfy the derived
+requirement, and the claim is now checked rather than asserted. A declared dead
+term is skipped, because no input can pin a half that cannot fire; the live half
+of the same clause is still required.
 
 Round 2 tried to close the pattern-level hole from the outside, with a guard
 requiring every matcher literal to APPEAR in some corpus input and a diff of the
@@ -209,7 +231,7 @@ signature.
 
 Synthetic rows **extend** coverage to markers, ordering overlaps and negatives
 the live window happens not to contain. They never stand in for the real
-population. Current split: **18 captured / 85 synthetic**.
+population. Current split: **18 captured / 105 synthetic**.
 
 ## Why the captured set is smaller than the failure population
 
@@ -242,21 +264,24 @@ drift was not on exotic inputs.
 same diff. That is the point: a classifier edit that silently changes an outcome
 has to argue with a written claim rather than update a string.
 
-There is no `known_divergence` mechanism any more, and no divergence for it to
-record. Round 2 carried two — a usage limit that names a model, and an overload
-carrying an explicit quota marker — where the extension signalled one kind while
-the record said another, each "tracked" at an issue that had nothing to do with
-terminal-kind taxonomy. Both dissolved when the two sides started reading one
-table with one precedence: the corpus keeps their inputs as ordering rows,
-because the overlaps they exercise are real, but there is nothing left to
-diverge. A site that disagrees with the table now is a bug in an interpreter,
-not a gap to record.
+There is no `known_divergence` mechanism any more. Round 2 carried two — a usage
+limit that names a model, and an overload carrying an explicit quota marker —
+where the extension signalled one kind while the record said another, each
+"tracked" at an issue that had nothing to do with terminal-kind taxonomy. Both
+dissolved when the two sides started reading one table with one precedence: the
+corpus keeps their inputs as ordering rows, because the overlaps they exercise
+are real.
 
-Note what closing them cost, so it is not rediscovered as a regression: a bare
-Anthropic `session limit` / `usage limit` with **no model named** is a shape the
-table does not classify at all, so the extension no longer signals
-`rate_limit_quota_exhausted` for it — Go decides, and Go returns nothing.
-`ConcurrentPipelineManager` still skips the queue halt for that wording as a
-documented local policy. Teaching the table about it would change the
-authoritative classifier's live routing, which is a taxonomy decision rather
-than a parity fix.
+What replaces the mechanism is narrower and declared: the table's
+`signal_extensions`. One extension exists — `session-usage-limit-quota` — and it
+is the reason a bare Anthropic or Codex quota line still routes to
+`rate_limit_quota_exhausted` even though no RULE classifies it. Round 3 deleted
+that branch with nothing in its place, which converted every non-stream-json
+quota window into a counted crash plus a cascade strike; it is restored here as
+data, with its reason, its precedence and corpus rows on all three suites. See
+[docs/FAILURE_TAXONOMY.md](../../../docs/FAILURE_TAXONOMY.md#the-one-deliberate-record-vs-reaction-divergence).
+
+A site that disagrees with the table outside a declared extension is a bug in an
+interpreter, not a gap to record — and the corpus well-formedness test says so:
+`expected_signal` may differ from `expected` only when a declared extension
+produces it, and every declared extension must have such a row.

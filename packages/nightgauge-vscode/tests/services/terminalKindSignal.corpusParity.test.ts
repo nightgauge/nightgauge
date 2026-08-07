@@ -44,8 +44,39 @@ interface TableRule {
   clauses: string[][];
 }
 
+interface TableSignalExtension {
+  id: string;
+  kind: string;
+  clauses: string[][];
+}
+
 const corpus: { cases: CorpusCase[] } = JSON.parse(readFileSync(CORPUS_PATH, "utf-8"));
-const table: { rules: TableRule[] } = JSON.parse(readFileSync(TABLE_PATH, "utf-8"));
+const table: { rules: TableRule[]; signal_extensions: TableSignalExtension[] } = JSON.parse(
+  readFileSync(TABLE_PATH, "utf-8")
+);
+
+/**
+ * The kind a DECLARED signal extension gives this input, or "". Extensions are
+ * the ONE place the fleet's reaction may name a kind the record does not, they
+ * are data in table.json rather than code here, and they are consulted only
+ * when the rule table projects no signal of its own.
+ */
+function extensionKindFor(input: string): string {
+  const t = input.toLowerCase();
+  for (const extension of table.signal_extensions) {
+    for (const clause of extension.clauses) {
+      if (clause.every((term) => termHolds(t, term))) return extension.kind;
+    }
+  }
+  return "";
+}
+
+/** Literal containment, or word-bounded containment for a `~` term. */
+function termHolds(lowered: string, term: string): boolean {
+  if (!term.startsWith("~")) return lowered.includes(term);
+  const lit = term.slice(1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![0-9a-z_])${lit}(?![0-9a-z_])`).test(lowered);
+}
 const golden: { cases: { input: string; kind: string; signal: string }[] } = JSON.parse(
   readFileSync(GOLDEN_PATH, "utf-8")
 );
@@ -75,19 +106,36 @@ describe("terminal-kind signal parity (extension)", () => {
     ).toEqual([]);
   });
 
-  it("never signals a kind that disagrees with the record, on any input the table describes", () => {
-    // Over the derived stress set, not a sample: every clause, every term and
-    // every ordered rule pair.
+  it("never signals a kind that disagrees with the record, outside declared extensions", () => {
+    // Over the derived stress set, not a sample: every clause, every term, every
+    // ordered rule pair, and every signal-extension clause.
     const conflicts: string[] = [];
     for (const input of terminalKindStressInputs()) {
       const signal = classifyTerminalKindForSignal(input);
       if (signal === undefined) continue;
       const record = classifyTerminalKind(input);
-      if (signal !== record) {
-        conflicts.push(`${JSON.stringify(input)}: signal=${signal} record=${record}`);
-      }
+      if (signal === record) continue;
+      if (extensionKindFor(input) === signal) continue;
+      conflicts.push(`${JSON.stringify(input)}: signal=${signal} record=${record}`);
     }
     expect(conflicts.slice(0, 10)).toEqual([]);
+  });
+
+  it("declares every divergence it produces, and produces every one it declares", () => {
+    // Both directions over the derived set: a signal that differs from the
+    // record must come from a declared extension, and every declared extension
+    // must actually produce such a divergence somewhere — otherwise it is dead
+    // data that could be deleted with nothing going red.
+    const produced = new Set<string>();
+    for (const input of terminalKindStressInputs()) {
+      const signal = classifyTerminalKindForSignal(input);
+      if (signal === undefined || signal === classifyTerminalKind(input)) continue;
+      produced.add(extensionKindFor(input));
+    }
+    expect(
+      [...produced].sort(),
+      "the divergences this side actually produces must be exactly the declared extensions"
+    ).toEqual([...new Set(table.signal_extensions.map((e) => e.kind))].sort());
   });
 
   it("matches Go's own signal projection for every derived input", () => {
@@ -153,10 +201,57 @@ describe("terminal-kind signal parity (extension)", () => {
     expect(src.match(/"[^"]*"|'[^']*'|`[^`]*`/g) ?? []).toEqual(['"@nightgauge/sdk"']);
   });
 
+  it("is the only producer of the kind services.ts sends to Go, and sends it unconditionally", () => {
+    // ROUND 3's FINDING 5. The guard above fences terminalKindSignal.ts, but the
+    // value that actually crosses the IPC boundary is assembled in
+    // bootstrap/services.ts and handed to IpcClient.autonomousComplete, which Go's
+    // NotifyComplete uses VERBATIM when non-empty. Nothing asserted anything
+    // about that line: changing it to
+    //
+    //   let terminalFailureKind = classifyTerminalKindForSignal(errMsg);
+    //   if (/\[baseline-ci-deferred\]/i.test(errMsg)) terminalFailureKind = "stall_kill";
+    //
+    // left the Go suite, this suite and the halt-policy suite green while the
+    // record said subagent_crash and the fleet reacted stall_kill.
+    //
+    // So the call site is asserted to be a BARE delegation: declared const (not
+    // let), assigned once from the guarded function, and never touched again
+    // except as the argument it is forwarded as.
+    const src = readFileSync(path.resolve(__dirname, "../../src/bootstrap/services.ts"), "utf-8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+
+    const declarations = src.match(/(?:const|let|var)\s+terminalFailureKind\b[^;\n]*/g) ?? [];
+    expect(
+      declarations,
+      "the terminal kind forwarded to Go must be declared exactly once, as a const, straight " +
+        "from the guarded classifier — a `let` is the first half of a reassignment"
+    ).toEqual(["const terminalFailureKind = classifyTerminalKindForSignal(errMsg)"]);
+
+    const assignments = src.match(/terminalFailureKind\s*(?:=[^=]|\+=|\?\?=|\|\|=|&&=)/g) ?? [];
+    expect(
+      assignments.length,
+      "terminalFailureKind is assigned more than once in services.ts. Every extra assignment is " +
+        "a matcher outside the table, on the value Go trusts verbatim."
+    ).toBe(1);
+
+    const calls = src.match(/classifyTerminalKindForSignal\s*\(/g) ?? [];
+    expect(
+      calls.length,
+      "classifyTerminalKindForSignal must be called exactly once in services.ts"
+    ).toBe(1);
+
+    // And the argument really is what reaches the wire.
+    expect(src).toMatch(/isConflictRestart,\s*terminalFailureKind,\s*failureDetail/);
+  });
+
   it("covers the environmental kinds it exists to catch — no more, no less", () => {
     // Exact set equality, both directions. The declared subset is in the table;
     // the corpus has to exercise all of it and nothing beyond it.
-    const declared = new Set(table.rules.filter((r) => r.signal).map((r) => r.kind));
+    const declared = new Set([
+      ...table.rules.filter((r) => r.signal).map((r) => r.kind),
+      ...table.signal_extensions.map((e) => e.kind),
+    ]);
     const observed = new Set(
       corpus.cases.map((c) => classifyTerminalKindForSignal(c.input)).filter(Boolean)
     );

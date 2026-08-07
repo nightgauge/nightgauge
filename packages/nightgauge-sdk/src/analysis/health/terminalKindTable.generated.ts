@@ -11,8 +11,8 @@
  * TestGeneratedTypeScriptIsInSync — the way to change classification is to edit
  * table.json and regenerate, which updates every consumer at once.
  *
- * See failureClassifier.ts for the interpreter and
- * internal/terminalkind/table.go for its Go twin.
+ * See terminalKind.ts for the interpreter and internal/terminalkind/table.go
+ * for its Go twin.
  */
 
 /** A named check the table references as a `@name` term because it cannot be a literal. */
@@ -45,6 +45,21 @@ export interface TerminalKindRule {
   why: string;
 }
 
+/**
+ * A SIGNAL-ONLY rule: matched by the reaction path and never by the record.
+ *
+ * This is the one declared place where the kind the fleet reacts to may differ
+ * from the kind the run record carries. Extensions are consulted ONLY when the
+ * rule table itself projects no signal, so they can never overrule a kind the
+ * record actually names.
+ */
+export interface TerminalKindSignalExtension {
+  id: string;
+  kind: string;
+  clauses: string[][];
+  why: string;
+}
+
 export interface TerminalKindTable {
   $comment: string[];
   schema_version: number;
@@ -52,10 +67,18 @@ export interface TerminalKindTable {
   dead_terms: TerminalKindDeadTerm[];
   kinds_without_rules: string[];
   rules: TerminalKindRule[];
+  signal_extensions: TerminalKindSignalExtension[];
 }
 
 /** The prefix marking a term as a named-predicate reference. */
 export const TERMINAL_KIND_PREDICATE_REF = "@";
+
+/**
+ * The prefix marking a term as a WORD-BOUNDED literal: satisfied only when the
+ * text contains it with a non-word character (or a string edge) on each side.
+ * A word character is [0-9a-z_] against the already-lowercased text.
+ */
+export const TERMINAL_KIND_WORD_BOUNDARY_REF = "~";
 
 export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   "$comment": [
@@ -71,15 +94,26 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
     "       interprets it. A drift check (pre-commit, ci-local, and a Go test) fails if the",
     "       generated module is not byte-identical to what this file renders.",
     "  Ext  packages/nightgauge-vscode/src/services/terminalKindSignal.ts runs the SAME ladder",
-    "       and returns the winning rule's kind only when that rule is `signal: true`. It cannot",
-    "       disagree with Go by construction: it either answers Go's answer or answers nothing.",
+    "       and returns the winning rule's kind only when that rule is `signal: true`, so on",
+    "       every rule it either answers Go's answer or answers nothing. The single declared",
+    "       exception is signal_extensions below, and it is data, not code.",
     "",
     "SEMANTICS. Rules are evaluated IN ORDER; the first rule with a satisfied clause wins.",
     "A rule fires when ANY of its clauses is satisfied (OR); a clause is satisfied when EVERY",
     "one of its terms holds (AND). A term is either a literal — satisfied when the lowercased",
-    "error text CONTAINS it — or a predicate reference `@name`, satisfied when that named",
-    "predicate returns true for the lowercased text. No match anywhere yields the empty kind;",
-    "callers fall back to subagent_crash (the most generic).",
+    "error text CONTAINS it — a WORD-BOUNDED literal `~text`, satisfied when the text contains it",
+    "with a non-word character on each side — or a predicate reference `@name`, satisfied when",
+    "that named predicate returns true for the lowercased text. No match anywhere yields the empty kind;",
+    "callers fall back to subagent_crash (the most generic). Matching is ASCII-only in",
+    "practice: every term here is ASCII, and the two languages' case folding differs on 56",
+    "non-ASCII code points (see the package doc in table.go).",
+    "",
+    "SIGNAL EXTENSIONS are rules the REACTION path has and the RECORD path does not — the one",
+    "declared place where the kind the fleet reacts to may differ from the kind the run record",
+    "carries. They are consulted ONLY when the rule ladder projects no signal, so they can",
+    "never overrule a kind the record names. Every extension is pinned by corpus rows whose",
+    "expected_signal differs from expected, which the corpus well-formedness test permits for",
+    "declared extensions and for nothing else.",
     "",
     "ORDER IS THE CONTRACT. Many real failure strings satisfy two rules and the earlier one",
     "wins on purpose — see budget-ceiling-hit vs budget-enforcer, runaway-ceiling vs",
@@ -90,13 +124,13 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
     "shared corpus (internal/terminalkind/testdata/corpus.json) in the same commit. Every",
     "consumer follows automatically; none of them can be changed on its own."
   ],
-  "schema_version": 1,
+  "schema_version": 2,
   "predicates": [
     {
       "name": "mentions_registry_model",
       "description": "True when the text names a model from the model registry — by concrete id (`claude-opus-4-5-20251101`), display name (`Claude Opus 4.5`), or tier (`opus`/`sonnet`/`haiku`/…), all compared lowercased. Registry-derived rather than hardcoded so new models are covered as the registry evolves (#42).",
       "go": "internal/terminalkind/predicates.go — iterates models.All().",
-      "ts": "packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts — iterates MODEL_REGISTRY.",
+      "ts": "packages/nightgauge-sdk/src/analysis/health/terminalKind.ts — iterates MODEL_REGISTRY.",
       "why_both_sides_agree": "Both registries are the SAME FILE: packages/nightgauge-sdk/src/eval/model-registry.json is canonical and internal/models/model-registry.json is a byte copy kept in sync by scripts/sync-model-registry.sh, with internal/models/registry_test.go (TestParityWithCanonicalSDKRegistry) failing on drift. The predicate is additionally pinned by dedicated corpus rows on both sides — id, display name, tier, and the negative case.",
       "probes_true": [
         "gpt-5.6-terra",
@@ -728,6 +762,21 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ]
       ],
       "why": "Process death / non-zero exit fallback. Everything specific is matched above because scheduler.SetStageError prefixes almost every stage error with `exit N: `, so this rule can claim any string that reaches it — a rule appended after it would be dead code."
+    }
+  ],
+  "signal_extensions": [
+    {
+      "id": "session-usage-limit-quota",
+      "kind": "rate_limit_quota_exhausted",
+      "clauses": [
+        [
+          "~session limit"
+        ],
+        [
+          "~usage limit"
+        ]
+      ],
+      "why": "THE ONE DELIBERATE RECORD-VS-REACTION DIVERGENCE, restored as data (#3792). A bare Anthropic session/usage-limit line — `You've hit your usage limit · resets 3pm`, `Claude AI usage limit reached|\u003cunix\u003e`, codex's `usage limit reached for this account` — is an environmental quota window, but no RULE above classifies it: the two `usage limit`/`weekly limit` clauses belong to model-unavailable and are gated on a model actually being named, and with no model named the record ladder answers nothing. Go's NotifyComplete then falls back to subagent_crash, which increments LifetimeIssueFailures and feeds the cascade breaker for a window that clears on its own, instead of applyQuotaCooldownLocked + RecordNonFaultOutcome. skillRunner normalises this shape to `[rate-limit-quota-exhausted]` ONLY on the Claude stream-json result-envelope path, so the extension is live defense-in-depth for the plain-text/Codex paths (extractTailError) — which is exactly what ConcurrentPipelineManager's surviving raw-text halt condition says in place. Precedence: the pre-#306 extension ladder evaluated this at position 3, ahead of overloaded / github-network-outage / socket-drop / adapter-auth / architecture-approval; here every signal RULE outranks it instead. That narrowing only affects text carrying BOTH a signal marker and session/usage-limit wording — no producer emits that shape, and in every such case the old ladder's answer contradicted its own record, which is the split #306 removes. Where the record DOES classify the text (a usage limit that names a model → model_unavailable) the extension still fires, because the record ladder marks that rule non-signal: that pair is pinned by corpus rows with expected != expected_signal and is the whole reason this section is declared rather than implied."
     }
   ]
 };

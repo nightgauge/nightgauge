@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
+	"github.com/nightgauge/nightgauge/internal/terminalkind/codegen"
 )
 
 func main() {
@@ -28,11 +29,11 @@ func main() {
 
 	tb := terminalkind.Load()
 
-	ts, err := terminalkind.RenderTypeScript(tb)
+	ts, err := codegen.RenderTypeScript(tb)
 	if err != nil {
 		fail("rendering TypeScript: %v", err)
 	}
-	golden, err := terminalkind.RenderStressGolden(tb)
+	golden, err := codegen.RenderStressGolden(tb)
 	if err != nil {
 		fail("rendering stress golden: %v", err)
 	}
@@ -41,8 +42,8 @@ func main() {
 		path string
 		data []byte
 	}{
-		{filepath.Join(*root, terminalkind.GeneratedTSPath), ts},
-		{filepath.Join(*root, terminalkind.StressGoldenPath), golden},
+		{filepath.Join(*root, codegen.GeneratedTSPath), ts},
+		{filepath.Join(*root, codegen.StressGoldenPath), golden},
 	}
 
 	drift := false
