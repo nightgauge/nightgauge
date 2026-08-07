@@ -302,10 +302,21 @@ reads the context files for the complexity model feedback loop. Do NOT run
 `pr-{N}.json` and `issue-{N}.json` before outcome recording can read them,
 causing 0-line garbage data in the complexity model.
 
-**Plan artifact cleanup:** For batch PRs, batch context files and plan artifacts
-are cleaned up in Phase 0.5 (Batch Path). For single-issue PRs, plan artifacts
+**Plan artifact cleanup:** For single-issue PRs, plan artifacts
 (`.nightgauge/plans/{N}-*.md`) are cleaned up automatically by the
-HeadlessOrchestrator during `pipeline-finish`.
+HeadlessOrchestrator during `pipeline-finish`. For batch PRs (`BATCH_MODE=true`
+from Phase 0.5), remove the batch context files and the epic's plan artifacts
+here — `pr-merge` is the terminal stage of a batch and nothing downstream
+reads them, so this is the only place they are removed:
+
+```bash
+if [ "${BATCH_MODE:-false}" = "true" ]; then
+  rm -f ".nightgauge/pipeline/batch-${EPIC_NUMBER}.json" \
+        ".nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json" \
+        ".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+  rm -f .nightgauge/plans/${EPIC_NUMBER}-*.md
+fi
+```
 
 #### Step 7.7: Record Outcome to Complexity Model
 

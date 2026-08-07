@@ -17,6 +17,7 @@ disable-model-invocation: true
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
 <!-- include: ../_shared/AUTONOMY_CONTRACT.md -->
+<!-- include: ../_shared/BATCH_MODE.md -->
 
 # PR Merge
 
@@ -102,6 +103,7 @@ attempt to populate that section itself; leave the placeholder from
 ## Supporting files (load on demand)
 
 - `skills/nightgauge-pr-merge/_includes/context-bootstrap.md` — read in Phase 0 (stage start + context reconstruction)
+- `skills/nightgauge-pr-merge/_includes/batch-detection.md` — read in Phase 0.5 (batch PR detection, multi-issue close, batch context cleanup)
 - `skills/nightgauge-pr-merge/_includes/validate-environment.md` — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
 - `skills/nightgauge-pr-merge/_includes/reviews.md` — read in Phase 3 (fetch & parse review feedback, CI status)
 - `skills/nightgauge-pr-merge/_includes/merge.md` — read in Phase 6 (ruleset pre-check, conflict resolution, merge gate, execute merge)
@@ -198,7 +200,16 @@ context file from GitHub if it is missing.
 printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'
 ```
 
-<!-- include: ../_shared/BATCH_MODE.md -->
+**PURPOSE**: Decide whether this PR closes one issue or a batch. A batch run
+carries one shared branch and one PR for a whole epic, so `pr-merge` must close
+every issue in the batch and remove the batch context files the run produced —
+it is the terminal stage, and nothing downstream reads them.
+
+> **Read `skills/nightgauge-pr-merge/_includes/batch-detection.md` now and follow its instructions before continuing this phase.**
+
+**Single-issue path**: when `.nightgauge/pipeline/dev-batch-{E}.json` does not
+exist — the common case — set `BATCH_MODE=false` and continue to Phase 1
+unchanged.
 
 ---
 

@@ -401,6 +401,38 @@ detailed in the reference file already loaded for this phase (Steps 8.3–8.7).
 
 <!-- include: ../_shared/BATCH_MODE.md -->
 
+### Batch Producer Step (epic pickups only)
+
+`issue-pickup` is the stage that **creates** `batch-{E}.json`. It runs only
+when the issue being picked up belongs to an epic that was already assessed as
+batchable — never on a plain issue, and never on an epic with no assessment:
+
+```bash
+EPIC_NUMBER=$(jq -r '.parent_issue // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
+ASSESSMENT=".nightgauge/pipeline/epic-assessment-${EPIC_NUMBER}.json"
+
+# No epic, no assessment, or a non-batchable strategy → single-issue path,
+# unchanged. Do not write batch-{E}.json.
+if [ -n "$EPIC_NUMBER" ] && [ -f "$ASSESSMENT" ]; then
+  STRATEGY=$(jq -r '.strategy // empty' "$ASSESSMENT")
+  case "$STRATEGY" in
+    parallel) BATCH_STRATEGY="batch" ;;
+    mixed)    BATCH_STRATEGY="hybrid" ;;
+    *)        BATCH_STRATEGY="" ;;   # sequential or unknown → single-issue
+  esac
+fi
+```
+
+When `BATCH_STRATEGY` is non-empty, write
+`.nightgauge/pipeline/batch-${EPIC_NUMBER}.json` to the schema in
+[docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) —
+`schema_version: "1.0"`, `epic_number`, `issue_numbers`, `batch_strategy`, the
+shared `branch` and `base_branch`, an `issues[]` entry per sub-issue with the
+same requirements shape as the single-issue context, `shared_files`, `groups`
+from the assessment, and `created_at`. The per-issue `issue-{N}.json` files are
+still written exactly as before: this file is **additional**, never a
+replacement.
+
 ---
 
 ## Output Contract
