@@ -532,7 +532,7 @@ higher-precedence non-signal rule owns. That is the bug the old ladder had.)
 
 - **Behaviour** — `internal/terminalkind/testdata/corpus.json`, read by
   `internal/terminalkind/corpus_test.go`,
-  `packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts`
+  `packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts`
   and
   `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`.
   `expected` is Go's answer because Go writes the record; `expected_signal` is

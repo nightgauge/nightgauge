@@ -9,7 +9,7 @@
     "Read by three suites over one file:",
     "",
     "  internal/terminalkind/corpus_test.go                                             (Go)",
-    "  packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts",
+    "  packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts",
     "  packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts",
     "",
     "`expected`        what the run record will say — Go's answer, because Go writes the record.",

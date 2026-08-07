@@ -6,7 +6,7 @@ package terminalkind
 // concrete failure text, and every row carries a written argument for its
 // answer. The same file is read by the SDK and the extension suites:
 //
-//	packages/nightgauge-sdk/tests/analysis/health/failureClassifier.corpusParity.test.ts
+//	packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts
 //	packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts
 //
 // `expected` is what the run record will say; `expected_signal` is what the
