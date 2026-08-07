@@ -697,6 +697,17 @@ key (e.g., `batch-799.json`).
 > **Note**: Batch context is additive — existing single-issue pipeline paths
 > remain unchanged. See Issue #801.
 
+> **Status (#337)**: these schemas are a contract, not a live path. No stage
+> writes `batch-{E}.json` — `issue-pickup` has no batch producer step — so the
+> first file in the chain never reaches disk and every later stage's batch file
+> test fails. The batch path is dormant end-to-end and the single-issue path is
+> the only one that runs. A stage must never synthesize one of these files to
+> "enable" batch mode mid-run: `groups[]` in particular has no source, since
+> `epic-assessment-{E}.json` carries a strategy, per-issue assessments, and cost
+> estimates, but no grouping or file-overlap data. Building the producer is a
+> deliberate change to `issue-pickup` (shared epic branch, dependency-aware
+> grouping), not something a run improvises.
+
 #### batch-{E}.json
 
 **Created by**: `/nightgauge-issue-pickup` (batch mode) **Read by**:

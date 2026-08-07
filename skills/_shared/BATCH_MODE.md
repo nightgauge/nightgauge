@@ -39,6 +39,16 @@ under the batch context file sections. Do not improvise a shape: a batch file
 that does not match its schema is not detected by the next stage, which
 degrades to the single-issue path and silently drops the rest of the batch.
 
+**Nothing writes `batch-{E}.json` today.** `issue-pickup` has no batch producer
+step, so the first input in the chain never reaches disk, every later stage's
+file test fails, and the batch path is dormant end-to-end. That is the current
+expected state, not a gap to route around mid-run: the table is the contract a
+producer would have to satisfy, not a licence to synthesize the file. Adding
+that producer is a deliberate change to `issue-pickup` — it has to resolve the
+shared epic branch every later stage keys off, and derive `groups` from real
+dependency and file-overlap data rather than from the strategy string in
+`epic-assessment-{E}.json`, which carries neither.
+
 ### Detection is a file test, nothing more
 
 Resolve `E`, test for this stage's batch input, and branch:
