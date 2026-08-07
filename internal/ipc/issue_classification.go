@@ -9,17 +9,36 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// issueClassification is the label-derived issue metadata a run record carries
-// alongside its cost: the raw labels, the issue type, and the size bucket.
+// issueClassification is the pre-run metadata a run record carries alongside
+// its cost: the raw labels, the issue type, the size bucket, and the routing
+// decision the issue was picked up under.
 //
 // Size is not a display field. It is the join key the VSCode pre-flight cost
 // estimator matches historical runs on, so a record written without it is
 // unusable as calibration input and silently collapses the projection back to
 // the raw static estimate (#112).
+//
+// ComplexityScore and PredictedModel are the routing *predictions*. They are
+// what the learning corpus calibrates against — a corpus row whose
+// complexity_score is 0 and whose predicted model is empty measures nothing,
+// which is exactly the degenerate shape every pre-#304 outcome had. Both sit in
+// the same issue-{N}.json this loader already opens for labels and size, one
+// object away from the fields that were being read.
 type issueClassification struct {
 	Labels []string
 	Type   string
 	Size   string
+	// ComplexityScore is routing.complexity_score. 0 means UNKNOWN — no
+	// recognized size bucket scores 0 (routing.SizeBaseScore: XS=1 … XL=8), so
+	// callers can tell "unscored" from any real score and must not spell it as
+	// a real one.
+	ComplexityScore int
+	// PredictedModel is routing.pickup_recommendation.dev_model — the model
+	// tier the router chose for the implementation stage. Empty when unknown;
+	// deliberately NOT defaulted to "sonnet" the way the scheduler's
+	// loadIssueContext does, because a fabricated prediction is worse for
+	// calibration than an absent one.
+	PredictedModel string
 }
 
 // loadIssueClassification reads the run's issue-{N}.json context file and
@@ -40,8 +59,14 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			continue
 		}
 		var ctx struct {
-			Type   string            `json:"type"`
-			Labels []json.RawMessage `json:"labels"`
+			Type    string            `json:"type"`
+			Labels  []json.RawMessage `json:"labels"`
+			Routing struct {
+				ComplexityScore      int `json:"complexity_score"`
+				PickupRecommendation struct {
+					DevModel string `json:"dev_model"`
+				} `json:"pickup_recommendation"`
+			} `json:"routing"`
 		}
 		if err := json.Unmarshal(data, &ctx); err != nil {
 			continue
@@ -52,9 +77,11 @@ func loadIssueClassification(repoRoot, worktreeDir string, issueNumber int) issu
 			issueType = state.ExtractTypeFromLabels(labels)
 		}
 		return issueClassification{
-			Labels: labels,
-			Type:   issueType,
-			Size:   state.ExtractSizeFromLabels(labels),
+			Labels:          labels,
+			Type:            issueType,
+			Size:            state.ExtractSizeFromLabels(labels),
+			ComplexityScore: ctx.Routing.ComplexityScore,
+			PredictedModel:  ctx.Routing.PickupRecommendation.DevModel,
 		}
 	}
 	return issueClassification{}

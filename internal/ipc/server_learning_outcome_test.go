@@ -7,14 +7,18 @@
 // HeadlessOrchestrator → pipeline.notifyComplete and never enter that loop, so
 // in the mode the product is actually operated in nothing recorded an outcome —
 // while HeadlessOrchestrator's own comment asserted the Go side "records
-// outcomes ... on every pipeline completion". These tests pin the corpus write
-// at the IPC seam and pin BOTH deliberate non-recording states separately, so a
-// regression cannot collapse "we chose not to record" into "we recorded a
-// failure" or into silence.
+// outcomes ... on every pipeline completion".
+//
+// These tests pin the corpus write at the IPC seam, pin BOTH deliberate
+// non-recording states separately, and — because "a file exists" was never the
+// bar — pin every field where a degenerate value is indistinguishable from a
+// real one: the corpus this fix replaces was 8/8 model-less, 8/8
+// complexityScore 0, 8/8 predictedSize "small" and 8/8 actualSize absent.
 package ipc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,9 +29,10 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// outcomesPath is the workspace-scoped corpus the loop verdicts and
-// `nightgauge learn tune` read. Deliberately NOT per-repo: sharding it would
-// leave the loops as blind as before the fix while every test still passed.
+// outcomesPath is the corpus for one repo root. Per-repo, NOT workspace-scoped:
+// the outcome is derived from the run record, and a run's persisted state lands
+// in its target repo (#215/#232). loop-verdicts and `learn tune` read one
+// --workdir and read that root's run history beside it.
 func outcomesPath(root string) string {
 	return filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
 }
@@ -59,13 +64,77 @@ func readOutcomes(t *testing.T, root string) ([]learning.Outcome, bool) {
 	return out, true
 }
 
+// loadCapturedFixture reads one redacted, REAL artifact from
+// internal/ipc/testdata/outcome-gap (see that directory's README.md for
+// provenance and scripts/capture-outcome-gap-fixture.sh for capture).
+func loadCapturedFixture(t *testing.T, name string, into any) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "outcome-gap", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	if err := json.Unmarshal(data, into); err != nil {
+		t.Fatalf("decode fixture %s: %v", name, err)
+	}
+}
+
+func loadCapturedRunRecord(t *testing.T, name string) state.V2RunRecord {
+	t.Helper()
+	var rec state.V2RunRecord
+	loadCapturedFixture(t, name, &rec)
+	return rec
+}
+
+// capturedClassification returns the classification the captured
+// issue-context.json fixture produces through the production loader — i.e. the
+// real routing prediction (complexity score, predicted dev model, size label)
+// a real run was picked up under.
+func capturedClassification(t *testing.T, issueNumber int) issueClassification {
+	t.Helper()
+	root := t.TempDir()
+	writeCapturedIssueContext(t, root, issueNumber)
+	cls := loadIssueClassification(root, "", issueNumber)
+	if cls.ComplexityScore <= 0 || cls.PredictedModel == "" || cls.Size == "" {
+		t.Fatalf("captured issue-context fixture is degenerate: %+v", cls)
+	}
+	return cls
+}
+
+// writeCapturedIssueContext plants the captured issue-{N}.json under root,
+// renumbered for the run under test. This is the file the notifyComplete
+// handler reads for labels, size, complexity score and predicted model — the
+// fixture is real captured routing data, not an invented shape (#166).
+func writeCapturedIssueContext(t *testing.T, root string, issueNumber int) {
+	t.Helper()
+	var ctx map[string]any
+	loadCapturedFixture(t, "issue-context.json", &ctx)
+	ctx["issue_number"] = issueNumber
+
+	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir pipeline dir: %v", err)
+	}
+	data, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("encode issue context: %v", err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("issue-%d.json", issueNumber))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write issue context: %v", err)
+	}
+}
+
 // THE KEY REGRESSION TEST (#304). An extension-path run that reaches
 // pipeline.notifyComplete must append exactly one learning outcome — and that
-// outcome must carry real signal, not an all-zero husk. Against unfixed code
-// this fails at the existence assertion: internal/ipc did not import the
-// learning package at all.
+// outcome must carry real signal, not an all-zero husk.
+//
+// Against unfixed code this fails at the existence assertion: internal/ipc did
+// not import the learning package at all. Against the FIRST fix attempt it
+// still fails, on complexityScore/predictedSize/actualSize — the fields that
+// stayed degenerate.
 func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 304)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -90,9 +159,9 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	}
 	o := outcomes[0]
 
-	// Non-empty assertions, one per field where empty is the pre-fix failure
-	// mode. A record that exists but reads all-zero is the same blindness with
-	// a file on disk.
+	// Non-empty assertions, one per field where a degenerate value is the
+	// pre-fix failure mode. A record that exists but reads all-zero is the same
+	// blindness with a file on disk.
 	if o.Repo == "" {
 		t.Error("Repo is empty — the outcome cannot be attributed to a repository")
 	}
@@ -103,10 +172,30 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 		t.Error("Success = false for a run that completed")
 	}
 	if o.PredictedModel == "" {
-		t.Error("PredictedModel is empty — the run reported a served model, so the outcome must carry it (every pre-#304 corpus record was model-less)")
+		t.Error("PredictedModel is empty — issue-304.json carries routing.pickup_recommendation.dev_model, so the router's prediction must reach the corpus (every pre-#304 record was model-less)")
 	}
 	if o.ActualModel == "" {
-		t.Error("ActualModel is empty — with no refusal fallback it must mirror PredictedModel")
+		t.Error("ActualModel is empty — the run reported a served model")
+	}
+	// complexityScore 0 is IN RANGE (SizeBucketForScore(0)=="small"), so an
+	// unrecorded score is indistinguishable from a genuinely trivial issue. The
+	// score is in the same issue-{N}.json the handler already opens for labels.
+	if o.ComplexityScore <= 0 {
+		t.Errorf("ComplexityScore = %d, want > 0 — the run's issue-304.json carries routing.complexity_score, and 0 is indistinguishable from a trivial issue (#304)", o.ComplexityScore)
+	}
+	// PredictedSize vs ActualSize must be POPULATED and in ONE vocabulary, or
+	// the calibration loop reports a measured 0% forever.
+	if o.PredictedSize == "" {
+		t.Error("PredictedSize is empty despite a known complexity score")
+	}
+	if o.ActualSize == "" {
+		t.Error("ActualSize is empty — no production code has ever written this field, so predicted-vs-actual size has never once been compared (#304)")
+	}
+	if !isSizeBucket(o.PredictedSize) {
+		t.Errorf("PredictedSize = %q — not a small|medium|large bucket; the size:* vocabulary (XS|S|M|L|XL) can never equal the bucket vocabulary the other writer uses, so calibration would report a measured 0%% forever", o.PredictedSize)
+	}
+	if !isSizeBucket(o.ActualSize) {
+		t.Errorf("ActualSize = %q — not a small|medium|large bucket", o.ActualSize)
 	}
 	if o.DurationMs <= 0 {
 		t.Errorf("DurationMs = %d, want > 0", o.DurationMs)
@@ -133,11 +222,128 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("expected exactly one RunRecord, got %d", len(records))
 	}
+	if records[0].Routing.ComplexityScore != o.ComplexityScore {
+		t.Errorf("RunRecord.Routing.ComplexityScore = %d, outcome says %d — the two sinks disagree",
+			records[0].Routing.ComplexityScore, o.ComplexityScore)
+	}
 	if records[0].OutcomePrediction == nil {
 		t.Fatal("RunRecord.OutcomePrediction is nil — the predicted-vs-actual routing fields never reached the record")
 	}
 	if got := records[0].OutcomePrediction.PredictedModel; got != o.PredictedModel {
 		t.Errorf("RunRecord.OutcomePrediction.PredictedModel = %q, outcome says %q — the two sinks disagree", got, o.PredictedModel)
+	}
+	if got := records[0].OutcomePrediction.ActualSize; got != o.ActualSize {
+		t.Errorf("RunRecord.OutcomePrediction.ActualSize = %q, outcome says %q — the two sinks disagree", got, o.ActualSize)
+	}
+}
+
+func isSizeBucket(v string) bool {
+	return v == "small" || v == "medium" || v == "large"
+}
+
+// The corpus must land in the run's TARGET repo — the same root as the run
+// record it is derived from (#215/#232) — NOT in s.workspaceRoot.
+//
+// s.workspaceRoot is not a workspace root at all: it is a mutable pointer to
+// the workspace's ACTIVE repo, reassigned by workspace.setRoot whenever the
+// extension's resolveActiveRepository picks a different repo (in a multi-repo
+// workspace, whichever repo owns the focused editor). Rooting the corpus there
+// files repo B's outcome under repo A the moment the operator clicks into a
+// different file, and repo B's corpus stays empty forever.
+//
+// Against the pre-fix code this fails on the FIRST assertion: the outcome
+// lands under the active repo, and the target repo has no corpus at all.
+func TestNotifyComplete_RecordsOutcomeInTargetRepoNotActiveRepo(t *testing.T) {
+	activeRepoRoot := t.TempDir() // what workspace.setRoot last pointed at
+	targetRepoRoot := t.TempDir() // the repo this run actually belongs to
+	writeCapturedIssueContext(t, targetRepoRoot, 3044)
+
+	s := NewServer(nil, WithWorkspaceRoot(activeRepoRoot))
+	s.RegisterRepo("acme", "widget", targetRepoRoot)
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"running","model":"claude-sonnet-5"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(running): %v", err)
+	}
+	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","inputTokens":10,"outputTokens":20,"costUsd":0.5}`)); err != nil {
+		t.Fatalf("notifyStageTransition(complete): %v", err)
+	}
+	if _, err := complete(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"success":true,"totalDurationMs":900}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
+
+	outcomes, exists := readOutcomes(t, targetRepoRoot)
+	if !exists {
+		t.Fatalf("no corpus in the run's TARGET repo (%s) — the outcome was filed under a different repo than the run record it came from (#215/#304)", targetRepoRoot)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("expected exactly one outcome in the target repo, got %d", len(outcomes))
+	}
+	if outcomes[0].Repo != "acme/widget" {
+		t.Errorf("Repo = %q, want %q", outcomes[0].Repo, "acme/widget")
+	}
+
+	if _, exists := readOutcomes(t, activeRepoRoot); exists {
+		t.Errorf("the ACTIVE repo (%s) must have no corpus — repo A would accumulate repo B's runs and both corpora would describe runs their own history files never saw", activeRepoRoot)
+	}
+
+	// Both sinks in one place: the run record went to the target repo too.
+	if got := len(readHistoryRecords(t, targetRepoRoot)); got != 1 {
+		t.Errorf("expected 1 RunRecord in the target repo, got %d", got)
+	}
+	if got := len(readHistoryRecords(t, activeRepoRoot)); got != 0 {
+		t.Errorf("expected 0 RunRecords in the active repo, got %d", got)
+	}
+}
+
+// Model attribution follows the money, not the stage order.
+//
+// This run spends effectively everything on an opus feature-planning stage and
+// then closes on a near-free haiku pr-merge; feature-dev never reports a model.
+// Resolving "the run's model" from the terminal stage books the whole $6 run —
+// its cost, its success verdict, and the OutcomePrediction pushed to the
+// platform — against haiku. That value is not empty, so the "no model
+// attribution" log never fires: the failure is silent and confidently wrong.
+//
+// Against the pre-fix code this fails with ActualModel = "haiku".
+func TestNotifyComplete_AttributesModelToDominantCostStage(t *testing.T) {
+	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 3045)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	// feature-dev runs but never reports a served model (a non-Claude adapter,
+	// or resolved-then-killed) — so the implementation-stage shortcut misses.
+	for _, msg := range []string{
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"running"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"complete","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"running","model":"claude-opus-5"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"complete","model":"claude-opus-5","inputTokens":5000,"outputTokens":9000,"costUsd":6.00}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"running","model":"claude-haiku-4-5-20251001"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"complete","model":"claude-haiku-4-5-20251001","inputTokens":20,"outputTokens":30,"costUsd":0.01}`,
+	} {
+		if _, err := transition(t.Context(), []byte(msg)); err != nil {
+			t.Fatalf("notifyStageTransition: %v\nmsg=%s", err, msg)
+		}
+	}
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3045,"success":true,"totalDurationMs":5000}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
+
+	outcomes, exists := readOutcomes(t, dir)
+	if !exists || len(outcomes) != 1 {
+		t.Fatalf("expected exactly one learning outcome (exists=%v, n=%d)", exists, len(outcomes))
+	}
+	o := outcomes[0]
+	if o.ActualModel != "opus" {
+		t.Errorf("ActualModel = %q, want %q — the run spent $6.00 of $6.011 on opus and closed on a $0.01 haiku bookend; attributing the run's cost and success verdict to the last stage is silently wrong, not empty", o.ActualModel, "opus")
+	}
+	if o.CostUSD < 6 {
+		t.Errorf("CostUSD = %f, want ≈6.011 — precondition: the opus stage dominates the run's spend", o.CostUSD)
 	}
 }
 
@@ -178,6 +384,18 @@ func TestNotifyComplete_WritesLearningOutcomeForFailure(t *testing.T) {
 	}
 	if o.CostUSD <= 0 {
 		t.Errorf("CostUSD = %f, want > 0 — a failed run still spent money and the cost loop must see it", o.CostUSD)
+	}
+	// No issue-{N}.json exists for this run: the prediction fields must be
+	// EMPTY, not defaulted. An absent value is excluded from the accuracy
+	// denominators; a fabricated one is counted as a measurement.
+	if o.PredictedModel != "" {
+		t.Errorf("PredictedModel = %q, want empty — no issue context exists, and inventing a default (the scheduler's loadIssueContext returns \"sonnet\") is a fabricated prediction", o.PredictedModel)
+	}
+	if o.PredictedSize != "" {
+		t.Errorf("PredictedSize = %q, want empty — an unscored run must not be spelled like a real bucket", o.PredictedSize)
+	}
+	if o.ComplexityScore != 0 {
+		t.Errorf("ComplexityScore = %d, want 0 for an unscored run", o.ComplexityScore)
 	}
 }
 
@@ -244,32 +462,22 @@ func TestNotifyComplete_SkipsOutcomeForNetworkUnavailable(t *testing.T) {
 	}
 }
 
-// loadCapturedRunRecord reads one redacted, REAL extension-path run record from
-// internal/ipc/testdata/outcome-gap (see that directory's README.md for
-// provenance and scripts/capture-outcome-gap-fixture.sh for capture).
-func loadCapturedRunRecord(t *testing.T, name string) state.V2RunRecord {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("testdata", "outcome-gap", name))
-	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
-	}
-	var rec state.V2RunRecord
-	if err := json.Unmarshal(data, &rec); err != nil {
-		t.Fatalf("decode fixture %s: %v", name, err)
-	}
-	return rec
-}
-
 // Fixture-driven (#166): the mapper is exercised against a REAL captured
-// extension-path run record, not a hand-authored shape. It must produce a
-// NON-DEGENERATE outcome — the existing corpus is 8/8 predictedModel:"",
-// complexityScore:0, predictedSize:"small", and shipping a fix that reproduces
-// that shape would look done and change nothing measurable.
+// extension-path run record plus a REAL captured routing classification. It
+// must produce a NON-DEGENERATE outcome — the existing corpus is 8/8
+// predictedModel:"", complexityScore:0, predictedSize:"small", actualSize
+// absent, and shipping a fix that reproduces that shape would look done and
+// change nothing measurable.
 func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 	rec := loadCapturedRunRecord(t, "run-record.json")
-	now := time.Now()
+	cls := capturedClassification(t, rec.IssueNumber)
+	// The captured record predates this fix, so its own routing/size fields are
+	// the degenerate values #304 is about. Project the classification onto it
+	// exactly as the notifyComplete handler now does before deriving.
+	rec.Routing.ComplexityScore = cls.ComplexityScore
+	rec.Size = &cls.Size
 
-	o, decision := learningOutcomeFor(rec, nil, "acme/widget", now)
+	o, decision := learningOutcomeFor(rec, cls, nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s for a completed real run", decision, outcomeRecord)
 	}
@@ -278,10 +486,16 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 		t.Errorf("Success = false, but the captured record's outcome is %q", rec.Outcome)
 	}
 	if o.PredictedModel == "" {
-		t.Error("PredictedModel is empty — the captured record carries stages[feature-dev].model_selection.model, so the mapper reproduced the degenerate pre-#304 corpus shape")
+		t.Error("PredictedModel is empty — the captured issue context carries routing.pickup_recommendation.dev_model")
 	}
-	if o.ActualModel != o.PredictedModel {
-		t.Errorf("ActualModel = %q, want %q (no refusal fallback in this record)", o.ActualModel, o.PredictedModel)
+	if o.ActualModel == "" {
+		t.Error("ActualModel is empty — the captured record carries stages[*].model_selection.model, so the mapper reproduced the degenerate pre-#304 corpus shape")
+	}
+	if o.ComplexityScore <= 0 {
+		t.Errorf("ComplexityScore = %d, want > 0", o.ComplexityScore)
+	}
+	if !isSizeBucket(o.PredictedSize) || !isSizeBucket(o.ActualSize) {
+		t.Errorf("PredictedSize=%q ActualSize=%q — both must use the small|medium|large bucket vocabulary", o.PredictedSize, o.ActualSize)
 	}
 	if o.CostUSD <= 0 {
 		t.Errorf("CostUSD = %f, want > 0 — the captured record reports %f", o.CostUSD, rec.Tokens.EstimatedCostUSD)
@@ -301,12 +515,100 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 	if o.CompletedAt.IsZero() {
 		t.Error("CompletedAt is the zero time")
 	}
-	// The captured record has size:null. PredictedSize must stay EMPTY —
-	// explicitly NOT the scheduler's predictedSizeLabel(0)=="small", which is
-	// why every existing corpus record is indistinguishable from a genuinely
-	// small issue.
+
+	// Attribution follows cost. The captured record's most expensive
+	// model-bearing stage is the one the run must be booked against.
+	if want := modelTier(stageModel(rec, dominantCostStage(rec))); o.ActualModel != want {
+		t.Errorf("ActualModel = %q, want %q (the captured record's dominant-cost stage)", o.ActualModel, want)
+	}
+}
+
+// The captured record's OWN degenerate fields must map to EMPTY, never to a
+// plausible-looking default. This is the fixture as captured — size null,
+// complexity_score 0 — i.e. exactly what the pre-fix handler wrote.
+func TestLearningOutcomeFor_UnknownSizeAndScoreStayEmpty(t *testing.T) {
+	rec := loadCapturedRunRecord(t, "run-record.json")
+	if rec.Size != nil || rec.Routing.ComplexityScore != 0 {
+		t.Fatalf("precondition: captured record should carry size=null / complexity_score=0, got size=%v score=%d",
+			rec.Size, rec.Routing.ComplexityScore)
+	}
+
+	o, decision := learningOutcomeFor(rec, issueClassification{}, nil, "acme/widget", time.Now())
+	if decision != outcomeRecord {
+		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
+	}
 	if o.PredictedSize != "" {
-		t.Errorf("PredictedSize = %q, want \"\" — the captured record has no size:* label, and an unknown size must not be spelled like a real one", o.PredictedSize)
+		t.Errorf("PredictedSize = %q, want \"\" — SizeBucketForScore(0)==\"small\" is why every pre-#304 record is indistinguishable from a genuinely small issue", o.PredictedSize)
+	}
+	if o.ActualSize != "" {
+		t.Errorf("ActualSize = %q, want \"\" — the record carries no size:* label", o.ActualSize)
+	}
+	if o.PredictedModel != "" {
+		t.Errorf("PredictedModel = %q, want \"\" — no issue context, so there is no router prediction to record", o.PredictedModel)
+	}
+	// ...but the ACTUAL model is knowable from the record and must be recorded.
+	if o.ActualModel == "" {
+		t.Error("ActualModel is empty — the served model is on the record regardless of whether an issue context exists")
+	}
+}
+
+// Predicted and actual sizes must be expressed in ONE vocabulary derived from
+// the product's own size→score table, with the same bucket thresholds on both
+// sides. A size:* label ("L") compared against a complexity bucket ("medium")
+// can never match, so the calibration loop would report a *measured* 0%
+// accuracy — strictly worse than "no data", because the reader stops saying
+// "bootstrapping" and starts asserting a number that can never move.
+func TestOutcomeSizeVocabulary_PredictedAndActualAreComparable(t *testing.T) {
+	// Every recognized size bucket, through the production mapper.
+	for _, label := range []string{"XS", "S", "M", "L", "XL"} {
+		size := label
+		got := actualSizeBucket(&size)
+		if !isSizeBucket(got) {
+			t.Errorf("actualSizeBucket(%q) = %q, want one of small|medium|large", label, got)
+		}
+	}
+	if got := actualSizeBucket(nil); got != "" {
+		t.Errorf("actualSizeBucket(nil) = %q, want \"\"", got)
+	}
+	unknown := "HUGE"
+	if got := actualSizeBucket(&unknown); got != "" {
+		t.Errorf("actualSizeBucket(%q) = %q, want \"\" — an unrecognized label must not be bucketed", unknown, got)
+	}
+	if got := predictedSizeBucket(0); got != "" {
+		t.Errorf("predictedSizeBucket(0) = %q, want \"\" — 0 means unscored", got)
+	}
+
+	// An issue whose size label and complexity score agree must produce a
+	// MATCHING pair — the calibration loop's equality test is the whole point.
+	m := "M"
+	if p, a := predictedSizeBucket(3), actualSizeBucket(&m); p != a {
+		t.Errorf("size:M scores 3, so predicted=%q and actual=%q should match; they do not, and no routing improvement could ever make them", p, a)
+	}
+	xl := "XL"
+	if p, a := predictedSizeBucket(8), actualSizeBucket(&xl); p != a {
+		t.Errorf("size:XL scores 8, so predicted=%q and actual=%q should match", p, a)
+	}
+}
+
+// modelTier has three outcomes and they must stay three: a registry-known
+// reference collapses to its band (so predicted "sonnet" and actual
+// "claude-sonnet-5" are comparable), an unknown model is passed through
+// VERBATIM (a user-defined local model is still attribution), and only an
+// absent model yields "". Collapsing "unknown model" into "" would relabel real
+// attribution as missing data.
+func TestModelTier_KnownUnknownAndAbsentAreDistinct(t *testing.T) {
+	if got := modelTier("claude-sonnet-5"); got != "sonnet" {
+		t.Errorf("modelTier(%q) = %q, want %q — a concrete id must normalize onto its band", "claude-sonnet-5", got, "sonnet")
+	}
+	if got := modelTier("sonnet"); got != "sonnet" {
+		t.Errorf("modelTier(%q) = %q, want %q — the router's alias is already a band", "sonnet", got, "sonnet")
+	}
+	const local = "my-local-llm-7b"
+	if got := modelTier(local); got != local {
+		t.Errorf("modelTier(%q) = %q, want it passed through — an unregistered model is still attribution, and dropping it to \"\" reports real data as missing", local, got)
+	}
+	if got := modelTier(""); got != "" {
+		t.Errorf("modelTier(\"\") = %q, want \"\"", got)
 	}
 }
 
@@ -315,7 +617,7 @@ func TestLearningOutcomeFor_FromCapturedRunRecord(t *testing.T) {
 func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 	rec := loadCapturedRunRecord(t, "run-record-failed.json")
 
-	o, decision := learningOutcomeFor(rec, nil, "acme/widget", time.Now())
+	o, decision := learningOutcomeFor(rec, issueClassification{}, nil, "acme/widget", time.Now())
 	if decision != outcomeRecord {
 		t.Fatalf("decision = %s, want %s", decision, outcomeRecord)
 	}
@@ -330,6 +632,9 @@ func TestLearningOutcomeFor_FromCapturedFailedRunRecord(t *testing.T) {
 	}
 	if o.CostUSD <= 0 {
 		t.Errorf("CostUSD = %f, want > 0 — a failed run still spent money", o.CostUSD)
+	}
+	if o.ActualModel == "" {
+		t.Error("ActualModel is empty — the captured record's stages carry served models")
 	}
 }
 
@@ -365,13 +670,13 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	deferred.Outcome = "cancelled"
 	deferred.TerminalFailureKind = ""
 	deferred.OutcomeType = orchestrator.OutcomeTypeDeferred
-	if _, d := learningOutcomeFor(deferred, nil, "acme/widget", time.Now()); d != outcomeSkipDeferred {
+	if _, d := learningOutcomeFor(deferred, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipDeferred {
 		t.Errorf("deferred record: decision = %s, want %s", d, outcomeSkipDeferred)
 	}
 
 	netdown := base
 	netdown.TerminalFailureKind = orchestrator.TerminalKindNetworkUnavailable
-	if _, d := learningOutcomeFor(netdown, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
+	if _, d := learningOutcomeFor(netdown, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
 		t.Errorf("network-unavailable record: decision = %s, want %s", d, outcomeSkipNetworkUnavailable)
 	}
 }

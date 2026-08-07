@@ -1,0 +1,11 @@
+{
+  "issue_number": 1001,
+  "labels": ["type:feature", "priority:critical", "size:M"],
+  "routing": {
+    "complexity_score": 5,
+    "pickup_recommendation": {
+      "dev_model": "sonnet"
+    }
+  },
+  "type": "feature"
+}

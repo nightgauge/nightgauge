@@ -152,8 +152,7 @@ func TestQueueOperations(t *testing.T) {
 func TestOutcomeRecording(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	recorder := learning.NewRecorder(tmpDir)
-	s := &Scheduler{recorder: recorder}
+	s := &Scheduler{recordOutcomes: true}
 
 	item := types.BoardItem{
 		Number: 42,
@@ -166,8 +165,10 @@ func TestOutcomeRecording(t *testing.T) {
 	snap.CompleteStage(0, 100, 200, "claude-sonnet-4-6")
 	snapshot := snap.Snapshot()
 
-	// Record a successful outcome
-	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6")
+	// Record a successful outcome. tmpDir stands in for the run's TARGET repo
+	// root — the corpus lands beside that repo's run records, not at the
+	// daemon's launch root (#304).
+	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6", tmpDir)
 
 	outcomesFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
 	data, err := os.ReadFile(outcomesFile)
@@ -206,7 +207,7 @@ func TestOutcomeRecording(t *testing.T) {
 	snap2 := state.NewRuntimeState(item.Repo, item.Number, "item-id-2")
 	snap2.BeginStage(state.StageFeatureValidate)
 	snapshot2 := snap2.Snapshot()
-	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001")
+	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001", tmpDir)
 
 	data2, err := os.ReadFile(outcomesFile)
 	if err != nil {
@@ -284,9 +285,9 @@ func TestPredictedSizeLabel(t *testing.T) {
 		{10, "large"},
 	}
 	for _, tc := range tests {
-		got := predictedSizeLabel(tc.score)
+		got := SizeBucketForScore(tc.score)
 		if got != tc.want {
-			t.Errorf("predictedSizeLabel(%d) = %q, want %q", tc.score, got, tc.want)
+			t.Errorf("SizeBucketForScore(%d) = %q, want %q", tc.score, got, tc.want)
 		}
 	}
 }

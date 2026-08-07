@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -53,24 +54,22 @@ func (d outcomeDecision) String() string {
 	}
 }
 
-// primaryModelStage is the stage whose served model best proxies the run's
-// routed model: the implementation stage the router sized the issue for.
-const primaryModelStage = "feature-dev"
-
 // learningOutcomeFor derives the learning/calibration outcome for one terminal
 // extension-path run from the SAME authoritative V2 run record that is about to
 // be written to history (#304). Deriving both sinks from one record is the
 // lesson of #261: a second, independently-built "mirror" record drifts.
 //
 // record is the built (and, for a deferral, already-overridden) run record.
-// snap may be nil — every field it contributes has a record-derived fallback,
-// so the mapper is exercisable against a captured record fixture with no live
-// runtime.
+// cls is the run's issue-{N}.json classification — the PREDICTION side of every
+// predicted-vs-actual pair below. snap may be nil — every field it contributes
+// has a record-derived fallback, so the mapper is exercisable against captured
+// fixtures with no live runtime.
 //
 // Returns the outcome plus the three-state decision. The outcome is only
 // meaningful when the decision is outcomeRecord.
 func learningOutcomeFor(
 	record state.V2RunRecord,
+	cls issueClassification,
 	snap *state.RuntimeState,
 	repo string,
 	now time.Time,
@@ -89,29 +88,19 @@ func learningOutcomeFor(
 	// PR merged is "complete" even if a late per-stage kill reported failure).
 	success := record.Outcome == "complete"
 
-	predictedModel := predictedModelFor(record, snap)
-	// ActualModel: the predicted model is the proxy — EXCEPT when the CLI's
-	// refusal fallback swapped models mid-run (#91), in which case the last
-	// served model is recorded so learning data is not attributed to a model
-	// that never produced the output. Same rule as scheduler.recordOutcome.
-	actualModel := predictedModel
-	if snap != nil {
-		if m := snap.LastRefusalServedModel(); m != "" {
-			actualModel = m
-		}
-	}
-
 	return learning.Outcome{
 		IssueNumber: record.IssueNumber,
 		Repo:        resolveOutcomeRepo(record, repo),
-		// PredictedSize is the issue's size:* label, left EMPTY when unknown.
-		// Deliberately NOT run through the scheduler's predictedSizeLabel(score),
-		// which maps an unknown score 0 onto "small" — that is why every outcome
-		// in the existing corpus reads predictedSize:"small" and is
-		// indistinguishable from a genuinely small issue.
-		PredictedSize:   sizeLabel(record.Size),
-		PredictedModel:  predictedModel,
-		ActualModel:     actualModel,
+		// PREDICTED vs ACTUAL, in ONE vocabulary each. The calibration loop
+		// (loopverdicts.analyzeCalibration) and Recorder.Calibrate both test
+		// PredictedSize == ActualSize / PredictedModel == ActualModel for
+		// equality, so a pair written in two vocabularies reports a *measured*
+		// 0% forever — worse than no data, because the reader stops saying
+		// "bootstrapping" and starts asserting a number.
+		PredictedSize:   predictedSizeBucket(cls.ComplexityScore),
+		ActualSize:      actualSizeBucket(record.Size),
+		PredictedModel:  modelTier(cls.PredictedModel),
+		ActualModel:     actualModelTier(record, snap),
 		Success:         success,
 		DurationMs:      record.TotalDuration,
 		InputTokens:     record.Tokens.TotalInput,
@@ -144,6 +133,38 @@ func resolveOutcomeRepo(record state.V2RunRecord, repo string) string {
 	return repo
 }
 
+// predictedSizeBucket expresses the router's complexity score in the corpus's
+// size vocabulary. Returns "" for an unscored run — explicitly NOT
+// SizeBucketForScore(0)=="small", which is why every pre-#304 corpus record
+// reads predictedSize:"small" and is indistinguishable from a genuinely small
+// issue.
+func predictedSizeBucket(complexityScore int) string {
+	if complexityScore <= 0 {
+		return ""
+	}
+	return orchestrator.SizeBucketForScore(complexityScore)
+}
+
+// actualSizeBucket expresses the issue's size:* label (XS|S|M|L|XL) in the SAME
+// small|medium|large vocabulary the prediction uses, by running it through the
+// router's own size→complexity table and the same bucket thresholds.
+//
+// ActualSize had no production writer at all before this (grep: tests only), so
+// the predicted-vs-actual size comparison every calibration consumer performs
+// had never once run against real data. Filling it in the size:* vocabulary
+// instead would have been worse than leaving it empty: "L" can never equal
+// "medium", so the loop would report a measured 0% accuracy that no amount of
+// improved routing could ever move.
+//
+// Returns "" when the issue carries no recognized size label.
+func actualSizeBucket(size *string) string {
+	score := routing.SizeBaseScore(sizeLabel(size))
+	if score <= 0 {
+		return ""
+	}
+	return orchestrator.SizeBucketForScore(score)
+}
+
 // sizeLabel dereferences the record's size:* label, returning "" for both a nil
 // pointer and an empty string — "unknown", never a plausible-looking default.
 func sizeLabel(size *string) string {
@@ -153,31 +174,82 @@ func sizeLabel(size *string) string {
 	return *size
 }
 
-// predictedModelFor resolves the model the run is attributed to, in descending
-// order of fidelity: the implementation stage's served model, the failing
-// stage's served model, then the first stage (in sorted-name order, so the
-// result is deterministic) that recorded one. Returns "" when no stage recorded
-// a model — an honest unknown the caller logs about.
-func predictedModelFor(record state.V2RunRecord, snap *state.RuntimeState) string {
-	if m := stageModel(record, primaryModelStage); m != "" {
-		return m
+// modelTier normalizes a model reference (registry alias like "sonnet" or a
+// concrete id like "claude-sonnet-5") onto its registry band, so predicted and
+// actual are comparable and so rows agree with the scheduler's corpus, which
+// records the router's tier alias. Unknown models (user-defined local models
+// the registry has never heard of) pass through verbatim rather than being
+// dropped — an unrecognized name is still attribution; "" is not.
+func modelTier(model string) string {
+	if model == "" {
+		return ""
 	}
+	if tier := orchestrator.NormalizeModelTier(model); tier != "" {
+		return tier
+	}
+	return model
+}
+
+// actualModelTier resolves the model the run's work actually ran on.
+//
+// The rule is COST, not stage order: attribute the run to the stage that
+// dominated its spend. Ordering heuristics are what made this field
+// confidently wrong — resolving "the run's model" from the terminal stage
+// attributes a $6.00 opus feature-validate to the $0.01 haiku pr-merge that
+// closed the run, and falling back to the alphabetically first stage attributes
+// it to issue-pickup. Both produce a plausible-looking model id that is not the
+// model that did the work, and a wrong value is invisible where an empty one is
+// logged.
+//
+// The refusal fallback wins over all of it (#91): when the CLI swapped models
+// mid-run, the last served model is what produced the output, and attributing
+// the run to a model that refused it is the same error in the other direction.
+// Same rule as scheduler.recordOutcome.
+//
+// Returns "" when no stage reported a served model — an honest unknown the
+// caller logs about.
+func actualModelTier(record state.V2RunRecord, snap *state.RuntimeState) string {
 	if snap != nil {
-		if m := stageModel(record, string(snap.Stage)); m != "" {
-			return m
+		if m := snap.LastRefusalServedModel(); m != "" {
+			return modelTier(m)
 		}
 	}
+	return modelTier(stageModel(record, dominantCostStage(record)))
+}
+
+// dominantCostStage names the stage that spent the most of the run's money AND
+// reported a served model. Ties (including the all-zero-cost case, where every
+// stage ties at 0) break on output tokens, then on stage name — deterministic,
+// so the same record always maps to the same attribution.
+//
+// Returns "" when no stage reported a model.
+func dominantCostStage(record state.V2RunRecord) string {
+	best := ""
+	var bestCost float64
+	var bestOutput int
+	for _, name := range sortedStageNames(record) {
+		if stageModel(record, name) == "" {
+			continue
+		}
+		tok := record.Tokens.PerStage[name]
+		switch {
+		case best == "",
+			tok.CostUSD > bestCost,
+			tok.CostUSD == bestCost && tok.Output > bestOutput:
+			best, bestCost, bestOutput = name, tok.CostUSD, tok.Output
+		}
+	}
+	return best
+}
+
+// sortedStageNames returns the record's stage names in a stable order.
+func sortedStageNames(record state.V2RunRecord) []string {
 	names := make([]string, 0, len(record.Stages))
 	for name := range record.Stages {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	for _, name := range names {
-		if m := stageModel(record, name); m != "" {
-			return m
-		}
-	}
-	return ""
+	return names
 }
 
 func stageModel(record state.V2RunRecord, stage string) string {
@@ -202,12 +274,7 @@ func failedStageFor(record state.V2RunRecord, snap *state.RuntimeState, success 
 	if snap != nil && snap.Stage != "" {
 		return string(snap.Stage)
 	}
-	names := make([]string, 0, len(record.Stages))
-	for name := range record.Stages {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range sortedStageNames(record) {
 		if record.Stages[name].Status == "failed" {
 			return name
 		}

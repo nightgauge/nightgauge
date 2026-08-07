@@ -398,8 +398,14 @@ type Scheduler struct {
 	// path). Tests inject deterministic fakes via WithRecoveryRegistry.
 	recoveryRegistry *recovery.Registry
 
-	// Outcome recorder for the pipeline learning system
-	recorder *learning.Recorder
+	// recordOutcomes gates the pipeline learning system's corpus write. The
+	// Recorder itself is built per run against the run's TARGET repo root, not
+	// held here: pinning one Recorder at construction rooted it at the daemon's
+	// LAUNCH root, so in a multi-repo workspace a run's outcome landed in a
+	// different repo than the run record it was derived from (#215/#232 say
+	// both belong in the target repo) — and the extension path, which does root
+	// per run, would write to a second file for the same run (#304).
+	recordOutcomes bool
 
 	// telemetrySvc pushes completed run records to the platform (optional).
 	telemetrySvc telemetryService
@@ -669,7 +675,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		repoRunning:               make(map[string]int),
 		budgetRetries:             make(map[string]int),
 		mergeLocks:                make(map[string]*sync.Mutex),
-		recorder:                  learning.NewRecorder(cfg.WorkspaceRoot),
+		recordOutcomes:            true,
 		onFailureStatus:           onFailureStatus,
 		excludeLabels:             excludeLabels,
 		trustedAuthorAssociations: cfg.TrustedAuthorAssociations,
@@ -2969,7 +2975,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// model/size predictions for no benefit.
 		var outcomePrediction *state.OutcomePrediction
 		if terminalFailureKind != TerminalKindNetworkUnavailable {
-			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel)
+			outcomePrediction = s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)
 		} else {
 			log.Printf("#%d: skipping outcome recording (terminal_failure_kind=%s — environmental, not model)",
 				item.Number, TerminalKindNetworkUnavailable)
@@ -4036,7 +4042,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		prStateAtExit := detMergePRState
 		s.writeStageExitRecord(item, stage, runtime, result, exitCode, err,
 			actualCostUsd, servedModel, inputTokens, outputTokens, cacheReadTokens,
-			stageStartedAt, workspaceRoot, prStateAtExit, predictedSizeLabel(complexityScore))
+			stageStartedAt, workspaceRoot, prStateAtExit, SizeBucketForScore(complexityScore))
 
 		// Trace the stage exit summary (#179). Full forensics stay in the
 		// exit-records store, joined by run_id (ADR 013 non-duplication rule).
@@ -5581,10 +5587,18 @@ func loadPRNumberForRecovery(workspaceRoot string, issueNumber int) int {
 	return ctx.PrNumber
 }
 
-// recordOutcome builds a learning.Outcome from the pipeline result, records it,
-// and returns the predicted-vs-actual routing decisions for the run record.
-func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState, success bool, complexityScore int, predictedModel string) *state.OutcomePrediction {
-	if s.recorder == nil {
+// recordOutcome builds a learning.Outcome from the pipeline result, records it
+// under the run's TARGET repo root, and returns the predicted-vs-actual routing
+// decisions for the run record.
+//
+// runRoot is the same root recordV2History writes the run record to (#215/#232:
+// a run's persisted state lands in its target repo, never the daemon's launch
+// root). The corpus follows the record — one run, one repo, one pair of files —
+// so `nightgauge intelligence loop-verdicts --workdir <repo>` and `nightgauge
+// learn tune --workdir <repo>` see the outcomes for exactly the history they
+// are reading beside.
+func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState, success bool, complexityScore int, predictedModel, runRoot string) *state.OutcomePrediction {
+	if !s.recordOutcomes || runRoot == "" {
 		return nil
 	}
 	var failedStage string
@@ -5599,10 +5613,24 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	if m := snap.LastRefusalServedModel(); m != "" {
 		actualModel = m
 	}
+	// PredictedSize vs ActualSize, in ONE vocabulary, both empty when unknown.
+	// Every consumer compares the two for equality: an unscored run spelled
+	// "small" (SizeBucketForScore(0)) is indistinguishable from a genuinely
+	// small issue, and an ActualSize no writer ever populated meant the
+	// comparison had never once run. Identical rules on the IPC path (#304).
+	predictedSize := ""
+	if complexityScore > 0 {
+		predictedSize = SizeBucketForScore(complexityScore)
+	}
+	actualSize := ""
+	if score := routing.SizeBaseScore(string(item.Size)); score > 0 {
+		actualSize = SizeBucketForScore(score)
+	}
 	outcome := learning.Outcome{
 		IssueNumber:     item.Number,
 		Repo:            item.Repo,
-		PredictedSize:   predictedSizeLabel(complexityScore),
+		PredictedSize:   predictedSize,
+		ActualSize:      actualSize,
 		PredictedModel:  predictedModel,
 		ActualModel:     actualModel,
 		Success:         success,
@@ -5614,10 +5642,8 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		FailedStage:     failedStage,
 		CompletedAt:     time.Now(),
 	}
-	if s.recorder != nil {
-		if err := s.recorder.Record(outcome); err != nil {
-			log.Printf("#%d: failed to record outcome: %v", item.Number, err)
-		}
+	if err := learning.NewRecorder(runRoot).Record(outcome); err != nil {
+		log.Printf("#%d: failed to record outcome: %v", item.Number, err)
 	}
 
 	// The telemetry push happens in recordV2History with the exact record
@@ -5710,8 +5736,16 @@ func (s *Scheduler) recordV2History(
 	}
 }
 
-// predictedSizeLabel maps a complexity score to a size label.
-func predictedSizeLabel(score int) string {
+// SizeBucketForScore maps a complexity score to the learning corpus's size
+// vocabulary (small|medium|large). This is the ONLY vocabulary
+// learning.Outcome.PredictedSize / ActualSize are ever written in — the
+// calibration loop compares the two for equality, so a second vocabulary in
+// the same field can only ever report 0% accuracy (#304).
+//
+// A score of 0 means "unknown", never "small": callers must not call this with
+// an unscored run. Exported so the IPC extension path derives the identical
+// bucket rather than inventing a parallel mapping.
+func SizeBucketForScore(score int) string {
 	switch {
 	case score <= 3:
 		return "small"

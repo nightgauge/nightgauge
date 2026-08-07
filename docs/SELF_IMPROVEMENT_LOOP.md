@@ -46,14 +46,48 @@ them is how #304 went unnoticed.
 `pipeline.notifyComplete` in `internal/ipc/server.go` (extension/interactive
 path, #304).
 
-**File**: `<workspaceRoot>/.nightgauge/pipeline/history/outcomes.jsonl` —
-workspace-scoped, NOT per-repo, because `nightgauge intelligence loop-verdicts`
-and `nightgauge learn tune` read a single `--workdir`.
+**File**: `<targetRepoRoot>/.nightgauge/pipeline/history/outcomes.jsonl` —
+**per-repo**, rooted at the run's target repo. That is the same root the run
+record the outcome is derived from is written to (#215/#232: a run's persisted
+state lands in its target repo, never the daemon's launch root), and the same
+root `nightgauge intelligence loop-verdicts --workdir X` / `nightgauge learn
+tune --workdir X` read `X`'s run history from — so both of their inputs describe
+the same runs.
 
-Each outcome includes: issue number, repo, predicted size, predicted/actual
-model, success, duration, tokens, cost, complexity score and failed stage.
-Consumers: the calibration, cost-optimization and reliability loop verdicts
-(`internal/intelligence/loopverdicts`) and `nightgauge learn tune`.
+Neither writer roots the corpus at the IPC server's `workspaceRoot`. That field
+is a mutable pointer to the workspace's **active** repo, reassigned by
+`workspace.setRoot` from the extension's `resolveActiveRepository` (in a
+multi-repo workspace: whichever repo owns the focused text editor), so a corpus
+rooted there accumulates other repos' runs and leaves the target repo's corpus
+empty.
+
+Each outcome includes: issue number, repo, predicted/actual size,
+predicted/actual model, success, duration, tokens, cost, complexity score and
+failed stage. Consumers: the calibration, cost-optimization and reliability loop
+verdicts (`internal/intelligence/loopverdicts`) and `nightgauge learn tune`.
+
+**Predicted vs actual, one vocabulary per pair.** Every consumer compares the
+two halves for equality, so a pair written in two vocabularies reports a
+_measured_ 0% forever — strictly worse than no data, because the reader stops
+saying "bootstrapping" and starts asserting a number that can never move.
+
+| Field                            | Predicted                                      | Actual                                                                          |
+| -------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
+| `predictedSize` / `actualSize`   | `SizeBucketForScore(routing.complexity_score)` | the issue's `size:*` label through `routing.SizeBaseScore` and the same buckets |
+| `predictedModel` / `actualModel` | `routing.pickup_recommendation.dev_model`      | the served model of the stage that dominated the run's **cost**                 |
+
+Both sides use `small｜medium｜large` for size and registry model bands
+(`haiku｜sonnet｜opus｜fable`) for models; unregistered models pass through
+verbatim. Unknown values are written **empty**, never defaulted — an absent
+value is excluded from the accuracy denominators, a fabricated one is counted as
+a measurement. `SizeBucketForScore(0)` is `"small"`, which is why an unscored
+run must not be run through it.
+
+Model attribution follows **cost**, not stage order. A run that spends $6.00 on
+an opus `feature-validate` and closes on a $0.01 haiku `pr-merge` is an opus
+run; resolving the model from the terminal stage (or from the alphabetically
+first one) yields a plausible model id that is not the model that did the work —
+and unlike an empty value, a wrong one is never logged.
 
 Two terminal states deliberately record **nothing**, on both paths: a
 blocked-dependency deferral (#305 — a non-failure that did no work) and a
@@ -335,7 +369,7 @@ Generate prioritized improvement proposals
 | File                                                    | Purpose                                                      |
 | ------------------------------------------------------- | ------------------------------------------------------------ |
 | `.nightgauge/execution-history.jsonl`                   | Pipeline execution records                                   |
-| `.nightgauge/pipeline/history/outcomes.jsonl`           | Learning outcome corpus (workspace-scoped, both exec paths)  |
+| `.nightgauge/pipeline/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
 | `.nightgauge/analysis/latest.json`                      | Most recent analysis result                                  |
 | `.nightgauge/analysis/analysis-*.json`                  | Timestamped analysis history                                 |
 | `.nightgauge/gate-metrics.jsonl`                        | Gate invocation records                                      |

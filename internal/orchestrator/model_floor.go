@@ -16,7 +16,7 @@ import (
 //
 // The tier ordering is not re-declared here: it is derived from
 // downgradeLadder (retry_engine.go), the single Go source of truth for tier
-// strength, via normalizeTier. That keeps this floor and the model-unavailable
+// strength, via NormalizeModelTier. That keeps this floor and the model-unavailable
 // downgrade ladder from drifting apart.
 
 // tierRank maps a model reference — a registry tier alias like "opus" or a
@@ -26,7 +26,7 @@ import (
 // the inline tier map in skillRunner.ts's enforceMinimumModel and is the
 // reverse index of downgradeLadder ([fable, opus, sonnet, haiku]).
 func tierRank(model string) int {
-	tier := normalizeTier(model) // retry_engine.go — alias or concrete ID → registry band
+	tier := NormalizeModelTier(model) // retry_engine.go — alias or concrete ID → registry band
 	if tier == "" {
 		return -1
 	}

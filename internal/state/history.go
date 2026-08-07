@@ -359,9 +359,24 @@ type Anomaly struct {
 }
 
 // OutcomePrediction captures predicted vs actual routing decisions for calibration.
+// OutcomePrediction mirrors the predicted-vs-actual pairs written to the
+// learning corpus (learning.Outcome) for the same run. Each pair uses ONE
+// vocabulary on both sides — the consumers compare them for equality, so a
+// mixed pair can only ever report a measured 0% (#304). Empty means unknown and
+// is excluded from accuracy denominators; it is never defaulted.
 type OutcomePrediction struct {
-	PredictedSize  string `json:"predicted_size"`        // xs, s, m, l, xl
-	ActualSize     string `json:"actual_size,omitempty"` // populated post-merge
+	// PredictedSize / ActualSize: small|medium|large. Predicted is the router's
+	// complexity score bucketed by orchestrator.SizeBucketForScore; actual is
+	// the issue's size:* label put through the same table and thresholds.
+	// Deliberately NOT the XS|S|M|L|XL label vocabulary — see V2RunRecord.Size
+	// for that, and the platform mapper for why the two cannot be conflated.
+	PredictedSize string `json:"predicted_size"`
+	ActualSize    string `json:"actual_size,omitempty"`
+	// PredictedModel / ActualModel: registry model bands
+	// (haiku|sonnet|opus|fable), with unregistered models passed through
+	// verbatim. Predicted is the router's pickup recommendation; actual is the
+	// model the run's dominant-cost stage served (or the refusal-fallback
+	// served model, #91).
 	PredictedModel string `json:"predicted_model"`
 	ActualModel    string `json:"actual_model,omitempty"`
 }

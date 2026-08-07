@@ -1,5 +1,5 @@
 {
-  "actualModel": "",
+  "actualModel": "REDACTED",
   "completedAt": "2026-06-26T19:43:13.35885-06:00",
   "complexityScore": 0,
   "costUsd": 0,
@@ -8,7 +8,7 @@
   "inputTokens": 0,
   "issueNumber": 1003,
   "outputTokens": 0,
-  "predictedModel": "",
+  "predictedModel": "REDACTED",
   "predictedSize": "small",
   "repo": "acme/widget",
   "retries": 0,

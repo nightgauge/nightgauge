@@ -90,7 +90,7 @@
         "model": "claude-sonnet-5",
         "source": "scheduler"
       },
-      "punt_reason": "dirty-merge-state: BLOCKED",
+      "punt_reason": "REDACTED",
       "started_at": "2026-07-28T18:28:57-06:00",
       "status": "complete"
     }

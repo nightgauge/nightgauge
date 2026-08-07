@@ -74,14 +74,14 @@
     },
     {
       "name": "learning-outcome-record",
-      "note": "Wired on both paths as of #304. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path.",
+      "note": "Wired on both paths as of #304, and rooted identically — the corpus is written to the run's TARGET repo on both paths (#215/#232), never the daemon launch root or the IPC server's mutable active-repo pointer. The extension side records at the Go side of its terminal funnel (pipeline.notifyComplete), deriving the outcome from the same V2 run record it writes — the Go scheduler's recordOutcome is unreachable from the extension path.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
-        "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel)"
+        "anchor": "s.recordOutcome(item, snap, pipelineSuccess, complexityScore, predictedModel, workspaceRoot)"
       },
       "extension": {
         "file": "internal/ipc/server.go",
-        "anchor": "learning.NewRecorder(s.workspaceRoot).Record(outcome)"
+        "anchor": "learning.NewRecorder(root).Record(outcome)"
       }
     },
     {
@@ -242,7 +242,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "d39c8923ae662162664c3beedacd82f004998e78e21237b8e21584ffcc86db4c"
+      "sha256": "afebd4c8e2206734181e31967e48522589e7371ff7cfa8a2201c8d4e0a390eb4"
     },
     {
       "id": "extension-runSlotPipeline-finally",

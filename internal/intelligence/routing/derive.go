@@ -277,6 +277,20 @@ var sizeBaseScore = map[string]int{
 	"XL": 8,
 }
 
+// SizeBaseScore returns the complexity base score a `size:*` bucket
+// (XS|S|M|L|XL, case-insensitive) contributes, or 0 when the label is empty or
+// unrecognized. 0 is NOT a valid score — every recognized bucket scores ≥ 1 —
+// so callers can distinguish "unknown size" from any real bucket.
+//
+// Exported so the learning corpus can express an issue's size label in the
+// SAME small|medium|large vocabulary the router's predicted size uses
+// (#304): both sides run through this table and then the same bucket
+// thresholds, instead of comparing XS|S|M|L|XL against small|medium|large and
+// reporting a permanent 0% calibration accuracy.
+func SizeBaseScore(size string) int {
+	return sizeBaseScore[strings.ToUpper(strings.TrimSpace(size))]
+}
+
 // priorityMultiplier mirrors PRIORITY_MULTIPLIER in changeAnalyzer.ts.
 var priorityMultiplier = map[string]float64{
 	"critical": 1.5,

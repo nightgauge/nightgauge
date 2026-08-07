@@ -2556,10 +2556,15 @@ and returning deterministic verdicts per loop.
 
 - `.nightgauge/pipeline/assessments/*.json` — skill-drift loop
 - `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops.
-  Workspace-scoped (not per-repo — these loops read one `--workdir`). Written by
-  `Scheduler.recordOutcome` on the autonomous path and by the `pipeline.notifyComplete`
-  handler in `internal/ipc/server.go` on the extension path (#304); both skip
-  blocked-dependency deferrals and `network_unavailable` failures.
+  **Per-repo**, rooted at the run's TARGET repo — the same root as the run record
+  the outcome is derived from (#215/#232), and the same root `--workdir` reads
+  that repo's run history from. Written by `Scheduler.recordOutcome` on the
+  autonomous path and by the `pipeline.notifyComplete` handler in
+  `internal/ipc/server.go` on the extension path (#304); both skip
+  blocked-dependency deferrals and `network_unavailable` failures. Neither
+  writes to the IPC server's `workspaceRoot`: that is a mutable pointer to the
+  workspace's ACTIVE repo (reassigned by `workspace.setRoot`), so an outcome
+  filed there lands in whichever repo happened to own the focused editor.
 - `.nightgauge/health/trends.jsonl` — health-monitoring loop
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)
