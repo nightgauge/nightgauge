@@ -41,14 +41,33 @@ type Outcome struct {
 	// scoring arithmetic rather than the run.
 	ActualSize string `json:"actualSize,omitempty"`
 	// PredictedModel is the router's pickup recommendation for the
-	// implementation stage, as a registry band (haiku|sonnet|opus|fable) with
-	// unregistered models passed through verbatim. Empty when the router made
-	// no recommendation.
+	// implementation stage, as a registry band (haiku|sonnet|opus|fable) — and
+	// NOTHING ELSE (orchestrator.OutcomeModelBand). A model reference the
+	// registry has no band for records "", not the id verbatim: this pair is
+	// compared for EQUALITY against a band, so a verbatim id
+	// ("gemini-2.0-flash", a user-defined local model, #56) is not attribution
+	// the corpus keeps — it is a guaranteed MISS the router never made, which
+	// rule 2 below exists to prevent. Attribution of what actually ran is kept
+	// in the run record's per-stage `model_selection`, which carries the
+	// concrete id. Also empty when the router made no recommendation.
 	PredictedModel string `json:"predictedModel"`
 	// ActualModel is the band the IMPLEMENTATION stage actually served — the
-	// stage PredictedModel is a recommendation for. Empty when that stage never
-	// ran or reported no model. Never a copy of PredictedModel: that made every
-	// row of this writer's history a tautological routing HIT.
+	// stage PredictedModel is a recommendation for — produced by
+	// orchestrator.OutcomeActualBand(served, predicted).
+	//
+	// It is an INVERSION of the adapter mapping against the prediction, not a
+	// strongest-band collapse. Go dispatches a band; the extension translates it
+	// at the last mile (codex opus → gpt-5.6-sol) and reports the concrete id
+	// back. Those ids are multi-band — gpt-5.6-sol serves [opus, fable] — so
+	// collapsing to the strongest band would read "fable" for a run the router
+	// predicted "opus" and the adapter served exactly as asked, booking every
+	// codex/gemini/copilot run as a routing MISS. When the served id serves the
+	// PREDICTED band, that is the band it was launched for.
+	//
+	// Empty in three cases, all of them honest unknowns excluded from every
+	// consumer's denominator: the stage never ran, it reported no model, or the
+	// served id has no registry band at all. Never a copy of PredictedModel:
+	// that made every row of this writer's history a tautological routing HIT.
 	ActualModel     string    `json:"actualModel"`
 	Success         bool      `json:"success"`
 	DurationMs      int64     `json:"durationMs"`

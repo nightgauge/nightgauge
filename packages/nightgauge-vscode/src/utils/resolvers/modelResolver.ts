@@ -25,6 +25,16 @@ export type DefaultModel = "sonnet" | "opus" | "haiku" | "fable";
 /**
  * Get the default model from config or environment.
  * Priority: NIGHTGAUGE_UI_CORE_DEFAULT_MODEL env → ui.core.default_model → undefined
+ *
+ * BOTH sources accept the same four registry bands, and the file matcher below
+ * has to spell all four (#340). It listed three — a regex written before Fable
+ * existed — while the env branch validated against `validModels`, so
+ * `ui.core.default_model: fable` was silently dropped here and honored by the
+ * Go mirror (`workspaceDefaultModel`, internal/orchestrator/dispatch_routing.go),
+ * which reads all four from both. One config file then dispatched Fable on an
+ * autonomous run and Sonnet — resolveModel's Step 4 hardcoded fallback — from
+ * the extension, with no log line on either side.
+ *
  * @see Issue #626 - Claude CLI headless adapter audit
  */
 export function getDefaultModel(workspaceRoot?: string): DefaultModel | undefined {
@@ -79,7 +89,9 @@ export function getDefaultModel(workspaceRoot?: string): DefaultModel | undefine
       }
 
       if (inCore) {
-        const match = trimmed.match(/^default_model:\s*['"]?(sonnet|opus|haiku)['"]?(?:\s+#.*)?$/);
+        const match = trimmed.match(
+          /^default_model:\s*['"]?(sonnet|opus|haiku|fable)['"]?(?:\s+#.*)?$/
+        );
         if (match) {
           return match[1] as DefaultModel;
         }
@@ -150,7 +162,13 @@ export function getFallbackModel(workspaceRoot?: string): DefaultModel | undefin
       }
 
       if (inCore) {
-        const match = trimmed.match(/^fallback_model:\s*['"]?(sonnet|opus|haiku)['"]?(?:\s+#.*)?$/);
+        // All four bands, matching this function's own `validModels` guard and
+        // the env branch above — the same alternation `default_model` had to
+        // grow for #340. A `fallback_model: fable` the env var accepts and the
+        // file drops is the identical silent divergence in the adjacent knob.
+        const match = trimmed.match(
+          /^fallback_model:\s*['"]?(sonnet|opus|haiku|fable)['"]?(?:\s+#.*)?$/
+        );
         if (match) {
           return match[1] as DefaultModel;
         }

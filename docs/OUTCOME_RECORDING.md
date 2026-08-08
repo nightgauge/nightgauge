@@ -35,6 +35,61 @@ Together these two paths mean the complexity model is a **living document**: it
 improves with every issue the pipeline processes and degrades gracefully when
 patterns prove unreliable.
 
+### The model pair's vocabulary (#340)
+
+The learning corpus (`.nightgauge/pipeline/history/outcomes.jsonl`) stores
+`predictedModel` / `actualModel`, and every consumer compares them for
+**equality**. Both halves are therefore registry **bands**
+(`haiku|sonnet|opus|fable`) and nothing else — a reference the registry has no
+band for records `""`, and consumers exclude a pair with an empty half from the
+denominator rather than booking a miss.
+
+`actualModel` is derived by `OutcomeActualBand`
+(`internal/orchestrator/outcome_semantics.go`), which is a band question asked
+about a concrete input. Go dispatches a band; the extension translates it at the
+last mile (`opus` → codex `gpt-5.6-sol`; and on a **Maximum**-mode gemini run,
+`opus` → `gemini-2.5-pro`) and reports the launched id back, which the scheduler
+re-records as the stage's model so cost and history name the model that actually
+ran. Those ids are **multi-band**: `gpt-5.6-sol` and `gemini-2.5-pro` each serve
+both `opus` and `fable`. Collapsing one onto its strongest band reads "fable"
+for a run the router predicted "opus" and the adapter served exactly as asked,
+so every such run booked a routing MISS.
+
+The mapping is therefore inverted through the registry rather than collapsed:
+
+| Served (concrete)  | Predicted | `actualModel` | Why                                                         |
+| ------------------ | --------- | ------------- | ----------------------------------------------------------- |
+| `claude-opus-5`    | `opus`    | `opus`        | single-band id                                              |
+| `gpt-5.6-sol`      | `opus`    | `opus`        | the model the opus band maps to — a HIT                     |
+| `gpt-5.6-sol`      | `fable`   | `fable`       | same id, and the request says which band                    |
+| `gpt-5.6-terra`    | `opus`    | `sonnet`      | genuinely weaker serve — a MISS                             |
+| `gemini-2.5-pro`   | `opus`    | `opus`        | gemini honoring the opus band — a HIT                       |
+| `gemini-2.5-flash` | `opus`    | `sonnet`      | serves [haiku, sonnet]: a real, correctly-booked MISS       |
+| `gemini-2.0-flash` | `opus`    | `""`          | no registry band: excluded, never a miss                    |
+| `gpt-5.5`          | `opus`    | `""`          | a configurable codex model the registry carries no band for |
+
+The last four rows are the common case on a non-Claude workspace, and they are
+correct rather than unfortunate. Which id gets served depends on the dispatch
+path. On the **Go executor** path (`nightgauge run` — `Scheduler.recordOutcome`
+is this corpus writer's autonomous caller), `internal/execution/adapters`
+translates the dispatched band for `codex`, `gemini`, `gemini-sdk` and
+`copilot` in every mode, so a gemini run asked for `opus` serves
+`gemini-2.5-pro` and books a HIT. On **extension-dispatched** runs, only
+`codex` translates the dispatched band outside Maximum mode
+(docs/PIPELINE_EXECUTION.md § Who Resolves the Model): `gemini`, `gemini-sdk`,
+`copilot` and `lm-studio` launch their configured model, so on the shipped
+gemini default (`gemini-2.5-flash`, bands `[haiku, sonnet]`) an `opus`- or
+`fable`-predicted `feature-dev` records `sonnet` and books a genuine MISS —
+the router asked for a tier that run did not serve. A workspace on a model
+with no registry band records `""` and is excluded from the accuracy
+denominator entirely, so such a workspace calibrates model routing from no
+samples rather than from fabricated ones. All of these readings describe the
+extension-side translation gap accurately; closing that gap is a routing
+change, not a corpus change.
+
+Attribution of what actually ran is kept where a concrete id belongs: the run
+record's per-stage `model_selection`.
+
 ## Architecture
 
 Two recording paths feed `ComplexityModelService`:

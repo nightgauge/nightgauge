@@ -56,6 +56,7 @@ import {
   isAgenticAdapter,
   AdapterError,
   clampTier,
+  getModelDescriptor,
   type ModelSelectionResult,
   type IssueMetadata,
   type ExperimentAssignment,
@@ -94,6 +95,7 @@ import {
   getMaxTurns,
   getCostBudget,
   getStageModel,
+  getStageEnvModel,
   getStageOverrideModel,
   getStallThresholds,
   getStallKillMultiplier,
@@ -139,6 +141,7 @@ import {
   getSuperchargeCodexModel,
   getPerformanceMode,
   getModeEnvelope,
+  getRoutedTierEnvelope,
   type ModeEnvelope,
   getModeStageProfile,
   getModeStageAdapterModel,
@@ -734,6 +737,17 @@ export type ModelSource =
   | "default"
   | "feedback-escalation"
   | "user-override"
+  /**
+   * The Go scheduler resolved the model and sent it over IPC (#340). On that
+   * path Go owns the decision end-to-end — the per-stage base routing
+   * (performance-mode pin, `pipeline.stage_models`, `model_routing.mode`,
+   * lightweight stage defaults), escalation after a failed stage, sticky
+   * model-unavailable downgrades (#42), the `model_routing.minimum_model` floor
+   * (#366), the pr-merge haiku floor (#197) and the feature-validate haiku gate
+   * all run in `resolveDispatchModel` — so the extension executes the value
+   * instead of computing a second one. The value is a registry tier band.
+   */
+  | "go-scheduler"
   /** Performance mode override (efficiency / maximum) supplied a stage profile (Issue #3009) */
   | "performance-mode"
   /** Legacy supercharge override — retained for back-compat with telemetry/history (Issue #2433) */
@@ -759,15 +773,24 @@ export interface ModelDecision {
   effort?: ClaudeEffort;
   /** Experiment assignment when source is 'experiment' (Issue #949) */
   experimentAssignment?: ExperimentAssignment;
-  /** The model that was active before escalation, when source is 'feedback-escalation' (Issue #1343) */
-  escalatedFrom?: string;
 }
+
+/**
+ * Capability order of the four registry bands, weakest first. Declared once:
+ * `enforceMinimumModel` and `clampModelToCeiling` both compare against it, and
+ * two declarations of one ladder is how a band ends up strong in one function
+ * and weak in another. Go pair: `routing.TierRank`.
+ */
+const TIER_ORDER: Record<DefaultModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
 
 /**
  * Enforce a minimum model floor.
  *
  * If the selected model is lighter than the minimum, returns the minimum.
- * Model tier ordering: haiku (0) < sonnet (1) < opus (2).
+ * Model tier ordering: haiku (0) < sonnet (1) < opus (2) < fable (3).
+ *
+ * Also serves as "the stronger of two bands" — which is how the Step 1 floor
+ * keeps a clamped raise from landing below the operator's own per-stage model.
  *
  * @param selected - The model selected by AutoModelSelector
  * @param minimum - The minimum model floor (from config)
@@ -780,8 +803,24 @@ function enforceMinimumModel(
   minimum: DefaultModel | undefined
 ): DefaultModel {
   if (!minimum) return selected;
-  const tiers: Record<DefaultModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
-  return tiers[selected] >= tiers[minimum] ? selected : minimum;
+  return TIER_ORDER[selected] >= TIER_ORDER[minimum] ? selected : minimum;
+}
+
+/**
+ * Lower a model to the envelope's ceiling; never raise it. The TS pair of
+ * `routing.ClampToCeiling` (#340).
+ *
+ * The floor half is deliberately absent, because this is what bounds a RAISE
+ * (the `model_routing.minimum_model` floor over an explicit per-stage model).
+ * Re-applying the envelope floor there would let a mode turn a floor into an
+ * upgrade — under `maximum`, whose envelope is `[opus, opus]`, an env override
+ * of `haiku` floored to `sonnet` would come back as `opus`, which neither
+ * resolver's ordering intends. Go leaves the floor off for a second reason that
+ * matters more on its path: it would force a run back onto a tier the API just
+ * rejected (the sticky #42 downgrade).
+ */
+function clampModelToCeiling(model: DefaultModel, envelope: ModeEnvelope): DefaultModel {
+  return TIER_ORDER[model] > TIER_ORDER[envelope.ceiling] ? envelope.ceiling : model;
 }
 
 /**
@@ -834,10 +873,12 @@ function getDiffLineCount(workspaceRoot: string): number {
  * Resolve the effective model for a pipeline stage using the full resolution chain.
  *
  * Resolution order:
- * 0. Performance mode override (Issue #3009 — replaces supercharge from #2433).
- *    `efficiency` / `maximum` look up the per-stage profile in MODE_PROFILES
- *    and return a ModelDecision with `source: "performance-mode"`. `elevated`
- *    supplies no overrides and falls through to the existing routing chain.
+ * 0. Performance mode PIN (Issue #3009 → Issue #19). Only `maximum` still pins
+ *    a stage: it looks up MODE_PROFILES and returns a ModelDecision with
+ *    `source: "performance-mode"`. `efficiency` and `frontier` are `[floor,
+ *    ceiling]` ENVELOPES with empty `stages` maps — they clamp the steps below
+ *    instead of preempting them — and `elevated` is the open band. A per-stage
+ *    env override suppresses the pin (#340), so it wins in every mode.
  * 1. getStageModel() — env var > config override > defaults (mode-aware)
  * 1.5. LIGHTWEIGHT_STAGE_DEFAULTS — built-in per-stage defaults (mode-agnostic)
  * 1.6. getStageOverrideModel() — adaptive policy routing override (automatic/hybrid only)
@@ -929,6 +970,87 @@ function clampModelToEnvelope(model: DefaultModel, envelope: ModeEnvelope): Defa
 }
 
 /**
+ * Registry tier bands, strongest first — the reverse of the SDK's ascending
+ * `ModelTier` ordering and the exact counterpart of Go's `downgradeLadder`
+ * (internal/orchestrator/retry_engine.go). A multi-band model resolves to its
+ * STRONGEST band, matching `NormalizeModelTier`.
+ */
+const TIER_BANDS_STRONGEST_FIRST: readonly ModelTier[] = ["fable", "opus", "sonnet", "haiku"];
+
+/**
+ * Collapse a model reference onto its registry tier band (#340).
+ *
+ * Two lookups in this file are keyed on the band vocabulary and fail SILENTLY
+ * against a concrete id: `modelSupportsEffort` (whose EFFORT_SUPPORTING_MODELS
+ * is `{sonnet, opus, fable}`, so `--effort` is simply never appended) and the
+ * performance-mode pin comparison (whose MODE_PROFILES pin is the string
+ * `"opus"`, so a Maximum-mode run falls back to the adapter's default model).
+ * Both used to be safe by accident: every caller reached them through
+ * `resolveModel`, which only ever returns a band. Once a caller can hand in a
+ * pre-decided model — the Go scheduler's wire value, an operator's run override
+ * — that accident ends, and neither failure is visible in a log line.
+ *
+ * Go normalizes its side of the wire too. This is not redundancy: the wire
+ * carries a `string`, the HeadlessOrchestrator path passes concrete ids
+ * (`RunStageParams.model` in tests/services/SkillRunner.test.ts is
+ * `"claude-sonnet-4-20250514"`), and an operator override is whatever they
+ * typed. One boundary cannot police the other's callers.
+ *
+ * Returns `undefined` for models the registry does not know — user-configured
+ * local models (#56) have no band, and inventing one would be a lie.
+ */
+function modelTierBand(model: string | undefined): ModelTier | undefined {
+  if (!model) return undefined;
+  if ((TIER_BANDS_STRONGEST_FIRST as readonly string[]).includes(model)) {
+    return model as ModelTier;
+  }
+  const descriptor = getModelDescriptor(model);
+  if (!descriptor) return undefined;
+  return TIER_BANDS_STRONGEST_FIRST.find((tier) => (descriptor.tiers ?? []).includes(tier));
+}
+
+/**
+ * Resolve a stage's Claude effort WITHOUT resolving its model (#340).
+ *
+ * Effort is not part of the model decision an orchestrator can own: neither
+ * the Go scheduler nor the extension's escalation engine resolves one (Go
+ * passes no `--effort` on either dispatch path), yet `model_routing.stage_efforts`
+ * and `model_routing.default_effort` are operator config that has to keep
+ * working when the model arrives pre-decided. `resolveModel` returns effort as
+ * a by-product of resolving the model, so the path that skips it needs this.
+ *
+ * Mirrors `resolveModel`'s Step 0 + envelope clamp for EFFORT, including the
+ * SUPPRESSION (#340): a per-stage `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` override
+ * short-circuits Step 0 there, so the mode's stage profile supplies neither the
+ * model nor the effort and the configured effort is merely clamped into the
+ * mode's `[effortFloor, effortCeiling]` band (Issue #19). This has to read the
+ * same override for the same reason, or one config yields two thinking budgets:
+ * the clamp only RAISES to the floor, so any effort stronger than the pin —
+ * `ClaudeEffort` includes `xhigh` and `max` — survives on the `resolveModel`
+ * path and was overwritten here. Concretely: Maximum + `stage_efforts: xhigh` +
+ * that env override spawned `--effort xhigh` from the HeadlessOrchestrator and
+ * `--effort high` from the IPC path, which is the one path this function
+ * exists to serve.
+ *
+ * With no such override the mode's pin still wins on both paths — the mode
+ * governs how hard a stage thinks whenever the operator has not overridden that
+ * stage.
+ */
+export function resolveStageEffort(
+  stage: PipelineStage,
+  workspaceRoot: string,
+  issueMetadata?: IssueMetadata
+): ClaudeEffort | undefined {
+  const mode = getPerformanceMode(workspaceRoot);
+  const envelope = getModeEnvelope(mode);
+  if (mode !== "elevated" && !getStageEnvModel(stage)) {
+    const profile = getModeStageProfile(mode, stage);
+    if (profile?.model && profile.effort) return profile.effort;
+  }
+  return clampEffortToEnvelope(getStageEffort(stage, workspaceRoot, issueMetadata), envelope);
+}
+
+/**
  * Resolve the `--fallback-model` for a run, accounting for Fable's separate
  * Max-plan usage bucket. When a stage runs on **Fable**, default the CLI
  * fallback to **Opus** so a Fable-only usage limit or capacity overload degrades
@@ -966,9 +1088,17 @@ export function resolveModel(
   // The canonical alias (haiku|sonnet|opus|fable) is consumed by Claude verbatim;
   // non-Claude adapters translate it downstream.
   // See docs/PERFORMANCE_MODES.md — Cross-adapter behavior.
+  //
+  // The per-stage env override is read FIRST and suppresses the pin (#340).
+  // Two docs have promised for a long time that it "wins in every mode", and it
+  // did not: a Maximum-mode operator exporting
+  // NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV=haiku got Opus, with no log
+  // line. The most specific, most explicit, most ephemeral signal wins; the
+  // mode still supplies the effort below.
   const performanceMode = getPerformanceMode(workspaceRoot);
   const envelope = getModeEnvelope(performanceMode);
-  if (performanceMode !== "elevated") {
+  const stageEnvModel = getStageEnvModel(stage);
+  if (performanceMode !== "elevated" && !stageEnvModel) {
     const profile = getModeStageProfile(performanceMode, stage);
     if (profile?.model) {
       const routingModeForPerformance = getModelRoutingMode(workspaceRoot);
@@ -985,15 +1115,62 @@ export function resolveModel(
   // effort — only the automatic/lightweight/default paths use this value.
   const effort = clampEffortToEnvelope(stageEffort, envelope);
 
+  // Every MODEL the pipeline chooses below is clamped into the stage's
+  // routed-tier envelope rather than the raw mode band (#340): a `fable`
+  // ceiling belongs to the heavy reasoning stages only, so `feature-validate`
+  // and the plumbing stages top out at Opus even under `frontier`. Go clamps
+  // against the same narrowed band (routing.RoutedTierEnvelope). Effort keeps
+  // the raw envelope — the narrowing is about tiers, not thinking budget.
+  //
+  // "Every" means every branch below EXCEPT Step 1: the lightweight defaults,
+  // the adaptive-policy override (1.6), the A/B assignment (1.7), the
+  // selector's pick (2), `ui.core.default_model` (3) and the hardcoded
+  // fallback (4). Step 1 — the env override, `pipeline.stage_models`, the
+  // manual-mode table — is the operator overriding the mode for one stage, and
+  // is returned unclamped on both resolvers.
+  const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage);
+
+  // The `model_routing.minimum_model` floor applies to EVERY tier the pipeline
+  // chose, not just the selector's pick (#340). Before this it was reachable
+  // only from Step 2, so a run that never reached the selector — no issue
+  // metadata (the pre-#340 IPC path passed none), a lightweight stage, an
+  // explicit `stage_models` entry, an adaptive-policy override (Step 1.6) or
+  // an A/B experiment assignment (Step 1.7) — silently ignored a configured
+  // floor that Go's `resolveDispatchModel` was applying to the same config.
+  // `withFloor` is that one rule: raise to the floor, then land inside the
+  // stage's routed-tier CEILING. The floor half of the envelope is
+  // deliberately not re-applied (see `clampModelToCeiling`).
+  const minModel = getMinimumModel(stage, workspaceRoot);
+  const withFloor = (chosen: DefaultModel): DefaultModel =>
+    clampModelToCeiling(enforceMinimumModel(chosen, minModel), modelEnvelope);
+
   // Step 1: Check stage-level config (env var > config > defaults based on mode)
   const routingMode = getModelRoutingMode(workspaceRoot);
   const stageModel = getStageModel(stage, workspaceRoot);
   if (stageModel !== undefined) {
-    // getStageModel already handles env var priority internally
-    // Determine if it came from env var or config
-    const envKey = `NIGHTGAUGE_PIPELINE_STAGE_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;
-    const source: ModelSource = process.env[envKey] ? "env" : "config";
-    return { model: stageModel, source, mode: routingMode, effort };
+    // getStageModel already handles env var priority internally; `stageEnvModel`
+    // is the same read Step 0 used, so the source label and the precedence
+    // decision cannot disagree about whether an env override exists.
+    const source: ModelSource = stageEnvModel ? "env" : "config";
+    // The `model_routing.minimum_model` floor binds an explicit per-stage model
+    // too (#340). It used to be reachable only from Step 2, so in
+    // `model_routing.mode: manual` — where `getStageModel` answers for EVERY
+    // stage out of DEFAULT_STAGE_MODELS — the floor was silently inert, while
+    // Go's `resolveDispatchModel` applied it. One config, two dispatch paths,
+    // a 4×-cost disagreement: `minimum_model.feature-dev: fable` ran Fable on
+    // an autonomous run and Sonnet on an extension-driven one.
+    //
+    // A floor only RAISES, and a raise lands inside the mode's ceiling — the
+    // same rule Step 2 applies to its own `enforceMinimumModel` result. The
+    // operator's OWN model is exempt from the ceiling (it overrides the mode
+    // for that stage), so the clamp may discard the raise but never drop the
+    // stage below `stageModel`: forcing a tier must not downgrade.
+    const floored = enforceMinimumModel(stageModel, minModel);
+    const model =
+      floored === stageModel
+        ? stageModel
+        : enforceMinimumModel(clampModelToCeiling(floored, modelEnvelope), stageModel);
+    return { model, source, mode: routingMode, effort };
   }
 
   // Step 1.5: Per-stage defaults for lightweight stages (mode-agnostic)
@@ -1011,7 +1188,7 @@ export function resolveModel(
           // Clamp to the mode envelope (e.g. Efficiency caps at sonnet anyway;
           // Maximum's floor would raise it — though Maximum returns pins earlier).
           return {
-            model: clampModelToEnvelope("sonnet", envelope),
+            model: withFloor(clampModelToEnvelope("sonnet", modelEnvelope)),
             source: "stage-default",
             mode: routingMode,
             effort,
@@ -1020,7 +1197,7 @@ export function resolveModel(
       }
     }
     return {
-      model: clampModelToEnvelope(lightweightDefault, envelope),
+      model: withFloor(clampModelToEnvelope(lightweightDefault, modelEnvelope)),
       source: "stage-default",
       mode: routingMode,
       effort,
@@ -1032,11 +1209,18 @@ export function resolveModel(
   // (env always wins) and lightweight defaults, but before experiment and
   // AutoModelSelector. Only active in automatic or hybrid modes (manual mode
   // uses explicit stage_models which are handled in Step 1).
+  //
+  // `withFloor`, like every other pipeline-chosen branch (#340). A policy
+  // override is the pipeline routing itself from its own health signals, not
+  // the operator naming a tier for this stage, so it gets no exemption from
+  // the `minimum_model` floor or the routed-tier ceiling — Go's
+  // `resolveDispatchModel` applies both to every base it produces, and an
+  // unclamped branch here means one config file dispatches two tiers.
   if (routingMode === "automatic" || routingMode === "hybrid") {
     const policyOverride = getStageOverrideModel(stage, workspaceRoot);
     if (policyOverride !== undefined) {
       return {
-        model: policyOverride,
+        model: withFloor(policyOverride),
         source: "config",
         mode: routingMode,
         effort,
@@ -1046,6 +1230,14 @@ export function resolveModel(
 
   // Step 1.7: Active A/B experiment override (Issue #949)
   // Experiments override auto-selection but not explicit env/config overrides.
+  //
+  // The assignment is honored; its TIER is bounded (#340). An experiment is a
+  // pipeline choice too, and an unclamped one was the last door out of the
+  // envelope: an efficiency-mode treatment of `opus` escaped the [haiku,
+  // sonnet] band the operator selected, and a `frontier` treatment escaped the
+  // `feature-validate` Opus cap MODE_PROFILES.frontier documents as deliberate
+  // ("empirically failed validation in dogfooding"). Clamping the tier does not
+  // change which arm the issue landed in, so the experiment stays measurable.
   if (issueNumber !== undefined && issueNumber > 0) {
     const experimentConfig = getExperimentConfig(workspaceRoot);
     if (experimentConfig) {
@@ -1062,7 +1254,7 @@ export function resolveModel(
       });
       if (assignment) {
         return {
-          model: assignment.model as DefaultModel,
+          model: withFloor(assignment.model as DefaultModel),
           source: "experiment",
           mode: routingMode,
           effort: assignment.effort as ClaudeEffort | undefined,
@@ -1105,15 +1297,14 @@ export function resolveModel(
         envelope
       );
       const threshold = getConfidenceThreshold(workspaceRoot);
-      const minModel = getMinimumModel(stage, workspaceRoot);
 
       if (result.confidence >= threshold) {
-        // enforceMinimumModel may raise above the selector's pick; re-clamp to
-        // the envelope ceiling so a config minimum can't exceed the mode band.
-        const model = clampModelToEnvelope(
-          enforceMinimumModel(result.model as DefaultModel, minModel),
-          envelope
-        );
+        // `withFloor` is the same floor + ceiling rule every other branch uses:
+        // enforceMinimumModel may raise above the selector's pick, and the raise
+        // lands inside the stage's routed-tier ceiling — so a `fable` floor
+        // cannot put feature-validate or the plumbing on Fable under `frontier`
+        // (#340).
+        const model = withFloor(result.model as DefaultModel);
 
         return {
           model,
@@ -1134,7 +1325,7 @@ export function resolveModel(
   const defaultModel = getDefaultModel(workspaceRoot);
   if (defaultModel) {
     return {
-      model: clampModelToEnvelope(defaultModel, envelope),
+      model: withFloor(clampModelToEnvelope(defaultModel, modelEnvelope)),
       source: "default",
       mode: routingMode,
       effort,
@@ -1143,7 +1334,7 @@ export function resolveModel(
 
   // Step 4: Hardcoded fallback (clamped to the mode envelope)
   return {
-    model: clampModelToEnvelope("sonnet", envelope),
+    model: withFloor(clampModelToEnvelope("sonnet", modelEnvelope)),
     source: "default",
     mode: routingMode,
     effort,
@@ -2853,10 +3044,31 @@ export function runStageSkillHeadless(
     }
   }
 
-  // Resolve model using full resolution chain (Issue #732 - AutoModelSelector)
-  // Hoisted so the decision is available in the onComplete callback.
-  // When modelOverride is provided (Issue #1343 - escalation engine), bypass
-  // resolveModel() and use the escalated model directly.
+  // Resolve the model. EXACTLY ONE resolver runs per dispatch (#340).
+  //
+  // When `modelOverride` is set it IS the decision, and the local chain does
+  // not run at all: on the IPC path that value is the Go scheduler's
+  // `resolveDispatchModel` result — escalation after a failed stage, sticky
+  // model-unavailable downgrades (#42), the `model_routing.minimum_model`
+  // floor (#366), the pr-merge haiku floor (#197) and the feature-validate
+  // haiku gate — and on the extension-orchestrated path it is that
+  // orchestrator's escalation engine (#1343) or an operator's run override.
+  // Before #340 this branch still ran `resolveModel` for a display-only
+  // `escalatedFrom`, and `services/SkillRunner` passed `undefined` here, so
+  // the local chain's answer reached the CLI and every Go-side escalation was
+  // computed, logged, recorded in run history — and thrown away.
+  //
+  // Consequence, stated rather than left implicit: everything inside
+  // `resolveModel` applies ONLY where `resolveModel` runs. What the Go
+  // scheduler reimplemented so the IPC path keeps it — performance-mode pins,
+  // `pipeline.stage_models` and its env overrides, `model_routing.mode`, the
+  // lightweight stage defaults, the `minimum_model` floor — lives in
+  // `stageBaseModel`/`resolveDispatchModel`
+  // (internal/orchestrator/dispatch_routing.go). What has no Go counterpart and
+  // is therefore NOT consulted on the IPC path: the adaptive policy override,
+  // the A/B experiment assignment, and `AutoModelSelector` (Go routes from the
+  // issue's complexity score at pickup instead). See docs/PIPELINE_EXECUTION.md.
+  //
   // When pauseAutoRouting is true (Issue #1395 - health emergency policy), skip
   // issueMetadata so AutoModelSelector is not consulted — resolution falls through
   // to config/default model while still respecting env var and stage-default overrides.
@@ -2864,29 +3076,34 @@ export function runStageSkillHeadless(
   // Moved above skill composition (#79): the render keys its overlay cascade
   // off this value, so it has to be final first.
   const effectiveMetadata = pauseAutoRouting ? undefined : issueMetadata;
-  const baselineModelDecision = resolveModel(stage, workspaceRoot, effectiveMetadata, issueNumber);
-  const priorModel = modelOverride
-    ? adapter === "claude"
-      ? baselineModelDecision.model
-      : adapter === "codex"
-        ? resolveCodexPipelineModel(baselineModelDecision.model, workspaceRoot)
-        : undefined
-    : undefined;
-  const baseDecision: ModelDecision = modelOverride
-    ? {
-        model:
-          adapter === "codex"
-            ? resolveCodexPipelineModel(modelOverride, workspaceRoot)
-            : modelOverride,
-        source: modelOverrideSource ?? "user-override",
-        escalatedFrom: priorModel,
-      }
-    : adapter === "codex"
-      ? {
-          ...baselineModelDecision,
-          model: resolveCodexPipelineModel(baselineModelDecision.model, workspaceRoot),
-        }
-      : baselineModelDecision;
+  let baseDecision: ModelDecision;
+  // The tier the orchestrator decided, BEFORE any adapter-specific translation
+  // (codex "sonnet" → "gpt-5.4"). Kept separately because two questions below
+  // are about the decision, not about what the adapter launches: whether the
+  // active performance mode pinned this tier, and what the served-model report
+  // must be measured against.
+  let requestedModel: string;
+  if (modelOverride) {
+    requestedModel = modelOverride;
+    baseDecision = {
+      model:
+        adapter === "codex"
+          ? resolveCodexPipelineModel(modelOverride, workspaceRoot)
+          : modelOverride,
+      source: modelOverrideSource ?? "user-override",
+      // Effort is resolved independently — it is not part of the model
+      // decision the caller owns, and dropping it here silently discarded
+      // `model_routing.stage_efforts` on every overridden dispatch.
+      effort: resolveStageEffort(stage, workspaceRoot, effectiveMetadata),
+    };
+  } else {
+    const resolved = resolveModel(stage, workspaceRoot, effectiveMetadata, issueNumber);
+    requestedModel = resolved.model;
+    baseDecision =
+      adapter === "codex"
+        ? { ...resolved, model: resolveCodexPipelineModel(resolved.model, workspaceRoot) }
+        : resolved;
+  }
   // Issue #3230: when the AutoProviderRouter picked the adapter, attribute the
   // model selection to "auto-router" so per-stage history records the routing
   // step accurately. Skip when the user explicitly overrode the model
@@ -2896,11 +3113,51 @@ export function runStageSkillHeadless(
       ? { ...baseDecision, source: "auto-router" }
       : baseDecision;
 
+  // Did the active performance mode pin this tier? (#340)
+  //
+  // The adapter translation tables below ask this by testing
+  // `modelDecision.source === "performance-mode"` — a proxy that held only
+  // while `resolveModel` was the sole resolver. On the IPC path the Go
+  // scheduler resolves the tier (source `go-scheduler`), applying the same pin
+  // itself through `routing.ModeStagePin` in `stageBaseModel`
+  // (internal/orchestrator/dispatch_routing.go), so the proxy reads false and a
+  // Maximum-mode Codex/Gemini/Copilot run would silently fall back to the
+  // adapter's configured default model. The question these tables actually need
+  // answered is about the MODE and the TIER, not about which layer spoke — so
+  // each site ORs this in.
+  //
+  // It reads MODE_PROFILES rather than the mode NAME, so it answers for the one
+  // mode that pins (`maximum`) and stays false for the envelope modes, whose
+  // `stages` maps are empty — an efficiency/frontier run has no pinned tier to
+  // hand an adapter.
+  //
+  // The comparison runs on BANDS. The wire value is a `string`, and the pin in
+  // MODE_PROFILES is the band `"opus"`; comparing it against a concrete id
+  // ("claude-opus-5", which is what `reRouteContext` writes into
+  // `pickup_recommendation.dev_model` the moment an operator switches to
+  // Maximum) is false for the exact input this predicate exists to catch.
+  const modePinnedTier = ((): boolean => {
+    const mode = getPerformanceMode(workspaceRoot);
+    if (mode === "elevated") return false;
+    const pinned = getModeStageProfile(mode, stage)?.model;
+    if (!pinned) return false;
+    return pinned === (modelTierBand(requestedModel) ?? requestedModel);
+  })();
+
   // Record the resolved model up-front, before the CLI spawns (#367), so a
   // stage killed before completion still attributes its true model rather than
   // 'unknown'. Fires once here for every adapter; for codex/copilot the model
   // may be perf-mode-remapped just before spawn, but that later value is
   // reconciled by the Go handler's latest-wins recording at completion.
+  //
+  // Only the HeadlessOrchestrator supplies this callback, and that is
+  // deliberate (#340). Its implementation calls
+  // `pipeline.notifyStageTransition`, whose Go handler keys `activeRuntimes` by
+  // issue number for extension-initiated runs and MINTS a runtime when none
+  // exists — wiring it on the IPC path would create a second, competing
+  // RuntimeState alongside the scheduler's own. The IPC path needs no
+  // equivalent: the Go scheduler already records the dispatch model up-front,
+  // at stage start, from the same value it sent over the wire.
   callbacks?.onModelResolved?.(stage, modelDecision.model, adapter);
 
   // Compose the skill through `nightgauge skill render` — the ONE composer
@@ -3019,8 +3276,18 @@ export function runStageSkillHeadless(
     // (Fable's own default), router-selected fable (L/XL only) gets `xhigh`,
     // and a deliberate pin with no explicit effort omits the flag so the
     // server default applies. Sonnet/Opus values pass through untouched.
+    //
+    // Both questions below are asked of the model's registry BAND, not of the
+    // raw string (#340). `EFFORT_SUPPORTING_MODELS` holds `{sonnet, opus,
+    // fable}`, so a concrete id — the Go scheduler's wire value before it
+    // normalized, an operator's `--model claude-sonnet-4-6`, a dated pin —
+    // silently dropped `--effort` altogether, taking `model_routing.stage_efforts`
+    // and Maximum mode's `effort: high` with it. A band that the registry does
+    // not recognize (a local model) falls back to the raw string, which is
+    // still not in the set: local models take no `--effort`, correctly.
+    const modelBand = modelTierBand(modelDecision.model) ?? modelDecision.model;
     let effort = modelDecision.effort;
-    if (modelDecision.model.toLowerCase().includes("fable")) {
+    if (modelBand === "fable") {
       const conformed = conformEffortForFable(
         effort,
         getExplicitStageEffort(stage, workspaceRoot),
@@ -3035,9 +3302,7 @@ export function runStageSkillHeadless(
     }
     const finalEffort = effort;
     const supportsEffort =
-      adapter === "claude" &&
-      !!finalEffort &&
-      modelSupportsEffort(modelDecision.model as DefaultModel);
+      adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand as DefaultModel);
     if (supportsEffort && finalEffort) {
       args.push("--effort", finalEffort);
     }
@@ -3115,8 +3380,12 @@ export function runStageSkillHeadless(
     args = [sdkCliPath, "stage", stage, String(issueNumber)];
   }
   if (adapter === "codex" && modelOverride) {
+    // Both halves of the translation, because the tier band and the concrete
+    // Codex id are what diverge (#340): the orchestrator decided the band, the
+    // adapter runs the id, and only this line ties them together in the log.
     callbacks?.onStderr?.(
-      `[skillRunner] Codex run-level override: ${modelDecision.model} (${modelOverrideSource ?? "user-override"})\n`
+      `[skillRunner] Codex model from ${modelOverrideSource ?? "user-override"}: ` +
+        `${modelOverride} → ${modelDecision.model}\n`
     );
   }
 
@@ -3162,7 +3431,7 @@ export function runStageSkillHeadless(
   const geminiEnv: Record<string, string> = {};
   if (adapter === "gemini" || adapter === "gemini-sdk") {
     const perfMapping =
-      modelDecision.source === "performance-mode"
+      modelDecision.source === "performance-mode" || modePinnedTier
         ? getModeStageAdapterModel(getPerformanceMode(workspaceRoot), stage, adapter)
         : undefined;
     let geminiModel: string;
@@ -3193,7 +3462,9 @@ export function runStageSkillHeadless(
     // to the registry's opus tier (CODEX_TIER_MODEL_MAP.opus) via
     // resolveCodexPipelineModel("opus").
     const heavyCodexOverride =
-      modelDecision.source === "performance-mode" || modelDecision.source === "supercharge"
+      modelDecision.source === "performance-mode" ||
+      modelDecision.source === "supercharge" ||
+      modePinnedTier
         ? getSuperchargeCodexModel(workspaceRoot)
         : undefined;
     const codexModel = heavyCodexOverride ?? modelDecision.model;
@@ -3239,7 +3510,7 @@ export function runStageSkillHeadless(
   const copilotEnv: Record<string, string> = {};
   if (adapter === "copilot") {
     const perfMapping =
-      modelDecision.source === "performance-mode"
+      modelDecision.source === "performance-mode" || modePinnedTier
         ? getModeStageAdapterModel(getPerformanceMode(workspaceRoot), stage, adapter)
         : undefined;
     let copilotModel: string | undefined;
@@ -3284,7 +3555,7 @@ export function runStageSkillHeadless(
   // history (executionHistoryWriter.ts:482) stays honest. AC #3.
   const lmStudioEnv: Record<string, string> = {};
   if (adapter === "lm-studio") {
-    if (modelDecision.source === "performance-mode") {
+    if (modelDecision.source === "performance-mode" || modePinnedTier) {
       const perfMapping = getModeStageAdapterModel(
         getPerformanceMode(workspaceRoot),
         stage,
@@ -3468,6 +3739,33 @@ export function runStageSkillHeadless(
       kill: () => {},
     };
   }
+
+  // The model the adapter is ACTUALLY launched with (#340) — read from the env
+  // vars after the preflight above rewrote them, which is the only point where
+  // every adapter's final concrete id exists.
+  //
+  // It is not `modelDecision.model`. The codex branch computes
+  // `heavyCodexOverride ?? modelDecision.model` and — unlike gemini and copilot
+  // — never stamps the result back, so a Maximum-mode / supercharge run spawns
+  // `NIGHTGAUGE_CODEX_MODEL=<override>` while `modelDecision.model` still holds
+  // the tier translation. And for gemini/copilot/lm-studio with no mode mapping
+  // in play, `modelDecision.model` stays the orchestrator's BAND while the
+  // adapter launches its configured local/default model. Reporting either as
+  // the served model attributes run history, cost and telemetry to a model that
+  // never ran; `scheduler.go` re-records the stage on this value.
+  //
+  // Claude takes `--model` directly and sets no model env, so it is the
+  // decision itself.
+  const launchedModel =
+    (adapter === "codex"
+      ? codexEnv.NIGHTGAUGE_CODEX_MODEL
+      : adapter === "gemini" || adapter === "gemini-sdk"
+        ? geminiEnv.NIGHTGAUGE_GEMINI_MODEL
+        : adapter === "copilot"
+          ? copilotEnv.NIGHTGAUGE_COPILOT_MODEL
+          : adapter === "lm-studio"
+            ? lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL
+            : undefined) || modelDecision.model;
 
   // ── Worktree write containment: baseline (Issue #129) ─────────────────
   // Snapshot the dirty state of every configured workspace repo the stage does
@@ -5611,11 +5909,37 @@ export function runStageSkillHeadless(
       // every tool, forwarded verbatim through pipeline.stageResult to the
       // Go-authoritative history record.
       toolCalls: toolCallLog.size > 0 ? toolCallLog.snapshot() : undefined,
-      // ── #91 served-model attribution ───────────────────────────────────
-      // Only forwarded when it diverges from the requested model, so alias
-      // canonicalization (e.g. "opus" → "claude-opus-4-8") still flows but
-      // healthy records stay terse when the stream reported nothing new.
-      servedModel: servedModel && servedModel !== modelDecision.model ? servedModel : undefined,
+      // ── #91 / #340 served-model attribution ────────────────────────────
+      // This field means ONE thing: the concrete model that RAN. The CLI
+      // stream's model when it reported one, otherwise `launchedModel` — the id
+      // the adapter process was actually spawned with, read from its env after
+      // preflight, not the extension's pre-spawn decision. That is what
+      // `scheduler.go` re-records, prices and attributes the stage on, so alias
+      // canonicalization ("opus" → "claude-opus-5"), adapter tier translation
+      // (codex "opus" → "gpt-5.6-sol") and a perf-mode/supercharge override all
+      // have to reach it.
+      //
+      // The `!== requestedModel` test is NOT a divergence check, and reading it
+      // as one is how the round-1 fixup broke the learning corpus. For every
+      // non-Claude adapter the launched id and the orchestrator's band are
+      // different strings BY CONSTRUCTION, so a comparison across those two
+      // spaces reports "diverged" on every run; here it only suppresses a
+      // redundant echo, when the process ran the exact string it was asked for.
+      // Whether the run served the band the router predicted is a question
+      // answered in ONE place, on the Go side, where the requested band is
+      // known: `OutcomeActualBand` (internal/orchestrator/outcome_semantics.go)
+      // inverts the adapter mapping instead of collapsing a multi-band id onto
+      // its strongest band.
+      //
+      // #340: the comparison used to be against `modelDecision.model` — a
+      // resolution private to the extension, already adapter-translated. On the
+      // IPC path that made the correction structurally blind: Go resolves Y, TS
+      // resolved X, the CLI served X, TS reported `undefined` because X === X,
+      // and Go went on attributing the stage to Y.
+      servedModel:
+        (servedModel ?? launchedModel) !== requestedModel
+          ? (servedModel ?? launchedModel)
+          : undefined,
       modelRefusalFallback,
     });
   });

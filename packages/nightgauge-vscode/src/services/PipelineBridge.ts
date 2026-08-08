@@ -55,7 +55,6 @@ interface IpcRunStageParams {
   worktreeDir: string;
   repo?: string;
   allowedTools?: string[];
-  prompt?: string;
   skillFallbackUsed?: boolean;
   /** When true, stall handling uses escalation+pause instead of silent kill (Issue #2656) */
   autonomousMode?: boolean;
@@ -209,7 +208,6 @@ export class PipelineBridge {
       worktreeDir: ipcParams.worktreeDir,
       repo: ipcParams.repo,
       allowedTools: ipcParams.allowedTools,
-      prompt: ipcParams.prompt,
       autonomousMode: ipcParams.autonomousMode,
       // Forward the run's UUID so SkillRunner can open the SDK TraceRecorder
       // against the run's <run_id>.jsonl instead of silently disabling (#228).

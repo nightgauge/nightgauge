@@ -459,6 +459,27 @@ function mapComplexityToEffort(
  * @see Issue #638 - Pipeline token efficiency
  * @see Issue #731 - Model routing configuration modes
  */
+/**
+ * The per-stage `NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE}` override, or
+ * undefined when it is unset or not one of the four registry bands.
+ *
+ * Split out of `getStageModel` (#340) because this override resolves in a
+ * different PLACE than the rest of the explicit chain: it wins in every
+ * performance mode — ahead of the Maximum pin, which `resolveModel` Step 0
+ * would otherwise return first — while `pipeline.stage_models` sits behind that
+ * pin. Its Go pair is `stageEnvModel` (internal/orchestrator/dispatch_routing.go),
+ * band validation included: a value one resolver drops and the other dispatches
+ * is the drift #340 removed.
+ */
+export function getStageEnvModel(stage: PipelineStage): DefaultModel | undefined {
+  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
+  const envKey = `NIGHTGAUGE_PIPELINE_STAGE_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;
+  const envModel = process.env[envKey]?.trim();
+  return envModel && validModels.includes(envModel as DefaultModel)
+    ? (envModel as DefaultModel)
+    : undefined;
+}
+
 export function getStageModel(
   stage: PipelineStage,
   workspaceRoot?: string
@@ -466,10 +487,9 @@ export function getStageModel(
   const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
 
   // 1. ALWAYS check environment variable first (highest priority, all modes)
-  const envKey = `NIGHTGAUGE_PIPELINE_STAGE_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;
-  const envModel = process.env[envKey];
-  if (envModel && validModels.includes(envModel as DefaultModel)) {
-    return envModel as DefaultModel;
+  const envModel = getStageEnvModel(stage);
+  if (envModel) {
+    return envModel;
   }
 
   // 2. Determine routing mode

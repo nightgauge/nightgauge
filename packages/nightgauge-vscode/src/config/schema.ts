@@ -1974,7 +1974,13 @@ export type ModelRoutingMode = z.infer<typeof ModelRoutingModeSchema>;
  * The automatic ceiling is Opus by design — complexity routing never escalates
  * to the premium Fable tier (Fable is ~2× Opus and Opus 4.8 is already SOTA for
  * agentic coding). Fable is reachable only via explicit opt-in: the `frontier`
- * performance mode, a `minimum_model.<stage>: fable` floor, or a per-run pick.
+ * performance mode, an explicit `stage_models` entry, or a per-run pick.
+ *
+ * A `minimum_model.<stage>: fable` floor is NOT an explicit model — it is a
+ * raise, and a raise lands inside the stage's routed-tier envelope. Under any
+ * mode but `frontier` the ceiling caps it at Opus, and under `frontier` it
+ * reaches Fable only on `feature-planning` / `feature-dev`; `feature-validate`
+ * and the plumbing stages stay at Opus (#340, #19).
  *
  * @see Issue #731 - Model routing configuration modes
  */

@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -85,26 +86,18 @@ func NewRetryEngine(cfg RetryConfig) *RetryEngine {
 // walks the Anthropic models, and local providers (no registry entries)
 // have a one-rung ladder — no fallback, the failure surfaces with
 // remediation instead.
-var downgradeLadder = []string{"fable", "opus", "sonnet", "haiku"}
+// The ladder is routing.TierBandsStrongestFirst, not a second copy of it: the
+// performance-mode envelopes clamp against the same ordering, and two
+// declarations of one ladder is how a band ends up strong in one file and weak
+// in another (#340).
+var downgradeLadder = routing.TierBandsStrongestFirst
 
 // NormalizeModelTier maps a model reference (registry tier name like "opus", or a
 // concrete ID like "claude-opus-4-8" / "gpt-5.5") onto its strongest registry
 // band. Returns "" when the model is unknown to the registry — user-defined
 // local models are never downgraded by this ladder.
 func NormalizeModelTier(model string) string {
-	for _, tier := range downgradeLadder {
-		if model == tier {
-			return tier
-		}
-	}
-	if desc, ok := models.Get(model); ok {
-		for _, tier := range downgradeLadder {
-			if desc.HasTier(tier) {
-				return tier
-			}
-		}
-	}
-	return ""
+	return routing.TierBand(model)
 }
 
 // DowngradeDecision is the result of EvaluateDowngrade.

@@ -5,9 +5,39 @@ import "github.com/nightgauge/nightgauge/internal/diagnostics"
 // RunStageParams is the payload for the "pipeline.runStage" event (Go→TS).
 // The Go scheduler emits this event to ask the TypeScript SkillRunner to
 // execute a pipeline stage via the Claude CLI.
+//
+// The scheduler's own `prompt` is deliberately NOT on this wire (#340). The
+// extension composes the stage prompt itself — it renders the skill through
+// `nightgauge skill render`, may substitute a platform-resolved SKILL.md body
+// (SkillContent below), and prepends the Haiku behavioral preamble — so a
+// second, unread prompt travelling alongside is indistinguishable from one
+// that silently broke. `Model` went the other way: it is now authoritative
+// and the extension executes it verbatim.
 type RunStageParams struct {
-	Stage             string   `json:"stage"`
-	IssueNumber       int      `json:"issueNumber"`
+	Stage       string `json:"stage"`
+	IssueNumber int    `json:"issueNumber"`
+	// Model is the tier this stage runs on, and it is AUTHORITATIVE (#340).
+	// resolveDispatchModel has already applied the per-stage base routing (the
+	// performance-mode pin AND its [floor, ceiling] envelope,
+	// pipeline.stage_models and its env overrides,
+	// model_routing.mode, the lightweight stage defaults), post-failure
+	// escalation, sticky model-unavailable downgrades (#42), the
+	// model_routing.minimum_model floor (#366), the pr-create large-diff
+	// escalation, the feature-validate haiku gate and the pr-merge haiku floor
+	// (#197). The TS SkillRunner passes it straight to the CLI's --model and
+	// runs no resolution of its own. On this wire only codex translates the
+	// band to a provider id (resolveCodexPipelineModel); gemini/copilot/
+	// lm-studio launch their configured model outside Maximum mode — the
+	// mode-pinned Maximum path is the sole exception (docs/PIPELINE_EXECUTION.md
+	// § Who Resolves the Model). Whatever actually launched is reported back as
+	// ServedModel.
+	//
+	// VOCABULARY: a registry tier BAND (haiku|sonnet|opus|fable) whenever the
+	// registry recognizes the model — resolveDispatchModel's last step is
+	// normalizeDispatchTier. A user-defined local model the registry does not
+	// know passes through as itself, because it has no band. Do not reintroduce
+	// a concrete id here: the extension's band-keyed lookups (`--effort`
+	// support, the performance-mode pin comparison) no-op SILENTLY on one.
 	Model             string   `json:"model"`
 	MaxTokens         int      `json:"maxTokens,omitempty"`
 	TimeoutMs         int      `json:"timeoutMs"`
@@ -17,7 +47,6 @@ type RunStageParams struct {
 	WorktreeDir       string   `json:"worktreeDir"`
 	Repo              string   `json:"repo"`
 	AllowedTools      []string `json:"allowedTools,omitempty"`
-	Prompt            string   `json:"prompt,omitempty"`
 	SkillFallbackUsed bool     `json:"skillFallbackUsed,omitempty"`
 	// AutonomousMode signals to TS SkillRunner that this stage is running
 	// under the autonomous scheduler, enabling escalation+pause on stall
@@ -156,14 +185,33 @@ type StageResultParams struct {
 	// operator can verify the reclassification was justified.
 	ShippedPRNumber int `json:"shippedPRNumber,omitempty"`
 
-	// ── #91 served-model attribution ──────────────────────────────────
-	// ServedModel is the model that actually served the stage per the CLI
-	// stream (last observed message.model / refusal fallback). Empty when
-	// the stream carried no model info. The claude CLI silently retries
-	// safety-refused turns on a fallback model (model_refusal_fallback)
-	// and still exits 0, so Go must attribute cost/telemetry/history to
-	// what TS observed serving, not to the model it requested.
-	// See docs/spikes/fable-5-behavior-porting.md §8.3.
+	// ── #91 / #340 served-model attribution ───────────────────────────
+	// ServedModel is the model that ACTUALLY served the stage: the CLI
+	// stream's last observed message.model when it reported one, otherwise the
+	// concrete model the adapter PROCESS was spawned with — read out of the
+	// adapter's own env after model preflight, not from the extension's
+	// pre-spawn decision. Omitted only when it is byte-identical to
+	// RunStageParams.Model, i.e. when there is nothing to add.
+	//
+	// VOCABULARY: unlike RunStageParams.Model this is a CONCRETE id, and that
+	// asymmetry is deliberate. Three things make it one. The claude CLI
+	// silently retries safety-refused turns on a fallback model
+	// (model_refusal_fallback) and still exits 0 (#91). A non-Claude adapter
+	// translates the tier band into a provider id — codex "opus" →
+	// "gpt-5.6-sol", or its own configured default when no band maps. And a
+	// performance-mode / supercharge override replaces that translation
+	// outright. All three are the model that ran, and therefore the one
+	// cost/telemetry/history must name.
+	//
+	// Do NOT read the omit-when-equal rule as a divergence flag: for every
+	// non-Claude adapter the launched id and the requested band are different
+	// strings by construction, so "present" means "here is what ran", not
+	// "something went wrong". The band question — did the run serve the tier
+	// the router predicted — is answered separately, by OutcomeActualBand
+	// (internal/orchestrator/outcome_semantics.go), which inverts the adapter
+	// mapping instead of collapsing a multi-band id onto its strongest band.
+	// See docs/OUTCOME_RECORDING.md and
+	// docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string `json:"servedModel,omitempty"`
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event
 	// when one was observed. Attribution + notification only — never used

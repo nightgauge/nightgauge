@@ -158,14 +158,37 @@ func TestRouter_EnvVarOverride_TakesPrecedence(t *testing.T) {
 	}
 }
 
-func TestRouter_FrontierMode_ReasoningStagesGetFable(t *testing.T) {
+// TestRouter_FrontierMode_IsAnEnvelopeNotAPin pins the #19 semantics this
+// router used to contradict: `frontier` is a [haiku, fable] ENVELOPE, not a
+// per-stage pin. MODE_PROFILES.frontier.stages is `{}`, and its comment says
+// why the pins were removed — pinned Fable "paid frontier rates for trivial
+// work and empirically failed validation in dogfooding".
+//
+// Three properties, each of which the pinning table got wrong:
+// Fable is reachable (the mode would otherwise be inert), only on heavy
+// reasoning at top complexity, and never on feature-validate.
+func TestRouter_FrontierMode_IsAnEnvelopeNotAPin(t *testing.T) {
 	root := writeModeFile(t, "frontier")
 	r := NewRouter(nil, root)
-	for _, stage := range []string{"feature-planning", "feature-dev", "feature-validate"} {
-		// Even at trivial complexity, frontier pins the reasoning stages to Fable.
-		rec := r.Route(context.Background(), stage, complexity.Score{Value: 2})
+
+	for _, stage := range []string{"feature-planning", "feature-dev"} {
+		rec := r.Route(context.Background(), stage, complexity.Score{Value: 8})
 		if rec.Model != ModelFable {
-			t.Errorf("frontier mode %s = %s, want %s", stage, rec.Model, ModelFable)
+			t.Errorf("frontier %s at complexity 8 = %s, want %s", stage, rec.Model, ModelFable)
+		}
+		trivial := r.Route(context.Background(), stage, complexity.Score{Value: 2})
+		if trivial.Model == ModelFable {
+			t.Errorf("frontier %s at complexity 2 = %s — trivial work must not pay frontier rates",
+				stage, trivial.Model)
+		}
+	}
+
+	// feature-validate is deliberately excluded from the escalation: Fable's
+	// extended reasoning is counterproductive for test orchestration.
+	for c := 1; c <= 10; c++ {
+		rec := r.Route(context.Background(), "feature-validate", complexity.Score{Value: c})
+		if rec.Model == ModelFable {
+			t.Errorf("frontier feature-validate at complexity %d = %s — must never exceed Opus", c, rec.Model)
 		}
 	}
 }

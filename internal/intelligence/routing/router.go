@@ -18,17 +18,33 @@ import (
 //
 // Fable is the premium frontier tier — the most capable model, priced at
 // ~2× Opus. Because Opus is already state-of-the-art for long-horizon
-// agentic coding, automatic complexity routing NEVER escalates to Fable: the
-// auto ceiling is Opus. Fable is reachable only via explicit opt-in — the
-// `frontier` performance mode (see performance_mode.go), an explicit per-run
-// model override, or a `model_routing.minimum_model.<stage>: fable` config
-// entry.
+// agentic coding, the auto ceiling is Opus in every mode but one: only the
+// `frontier` envelope (see performance_mode.go) lifts it, and even there only
+// for a heavy reasoning stage at top complexity. Two explicit opt-ins reach it
+// from any mode, because neither is clamped: a per-run model override and an
+// explicit per-stage model (`pipeline.stage_models` /
+// NIGHTGAUGE_PIPELINE_STAGE_MODEL_*). A `model_routing.minimum_model.<stage>:
+// fable` floor is NOT one of them: floors land inside the stage's ROUTED-TIER
+// envelope (RoutedTierEnvelope), so a non-frontier ceiling caps them at Opus,
+// and even under `frontier` a floor reaches Fable only on feature-planning and
+// feature-dev — feature-validate and the plumbing stages stay at Opus.
 var (
 	ModelHaiku  = mustCurrentModelID("haiku")
 	ModelSonnet = mustCurrentModelID("sonnet")
 	ModelOpus   = mustCurrentModelID("opus")
 	ModelFable  = mustCurrentModelID("fable")
 )
+
+// currentModelForBand resolves a registry BAND back to the concrete Anthropic
+// id this file's callers speak (selectModel returns ModelHaiku and friends, and
+// Recommendation.Model is persisted as a concrete id). Anything the registry
+// does not resolve is returned as-is.
+func currentModelForBand(band string) string {
+	if m, ok := models.Get(band); ok {
+		return m.ID
+	}
+	return band
+}
 
 // mustCurrentModelID resolves a tier to the registry's current non-deprecated
 // model ID. The registry is embedded, so a missing tier is a build defect —
@@ -92,9 +108,28 @@ func (r *Router) Route(ctx context.Context, stage string, cplx complexity.Score)
 func (r *Router) routeLocal(stage string, cplx complexity.Score) Recommendation {
 	model := selectModel(stage, cplx.Value)
 
-	// Apply performance-mode override (reads fresh from disk on every call).
+	// Apply the performance mode (reads fresh from disk on every call), through
+	// the ONE mode table in performance_mode.go. A mode either PINS the stage
+	// (only `maximum` does) or supplies an envelope the heuristic pick is
+	// clamped into — mirroring MODE_PROFILES, where `efficiency.stages` and
+	// `frontier.stages` are both `{}`.
 	mode := resolvePerformanceMode(r.workspaceRoot)
-	model = applyModeOverride(mode, stage, model)
+	if pin := ModeStagePin(mode, stage); pin != "" {
+		model = currentModelForBand(pin)
+	} else {
+		envelope := RoutedTierEnvelope(mode, stage)
+		// Frontier-reasoning escalation: a fable ceiling is the ONLY way
+		// automatic routing reaches Fable, and only on a heavy reasoning stage
+		// at top complexity. Mirrors AutoModelSelector.selectModel; applied
+		// before the clamp, exactly as it is there.
+		if envelope.Ceiling == TierFable && frontierReasoningStage(stage) &&
+			cplx.Value >= frontierReasoningComplexity {
+			model = ModelFable
+		}
+		if clamped := ClampToEnvelope(model, envelope); clamped != model {
+			model = currentModelForBand(clamped)
+		}
+	}
 
 	tokens := estimateTokens(stage, cplx.Value)
 	cost := estimateCost(model, tokens)

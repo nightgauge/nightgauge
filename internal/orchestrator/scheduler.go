@@ -2847,6 +2847,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	if forcedTier, ok := ConsumeEscalationOverride(workspaceRoot, item.Number); ok {
 		log.Printf("#%d: run.retryWithEscalation applied — forcing model tier %q for this run", item.Number, forcedTier)
 		predictedModel = forcedTier
+		// A forced escalation is a run-wide FLOOR, not merely a prediction
+		// (#340). The prediction alone stopped being sufficient once
+		// stageBaseModel gained the lightweight-stage defaults, which sit
+		// ABOVE the prediction: an operator escalating a stalled pr-create
+		// would have watched the retry re-run it on haiku.
+		modelFloors = raiseStageFloors(modelFloors, forcedTier)
 	}
 
 	// Trace the scheduler's model-routing decision for the dev stage (#179).
@@ -3752,12 +3758,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// #91 served-model attribution: the claude CLI can silently retry a
-		// safety-refused turn on a fallback model (model_refusal_fallback)
-		// and still exit 0, so the model that served the stage is not
-		// guaranteed to be the one requested. Cost, exit-record, telemetry,
-		// and history sinks below use servedModel; routing, escalation, and
-		// retry decisions stay on the requested `model`.
+		// #91 served-model attribution: the model that served the stage is not
+		// guaranteed to be the one requested — the claude CLI can silently
+		// retry a safety-refused turn on a fallback model
+		// (model_refusal_fallback) and still exit 0, and a non-Claude adapter
+		// translates the tier band into a concrete id before spawning. Cost,
+		// exit-record, telemetry, and history sinks below use servedModel;
+		// routing, escalation, and retry decisions stay on the requested
+		// `model`.
+		//
+		// The comparison is sound only because `model` is what the executor
+		// was actually asked to run (#340). While the IPC path re-resolved the
+		// model in TypeScript, the executor measured divergence against its own
+		// private resolution — so a Go-resolves-Y / TS-resolves-X /
+		// CLI-serves-X stage reported no servedModel at all and this
+		// correction could never fire.
 		// See docs/spikes/fable-5-behavior-porting.md §8.3.
 		servedModel := model
 		if result != nil && result.ServedModel != "" {
@@ -5687,7 +5702,7 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		Repo:            item.Repo,
 		PredictedSize:   OutcomePredictedSize(string(item.Size), item.Labels, complexityScore),
 		PredictedModel:  OutcomeModelBand(predictedModel),
-		ActualModel:     OutcomeModelBand(OutcomeServedDevModel(snap)),
+		ActualModel:     OutcomeActualBand(OutcomeServedDevModel(snap), predictedModel),
 		Success:         success,
 		DurationMs:      snap.TotalDuration().Milliseconds(),
 		InputTokens:     snap.InputTokens,
@@ -5706,13 +5721,19 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// loadIssueContext reads <runRoot>/.nightgauge/pipeline/issue-{N}.json and
 	// stages write that file into the run's WORKTREE, so an autonomous row can
 	// carry score 0 and no prediction at all.
+	//
+	// WHICH cause fired is the whole point, and there are three (see
+	// OutcomePredictedModelDiagnostic): absent, or present-but-unregistered on
+	// either half. The sentences live in outcome_semantics.go beside the rule
+	// that produces the empty band, so this writer and the extension's cannot
+	// name different causes for one corpus field.
 	if outcome.PredictedModel == "" {
-		log.Printf("#%d: learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
-			item.Number, item.Number)
+		log.Printf("#%d: %s", item.Number,
+			OutcomePredictedModelDiagnostic(item.Number, predictedModel))
 	}
 	if outcome.ActualModel == "" {
-		log.Printf("#%d: learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
-			item.Number, OutcomeModelStage)
+		log.Printf("#%d: %s", item.Number,
+			OutcomeActualModelDiagnostic(OutcomeServedDevModel(snap)))
 	}
 	if complexityScore <= 0 {
 		log.Printf("#%d: learning outcome has no routing.complexity_score — no issue context reached this handler, so the run records no size prediction at all (#304)",
@@ -5854,12 +5875,21 @@ func isHaikuModel(model string) bool {
 // now resolve here. That is a deliberate behavior change for the missing-file
 // case; a stage the operator floored to a premium tier should not run the
 // provider default, with no log line, because a context file failed to parse.
-const defaultDispatchModel = "sonnet"
+const defaultDispatchModel = tierSonnet
+
+// tierSonnet is the sonnet registry BAND, spelled out rather than reached for
+// as routing.ModelSonnet (#340). The three stage-specific haiku exclusions
+// below all escalate to sonnet, and until #340 they wrote the concrete id — so
+// resolveDispatchModel emitted two vocabularies on one field. Both this
+// package's ladders and the extension's band-keyed lookups fail SILENTLY on a
+// concrete id, which is why the ONE vocabulary is spelled the same way
+// everywhere it is produced.
+const tierSonnet = "sonnet"
 
 // resolveDispatchModel returns the model a stage will actually dispatch on,
-// after every override the run can apply: escalation, the configured minimum
-// floor, sticky model-unavailable downgrades, and the three stage-specific
-// haiku exclusions.
+// after every override the run can apply: the per-stage base routing, then
+// escalation, the configured minimum floor, sticky model-unavailable
+// downgrades, and the three stage-specific haiku exclusions.
 //
 // Extracted from the dispatch path in #79 so the result is available BEFORE
 // the skill is composed. Overlay keys are derived from this value (ADR 016 §2)
@@ -5869,6 +5899,19 @@ const defaultDispatchModel = "sonnet"
 // load-bearing and unchanged from the inline version: the floor lands before
 // ApplyDowngrades so a model-unavailable downgrade stays the final safety net
 // (a floor must never force a run back onto a tier the API just rejected).
+//
+// This is the ONLY router on both dispatch paths since #340. Everything the
+// TypeScript resolveModel chain used to contribute on the IPC path — the
+// performance-mode pin AND envelope, pipeline.stage_models and its env
+// overrides, model_routing.mode, the lightweight-stage defaults — is applied by
+// stageBaseModel (dispatch_routing.go) before the first line below. The mode's
+// ceiling is applied again after the raising mechanisms, where this function
+// (not stageBaseModel) is the one that knows what they produced.
+//
+// The RETURN VALUE is always a registry band when the registry recognizes it
+// (normalizeDispatchTier, last line). The wire, both executors and every ladder
+// in this package speak that one vocabulary; a concrete id reaching a band-keyed
+// consumer fails silently rather than loudly.
 func (s *Scheduler) resolveDispatchModel(
 	stage state.PipelineStage,
 	issueNumber int,
@@ -5876,30 +5919,22 @@ func (s *Scheduler) resolveDispatchModel(
 	predictedModel string,
 	modelFloors map[string]string,
 ) string {
-	// An unrouted run dispatches on the general-purpose default tier. This
-	// default lives HERE and nowhere else (#304): it used to live in
-	// loadIssueContext, where the same value also reached the learning corpus
-	// and was recorded as a routing prediction the router never made. Deleting
-	// it there was right; deleting it outright was not, because four mechanisms
-	// below key on tier RECOGNITION and silently no-op on "" — the
-	// model_routing.minimum_model floor (#366) returns the selection untouched,
-	// the sticky model-unavailable downgrade (#42) reports
-	// model_not_in_registry, RecordStageModel drops the empty value so the run
-	// record carries no per-stage attribution, and tokens.CalculateCost("")
-	// returns a truthful-looking $0.
-	//
-	// It is the tier BAND ("sonnet"), never routing.ModelSonnet's concrete id:
-	// every consumer downstream — enforceMinimumModel, ApplyDowngrades and
-	// RetryEngine.NextModel — reads the band vocabulary, and NextModel in
-	// particular walks a literal ladder ([haiku sonnet opus]) that a dated id
-	// is not a member of. A concrete id here would resolve the floor and the
-	// downgrade but silently break escalation past the default
-	// (TestScheduler_BudgetAwareEscalationOnStallKill).
-	model := predictedModel
-	if model == "" {
-		model = defaultDispatchModel
-	}
-	// Escalation override if set, otherwise the (defaulted) predicted model.
+	// Per-stage base routing. An unrouted run still ends on the general-purpose
+	// default tier, and that default lives in stageBaseModel's last branch and
+	// nowhere else (#304): it used to live in loadIssueContext, where the same
+	// value also reached the learning corpus and was recorded as a routing
+	// prediction the router never made. Deleting it there was right; deleting
+	// it outright was not, because four mechanisms below key on tier
+	// RECOGNITION and silently no-op on "" — the model_routing.minimum_model
+	// floor (#366) returns the selection untouched, the sticky
+	// model-unavailable downgrade (#42) reports model_not_in_registry,
+	// RecordStageModel drops the empty value so the run record carries no
+	// per-stage attribution, and tokens.CalculateCost("") returns a
+	// truthful-looking $0.
+	mode := routing.ResolvePerformanceMode(workspaceRoot)
+	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
+	model := baseModel
+	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
 	}
@@ -5914,6 +5949,53 @@ func (s *Scheduler) resolveDispatchModel(
 			model = raised
 		}
 	}
+	// The performance mode's CEILING binds everything the pipeline chose (#340,
+	// #19). Escalation and the minimum_model floor both only RAISE, and TS
+	// re-clamps its own enforceMinimumModel result to the envelope ceiling for
+	// the same reason: a cost-capping mode that any later mechanism can raise
+	// out of caps nothing. So Efficiency tops out at sonnet even after a failed
+	// stage escalates, and an operator forcing a tier through
+	// run.retryWithEscalation gets it within the band they selected.
+	//
+	// The clamp is applied to what the RAISING MECHANISMS PRODUCED, never
+	// skipped on the provenance of the base they raised. Gating it on
+	// `explicitBase` was the round-2 defect: under `model_routing.mode: manual`
+	// — which every recommended docs/CONFIGURATION.md profile sets, and where
+	// stageConfiguredModel answers for EVERY stage from defaultStageModels —
+	// the flag was true on every stage, so the ceiling never bound escalation,
+	// the floor or the forced tier for the operators most likely to have chosen
+	// a cost-capping mode.
+	//
+	// Two rules, and only these:
+	//   - An explicit per-stage model (the env override, pipeline.stage_models,
+	//     the manual-mode table) is the operator overriding the MODE for that
+	//     stage. resolveModel Step 1 returns it unclamped; so does this. That
+	//     exemption covers the operator's OWN value — it is the strongest tier
+	//     this stage can end on when nothing raised it, and a floor may never
+	//     LOWER a dispatch below it (forcing a tier must never downgrade).
+	//   - The floor half of the envelope is not applied here. It would re-raise
+	//     a tier the sticky #42 downgrade just lowered — the ONE thing the
+	//     ordering below exists to prevent.
+	//
+	// The envelope is the stage's ROUTED-TIER envelope, not the raw mode band:
+	// a `fable` ceiling belongs only to the heavy reasoning stages, so a
+	// run-wide floor (or a forced tier) cannot put feature-validate or the
+	// plumbing on Fable under `frontier` — the exact behavior #19 deleted for
+	// having "empirically failed validation in dogfooding". stageBaseModel
+	// clamps its own branches against the same narrowed envelope.
+	envelope := routing.RoutedTierEnvelope(mode, string(stage))
+	if capped := routing.ClampToCeiling(model, envelope); capped != model {
+		if explicitBase && routing.TierRank(capped) < routing.TierRank(baseModel) {
+			// The ceiling landed below the operator's own per-stage model.
+			// Keep theirs: the raise is discarded, not the override.
+			capped = baseModel
+		}
+		if capped != model {
+			log.Printf("#%d: stage %s — performance mode %s caps %s → %s",
+				issueNumber, stage, mode, model, capped)
+			model = capped
+		}
+	}
 	// Reroute through any sticky model-unavailable downgrades (#42): once the
 	// API rejected a tier this run, every later stage resolving to it runs on
 	// the substituted tier instead of re-failing identically.
@@ -5921,13 +6003,28 @@ func (s *Scheduler) resolveDispatchModel(
 
 	// For pr-create, escalate from haiku to sonnet when the diff is large.
 	// Large diffs cause haiku to stall before producing a complete PR.
-	if stage == state.StagePRCreate && isHaikuModel(model) {
+	//
+	// Only over a base the PIPELINE chose. In `resolveModel` this rule is
+	// structural rather than stated: the escalation lives inside Step 1.5, the
+	// lightweight-stage branch, which Step 1 returns before ever reaching
+	// whenever `getStageModel` answers. Evaluating it here on the resolved
+	// model regardless of provenance made it fire over an explicit
+	// `pipeline.stage_models` entry, a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`
+	// override, and the whole `model_routing.mode: manual` table — where
+	// defaultStageModels[pr-create] is haiku and all three recommended
+	// docs/CONFIGURATION.md profiles live. One workspace and one 900-line diff
+	// then ran pr-create on sonnet autonomously and haiku from the extension.
+	//
+	// So: explicit operator configuration wins, on both resolvers. An operator
+	// who names haiku for pr-create gets haiku; the escalation exists to keep
+	// the PIPELINE's own cheap default from stalling, not to overrule a choice.
+	if stage == state.StagePRCreate && !explicitBase && isHaikuModel(model) {
 		threshold := getLargeDiffThreshold(workspaceRoot)
 		if threshold > 0 {
 			if diffLines := getDiffLineCount(workspaceRoot); diffLines > threshold {
 				log.Printf("#%d: pr-create diff is %d lines (threshold %d) — escalating to sonnet",
 					issueNumber, diffLines, threshold)
-				model = routing.ModelSonnet
+				model = tierSonnet
 			}
 		}
 	}
@@ -5939,7 +6036,7 @@ func (s *Scheduler) resolveDispatchModel(
 		if !devContextBuildPassed(workspaceRoot, issueNumber) {
 			log.Printf("#%d: feature-validate: dev build_verification not passed — disabling haiku, escalating to sonnet",
 				issueNumber)
-			model = routing.ModelSonnet
+			model = tierSonnet
 		}
 	}
 
@@ -5952,10 +6049,10 @@ func (s *Scheduler) resolveDispatchModel(
 	if stage == state.StagePRMerge && isHaikuModel(model) {
 		log.Printf("#%d: pr-merge LLM path runs only on deterministic punts — flooring haiku to sonnet (#197)",
 			issueNumber)
-		model = routing.ModelSonnet
+		model = tierSonnet
 	}
 
-	return model
+	return normalizeDispatchTier(model)
 }
 
 // devContextBuildPassed reads dev-{N}.json and returns true when

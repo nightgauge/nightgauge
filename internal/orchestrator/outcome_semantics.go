@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -22,10 +24,10 @@ import (
 // are expressed:
 //
 //  1. ONE VOCABULARY per pair. Sizes are small|medium|large; models are
-//     registry bands (haiku|sonnet|opus|fable) with unregistered models passed
-//     through verbatim. A pair written in two vocabularies reports a *measured*
-//     0% forever — strictly worse than no data, because the reader stops saying
-//     "bootstrapping" and starts asserting a number that can never move.
+//     registry bands (haiku|sonnet|opus|fable) and nothing else. A pair written
+//     in two vocabularies reports a *measured* 0% forever — strictly worse than
+//     no data, because the reader stops saying "bootstrapping" and starts
+//     asserting a number that can never move.
 //
 //  2. ABSENT MEANS EMPTY. An unknown value is "", never a plausible-looking
 //     default. Consumers exclude a pair with an empty half from their
@@ -53,20 +55,82 @@ const OutcomeModelStage = state.StageFeatureDev
 
 // OutcomeModelBand normalizes a model reference onto its registry band so the
 // router's alias ("sonnet") and a concrete served id ("claude-sonnet-5") are
-// comparable.
+// comparable. It is the PREDICTION half's normalizer; the measured half goes
+// through OutcomeActualBand, which needs the prediction to invert a many-to-one
+// adapter mapping.
 //
-// Three outcomes, deliberately distinct: a registry-known reference collapses to
-// its band; an unregistered model (a user-defined local model) passes through
-// VERBATIM, because an unrecognized name is still attribution and collapsing it
-// to "" would relabel real data as missing; only an absent model yields "".
+// A model the registry has no band for records "" — absent, excluded from every
+// consumer's denominator. This is deliberately NOT the verbatim pass-through it
+// was before #340: the pair is compared for EQUALITY against a band, so a
+// verbatim id ("gemini-2.0-flash", a user-configured local model) is not
+// "attribution the corpus keeps", it is a guaranteed MISS the router never made
+// — a fabricated measurement, which rule 2 exists to prevent. Attribution of
+// what actually ran lives in the run record's per-stage model_selection, which
+// keeps the concrete id.
 func OutcomeModelBand(model string) string {
 	if model == "" {
 		return ""
 	}
-	if tier := NormalizeModelTier(model); tier != "" {
-		return tier
+	return NormalizeModelTier(model)
+}
+
+// OutcomeActualBand expresses the model a run actually SERVED in the band
+// vocabulary its prediction is written in.
+//
+// The naive normalization is wrong for every non-Claude adapter, and wrong in
+// the direction that manufactures misses. Go dispatches a BAND ("opus"); the
+// extension translates it at the last mile — `resolveCodexPipelineModel` on
+// every codex dispatch (opus → gpt-5.6-sol), and `getModeStageAdapterModel` on
+// a gemini/copilot dispatch whose tier the MODE PINNED, which since #19 means
+// Maximum alone (opus → gemini-2.5-pro) — and reports the concrete id back,
+// which the scheduler re-records as the stage's model. Those ids are MULTI-BAND
+// — gpt-5.6-sol serves [opus, fable], gemini-2.5-pro serves [opus, fable] — so
+// a strongest-band collapse reads "fable" for a run the router predicted "opus"
+// and the adapter served exactly as asked. Every such run would book a routing
+// MISS, feeding the calibration loop with systematic garbage.
+//
+// So the mapping is inverted through the registry instead of collapsed: when
+// the served model serves the predicted band, THAT is the band it was launched
+// for, and the run is a HIT. A model that serves neither the predicted band nor
+// any other (unregistered) records "" — an honest unknown, excluded — rather
+// than a value guaranteed to compare unequal.
+//
+// This function does NOT assume the adapter was asked for the dispatched band,
+// and its callers sit on both sides of the translation gap. On the Go-executor
+// path (Scheduler.recordOutcome, the `nightgauge run` dispatch),
+// internal/execution/adapters translates the band for codex/gemini/gemini-sdk/
+// copilot in EVERY mode, so a gemini run asked for opus serves gemini-2.5-pro
+// and books a HIT. On extension-dispatched (IPC) runs outside Maximum mode,
+// gemini/copilot/lm-studio launch their CONFIGURED model and ignore the wire
+// tier (docs/PIPELINE_EXECUTION.md § Who Resolves the Model), so `served`
+// there is a fact about the workspace's config rather than about the run — and
+// it is scored honestly on that basis: the shipped gemini default
+// `gemini-2.5-flash` serves [haiku, sonnet], so an opus-predicted feature-dev
+// records "sonnet" and books a real MISS. Both are correct readings of the
+// corpus's question ("did the run serve the band the router predicted?"), not
+// defects in this helper — the defect the extension-side reading reports is
+// the translation gap, and that has its own issue.
+//
+// The comparison and the recording therefore happen in ONE space each, on
+// purpose: divergence is judged in the concrete-id space where the adapter
+// actually launched a process (utils/skillRunner.ts reports the id that ran),
+// and the corpus records the band, because the prediction it is scored against
+// is a band. See docs/OUTCOME_RECORDING.md.
+func OutcomeActualBand(served, predicted string) string {
+	band := OutcomeModelBand(served)
+	if band == "" {
+		return ""
 	}
-	return model
+	predictedBand := OutcomeModelBand(predicted)
+	if predictedBand == "" || predictedBand == band {
+		return band
+	}
+	if desc, ok := models.Get(served); ok && desc.HasTier(predictedBand) {
+		// One concrete model serves both bands — the adapter maps the predicted
+		// band onto exactly this id, so this IS the predicted band served.
+		return predictedBand
+	}
+	return band
 }
 
 // OutcomeServedDevModel returns the model the run's implementation stage
@@ -90,6 +154,53 @@ func OutcomeServedDevModel(snap *state.RuntimeState) string {
 		}
 	}
 	return snap.StageModel(OutcomeModelStage)
+}
+
+// OutcomePredictedModelDiagnostic and OutcomeActualModelDiagnostic are the
+// operator-facing explanations for an empty corpus model band — the ONE place
+// each sentence is written, because the corpus has two writers
+// (Scheduler.recordOutcome and the internal/ipc notifyComplete handler) and a
+// diagnostic that disagrees between them is a second, quieter drift.
+//
+// They exist because an empty band has THREE causes, not one, and the log text
+// used to assert the first:
+//
+//  1. nothing was predicted / the stage reported nothing — genuinely absent;
+//  2. (predicted half) the router recorded a recommendation the registry has no
+//     band for;
+//  3. (actual half) the stage DID serve a model, and its id has no registry
+//     band — every codex `gpt-5.5`, gemini, lm-studio and ollama workspace.
+//
+// Since OutcomeModelBand stopped passing unregistered ids through verbatim
+// (they book a guaranteed miss, which rule 2 above forbids), cause 3 is the
+// COMMON one on non-Claude workspaces — and "the feature-dev stage reported no
+// served model" told exactly those operators that the stage never ran. That is
+// the misdiagnosis this pair removes: an id is named, and the band-only rule is
+// stated, so "excluded" is distinguishable from "missing".
+//
+// Callers prefix their own context ("#12: " / "notifyComplete: #12 ") and log
+// the returned sentence verbatim.
+func OutcomePredictedModelDiagnostic(issueNumber int, predicted string) string {
+	if strings.TrimSpace(predicted) == "" {
+		return fmt.Sprintf(
+			"learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
+			issueNumber)
+	}
+	return fmt.Sprintf(
+		"learning outcome has no PREDICTED model — issue-%d.json recommended %q, which the model registry has no band for; the corpus pair is compared band to band (haiku|sonnet|opus|fable), so an unregistered id is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
+		issueNumber, predicted)
+}
+
+// OutcomeActualModelDiagnostic — see OutcomePredictedModelDiagnostic.
+func OutcomeActualModelDiagnostic(served string) string {
+	if strings.TrimSpace(served) == "" {
+		return fmt.Sprintf(
+			"learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
+			OutcomeModelStage)
+	}
+	return fmt.Sprintf(
+		"learning outcome has no ACTUAL model — the %s stage served %q, which the model registry has no band for; the corpus pair is compared band to band (haiku|sonnet|opus|fable), so an unregistered id (a local model, or a provider id the registry does not carry) is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
+		OutcomeModelStage, served)
 }
 
 // OutcomeSizeInput resolves the size term the router itself scored the issue

@@ -380,14 +380,23 @@ want to optimize for a specific dimension, copy one of these profiles into your
 | Sonnet | Reasoning, code generation       | Medium (~3x)   | medium         |
 | Opus   | Complex multi-file refactors     | Highest (~15x) | high           |
 
+> **These profiles pin models explicitly, so they need
+> `model_routing.mode: manual`.** The shipped default is `automatic`, where every
+> stage's model comes from the complexity router and `pipeline.stage_models` is
+> ignored. Each profile below sets the mode; deleting that line silently reverts
+> the whole table to router-chosen tiers. (`stage_efforts` is independent of the
+> mode and always applies.)
+
 ### Balanced (Shipped Default)
 
-The built-in defaults use Haiku for lightweight stages, Sonnet for reasoning
-stages, and medium/low effort. **No config file needed** — this is what you get
-out of the box.
+The shipped default is **`automatic`** routing: the complexity router picks the
+tier per run, the lightweight stages (`issue-pickup`, `pr-create`) start from
+Haiku, and effort is medium/low. **No config file needed** — this is what you get
+out of the box. The explicit form below reproduces roughly the same tiers as a
+static mapping, for operators who want the routing to stop moving.
 
 ```yaml
-# Shipped defaults — shown for reference, no config.yaml needed
+# The automatic default's tiers, pinned. Not needed unless you want them fixed.
 pipeline:
   stage_models:
     issue-pickup: haiku
@@ -395,9 +404,12 @@ pipeline:
     feature-dev: sonnet
     feature-validate: sonnet
     pr-create: haiku
-    pr-merge: haiku
+    # sonnet, not haiku (#197): the pr-merge LLM path only runs when the
+    # deterministic runner punted, i.e. on the hardest merges.
+    pr-merge: sonnet
 
 model_routing:
+  mode: manual
   stage_efforts:
     feature-planning: medium
     feature-dev: medium
@@ -418,9 +430,12 @@ pipeline:
     feature-dev: sonnet
     feature-validate: haiku
     pr-create: haiku
-    pr-merge: haiku
+    # haiku here is silently raised to sonnet at dispatch (#197) — the pr-merge
+    # LLM path only runs on deterministic punts. Spelled honestly.
+    pr-merge: sonnet
 
 model_routing:
+  mode: manual
   stage_efforts:
     feature-planning: low
     feature-dev: low
@@ -441,9 +456,10 @@ pipeline:
     feature-dev: opus
     feature-validate: sonnet
     pr-create: haiku
-    pr-merge: haiku
+    pr-merge: sonnet
 
 model_routing:
+  mode: manual
   stage_efforts:
     feature-planning: medium
     feature-dev: high
@@ -1269,12 +1285,37 @@ pipeline:
         disable_budget_ceiling: true
 ```
 
-`frontier` is the premium opt-in tier: it routes the reasoning stages to
-**Fable 5** (`claude-fable-5`, ~2× Opus) and keeps mechanical stages on Haiku.
-Automatic routing never selects Fable — `frontier` (or an explicit
-`model_routing.minimum_model: fable` / per-run override) is the only way in.
-Unlike `maximum`, `frontier` leaves the budget ceiling enabled. See
-[PERFORMANCE_MODES.md § When is Fable used over Opus?](PERFORMANCE_MODES.md#when-is-fable-used-over-opus).
+`frontier` is the premium opt-in tier: it widens the routing ceiling to
+**Fable 5** (`claude-fable-5`, ~2× Opus). It **pins nothing** — the router
+reaches Fable only on a heavy reasoning stage (`feature-planning`,
+`feature-dev`) at L/XL complexity, plumbing stays on Haiku, and
+`feature-validate` never exceeds Opus. (#19 removed the earlier
+"Fable pinned on every reasoning stage" behavior: it paid frontier rates for
+trivial work and empirically failed validation in dogfooding.) No other mode can
+route to Fable. Two knobs reach it from any mode because no mode clamps them —
+an explicit `pipeline.stage_models` entry (or its
+`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env override) and a per-run override.
+`model_routing.minimum_model: fable` is a floor, not an explicit model, and
+floors land inside the mode envelope: it reaches Fable only under `frontier`,
+and there only on `feature-planning` / `feature-dev` — the two stages the
+frontier ceiling is offered to. On `feature-validate` and the plumbing stages a
+`fable` floor is capped at Opus, in every mode. Unlike `maximum`, `frontier`
+leaves the budget ceiling enabled.
+
+Only `maximum` pins per stage (Opus everywhere, effort `high`). `efficiency`
+(`[haiku, sonnet]`), `elevated` (`[haiku, opus]`) and `frontier`
+(`[haiku, fable]`) are `[floor, ceiling]` **envelopes**: the router picks inside
+the band, and the ceiling also caps post-failure escalation, the
+`model_routing.minimum_model` floor and the `run.retryWithEscalation` forced
+tier, so a cost-capping mode actually caps. An explicit per-stage model
+(`pipeline.stage_models`, the manual-mode table, or the env override below) is
+the operator overriding the mode for that stage and is not clamped — but a floor
+still binds it, the ceiling still binds the raise, and the result is never
+**below** the model the operator named. So under `efficiency`,
+`stage_models.feature-dev: haiku` + `minimum_model.feature-dev: opus` dispatches
+Sonnet (the ceiling caps the raise), while `stage_models.feature-dev: opus` +
+`minimum_model.feature-dev: fable` dispatches Opus (the raise is discarded, the
+operator's own model stands).
 
 The active mode is normally driven by the status-bar QuickPick (writes
 `.nightgauge/performance-mode.yaml`); `pipeline.performance_mode.default`
@@ -1818,7 +1859,8 @@ Provider scale defaults (seeded from C1 pricing-table ratios — see
 | `ollama`     | 0.0           | _switches to time-based cap_                                     |
 
 **Cross-axis composition example.** `feature-dev` on `gemini` with the
-default `gemini-2.5-pro` model in `elevated` mode:
+`gemini-2.5-pro` model (the shipped default is `gemini-2.5-flash`) in
+`elevated` mode:
 
 ```
 $23.00 × 1.0 (no Claude family match) × 1.0 (elevated) × 0.4 (gemini) = $9.20
@@ -2774,6 +2816,15 @@ Go scheduler classifies a ceiling kill as the `budget_ceiling_hit` terminal kind
 Per-stage model routing using a 3-tier model strategy. Each pipeline stage can
 use a different model tier to balance cost and capability.
 
+> **Requires `model_routing.mode: manual` or `hybrid`.** In the default
+> `automatic` mode every stage defers to the complexity router and this table is
+> ignored — on **both** dispatch paths. It is also outranked by the `maximum`
+> performance mode, which pins Opus on every stage before this table is read
+> (the envelope modes — `efficiency`, `frontier` — pin nothing and honor it).
+> The per-stage environment variables below are the exception: they win in every
+> mode, ahead of the Maximum pin. See [model_routing.mode](#model_routing) and
+> [PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340).
+
 **3-Tier Model Strategy:**
 
 | Tier        | Model  | Cost (per MTok) | Used For                            |
@@ -2786,14 +2837,14 @@ Lightweight stages perform structured, template-driven tasks (JSON extraction,
 PR template filling, merge flow) that don't require advanced reasoning. Routing
 these to Haiku saves ~67% per stage compared to Sonnet.
 
-| Stage              | Default Model | Rationale                          |
-| ------------------ | ------------- | ---------------------------------- |
-| `issue-pickup`     | `haiku`       | Structured JSON extraction         |
-| `feature-planning` | `opus`        | Deep reasoning for plan design     |
-| `feature-dev`      | `opus`        | Complex code generation            |
-| `feature-validate` | `opus`        | Quality review and test validation |
-| `pr-create`        | `haiku`       | Template-based PR description      |
-| `pr-merge`         | `haiku`       | Review/merge flow management       |
+| Stage              | Default Model | Rationale                                                    |
+| ------------------ | ------------- | ------------------------------------------------------------ |
+| `issue-pickup`     | `haiku`       | Structured JSON extraction                                   |
+| `feature-planning` | `opus`        | Deep reasoning for plan design                               |
+| `feature-dev`      | `opus`        | Complex code generation                                      |
+| `feature-validate` | `opus`        | Quality review and test validation                           |
+| `pr-create`        | `haiku`       | Template-based PR description                                |
+| `pr-merge`         | `sonnet`      | Runs only on deterministic punts — the hardest merges (#197) |
 
 **Example:**
 
@@ -2805,7 +2856,7 @@ pipeline:
     feature-dev: opus
     feature-validate: opus
     pr-create: haiku
-    pr-merge: haiku
+    pr-merge: sonnet
 ```
 
 **Environment overrides (per-stage):**
@@ -2818,7 +2869,11 @@ export NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_CREATE=sonnet
 
 **Used by:**
 
-- All pipeline stages - Model selection for CLI invocation
+- All pipeline stages, on both dispatch paths — `stageBaseModel`
+  (`internal/orchestrator/dispatch_routing.go`) reads it for autonomous runs,
+  `getStageModel` (`utils/resolvers/stageResolver.ts`) for
+  HeadlessOrchestrator-driven ones. Both consult it only in `manual`/`hybrid`
+  mode, and both let the env var win outright (#340).
 - `skillRunner.ts` - Passes `--model` flag to Claude CLI when model differs from
   the default (sonnet)
 - Codex adapter - Translates shared tiers to OpenAI models before invoking
@@ -3284,14 +3339,17 @@ is a cross-cutting concern placed at the top level (alongside `pipeline`,
 
 **Model Routing Modes:**
 
-| Mode        | Behavior                                                            |
-| ----------- | ------------------------------------------------------------------- |
-| `manual`    | Static per-stage mapping (legacy behavior)                          |
-| `automatic` | AutoModelSelector (#730) determines model for every stage (default) |
-| `hybrid`    | AutoModelSelector runs, but explicit per-stage config overrides win |
+| Mode        | Behavior                                                                              |
+| ----------- | ------------------------------------------------------------------------------------- |
+| `manual`    | Static per-stage mapping — `pipeline.stage_models`, then the built-in per-stage table |
+| `automatic` | AutoModelSelector (#730) determines model for every stage (default)                   |
+| `hybrid`    | AutoModelSelector runs, but explicit per-stage config overrides win                   |
 
-In all modes, environment variable overrides
-(`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`) take highest priority.
+In all modes — and in every performance mode, ahead of the `maximum` pin —
+environment variable overrides (`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`) take
+highest priority. Both resolvers accept only the four registry bands
+(`haiku|sonnet|opus|fable`) there; any other value is ignored and the chain
+continues.
 
 **Complexity Thresholds:**
 
@@ -3313,6 +3371,12 @@ hybrid mode:     env var > config stage_models override > undefined (defer)
 Returning `undefined` signals "use AutoModelSelector" to the caller
 (skillRunner.ts). In manual mode, `undefined` is never returned — it always
 falls back to `DEFAULT_STAGE_MODELS`.
+
+The Go scheduler applies the same three rules for autonomous runs, in
+`stageConfiguredModel` (`internal/orchestrator/dispatch_routing.go`), so a mode
+change takes effect on every dispatch path (#340). Its "defer to the router"
+branch means the run's complexity-routed tier from `issue-{N}.json` rather than
+`AutoModelSelector`, which has no Go counterpart.
 
 **Effort Resolution (`--effort`):**
 
@@ -3435,37 +3499,64 @@ export NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV=high
 
 **Resolution Chain:**
 
-The full model resolution chain, implemented in `skillRunner.ts`, is:
+The full model resolution chain is:
 
 ```
-1.   Environment variable    NIGHTGAUGE_PIPELINE_STAGE_MODEL_*         → highest priority
-1.5. Lightweight stage default  issue-pickup, pr-create, pr-merge → haiku   → before AutoModelSelector
+0.   Performance-mode pin    maximum only (Opus, every stage)               → env override wins over it
+1.   Environment variable    NIGHTGAUGE_PIPELINE_STAGE_MODEL_*              → highest priority
 2.   Config stage override   pipeline.stage_models.<stage>                  → mode-aware
-3.   AutoModelSelector       complexity × stage matrix                      → automatic/hybrid only
-4.   Global default          pipeline.default_model                         → fallback
+2.5. Lightweight stage default  issue-pickup, pr-create → haiku             → before the router
+3.   Router                  complexity × stage matrix                      → automatic/hybrid only
+4.   Global default          ui.core.default_model                          → fallback
 5.   Hardcoded fallback      'sonnet'                                       → final safety net
 ```
 
-This chain applies identically in all three modes. The `mode` setting controls
-whether step 2 returns `undefined` (deferring to step 3) or a static value.
+This chain applies identically in all three `model_routing` modes. The `mode`
+setting controls whether step 2 returns nothing (deferring to step 3) or a
+static value — in `manual` it always answers, from `pipeline.stage_models` or
+the built-in per-stage table.
 
-Step 1.5 applies only when no environment variable override is set and the stage
-is one of the three lightweight stages (`issue-pickup`, `pr-create`,
-`pr-merge`). These stages perform structured, template-driven work (JSON
-extraction, PR description filling, merge flow) that does not require advanced
-reasoning, so they default to `haiku` without requiring any config entry. The
+**Which resolver runs it (#340).** Both do, and they agree by construction. The
+extension-driven path (`HeadlessOrchestrator`) runs `resolveModel` in
+`utils/skillRunner.ts`; the autonomous path (Go scheduler → IPC → extension, and
+Go scheduler → `ExecutionManager`) runs `resolveDispatchModel` in
+`internal/orchestrator/`, and on the IPC path the extension executes that value
+rather than resolving a second one. Step 3 is where they legitimately differ in
+INPUT — the extension re-runs `AutoModelSelector` per stage, Go applies the
+routed tier the router chose at pickup. Everything else is mirrored table for
+table; the agreement matrix is asserted twice, in
+`internal/orchestrator/dispatch_routing_mode_test.go` and
+`tests/utils/resolveModel.modeKnobAgreement.test.ts`. See
+[PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340)
+for the three extension-only mechanisms (adaptive-policy override, A/B
+assignment, `AutoModelSelector`) that are not consulted on an autonomous run.
+
+The performance mode wraps the whole chain: steps 2.5–5 are clamped into the
+stage's routed-tier envelope, and so is any later raise (post-failure
+escalation, the `model_routing.minimum_model` floor, a
+`run.retryWithEscalation` forced tier). Steps 0 and 1–2 are not clamped.
+
+Step 2.5 applies only when no environment variable override and no explicit
+stage model is set, and the stage is one of the two lightweight stages
+(`issue-pickup`, `pr-create`). These stages perform structured, template-driven
+work (JSON extraction, PR description filling) that does not require advanced
+reasoning, so they default to `haiku` without requiring any config entry.
+`pr-merge` was removed from the set in #197 — its LLM path runs only when the
+deterministic merge runner punts, i.e. exclusively on the hardest merges. The
 resolved source is annotated as `stage-default` in `ModelDecision.source`.
 
 **`ModelSource` values** (annotated on `ModelDecision.source` for
 observability):
 
-| Value           | Resolved by                                           |
-| --------------- | ----------------------------------------------------- |
-| `env`           | Step 1 — environment variable override                |
-| `stage-default` | Step 1.5 — built-in lightweight stage default (haiku) |
-| `config`        | Step 2 — explicit `pipeline.stage_models` entry       |
-| `auto`          | Step 3 — AutoModelSelector complexity × stage matrix  |
-| `default`       | Steps 4–5 — global default or hardcoded fallback      |
+| Value              | Resolved by                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `performance-mode` | Step 0 — a `maximum` stage pin                                |
+| `env`              | Step 1 — environment variable override                        |
+| `config`           | Step 2 — explicit `pipeline.stage_models` entry               |
+| `stage-default`    | Step 2.5 — built-in lightweight stage default (haiku)         |
+| `auto`             | Step 3 — AutoModelSelector complexity × stage matrix          |
+| `default`          | Steps 4–5 — `ui.core.default_model` or the hardcoded fallback |
+| `go-scheduler`     | the whole chain, resolved by Go and executed verbatim (#340)  |
 
 **Migration Guide:**
 
@@ -4513,8 +4604,8 @@ Core VSCode extension settings for authentication and paths.
 | ---------------- | ------ | ------------------------ | --------------------------------------------------------------------------------------------- |
 | `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental) |
 | `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                 |
-| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku                                                            |
-| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku (#626)                                        |
+| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                              |
+| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                 |
 | `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                          |
 | `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                              |
 

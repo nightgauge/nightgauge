@@ -17,10 +17,13 @@
 package ipc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,13 +424,13 @@ func TestServedDevModel_RefusalFallbackIsScopedToTheDevStage(t *testing.T) {
 	snap := state.NewRuntimeState("acme/widget", 1, "item")
 	snap.RecordStageModel(state.StagePRMerge, "claude-haiku-4-5-20251001")
 	snap.RecordModelRefusalFallback(state.StagePRMerge, "claude-sonnet-5", "claude-haiku-4-5-20251001", "safety")
-	if got := servedDevModel(rec, snap.Snapshot()); got != "" {
+	if got := servedDevModel(rec, snap.Snapshot(), "sonnet"); got != "" {
 		t.Errorf("servedDevModel = %q, want empty — a pr-merge refusal swap says nothing about the model feature-dev served", got)
 	}
 
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-5")
 	snap.RecordModelRefusalFallback(state.StageFeatureDev, "claude-sonnet-5", "claude-opus-5", "safety")
-	if got := servedDevModel(rec, snap.Snapshot()); got != "opus" {
+	if got := servedDevModel(rec, snap.Snapshot(), "sonnet"); got != "opus" {
 		t.Errorf("servedDevModel = %q, want %q — the model that actually served the refused dev turn is the one that produced the output (#91)", got, "opus")
 	}
 }
@@ -737,13 +740,17 @@ func TestOutcomePredictedSize_AbsenceComesFromMissingInputs(t *testing.T) {
 	}
 }
 
-// OutcomeModelBand has three outcomes and they must stay three: a registry-known
-// reference collapses to its band (so predicted "sonnet" and actual
-// "claude-sonnet-5" are comparable), an unknown model is passed through
-// VERBATIM (a user-defined local model is still attribution), and only an
-// absent model yields "". Collapsing "unknown model" into "" would relabel real
-// attribution as missing data.
-func TestOutcomeModelBand_KnownUnknownAndAbsentAreDistinct(t *testing.T) {
+// OutcomeModelBand speaks the corpus's ONE model vocabulary — registry bands —
+// and nothing else: a registry-known reference collapses to its band (so
+// predicted "sonnet" and actual "claude-sonnet-5" are comparable), and anything
+// with no band records "" so every consumer excludes the pair.
+//
+// The unregistered case reverses a pre-#340 rule that passed the id through
+// VERBATIM to "keep the attribution". The pair is compared for EQUALITY against
+// a band, so a verbatim id can only ever be a MISS — a measurement of nothing,
+// booked against the router. Attribution of what actually ran is kept where it
+// belongs: the run record's per-stage model_selection.
+func TestOutcomeModelBand_SpeaksBandsOrNothing(t *testing.T) {
 	if got := orchestrator.OutcomeModelBand("claude-sonnet-5"); got != "sonnet" {
 		t.Errorf("OutcomeModelBand(%q) = %q, want %q — a concrete id must normalize onto its band", "claude-sonnet-5", got, "sonnet")
 	}
@@ -751,11 +758,48 @@ func TestOutcomeModelBand_KnownUnknownAndAbsentAreDistinct(t *testing.T) {
 		t.Errorf("OutcomeModelBand(%q) = %q, want %q — the router's alias is already a band", "sonnet", got, "sonnet")
 	}
 	const local = "my-local-llm-7b"
-	if got := orchestrator.OutcomeModelBand(local); got != local {
-		t.Errorf("OutcomeModelBand(%q) = %q, want it passed through — an unregistered model is still attribution, and dropping it to \"\" reports real data as missing", local, got)
+	if got := orchestrator.OutcomeModelBand(local); got != "" {
+		t.Errorf("OutcomeModelBand(%q) = %q, want \"\" — an id with no registry band is not expressible in this pair's vocabulary, and recording it verbatim books a guaranteed routing MISS", local, got)
 	}
 	if got := orchestrator.OutcomeModelBand(""); got != "" {
 		t.Errorf("OutcomeModelBand(\"\") = %q, want \"\"", got)
+	}
+}
+
+// The extension writer must book a HIT for a run whose non-Claude adapter
+// served exactly the band the router predicted, and a MISS only for a real
+// divergence. The record carries the adapter's CONCRETE id (the extension
+// reports what it launched, and the scheduler re-records the stage on it), so
+// this is the boundary where the many-to-one adapter mapping is inverted.
+func TestServedDevModel_AdapterTranslationIsNotADivergence(t *testing.T) {
+	rec := loadCapturedRunRecord(t, "run-record.json")
+	rec.Stages = map[string]state.V2StageDetail{
+		string(orchestrator.OutcomeModelStage): {
+			ModelSelection: &state.V2ModelSelect{Model: "gpt-5.6-sol", Source: "go-scheduler"},
+		},
+	}
+
+	// codex: resolveCodexPipelineModel("opus") launches gpt-5.6-sol, which the
+	// registry lists as [opus, fable]. Collapsing to the strongest band books a
+	// MISS on every codex run the router got right.
+	if got := servedDevModel(rec, nil, "opus"); got != "opus" {
+		t.Errorf("servedDevModel(gpt-5.6-sol, predicted opus) = %q, want opus — the adapter launched the model the opus band maps to", got)
+	}
+	// The same id under a fable prediction is a fable serve: one model, two
+	// bands, and the request says which one was asked for.
+	if got := servedDevModel(rec, nil, "fable"); got != "fable" {
+		t.Errorf("servedDevModel(gpt-5.6-sol, predicted fable) = %q, want fable", got)
+	}
+	// A genuine divergence still books a MISS: gpt-5.6-terra serves sonnet only.
+	rec.Stages[string(orchestrator.OutcomeModelStage)].ModelSelection.Model = "gpt-5.6-terra"
+	if got := servedDevModel(rec, nil, "opus"); got != "sonnet" {
+		t.Errorf("servedDevModel(gpt-5.6-terra, predicted opus) = %q, want sonnet — the run really did serve a weaker band", got)
+	}
+	// A model with no registry band records nothing rather than guaranteeing a
+	// miss: gemini's configured default has no band mapping at all.
+	rec.Stages[string(orchestrator.OutcomeModelStage)].ModelSelection.Model = "gemini-2.0-flash"
+	if got := servedDevModel(rec, nil, "opus"); got != "" {
+		t.Errorf("servedDevModel(gemini-2.0-flash, predicted opus) = %q, want \"\" — an unbanded id is excluded, not scored", got)
 	}
 }
 
@@ -825,5 +869,94 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	netdown.TerminalFailureKind = orchestrator.TerminalKindNetworkUnavailable
 	if _, d := learningOutcomeFor(netdown, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
 		t.Errorf("network-unavailable record: decision = %s, want %s", d, outcomeSkipNetworkUnavailable)
+	}
+}
+
+// captureLog redirects the standard logger for the duration of fn.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	fn()
+	return buf.String()
+}
+
+// The extension writer's diagnostics have the SAME three causes as the
+// scheduler's, and must name the same one (#340). This is the surface an
+// operator debugging an empty ModelAccuracy actually reads: on a gemini,
+// lm-studio or ollama workspace the implementation stage DOES report a served
+// model — it just has no registry band — and "the feature-dev stage reported no
+// served model" tells them the stage never ran.
+func TestNotifyComplete_DiagnosesAnUnregisteredServedModel(t *testing.T) {
+	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 3401)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	out := captureLog(t, func() {
+		for _, msg := range []string{
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+		} {
+			if _, err := transition(t.Context(), []byte(msg)); err != nil {
+				t.Fatalf("notifyStageTransition: %v\nmsg=%s", err, msg)
+			}
+		}
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3401,"success":true,"totalDurationMs":1000}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	outcomes, exists := readOutcomes(t, dir)
+	if !exists || len(outcomes) != 1 {
+		t.Fatalf("expected exactly one learning outcome (exists=%v, n=%d)", exists, len(outcomes))
+	}
+	if outcomes[0].ActualModel != "" {
+		t.Fatalf("ActualModel = %q, want \"\" — gemini-2.0-flash has no registry band, so this test is not exercising the empty-band diagnostic", outcomes[0].ActualModel)
+	}
+
+	if strings.Contains(out, "reported no served model") {
+		t.Errorf("log says the stage reported no served model, but it reported gemini-2.0-flash:\n%s", out)
+	}
+	if !strings.Contains(out, "gemini-2.0-flash") {
+		t.Errorf("log does not name the served id, so the operator cannot tell which of the three causes fired:\n%s", out)
+	}
+}
+
+// Both writers emit the SAME sentence for the same cause. The corpus has two
+// writers and one reader; a diagnostic that differs between them is a second,
+// quieter drift of exactly the kind #340 removed.
+func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
+	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 3402)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	out := captureLog(t, func() {
+		for _, msg := range []string{
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+		} {
+			if _, err := transition(t.Context(), []byte(msg)); err != nil {
+				t.Fatalf("notifyStageTransition: %v", err)
+			}
+		}
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3402,"success":true,"totalDurationMs":1000}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	want := orchestrator.OutcomeActualModelDiagnostic("gemini-2.0-flash")
+	if !strings.Contains(out, want) {
+		t.Errorf("extension writer did not emit the shared diagnostic.\nwant substring: %s\ngot:\n%s", want, out)
 	}
 }

@@ -172,6 +172,19 @@ func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
 		{"concrete id normalizes to the same band as the alias", "claude-sonnet-4-6", "claude-sonnet-5", "sonnet", "sonnet"},
 		{"dev stage never reported a model", "sonnet", "", "sonnet", ""},
 		{"no router prediction", "", "claude-sonnet-5", "", "sonnet"},
+		// Adapter translation is not a routing decision (#340). Go dispatches
+		// the BAND; the extension launches the provider id the band maps to and
+		// reports it back, and the scheduler re-records the stage on it. A
+		// strongest-band collapse reads gpt-5.6-sol ([opus, fable]) as "fable"
+		// and books a MISS on every correctly-served codex run.
+		{"codex served the predicted band", "opus", "gpt-5.6-sol", "opus", "opus"},
+		{"gemini served the predicted band", "opus", "gemini-2.5-pro", "opus", "opus"},
+		{"the same id under a fable prediction is a fable serve", "fable", "gpt-5.6-sol", "fable", "fable"},
+		{"a genuinely weaker serve is still a miss", "opus", "gpt-5.6-terra", "opus", "sonnet"},
+		// No registry band → no measurement. Recording the id verbatim (the
+		// pre-#340 rule) guarantees a MISS the router never made.
+		{"gemini default has no band", "opus", "gemini-2.0-flash", "opus", ""},
+		{"a local model has no band", "sonnet", "my-local-llm-7b", "sonnet", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
