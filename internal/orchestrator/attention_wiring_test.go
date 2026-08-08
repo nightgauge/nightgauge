@@ -985,9 +985,9 @@ func TestProposedCeilingUSDIsOneRule(t *testing.T) {
 }
 
 // TestProducerAbandonedDispatchEmitsUnblock covers the one producer with no Go
-// counterpart (#307's force-clear funnel). Keyed per (repo, issue) and standing
-// with a constant fingerprint, so a slot that wedges repeatedly collapses onto
-// one card instead of one per force-clear.
+// counterpart (#307's force-clear funnel). Keyed per (repo, issue) so a slot
+// that wedges repeatedly collapses onto one card via Store.Raise's open-record
+// dedup, instead of one card per force-clear.
 func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
 	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev")
 
@@ -997,8 +997,16 @@ func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
 	if r.Kind != attention.KindUnblock || r.Severity != attention.SeverityBlockingRun {
 		t.Errorf("kind/severity = %q/%q, want unblock/blocking_run", r.Kind, r.Severity)
 	}
-	if !r.Standing || r.Fingerprint == "" {
-		t.Error("must be standing with a fingerprint — the wedge persists until someone deals with it")
+	// EVENT-SHAPED. The force-clear funnel observes a transition once; it does
+	// not re-answer "is this dispatch abandoned?" on a loop, which is the test
+	// docs/ATTENTION_PRODUCERS.md states. Declaring Standing would also opt this
+	// producer into ADR-015 §M suppression — and with no fingerprint that can
+	// move and no auto-resolve call site, the first human resolution would
+	// silence the (repo, issue) key permanently. See
+	// TestAbandonedDispatchReRaisesAfterAHumanResolution in internal/ipc.
+	if r.Standing || r.Fingerprint != "" {
+		t.Errorf("standing=%v fingerprint=%q: abandoned-dispatch is an EVENT — standing here "+
+			"inherits §M suppression it has no way to lapse", r.Standing, r.Fingerprint)
 	}
 	if want := "abandoned-dispatch:octocat/acme#42"; r.IdempotencyKey != want {
 		t.Errorf("idempotency_key = %q, want %q (per-issue, NOT per force-clear generation)", r.IdempotencyKey, want)
@@ -1006,9 +1014,8 @@ func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
 	// A second force-clear of the same issue must be the SAME key, or a wedged
 	// slot that keeps re-wedging buries the inbox.
 	again := BuildAbandonedDispatch("octocat/acme", 42, "run-2", "pr-create")
-	if again.IdempotencyKey != r.IdempotencyKey || again.Fingerprint != r.Fingerprint {
-		t.Errorf("repeat force-clear changed identity: key %q→%q fingerprint %q→%q",
-			r.IdempotencyKey, again.IdempotencyKey, r.Fingerprint, again.Fingerprint)
+	if again.IdempotencyKey != r.IdempotencyKey {
+		t.Errorf("repeat force-clear changed identity: key %q→%q", r.IdempotencyKey, again.IdempotencyKey)
 	}
 	retry := r.FindOption("retry")
 	if retry == nil || retry.Verb != attention.VerbAutonomousClearIssueFailures {
@@ -1062,6 +1069,31 @@ func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
 	for _, snap := range notBlocking {
 		if d := pmstages.Decide(snap); IsBranchProtectionPunt(d.Reason) {
 			t.Errorf("IsBranchProtectionPunt(%q) = true for %+v, want false", d.Reason, snap)
+		}
+	}
+
+	// IsBranchProtectionPunt over bare Decide() is NOT the whole gate, and this
+	// is the trap: a PR whose only blocker is a queued required check decides
+	// `dirty-merge-state: BLOCKED`, which IS a branch-protection punt by
+	// prefix — yet the Go runner never reaches that punt, because
+	// DeterministicRunner.Run tests MergeBlockedByPendingCI first and waits.
+	// Any surface reusing this predicate must apply the same precondition or it
+	// cards in-flight CI as a human-needed block (#297/#305).
+	pendingCI := []pmstages.PRViewSnapshot{
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+			StatusCheckRollup: []pmstages.PRStatusCheckRow{{Name: "ci", Conclusion: ""}}},
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "UNSTABLE",
+			StatusCheckRollup: []pmstages.PRStatusCheckRow{{Name: "ci", Conclusion: "PENDING"}}},
+	}
+	for _, snap := range pendingCI {
+		d := pmstages.Decide(snap)
+		if !IsBranchProtectionPunt(d.Reason) {
+			t.Errorf("premise changed: Decide(%+v) = %q is no longer a branch-protection punt, "+
+				"so the pending-CI precondition below is testing nothing", snap, d.Reason)
+		}
+		if !pmstages.MergeBlockedByPendingCI(snap) {
+			t.Errorf("MergeBlockedByPendingCI(%+v) = false, want true — in-flight CI would be "+
+				"carded as branch protection", snap)
 		}
 	}
 }

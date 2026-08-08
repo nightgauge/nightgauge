@@ -845,8 +845,33 @@ const ProducerAbandonedDispatch = "abandoned-dispatch"
 //
 // Keyed per (repo, issue), NOT per generation: a wedged slot that force-clears,
 // gets re-queued, and wedges again is one condition an operator has to deal
-// with once, not a new card per attempt. Standing with a constant fingerprint,
-// so repeat force-clears refresh silently instead of re-alerting.
+// with once, not a new card per attempt. Store.Raise's open-record dedup is
+// what collapses them — an open card for the key is updated in place.
+//
+// EVENT-SHAPED, NOT STANDING, and the distinction is load-bearing rather than
+// cosmetic (fixed in review; the first cut shipped Standing + a constant
+// fingerprint "abandoned:force-clear"). Two independent reasons:
+//
+//  1. The trigger site observes a TRANSITION once. forceClearStuckSlots fires
+//     from the abort deadline for one wedged slot; it does not re-answer "is
+//     this issue's dispatch abandoned?" on a loop. That is exactly the test
+//     docs/ATTENTION_PRODUCERS.md states for event vs standing.
+//  2. Standing carries a suppression rule this producer cannot satisfy.
+//     ADR-015 §M: a standing raise whose fingerprint equals the latest
+//     HUMAN-RESOLVED record for its key returns `suppressed` and writes
+//     nothing. A CONSTANT fingerprint can never move, resolved records are
+//     never pruned, and no sweep calls AutoResolveUnobserved/AutoResolveKey for
+//     this producer — so the first resolution silenced the (repo, issue) key
+//     forever. The failure loop was the card's own happy path: the operator
+//     clicks Retry → Store.Resolve marks it resolved and re-dispatches → the
+//     retried dispatch wedges again (the common case for a wedged worktree) →
+//     `suppressed`, and the operator is never told their retry died.
+//     TestAbandonedDispatchReRaisesAfterAHumanResolution pins the fix.
+//
+// Event shape gives the behaviour that was actually wanted at every step:
+// repeat force-clears while the card is OPEN update it in place (one card), a
+// resolved card's successor is a genuinely new fact and gets a new card, and an
+// EXPIRED predecessor is revived under its own id by findExpiredByKey.
 func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attention.DecisionRequest {
 	if stage == "" {
 		stage = "unknown"
@@ -873,20 +898,17 @@ func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attenti
 			Blocker:  "dispatch wedged past the abort deadline (#307 force-clear)",
 			TraceRef: runTraceRef(runID),
 		},
-		Standing: true,
-		// Constant: the condition is binary — this issue's dispatch was
-		// abandoned and nobody has dealt with it. A counter or a timestamp here
-		// would re-alert on every repeat force-clear, which is the spam-folder
-		// failure mode invariant 2 exists to prevent.
-		Fingerprint: "abandoned:force-clear",
 		Options: []attention.Option{
 			{ID: "retry", Label: "Retry", Verb: attention.VerbAutonomousClearIssueFailures,
 				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
 			noopOption("leave", "Leave for manual triage"),
 		},
 		DefaultAction: attention.ExpireNoop,
-		ExpiresAt:     standingExpiry(),
-		Steer:         &attention.Steer{Enabled: true, Hint: "Note what the wedged run left behind, or what to check first"},
+		// The same window branch-protection declares: both are blocking_run
+		// unblock cards naming work only a human can do, and neither has an
+		// auto-retraction path, so expiry is the only thing that clears them.
+		ExpiresAt: expiryFromNow(48 * time.Hour),
+		Steer:     &attention.Steer{Enabled: true, Hint: "Note what the wedged run left behind, or what to check first"},
 	}
 }
 

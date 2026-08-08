@@ -149,6 +149,14 @@ interface SlotHandle {
   rejectRun: (error: Error) => void;
   getState: ReturnType<typeof vi.fn>;
   stateDispose: ReturnType<typeof vi.fn>;
+  /**
+   * When set, `stateService.getState()` never settles. That is the ONE await
+   * inside `runSlotPipeline` that sits AFTER terminal boundary 1 takes the
+   * claim (`slot.terminalOutcomeDispatched = true`) and BEFORE the outcome
+   * callback fires — i.e. the exact shape of a run that reported its own
+   * outcome and then wedged in teardown.
+   */
+  wedgeAfterClaim: () => void;
 }
 
 /**
@@ -164,11 +172,25 @@ function createControllableFactory() {
       resolveRun = res;
       rejectRun = rej;
     });
-    const getState = vi.fn().mockResolvedValue({
+    const settledState = {
       tokens: { estimated_cost_usd: RUN_OUTCOMES.cancelled.cost_usd, input: 0, output: 0 },
-    });
+    };
+    let stateWedged = false;
+    const getState = vi
+      .fn()
+      .mockImplementation(() =>
+        stateWedged ? new Promise<never>(() => {}) : Promise.resolve(settledState)
+      );
     const stateDispose = vi.fn();
-    handles.set(issueNumber, { resolveRun, rejectRun, getState, stateDispose });
+    handles.set(issueNumber, {
+      resolveRun,
+      rejectRun,
+      getState,
+      stateDispose,
+      wedgeAfterClaim: () => {
+        stateWedged = true;
+      },
+    });
     return {
       orchestrator: {
         setWorktreeOverride: vi.fn(),
@@ -359,6 +381,48 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
       "Force-clear: attention.raise failed (fail-open) — no card for this wedge",
       expect.objectContaining({ issueNumber: 282 })
     );
+  });
+
+  it("does NOT card a run that already claimed its own outcome and wedged in teardown", async () => {
+    // `terminalOutcomeDispatched` is set at terminal boundary 1 on the RESOLVED
+    // path regardless of result.success — so a run that COMPLETED, possibly
+    // merging its PR, and then wedged in post-terminal teardown (an
+    // onSlotCompleted callback, cleanupSlot, a worktree removal blocked by a
+    // lingering process) is still in `slots` when the 30s deadline fires, with
+    // alreadyClaimed === true.
+    //
+    // The card's body asserts "the run never reported an outcome of its own"
+    // and its primary option is Retry → clearIssueFailures + rescan. Both are
+    // false here, and the log line two statements above the raise already says
+    // so (`runAlreadyClaimedItsOwnOutcome: true`). #307 introduced this flag to
+    // draw exactly that distinction; raising anyway discards it and produces
+    // the confident-wrong diagnostic docs/ATTENTION_PRODUCERS.md forbids.
+    const { factory, handles } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([repoQueueItem(282)]);
+    await manager.fillSlots();
+
+    // The run settles SUCCESSFULLY, takes the claim at boundary 1, and then
+    // wedges on the first await past it — so the slot is still in `slots` when
+    // the 30s deadline fires, with terminalOutcomeDispatched already true.
+    const handle = handles.get(282)!;
+    handle.wedgeAfterClaim();
+    handle.resolveRun({ success: true, completedStages: [], failedStage: undefined });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    // Premise: the force-clear really did run and really did see a claimed run.
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      "Force-clearing stuck slot — booking its terminal state (#307)",
+      expect.objectContaining({ issueNumber: 282, runAlreadyClaimedItsOwnOutcome: true })
+    );
+    // …and step 2 stood down, which is the whole reason the card must too.
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+    expect(attentionRaise).not.toHaveBeenCalled();
   });
 
   it("skips the card when the slot has no owner/name identity", async () => {

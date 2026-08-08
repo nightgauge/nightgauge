@@ -177,10 +177,28 @@ func buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, bool, error)
 			snap.StatusCheckRollup = append(snap.StatusCheckRollup,
 				pmstages.PRStatusCheckRow{Name: c.Name, Conclusion: c.Conclusion})
 		}
+		// IN-FLIGHT CI IS NOT BRANCH PROTECTION, and Decide() cannot tell you
+		// that. The Go path's pending-CI arm lives OUTSIDE the matrix, in
+		// DeterministicRunner.Run: it tests MergeBlockedByPendingCI first,
+		// waits out the bounded CI budget, and on exhaustion punts
+		// `ci-wait-timeout` — a reason IsBranchProtectionPunt deliberately does
+		// not match. Classifying with bare Decide() therefore read a queued
+		// required check as `dirty-merge-state: BLOCKED` and carded it as
+		// branch protection, telling the operator to fix a failing check that
+		// does not exist. That is not an edge case: prmerge.go's own comment
+		// records that pr-merge starts right after pr-create, so on repos whose
+		// CI takes minutes the FIRST snapshot is always BLOCKED/UNSTABLE with
+		// pending checks (#297).
+		//
+		// Gate on the exported predicate, never a re-implementation: three
+		// copies of this matrix is how the paths drift apart again (#257).
+		if pmstages.MergeBlockedByPendingCI(snap) {
+			return attention.DecisionRequest{}, false, nil
+		}
 		d := pmstages.Decide(snap)
 		if !d.Punt || !orchestrator.IsBranchProtectionPunt(d.Reason) {
-			// The PR is blocked by something a retry CAN clear (in-flight CI),
-			// or is not blocked at all. The Go path stays silent here too.
+			// Not blocked at all, or blocked by something outside the
+			// human-needed class. The Go path stays silent here too.
 			return attention.DecisionRequest{}, false, nil
 		}
 		return orchestrator.BuildBranchProtectionBlock(p.Repo, p.Issue, p.PR, p.RunID, d.Reason), true, nil

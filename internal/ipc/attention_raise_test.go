@@ -214,53 +214,147 @@ func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
 	}
 }
 
-// TestAttentionRaiseOutcomesAreFourDistinctValues — created / refreshed /
-// suppressed are three different facts and must not share a return value. A
-// caller that cannot tell "a card is on screen" from "the operator already
-// dismissed this exact condition" has no basis for deciding whether to also
-// toast.
-func TestAttentionRaiseOutcomesAreFourDistinctValues(t *testing.T) {
+// TestAbandonedDispatchReRaisesAfterAHumanResolution — a force-clear that
+// happens AFTER the operator dealt with the previous one is a NEW FACT and must
+// produce a card.
+//
+// This is the regression test for the defect the first cut of #305 shipped.
+// BuildAbandonedDispatch declared `Standing: true` with the constant
+// fingerprint "abandoned:force-clear", which opted it into ADR-015 §M: a
+// standing raise whose fingerprint equals the latest human-RESOLVED record for
+// its key returns `suppressed` and writes nothing. A constant fingerprint can
+// never move, resolved records are never pruned, and nothing calls
+// AutoResolveUnobserved / AutoResolveKey for this producer — so the FIRST
+// resolution silenced that (repo, issue) forever.
+//
+// The silenced path is the card's own designed flow, not a corner: the primary
+// option is Retry, which resolves the card and re-dispatches the issue into the
+// same preserved worktree; when that dispatch wedges again — the ordinary
+// outcome for a wedged worktree, and the entire reason #307's force-clear
+// funnel exists — the operator was never told. Verbatim, against the unfixed
+// builder:
+//
+//	first outcome=created id=dr_019fdf95-4952-78ae-b4a9-d61f2133a5b2
+//	second (new run, new stage) outcome=suppressed id=dr_019fdf95-4952-…
+//	open cards after second wedge: 0
+//
+// "leave" is used rather than "retry" only to keep the test off the verb
+// executor; §M keys on the RESOLVED state, not on which option produced it, so
+// both dismissals silenced the issue identically.
+func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
 	s := newAttentionTestServer(t)
-	// abandoned-dispatch is STANDING with a constant fingerprint, so it can
-	// exercise refresh and suppression; budget-ceiling (event-shaped) covers
-	// created/updated in the dedup test above.
 	p := AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
 		RunID: "run-1", Stage: "feature-dev",
 	}
 
-	created := mustRaise(t, s, p)
-	if created.Outcome != string(attention.OutcomeCreated) {
-		t.Fatalf("first outcome = %q, want created", created.Outcome)
+	first := mustRaise(t, s, p)
+	if first.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("first outcome = %q, want created", first.Outcome)
 	}
-
-	refreshed := mustRaise(t, s, p)
-	if refreshed.Outcome != string(attention.OutcomeRefreshed) {
-		t.Errorf("re-observed standing outcome = %q, want refreshed (silent)", refreshed.Outcome)
-	}
-
-	// The operator resolves it, then the wedge recurs unchanged: ADR-015 §M
-	// says do not hand it straight back.
-	if _, err := s.attentionStore().Resolve(context.Background(), created.ID, "leave", "octocat", "", "", s); err != nil {
+	if _, err := s.attentionStore().Resolve(context.Background(), first.ID, "leave", "octocat", "", "", s); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	before, _ := filepath.Glob(filepath.Join(s.attentionStore().Dir(), "dr_*.json"))
 
-	suppressed := mustRaise(t, s, p)
-	if suppressed.Outcome != string(attention.OutcomeSuppressed) {
-		t.Errorf("re-raise after resolve outcome = %q, want suppressed", suppressed.Outcome)
+	// A genuinely different wedge: another dispatch, another stage.
+	p.RunID = "run-2"
+	p.Stage = "pr-create"
+	second := mustRaise(t, s, p)
+	if second.Outcome != string(attention.OutcomeCreated) {
+		t.Errorf("force-clear after a resolution = %q, want created — the operator's retry "+
+			"died and nothing told them", second.Outcome)
 	}
-	if suppressed.ID != created.ID {
-		t.Errorf("suppressed id = %q, want the resolved card's id %q", suppressed.ID, created.ID)
+	open, err := s.attentionStore().List(attention.ListFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
 	}
-	after, _ := filepath.Glob(filepath.Join(s.attentionStore().Dir(), "dr_*.json"))
-	if len(after) != len(before) {
-		t.Errorf("suppressed raise wrote a file: %d records before, %d after", len(before), len(after))
+	if len(open) != 1 {
+		t.Fatalf("open cards after the second wedge = %d, want 1", len(open))
 	}
-	// Open inbox is empty: suppression must not resurrect the resolved card.
-	open, _ := s.attentionStore().List(attention.ListFilter{})
-	if len(open) != 0 {
-		t.Errorf("open requests after suppression = %d, want 0", len(open))
+	if open[0].Context.Stage != "pr-create" {
+		t.Errorf("open card stage = %q, want the SECOND wedge's stage", open[0].Context.Stage)
+	}
+}
+
+// TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard — the property the
+// standing declaration was reaching for, obtained the way an EVENT gets it:
+// Store.Raise updates the open record for the key in place. A slot that wedges,
+// is re-queued, and wedges again is one thing to deal with, not a card per
+// attempt.
+func TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard(t *testing.T) {
+	s := newAttentionTestServer(t)
+	p := AttentionRaiseParams{
+		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
+		RunID: "run-1", Stage: "feature-dev",
+	}
+
+	first := mustRaise(t, s, p)
+	if first.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("first outcome = %q, want created", first.Outcome)
+	}
+
+	p.RunID = "run-2"
+	p.Stage = "pr-create"
+	second := mustRaise(t, s, p)
+	if second.Outcome != string(attention.OutcomeUpdated) {
+		t.Errorf("repeat force-clear while the card is open = %q, want updated", second.Outcome)
+	}
+	if second.ID != first.ID {
+		t.Errorf("second id = %q, want the open card's id %q", second.ID, first.ID)
+	}
+	files, err := filepath.Glob(filepath.Join(s.attentionStore().Dir(), "dr_*.json"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("materialized records = %d, want 1 — a re-wedge spawned a second card", len(files))
+	}
+	// The refresh carries the LATEST wedge, not the first one's stale stage.
+	persisted := onlyOpenRequest(t, s)
+	if persisted.Context.Stage != "pr-create" {
+		t.Errorf("stage = %q, want the most recent wedge's stage", persisted.Context.Stage)
+	}
+}
+
+// TestNoRaiseableProducerIsStandingWithoutRetraction is the structural fence
+// around the defect above.
+//
+// STANDING is not a severity dial — it is a contract with two obligations
+// (docs/ATTENTION_PRODUCERS.md, "Run-scoped producers"): a fingerprint that
+// MOVES when the underlying condition moves, and a trigger site that calls
+// autoResolveAttention / AutoResolveKey with what it just observed so the card
+// retracts when the condition clears. A producer raised over IPC has neither by
+// construction: `attention.raise` is a one-shot report from a surface that
+// observed a transition, with no scan to reconcile against. Declaring Standing
+// there inherits §M's "a human resolved this exact condition, do not hand it
+// back" rule with no way to ever lapse it.
+//
+// So the rule for this allowlist is flat: no standing producers. If a genuinely
+// standing condition ever needs the raise verb, this test is where the
+// retraction story has to be written down first.
+func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
+	samples := map[string]AttentionRaiseParams{
+		ProducerBudgetCeiling: {Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 1,
+			RunID: "run-1", CostUSD: 20, CeilingUSD: 10},
+		ProducerBranchProtection: {Producer: ProducerBranchProtection, Repo: "octocat/acme", Issue: 1,
+			RunID: "run-1", PR: 2, PRState: "OPEN", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
+		ProducerAbandonedDispatch: {Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 1,
+			RunID: "run-1", Stage: "feature-dev"},
+	}
+	for _, producer := range RaiseableProducers() {
+		p, ok := samples[producer]
+		if !ok {
+			t.Fatalf("producer %q is raiseable but has no sample here — add one and state its "+
+				"standing/retraction story", producer)
+		}
+		req, applicable, err := buildRaise(p)
+		if err != nil || !applicable {
+			t.Fatalf("buildRaise(%s): applicable=%v err=%v — the sample must produce a card", producer, applicable, err)
+		}
+		if req.Standing {
+			t.Errorf("%s declares Standing over the raise verb, which has no scan to auto-resolve "+
+				"against: the first human resolution suppresses it forever (ADR-015 §M)", producer)
+		}
 	}
 }
 
@@ -360,6 +454,79 @@ func TestAttentionRaiseBranchProtectionClassifiesDaemonSide(t *testing.T) {
 				PRState: "CLOSED", Mergeable: "UNKNOWN", MergeStateStatus: "UNKNOWN",
 			},
 			wantRaised: false,
+		},
+		// --- in-flight CI: the case bare Decide() gets WRONG -----------------
+		//
+		// A queued required check makes an otherwise-clean PR BLOCKED, which
+		// Decide() reasons as `dirty-merge-state: BLOCKED` and
+		// IsBranchProtectionPunt matches by prefix. The Go runner never reaches
+		// that punt — DeterministicRunner.Run tests MergeBlockedByPendingCI
+		// first, waits the bounded budget, and on timeout punts
+		// `ci-wait-timeout`, which IsBranchProtectionPunt does not match. The
+		// raise handler applies the SAME predicate, so this is not_applicable
+		// on both paths.
+		//
+		// This is not a rare shape. prmerge.go: pr-merge starts immediately
+		// after pr-create, so on repos whose CI takes minutes the first
+		// snapshot is ALWAYS BLOCKED/UNSTABLE with pending checks (#297).
+		// Without the exclusion, every such run got a blocking_run card with a
+		// 48h TTL and no auto-resolve, saying "Fix the failing check / approval
+		// on GitHub" about CI that was about to go green on its own.
+		{
+			name: "a queued required check (BLOCKED, null conclusion) is in-flight CI, not branch protection",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+				ReviewDecision: "",
+				// "" is what GitHub's null conclusion projects to — the wire
+				// value that means "has not concluded".
+				Checks: []AttentionRaiseCheck{{Name: "build-and-test", Conclusion: ""}},
+			},
+			wantRaised: false,
+		},
+		{
+			name: "a pending optional check (UNSTABLE) is in-flight CI, not branch protection",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "UNSTABLE",
+				Checks: []AttentionRaiseCheck{
+					{Name: "lint", Conclusion: "SUCCESS"},
+					{Name: "e2e", Conclusion: "PENDING"},
+				},
+			},
+			wantRaised: false,
+		},
+		{
+			name: "a FAILED check alongside a pending one is a hard blocker, card it",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+				Checks: []AttentionRaiseCheck{
+					{Name: "build-and-test", Conclusion: "FAILURE"},
+					{Name: "e2e", Conclusion: ""},
+				},
+			},
+			wantRaised: true,
+			// Decide reports the merge state before it walks the checks, so the
+			// reason names the state — the card is still correct that a human
+			// is needed, which is what the gate decides.
+			wantReason: "dirty-merge-state: BLOCKED",
+		},
+		{
+			name: "review required while CI is still pending will not clear by waiting",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+				ReviewDecision: "REVIEW_REQUIRED",
+				Checks:         []AttentionRaiseCheck{{Name: "build-and-test", Conclusion: ""}},
+			},
+			wantRaised: true,
+			wantReason: "dirty-merge-state: BLOCKED",
+		},
+		{
+			name: "BLOCKED with no pending check at all is a real branch-protection block",
+			params: AttentionRaiseParams{
+				PRState: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED",
+				Checks: []AttentionRaiseCheck{{Name: "lint", Conclusion: "SUCCESS"}},
+			},
+			wantRaised: true,
+			wantReason: "dirty-merge-state: BLOCKED",
 		},
 	}
 

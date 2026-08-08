@@ -50,6 +50,24 @@ vi.mock("fs", async () => {
   };
 });
 
+/**
+ * The `gh pr view --json state,statusCheckRollup,mergeable,mergeStateStatus,
+ * reviewDecision` payload the deterministic merge fallback reads. Mutable so a
+ * test can hand it a REAL in-flight-CI shape — GitHub emits `conclusion: null`
+ * for a check that has not concluded, and that null is exactly the value the
+ * projection used to destroy.
+ */
+const { ghPrViewPayload } = vi.hoisted(() => ({
+  ghPrViewPayload: {
+    current: {
+      state: "MERGED",
+      statusCheckRollup: [] as Array<Record<string, unknown>>,
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    } as Record<string, unknown>,
+  },
+}));
+
 // Mock child_process so preCheckAuth/preCheckIssue resolve without a real gh
 // CLI. No labels on the issue — the pre-flight budget estimate block (which
 // only fires when preCheck.labels.length > 0) stays out of scope so these
@@ -106,12 +124,7 @@ vi.mock("child_process", async () => {
     // gh pr view <N> --json state,statusCheckRollup,... — verifyPostMergeState
     if (args && args[0] === "pr" && args[1] === "view") {
       return Promise.resolve({
-        stdout: JSON.stringify({
-          state: "MERGED",
-          statusCheckRollup: [],
-          mergeable: "MERGEABLE",
-          mergeStateStatus: "CLEAN",
-        }),
+        stdout: JSON.stringify(ghPrViewPayload.current),
         stderr: "",
       });
     }
@@ -290,6 +303,12 @@ describe("HeadlessOrchestrator run-scoped attention raises (Issue #305)", () => 
       debug: vi.fn(),
     } as unknown as Logger;
     ceilingConfigRef = { current: baseCeilingConfig(75) };
+    ghPrViewPayload.current = {
+      state: "MERGED",
+      statusCheckRollup: [],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    };
     vi.spyOn(incrediConfig, "getPipelineCeilingConfig").mockImplementation(
       () => ceilingConfigRef.current
     );
@@ -409,6 +428,59 @@ describe("HeadlessOrchestrator run-scoped attention raises (Issue #305)", () => 
     // No prose anywhere in the payload: every string sent is a GitHub enum
     // value or an identifier.
     expect(JSON.stringify(raised)).not.toContain("blocked by");
+  });
+
+  it('projects an in-flight check\'s null conclusion as "", not a placeholder', async () => {
+    // THE SIGNAL THE DAEMON NEEDS. This fallback takes ONE `gh pr view` sample
+    // with no CI wait, and pr-merge starts right after pr-create — so on a repo
+    // whose CI takes minutes the sample is routinely BLOCKED/UNSTABLE with
+    // checks still queued (#297). The daemon distinguishes that from a real
+    // branch-protection block with `stages.MergeBlockedByPendingCI`, which keys
+    // on a conclusion of "" or "PENDING".
+    //
+    // Coercing GitHub's `conclusion: null` to "UNKNOWN" (the shipped bug)
+    // made this payload unable to express "CI is still running": the daemon
+    // classified the queued check as `dirty-merge-state: BLOCKED` and raised a
+    // 48h blocking_run card telling the operator to fix a failing check that
+    // did not exist, on a PR that was about to merge itself.
+    //
+    // The rows below are the real `gh pr view --json statusCheckRollup` shapes:
+    // a CheckRun in progress (null conclusion), a concluded CheckRun, and a
+    // StatusContext, which has no `conclusion` key at all.
+    ghPrViewPayload.current = {
+      state: "OPEN",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "",
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "build-and-test", status: "IN_PROGRESS", conclusion: null },
+        { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "StatusContext", context: "ci/legacy", state: "PENDING" },
+      ],
+    };
+
+    const mockState = createMockStateService(makeStateAroundFeatureDev());
+    const orchestrator = new HeadlessOrchestrator(mockState, mockLogger, {
+      contextFileWaitMs: 0,
+    });
+    orchestrator.setRepoOverride("octocat/acme");
+
+    const fb = await (
+      orchestrator as unknown as {
+        tryDeterministicMergeFallback(
+          pr: number,
+          issue: number,
+          cwd: string
+        ): Promise<{ merged: boolean; snapshot?: { checks: Array<{ conclusion: string }> } }>;
+      }
+    ).tryDeterministicMergeFallback(91, 257, "/tmp");
+
+    expect(fb.merged).toBe(false);
+    expect(fb.snapshot?.checks.map((c) => c.conclusion)).toEqual(["", "SUCCESS", ""]);
+    // The exact string the bug substituted. It is not a GitHub conclusion
+    // value at all, and it is indistinguishable from a check that reported
+    // something the projection did not recognise.
+    expect(JSON.stringify(fb.snapshot?.checks)).not.toContain("UNKNOWN");
   });
 
   it("skips the raise entirely when no repo identity resolves", async () => {

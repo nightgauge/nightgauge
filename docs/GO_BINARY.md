@@ -1547,11 +1547,32 @@ any process with socket access mint a legitimate-looking card offering
 `issue.close` or `budget.raiseCeiling` on an arbitrary issue and wait for the
 operator to click it.
 
-| Producer             | Required params                            | Notes                                                                                                                            |
-| -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `budget-ceiling`     | `costUsd`, `ceilingUsd`                    | The proposed higher ceiling is derived daemon-side by `orchestrator.ProposedCeilingUSD`, so both paths offer the same number     |
-| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire                             |
-| `abandoned-dispatch` | (none beyond repo/issue)                   | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) |
+| Producer             | Required params                            | Notes                                                                                                                                                                |
+| -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `budget-ceiling`     | `costUsd`, `ceilingUsd`                    | The proposed higher ceiling is derived daemon-side by `orchestrator.ProposedCeilingUSD`, so both paths offer the same number                                         |
+| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire. In-flight CI is excluded first (see below)                     |
+| `abandoned-dispatch` | (none beyond repo/issue)                   | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) when the dispatch booked no outcome |
+
+**In-flight CI is not branch protection, and `Decide` alone cannot tell you
+that.** The Go pr-merge runner's pending-CI arm lives outside the matrix:
+`DeterministicRunner.Run` tests `stages.MergeBlockedByPendingCI` first, waits
+out a bounded CI budget, and on exhaustion punts `ci-wait-timeout` — a reason
+`IsBranchProtectionPunt` deliberately does not match. `attention.raise` applies
+the same exported predicate before classifying, because pr-merge starts
+immediately after pr-create and on repos whose CI takes minutes the first
+snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297).
+Without the exclusion those runs got a `blocking_run` card with a 48-hour TTL
+telling the operator to fix a check that was about to go green on its own. This
+also means `checks[].conclusion` must reach the daemon un-coerced: `""` is how
+an in-flight check is spelled, and a placeholder in its place is a lost signal.
+
+**Every raiseable producer is EVENT-shaped**, enforced by
+`TestNoRaiseableProducerIsStandingWithoutRetraction`. Standing carries a
+retraction contract (a fingerprint that moves plus an `AutoResolveUnobserved`
+call at the end of a scan) that a one-shot raise from a surface cannot satisfy;
+declaring it inherits §M suppression that can never lapse, so the first human
+resolution silences that `idempotency_key` forever. Repeat observations still
+collapse onto one card — that is `Raise`'s open-record dedup, not standing.
 
 `runId` is supplied by the **caller**, deliberately: resolving it daemon-side
 from the runtime registry would add a reader of the bare-issue-number keying
@@ -1566,6 +1587,9 @@ already resolved this exact standing condition and nothing was shown — ADR-015
 §M), and `not_applicable` (the daemon evaluated the producer's own precondition
 and it does not hold, e.g. a pr-merge punt that turned out to be in-flight CI
 rather than branch protection). A failure is an **error**, never an outcome.
+`refreshed` and `suppressed` are `Store.Raise` outcomes the verb reports
+faithfully but, with every raiseable producer event-shaped, cannot currently
+produce; they exist so a caller reading the field never has to guess.
 
 Three run-scoped producers remain Go-only, with reasons recorded in
 `internal/orchestrator/testdata/terminal_behaviors.json`: `auth-preflight`,

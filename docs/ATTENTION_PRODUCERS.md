@@ -336,11 +336,35 @@ Two rules on that wiring:
 - **Send structured inputs, classify daemon-side.** If Go decides the condition
   from a machine value (`stages.Decide`'s reason codes, a gate verdict), send
   that value, not the extension's own prose rendering of it. Two renderers put
-  two different sentences on the same condition with nothing failing.
+  two different sentences on the same condition with nothing failing. Send the
+  value **un-coerced**: an in-flight check's `conclusion` is `null` on the wire
+  and `""` in the projection, and substituting a friendly placeholder for it
+  makes the payload unable to express the very state the classifier keys on.
+- **Share the whole precondition, not just the classifier.** A pure decision
+  function is rarely the entire Go rule — `stages.Decide` says
+  `dirty-merge-state: BLOCKED` for a PR whose only blocker is a queued required
+  check, and the Go runner never acts on that punt because
+  `stages.MergeBlockedByPendingCI` intercepts first and waits out CI. A surface
+  that reuses `Decide` and not that predicate reproduces the classifier and
+  loses the guard, which is the same dual-path drift (#257) with the sign
+  flipped. Export the predicate and call it; never re-implement it — a third
+  copy of a matrix is a third thing to keep in sync.
 
 If the extension does NOT observe it, say so in the `run-scoped-attention` row
 of `internal/orchestrator/testdata/terminal_behaviors.json` with a reason. A
 Go-only producer is a legitimate choice; an undeclared one is a silent gap.
+
+**A producer raised over `attention.raise` is an EVENT, and the allowlist
+enforces it** (`TestNoRaiseableProducerIsStandingWithoutRetraction`). `Standing`
+is not a severity dial; it is a contract with two obligations (below), and a
+one-shot report from a surface that observed a transition can satisfy neither —
+there is no scan to reconcile against. Declaring it anyway inherits ADR-015 §M's
+"a human already resolved this exact condition, do not hand it back" rule with
+nothing that can ever lapse it, and the producer goes permanently silent for
+that key on the operator's first dismissal. Event shape gives what a
+re-observation actually needs anyway: `Raise` updates the open record for the
+key in place (one card per condition), while a recurrence _after_ a resolution —
+a new fact — gets a new card.
 
 A genuine event needs no fingerprint: it is observed once rather than
 reconciled. If instead your trigger site re-answers the same question on every

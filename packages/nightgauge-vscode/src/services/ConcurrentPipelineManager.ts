@@ -2822,7 +2822,22 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // cleanupSlot because that disposes the state service; the raise itself
     // does not need it, but ordering the notification ahead of teardown keeps
     // the sequence readable and means a future field read here is still valid.
-    await this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage);
+    //
+    // GATED ON THE SAME FLAG STEP 2 IS, and for the same reason (fixed in
+    // review). `alreadyClaimed` means the run reached its OWN terminal boundary
+    // and took the claim — it reported an outcome, possibly a SUCCESS whose PR
+    // is merged, and merely wedged afterwards in teardown (an onSlotCompleted
+    // callback, cleanupSlot, a worktree removal blocked by a lingering
+    // process). The card's body asserts "the run never reported an outcome of
+    // its own" and its PRIMARY option re-dispatches the issue; on a claimed
+    // dispatch both are false, and #307 introduced this flag precisely to draw
+    // that distinction. docs/ATTENTION_PRODUCERS.md: say only what you
+    // observed — a specific, confident, wrong diagnostic is worse than none.
+    // A slow teardown after a booked outcome is a different condition and has
+    // no producer; inventing one here would be the same mistake twice.
+    if (!alreadyClaimed) {
+      await this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage);
+    }
 
     try {
       await this.cleanupSlot(slot, /* preserveWorktree */ true, /* deleteBranch */ false);
@@ -2941,11 +2956,24 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       "abort deadline force-cleared a stranded reservation"
     );
 
-    // #305: same card as the slot arm. A dispatch that wedged inside worktree
-    // creation is abandoned exactly as much as one that wedged mid-stage, and
-    // giving only one arm the notification is the asymmetry this fence exists
-    // to prevent. No stage: the pipeline never started one.
-    await this.raiseAbandonedDispatchCard(reservation.repo, issueNumber, undefined);
+    // #305: same card as the slot arm, and gated the same way. A dispatch that
+    // wedged inside worktree creation is abandoned exactly as much as one that
+    // wedged mid-stage, and giving only one arm the notification is the
+    // asymmetry this fence exists to prevent — but `booked === false` means the
+    // dispatch already claimed and fired its own outcome, which is the one
+    // thing the card says did not happen. No stage: the pipeline never started
+    // one.
+    //
+    // On today's code `booked` is always true here: both `claimReservationOutcome`
+    // call sites in `startSlotInner` are followed immediately by `return
+    // "failed"`, whose `finally` releases the reservation, so a claimed
+    // reservation is gone before the deadline can see it. The guard is the
+    // structural half of the slot arm's, not dead weight — the invariant it
+    // encodes ("only card a dispatch that reported nothing") must not depend on
+    // which unwind path a future edit adds an await to.
+    if (booked) {
+      await this.raiseAbandonedDispatchCard(reservation.repo, issueNumber, undefined);
+    }
 
     // The `reservedSlots` entry is deliberately LEFT IN PLACE. It is what stops
     // a re-dispatch from colliding with the still-running `startSlot`, and that

@@ -167,7 +167,7 @@
     },
     {
       "name": "abandoned-dispatch-attention",
-      "note": "EXTENSION-ONLY BY DESIGN (#305, closing the gap #307 named). A dispatch the abort deadline force-cleared is booked as terminal but reported nothing durable — its only surfacing was a transient Stop toast and a warn log, and #307's own ledger listed run-scoped-attention as the reason. Both arms of the force-clear funnel now raise the card, so a wedge inside worktree creation is as visible as one mid-stage. Keyed per (repo, issue) and STANDING with a constant fingerprint: a slot that wedges, is re-queued, and wedges again collapses onto one card instead of one per attempt. The card deliberately carries NO run_id — at force-clear time Go mints the RunID and the extension has no verb to ask for one, and the wedged run's run-state.json may already be archived; an empty run id is a handled case daemon-side, and synthesising one would put a fabricated identity into the audit trail. #370 is what improves this later.",
+      "note": "EXTENSION-ONLY BY DESIGN (#305, closing the gap #307 named). A dispatch the abort deadline force-cleared is booked as terminal but reported nothing durable — its only surfacing was a transient Stop toast and a warn log, and #307's own ledger listed run-scoped-attention as the reason. Both arms of the force-clear funnel now raise the card, so a wedge inside worktree creation is as visible as one mid-stage.\n\nRAISED ONLY WHEN THE DISPATCH DID NOT CLAIM ITS OWN OUTCOME — the same `alreadyClaimed` / `booked` flag that gates step 2 of the bookkeeping. A claimed dispatch reported an outcome (possibly a SUCCESS whose PR merged) and merely wedged in post-terminal teardown; the card's body says the run never reported one and its primary option re-dispatches the issue, so raising it there would be a confident wrong diagnostic on the exact distinction #307 introduced the flag to draw. A slow teardown after a booked outcome is a different condition with no producer today.\n\nKeyed per (repo, issue) and EVENT-shaped: a slot that wedges, is re-queued, and wedges again collapses onto one card via Store.Raise's open-record dedup. NOT standing — standing would inherit ADR-015 §M suppression (a raise whose fingerprint matches the latest human-RESOLVED record for the key writes nothing), and with a constant fingerprint, no pruning of resolved records and no auto-resolve call site, the operator's FIRST dismissal — including clicking the card's own Retry — silenced that issue permanently. The card deliberately carries NO run_id — at force-clear time Go mints the RunID and the extension has no verb to ask for one, and the wedged run's run-state.json may already be archived; an empty run id is a handled case daemon-side, and synthesising one would put a fabricated identity into the audit trail. #370 is what improves this later.",
       "go": {
         "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare a run abandoned while that defer is still owed. There is no Go force-clear funnel, and therefore no Go condition to card."
       },
@@ -329,11 +329,14 @@
         "PERFORMED (added by #305) (1):",
         "  abandoned-dispatch-attention— BOTH arms raise the `abandoned-dispatch` Action Center card through",
         "                                the `attention.raise` IPC verb, so a force-cleared dispatch survives",
-        "                                the Stop toast. Standing and keyed per (repo, issue), so repeat",
-        "                                wedges of one issue collapse onto one card. Fail-open and",
-        "                                never-throwing: a raise failure here would abort the exactly-once",
-        "                                bookkeeping this funnel exists to guarantee. Carries no run_id — see",
-        "                                the abandoned-dispatch-attention row.",
+        "                                the Stop toast. Gated on the SAME claim flag step 2 uses: a dispatch",
+        "                                that booked its own outcome and then wedged in teardown gets no card,",
+        "                                because the card says it never reported one. Event-shaped and keyed",
+        "                                per (repo, issue), so repeat wedges of one issue collapse onto one",
+        "                                card while a wedge AFTER a human dealt with the last one still",
+        "                                speaks up. Fail-open and never-throwing: a raise failure here would",
+        "                                abort the exactly-once bookkeeping this funnel exists to guarantee.",
+        "                                Carries no run_id — see the abandoned-dispatch-attention row.",
         "",
         "NOT PERFORMED — real gaps, owned elsewhere (2):",
         "  terminal-kind-classification— the error handed to onSlotFailed is byte-identical to the SETTLED Stop",
@@ -430,7 +433,7 @@
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin force-clear-funnel",
       "end": "terminal-parity:end force-clear-funnel",
-      "sha256": "b525a5c99831ab887af8eff91a9346ff73936badfef2440026810ea28726b3e0"
+      "sha256": "528e0350bd2e4497efda4c285a3bb5942e5869c94960eb438f9bf1f7f041feb2"
     }
   ]
 }

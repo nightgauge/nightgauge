@@ -1541,7 +1541,16 @@ type AttentionRaiseParams struct {
 // AttentionRaiseCheck is one statusCheckRollup row, mirroring
 // stages.PRStatusCheckRow.
 type AttentionRaiseCheck struct {
-	Name       string `json:"name"`
+	Name string `json:"name"`
+	// Conclusion is SUCCESS | FAILURE | ERROR | NEUTRAL | SKIPPED, or the EMPTY
+	// STRING for a check that has not concluded. Empty is the load-bearing
+	// value, not a missing one: GitHub returns a null conclusion for an
+	// in-flight check, and stages.MergeBlockedByPendingCI keys on ""/"PENDING"
+	// to tell "CI is still running, this will clear itself" from "a human must
+	// fix something". A caller that coerces null to a placeholder like
+	// "UNKNOWN" makes the wire payload unable to express in-flight CI, and the
+	// daemon then cards a still-running required check as a branch-protection
+	// block.
 	Conclusion string `json:"conclusion"`
 }
 

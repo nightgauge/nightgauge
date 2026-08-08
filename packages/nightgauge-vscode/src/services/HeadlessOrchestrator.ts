@@ -648,6 +648,13 @@ export interface MergeBlockerSnapshot {
   mergeStateStatus: string;
   /** "" means the branch ruleset requires no reviewers — not "unknown". */
   reviewDecision: string;
+  /**
+   * `conclusion` is "" for a check that has NOT concluded — GitHub returns null
+   * for an in-flight run, and "" is what the daemon's
+   * `stages.MergeBlockedByPendingCI` reads as "CI is still going". Never
+   * substitute a placeholder here: the payload would lose the only signal that
+   * distinguishes "wait, this clears itself" from "a human must fix this".
+   */
   checks: Array<{ name: string; conclusion: string }>;
 }
 
@@ -2112,8 +2119,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // human-needed dead end no retry can clear — the Go scheduler has
         // carded it since ADR 015 §F #6, and until now the extension path
         // recorded it as punt telemetry and nothing else. The daemon decides
-        // whether this particular block IS branch protection (some punts are
-        // in-flight CI, which a retry does clear) and stays silent if not.
+        // whether this particular block IS branch protection and stays silent
+        // if not.
+        //
+        // The commonest not-applicable case is in-flight CI. This fallback
+        // takes ONE `gh pr view` sample with no CI wait (the EC budget above is
+        // eventual-consistency, not a CI wait), and pr-merge runs right after
+        // pr-create, so on a repo whose CI takes minutes that sample is
+        // routinely BLOCKED/UNSTABLE with checks still queued. The daemon gates
+        // on `stages.MergeBlockedByPendingCI` — the same predicate the Go
+        // runner uses before its bounded CI wait — and returns `not_applicable`
+        // for exactly that shape. Which is why `checks[].conclusion` must reach
+        // it un-coerced (see fetchPrData).
         if (fb.snapshot) {
           await this.raiseRunScopedAttention({
             producer: "branch-protection",
@@ -3179,9 +3196,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       const data = JSON.parse(stdout);
       return {
         state: data.state as string,
+        // An in-flight check's conclusion is NULL on the wire, and empty is the
+        // meaningful value for it — `stages.PRStatusCheckRow` documents `""
+        // (in-flight)` and `stages.MergeBlockedByPendingCI` keys on
+        // ""/"PENDING". Coercing null to "UNKNOWN" (#305 review) made this
+        // projection unable to express "CI is still running", so the daemon
+        // read a queued required check as a branch-protection block and told
+        // the operator to fix a failing check that does not exist.
         checks: (
-          (data.statusCheckRollup ?? []) as Array<{ name?: string; conclusion?: string }>
-        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion || "UNKNOWN" })),
+          (data.statusCheckRollup ?? []) as Array<{
+            name?: string;
+            conclusion?: string | null;
+          }>
+        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion ?? "" })),
         mergeable: (data.mergeable as string) || "UNKNOWN",
         mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
         // Empty is meaningful and NOT a fallback value: GitHub returns "" when
