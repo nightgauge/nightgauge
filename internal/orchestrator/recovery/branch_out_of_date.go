@@ -117,6 +117,31 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 		{"push", []string{"push", "--force-with-lease"}},
 	}
 
+	// Refuse outright when a rebase is ALREADY in progress. Everything below
+	// assumes any rebase state it meets is state this invocation created, and
+	// `git rebase --abort` acts on that assumption — but a worktree paused in
+	// `git rebase -i` at an `edit` step is the operator's, and aborting it throws
+	// away their in-progress work with no record that anything was destroyed
+	// (#301 review reproduced exactly that: staged `wip.txt`, gone, escalation
+	// text mentioning only "exit status 128"). We cannot tell whose rebase it is,
+	// so we do not touch it: no fetch, no rebase, no abort, straight to triage.
+	//
+	// Probed here rather than in the failure handler because this is the only
+	// point at which the answer is unambiguous — after `git rebase origin/main`
+	// runs, a rebase directory could be either.
+	if dir := rebaseStateDir(ctx, failure.Workspace); dir != "" {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: "a rebase is already in progress in this worktree — refusing to rebase over, or abort, state this run did not create",
+			Evidence: []string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				"preexisting_rebase=true",
+				fmt.Sprintf("rebase_state=%s", dir),
+			},
+			FollowUp: FollowUpHumanTriageRequired,
+		}
+	}
+
 	// Resolve the PR branch BEFORE the steps run. `git rebase` detaches HEAD for
 	// its whole duration, so asking from inside the failure handler below reads
 	// the literal "HEAD" and degrades to the unknownBranch sentinel — which
@@ -168,14 +193,18 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 					}
 
 				case captureNoConflictState:
-					// The rebase failed but nothing is conflicted — a dirty index, a
-					// pre-existing rebase, an unborn base. There is nothing for
-					// feature-dev to resolve, so emitting CONFLICT_RESOLUTION_NEEDED
-					// here would spend the entire max_dev_redispatch budget
-					// re-running the dev stage against a context naming zero files
-					// and terminate in triage anyway. Escalate now, with the real
-					// rebase error. The abort is a harmless no-op when no rebase
-					// started, and cleans up when one did.
+					// The rebase failed but nothing is conflicted — a dirty index or
+					// an unborn base. There is nothing for feature-dev to resolve, so
+					// emitting CONFLICT_RESOLUTION_NEEDED here would spend the entire
+					// max_dev_redispatch budget re-running the dev stage against a
+					// context naming zero files and terminate in triage anyway.
+					// Escalate now, with the real rebase error.
+					//
+					// The abort is safe here ONLY because the pre-flight guard above
+					// established that no rebase was in progress when we started: any
+					// rebase state now is ours. It is emphatically not a "harmless
+					// no-op" in general — that claim is what let this line destroy an
+					// operator's paused `rebase -i` (#301 review).
 					_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
 					return RecoveryResult{
 						Action: a.Name(),
@@ -189,21 +218,49 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 					}
 
 				default: // captureFailed
-					// A conflict may well exist and is recorded NOWHERE.
-					// `git rebase --abort` permanently destroys the :2:/:3: index
-					// blobs, so deliberately leave the rebase in progress: the index
-					// is the only surviving copy of the evidence. Pair that strictly
-					// with human triage — never StageCanResume — because a dev stage
-					// must not be dispatched into a conflicted index.
+					// The conflict could not be turned into something feature-dev can
+					// act on. What licenses the abort here is NOT the outcome but
+					// whether the raw index was copied out first: `git rebase --abort`
+					// destroys the :2:/:3: stages permanently, so the only question
+					// that matters is whether they now exist somewhere else. Either
+					// way this is human triage, never StageCanResume — a dev stage
+					// must not be dispatched against a conflict nobody could record.
 					captureErr := "unspecified"
 					if capture.Err != nil {
 						captureErr = truncate(capture.Err.Error(), 200)
 					}
+					if capture.EvidenceDir != "" {
+						// The raw stages are on disk under conflict-evidence-{N}/.
+						// Abort so the operator inherits a worktree they (and the
+						// pipeline's own sweeps and rescues) can still use — leaving it
+						// mid-rebase does not protect the index in this system: the
+						// scheduler's terminal defer `git add -A`s it away seconds
+						// later, then commits the conflict markers to a detached HEAD
+						// and books the run as auto-recovered (#301 review).
+						_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
+						return RecoveryResult{
+							Action: a.Name(),
+							Reason: fmt.Sprintf("rebase conflict could not be captured (%s) — raw index stages preserved to %s for triage", captureErr, capture.EvidenceDir),
+							Evidence: append(append(conflictEvidence,
+								"capture=failed",
+								"evidence_preserved=true",
+								fmt.Sprintf("evidence_dir=%s", capture.EvidenceDir),
+								fmt.Sprintf("capture_error=%s", captureErr),
+								fmt.Sprintf("rebase_error=%s", rebaseErr)),
+								prefixed("conflicting_file=", capture.Files)...),
+							FollowUp: FollowUpHumanTriageRequired,
+						}
+					}
+					// Last resort: the capture failed AND the raw index could not be
+					// copied out (unwritable tree, or git could not read back a blob it
+					// had just listed). Aborting now would leave zero record of the
+					// conflict, so do not — the in-index stages are all that is left.
 					return RecoveryResult{
 						Action: a.Name(),
-						Reason: fmt.Sprintf("rebase conflict could not be captured (%s) — leaving the rebase in progress so the conflicted index survives for triage", captureErr),
+						Reason: fmt.Sprintf("rebase conflict could not be captured or preserved (%s) — leaving the rebase in progress so the conflicted index survives for triage", captureErr),
 						Evidence: append(append(conflictEvidence,
 							"capture=failed",
+							"evidence_preserved=false",
 							fmt.Sprintf("capture_error=%s", captureErr),
 							fmt.Sprintf("rebase_error=%s", rebaseErr),
 							"rebase_left_in_progress=true"),

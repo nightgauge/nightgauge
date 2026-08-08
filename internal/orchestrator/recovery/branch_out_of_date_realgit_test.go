@@ -1,6 +1,7 @@
 package recovery
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -240,9 +242,13 @@ func TestRealGit_RebaseRefused_NoConflictState(t *testing.T) {
 //
 // A conflict context naming "unknown" is not actionable — feature-dev refuses to
 // check the branch out — so this is a FAILED capture, not a successful one: no
-// context file, no rewind signal, human triage. And because the capture failed,
-// the rebase is deliberately left in progress: `rebase --abort` would destroy
-// the :2:/:3: blobs that are now the only copy of the conflict.
+// context file, no rewind signal, human triage.
+//
+// The conflict is still not thrown away: the raw index stages are copied out to
+// conflict-evidence-{N}/ FIRST, and only then does the rebase abort. Leaving the
+// worktree mid-rebase instead does not preserve anything in this system — the
+// scheduler's terminal defer reads the `UU` paths as uncommitted work and
+// `git add -A`s the stages away moments later (#301 review).
 func TestRealGit_DetachedHead_BranchGenuinelyUnknown(t *testing.T) {
 	ws := realGitFixture(t, "detached")
 
@@ -259,10 +265,248 @@ func TestRealGit_DetachedHead_BranchGenuinelyUnknown(t *testing.T) {
 	if res.FollowUp != FollowUpHumanTriageRequired {
 		t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
 	}
+	entries := readEvidenceManifest(t, ws, 301)
+	if len(entries) == 0 {
+		t.Fatal("the raw index must be preserved before the abort — nothing was written")
+	}
+	if rebaseInProgress(t, ws) {
+		t.Error("with the evidence preserved the abort is non-destructive and must run, leaving a usable worktree")
+	}
+	if !strings.Contains(strings.Join(res.Evidence, " "), "evidence_preserved=true") {
+		t.Errorf("evidence must point the operator at the preserved dump, got %v", res.Evidence)
+	}
+}
+
+// evidenceStage locates one preserved index stage in the evidence manifest and
+// returns the raw bytes that were written for it.
+func evidenceStage(t *testing.T, ws string, issue int, path string, stage int) []byte {
+	t.Helper()
+	for _, entry := range readEvidenceManifest(t, ws, issue) {
+		if entry.Path != path {
+			continue
+		}
+		for _, st := range entry.Stages {
+			if st.Stage != stage {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline",
+				"conflict-evidence-"+strconv.Itoa(issue), filepath.FromSlash(st.File)))
+			if err != nil {
+				t.Fatalf("read preserved stage %d blob for %s: %v", stage, path, err)
+			}
+			return data
+		}
+		t.Fatalf("stage %d not preserved for %s (stages: %+v)", stage, path, entry.Stages)
+	}
+	t.Fatalf("path %q missing from the evidence manifest", path)
+	return nil
+}
+
+type evidenceEntry struct {
+	Path   string `json:"path"`
+	Stages []struct {
+		Stage int    `json:"stage"`
+		SHA   string `json:"sha"`
+		Bytes int64  `json:"bytes"`
+		File  string `json:"file"`
+	} `json:"stages"`
+}
+
+func readEvidenceManifest(t *testing.T, ws string, issue int) []evidenceEntry {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline",
+		"conflict-evidence-"+strconv.Itoa(issue), "manifest.json"))
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Entries []evidenceEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("parse evidence manifest: %v", err)
+	}
+	return doc.Entries
+}
+
+// gitShow reads a committed blob. Used to derive what the :2:/:3: index stages
+// MUST contain without hand-authoring a single byte: on a one-commit rebase,
+// stage 2 is the feature branch's version of the file and stage 3 is
+// origin/main's, so git itself supplies both expected values.
+func gitShow(t *testing.T, ws, rev, path string) []byte {
+	t.Helper()
+	out, err := exec.Command("git", "-C", ws, "show", rev+":"+path).Output()
+	if err != nil {
+		t.Fatalf("git show %s:%s: %v", rev, path, err)
+	}
+	return out
+}
+
+// TestRealGit_MultiFileConflict_NonASCIIPathCaptured is the #301-review
+// regression for the enumeration bug. `git diff --name-only --diff-filter=U`
+// C-QUOTES any path with a non-ASCII byte: a genuine conflict in `café.txt`
+// comes back as the literal 12-character string `"caf\303\251.txt"`. Feeding
+// that to `git show :2:<path>` fails ("does not exist (neither on disk nor in
+// the index)"), so the entry was written with the mangled path and BOTH SIDES
+// EMPTY — and because the sibling `f.txt` read fine, the global blob counter was
+// non-zero and the whole capture still reported `capture=captured`, aborted the
+// rebase, and told the scheduler the stage could resume.
+//
+// Both paths must arrive intact with both sides populated, or the capture must
+// not claim success. Only real git produces the quoting, which is why this
+// cannot be stubbed.
+func TestRealGit_MultiFileConflict_NonASCIIPathCaptured(t *testing.T) {
+	ws := realGitFixture(t, "unicode-path")
+	const unicodePath = "café.txt"
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+
+	if res.FollowUp != FollowUpStageCanResume {
+		t.Fatalf("FollowUp = %q, want %q — both paths are ordinary text conflicts: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+	}
+
+	doc := readConflictContext(t, ws, 301)
+	rawFiles, _ := doc["conflicting_files"].([]interface{})
+	byPath := map[string]map[string]interface{}{}
+	for _, rf := range rawFiles {
+		entry, _ := rf.(map[string]interface{})
+		p, _ := entry["path"].(string)
+		byPath[p] = entry
+	}
+	if len(byPath) != 2 {
+		t.Fatalf("conflicting_files = %v, want exactly f.txt and %q", doc["conflicting_files"], unicodePath)
+	}
+	// Stage 2 / stage 3 are git's, and under a REBASE git replays the feature
+	// commit onto the upstream, so stage 2 ("ours") is origin/main's version and
+	// stage 3 ("theirs") is the feature branch's — the inverse of a merge. The
+	// assertion follows git, matching TestRealGit_RebaseConflict_CapturesThenAborts.
+	for _, want := range []string{"f.txt", unicodePath} {
+		entry, ok := byPath[want]
+		if !ok {
+			t.Fatalf("path %q missing from the capture (got %v) — C-quoted?", want, byPath)
+		}
+		ours, _ := entry["ours"].(string)
+		theirs, _ := entry["theirs"].(string)
+		if !strings.Contains(ours, "main-side") {
+			t.Errorf("%s ours (stage 2, the rebase upstream) = %q, want origin/main's version", want, ours)
+		}
+		if !strings.Contains(theirs, "feature-side") {
+			t.Errorf("%s theirs (stage 3, the replayed commit) = %q, want the feature branch's version", want, theirs)
+		}
+		if entry["ours_present"] != true || entry["theirs_present"] != true {
+			t.Errorf("%s: both sides exist in the index, so neither empty-side flag may be false: %v", want, entry)
+		}
+	}
+	if !hasConflictSignal(t, ws, 301) {
+		t.Error("a captured conflict must emit CONFLICT_RESOLUTION_NEEDED")
+	}
+	if rebaseInProgress(t, ws) {
+		t.Error("a captured conflict must abort the rebase")
+	}
+}
+
+// TestRealGit_BinaryConflict_NotCapturedAsSuccess is the #301-review regression
+// for the corruption bug. `ours = string(blobBytes)` followed by
+// json.MarshalIndent replaces every invalid UTF-8 byte with U+FFFD, so a binary
+// conflict was stored as something that does not equal the blob (a 256-byte
+// input round-trips to ~512 bytes of replacement runes) — and the result still
+// read `capture=captured`, still aborted, and still told the scheduler the stage
+// could resume. The bytes were then unrecoverable.
+//
+// Bytes that cannot survive JSON must not be reported as captured. They must
+// still SURVIVE: the raw stages go to conflict-evidence-{N}/ byte-for-byte, and
+// the expected bytes here come from `git show` on the two commits — git supplies
+// both sides, nothing is hand-authored.
+func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
+	ws := realGitFixture(t, "binary")
+	const binPath = "bin.dat"
+
+	// Under a rebase git replays the feature commit onto the upstream, so stage 2
+	// ("ours") holds origin/main's bytes and stage 3 ("theirs") the feature
+	// branch's. Both expected values come straight out of git.
+	wantOurs := gitShow(t, ws, "origin/main", binPath)
+	wantTheirs := gitShow(t, ws, fixtureBranch, binPath)
+	if utf8.Valid(wantOurs) || utf8.Valid(wantTheirs) {
+		t.Fatalf("fixture is not exercising the binary class: ours valid=%v theirs valid=%v",
+			utf8.Valid(wantOurs), utf8.Valid(wantTheirs))
+	}
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+
+	if res.FollowUp != FollowUpHumanTriageRequired {
+		t.Errorf("FollowUp = %q, want %q — a binary conflict is not something feature-dev can be re-dispatched to resolve",
+			res.FollowUp, FollowUpHumanTriageRequired)
+	}
+	if _, err := os.Stat(conflictContextPathForTest(ws, 301)); err == nil {
+		data, _ := os.ReadFile(conflictContextPathForTest(ws, 301))
+		t.Errorf("bytes that cannot round-trip through JSON must not be written as a capture; got:\n%s", data)
+	}
+	if hasConflictSignal(t, ws, 301) {
+		t.Error("a failed capture must not emit CONFLICT_RESOLUTION_NEEDED")
+	}
+
+	// The whole capture fails, not just the binary path: a partial capture would
+	// re-dispatch feature-dev against a conflict set that is missing a file.
+	joined := strings.Join(res.Evidence, " ")
+	if !strings.Contains(joined, "conflicting_file="+binPath) || !strings.Contains(joined, "conflicting_file=f.txt") {
+		t.Errorf("escalation must name every conflicting path, got %v", res.Evidence)
+	}
+
+	if got := evidenceStage(t, ws, 301, binPath, 2); !bytes.Equal(got, wantOurs) {
+		t.Errorf("preserved ours blob is not byte-identical: got %d bytes, want %d", len(got), len(wantOurs))
+	}
+	if got := evidenceStage(t, ws, 301, binPath, 3); !bytes.Equal(got, wantTheirs) {
+		t.Errorf("preserved theirs blob is not byte-identical: got %d bytes, want %d", len(got), len(wantTheirs))
+	}
+	if rebaseInProgress(t, ws) {
+		t.Error("the bytes are preserved verbatim on disk, so the abort is safe and must run")
+	}
+}
+
+// TestRealGit_PreexistingRebase_OperatorWorkSurvives is the #301-review
+// regression for the destructive `rebase --abort` in the no-conflict-state
+// branch, which the code called a "harmless no-op". It is not harmless for the
+// very case the comment itself listed — a pre-existing rebase.
+//
+// Handed a worktree parked in `git rebase -i` at an `edit` step with staged
+// work, the action must touch nothing: `git rebase origin/main` fails with "there
+// is already a rebase-merge directory", the unmerged-path probe finds zero
+// conflicts, and the old code then aborted the operator's rebase and deleted
+// their staged file while reporting only "exit status 128".
+func TestRealGit_PreexistingRebase_OperatorWorkSurvives(t *testing.T) {
+	ws := realGitFixture(t, "operator-rebase")
+
 	if !rebaseInProgress(t, ws) {
-		t.Error("a failed capture must NOT abort — the conflicted index is the only surviving evidence")
+		t.Fatal("fixture precondition: the worktree must start mid-rebase")
 	}
-	if !strings.Contains(strings.Join(res.Evidence, " "), "rebase_left_in_progress=true") {
-		t.Errorf("evidence must tell the operator the worktree is intentionally mid-rebase, got %v", res.Evidence)
+	before := gitStatus(t, ws)
+	if !strings.Contains(before, "wip.txt") {
+		t.Fatalf("fixture precondition: staged operator work must be present, got %q", before)
 	}
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+
+	if !rebaseInProgress(t, ws) {
+		t.Error("the pipeline aborted a rebase it did not start")
+	}
+	if after := gitStatus(t, ws); after != before {
+		t.Errorf("the operator's in-progress work was destroyed:\nbefore: %q\nafter:  %q", before, after)
+	}
+	if res.FollowUp != FollowUpHumanTriageRequired {
+		t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
+	}
+	if !strings.Contains(strings.Join(res.Evidence, " "), "preexisting_rebase=true") {
+		t.Errorf("the escalation must say a rebase was already in progress, got %v (reason: %s)", res.Evidence, res.Reason)
+	}
+}
+
+func gitStatus(t *testing.T, ws string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", ws, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	return string(out)
 }

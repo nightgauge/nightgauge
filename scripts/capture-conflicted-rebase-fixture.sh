@@ -48,6 +48,27 @@
 #                            ref. This is the one state where the branch is
 #                            genuinely undeterminable, and it is git's own
 #                            answer — not an invented one.
+#               unicode-path — a MULTI-FILE content conflict where one path has
+#                            non-ASCII bytes ("café.txt"). git C-quotes such a
+#                            path in `diff --name-only` output (it prints the
+#                            literal 12-char string "caf\303\251.txt"), so a
+#                            capture that reads that output verbatim records a
+#                            path no filesystem matches and both sides empty —
+#                            while the sibling f.txt reads fine and makes the
+#                            whole capture look successful. Only real git
+#                            produces the quoting.
+#               binary       — a MULTI-FILE content conflict where one path is
+#                            binary (invalid UTF-8, embedded NUL). encoding/json
+#                            substitutes U+FFFD for every invalid byte, so such
+#                            a blob cannot round-trip through the context file;
+#                            git is what decides the conflict has stages 1/2/3
+#                            for a binary path at all.
+#               operator-rebase — the worktree is parked mid-`git rebase -i` at
+#                            an `edit` step with STAGED, uncommitted work. This
+#                            is a rebase the pipeline did not start; `git rebase
+#                            --abort` here throws away the operator's work. No
+#                            conflict is present, so a capture probe reports zero
+#                            unmerged paths.
 #
 # Prints the path of the working clone on stdout. That clone is left checked out
 # on the feature branch with origin/main already advanced, i.e. positioned
@@ -68,14 +89,15 @@ set -euo pipefail
 dest="${1:-}"
 mode="${2:-conflict}"
 
+modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase"
 if [ -z "$dest" ]; then
-  echo "usage: $0 <dest-dir> [conflict|dirty-index]" >&2
+  echo "usage: $0 <dest-dir> [$modes]" >&2
   exit 2
 fi
 case "$mode" in
-  conflict | dirty-index | detached) ;;
+  conflict | dirty-index | detached | unicode-path | binary | operator-rebase) ;;
   *)
-    echo "unknown mode: $mode (want conflict|dirty-index|detached)" >&2
+    echo "unknown mode: $mode (want $modes)" >&2
     exit 2
     ;;
 esac
@@ -104,22 +126,50 @@ git clone --quiet "$origin" "$work"
 git -C "$work" config commit.gpgsign false
 git -C "$work" config core.hooksPath /dev/null
 
+# Extra conflicting path per mode. Its name/content is written the same three
+# times (base, feature side, main side) so git produces a genuine three-stage
+# conflict for it exactly as it does for f.txt.
+#
+#   unicode-path — a NON-ASCII filename. git C-quotes it in `diff --name-only`.
+#   binary       — invalid UTF-8 with an embedded NUL, so git treats it as
+#                  binary and encoding/json cannot represent its bytes.
+extra=""
+case "$mode" in
+  unicode-path) extra="café.txt" ;;
+  binary) extra="bin.dat" ;;
+esac
+
+# write_extra <variant> — emit the extra path's content for one side. Byte
+# sequences are written with printf octal escapes rather than /dev/urandom so
+# the fixture is reproducible: \377 and \376 are never valid UTF-8 anywhere,
+# and \000 is what makes git call the file binary.
+write_extra() {
+  [ -n "$extra" ] || return 0
+  case "$mode" in
+    unicode-path) printf 'line-1\n%s\nline-3\n' "$1" >"$work/$extra" ;;
+    binary) printf '\377\376%s\000\001\002\377' "$1" >"$work/$extra" ;;
+  esac
+}
+
 # --- base commit on main -------------------------------------------------
 printf 'line-1\nshared\nline-3\n' >"$work/f.txt"
-git -C "$work" add f.txt
+write_extra shared
+git -C "$work" add -A
 git -C "$work" commit --quiet -m "base"
 git -C "$work" push --quiet origin main
 
 # --- feature branch edits the shared line --------------------------------
 git -C "$work" checkout --quiet -b "$BRANCH"
 printf 'line-1\nfeature-side\nline-3\n' >"$work/f.txt"
-git -C "$work" add f.txt
+write_extra feature-side
+git -C "$work" add -A
 git -C "$work" commit --quiet -m "feat: rewrite shared line on the feature branch"
 
 # --- main advances, editing the SAME line differently --------------------
 git -C "$work" checkout --quiet main
 printf 'line-1\nmain-side\nline-3\n' >"$work/f.txt"
-git -C "$work" add f.txt
+write_extra main-side
+git -C "$work" add -A
 git -C "$work" commit --quiet -m "fix: rewrite shared line on main"
 git -C "$work" push --quiet origin main
 
@@ -144,6 +194,28 @@ if [ "$mode" = "dirty-index" ]; then
   # that reads as a successful conflict capture on unfixed code.
   printf 'staged-but-uncommitted\n' >"$work/dirty.txt"
   git -C "$work" add dirty.txt
+fi
+
+if [ "$mode" = "operator-rebase" ]; then
+  # Park the worktree mid-`git rebase -i` at an `edit` step, holding STAGED work
+  # that exists nowhere else. This is the operator's rebase, not the pipeline's:
+  # `git rebase --abort` here discards wip.txt permanently and reports nothing.
+  #
+  # GIT_SEQUENCE_EDITOR rewrites the todo list non-interactively. `ed`-style
+  # in-place editing differs between BSD and GNU sed, so the rewrite goes
+  # through a temp file instead of `sed -i`.
+  seq_editor="$dest/seq-editor.sh"
+  cat >"$seq_editor" <<'SEQEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+todo="$1"
+sed '1s/^pick/edit/' "$todo" >"$todo.rewritten"
+mv "$todo.rewritten" "$todo"
+SEQEOF
+  chmod +x "$seq_editor"
+  GIT_SEQUENCE_EDITOR="$seq_editor" git -C "$work" rebase --quiet -i HEAD~1 >/dev/null
+  printf 'operator work in progress\n' >"$work/wip.txt"
+  git -C "$work" add wip.txt
 fi
 
 echo "$work"

@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"os"
 	"os/exec"
 )
 
@@ -27,6 +28,31 @@ var execGit = func(ctx context.Context, dir string, args ...string) ([]byte, err
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	return cmd.Output()
+}
+
+// execGitToFile streams a git command's stdout straight into destPath instead of
+// buffering it, for outputs whose size is bounded by repository content rather
+// than by anything this process controls — `cat-file blob` on a conflicting
+// file, above all. execGit would read a multi-gigabyte blob entirely into
+// memory (#301 review).
+//
+// destPath's parent must already exist. A non-zero exit leaves the partial file
+// in place for the caller to clean up; callers treat any error as "this blob was
+// not preserved".
+var execGitToFile = func(ctx context.Context, dir, destPath string, args ...string) error {
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	cmd.Stdout = f
+	runErr := cmd.Run()
+	closeErr := f.Close()
+	if runErr != nil {
+		return runErr
+	}
+	return closeErr
 }
 
 // execNightgauge is the indirection point for the local nightgauge

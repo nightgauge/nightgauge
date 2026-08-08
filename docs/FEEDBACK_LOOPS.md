@@ -196,28 +196,63 @@ gone after the abort). Schema: `ConflictContextSchema` in
 ### Write invariant — the file's existence IS the claim (#301)
 
 A `conflict-context-{N}.json` is written **only** for a capture that actually
-succeeded: at least one conflicting path, at least one readable ours/theirs
-index blob, and a resolved `branch`. Nothing else writes one. `conflicting_files`
+succeeded: at least one conflicting path, EVERY such path representable in the
+document, and a resolved `branch`. Nothing else writes one. `conflicting_files`
 is never empty (`ConflictContextSchema` requires ≥ 1) and `branch` is never the
 `"unknown"` sentinel — feature-dev's conflict intake skips the branch checkout on
 `"unknown"`, so a context carrying it would silently discard the same-branch
 guarantee this whole loop exists to provide.
 
-The three ways a capture can end are three distinct states, and only one of them
-writes anything:
+"Representable" is checked **per path**, not in aggregate (#301). One readable
+file must not license a capture whose siblings landed with both sides empty. A
+path fails the check when its index blob is unreadable, is not valid UTF-8
+(`encoding/json` substitutes U+FFFD for every invalid byte, so a binary conflict
+cannot round-trip), or exceeds the per-side size cap — a truncated side is worse
+than none, because feature-dev resolves against what the context says. Any
+failing path fails the whole capture.
 
-| Capture outcome     | Meaning                                                            | Artifacts             | `rebase --abort`                | Follow-up     |
-| ------------------- | ------------------------------------------------------------------ | --------------------- | ------------------------------- | ------------- |
-| `captured`          | ≥ 1 conflicting path with index blobs, branch resolved             | context file + signal | yes — evidence is safely stored | stage resumes |
-| `no-conflict-state` | probe succeeded, zero unmerged paths (dirty index, refused rebase) | none                  | yes — harmless no-op            | human triage  |
-| `failed`            | probe errored, branch unresolvable, or blobs unreadable            | none                  | **no** — see below              | human triage  |
+The index is enumerated with `git ls-files -u -z`, never
+`git diff --name-only --diff-filter=U`: the latter C-quotes non-ASCII paths (a
+conflict in `café.txt` prints as the literal `"caf\303\251.txt"`), and `-z` also
+removes newline ambiguity. `ls-files -u` additionally yields the per-stage blob
+ids, so every blob is read by id and no path has to survive a round-trip through
+a git argument.
 
-**A failed capture deliberately leaves the rebase in progress.** The `:2:`/`:3:`
-index blobs are the only copy of the conflict and `git rebase --abort` destroys
-them permanently, so a capture that could not record them must not abort. The
-result carries `rebase_left_in_progress=true` in its evidence, and is always
-paired with human triage — never with a resumable stage, because a dev stage must
-not be dispatched into a conflicted index.
+The three ways a capture can end are three distinct states:
+
+| Capture outcome     | Meaning                                                               | Artifacts                     | `rebase --abort`                      | Follow-up     |
+| ------------------- | --------------------------------------------------------------------- | ----------------------------- | ------------------------------------- | ------------- |
+| `captured`          | ≥ 1 conflicting path, all representable, branch resolved              | context file + signal         | yes — the context IS the durable copy | stage resumes |
+| `no-conflict-state` | enumeration succeeded, zero unmerged paths (dirty index, unborn base) | none                          | yes — the rebase is this run's own    | human triage  |
+| `failed`            | enumeration errored, branch unresolvable, or a path unrepresentable   | `conflict-evidence-{N}/` dump | yes, once the dump succeeded          | human triage  |
+
+**A failed capture preserves the raw index and then aborts.** The `:2:`/`:3:`
+stages are copied out verbatim to `.nightgauge/pipeline/conflict-evidence-{N}/`
+(content-addressed `blobs/<sha>` plus a `manifest.json` naming which stage of
+which path each blob was) before `git rebase --abort` runs. Evidence carries
+`evidence_preserved=true` and `evidence_dir=…`.
+
+Leaving the rebase in progress instead does **not** preserve anything here: the
+scheduler's terminal defer reads the conflicted `UU` paths as uncommitted work
+and `git add -A`s the stages away seconds later, commits conflict markers onto
+the detached HEAD, and books the run as `worktree_uncommitted` — a kind meaning
+"recovered, not a failure". The detached worktree is then skipped by the sweep
+forever and cannot be checked out or stashed. Copying the bytes out and aborting
+keeps the evidence and leaves a worktree the rest of the system can handle.
+(`RecoverUncommittedWork` now refuses an unmerged index outright as well.)
+
+The one exception is the case where the capture failed AND the dump failed too:
+aborting then would leave zero record, so the in-index stages are kept as the
+last copy, with `evidence_preserved=false` and `rebase_left_in_progress=true`.
+
+Either way the follow-up is human triage, never a resumable stage — a dev stage
+must not be dispatched against a conflict nobody could record.
+
+**A rebase that was already in progress is never touched.** `branch-out-of-date`
+probes for `rebase-merge`/`rebase-apply` before it mutates anything and escalates
+with `preexisting_rebase=true` if one exists. It cannot tell an operator's paused
+`git rebase -i` from its own, and aborting the former destroys work no artifact
+records.
 
 Readers enforce the same invariant: `conflict-recovery-loop` escalates on a
 missing context file, on one naming zero files, and on one naming no resolvable

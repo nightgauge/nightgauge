@@ -166,27 +166,63 @@ emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal **before**
 `FollowUp=stage can resume` so the scheduler rewinds to feature-dev. It never
 resolves the conflict itself.
 
+Before any of that, the action **refuses outright when a rebase is already in
+progress** in the worktree. Everything below assumes the rebase state it meets is
+state this invocation created, and `git rebase --abort` acts on that assumption —
+but a worktree parked in `git rebase -i` at an `edit` step is the operator's, and
+aborting it destroys their in-progress work with no record that anything was
+lost. The action cannot tell whose rebase it is, so it performs no fetch, no
+rebase and no abort: evidence carries `preexisting_rebase=true` and the follow-up
+is human triage.
+
 That hand-off is claimed **only when the capture actually succeeded** (#301). The
 branch is resolved _before_ the rebase runs — git detaches HEAD for a rebase's
 duration, so asking afterwards yields the `"unknown"` sentinel that feature-dev
 refuses to check out — with `rebase-merge/head-name` as the fallback. The capture
 then reports one of three outcomes, and each gets its own handling:
 
-- **captured** — conflicting paths with readable index blobs and a resolved
-  branch. Writes the context file + signal, aborts the rebase (the evidence is
-  already on disk), returns `stage can resume`.
+- **captured** — every conflicting path has index blobs that can be represented
+  in the context (readable, valid UTF-8, under the per-side size cap) and the
+  branch resolved. Writes the context file + signal, aborts the rebase (the
+  context carries both sides of every path, so it IS the durable copy), returns
+  `stage can resume`.
 - **no-conflict-state** — the rebase failed but nothing is conflicted (dirty
-  index, pre-existing rebase, unborn base). Writes nothing, aborts, escalates to
-  human triage with the raw rebase error. Emitting a conflict signal here would
-  spend the whole `max_dev_redispatch` budget re-running feature-dev against a
-  context naming zero files.
-- **failed** — the probe errored, the branch could not be named, or the index
-  blobs could not be read. Writes nothing and **does not abort**: the conflicted
-  index is the only surviving copy of the evidence, and the abort destroys it
-  permanently. Evidence carries `rebase_left_in_progress=true`; the follow-up is
-  always human triage, never a resumable stage, since a dev stage must not be
-  dispatched into a conflicted index. Operators will find the worktree
-  intentionally mid-rebase.
+  index, unborn base). Writes nothing, aborts, escalates to human triage with the
+  raw rebase error. Emitting a conflict signal here would spend the whole
+  `max_dev_redispatch` budget re-running feature-dev against a context naming
+  zero files.
+- **failed** — the index could not be enumerated, the branch could not be named,
+  or at least one conflicting path cannot be represented in a context (unreadable
+  blob, binary/non-UTF-8 content, over the size cap). Writes no context and no
+  signal. The raw index stages are first copied out verbatim to
+  `.nightgauge/pipeline/conflict-evidence-{N}/`, and only then is the rebase
+  aborted — evidence carries `evidence_preserved=true` and `evidence_dir=…`. The
+  follow-up is always human triage, never a resumable stage, since a dev stage
+  must not be dispatched against a conflict nobody could record.
+
+The capture precondition is **per path**, not aggregate: one readable file does
+not license a capture whose siblings landed with both sides empty. Any path that
+cannot be represented fails the whole capture.
+
+**Why the failed case aborts rather than leaving the rebase live.** Leaving a
+conflicted index in place does not preserve it in this system: `git status`
+reports the conflicted path as `UU`, which `reclaim.ClassifyStatus` calls
+blocking, so the scheduler's terminal defer treats it as uncommitted work and
+runs `RecoverUncommittedWork` — whose `git add -A` collapses the very `:2:`/`:3:`
+stages the skipped abort was protecting, commits conflict markers onto the
+rebase's detached HEAD, and relabels the run `worktree_uncommitted` ("recovered,
+not a failure"). Meanwhile the detached worktree is skipped by the sweep forever
+and is unusable (`git checkout` and `git stash` both refuse on an unmerged
+index). Copying the evidence out and then aborting keeps the bytes and leaves a
+worktree every consumer can still handle. `RecoverUncommittedWork` additionally
+refuses an unmerged index outright, so the collapse cannot happen even if some
+other path leaves one behind.
+
+Only one narrow case still leaves the rebase in progress: the capture failed AND
+the raw index could not be copied out either (unwritable tree, or git could not
+read back a blob it had just listed). Aborting then would leave zero record, so
+the in-index stages are kept as the last copy. That result carries
+`evidence_preserved=false` and `rebase_left_in_progress=true`.
 
 ### Conflict-recovery-loop (#4072)
 
