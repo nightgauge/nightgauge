@@ -29,7 +29,7 @@ func TestAttentionIPCRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "roundtrip:1",
 		Kind:           attention.KindChoose,
@@ -97,7 +97,7 @@ func TestAttentionResolveRejectsUnknownOption(t *testing.T) {
 	s := newAttentionTestServer(t)
 	store := s.attentionStore()
 	id, _ := attention.NewID()
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "reject:1",
 		Kind:           attention.KindApprove,

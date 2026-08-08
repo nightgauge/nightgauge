@@ -189,7 +189,7 @@ func raiseThrough(store *attention.Store, req attention.DecisionRequest) {
 		}
 		req.ID = id
 	}
-	if _, err := store.Raise(req); err != nil {
+	if _, _, err := store.Raise(req); err != nil {
 		log.Printf("attention: raise %q failed (fail-open): %v", req.IdempotencyKey, err)
 	}
 }

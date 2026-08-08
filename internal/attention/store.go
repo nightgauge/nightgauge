@@ -158,10 +158,48 @@ func (s *Store) pathFor(id string) (string, error) {
 	return filepath.Join(s.dir, id+".json"), nil
 }
 
+// RaiseOutcome names what a Raise actually DID. Raise has four genuine
+// results and they are not interchangeable — a caller that only learns "some
+// id" cannot tell "a card is now in front of the operator" from "the operator
+// already dismissed this exact condition and nothing was shown". The IPC
+// raise verb (#305) surfaces this verbatim so a remote producer knows which
+// of the four happened, exactly as an in-process Go producer could infer from
+// the journal action.
+//
+// A store that is not configured is an ERROR, not a fifth outcome: "I could
+// not write" is never "I wrote nothing on purpose".
+type RaiseOutcome string
+
+// The four values are the SAME vocabulary the standing reconciler already
+// reports on StandingOutcome.Action — deliberately aliased to the journal
+// action constants rather than re-spelled, so "created" means one thing in this
+// package and a surface never has to learn a second set of words for the same
+// four facts.
+const (
+	// OutcomeCreated — no live record existed for the key; a new card was
+	// materialized (or an EXPIRED predecessor revived under its own id).
+	OutcomeCreated RaiseOutcome = ActionCreated
+	// OutcomeUpdated — an open record for the key was refreshed with new
+	// payload, and the condition itself moved (event-shaped request, or a
+	// standing request whose fingerprint changed). Re-alerts.
+	OutcomeUpdated RaiseOutcome = ActionUpdated
+	// OutcomeRefreshed — an open STANDING record was re-observed unchanged.
+	// Content refreshed, deliberately silent (ADR-015 §M).
+	OutcomeRefreshed RaiseOutcome = ActionRefreshed
+	// OutcomeSuppressed — a human already RESOLVED this exact standing
+	// condition and its fingerprint has not moved, so nothing was written and
+	// no card is showing (ADR-015 §M). The returned id is the prior record's.
+	//
+	// Not a journal action: nothing was persisted, so there is nothing to
+	// audit. It is still an OUTCOME, because the caller has to be able to tell
+	// it apart from a card that is now on screen.
+	OutcomeSuppressed RaiseOutcome = "suppressed"
+)
+
 // Raise creates a new request, or folds it into the record that already exists
 // for the same idempotency_key (ADR-015 §C/§D). It rejects identity-less
 // records (empty id/idempotency_key/producer) — the #316 lesson encoded.
-// Returns the id of the live request.
+// Returns what it did and the id of the live request.
 //
 // "One record per key" holds across expiry, not just while a card is open
 // (#108). An open record is updated in place; an EXPIRED one is revived under
@@ -172,9 +210,9 @@ func (s *Store) pathFor(id string) (string, error) {
 // Standing requests additionally follow the §M rules: an unchanged fingerprint
 // refreshes the card without re-alerting, and a condition a human already
 // resolved is not handed straight back until its fingerprint moves.
-func (s *Store) Raise(req DecisionRequest) (string, error) {
+func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	if err := validateForRaise(&req); err != nil {
-		return "", err
+		return "", "", err
 	}
 	s.applyRaiseDefaults(&req)
 
@@ -184,7 +222,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 
 	stored, err := s.scanLocked()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// Dedup: an open (non-terminal) request with the same key is updated in
@@ -196,10 +234,12 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 		merged.CreatedAt = existing.CreatedAt
 		merged.Lifecycle = existing.Lifecycle
 		action := ActionUpdated
+		outcome := OutcomeUpdated
 		if merged.Standing && merged.Fingerprint == existing.Fingerprint {
 			// The same condition re-observed: bodies and titles move on their
 			// own, so refresh the content and stay silent.
 			action = ActionRefreshed
+			outcome = OutcomeRefreshed
 		} else if merged.Standing {
 			// The condition itself moved. Drop a mute pinned to the fingerprint
 			// that no longer applies, and re-open an acknowledgement that was
@@ -211,7 +251,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 			}
 		}
 		if err := s.writeMaterializedLocked(path, &merged); err != nil {
-			return "", err
+			return "", "", err
 		}
 		s.emitLocked(JournalEntry{
 			Action:         action,
@@ -223,7 +263,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 			Muted:          merged.IsMuted(),
 			At:             s.nowUTC().Format(tsLayout),
 		}, &merged)
-		return merged.ID, nil
+		return outcome, merged.ID, nil
 	}
 
 	// No open record. A human who already resolved THIS EXACT standing
@@ -232,7 +272,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 	// it back on the next observation.
 	if req.Standing {
 		if prior, ok := latestResolvedByKey(stored, req.IdempotencyKey); ok && prior.Fingerprint == req.Fingerprint {
-			return prior.ID, nil
+			return OutcomeSuppressed, prior.ID, nil
 		}
 	}
 
@@ -243,10 +283,10 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 	}
 	path, err := s.pathFor(req.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := s.writeMaterializedLocked(path, &req); err != nil {
-		return "", err
+		return "", "", err
 	}
 	s.emitLocked(JournalEntry{
 		Action:         ActionCreated,
@@ -257,7 +297,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 		Fingerprint:    req.Fingerprint,
 		At:             s.nowUTC().Format(tsLayout),
 	}, &req)
-	return req.ID, nil
+	return OutcomeCreated, req.ID, nil
 }
 
 // validateForRaise rejects identity-less and malformed records BEFORE any disk

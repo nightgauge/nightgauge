@@ -92,7 +92,7 @@ func TestSweepPopulatesExistingRequestsForCrossProducerDedupe(t *testing.T) {
 		Context:        attention.Context{Repo: "octocat/acme", Issue: 7, PR: 42},
 		DefaultAction:  attention.ExpireNoop,
 	}
-	if _, err := store.Raise(runScoped); err != nil {
+	if _, _, err := store.Raise(runScoped); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 

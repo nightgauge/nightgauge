@@ -84,7 +84,7 @@ func seedRequest(t *testing.T, dir, key, title string, sev attention.Severity) s
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: key,
 		Kind:           attention.KindChoose,
@@ -176,7 +176,7 @@ func TestAttentionResolveCLI_NoDaemonLeavesCardOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "k1",
 		Kind:           attention.KindChoose,
@@ -304,7 +304,7 @@ func TestAttentionResolveCLI_RoutesThroughDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "daemon-route:1",
 		Kind:           attention.KindChoose,
@@ -350,7 +350,7 @@ func TestAttentionShowCLI_AnnotatesUnavailableOptions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "show-annotate:1",
 		Kind:           attention.KindChoose,
