@@ -2871,14 +2871,14 @@ surfaces, and this is not one.
    (0b, 3). **Per-verb flip gate — a verb may begin refusing only when every row
    in its "must already assert" column has landed:**
 
-   | Verb                             | Emitter populations that must already assert                                                                     |
-   | -------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-   | `pipeline.notifyStageTransition` | scheduler `IpcStageRunner` (0b); extension `PipelineStateService` ×7 raw sites (3)                               |
-   | `pipeline.notifyPhaseTransition` | scheduler `PipelineBridge:280` (0b); extension `HeadlessOrchestrator` (3)                                        |
-   | `pipeline.notifyStageProgress`   | scheduler `PipelineBridge:355` (0b); extension `HeadlessOrchestrator:13323` and `bootstrap/services.ts:3094` (3) |
-   | `pipeline.notifyComplete`        | extension `PipelineStateService.notifyPipelineComplete:921` (3)                                                  |
-   | `pipeline.setPaused`             | extension `PipelineStateService.{pause,resume}Pipeline` (3)                                                      |
-   | `pipeline.abandonRun`            | its only caller is the force-clear funnel, which lands **with the verb** in step 6                               |
+   | Verb                             | Emitter populations that must already assert                                                                                                                                                                           |
+   | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | `pipeline.notifyStageTransition` | scheduler `IpcStageRunner` (0b); extension `PipelineStateService` ×7 raw sites (3)                                                                                                                                     |
+   | `pipeline.notifyPhaseTransition` | scheduler `PipelineBridge:280` (0b); extension `PipelineStateService.{startPhase:1076,completePhase:1120}` — both fire-and-forget with silent catches, so their assertion must land with the beginRun installation (3) |
+   | `pipeline.notifyStageProgress`   | scheduler `PipelineBridge:355` (0b); extension `HeadlessOrchestrator:13323` and `bootstrap/services.ts:3094` (3)                                                                                                       |
+   | `pipeline.notifyComplete`        | extension `PipelineStateService.notifyPipelineComplete:921` (3)                                                                                                                                                        |
+   | `pipeline.setPaused`             | extension `PipelineStateService.{pause,resume}Pipeline` (3)                                                                                                                                                            |
+   | `pipeline.abandonRun`            | its only caller is the force-clear funnel, which lands **with the verb** in step 6                                                                                                                                     |
 
 5. **The reconciler.** The **liveness ladder** including arm 3 consuming the
    `stagePid` step 3 began sending, the **deferred startup sweep**, the 7.4
