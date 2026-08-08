@@ -159,13 +159,34 @@ Recovery is **not** a bare rebase. After `git fetch origin main` →
    lands instead of being skipped while the scheduler advances. A runner punt
    (e.g. review still required) returns `FollowUp=issue requires human triage`.
 
-Real rebase **conflicts** now defer to `conflict-recovery-loop` (#4072): the
-action captures the conflicting files + both sides into
-`conflict-context-{N}.json` and emits a `CONFLICT_RESOLUTION_NEEDED` feedback
-signal **before** `git rebase --abort` (the conflict blobs vanish after the
-abort), then returns `FollowUp=stage can resume` so the scheduler rewinds to
-feature-dev. It still aborts the rebase to leave the tree clean for the
-re-dispatch. It never resolves the conflict itself.
+Real rebase **conflicts** defer to `conflict-recovery-loop` (#4072): the action
+captures the conflicting files + both sides into `conflict-context-{N}.json` and
+emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal **before**
+`git rebase --abort` (the conflict blobs vanish after the abort), then returns
+`FollowUp=stage can resume` so the scheduler rewinds to feature-dev. It never
+resolves the conflict itself.
+
+That hand-off is claimed **only when the capture actually succeeded** (#301). The
+branch is resolved _before_ the rebase runs — git detaches HEAD for a rebase's
+duration, so asking afterwards yields the `"unknown"` sentinel that feature-dev
+refuses to check out — with `rebase-merge/head-name` as the fallback. The capture
+then reports one of three outcomes, and each gets its own handling:
+
+- **captured** — conflicting paths with readable index blobs and a resolved
+  branch. Writes the context file + signal, aborts the rebase (the evidence is
+  already on disk), returns `stage can resume`.
+- **no-conflict-state** — the rebase failed but nothing is conflicted (dirty
+  index, pre-existing rebase, unborn base). Writes nothing, aborts, escalates to
+  human triage with the raw rebase error. Emitting a conflict signal here would
+  spend the whole `max_dev_redispatch` budget re-running feature-dev against a
+  context naming zero files.
+- **failed** — the probe errored, the branch could not be named, or the index
+  blobs could not be read. Writes nothing and **does not abort**: the conflicted
+  index is the only surviving copy of the evidence, and the abort destroys it
+  permanently. Evidence carries `rebase_left_in_progress=true`; the follow-up is
+  always human triage, never a resumable stage, since a dev stage must not be
+  dispatched into a conflicted index. Operators will find the worktree
+  intentionally mid-rebase.
 
 ### Conflict-recovery-loop (#4072)
 
@@ -192,8 +213,9 @@ termination bound (reliable on every path, cleared per run), while the
 the primary escalation trigger on the normal path (the pr-merge skill appends one
 signal per failure). Whichever trips first stops the loop at exactly
 `max_dev_redispatch` re-dispatches. Once exhausted — or when the context file is
-missing (e.g. a rebase failed with no markers) — the loop ends with a terminal
-state naming the specific conflicting files. This converts the old dead-stop
+unusable: missing, naming zero conflicting files, or naming no resolvable branch
+— the loop ends with a terminal state naming the specific conflicting files. This
+converts the old dead-stop
 (blind fresh-branch restart that discarded all dev work, then human triage) into
 either active dev work on the same branch or an explicit, file-named escalation.
 

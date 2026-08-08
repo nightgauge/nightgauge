@@ -193,6 +193,36 @@ blobs MUST be captured **before** `git rebase --abort` (the conflict index is
 gone after the abort). Schema: `ConflictContextSchema` in
 `packages/nightgauge-sdk/src/context/schemas/feedback.ts`.
 
+### Write invariant — the file's existence IS the claim (#301)
+
+A `conflict-context-{N}.json` is written **only** for a capture that actually
+succeeded: at least one conflicting path, at least one readable ours/theirs
+index blob, and a resolved `branch`. Nothing else writes one. `conflicting_files`
+is never empty (`ConflictContextSchema` requires ≥ 1) and `branch` is never the
+`"unknown"` sentinel — feature-dev's conflict intake skips the branch checkout on
+`"unknown"`, so a context carrying it would silently discard the same-branch
+guarantee this whole loop exists to provide.
+
+The three ways a capture can end are three distinct states, and only one of them
+writes anything:
+
+| Capture outcome     | Meaning                                                            | Artifacts             | `rebase --abort`                | Follow-up     |
+| ------------------- | ------------------------------------------------------------------ | --------------------- | ------------------------------- | ------------- |
+| `captured`          | ≥ 1 conflicting path with index blobs, branch resolved             | context file + signal | yes — evidence is safely stored | stage resumes |
+| `no-conflict-state` | probe succeeded, zero unmerged paths (dirty index, refused rebase) | none                  | yes — harmless no-op            | human triage  |
+| `failed`            | probe errored, branch unresolvable, or blobs unreadable            | none                  | **no** — see below              | human triage  |
+
+**A failed capture deliberately leaves the rebase in progress.** The `:2:`/`:3:`
+index blobs are the only copy of the conflict and `git rebase --abort` destroys
+them permanently, so a capture that could not record them must not abort. The
+result carries `rebase_left_in_progress=true` in its evidence, and is always
+paired with human triage — never with a resumable stage, because a dev stage must
+not be dispatched into a conflicted index.
+
+Readers enforce the same invariant: `conflict-recovery-loop` escalates on a
+missing context file, on one naming zero files, and on one naming no resolvable
+branch. An empty capture never reads as a successful one at either end.
+
 | Field               | Type     | Description                                             |
 | ------------------- | -------- | ------------------------------------------------------- |
 | `schema_version`    | string   | Schema version (e.g., `"1.0"`)                          |

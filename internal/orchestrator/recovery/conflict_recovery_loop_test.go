@@ -196,6 +196,50 @@ func TestAction_ConflictRecoveryLoop_NoContext_Escalates(t *testing.T) {
 	}
 }
 
+// TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates locks the reader
+// half of the #301 invariant. A missing context file already escalated; a
+// context file that is PRESENT but degenerate — naming zero conflicting files,
+// or naming no resolvable branch — slipped straight through and produced another
+// feature-dev re-dispatch. Both are equally un-actionable: there is nothing to
+// resolve, and feature-dev's intake skips the branch checkout entirely on
+// "unknown". Enforcing it here as well as at the writer means a degenerate
+// context from ANY writer (including the pr-merge skill, whose shell capture has
+// the same empty-default shape) costs one honest escalation instead of the whole
+// max_dev_redispatch budget.
+func TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates(t *testing.T) {
+	cases := []struct {
+		name   string
+		branch string
+		files  []string
+	}{
+		{"zero conflicting files", "feat/12-thing", nil},
+		{"unknown branch", unknownBranch, []string{"internal/foo.go"}},
+		{"empty branch", "", []string{"internal/foo.go"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := writeConflictContext(t, 12, 34, c.branch, c.files)
+			a := NewConflictRecoveryLoop(2)
+			failure := StageFailure{
+				Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+				IssueNumber: 12, PRNumber: 34, Reason: "conflict",
+				Evidence: []string{"conflict"},
+			}
+			res := a.Execute(context.Background(), failure)
+			if res.Recovered {
+				t.Error("a degenerate conflict context cannot recover")
+			}
+			if res.FollowUp != FollowUpHumanTriageRequired {
+				t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
+			}
+			// No rewind signal may be written for a context nobody can act on.
+			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a degenerate context")
+			}
+		})
+	}
+}
+
 // TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates: once the feedback file
 // carries more than max_dev_redispatch CONFLICT_RESOLUTION_NEEDED signals (each
 // distinct pr-merge conflict failure appends one), the action escalates with the

@@ -34,6 +34,11 @@ const (
 // context (files + both sides) is captured BEFORE `rebase --abort` and the
 // action returns FollowUpStageCanResume so the conflict-recovery loop rewinds to
 // feature-dev to resolve it on the same branch (#4072 / epic #4067).
+//
+// That deferral is claimed only when the capture actually SUCCEEDED. A rebase
+// that failed without conflicting anything, and a capture that could not record
+// the conflict, are separate outcomes with separate handling — see the switch in
+// Execute (#301).
 type BranchOutOfDate struct {
 	runner       pmstages.PRMergeRunner
 	pollInterval time.Duration
@@ -112,33 +117,99 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 		{"push", []string{"push", "--force-with-lease"}},
 	}
 
+	// Resolve the PR branch BEFORE the steps run. `git rebase` detaches HEAD for
+	// its whole duration, so asking from inside the failure handler below reads
+	// the literal "HEAD" and degrades to the unknownBranch sentinel — which
+	// feature-dev's conflict intake refuses to check out, silently discarding the
+	// same-branch guarantee this hand-off exists to provide (#301). HEAD is still
+	// attached here.
+	branch := currentBranch(ctx, failure.Workspace)
+
 	evidence := []string{fmt.Sprintf("pr=%d", failure.PRNumber)}
 	for _, step := range steps {
 		out, err := execGit(ctx, failure.Workspace, step.args...)
 		if err != nil {
 			if step.label == "rebase" {
-				// A genuine content conflict during rebase. Rather than escalate
-				// straight to human triage (the old behaviour), defer to the
-				// conflict-recovery loop: capture the conflicting files + both
-				// sides into conflict-context-{N}.json and emit a
-				// CONFLICT_RESOLUTION_NEEDED feedback signal BEFORE aborting (the
-				// conflict blobs vanish after `git rebase --abort`). Returning
-				// FollowUpStageCanResume lets the scheduler honor that signal and
-				// rewind to feature-dev on the SAME branch (#4072). We still
-				// abort to leave the tree clean for the dev re-dispatch.
-				branch := currentBranch(ctx, failure.Workspace)
-				files := captureConflictContextFromIndex(ctx, failure.Workspace,
-					failure.IssueNumber, failure.PRNumber, branch, "main",
-					fmt.Sprintf("rebase onto origin/main conflicted: %s", truncate(err.Error(), 120)))
-				_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
-				return RecoveryResult{
-					Action: a.Name(),
-					Reason: fmt.Sprintf("rebase conflict — deferring to conflict-recovery (re-dispatch feature-dev on %q, %d file(s))", branch, len(files)),
-					Evidence: append(append(evidence,
-						"step=rebase",
-						fmt.Sprintf("branch=%s", branch)),
-						prefixed("conflicting_file=", files)...),
-					FollowUp: FollowUpStageCanResume,
+				// A rebase failure. If it is a genuine content conflict, defer to
+				// the conflict-recovery loop rather than escalating outright:
+				// capture the conflicting files + both sides into
+				// conflict-context-{N}.json and emit CONFLICT_RESOLUTION_NEEDED
+				// BEFORE aborting (the blobs vanish after `git rebase --abort`), so
+				// the scheduler rewinds to feature-dev on the SAME branch (#4072).
+				//
+				// But "the rebase failed" is not the same claim as "we captured a
+				// conflict", and neither is "the capture ran". Each of the capture's
+				// three outcomes gets its own handling below — the bug this replaces
+				// treated all three as success (#301).
+				if branch == unknownBranch {
+					// Second chance: git records the branch it is rebasing in
+					// rebase-merge/head-name even though HEAD is detached.
+					if b := rebaseBranch(ctx, failure.Workspace); b != "" {
+						branch = b
+					}
+				}
+				capture := captureConflictContextFromIndex(ctx, failure.Workspace,
+					failure.IssueNumber, failure.PRNumber, branch, "main")
+				rebaseErr := truncate(err.Error(), 200)
+				conflictEvidence := append(evidence, "step=rebase", fmt.Sprintf("branch=%s", branch))
+
+				switch capture.Outcome {
+				case captureCaptured:
+					// The evidence is on disk and the signal is written; the index
+					// has done its job. Abort to leave a clean tree for the dev
+					// re-dispatch.
+					_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
+					return RecoveryResult{
+						Action: a.Name(),
+						Reason: fmt.Sprintf("rebase conflict — deferring to conflict-recovery (re-dispatch feature-dev on %q, %d file(s))", capture.Branch, len(capture.Files)),
+						Evidence: append(append(conflictEvidence, "capture=captured"),
+							prefixed("conflicting_file=", capture.Files)...),
+						FollowUp: FollowUpStageCanResume,
+					}
+
+				case captureNoConflictState:
+					// The rebase failed but nothing is conflicted — a dirty index, a
+					// pre-existing rebase, an unborn base. There is nothing for
+					// feature-dev to resolve, so emitting CONFLICT_RESOLUTION_NEEDED
+					// here would spend the entire max_dev_redispatch budget
+					// re-running the dev stage against a context naming zero files
+					// and terminate in triage anyway. Escalate now, with the real
+					// rebase error. The abort is a harmless no-op when no rebase
+					// started, and cleans up when one did.
+					_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
+					return RecoveryResult{
+						Action: a.Name(),
+						Reason: fmt.Sprintf("git rebase failed with no conflicted paths — not a content conflict: %s", rebaseErr),
+						Evidence: append(conflictEvidence,
+							"capture=no-conflict-state",
+							fmt.Sprintf("rebase_error=%s", rebaseErr),
+							fmt.Sprintf("output=%s", truncate(string(out), 200)),
+						),
+						FollowUp: FollowUpHumanTriageRequired,
+					}
+
+				default: // captureFailed
+					// A conflict may well exist and is recorded NOWHERE.
+					// `git rebase --abort` permanently destroys the :2:/:3: index
+					// blobs, so deliberately leave the rebase in progress: the index
+					// is the only surviving copy of the evidence. Pair that strictly
+					// with human triage — never StageCanResume — because a dev stage
+					// must not be dispatched into a conflicted index.
+					captureErr := "unspecified"
+					if capture.Err != nil {
+						captureErr = truncate(capture.Err.Error(), 200)
+					}
+					return RecoveryResult{
+						Action: a.Name(),
+						Reason: fmt.Sprintf("rebase conflict could not be captured (%s) — leaving the rebase in progress so the conflicted index survives for triage", captureErr),
+						Evidence: append(append(conflictEvidence,
+							"capture=failed",
+							fmt.Sprintf("capture_error=%s", captureErr),
+							fmt.Sprintf("rebase_error=%s", rebaseErr),
+							"rebase_left_in_progress=true"),
+							prefixed("conflicting_file=", capture.Files)...),
+						FollowUp: FollowUpHumanTriageRequired,
+					}
 				}
 			}
 			return RecoveryResult{

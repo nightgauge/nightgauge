@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -139,6 +140,13 @@ type feedbackSignalOnDisk struct {
 
 const conflictResolutionSignalType = "CONFLICT_RESOLUTION_NEEDED"
 
+// unknownBranch is the sentinel currentBranch returns when it cannot name the
+// checked-out branch. It is a HARD STOP, never an acceptable value to record:
+// feature-dev's conflict intake skips the branch checkout when the context says
+// "unknown", so a context carrying it silently discards the same-branch
+// guarantee the conflict-recovery loop exists to provide (#301).
+const unknownBranch = "unknown"
+
 // Execute implements RecoveryAction. Deterministic — emits/normalizes the
 // feedback signal and defers to the scheduler's rewind. No LLM, no conflict
 // resolution here.
@@ -174,6 +182,37 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	for _, f := range cc.ConflictingFiles {
 		if f.Path != "" {
 			files = append(files, f.Path)
+		}
+	}
+
+	// A context naming zero files, or naming no resolvable branch, is not
+	// actionable: feature-dev would be re-dispatched with nothing to resolve (and
+	// with "unknown" it skips the branch checkout outright), spinning through the
+	// whole max_dev_redispatch budget and terminating in triage anyway. Escalate
+	// here instead — the reader enforces the same invariant the writer does, so a
+	// degenerate context from ANY writer (including the pr-merge skill) stops at
+	// one honest escalation rather than N useless dispatches (#301).
+	if len(files) == 0 {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: fmt.Sprintf("conflict-context-%d.json names zero conflicting files — nothing for feature-dev to resolve", failure.IssueNumber),
+			Evidence: []string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				fmt.Sprintf("branch=%s", cc.Branch),
+				fmt.Sprintf("context=%s", contextPath),
+			},
+			FollowUp: FollowUpHumanTriageRequired,
+		}
+	}
+	if cc.Branch == "" || cc.Branch == unknownBranch {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: fmt.Sprintf("conflict-context-%d.json does not name a resolvable branch — feature-dev cannot check out %q to resolve the conflict", failure.IssueNumber, cc.Branch),
+			Evidence: append([]string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				fmt.Sprintf("context=%s", contextPath),
+			}, prefixed("conflicting_file=", files)...),
+			FollowUp: FollowUpHumanTriageRequired,
 		}
 	}
 
@@ -240,19 +279,101 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	}
 }
 
-// currentBranch returns the workspace's checked-out branch name (best-effort;
-// "unknown" on error). Used to populate conflict-context-{N}.json when the
-// branch isn't otherwise carried in StageFailure.
+// currentBranch returns the workspace's checked-out branch name, or
+// unknownBranch when HEAD names no branch (detached, or mid-rebase — git
+// detaches HEAD for a rebase's duration and answers the literal "HEAD").
+//
+// This answers "what branch is checked out", which is NOT the same question as
+// "what branch is the rebase operating on" — see rebaseBranch. Callers that
+// need the latter mid-rebase must not use this one (#301).
 func currentBranch(ctx context.Context, workspace string) string {
 	out, err := execGit(ctx, workspace, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return "unknown"
+		return unknownBranch
 	}
 	b := strings.TrimSpace(string(out))
 	if b == "" || b == "HEAD" {
-		return "unknown"
+		return unknownBranch
 	}
 	return b
+}
+
+// rebaseBranch returns the branch an in-progress rebase is replaying onto, or
+// "" when there is none to name.
+//
+// git detaches HEAD while rebasing, so currentBranch cannot answer this; git
+// instead records the original ref in rebase-merge/head-name (merge backend) or
+// rebase-apply/head-name (am backend). Resolved via `rev-parse --git-path` so
+// linked worktrees — which the pipeline uses for every issue — find their own
+// rebase state rather than the main checkout's.
+//
+// Only a refs/heads/ value is accepted. When the rebase was started from a
+// detached HEAD, git writes the literal string "detached HEAD" into that file;
+// there genuinely is no branch then, and "" is the honest answer.
+func rebaseBranch(ctx context.Context, workspace string) string {
+	for _, rel := range []string{"rebase-merge/head-name", "rebase-apply/head-name"} {
+		out, err := execGit(ctx, workspace, "rev-parse", "--git-path", rel)
+		if err != nil {
+			continue
+		}
+		path := strings.TrimSpace(string(out))
+		if path == "" {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workspace, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		ref := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(ref, "refs/heads/") {
+			continue
+		}
+		if b := strings.TrimPrefix(ref, "refs/heads/"); b != "" {
+			return b
+		}
+	}
+	return ""
+}
+
+// captureOutcome names WHICH of the three possible realities a conflict capture
+// landed in. They are three distinct states and they get three distinct values:
+// folding them into one empty-slice return is exactly the #301 defect (an empty
+// capture was indistinguishable from a successful one, and the caller then ran
+// the destructive `rebase --abort` and reported the run resumable).
+type captureOutcome string
+
+const (
+	// captureFailed — the capture itself did not work: the unmerged-path probe
+	// errored, the branch could not be named, the index blobs could not be read,
+	// or the write failed. A conflict may well exist and is now recorded NOWHERE,
+	// so the caller MUST NOT run `git rebase --abort`: the index is the only
+	// surviving copy of the evidence.
+	captureFailed captureOutcome = "failed"
+	// captureNoConflictState — the probe succeeded and found zero unmerged paths.
+	// The rebase failed for a reason that is not a content conflict (dirty index,
+	// pre-existing rebase state, unborn base). There is nothing to capture and
+	// nothing for feature-dev to resolve.
+	captureNoConflictState captureOutcome = "no-conflict-state"
+	// captureCaptured — at least one unmerged path, with index blobs, written to
+	// conflict-context-{N}.json and signalled. The ONLY outcome that has earned a
+	// feature-dev re-dispatch.
+	captureCaptured captureOutcome = "captured"
+)
+
+// conflictCapture is the result of captureConflictContextFromIndex.
+type conflictCapture struct {
+	Outcome captureOutcome
+	// Files is the set of unmerged paths the probe found. Populated on
+	// captureCaptured, and also on captureFailed when the failure came AFTER the
+	// probe (so the escalation can still name what was at stake).
+	Files []string
+	// Branch is the branch recorded in the context file. Set on captureCaptured.
+	Branch string
+	// Err explains a captureFailed. Nil otherwise.
+	Err error
 }
 
 // captureConflictContextFromIndex snapshots the in-progress rebase conflict
@@ -266,44 +387,81 @@ func currentBranch(ctx context.Context, workspace string) string {
 // branch-out-of-date calls it so a rebase conflict it cannot land defers to the
 // conflict-recovery rewind instead of escalating immediately (#4072).
 //
-// Returns the conflicting file paths (for evidence). All shell-outs go through
-// execGit so tests can stub them.
-func captureConflictContextFromIndex(ctx context.Context, workspace string, issue, pr int, branch, baseRef, reason string) []string {
-	pipelineDir := filepath.Join(workspace, ".nightgauge", "pipeline")
-	_ = os.MkdirAll(pipelineDir, 0o755)
-
-	// Conflicting files via `git diff --name-only --diff-filter=U`.
+// INVARIANT (#301): it writes conflict-context-{N}.json and emits
+// CONFLICT_RESOLUTION_NEEDED for captureCaptured and for NOTHING else. A failed
+// or empty capture leaves no artifact at all — absence is already handled
+// correctly by ConflictRecoveryLoop.Execute (missing context → human triage),
+// whereas a "capture_failed: true" marker would only work for readers that
+// remembered to check it, and the first reader that forgot would reintroduce
+// this bug. Writing nothing also keeps the emitted document conformant with the
+// published ConflictContextSchema, which requires conflicting_files to be
+// non-empty.
+//
+// All shell-outs go through execGit so tests can stub them.
+func captureConflictContextFromIndex(ctx context.Context, workspace string, issue, pr int, branch, baseRef string) conflictCapture {
+	// Conflicting files via `git diff --name-only --diff-filter=U`. An ERROR here
+	// is not "no conflicting files" — it means we do not know, which is a failed
+	// capture, not an empty one.
+	out, err := execGit(ctx, workspace, "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		return conflictCapture{
+			Outcome: captureFailed,
+			Err:     fmt.Errorf("could not list unmerged paths: %w", err),
+		}
+	}
 	var files []string
-	if out, err := execGit(ctx, workspace, "diff", "--name-only", "--diff-filter=U"); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if f := strings.TrimSpace(line); f != "" {
-				files = append(files, f)
-			}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if f := strings.TrimSpace(line); f != "" {
+			files = append(files, f)
+		}
+	}
+	if len(files) == 0 {
+		return conflictCapture{Outcome: captureNoConflictState}
+	}
+
+	// A conflict exists but we cannot say which branch it is on. feature-dev's
+	// intake refuses to check out the "unknown" sentinel, so a context carrying
+	// it would be re-dispatched against the wrong tree (or no checkout at all).
+	// Treat it as a failed capture so the conflicted index is preserved for
+	// triage rather than aborted away behind a context nobody can act on.
+	if branch == "" || branch == unknownBranch {
+		return conflictCapture{
+			Outcome: captureFailed,
+			Files:   files,
+			Err:     errors.New("could not resolve the branch under rebase"),
 		}
 	}
 
-	// Build conflicting_files[] with ours/theirs blobs.
+	// Build conflicting_files[] with ours/theirs blobs. Track whether ANY index
+	// blob resolved: if every `git show :2:`/`:3:` fails, the index is already
+	// gone and all we have is a list of names — not a capture.
 	cf := make([]map[string]string, 0, len(files))
+	blobsResolved := 0
 	for _, f := range files {
 		ours := ""
 		theirs := ""
 		if b, err := execGit(ctx, workspace, "show", ":2:"+f); err == nil {
 			ours = string(b)
+			blobsResolved++
 		}
 		if b, err := execGit(ctx, workspace, "show", ":3:"+f); err == nil {
 			theirs = string(b)
+			blobsResolved++
 		}
 		cf = append(cf, map[string]string{"path": f, "ours": ours, "theirs": theirs})
+	}
+	if blobsResolved == 0 {
+		return conflictCapture{
+			Outcome: captureFailed,
+			Files:   files,
+			Err:     errors.New("conflicting paths listed but no ours/theirs index blobs could be read"),
+		}
 	}
 
 	if baseRef == "" {
 		baseRef = "main"
 	}
-	if branch == "" {
-		branch = "unknown"
-	}
 
-	// Write conflict-context-{N}.json.
 	contextDoc := map[string]interface{}{
 		"schema_version":    "1.0",
 		"issue_number":      issue,
@@ -313,20 +471,31 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 		"conflicting_files": cf,
 		"created_at":        time.Now().UTC().Format(time.RFC3339),
 	}
-	if data, err := json.MarshalIndent(contextDoc, "", "  "); err == nil {
-		_ = os.WriteFile(filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue)), data, 0o644)
+	data, err := json.MarshalIndent(contextDoc, "", "  ")
+	if err != nil {
+		return conflictCapture{Outcome: captureFailed, Files: files, Err: fmt.Errorf("encode conflict context: %w", err)}
+	}
+	pipelineDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
+		return conflictCapture{Outcome: captureFailed, Files: files, Err: fmt.Errorf("create pipeline dir: %w", err)}
+	}
+	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
+	if err := os.WriteFile(contextPath, data, 0o644); err != nil {
+		return conflictCapture{Outcome: captureFailed, Files: files, Err: fmt.Errorf("write conflict context: %w", err)}
 	}
 
-	// Merge the CONFLICT_RESOLUTION_NEEDED signal into feedback-{N}.json.
-	evidence := files
-	if len(evidence) == 0 {
-		evidence = []string{reason}
-	}
+	// Merge the CONFLICT_RESOLUTION_NEEDED signal into feedback-{N}.json. Without
+	// it the scheduler never rewinds, so a context file with no signal is a
+	// half-written capture — remove it rather than leave a success-shaped artifact
+	// behind a failed capture.
 	cc := conflictContextFile{IssueNumber: issue, PRNumber: pr, Branch: branch, BaseRef: baseRef}
 	loop := &ConflictRecoveryLoop{maxDevRedispatch: DefaultConflictMaxDevRedispatch}
-	_ = loop.ensureFeedbackSignal(filepath.Join(pipelineDir, fmt.Sprintf("feedback-%d.json", issue)), issue, cc, evidence)
+	if err := loop.ensureFeedbackSignal(filepath.Join(pipelineDir, fmt.Sprintf("feedback-%d.json", issue)), issue, cc, files); err != nil {
+		_ = os.Remove(contextPath)
+		return conflictCapture{Outcome: captureFailed, Files: files, Err: fmt.Errorf("write conflict feedback signal: %w", err)}
+	}
 
-	return files
+	return conflictCapture{Outcome: captureCaptured, Files: files, Branch: branch}
 }
 
 // countConflictSignals returns how many CONFLICT_RESOLUTION_NEEDED signals are
@@ -357,11 +526,12 @@ func countConflictSignals(feedbackPath string) int {
 // by double-writing for the same failure). It only writes when NO conflict
 // signal is present yet (e.g. the skill crashed before its write), preserving any
 // existing non-conflict signals such as a concurrent feature-validate revision.
+//
+// files is always non-empty: both call sites reject a zero-file conflict before
+// reaching here (#301), so there is no "signal with no evidence" case to paper
+// over.
 func (a *ConflictRecoveryLoop) ensureFeedbackSignal(feedbackPath string, issue int, cc conflictContextFile, files []string) error {
 	evidence := files
-	if len(evidence) == 0 {
-		evidence = []string{fmt.Sprintf("branch=%s", cc.Branch)}
-	}
 	newSignal := feedbackSignalOnDisk{
 		SignalType:           conflictResolutionSignalType,
 		EmittedByStage:       "pr-merge",

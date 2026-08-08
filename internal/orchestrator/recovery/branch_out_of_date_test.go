@@ -69,9 +69,17 @@ func TestAction_BranchOutOfDate_Matches_AndRecovers(t *testing.T) {
 	if res.FollowUp != FollowUpStageCanResume {
 		t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpStageCanResume)
 	}
-	want := []string{"fetch origin main", "rebase origin/main", "push --force-with-lease"}
-	if len(calls) != 3 {
-		t.Fatalf("expected 3 git calls, got %d (%v)", len(calls), calls)
+	// The branch is resolved FIRST, while HEAD is still attached — `git rebase`
+	// detaches HEAD for its duration, so a later lookup cannot name the branch
+	// (#301). Then the three rebase steps, in order.
+	want := []string{
+		"rev-parse --abbrev-ref HEAD",
+		"fetch origin main",
+		"rebase origin/main",
+		"push --force-with-lease",
+	}
+	if len(calls) != len(want) {
+		t.Fatalf("expected %d git calls, got %d (%v)", len(want), len(calls), calls)
 	}
 	for i, w := range want {
 		if calls[i] != w {
@@ -215,9 +223,18 @@ func TestAction_BranchOutOfDate_NoMatch_FallsThrough(t *testing.T) {
 // returns FollowUpStageCanResume so the conflict-recovery loop rewinds to
 // feature-dev — instead of escalating straight to human triage. The capture
 // MUST happen before the abort.
+//
+// The `rev-parse --abbrev-ref HEAD` stub is STATEFUL on purpose (#301). Real git
+// detaches HEAD for the duration of a rebase and answers the literal "HEAD"; the
+// old stub answered "feat/77-thing" unconditionally — a response git never
+// gives mid-rebase — which is precisely why the branch always landed in the
+// context file as "unknown" while this test stayed green. With the honest stub,
+// moving the branch resolution back inside the failure handler makes the branch
+// unresolvable and this test fails.
 func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 	ws := t.TempDir()
 	aborted := false
+	rebasing := false
 	capturedBeforeAbort := false
 	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
@@ -225,8 +242,13 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 		case joined == "fetch origin main":
 			return []byte(""), nil
 		case joined == "rebase origin/main":
+			rebasing = true
 			return []byte("CONFLICT (content): Merge conflict in foo.go"), errors.New("exit 1: rebase conflict")
 		case joined == "rev-parse --abbrev-ref HEAD":
+			if rebasing {
+				// Detached HEAD — what git actually answers mid-rebase.
+				return []byte("HEAD\n"), nil
+			}
 			return []byte("feat/77-thing\n"), nil
 		case joined == "diff --name-only --diff-filter=U":
 			// Conflict capture happens before the abort.
@@ -240,6 +262,7 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 			return []byte("theirs-content"), nil
 		case joined == "rebase --abort":
 			aborted = true
+			rebasing = false
 			return []byte(""), nil
 		}
 		return []byte(""), nil
@@ -262,10 +285,18 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 		t.Errorf("FollowUp = %q, want stage-can-resume (defer to conflict-recovery)", res.FollowUp)
 	}
 
-	// conflict-context-77.json must have been written.
+	// conflict-context-77.json must have been written, naming the REAL branch.
 	ctxPath := filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")
-	if _, err := os.Stat(ctxPath); err != nil {
-		t.Errorf("expected conflict-context-77.json written, stat err: %v", err)
+	ctxData, err := os.ReadFile(ctxPath)
+	if err != nil {
+		t.Fatalf("expected conflict-context-77.json written, read err: %v", err)
+	}
+	var ctxDoc map[string]interface{}
+	if err := json.Unmarshal(ctxData, &ctxDoc); err != nil {
+		t.Fatalf("parse conflict context: %v", err)
+	}
+	if ctxDoc["branch"] != "feat/77-thing" {
+		t.Errorf("conflict-context branch = %v, want %q", ctxDoc["branch"], "feat/77-thing")
 	}
 	// feedback-77.json must carry a CONFLICT_RESOLUTION_NEEDED signal.
 	fbData, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json"))
@@ -284,6 +315,113 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 	}
 	if !hasConflict {
 		t.Errorf("expected CONFLICT_RESOLUTION_NEEDED signal targeting feature-dev, got %+v", fb.Signals)
+	}
+}
+
+// TestAction_BranchOutOfDate_ConflictProbeFails is the #301 regression for the
+// literal defect in the issue: `git diff --name-only --diff-filter=U` errors, so
+// the conflicting files are UNKNOWN — which is not the same thing as "there are
+// none". A failed probe must not produce a context file that reads as a
+// successful capture, must not emit CONFLICT_RESOLUTION_NEEDED, and above all
+// must not run `git rebase --abort`: that permanently destroys the :2:/:3: index
+// blobs, which are the only surviving copy of the evidence.
+//
+// The real-git tests cover the states git produces on its own; this one covers
+// the probe itself failing, which needs a stub to provoke.
+func TestAction_BranchOutOfDate_ConflictProbeFails(t *testing.T) {
+	ws := t.TempDir()
+	aborted := false
+	rebasing := false
+	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "rebase origin/main":
+			rebasing = true
+			return []byte("CONFLICT (content): Merge conflict in foo.go"), errors.New("exit 1: rebase conflict")
+		case joined == "rev-parse --abbrev-ref HEAD":
+			if rebasing {
+				return []byte("HEAD\n"), nil
+			}
+			return []byte("feat/77-thing\n"), nil
+		case joined == "diff --name-only --diff-filter=U":
+			return nil, errors.New("exit 128: fatal: not a git repository")
+		case joined == "rebase --abort":
+			aborted = true
+			return []byte(""), nil
+		}
+		return []byte(""), nil
+	})
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 1, IssueNumber: 77, Workspace: ws, Reason: "BEHIND",
+	})
+
+	if aborted {
+		t.Error("a failed capture must NOT abort — the conflicted index is the only evidence left")
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")); err == nil {
+		t.Error("a failed capture must not write a conflict context that reads as a successful one")
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json")); err == nil {
+		t.Error("a failed capture must not emit CONFLICT_RESOLUTION_NEEDED")
+	}
+	if res.FollowUp != FollowUpHumanTriageRequired {
+		t.Errorf("FollowUp = %q, want %q — a preserved conflicted index must never be paired with a resumable stage", res.FollowUp, FollowUpHumanTriageRequired)
+	}
+	joinedEvidence := strings.Join(res.Evidence, " ")
+	if !strings.Contains(joinedEvidence, "capture=failed") {
+		t.Errorf("evidence must name the capture outcome, got %v", res.Evidence)
+	}
+	if !strings.Contains(joinedEvidence, "rebase_left_in_progress=true") {
+		t.Errorf("evidence must tell the operator the worktree is intentionally mid-rebase, got %v", res.Evidence)
+	}
+}
+
+// TestAction_BranchOutOfDate_ConflictBlobsUnreadable covers the other half of a
+// failed capture: the paths are listed but neither side's index blob can be
+// read, so all that could be written is a list of names with empty ours/theirs —
+// a context feature-dev cannot resolve anything from. Same handling: no
+// artifact, no signal, no abort.
+func TestAction_BranchOutOfDate_ConflictBlobsUnreadable(t *testing.T) {
+	ws := t.TempDir()
+	aborted := false
+	rebasing := false
+	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case joined == "rebase origin/main":
+			rebasing = true
+			return []byte("CONFLICT"), errors.New("exit 1: rebase conflict")
+		case joined == "rev-parse --abbrev-ref HEAD":
+			if rebasing {
+				return []byte("HEAD\n"), nil
+			}
+			return []byte("feat/77-thing\n"), nil
+		case joined == "diff --name-only --diff-filter=U":
+			return []byte("foo.go\n"), nil
+		case strings.HasPrefix(joined, "show :"):
+			return nil, errors.New("exit 128: path does not exist in the index")
+		case joined == "rebase --abort":
+			aborted = true
+			return []byte(""), nil
+		}
+		return []byte(""), nil
+	})
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, PRNumber: 1, IssueNumber: 77, Workspace: ws, Reason: "BEHIND",
+	})
+
+	if aborted {
+		t.Error("a failed capture must NOT abort")
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")); err == nil {
+		t.Error("a name-only capture with no blobs must not be written as a successful capture")
+	}
+	if res.FollowUp != FollowUpHumanTriageRequired {
+		t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
 	}
 }
 
