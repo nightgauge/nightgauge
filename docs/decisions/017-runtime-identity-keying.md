@@ -52,16 +52,18 @@ We re-key the registry on a **run identity** that is:
    server, and never taken from the network;
 2. **carried on every `pipeline.*` call**, not latched on one at-most-once
    message;
-3. **adopted on sight** by the run-progress verbs when the server has never
-   seen it and it is not provably closed — so a restarted server, a lost
-   `initialized`, or a slow socket never locks a live run out of its own
-   records;
+3. **adopted on sight — exactly once** by the run-progress and terminal verbs
+   when the server has never seen it and it is not provably closed, so a
+   restarted server, a lost `initialized`, or a slow socket never locks a live
+   run out of its own records;
 4. **resolved but never invented** by the administrative verbs (`setPaused`,
    `abandonRun`), which may not manufacture a target;
-5. **refused** only for a run that is provably terminal, where "terminal" is a
-   **durable** fact and not an in-memory one;
-6. **compared at every destructive write, under the lock that resolved it**,
-   with the snapshot filename carrying the identity so the path _is_ the check.
+5. **refused for run content only when the run is provably terminal**, where
+   "terminal" is a **durable** fact travelling on the run's own state, not an
+   in-memory flag on a registry entry;
+6. **compared at every destructive write, under the locks that resolved it**,
+   with the snapshot filename carrying the identity so the path _is_ the check,
+   and with `Persist` itself latch-aware so no in-flight write can undo it.
 
 The issue number is demoted to a **derived index** for lookup and UX. Two
 dispatches of one issue coexist under distinct keys and corrupt nothing; the
@@ -78,8 +80,17 @@ that must be kept in sync.
 platform event and frees the local bookkeeping — while leaving the run's
 identity open, so a wedged process that unwedges an hour later still books its
 own honest record under its own id. That distinction is the correction design
-review forced, and it is what keeps the "a live run is never rejected"
-invariant true (see [Revision history](#revision-history--what-design-review-changed)).
+review forced, and it is what keeps the "a live run's own progress is never
+rejected" invariant true (see
+[Revision history](#revision-history--what-design-review-changed)).
+
+**And it does not let the reconciler close what it cannot prove dead.** Every
+destructive or terminal-emitting path in this ADR is biased in one direction: a
+false "this run is alive" costs a deferred sweep, bounded by the 14-day cap; a
+false "this run is dead" costs a live run its entire record. The **liveness
+ladder** (7.2) and the **deferred startup reconcile** (7.3) exist because the
+first draft of this ADR got that bias backwards at the one call site that fires
+on every Go-backend auto-restart.
 
 ---
 
@@ -143,53 +154,63 @@ Both are analysed in [Alternatives Considered](#alternatives-considered).
 
 The design-phase enumeration, inlined here because this is the permanent record
 and every coverage claim below cites it. F1–F20 are the defects that motivated
-#370; F21–F25 were found by design review of this ADR's first draft and are
-closed by the decisions that review produced.
+#370; F21–F25 were found by design review of this ADR's first draft and F26–F31
+by design review of its second, and all of them are closed by the decisions
+those reviews produced.
 
-| ID  | Failure                                                                                                                                                                                                                            | Where it lives today                                                      |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| F1  | **Identity laundering.** A producer that supplies no identity acquires a runtime it did not start, because the server mints one on miss under a key the producer does not own.                                                     | `server.go:2466-2476`                                                     |
-| F2  | **Cross-run cost/token booking.** A zombie's transitions accumulate onto a live successor's `RuntimeState`.                                                                                                                        | issue-keyed `activeRuntimes`                                              |
-| F3  | **Snapshot destruction by a zombie.** The `failed`-transition `os.Remove` deletes a live successor's crash snapshot.                                                                                                               | `server.go:2592`                                                          |
-| F4  | **Wrong authoritative record.** A zombie's `notifyComplete` writes the V2 record and the calibration row under the successor's `RunID`.                                                                                            | `server.go` notifyComplete                                                |
-| F5  | **Registry eviction of a successor.** The issue-keyed delete after seconds of unlocked I/O removes an entry installed during that window.                                                                                          | `server.go:2670`, `:2957-2966`                                            |
-| F6  | **History-record collision.** Two runs of one issue sharing a `RunID` produce one ledger key; one record is dropped or overwritten, and `repair-history` cannot recover it after the fact.                                         | #313/#316 `run:<id>` key                                                  |
-| F7  | **Fallback-key collision.** The `issue:{N}\|{whole UTC second}` fallback makes two dispatches started in the same second one run to the ledger.                                                                                    | history fallback key                                                      |
-| F8  | **Cross-repo collision.** Repo A #42 and repo B #42 share a registry key, a snapshot filename and a record key, with no force-clear involved.                                                                                      | issue-keyed everything                                                    |
-| F9  | **`setPaused` stub.** Mints a runtime with no repo and no `RunID`; can pause a **live successor**; and because `collectOrphanedRuns` skips paused snapshots, pins the issue against #44 forever.                                   | `server.go:2358`                                                          |
-| F10 | **Phase/progress cross-run writes.** `notifyPhaseTransition` and `notifyStageProgress` resolve by issue, so a zombie's phases land in a live run's `PhaseHistory` and authoritative record.                                        | `server.go:2634, 2663, 2986`                                              |
-| F11 | **Reconcile dead at the root switch.** A force-cleared run's own entry makes `skipIssue` true for the life of the server, so `workspace.setRoot` never reconciles exactly the runs that need it.                                   | `pipeline_orphan_reconcile.go:138-144`                                    |
-| F12 | **Confidently-wrong issue-addressed reads.** `getState` serves a dead run's snapshot for that issue indefinitely.                                                                                                                  | `getState` resolution                                                     |
-| F13 | **Shared-namespace last-write-wins.** Five writers in three processes marshal whole snapshots into one filename with no merge.                                                                                                     | `RuntimeState.Persist`                                                    |
-| F14 | **The force-clear card has no run id.** `runTraceRef` resolves to nothing, so the card cannot reach the ADR-013 trace of the run it describes.                                                                                     | `attention_wiring.go` `BuildAbandonedDispatch`                            |
-| F15 | **SDK trace recorder guesses the run id** from `runtime-{issue}.json`, which is wrong after any adoption or steal.                                                                                                                 | `traceRecorder.ts:288`                                                    |
-| F16 | **Permanent lockout from one lost message** (the refuted latch design): a live, successful run records nothing at all.                                                                                                             | Alternative A                                                             |
-| F17 | **Token-less-producer steal.** A guard gated on `token != ""` is bypassed by every producer that has no token, which then steals a live run.                                                                                       | refuted round-2 design                                                    |
-| F18 | **Extension-side terminal double-book.** A force-cleared dispatch settles late and books its terminal outcome twice.                                                                                                               | #307 PROBE-X / PROBE-Y                                                    |
-| F19 | **Zombie-driven `stateChanged` applied to a successor's slot UI.**                                                                                                                                                                 | `PipelineSlotsTracker`, `PipelineStateService`                            |
-| F20 | **Two locks, one comparator.** `RunID` is written under `Server.runtimesMu` and read under `RuntimeState.mu` in `snapshotLocked`/`Persist` — a torn read a sequential `-race` test would not catch.                                | `server.go` / `runtime_state.go`                                          |
-| F21 | **Live-run reconciliation across registries.** The reconcile skip consults only the IPC registry, so every `workspace.setRoot` emits a terminal `pipeline_done` for each live **Go-scheduler** run and deletes its crash snapshot. | `pipeline_orphan_reconcile.go:138-144` vs `scheduler.go:4043, 4460, 6271` |
-| F22 | **Cross-process resurrection.** `AppendStageGateResultToDisk`'s create-on-miss recreates a snapshot the terminal claim just removed, from a process with no registry and no latch.                                                 | `runtime_state.go:784-791`                                                |
-| F23 | **Shared-holder minting.** Three producers stamp an identity onto one singleton `PipelineStateService`, so the last minter relabels a live run's remaining traffic — F1 reproduced through the client.                             | `retryFailedIssue.ts:94-123`, `bootstrap/services.ts`                     |
-| F24 | **Local-only inertness.** Reconciliation and retention are gated on `analyticsSvc != nil`, so a workspace with no platform account collects nothing and `.nightgauge/pipeline/` grows without bound.                               | `pipeline_orphan_reconcile.go` first line                                 |
-| F25 | **CLI-run discovery by issue filename.** `CliPipelineReconciliationService` reads `runtime-{issue}.json`, and its `current-run.json` sidecar carries no run id — so a filename change makes it silently blind.                     | `CliPipelineReconciliationService.ts:137`                                 |
+| ID  | Failure                                                                                                                                                                                                                                                     | Where it lives today                                                      |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| F1  | **Identity laundering.** A producer that supplies no identity acquires a runtime it did not start, because the server mints one on miss under a key the producer does not own.                                                                              | `server.go:2466-2476`                                                     |
+| F2  | **Cross-run cost/token booking.** A zombie's transitions accumulate onto a live successor's `RuntimeState`.                                                                                                                                                 | issue-keyed `activeRuntimes`                                              |
+| F3  | **Snapshot destruction by a zombie.** The `failed`-transition `os.Remove` deletes a live successor's crash snapshot.                                                                                                                                        | `server.go:2592`                                                          |
+| F4  | **Wrong authoritative record.** A zombie's `notifyComplete` writes the V2 record and the calibration row under the successor's `RunID`.                                                                                                                     | `server.go` notifyComplete                                                |
+| F5  | **Registry eviction of a successor.** The issue-keyed delete after seconds of unlocked I/O removes an entry installed during that window.                                                                                                                   | `server.go:2670`, `:2957-2966`                                            |
+| F6  | **History-record collision.** Two runs of one issue sharing a `RunID` produce one ledger key; one record is dropped or overwritten, and `repair-history` cannot recover it after the fact.                                                                  | #313/#316 `run:<id>` key                                                  |
+| F7  | **Fallback-key collision.** The `issue:{N}\|{whole UTC second}` fallback makes two dispatches started in the same second one run to the ledger.                                                                                                             | history fallback key                                                      |
+| F8  | **Cross-repo collision.** Repo A #42 and repo B #42 share a registry key, a snapshot filename and a record key, with no force-clear involved.                                                                                                               | issue-keyed everything                                                    |
+| F9  | **`setPaused` stub.** Mints a runtime with no repo and no `RunID`; can pause a **live successor**; and because `collectOrphanedRuns` skips paused snapshots, pins the issue against #44 forever.                                                            | `server.go:2358`                                                          |
+| F10 | **Phase/progress cross-run writes.** `notifyPhaseTransition` and `notifyStageProgress` resolve by issue, so a zombie's phases land in a live run's `PhaseHistory` and authoritative record.                                                                 | `server.go:2634, 2663, 2986`                                              |
+| F11 | **Reconcile dead at the root switch.** A force-cleared run's own entry makes `skipIssue` true for the life of the server, so `workspace.setRoot` never reconciles exactly the runs that need it.                                                            | `pipeline_orphan_reconcile.go:138-144`                                    |
+| F12 | **Confidently-wrong issue-addressed reads.** `getState` serves a dead run's snapshot for that issue indefinitely.                                                                                                                                           | `getState` resolution                                                     |
+| F13 | **Shared-namespace last-write-wins.** Five writers in three processes marshal whole snapshots into one filename with no merge.                                                                                                                              | `RuntimeState.Persist`                                                    |
+| F14 | **The force-clear card has no run id.** `runTraceRef` resolves to nothing, so the card cannot reach the ADR-013 trace of the run it describes.                                                                                                              | `attention_wiring.go` `BuildAbandonedDispatch`                            |
+| F15 | **SDK trace recorder guesses the run id** from `runtime-{issue}.json`, which is wrong after any adoption or steal.                                                                                                                                          | `traceRecorder.ts:288`                                                    |
+| F16 | **Permanent lockout from one lost message** (the refuted latch design): a live, successful run records nothing at all.                                                                                                                                      | Alternative A                                                             |
+| F17 | **Token-less-producer steal.** A guard gated on `token != ""` is bypassed by every producer that has no token, which then steals a live run.                                                                                                                | refuted round-2 design                                                    |
+| F18 | **Extension-side terminal double-book.** A force-cleared dispatch settles late and books its terminal outcome twice.                                                                                                                                        | #307 PROBE-X / PROBE-Y                                                    |
+| F19 | **Zombie-driven `stateChanged` applied to a successor's slot UI.**                                                                                                                                                                                          | `PipelineSlotsTracker`, `PipelineStateService`                            |
+| F20 | **Two locks, one comparator.** `RunID` is written under `Server.runtimesMu` and read under `RuntimeState.mu` in `snapshotLocked`/`Persist` — a torn read a sequential `-race` test would not catch.                                                         | `server.go` / `runtime_state.go`                                          |
+| F21 | **Live-run reconciliation across registries.** The reconcile skip consults only the IPC registry, so every `workspace.setRoot` emits a terminal `pipeline_done` for each live **Go-scheduler** run and deletes its crash snapshot.                          | `pipeline_orphan_reconcile.go:138-144` vs `scheduler.go:4043, 4460, 6271` |
+| F22 | **Cross-process resurrection.** `AppendStageGateResultToDisk`'s create-on-miss recreates a snapshot the terminal claim just removed, from a process with no registry and no latch.                                                                          | `runtime_state.go:784-791`                                                |
+| F23 | **Shared-holder minting.** Three producers stamp an identity onto one singleton `PipelineStateService`, so the last minter relabels a live run's remaining traffic — F1 reproduced through the client.                                                      | `retryFailedIssue.ts:94-123`, `bootstrap/services.ts`                     |
+| F24 | **Local-only inertness.** Reconciliation and retention are gated on `analyticsSvc != nil`, so a workspace with no platform account collects nothing and `.nightgauge/pipeline/` grows without bound.                                                        | `pipeline_orphan_reconcile.go` first line                                 |
+| F25 | **CLI-run discovery by issue filename.** `CliPipelineReconciliationService` reads `runtime-{issue}.json`, and its `current-run.json` sidecar carries no run id — so a filename change makes it silently blind.                                              | `CliPipelineReconciliationService.ts:137`                                 |
+| F26 | **Startup reconcile closes live runs on every backend auto-restart.** The client restarts the Go binary while the extension host and its in-flight runs survive; the fresh server's registries are empty, so the startup sweep terminates and deletes them. | `IpcClientBase.ts:1456-1485` vs `server.go:654`                           |
+| F27 | **In-flight `Persist` resurrects a removed snapshot.** A handler that resolved a runtime, unlocked, then persists re-creates the file the terminal claim just removed — non-terminal and rehydratable, from inside the same process.                        | `server.go:2585-2597` vs the terminal claim                               |
+| F28 | **Pause-restore replays an identity it did not mint.** The restore prompt reads a paused snapshot on every activation and resumes under its id with nothing consuming the file, so two extension hosts can drive one run id.                                | `bootstrap/services.ts:1168-1220`                                         |
+| F29 | **Terminal/administrative verbs served from the scheduler registry.** A registry with no `runEntry`, no latch, no lease and no compare-and-delete target degrades the terminal claim to "snapshot and write" — two authoritative writers per `run:<id>`.    | Decision 11's resolution order, first draft                               |
+| F30 | **Concurrent adoption of one id.** Every request runs in its own goroutine; two misses for one unknown id both load from disk and both construct a `*RuntimeState`, and the loser's accumulated stages vanish under same-file last-write-wins.              | `server.go:678` + adoption                                                |
+| F31 | **`attention.raise`'s run id is guessed from an unrelated file.** `readCurrentRunId` reads the scheduler/CLI `run-state.json`, so on the extension path — the entire population of run-scoped raises — the id is empty or foreign. F15's class, new site.   | `HeadlessOrchestrator.ts:1525-1544`                                       |
 
 ## Constraints
 
-| ID  | Constraint                                                                                                                                                                                                                                                                     |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| C1  | #44's existing reconciler skips must be preserved: **paused** snapshots (they power #2008) and **identity-less** snapshots are never reconciled into a bogus terminal event.                                                                                                   |
-| C2  | #304's outcome recording must stay **at most once per run**.                                                                                                                                                                                                                   |
-| C3  | #305's corroboration rules must hold: exact repo match on both arms, and spend summed only over stages the daemon watched **begin**.                                                                                                                                           |
-| C4  | #313/#316's history identity and **single authoritative writer** must hold: one serialized idempotent append path, first-write-wins, richer-upgrade-only, skeletons never overwrite.                                                                                           |
-| C5  | #2008 pause-restore must keep working, including across an IPC-server restart.                                                                                                                                                                                                 |
-| C6  | The snapshot must stay: (a) discoverable by directory scan with no index, (b) parseable by a process with no registry, (c) atomically written, (d) rooted in the run's **target** repo (#215/#307), and (e) never written for an unattributed runtime (the `repo != ""` gate). |
-| C7  | A successor entry installed during `notifyComplete`'s unlocked window must survive that window.                                                                                                                                                                                |
-| C8  | The IPC socket's trust model (ADR 015 §N) may not be **widened**: no new verb may give an unauthenticated caller a capability against a run it did not start that it does not already have.                                                                                    |
-| C9  | **Fail-open.** A refused or lost IPC call must never kill a live run; the run continues on its local cache. The two new client-side run-id filters are the migration surface for this.                                                                                         |
-| C10 | #307's guarantees: permanent tombstones, `await`-free check-and-claim boundaries, `stillOwnsIssue` reading `slots ∪ reservedSlots`, and the sha256-pinned terminal-parity fences.                                                                                              |
-| C11 | The Go scheduler's `map[int]*RuntimeState` registry is **out of re-keying scope** for this ADR — but it is not out of **correctness** scope (see F21, and Decision 11).                                                                                                        |
-| C12 | Third-process seams (`nightgauge gate verify --record`, the SDK `TraceRecorder`) must get the identity **threaded**, never guessed.                                                                                                                                            |
+| ID  | Constraint                                                                                                                                                                                                                                                                                                            |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | #44's existing reconciler skips must be preserved: **paused** snapshots (they power #2008) and **identity-less** snapshots are never reconciled into a bogus terminal event.                                                                                                                                          |
+| C2  | #304's outcome recording must stay **at most once per run**.                                                                                                                                                                                                                                                          |
+| C3  | #305's corroboration rules must hold: exact repo match on both arms, and spend summed only over stages the daemon watched **begin**.                                                                                                                                                                                  |
+| C4  | #313/#316's history identity and **single authoritative writer** must hold: one serialized idempotent append path, first-write-wins, richer-upgrade-only, skeletons never overwrite.                                                                                                                                  |
+| C5  | #2008 pause-restore must keep working, including across an IPC-server restart.                                                                                                                                                                                                                                        |
+| C6  | The snapshot must stay: (a) discoverable by directory scan with no index, (b) parseable by a process with no registry, (c) atomically written, (d) rooted in the run's **target** repo (#215/#307), and (e) never written for an unattributed runtime (the `repo != ""` gate).                                        |
+| C7  | A successor entry installed during `notifyComplete`'s unlocked window must survive that window.                                                                                                                                                                                                                       |
+| C8  | The IPC socket's trust model (ADR 015 §N) may not be **widened**: no new verb may give an unauthenticated caller a capability against a run it did not start that it does not already have.                                                                                                                           |
+| C9  | **Fail-open.** A refused or lost IPC call must never kill a live run; the run continues on its local cache. The two new client-side run-id filters are the migration surface for this.                                                                                                                                |
+| C10 | #307's guarantees: permanent tombstones, `await`-free check-and-claim boundaries, `stillOwnsIssue` reading `slots ∪ reservedSlots`, and the sha256-pinned terminal-parity fences.                                                                                                                                     |
+| C11 | The Go scheduler's `map[int]*RuntimeState` registry is **out of re-keying scope** for this ADR — but it is not out of **correctness** scope (see F21, and Decision 11).                                                                                                                                               |
+| C12 | Third-process seams (`nightgauge gate verify --record`, the SDK `TraceRecorder`) must get the identity **threaded**, never guessed.                                                                                                                                                                                   |
+| C13 | **Reconciliation may only close a run it can prove dead.** An empty registry is not evidence of death — the Go backend is auto-restarted under a surviving extension host (F26). Liveness evidence is a registry entry, a live recorded PID, or a fresh lease; its absence is decisive only outside the grace window. |
+| C14 | **Adoption is exactly-once per identity within a process.** It is the ordinary post-restart path, it performs I/O, and every request runs in its own goroutine, so two concurrent adoptions of one id may never produce two `*RuntimeState` objects (F30).                                                            |
+| C15 | **Claiming a paused snapshot must be atomic-exclusive.** Two extension hosts scanning one pipeline dir may both see a paused snapshot; at most one may resume it (F28).                                                                                                                                               |
 
 ---
 
@@ -308,14 +329,21 @@ today with the Go-minted UUID, and joins to its own trigger through
 `runstate.RunID` (`scheduler.go:2758-2762`) is deleted for the same reason**;
 the scheduler keeps minting locally and carries the remote id alongside.
 
-### 3. Every `pipeline.*` call carries the identity; there are two verb classes
+### 3. Every `pipeline.*` call carries the identity, and the verb class decides everything
+
+Four classes, and the class is resolved **before** any registry is consulted:
+**run-progress** (a caller describing its own run), **terminal** (the claim),
+**administrative** (a caller asserting something _about_ a run), and **lookup**.
+The first draft had two, and folded the terminal claim into run-progress —
+which is how a terminal verb could be served from a registry that cannot latch
+it (F29).
 
 | Method                           | `runId`      | Class          | Notes                                                                            |
 | -------------------------------- | ------------ | -------------- | -------------------------------------------------------------------------------- |
 | `pipeline.notifyStageTransition` | **required** | run-progress   | `initialized` loses all special status — it is one transition among many         |
 | `pipeline.notifyPhaseTransition` | **required** | run-progress   |                                                                                  |
 | `pipeline.notifyStageProgress`   | **required** | run-progress   |                                                                                  |
-| `pipeline.notifyComplete`        | **required** | terminal claim | Decision 5                                                                       |
+| `pipeline.notifyComplete`        | **required** | terminal       | Decision 5                                                                       |
 | `pipeline.setPaused`             | **required** | administrative | gains `repo` + `issueNumber`; **resolves, never creates** (Decision 7)           |
 | `pipeline.abandonRun`            | **required** | administrative | new verb; gains `repo` + `issueNumber`; **resolves, never creates** (Decision 7) |
 | `pipeline.getState`              | _optional_   | lookup         | not a run message; issue-addressed reads stay supported (Decision 6)             |
@@ -325,17 +353,60 @@ There is no separate handshake message and no state machine over message types.
 message costs exactly that message's content and nothing else — which is the
 property the latch-on-`initialized` design failed to have.
 
-The server's rule is five lines, and the **last** line is the one that differs
-by class:
+The server's rule is six lines, and **the verb class is decided on line 3,
+before any registry is consulted**:
 
 ```
-if runId == ""                      → error  run_id_required   (an old client, or a producer that has none)
-if !matchesIdentityRegex(runId)     → error  run_id_invalid    (Decision 1 — checked BEFORE any use)
-if closedRuns.has(runId)            → error  run_closed        (durable — Decision 4)
-if resolve(runId) != nil            → serve  (Decision 11 picks WHICH registry)
-run-progress   → ADOPT and serve                               (Decision 4)
-administrative → resolve from disk, else error run_not_found; NEVER create
+1  if runId == ""                   → error  run_id_required   (an old client, or a producer that has none)
+2  if !matchesIdentityRegex(runId)  → error  run_id_invalid    (Decision 1 — checked BEFORE any use)
+3  class := classOf(method)         → run-progress | terminal | administrative | lookup
+4  if closedRuns.has(runId)         → error  run_closed        (fast path; the DURABLE authority is Decision 4's
+                                                                terminal marker — see "closedRuns is a cache")
+5  resolve(runId) under the CLASS's registry policy              (the table below; Decision 11)
+6  unresolved → run-progress/terminal: adopt (Decision 4)
+               administrative:        error run_not_found; NEVER create
 ```
+
+**Line 3 moved, and that is a design change, not a re-ordering of prose.** The
+first draft branched by class only after step 3 of Decision 11's resolution
+order — a step that never reached the class check when the scheduler registry
+happened to hold the id. `notifyComplete` carrying a live scheduler run's id was
+therefore **served** from a registry that has no `runEntry`, no terminal latch,
+no `LastSeen` and no compare-and-delete target: the terminal claim degraded to
+"snapshot and write", writing a V2 record and a learning-corpus row for a run
+whose scheduler path writes its own through `OnPipelineComplete` — two
+authoritative records under one `run:<id>`, breaking exactly the C4 rule this
+ADR promises to preserve (F29). `abandonRun` and `setPaused` reached it the same
+way: a scheduler entry _is_ a resolution, so an administrative verb could emit a
+terminal `pipeline_done` for a live scheduler run and stamp `abandoned` into its
+snapshot. "The scheduler path never calls `notifyComplete`" is a statement about
+today's TypeScript, not an invariant of an unauthenticated socket (R-2).
+
+**Per verb class, per registry — the complete disposition:**
+
+| Resolves in →                                  | IPC registry (`activeRuntimes`) | Scheduler registry (`map[int]`, C11)                                 | On-disk snapshot                                     | Nothing                      |
+| ---------------------------------------------- | ------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------- | ---------------------------- |
+| **run-progress** (transition, phase, progress) | serve; refresh `LastSeen`       | **serve read-through** onto the scheduler's own runtime; never adopt | **adopt + rehydrate** (refuse a `terminal` snapshot) | **adopt empty**              |
+| **terminal** (`notifyComplete`)                | claim (Decision 5)              | **REFUSE `run_wrong_owner`** — no latch, no lease, no delete target  | **adopt + rehydrate**, then claim                    | **adopt empty**, then claim  |
+| **administrative** (`setPaused`, `abandonRun`) | resolve; corroborate repo+issue | **REFUSE `run_wrong_owner`**                                         | resolve **read-only**; never create an entry         | `run_not_found` / `no_run`   |
+| **lookup** (`getState`)                        | read                            | read                                                                 | read                                                 | empty response, not an error |
+
+`run_wrong_owner` is a new, distinct error code, and it is a **refusal to
+degrade** rather than a capability check: the scheduler owns that run's terminal
+bookkeeping through `OnPipelineComplete`, and the only correct answer to "close
+this scheduler run over IPC" is "that is not this socket's run to close".
+Refusing it costs nothing that C9 protects — the scheduler still books the run's
+record on its own path — and it is logged loudly in Go with the resolved
+registry named, because on today's tree it should be unreachable and a
+non-zero count is a real signal.
+
+The corollary the ADR states rather than leaves implicit: **there is no IPC
+route to abandon or pause a Go-scheduler run.** The scheduler's own cancellation
+path is the route, and unifying the two is exactly what R-5's re-key of
+`Scheduler.activeRuntimes` buys. Inventing a second one here would mean
+duplicating the latch, the lease and the compare-and-delete into a registry this
+ADR has explicitly scoped out (C11) — the "two registries with different
+invariants" shape Alternative B was refuted for.
 
 The two id errors are distinct on purpose: `run_id_required` is what a
 version-skewed client produces and is the signal the Migration hard-fail exists
@@ -389,27 +460,93 @@ both normative:
 re-handshake instruction and no `reHandshakeRequired` flag, because there is no
 actor on the TypeScript side to act on one — inventing a recipient for a
 rejection is how the permanent lockout was designed in the first place. The
-invariant that makes this safe: **a live run can never be rejected**, and it
-holds because `run_closed` is set by exactly one thing — a run's own
-`notifyComplete` terminal claim — and `run_not_found` is reachable only for
-administrative verbs, which never carry run content. The first draft broke this
-invariant by having `abandonRun` write to `closedRuns`; Decision 7 is the
-correction.
+invariant that makes this safe: **a live run's own progress can never be
+rejected**, and it holds because `run_closed` is set by exactly one thing — a
+run's own `notifyComplete` terminal claim — while `run_not_found` and
+`run_wrong_owner` are reachable only for verbs that carry **no run content**:
+
+| Error             | Reachable on                                         | Can it discard a live run's stage/cost/phase data? |
+| ----------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `run_id_required` | any verb, from a producer with no id                 | No — unreachable after plan step 0b (Decision 10)  |
+| `run_id_invalid`  | any verb, malformed value                            | No — a live run's ids are minted, never typed      |
+| `run_closed`      | any verb, after that run's own claim                 | No — its content is already booked                 |
+| `run_not_found`   | administrative verbs only                            | No — they carry no run content                     |
+| `run_wrong_owner` | terminal + administrative verbs, scheduler-owned run | No — the scheduler books that run itself           |
+
+The four run-progress verbs — the only ones that carry a live run's data — can
+return **none** of the last three. The first draft broke this invariant by
+having `abandonRun` write to `closedRuns` (Decision 7 is the correction) and
+nearly broke it again by letting `notifyComplete` be served from the scheduler
+registry, which would have written a **second** authoritative record rather than
+rejecting anything — the inverse failure, and worse.
 
 ### 4. Adoption is the answer to "unknown identity" for run-progress verbs, and it rehydrates
 
 When the server sees a `runId` it has no entry for, that is not in `closedRuns`,
-and that arrives on a **run-progress** verb, it **creates the entry and serves
-the call**. This is safe in a way that mint-on-miss never was, because the
-identity came from the caller: an adopting zombie re-creates **its own** run
-under **its own** key, where every write it makes lands on its own record and
-touches no other run.
+and that arrives on a **run-progress** or **terminal** verb, it **creates the
+entry and serves the call**. This is safe in a way that mint-on-miss never was,
+because the identity came from the caller: an adopting zombie re-creates **its
+own** run under **its own** key, where every write it makes lands on its own
+record and touches no other run.
 
 Adoption **rehydrates from disk when it can.** The snapshot path is fully
 derivable from the call's own parameters (`repo` → repo root, plus `issue` and
 `runId`), so adoption reads `runtime-{issue}-{runId}.json` and restores the run's
 accumulated history rather than starting empty. This turns the ordinary case —
 an IPC server restarted mid-run — from lossy into very nearly lossless.
+
+#### Adoption is exactly-once per identity: a per-id singleflight (C14)
+
+Adoption is a **check → disk read → insert**, and `server.go:678` fans every
+request into its own goroutine. The post-restart case this decision names as the
+_ordinary_ one is therefore concurrent by default: the extension's
+`notifyStageProgress` (≥5s cadence, `PipelineBridge.ts:355`) and its next
+`notifyStageTransition` arrive for the same unknown id within milliseconds. If
+both miss, both load, and both construct a `*RuntimeState`, one wins
+`activeRuntimes[runId]` and the loser's handler keeps mutating an orphaned
+object whose `Persist` targets the **same filename** — same-run field loss
+inside one process, which would falsify R-1's claim that re-keying narrows F13
+to a cross-process residual (F30).
+
+The resolution is a **singleflight keyed by `runId`**, with the disk read
+outside `runtimesMu` and both the check and the insert inside it:
+
+```
+resolveOrAdopt(runId, class, params):
+  LOCK runtimesMu
+    if e := reg[runId];      e != nil { e.LastSeen = now; UNLOCK; return e }
+    if f := adopting[runId]; f != nil { UNLOCK; <-f.done; return f.entry }   // wait; do not load
+    f := newFlight(); adopting[runId] = f                                   // this goroutine owns the load
+  UNLOCK
+
+  rs, terminalOnDisk, err := loadSnapshot(stateDir(params.repo), runId)     // I/O, unlocked
+
+  LOCK runtimesMu
+    delete(adopting, runId)
+    if terminalOnDisk { closedRuns.add(runId); f.entry = nil; f.err = run_closed }
+    else             { f.entry = newEntry(rs or empty); reg[runId] = f.entry }
+  UNLOCK
+  close(f.done)                                                            // ALWAYS, via defer
+  return f.entry, f.err
+```
+
+Exactly one goroutine per id performs the load and the insert; every other
+caller for that id **waits and receives the same `*runEntry`**, so two
+`*RuntimeState` objects for one identity cannot exist. The flight is closed from
+a `defer`, so a load that panics (the handler's `recover` at `server.go:680`
+would otherwise swallow it) never strands a waiter.
+
+**The I/O-under-lock tradeoff, stated rather than assumed.** The obvious
+alternative is one check-load-insert critical section holding `runtimesMu`
+across the read. It is correct, and it is rejected: `runtimesMu` is a
+**server-global** lock also taken by Decision 6's derived index scan and by the
+reconciler, so holding it across a synchronous file read serialises every
+_other_ run's handlers behind one run's disk latency. Adoption is the ordinary
+path after a restart, so the pathological case is not exotic — N runs
+re-asserting at once would serialise N reads. The singleflight keeps the lock's
+hold time at O(map operations) while still giving exactly-once semantics per id;
+the price is one more piece of state (`adopting map[string]*flight`) and the
+discipline that every exit path closes the flight. Recorded as Alternative K.
 
 **"Closed" is a durable fact, not an in-memory one, and rehydration honours
 it.** The first draft leaned on a self-verifying property — "a terminal run has
@@ -446,6 +583,45 @@ written if it is all we have. Because rehydration from a terminal snapshot is
 now impossible, a post-restart zombie's record is **always** the poorer one, so
 C4's rule resolves it correctly rather than accidentally.
 
+#### `closedRuns` is a cache; the durable terminal marker is the authority
+
+The first draft stated this three incompatible ways — a "durable on-disk
+backing" in Consequences, a snapshot field plus opportunistic repopulation here,
+and R-4's flat "does not survive a server restart". A reader implementing from
+one built a durable set and a reader implementing from another built a volatile
+one, and the two give different answers to a late duplicate `notifyComplete`.
+**One story, and every rule that leans on "run_closed" cites it:**
+
+- **`closedRuns` is an in-memory FIFO ring, capped at 1024 run ids.** It is
+  never persisted and never loaded. Ids are inserted once and never re-touched,
+  so an LRU would degenerate to a FIFO anyway; the cap is stated as a FIFO to
+  keep the eviction order decidable by a reader. 1024 × a 36-byte id bounds it
+  at ~40 KB and covers weeks of runs at any plausible dispatch rate.
+- **The authority is the durable `terminal` marker** stamped into
+  `runtime-{issue}-{runId}.json` before removal (fix #1 above). While the file
+  exists, "closed" is decidable by any process, across any restart. Adoption
+  reading a `terminal` snapshot re-populates `closedRuns` — that is the ring's
+  only refill path.
+- **Once the file is gone, there is no durable authority, and that is
+  deliberate.** The alternative — a persistent closed-run journal — is a second
+  writer over run state whose retention has to be managed, revisiting the #316
+  lesson ADR 015 Decision C already paid for. Recorded as Alternative L.
+
+**The late-duplicate outcome, specified for every case** — this is what makes
+"run_closed is durable" safe to _not_ claim:
+
+| Late duplicate arrives when…                                                                      | Result                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| id is in the ring                                                                                 | `run_closed` error. Nothing written.                                                                                                                                                                                                             |
+| evicted from the ring, snapshot still on disk (removal failed / crashed between write and remove) | adoption reads `terminal: true` → refuses, re-populates the ring → `run_closed`. Nothing written.                                                                                                                                                |
+| evicted **and** the snapshot was removed cleanly                                                  | adopt-empty → skeleton record **dropped** by C4's richer-upgrade-only rule → learning row **dropped** by Decision 9's corpus dedup (which reads the durable corpus) → **one spurious `pipeline_done`** and nothing else. This is R-4, unchanged. |
+| server restarted (ring empty by construction)                                                     | identical to the two rows above, decided by whether the snapshot survived.                                                                                                                                                                       |
+
+Eviction therefore cannot produce a wrong record, a doubled outcome or a
+reopened run — it can only downgrade a cheap in-memory refusal into R-4's
+one-event noise. Decision 3's line 4 says so inline, so a reader implementing
+the five-line server rule cannot build the durable variant by mistake.
+
 ### 5. Terminal is a latch — in-process for the registry, durable on disk for everyone else
 
 `notifyComplete` today unlocks at `server.go:2670`, does seconds of unlocked
@@ -454,25 +630,128 @@ I/O — ground-truth reconciliation, classification file reads, `BuildV2Record`,
 deletes `activeRuntimes[<issue>]` and `os.Remove`s `runtime-{issue}.json` with
 no re-read and no identity check.
 
-The replacement is a **claim**, not a longer critical section:
+The replacement is a **claim**, not a longer critical section. The sequence is
+normative and complete — a mutation that is not in it is refused, and anything
+added later must be added here or it does not happen:
 
-1. **Claim, under `runtimesMu`:** resolve by `runId`; absent → adopt; already
-   `terminal` → `run_closed` error; otherwise set `entry.terminal = true` and
-   take the `*RuntimeState` **snapshot inside the same critical section**.
+1. **Claim.** Under `runtimesMu`, and (for 1b–1d) `rs.mu` nested inside it:
+
+   - **1a. Resolve.** By `runId`, through the class policy of Decision 3 (a
+     scheduler-owned id is `run_wrong_owner` and stops here); absent → adopt via
+     the singleflight; `entry.terminal` already set → `run_closed`.
+   - **1b. Replay the dispatcher's terminal payload.** `p.StageExecutionPaths`
+     → `rt.RecordExecutionPath`, `p.StagePuntReasons` →
+     `rt.RecordStagePuntReason` (`server.go:2690-2700`, #309). **These are the
+     last mutations the run will ever accept**, and they run _inside_ the claim
+     rather than before it.
+   - **1c. Latch, both halves.** `entry.terminal = true` (registry admission)
+     **and** `rt.MarkTerminal(outcome)` under `rs.mu`, which sets the persisted
+     `RuntimeState.Terminal` / `TerminalAt` on the **live object**.
+   - **1d. Snapshot.** `snap := rt.Snapshot()` inside the same critical section.
+
    Release.
-2. **Work, unlocked,** against the snapshot taken under the lock — never
-   against the live pointer.
+
+2. **Work, unlocked,** against `snap` — never against the live pointer.
 3. **Compare-and-delete, under `runtimesMu`:** delete `activeRuntimes[runId]`
    **only if the entry stored there is the same pointer that was claimed**, and
    record the id in `closedRuns`.
-4. **Stamp the terminal marker** into `runtime-{issue}-{runId}.json` under the
-   directory derived from the **claimed snapshot's** `Repo` (Decision 4).
-5. **Remove that same path.** **The path is the identity**, so this cannot take
-   a successor's file even in principle — the strongest available form of an
-   identity-checked destructive write.
+4. **Seal and remove, under `rs.mu`, as one operation** (`rt.SealAndRemove`):
+   write the terminal-stamped snapshot through `AtomicWriteFile` into
+   `runtime-{issue}-{runId}.json` under the directory derived from the **claimed
+   snapshot's** `Repo` (Decision 4), `os.Remove` that same path, then set
+   `rs.sealed = true`. **The path is the identity**, so this cannot take a
+   successor's file even in principle — the strongest available form of an
+   identity-checked destructive write. Write-then-remove is idempotent if the
+   reconciler removed the file first: the write re-creates it as terminal and
+   the remove takes it away again, net nothing.
 
-Once `terminal` is set, the entry refuses every further mutation _and every
-further `Persist`_. **That latch is in-process, and this ADR says so rather
+**Why #309's replay is step 1b and not a step of its own** (it had no slot at
+all in the first draft, which is how it became a silent regression). Today it
+mutates the live runtime _before_ snapshotting, because `BuildV2Record` projects
+`execution_path` / `punt_reason` off the snapshot. Under a claim sequence that
+latches first, the replay would be **refused** — every extension-path history
+record silently losing #309's fields, with no test that would notice. Running it
+before the claim but outside the lock reintroduces exactly the unlocked
+resolve-then-mutate window this decision exists to delete. Inside the critical
+section is the only correct place, and it is cheap enough to belong there: both
+methods are pure in-memory map writes on `rs` with no I/O, so the added hold
+time is microseconds — the same argument that made a **disk read** under this
+lock unacceptable in Decision 4 makes these map writes fine.
+
+#### The latch has two halves, one owner each, and `Persist` enforces the durable one
+
+The first draft said "once `terminal` is set, the entry refuses every further
+mutation _and every further `Persist`_" while putting `Terminal` on `runEntry`
+("never persisted, never read under `RuntimeState.mu`") and leaving `Persist` a
+`RuntimeState` method with no access to it. Two flags named `terminal`, two
+owners, and no decision said who set both — so the latch could not touch a
+`Persist` that was already in flight (F27):
+
+> `notifyStageTransition` resolves entry E under the lock, **unlocks**, mutates,
+> and calls `rt.Persist(stateDir)` unlocked (`server.go:2585-2597`). Meanwhile
+> `notifyComplete` claims, does seconds of unlocked I/O, writes the V2 record,
+> compare-and-deletes, stamps `terminal` into the file and removes it. The
+> transition's `Persist` then lands and **re-creates** the snapshot with
+> `terminal: false` and the full history. Consequences: the reconciler emits a
+> second, contradictory `pipeline_done`; and after any restart adoption
+> rehydrates it in full, so the next call produces a record strictly richer by
+> one stage — which `appendAndIndex` accepts as an upgrade, replacing the
+> correct authoritative index entry. That is the precise R-4-falsifying
+> overwrite fix #1 of Decision 4 claims to have killed, reachable with a
+> **successful** `os.Remove` and no cross-process writer.
+
+The correction has three parts, and together they make `Persist` itself
+latch-aware:
+
+- **The durable half lives on `RuntimeState`.** `Terminal` / `TerminalAt` are
+  fields of the run's _content_, written under `rs.mu` by `MarkTerminal` in step
+  1c and marshalled by `snapshotLocked` like any other field. `runEntry.terminal`
+  remains the registry's _admission_ flag under `runtimesMu`. Neither is a copy
+  of the other: one gates resolution of new calls, the other travels with the
+  object and with every byte it writes.
+- **`Persist` holds `rs.mu` across the marshal _and_ the `AtomicWriteFile`.** It
+  does not today, and that gap is the hole: a marshal-under-lock followed by an
+  unlocked write lets a stale byte slice land after a removal. Holding the run's
+  own mutex across its own file write serialises writers within the process —
+  which is exactly the property being bought — at a cost of a few milliseconds
+  of contention on a mutex whose only other holders are that same run's
+  mutations.
+- **`Persist` refuses a sealed runtime.** After step 4, `rs.sealed` is true and
+  every subsequent `Persist` returns `ErrRunSealed` **without writing**. `sealed`
+  is in-memory only (the durable equivalent is the `terminal` field it just
+  wrote), and it is checked _inside_ `Persist`'s own `rs.mu` critical section —
+  so the check and the write cannot be separated by a scheduler.
+
+**Where every unlocked `Persist` re-checks — the complete list.** No handler
+gains its own guard; each one re-checks by virtue of calling `Persist`, which
+now cannot be raced:
+
+| Unlocked `Persist` call site                     | Outcome once the claim has run                                                                                         |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `notifyStageTransition` (`server.go:2585-2597`)  | `ErrRunSealed`; logged once per `(method, runId)`; the run is closed and its content already booked                    |
+| `notifyPhaseTransition` (IPC arm)                | `ErrRunSealed`                                                                                                         |
+| `notifyStageProgress`                            | `ErrRunSealed`                                                                                                         |
+| `setPaused` (administrative)                     | resolution already refused by `entry.terminal` → `run_closed`; a sealed object is refused a second time at `Persist`   |
+| `abandonRun`'s `MarkAbandoned` + `Persist` (7.1) | `ErrRunSealed` — a run that completed cannot be retro-abandoned                                                        |
+| `AppendStageGateResultToDisk` (separate process) | not covered by an in-process latch; covered by load-or-skip + terminal-refusal + `PersistExisting` below, residual R-1 |
+
+The three interleavings that remain are all benign and all decided:
+
+1. A `Persist` that entered `rs.mu` **before** `MarkTerminal` writes a
+   non-terminal file, and step 4 runs strictly after it (same mutex), so the
+   seal overwrites and removes it.
+2. A `Persist` that enters **between** `MarkTerminal` and the seal marshals
+   `Terminal: true` — so even if it lands, the file it writes is one adoption
+   refuses (Decision 4 fix #2) and the reconciler removes without emitting
+   (7.3). A resurrection that cannot rehydrate and cannot re-emit is not a
+   resurrection.
+3. A `Persist` **after** the seal writes nothing.
+
+**Lock order is `runtimesMu` → `rs.mu`, never the reverse**, and Decision 12's
+rule that `runEntry` fields are never read under `rs.mu` is what keeps that
+acyclic.
+
+**The cross-process half is still not latchable, and this ADR says so rather
 than over-claiming.** The IPC server's registry cannot latch a write made by a
 different OS process, and one such writer exists: `nightgauge gate verify
 --record` (`cmd/nightgauge/gate.go:155` → `state.AppendStageGateResultToDisk`,
@@ -508,11 +787,19 @@ with `Success=false`, as the adjacent comment already says — and it is what le
 a zombie destroy a live run's crash snapshot (F3). Worse, it was wrong on its
 own terms: if the host dies between the `failed` transition and
 `notifyComplete`, the run genuinely never reached a terminal event and deserves
-reconciliation, which the removal prevented. After this ADR a snapshot is
-removed by exactly **two actors**: a terminal claim (`notifyComplete`), and the
-reconciler — which emits the run's terminal event first **unless** the snapshot
-already carries a `terminal` or `abandoned` marker, and which also applies the
-14-day cap (7.3, 7.4). `abandonRun` is deliberately not one of them.
+reconciliation, which the removal prevented. After this ADR a canonical snapshot
+leaves the directory through exactly **three** doors, and no others:
+
+1. a terminal claim's `SealAndRemove` (`notifyComplete`, Decision 5 step 4);
+2. the reconciler — which emits the run's terminal event first **unless** the
+   snapshot already carries a `terminal` marker or is a past-window `abandoned`
+   one, and which also applies the 14-day cap (7.3, 7.4);
+3. the pause-restore **claim rename** (Decision 9), which does not delete the
+   state at all — it moves it to `resuming-…` under the claimant's ownership and
+   the claimant deletes that artifact once the run is running again.
+
+`abandonRun` is deliberately not one of them, and neither is the TypeScript stub
+sweep (which classifies, and only ever deletes identity-less new-scheme stubs).
 
 **The force-clear funnel must never call `notifyComplete`.** A dispatch the
 abort deadline gave up on is abandoned, not completed; routing it through the
@@ -623,22 +910,69 @@ its OWN RunID."
 
 So `abandonRun` terminates the **dispatch**:
 
-| It does                                                                              | It does NOT                                                                              |
-| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| resolve the entry by `runId` (never create — Decision 3's administrative class)      | set the terminal latch                                                                   |
-| set `entry.Abandoned = true`, `entry.AbandonedAt = now`                              | add the id to `closedRuns`                                                               |
-| take the snapshot under the lock and emit the run's terminal `pipeline_done` from it | delete the registry entry                                                                |
-| stamp `abandoned: true` + `abandoned_at` durably into `runtime-{issue}-{runId}.json` | remove the snapshot                                                                      |
-| drop the entry out of the issue index's "current" ranking (Decision 6)               | write a learning-corpus row (an abandoned dispatch measures nothing about model routing) |
+| It does                                                                                           | It does NOT                                                                              |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| resolve the entry by `runId` (never create — Decision 3's administrative class)                   | set the terminal latch                                                                   |
+| call `rt.MarkAbandoned(now)` under `rs.mu` — the fields live on the **live `RuntimeState`**       | add the id to `closedRuns`                                                               |
+| mirror `entry.Abandoned` / `entry.AbandonedAt` under `runtimesMu` for the index ranking           | delete the registry entry                                                                |
+| take the snapshot under the lock and emit the run's terminal `pipeline_done` from it              | remove the snapshot                                                                      |
+| `Persist` it, so `abandoned: true` + `abandoned_at` are durable in `runtime-{issue}-{runId}.json` | write a learning-corpus row (an abandoned dispatch measures nothing about model routing) |
+| drop the entry out of the issue index's "current" ranking (Decision 6)                            | make the run ineligible for the liveness skip (7.2)                                      |
+
+#### The marker survives the run that keeps overwriting its own snapshot
+
+7.1's whole premise is that an abandoned dispatch is **still alive** and will
+keep emitting transitions, each of which calls `Persist`, which marshals the
+**whole** snapshot with no merge (`runtime_state.go:909-925`). The first draft
+said `abandonRun` "stamps `abandoned: true` durably into the file" without
+saying whether the field was set on the live object or only on a written copy,
+and both readings lost data (F4 of the second review):
+
+- **stamped on a copy** → the run's very next transition erases the marker, the
+  reconciler treats it as an ordinary orphan, and it emits a **second**
+  `pipeline_done` and removes the snapshot;
+- **set on the live object, with the first draft's `skipRun` predicate** → that
+  predicate was `has(runID) && !terminal && !abandoned && LastSeen within 30m`,
+  so an abandoned entry was **never** skipped no matter how fresh, and 7.3 would
+  "remove without emitting" the crash snapshot of a run that refreshed
+  `LastSeen` two seconds ago and is actively streaming stages.
+
+**The decision is persist-through, and abandonment leaves the liveness test
+alone.** Concretely:
+
+1. `abandoned` / `abandoned_at` are **fields of `RuntimeState`**, set under
+   `rs.mu` by `MarkAbandoned` exactly as `Terminal` is set by `MarkTerminal`
+   (Decision 5). Because they live on the live object, every subsequent
+   whole-snapshot `Persist` **re-stamps** them. There is no copy to diverge.
+2. **There is no `ClearAbandoned`.** No transition, no phase, no progress call
+   can unset it; the only state that supersedes it is `terminal`, and a run that
+   reaches its own honest completion carries `abandoned_dispatch: true` into its
+   V2 record as provenance rather than erasing the fact.
+3. **`abandoned` is removed from the liveness predicate entirely** (7.2).
+   Abandonment is a statement about the _dispatch_, never evidence about the
+   _run_ — that is the whole content of 7.1, and letting it decide liveness
+   contradicted it inside two subsections. A fresh abandoned entry is skipped
+   like any other fresh entry.
+4. Removal of an abandoned snapshot therefore requires **two** independent
+   facts: `abandoned_at` older than the liveness window **and** `!skipRun` on
+   the full ladder (7.2). The retention table in 7.4 states this per state, so
+   "fresh but abandoned" has an explicit row rather than falling out of a
+   predicate.
+5. The claim's step-4 seal can no longer target a file the reconciler removed
+   underneath it: `SealAndRemove` writes before it removes (Decision 5), so the
+   worst case is a re-create-then-remove that nets to nothing.
 
 The entry stays **adoptable and mutable**. A late honest completion from the
 same process is accepted, performs the ordinary terminal claim, and books its
 record and learning outcome **under its own identity** — the #307 behaviour,
 preserved. The platform sees `pipeline_done(success=false)` at abandon time and
-then the run's real terminal event; `pipeline_runs` is keyed by `run_id` and
-last-writer-wins on outcome, so the row converges on the truth. Emitting early
-and correcting later is the right trade: the ordinary case is that the wedge is
-terminal and #44's whole point is not stranding a `running` row.
+then the run's real terminal event; the row converges on the truth **if**
+`pipeline_runs` is keyed by `run_id` and last-writer-wins on outcome. That is
+**Assumption A-1**, it is unverified from this tree, and the
+[Assumptions](#assumptions) section carries both the verification task and the
+design that applies if it is false. Emitting early and correcting later is the
+right trade under A-1: the ordinary case is that the wedge is terminal and #44's
+whole point is not stranding a `running` row.
 
 **Resolution when the registry has no entry** (the modal case — the force-clear
 fires because something is wedged, and a restarted or replaced IPC binary leaves
@@ -672,69 +1006,146 @@ additionally requires that the resolved run's own `Repo` and `IssueNumber`
 corroboration discipline #305 spent three rounds building, applied to the one
 new verb (C8).
 
-#### 7.2 A lease, fed by BOTH registries
+#### 7.2 The liveness ladder — registries, process, disk
 
 Every accepted call stamps `entry.LastSeen`. The reconciler's skip predicate is
-re-derived from _"this issue has an entry"_ to **"this run is live"**:
+re-derived from _"this issue has an entry"_ to **"this run is live"**, and it
+consults every source of evidence that exists rather than only the one the
+reconciler happens to be standing next to:
 
 ```
-skipRun(runID) =
-      ipcRegistry.has(runID)      && !terminal && !abandoned && LastSeen within 30m
-   || scheduler.IsRunLive(runID)                                    // Decision 11
+skipRun(runID, snapshot) =
+      ipcRegistry.has(runID) && !terminal && LastSeen within LIVENESS_WINDOW   // 1. IPC registry
+   || scheduler.IsRunLive(runID)                                              // 2. scheduler registry (Decision 11)
+   || processAlive(snapshot.PID)                                              // 3. the run's own child process
+   || fileAge(snapshot) < LIVENESS_WINDOW                                     // 4. the disk-side lease
+   || withinStartupGrace()                                                    // 5. the reconnect window (7.3)
 ```
 
-The liveness window is 30 minutes; `notifyStageProgress` refreshes it
-continuously during a long stage, so it is generous by an order of magnitude.
-The lease is a backstop for a lost `abandonRun`, not the primary mechanism — it
-can only fire for a run that both lost its abandon call and went silent for half
-an hour, which is indistinguishable from dead.
+`LIVENESS_WINDOW` is 30 minutes. `notifyStageProgress` refreshes arms 1 and 4
+continuously during a long stage (≥5s cadence, `PipelineBridge.ts:355`), so the
+window is generous by an order of magnitude. The lease is a backstop for a lost
+`abandonRun`, not the primary mechanism — it can only fire for a run that lost
+its abandon call, went silent for half an hour, and has no live process.
 
-**The second arm is not optional, and it fixes a live defect rather than a
-hypothetical one (F21).** `reconcileOrphanedRuns` builds its skip from
-`s.activeRuntimes` alone. The Go scheduler persists into the same directories
-(`scheduler.go:4043, 4460, 6271`, covered by `pipelineStateScanRoots`) and
-always stamps a non-empty `RunID`, and `collectOrphanedRuns` skips only paused
-and `RunID`-less snapshots. Scheduler runs are **never** in `activeRuntimes` —
-`PipelineBridge.ts:265-267` says so verbatim. So every `workspace.setRoot`
-(`server.go:757`, fired from `bootstrap/services.ts:2441` on
-`onWorkspaceChanged`) emits a terminal `pipeline_done` for every **live**
-scheduler run and `os.Remove`s its crash snapshot. Renaming `skipIssue` to
-`skipRun` would have made that predicate look rigorous while leaving it blind to
-half the product's runs. `Scheduler.IsRunLive(runID)` — a scan of its
-`map[int]*state.RuntimeState` for a matching `RunID`, under
-`activeRuntimesMu` — is the arm that closes it.
+**`abandoned` is not on this ladder, deliberately.** The first draft's predicate
+included `&& !abandoned`, which made a fresh, actively-streaming abandoned run
+_ineligible_ for the skip and handed its crash snapshot to the remover. See 7.1
+— abandonment describes a dispatch, not a run.
 
-#### 7.3 `collectOrphanedRuns` keys on the run
+**Arm 2 is not optional, and it fixes a live defect rather than a hypothetical
+one (F21).** `reconcileOrphanedRuns` builds its skip from `s.activeRuntimes`
+alone. The Go scheduler persists into the same directories (`scheduler.go:4043,
+4460, 6271`, covered by `pipelineStateScanRoots`) and always stamps a non-empty
+`RunID`, and `collectOrphanedRuns` skips only paused and `RunID`-less snapshots.
+Scheduler runs are **never** in `activeRuntimes` — `PipelineBridge.ts:265-267`
+says so verbatim. So every `workspace.setRoot` (`server.go:757`, fired from
+`bootstrap/services.ts:2441` on `onWorkspaceChanged`) emits a terminal
+`pipeline_done` for every **live** scheduler run and `os.Remove`s its crash
+snapshot. Renaming `skipIssue` to `skipRun` would have made that predicate look
+rigorous while leaving it blind to half the product's runs.
+`Scheduler.IsRunLive(runID)` — a scan of its `map[int]*state.RuntimeState` for a
+matching `RunID`, under `activeRuntimesMu` — is the arm that closes it.
+
+**Arms 3 and 4 exist because a fresh process has neither registry.** They are
+the evidence the tree already writes and never reads: `RuntimeState.PID` /
+`WorktreeDir` (`SetProcess`, `runtime_state.go:359`) record the stage child, and
+every `Persist` bumps the snapshot's mtime. A live stage child is direct
+evidence the run is alive; a snapshot written 40 seconds ago is nearly as good.
+
+**The ladder is deliberately biased, and the bias is stated as a rule (C13).**
+Every arm can only ever produce a **skip**, never a close. So:
+
+- a **false positive** (a recycled PID, a snapshot touched by something else)
+  costs one deferred sweep — collected on the next activation, and unconditionally
+  by the 14-day cap;
+- a **false negative** costs a live run its entire record, its learning row and
+  its telemetry, silently, behind five bare `catch {}` blocks.
+
+Those are not comparable, so the predicate is not symmetric. PID reuse is the
+obvious objection to arm 3 and it is answered by that asymmetry rather than by a
+start-time comparison the snapshot does not record: the worst outcome of a
+reused PID is that a dead run's platform row closes at the next activation
+instead of this one.
+
+#### 7.3 `collectOrphanedRuns` keys on the run, and the startup sweep DEFERS
 
 It parses the identity out of the filename. Its existing skips are preserved
-(C1) with one bounded change:
+(C1), every candidate is filtered through the 7.2 ladder first, and the
+disposition per snapshot state is the table in 7.4 rather than a predicate a
+reader has to evaluate in their head. Emit-then-remove idempotency across
+activations is unchanged.
 
-- **paused** snapshots are skipped by the emit-and-remove path (they power the
-  #2008 pause-restore prompt) — but they are **not** exempt from the age cap
-  (see Retention);
-- **identity-less** snapshots are skipped, never reconciled, never deleted here;
-- **terminal** snapshots (Decision 4's durable marker) are **removed without
-  emitting** — their event was already emitted by the terminal claim;
-- **abandoned** snapshots whose `abandoned_at` is older than the liveness window
-  are **removed without emitting** — their event was already emitted by
-  `abandonRun`;
-- emit-then-remove idempotency across activations is unchanged.
+**The `Server.Run` call site does not reconcile inline, and that is the fix for
+the worst defect in the first draft (F26).** The draft asserted "Both call sites
+then work: `Server.Run` (fresh process, empty IPC registry…)". That is wrong,
+and the trigger is an **engineered auto-behaviour**, not a rare crash:
+`IpcClientBase.ts:1472-1485` restarts the Go backend on process exit (5
+attempts, `2000ms · 2^(n-1)` backoff) **while the extension host and all its
+in-flight runs survive**. `server.go:654` then runs `reconcileOrphanedRuns()`
+before any client can reconnect. Trace, all of it on today's tree:
 
-Both call sites then work: `Server.Run` (fresh process, empty IPC registry, but
-a possibly-populated scheduler registry — hence 7.2) and `workspace.setRoot`
-(populated registry — now skips only runs that are genuinely live, in either
-registry). That is the #370 acceptance criterion.
+> Run R is live; `runtime-42-R.json` holds its full history. The backend dies
+> and restarts. The IPC registry is empty **and** the scheduler registry is
+> empty (extension-path runs are never in the scheduler registry —
+> `PipelineBridge.ts:265-267`), so arms 1 and 2 of the ladder are both false.
+> The reconciler emits a terminal `pipeline_done(success=false)` for a **live**
+> run and `os.Remove`s its snapshot. R's next message adopts and rehydrates
+> **nothing**; R's eventual `notifyComplete` writes a **skeleton** authoritative
+> record (zero stages, zero cost) and a learning-corpus row with no measurable
+> routing signal — and #313's richer-upgrade-only rule has no richer record to
+> prefer, because the skeleton is the only one. The 30-minute lease is
+> structurally incapable of helping: it is keyed on a `runEntry` a fresh process
+> does not have.
 
-#### 7.4 Retention, and it must not depend on telemetry
+So the startup sweep becomes a **deferred, re-evaluated** sweep:
 
-Today there is none, which is why identity-less debris accumulates. The rules:
+1. `Server.Run` **collects** the candidate set and starts a timer. It emits
+   `ipc.ready` immediately; nothing about the handshake is delayed.
+2. For `STARTUP_GRACE = 120s`, `withinStartupGrace()` (ladder arm 5) is true and
+   **no snapshot is emitted for or removed by the reconciler**. Terminal
+   snapshots are the one exception — they carry their own proof and are removed
+   without emitting at any time.
+3. At expiry the candidate set is **re-evaluated from scratch** against the full
+   ladder. A run that reconnected has an entry (arm 1) or a refreshed file (arm 4) and drops out. Everything still stale is reconciled normally.
 
-| Rule                                                                                                            | Applies to                                                           |
-| --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| A terminal claim removes its own snapshot                                                                       | every run that completes                                             |
-| The reconciler removes each snapshot after emitting                                                             | orphans with an identity, not paused, not terminal, not abandoned    |
-| The reconciler removes without emitting                                                                         | terminal snapshots, and abandoned snapshots past the liveness window |
-| A startup pass removes any snapshot older than 14 days, reconciling first if it has not already been reconciled | **everything, including paused snapshots**                           |
+**120 seconds is derived, not chosen by feel:** the client's five restart
+attempts sum to `2+4+8+16+32 = 62s` of backoff, plus process start, plus the
+first `notifyStageProgress` at a ≥5s cadence. 120s clears that ladder with
+margin. `workspace.setRoot` keeps reconciling inline — a `setRoot` arrives from
+a **connected, live** extension host, so arms 1 and 2 carry real information —
+except when it fires inside the server's own startup grace, where arm 5 defers
+it like any other candidate.
+
+**Backend auto-restart vs cold start is decided by behaviour, not by a flag.**
+After the grace window, an auto-restart's live runs have re-asserted (entry or
+fresh mtime) and a cold start's have not. The cost of not distinguishing them
+up front is that a genuinely-dead run's platform row closes two minutes later
+than it would have; the cost of getting it wrong in the other direction is F26.
+An explicit "the client declares which runs it believes are live" handshake was
+considered and rejected — Alternative M.
+
+#### 7.4 Retention: one disposition table, and it must not depend on telemetry
+
+Today there is none, which is why identity-less debris accumulates. Every
+snapshot the scan sees resolves to exactly one row, evaluated top to bottom:
+
+| Snapshot state                                                       | Reconciler emits?                           | Removes?                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------ |
+| `terminal: true`                                                     | **no** — the terminal claim already emitted | **yes**, at any age, grace or no grace                                   |
+| identity-less (no id in the filename or the body)                    | no                                          | **no** — never touched here; the Go legacy sweep owns it (Migration)     |
+| `skipRun` true on any ladder arm (7.2), including the startup grace  | no                                          | no                                                                       |
+| `abandoned: true`, `abandoned_at` **inside** the liveness window     | no — already emitted by `abandonRun`        | **no** — the dispatch is abandoned, the run may still be streaming (7.1) |
+| `abandoned: true`, `abandoned_at` **outside** the window, `!skipRun` | no — already emitted                        | **yes**                                                                  |
+| `paused: true`, fresh                                                | no (C1/C5 — it powers the restore prompt)   | no                                                                       |
+| `resuming-*` claim artifact older than `STARTUP_GRACE` (Decision 9)  | no                                          | **no** — renamed back to canonical; a crashed claim releases its claim   |
+| ordinary orphan, `!skipRun`                                          | **yes**                                     | **yes**, after emitting                                                  |
+| **anything** older than 14 days, including paused                    | yes, if never reconciled                    | **yes**                                                                  |
+| a terminal claim's own snapshot                                      | n/a                                         | removed by `SealAndRemove` (Decision 5 step 4)                           |
+
+The two rows that used to be a single "abandoned → remove without emitting"
+bullet are the F4 correction: a fresh abandoned run keeps its crash snapshot,
+because 7.1's entire premise is that it is still alive.
 
 **Paused snapshots are no longer exempt from the age cap**, and that is a
 deliberate change from the first draft, which exempted them from all three
@@ -772,6 +1183,13 @@ destructive writes:
 | Atomic                                    | unchanged — `state.AtomicWriteFile`                                                           |
 | Rooted in the run's target repo           | unchanged (#215/#307)                                                                         |
 | Never written for an unattributed runtime | the `repo != ""` gates stay, and `Persist` now also refuses an empty `RunID` (Decision 1)     |
+
+**One sibling filename exists in the same directory:** the pause-restore claim
+artifact `resuming-{issue}-{runId}.{claimToken}.json` (Decision 9), matched by
+`^resuming-(\d+)-(<identity>)\.([0-9a-z]{8,64})\.json$` where `<identity>` is
+the same shared constant. It is a full `RuntimeState` snapshot under a name that
+means "a host is claiming this"; the reconciler renames a stale one back to
+canonical rather than reconciling it (7.4), and no other reader touches it.
 
 The discovery regex is the **same** expression as Decision 1's wire validation,
 shared as one constant on each side rather than written twice. Because the
@@ -876,10 +1294,46 @@ case, so the selection rule is stated rather than left to "current":
 
 > Corroborate against the entry (or persisted snapshot) whose **`RunID` equals
 > the raise's `RunID`**, whose `Repo` equals the raise's `repo`, and whose
-> `IssueNumber` equals the raise's `issue`. If the raise carries no `RunID`, or
-> no run matches all three, **corroboration fails** — the card is still raised,
-> without the raise-and-retry option, exactly as §N specifies for a failed
-> corroboration.
+> `IssueNumber` equals the raise's `issue`. If no run matches all three,
+> **corroboration fails** — the card is still raised, without the
+> raise-and-retry option, exactly as §N specifies for a failed corroboration.
+
+**And the raise's `RunID` is the run's INSTALLED identity, threaded — never
+read out of a file.** The first draft promoted `RunID` from an audit label to a
+required selector while leaving its only producer a guesser, which would have
+converted a working corroboration into a systematically failing one on the
+extension path while describing the change as "strictly narrower than today"
+(F31). `HeadlessOrchestrator.readCurrentRunId` (`:1525-1544`) reads
+`.nightgauge/pipeline/run-state.json` — a **scheduler/CLI runstate artifact**,
+not the extension run's identity — and returns `""` on any miss or issue
+mismatch. On the extension path, which the raise method's own doc comment names
+as the entire population of run-scoped raises, that guess is empty or foreign by
+default. It is a run-id guesser of exactly the F15 class, and the first draft's
+"exhaustive by construction" producer table did not contain it.
+
+Therefore:
+
+- **`readCurrentRunId` is deleted**, and it is listed in Decision 10's table as
+  a deleted guesser so the table's exhaustiveness claim survives contact.
+- `raiseRunScopedCard` takes the identity as an **explicit parameter** from the
+  orchestrator's own run context — the value `beginRun` installed (Decision 10).
+  The orchestrator holds it for the same reason it holds the `--run-id` it
+  passes to its four `nightgauge gate verify` spawns.
+- Because the value is now always present and always correct on the path that
+  raises these cards, **#305's raise-and-retry ceiling option is preserved**
+  rather than removed. That is the whole point of threading it: the first
+  draft's rule was safe and useless; this one is safe and lands.
+- **`RunID` becomes required for run-scoped producers and stays optional for
+  repo-scoped ones.** A run-scoped raise with an empty `RunID` is an error
+  (`run_id_required`), not a silent corroboration failure — an empty id there
+  means a producer forgot to thread it, and a loud refusal is how that gets
+  found. Repo-scoped producers (default-branch health and friends) have no run
+  and continue to omit it.
+- `AttentionRaiseParams`' doc comment at `protocol.go:1524-1530` — _"Empty is a
+  handled case … It is an audit back-reference only — nothing is authorized by
+  it"_ — is **amended in this PR**. It is accurate for repo-scoped producers and
+  false for run-scoped ones once this lands, and leaving a contract comment that
+  contradicts the code is how the first draft's protocol-version claim happened.
 
 Falling back to "the current run" would let `ProposedCeilingUSD`'s
 `max(enforced, spent) * 1.5` — which persists a privileged ceiling override —
@@ -926,18 +1380,79 @@ entirely. The full migration:
    offered for discard. The first draft's behaviour — N identical prompts naming
    the same issue with nothing to tell them apart — is not a UX detail, it is
    the reason the un-chosen files became permanent.
-3. Resume threads the identity: `pipelineStateService.beginRun(runId, repo,
+3. **The snapshot is CLAIMED by an atomic rename before anything resumes**, and
+   only the winner of that rename resumes. See below.
+4. Resume threads the identity: `pipelineStateService.beginRun(runId, repo,
 issueNumber)` (Decision 10) **before** `resumePipeline()`, and
    `headlessOrchestrator.runPipeline(issueNumber, { runId })`. The resumed run
-   continues **under the snapshot's own identity**, so the snapshot is consumed
-   rather than orphaned.
-4. `setPaused` resolves through the on-disk snapshot when the registry has no
+   continues **under the snapshot's own identity**.
+5. `setPaused` resolves through the on-disk snapshot when the registry has no
    entry (Decision 3's administrative class), so a pause or resume issued after
    an IPC-server restart lands instead of being dropped.
-5. `classifyRuntimeStub`'s two existing rules are unchanged (empty repo/stage →
+6. `classifyRuntimeStub`'s two existing rules are unchanged (empty repo/stage →
    delete; repo mismatch against the containing repo → delete) and it gains a
    third: **a new-scheme file with no identity in its name or body → delete**.
    It does **not** classify legacy `runtime-{N}.json` at all — see Migration.
+
+#### Consume-on-claim: the rename IS the exclusion (C15)
+
+Decision 1's entire safety argument is that _a producer that must supply an
+identity **it minted itself** cannot address a run it did not start_, and
+Alternative H rejects `RemoteRunID` seeding because a redelivered command
+"produces two dispatches carrying the same `runId`; the second adopts the
+first's live entry, and both runs share one registry key, one snapshot file and
+one history-record key". The first draft's resume path did **exactly that** with
+a locally redeliverable seed: it parsed an id off disk and resumed under it,
+while nothing consumed the file. `bootstrap/services.ts:1168-1220` runs the
+restore prompt on **every** activation and the file is only mutated later,
+best-effort, by `resumePipeline`'s `setPaused` round trip inside a swallowing
+`try/catch` (`PipelineStateService.ts:1012-1025`). Two extension hosts on one
+workspace — a bypass Decision 6 names by name — both scan, both prompt, and both
+resume run id X: two live dispatches under one identity, one `activeRuntimes[X]`
+mutated by both (F2), one snapshot under whole-file last-write-wins (F13), one
+`run:X` ledger key collapsing two different runs into one record (F6) — with no
+force-clear and no zombie in sight (F28). "The snapshot is consumed rather than
+orphaned" was asserted and never mechanised.
+
+**The claim artifact is a rename, and it is the only thing that authorises a
+resume:**
+
+```
+rename( runtime-{issue}-{runId}.json ,  resuming-{issue}-{runId}.{claimToken}.json )
+```
+
+- Same directory, therefore the same filesystem, therefore **atomic**; and
+  `rename(2)` on a source that no longer exists fails `ENOENT` on POSIX and on
+  Windows alike. **Exactly one host's rename can succeed.**
+- `claimToken` is the claiming host's `vscode.env.sessionId` (first 16 chars) —
+  it makes the claimant nameable in a log and in a forensic directory listing,
+  and it is not a secret and grants nothing.
+- **Order: prompt → user chooses Resume → rename → resume.** Renaming before the
+  prompt would leave a claimed-but-unresumed file behind on every dismissal.
+  Two hosts both prompting is a UX wart; two hosts both resuming is corruption,
+  and only the second is prevented structurally.
+- The loser sees `ENOENT`, logs once, drops that snapshot from its list and
+  shows _"#N was resumed elsewhere."_ **It deletes nothing** — the file it
+  wanted is now another host's working state.
+- On a successful rename the claimant reads the claimed file, calls `beginRun`,
+  starts the run, and deletes the `resuming-*` artifact once `beginRun` returns.
+  The run's first accepted transition re-`Persist`s under the canonical name, so
+  the canonical file reappears owned by exactly one live run.
+- **If the claimant dies between the rename and the first persist**, the
+  artifact is orphaned — so the reconciler renames any `resuming-*` file older
+  than `STARTUP_GRACE` **back** to its canonical name (7.4). A crashed claim
+  releases its claim; the pause is not lost, and the next activation prompts
+  again.
+
+**Why not "resume mints a fresh id and carries the paused one as a
+predecessor"** — the other structurally-sound option, recorded as Alternative J.
+The paused snapshot's accumulated stage history, cost, phase records, ADR-013
+trace file and `run:<id>` ledger key are all keyed to the **existing** id. A
+fresh id either orphans all of it or requires a predecessor→successor mapping to
+stitch it back — and a mapping is a thing that can be stale, lost or disagreed
+about, which is Alternative E's refutation verbatim. Consume-on-claim keeps the
+ADR's "one run, one identity, for the run's whole life" invariant, and it does
+so with a primitive the operating system already makes atomic.
 
 **#375 attention cards: the run id goes on the card, the idempotency key does
 NOT change (F14).** The first draft made `BuildAbandonedDispatch`'s
@@ -1000,7 +1515,11 @@ its omissions enumerated the call sites.
 | `nightgauge gate verify --record`                                                                                                      | `--run-id`, else `NIGHTGAUGE_RUN_ID`; records nothing without one, and never creates a file (Decision 5)                                                                                                                                                                       |
 | SDK `traceRecorder`                                                                                                                    | `NIGHTGAUGE_RUN_ID`; the `runtime-${issue}.json` read is deleted (Decision 8)                                                                                                                                                                                                  |
 | `CliPipelineReconciliationService`                                                                                                     | **consumer** — reads `run_id` from the `current-run.json` sidecar (Decision 8)                                                                                                                                                                                                 |
-| `bootstrap/services.ts` pause-restore prompt                                                                                           | **consumer** — parses the id from the filename and installs it via `beginRun` (Decision 9)                                                                                                                                                                                     |
+| `bootstrap/services.ts` pause-restore prompt                                                                                           | **consumer** — parses the id from the claimed filename and installs it via `beginRun`, after winning the rename (Decision 9)                                                                                                                                                   |
+| `IpcStageRunner.RunStage` (`ipc_stage_runner.go:70-73`)                                                                                | `params.RunID`, **explicitly populated** by the scheduler from `runtime.RunID`; `Runtime` and `RunID` are non-optional and the runner **asserts** before emitting `pipeline.runStage` (see below)                                                                              |
+| `HeadlessOrchestrator.raiseRunScopedCard`                                                                                              | the orchestrator's **installed** identity, threaded as a parameter (Decision 9)                                                                                                                                                                                                |
+| ~~`HeadlessOrchestrator.readCurrentRunId`~~                                                                                            | **DELETED.** It guessed the id from the scheduler/CLI `run-state.json` — F15's class at a new site (F31). Listed here so this table's "exhaustive by construction" claim covers the guessers it removes as well as the producers it names.                                     |
+| ~~SDK `traceRecorder`'s `runtime-${issue}.json` read~~                                                                                 | **DELETED** (F15) — replaced by the `NIGHTGAUGE_RUN_ID` row above                                                                                                                                                                                                              |
 | `PipelineSlotsTracker`, `PipelineStateService` event filters                                                                           | **consumers** — route/filter on the envelope's `runId`, empty id falls back (Decision 6)                                                                                                                                                                                       |
 
 This is the structural answer to F17. The refuted design's guard was gated on
@@ -1009,6 +1528,44 @@ runtime, wrote the authoritative record and outcome under it, deleted the
 runtime — after which the live run's own completion was refused and it recorded
 nothing at all. When _everyone_ mints or receives, there is no token-less
 producer to bypass anything.
+
+#### The emitter's `runId` becomes non-optional BEFORE the verbs require it
+
+The revision that replaced invented plumbing with "PipelineBridge already
+receives `ipcParams.runId`" was right about the field existing and wrong about
+its guarantees. Today the value is **structurally optional and sometimes empty**:
+`RunID string \`json:"runId,omitempty"\``on the Go side,`runId?: string`at`PipelineBridge.ts:63`, and `ipc_stage_runner.go:70-73`initialises`runID := ""`, filling it only `if params.Runtime != nil`. A `RunStage`dispatch
+with a nil`Runtime`emits an empty id, and under Decision 3 **both**`PipelineBridge` calls (`notifyPhaseTransition` `:280`, `notifyStageProgress`
+`:355`) are then hard-rejected `run_id_required`— swallowed by the bridge's`.catch(warn)`, so the product's **primary** execution path silently loses phase
+markers and live progress for that stage. Decision 6's "an event carrying an
+empty `runId` is not dropped" fallback covers only **outbound** events; there is
+no inbound counterpart and there will not be one.
+
+The resolution is sequencing plus an assertion, not an inbound fallback:
+
+1. **`StageRunParams` gains an explicit `RunID string`**, populated at the single
+   production construction site (`scheduler.go:3620`) from `runtime.RunID`, and
+   `Runtime` is documented **non-optional**. The nil-`Runtime` case is not a
+   supported configuration — `runPipeline` constructs the runtime before it can
+   reach a stage — so it is a **programming error**, and the only other
+   constructors are tests.
+2. **`IpcStageRunner.RunStage` asserts `RunID != ""` and returns an error rather
+   than emitting `pipeline.runStage`.** The stage fails loudly at the dispatch
+   boundary, **before** any child process spawns and before a single token is
+   spent.
+3. **`RunStageParams.RunID` loses `omitempty` and becomes required on the wire**,
+   as does `runId` in the TypeScript type. `SkillRunner` already receives and
+   forwards it (`:216`); it stops being able to receive nothing.
+4. This lands as **step 0b of the plan** — with step 0's `NIGHTGAUGE_RUN_ID`
+   exporters, and strictly **before** step 3 makes the verbs require the id.
+   After step 0b the inbound empty-id case is unreachable by construction, which
+   is why Decision 3 can keep `run_id_required` as a hard error with no softening.
+
+**This does not contradict C9.** C9 forbids a refused or lost IPC call from
+killing a run **in flight**; refusing to _start_ a stage that could not be booked
+is a different transaction. The failure is at t=0, it is loud, it costs no work,
+and the alternative — dispatching a stage whose every progress and phase call
+will be refused — is F16's silence with extra steps.
 
 **One identity per service, and minting onto a live one is refused (F23).**
 "Every producer mints at its own dispatch point" is not structural on its own:
@@ -1055,17 +1612,22 @@ and subjecting paused snapshots to the age cap kills all four.
 re-keys the first and **does not** re-key the second — but it does make the
 boundary between them explicit, because three defects lived in the gap.
 
-**Resolution order for every identity-bearing call:**
+**Resolution order for every identity-bearing call** — and it is **entered with
+the verb class already decided** (Decision 3 line 3), because the first draft's
+ordering let a terminal or administrative verb fall into step 3 and be served
+from a registry that has none of the claim invariants (F29):
 
 ```
 1. closedRuns.has(runId)               → run_closed
 2. ipcRegistry[runId]                  → serve from the IPC registry
-3. scheduler.LookupRunByID(runId)      → serve from the SCHEDULER's runtime; NEVER adopt
-4. run-progress verb                   → adopt into the IPC registry
-   administrative verb                 → resolve from disk, else run_not_found
+3. scheduler.LookupRunByID(runId)      → run-progress: serve from the SCHEDULER's runtime; NEVER adopt
+                                       → terminal / administrative: run_wrong_owner (Decision 3's table)
+4. run-progress / terminal             → adopt into the IPC registry (singleflight, Decision 4)
+   administrative                      → resolve from disk read-only, else run_not_found
 ```
 
-Step 3 is what keeps "the two registries stay separate" true. Without it,
+Step 3's run-progress arm is what keeps "the two registries stay separate" true.
+Without it,
 `PipelineBridge`'s two calls — the product's **primary** execution path, since
 all pipeline orchestration decisions flow through the Go scheduler — would carry
 the scheduler's `RunID` into step 4 and **adopt**, manufacturing a second
@@ -1097,21 +1659,95 @@ real one.
 
 ### 12. Where the identity lives, and under which lock
 
-- `RuntimeState.RunID` — the identity. **Immutable after construction**,
-  persisted, needs no lock (Decision 1).
-- `runEntry` — a new wrapper struct owned **exclusively** by `runtimesMu`,
-  holding the registry's mutable bookkeeping: `Terminal bool`,
-  `Abandoned bool`, `AbandonedAt`, `FirstSeen`, `LastSeen`, and the
-  `*RuntimeState` pointer. **Never persisted, never read under
-  `RuntimeState.mu`.**
-- `terminal` / `abandoned` also exist as **persisted fields** on the snapshot —
-  the durable facts of Decisions 4 and 7. They are written only by the claim
-  path and read by adoption, the reconciler, and the gate CLI.
-
 `RuntimeState` owns the run's _content_ behind its own mutex; `runEntry` owns
-the registry's _bookkeeping_ behind the server's. No field is written under one
-lock and read under another, which is the specific hazard F20 raised — a
-comparator whose torn read a sequential `-race` test would not catch.
+the registry's _bookkeeping_ behind the server's. Two fields are spelled
+`terminal` and two are spelled `abandoned`, so this section names **who sets
+each one and who reads it** — the first draft left that unstated, and F27 walked
+through the gap.
+
+| Field                                               | Owner / lock                                 | Persisted | Written by                                          | Read by                                                            |
+| --------------------------------------------------- | -------------------------------------------- | --------- | --------------------------------------------------- | ------------------------------------------------------------------ |
+| `RuntimeState.RunID`                                | immutable after construction; no lock needed | yes       | `NewRuntimeState` only                              | everything                                                         |
+| `RuntimeState.Terminal` / `TerminalAt`              | `rs.mu`                                      | **yes**   | `MarkTerminal`, claim step 1c                       | `Persist`/`snapshotLocked`, adoption, the reconciler, the gate CLI |
+| `RuntimeState.Abandoned` / `AbandonedAt`            | `rs.mu`                                      | **yes**   | `MarkAbandoned`, `abandonRun` (7.1) — no clear path | `Persist`, the reconciler, the issue index                         |
+| `RuntimeState.sealed`                               | `rs.mu`                                      | no        | `SealAndRemove`, claim step 4                       | `Persist` only, inside its own critical section                    |
+| `runEntry.terminal`                                 | `runtimesMu`                                 | no        | claim step 1c                                       | resolution (admission control) only                                |
+| `runEntry.abandoned` / `AbandonedAt`                | `runtimesMu`                                 | no        | `abandonRun`, mirroring `rs`                        | the derived issue index's ranking (Decision 6)                     |
+| `runEntry.FirstSeen` / `LastSeen` / `*RuntimeState` | `runtimesMu`                                 | no        | every accepted call                                 | the lease (7.2), the index                                         |
+| `adopting map[runID]*flight`                        | `runtimesMu`                                 | no        | the adoption singleflight (Decision 4)              | the adoption singleflight                                          |
+| `closedRuns` (FIFO ring, cap 1024)                  | `runtimesMu`                                 | no        | claim step 3; adoption on a terminal snapshot       | Decision 3 line 4                                                  |
+
+The registry pair and the content pair are **not copies of one fact**: the
+`runEntry` half is admission control for _new_ resolutions and dies with the
+process; the `RuntimeState` half travels with the object, is marshalled into
+every byte the run writes, and is what a fresh process, the gate CLI and the
+reconciler read. That is why the claim sets both (step 1c) and why an in-flight
+`Persist` cannot write a lie.
+
+**Lock order is `runtimesMu` → `rs.mu`, never the reverse.** `runEntry` fields
+are never read under `rs.mu` — the rule that keeps the order acyclic and that
+also dissolves F20's two-locks-one-comparator hazard, a torn read a sequential
+`-race` test would not catch.
+
+---
+
+## Assumptions
+
+Assertions this ADR relies on that **cannot be verified from this tree**. Each
+carries a verification task and the design that applies if it turns out false —
+so the ADR stays decidable either way rather than deferring to a discovery made
+during implementation.
+
+### A-1 — the platform's `pipeline_runs` row is idempotent by `run_id` and last-writer-wins on outcome
+
+**Where it is load-bearing.** 7.1's `abandonRun` emits a terminal
+`pipeline_done(success=false)` for a dispatch that may still be alive, on the
+theory that the run's own later `notifyComplete` supersedes it and the row
+converges on the truth. R-3's false-positive lease expiry leans on the same
+property, as does the reconciler's emit-then-remove idempotency across
+activations.
+
+**Why it is unverified.** The platform is the closed-source companion service
+and is not in this repository. `#1047` materialises a `running` row from the
+first `stage_started` event keyed by `run_id`, which is consistent with — but
+not proof of — last-writer-wins on a later terminal event.
+
+**Verification task (blocks the step that ships `abandonRun`).** Confirm against
+the platform's ingestion contract that (a) two `pipeline_done` events for one
+`run_id` update one row rather than creating two, and (b) the **later** event's
+outcome wins. Filed as a follow-up issue (see below) and named as a precondition
+on plan step 4.
+
+**If A-1 is false** — i.e. the platform treats the first terminal event as final
+— the design changes as follows, and only here: **`abandonRun` stops emitting
+`pipeline_done` at abandon time.** It still marks the dispatch abandoned locally,
+still stamps the durable marker, still frees the bookkeeping, still returns
+`no_run` where there is nothing to abandon. The run's platform row is then
+closed by exactly one of two things: the run's own `notifyComplete` (the #307
+case — a wedge that unwedges), or the reconciler at lease expiry (7.2), which is
+the existing #44 mechanism and already the path for "the run went silent and
+never came back". The cost of that variant is that a genuinely-dead abandoned
+run's row stays `running` for up to `LIVENESS_WINDOW` instead of closing
+immediately; the cost of guessing wrong in the other direction is a permanently
+wrong row for every wedge that recovers. Nothing else in this ADR moves.
+
+### A-2 — `rename(2)` within one `.nightgauge/pipeline/` directory is atomic and exclusive on every supported platform
+
+**Where it is load-bearing.** Decision 9's consume-on-claim is the whole of C15.
+
+**Status.** POSIX `rename(2)` is specified atomic within a filesystem, and a
+rename whose **source** does not exist fails `ENOENT`; Node's `fs.rename` maps
+to `MoveFileEx` on Windows with the same source-missing behaviour. The
+assumption that can fail is not the primitive but the **premise that both files
+are on one filesystem** — which holds because the claim artifact is written into
+the same directory as its source. A workspace whose `.nightgauge/pipeline/`
+straddles a mount point cannot exist by construction.
+
+**If A-2 is false** for some future storage backend (a network filesystem
+without atomic rename), the fallback is `open(O_CREAT|O_EXCL)` on a separate
+`.claim` file — a weaker artifact, because the snapshot then still exists under
+its canonical name and a reader that ignores the claim file is unprotected. That
+is why rename is the primary design and not a convenience.
 
 ---
 
@@ -1197,27 +1833,36 @@ here as permanent tests.
 
 ### Go — `internal/ipc/`
 
-| Test                                                                                                                          | Must show                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TestRunIdentity_AbandonedRunStillBooksItsOwnCompletion` (from `TestProbe_ForceClearedRunResurrectsAfterSuccessorCompletes`)  | After `abandonRun`, the same run's late `pr-create running` + `notifyComplete{prMerged:true}` are **accepted**, produce exactly **one** run record and **one** learning-corpus row under that run's own id, and its `pipeline_done` supersedes the abandon event. A **successor** run of the same issue is untouched. Covers F1, F4, F18. |
-| `TestRunIdentity_SuccessorWithoutInitializedRecordsNormally` (from `TestProbe_SuccessorWithoutInitializedIsLockedOutForever`) | A run whose first message the server never saw has **every** subsequent transition accepted by adoption, and its completion writes exactly one record, one outcome, and full telemetry. This is the test that fails against the refuted design (F16) and must never be deleted.                                                           |
-| `TestRunIdentity_AbandonRunNeverCreates`                                                                                      | `abandonRun` for an id with no entry **and** no snapshot returns `no_run`, writes nothing, adds nothing to `closedRuns`, emits no `pipeline_done`, and a subsequent first message from that id is served normally. Covers the `bookForceClearedReservation` case.                                                                         |
-| `TestRunIdentity_AbandonRunRequiresMatchingRepoAndIssue`                                                                      | A mismatched `repo` or `issueNumber` yields `run_not_found` and mutates nothing; no `pipeline_done` with `IssueNumber: 0` is ever emitted. Covers C8.                                                                                                                                                                                     |
-| `TestRunIdentity_ZombieCannotMutateSuccessor`                                                                                 | Interleaving two run ids on one issue: the successor's `TotalCostUSD`, per-stage tokens, `StageErrors`, `PhaseHistory` and `RunRecord` are byte-identical to a solo run. Covers F2, F4, F10.                                                                                                                                              |
-| `TestRunIdentity_TerminalDeleteIsIdentityChecked`                                                                             | A successor's entry installed during `notifyComplete`'s unlocked window survives: its registry entry is intact and its snapshot file still exists on disk. Covers F5 and C7.                                                                                                                                                              |
-| `TestRunIdentity_TerminalSnapshotIsNeverRehydrated`                                                                           | A terminal-marked snapshot left on disk (removal failed) makes a later call `run_closed`, not an adoption; no record is written and the authoritative index entry for `run:<id>` is unchanged. Covers the R-4 interleaving.                                                                                                               |
-| `TestRunIdentity_TerminalRemovalUsesSnapshotRepo`                                                                             | A `notifyComplete` whose `repo` param differs from the run's persisted repo still removes the correct file and leaves no other repo's file touched.                                                                                                                                                                                       |
-| `TestRunIdentity_CrossRepoSameIssueNumberDoNotCollide`                                                                        | Repo A #42 and repo B #42, no force-clear involved, keep separate runtimes, snapshots and records. Covers F8.                                                                                                                                                                                                                             |
-| `TestRunIdentity_SetPausedNeverCreatesARuntime`                                                                               | `setPaused` for a closed id errors `run_closed`; for an unknown id with **no** snapshot errors `run_not_found` and writes **no file**; for an unknown id **with** a snapshot resolves through disk without creating a registry entry. Covers F9.                                                                                          |
-| `TestRunIdentity_InvalidRunIdIsRejectedBeforeUse`                                                                             | Table-driven over `../`, `/`, `%2e%2e`, uppercase, a UUIDv4, and a 36-char non-UUID: every one returns `run_id_invalid`; an **empty** id returns `run_id_required`. In no case is a file created, read or removed anywhere under the state dirs. Pins Decision 1's regex to Decision 8's discovery regex as the same constant.            |
-| `TestRunIdentity_ClosedRunIsRefusedOnEveryRunProgressMethod`                                                                  | Table-driven across the four run-progress methods: each returns `run_closed` as a JSON-RPC **error**, and mutates nothing.                                                                                                                                                                                                                |
-| `TestRunIdentity_SchedulerRunIsServedNotAdopted`                                                                              | A `notifyStageProgress` / `notifyPhaseTransition` carrying a **live scheduler** run's id creates **no** entry in `activeRuntimes`, records onto the scheduler's runtime, and does not become "current" in the issue index. Covers the PipelineBridge path and Decision 11.                                                                |
-| `TestRunIdentity_PhaseTransitionSchedulerArmIsIdentityGated`                                                                  | A phase event whose `runId` does not match the scheduler's registered runtime for that issue records **nothing** in that runtime's `PhaseHistory`. Covers the second arm of F10.                                                                                                                                                          |
-| `TestOrphanReconcile_ClosesAbandonedRunAtRootSwitch`                                                                          | With an abandoned entry in the registry, the `workspace.setRoot` call site emits `pipeline_done` and removes the snapshot — the case that is dead on main (F11). The fresh-start case continues to pass unchanged.                                                                                                                        |
-| `TestOrphanReconcile_LiveSchedulerRunIsNotReconciled`                                                                         | A live Go-scheduler run's snapshot is **skipped** at `workspace.setRoot`: no `pipeline_done`, file intact. Verified failing against `main`, where it is reconciled. Covers F21.                                                                                                                                                           |
-| `TestOrphanReconcile_PausedAndIdentityLessSnapshotsStillSkipped`                                                              | C1/C5 preservation: paused snapshots and snapshots with no identity are skipped, not reconciled, not deleted — until the 14-day cap, which does remove a paused one.                                                                                                                                                                      |
-| `TestOrphanReconcile_LiveLeaseIsNotReconciled`                                                                                | A run whose `LastSeen` is inside the window is skipped; the same run outside the window is reconciled.                                                                                                                                                                                                                                    |
-| `TestOrphanReconcile_RunsAndRemovesWithoutAnalytics`                                                                          | With `analyticsSvc == nil`, the scan still runs, every removal rule still fires, and no event is emitted. Covers F24.                                                                                                                                                                                                                     |
+| Test                                                                                                                          | Must show                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestRunIdentity_AbandonedRunStillBooksItsOwnCompletion` (from `TestProbe_ForceClearedRunResurrectsAfterSuccessorCompletes`)  | After `abandonRun`, the same run's late `pr-create running` + `notifyComplete{prMerged:true}` are **accepted**, produce exactly **one** run record and **one** learning-corpus row under that run's own id, and its `pipeline_done` supersedes the abandon event. A **successor** run of the same issue is untouched. Covers F1, F4, F18.    |
+| `TestRunIdentity_SuccessorWithoutInitializedRecordsNormally` (from `TestProbe_SuccessorWithoutInitializedIsLockedOutForever`) | A run whose first message the server never saw has **every** subsequent transition accepted by adoption, and its completion writes exactly one record, one outcome, and full telemetry. This is the test that fails against the refuted design (F16) and must never be deleted.                                                              |
+| `TestRunIdentity_AbandonRunNeverCreates`                                                                                      | `abandonRun` for an id with no entry **and** no snapshot returns `no_run`, writes nothing, adds nothing to `closedRuns`, emits no `pipeline_done`, and a subsequent first message from that id is served normally. Covers the `bookForceClearedReservation` case.                                                                            |
+| `TestRunIdentity_AbandonRunRequiresMatchingRepoAndIssue`                                                                      | A mismatched `repo` or `issueNumber` yields `run_not_found` and mutates nothing; no `pipeline_done` with `IssueNumber: 0` is ever emitted. Covers C8.                                                                                                                                                                                        |
+| `TestRunIdentity_ZombieCannotMutateSuccessor`                                                                                 | Interleaving two run ids on one issue: the successor's `TotalCostUSD`, per-stage tokens, `StageErrors`, `PhaseHistory` and `RunRecord` are byte-identical to a solo run. Covers F2, F4, F10.                                                                                                                                                 |
+| `TestRunIdentity_TerminalDeleteIsIdentityChecked`                                                                             | A successor's entry installed during `notifyComplete`'s unlocked window survives: its registry entry is intact and its snapshot file still exists on disk. Covers F5 and C7.                                                                                                                                                                 |
+| `TestRunIdentity_TerminalSnapshotIsNeverRehydrated`                                                                           | A terminal-marked snapshot left on disk (removal failed) makes a later call `run_closed`, not an adoption; no record is written and the authoritative index entry for `run:<id>` is unchanged. Covers the R-4 interleaving.                                                                                                                  |
+| `TestRunIdentity_TerminalRemovalUsesSnapshotRepo`                                                                             | A `notifyComplete` whose `repo` param differs from the run's persisted repo still removes the correct file and leaves no other repo's file touched.                                                                                                                                                                                          |
+| `TestRunIdentity_CrossRepoSameIssueNumberDoNotCollide`                                                                        | Repo A #42 and repo B #42, no force-clear involved, keep separate runtimes, snapshots and records. Covers F8.                                                                                                                                                                                                                                |
+| `TestRunIdentity_SetPausedNeverCreatesARuntime`                                                                               | `setPaused` for a closed id errors `run_closed`; for an unknown id with **no** snapshot errors `run_not_found` and writes **no file**; for an unknown id **with** a snapshot resolves through disk without creating a registry entry. Covers F9.                                                                                             |
+| `TestRunIdentity_InvalidRunIdIsRejectedBeforeUse`                                                                             | Table-driven over `../`, `/`, `%2e%2e`, uppercase, a UUIDv4, and a 36-char non-UUID: every one returns `run_id_invalid`; an **empty** id returns `run_id_required`. In no case is a file created, read or removed anywhere under the state dirs. Pins Decision 1's regex to Decision 8's discovery regex as the same constant.               |
+| `TestRunIdentity_ClosedRunIsRefusedOnEveryRunProgressMethod`                                                                  | Table-driven across the four run-progress methods: each returns `run_closed` as a JSON-RPC **error**, and mutates nothing.                                                                                                                                                                                                                   |
+| `TestRunIdentity_SchedulerRunIsServedNotAdopted`                                                                              | A `notifyStageProgress` / `notifyPhaseTransition` carrying a **live scheduler** run's id creates **no** entry in `activeRuntimes`, records onto the scheduler's runtime, and does not become "current" in the issue index. Covers the PipelineBridge path and Decision 11.                                                                   |
+| `TestRunIdentity_PhaseTransitionSchedulerArmIsIdentityGated`                                                                  | A phase event whose `runId` does not match the scheduler's registered runtime for that issue records **nothing** in that runtime's `PhaseHistory`. Covers the second arm of F10.                                                                                                                                                             |
+| `TestOrphanReconcile_ClosesAbandonedRunAtRootSwitch`                                                                          | With an abandoned entry in the registry, the `workspace.setRoot` call site emits `pipeline_done` and removes the snapshot — the case that is dead on main (F11). The fresh-start case continues to pass unchanged.                                                                                                                           |
+| `TestOrphanReconcile_LiveSchedulerRunIsNotReconciled`                                                                         | A live Go-scheduler run's snapshot is **skipped** at `workspace.setRoot`: no `pipeline_done`, file intact. Verified failing against `main`, where it is reconciled. Covers F21.                                                                                                                                                              |
+| `TestOrphanReconcile_PausedAndIdentityLessSnapshotsStillSkipped`                                                              | C1/C5 preservation: paused snapshots and snapshots with no identity are skipped, not reconciled, not deleted — until the 14-day cap, which does remove a paused one.                                                                                                                                                                         |
+| `TestOrphanReconcile_LiveLeaseIsNotReconciled`                                                                                | A run whose `LastSeen` is inside the window is skipped; the same run outside the window is reconciled.                                                                                                                                                                                                                                       |
+| `TestOrphanReconcile_RunsAndRemovesWithoutAnalytics`                                                                          | With `analyticsSvc == nil`, the scan still runs, every removal rule still fires, and no event is emitted. Covers F24.                                                                                                                                                                                                                        |
+| `TestOrphanReconcile_StartupDefersAndReEvaluates`                                                                             | A snapshot present at `Server.Run` whose run re-asserts during the grace window is **not** emitted for and **not** removed; one that stays silent is reconciled at expiry. Verified failing against `main`, where the sweep runs inline. Covers **F26**.                                                                                     |
+| `TestOrphanReconcile_LivePidIsNotReconciled`                                                                                  | A snapshot whose recorded `PID` names a live process is skipped after the grace window with both registries empty; the same snapshot with a dead PID is reconciled. Covers ladder arm 3.                                                                                                                                                     |
+| `TestOrphanReconcile_FreshAbandonedSnapshotSurvives`                                                                          | An `abandoned` snapshot whose `abandoned_at` and mtime are inside the window is **neither** emitted for **nor** removed, and a stage transition arriving afterwards still finds its file. The same snapshot past the window is removed without emitting. Pins 7.4's two abandoned rows.                                                      |
+| `TestOrphanReconcile_StaleResumingArtifactIsRestored`                                                                         | A `resuming-{issue}-{runId}.{token}.json` older than the grace window is renamed back to canonical, not reconciled and not deleted; the pause survives to the next activation. Covers Decision 9's crashed-claim release.                                                                                                                    |
+| `TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused`                                                                    | `notifyComplete`, `abandonRun` and `setPaused` carrying a **live scheduler** run's id each return `run_wrong_owner`, write **no** V2 record, **no** learning row, **no** `abandoned` stamp, and emit **no** `pipeline_done`; the scheduler's own `OnPipelineComplete` still writes exactly one record. Covers **F29** and C4.                |
+| `TestRunIdentity_ConcurrentAdoptionYieldsOneRuntime`                                                                          | N goroutines calling run-progress verbs for one unknown id concurrently produce exactly **one** `*RuntimeState`, one registry entry, and one snapshot containing **every** goroutine's stage; run under `-race`. Covers **F30** and C14.                                                                                                     |
+| `TestRunIdentity_InFlightPersistCannotResurrect`                                                                              | A `Persist` held mid-flight across the terminal claim either lands **before** the seal (overwritten and removed) or writes `terminal: true`; in no interleaving does a non-terminal `runtime-{issue}-{runId}.json` exist after the claim returns, and a post-seal `Persist` returns `ErrRunSealed`. Run under `-race`. Covers **F27**.       |
+| `TestRunIdentity_ExecutionPathReplayIsInsideTheClaim`                                                                         | A `notifyComplete` carrying `StageExecutionPaths` / `StagePuntReasons` produces a V2 record with `execution_path` and `punt_reason` stamped on its stage records — the #309 replay is not refused by the latch. Pins claim step 1b.                                                                                                          |
+| `TestRunIdentity_ClosedRunsEvictionFallsBackToTheDurableMarker`                                                               | With the ring forced past its cap, a late duplicate whose terminal snapshot survives is `run_closed`; one whose snapshot was removed adopts empty, its skeleton record is dropped by the richer-upgrade rule and its learning row by the corpus dedup, leaving exactly one spurious `pipeline_done`. Pins Decision 4's late-duplicate table. |
 
 ### Go — `internal/state`, `internal/learning`, `internal/orchestrator`
 
@@ -1230,20 +1875,24 @@ here as permanent tests.
 | `TestLearningRecorder_RecordIsIdempotentByRunID` | Two `Record` calls for one run id append one row, **including across a process restart** (the corpus is the durable dedup). Explicit replacement for the deleted "the runtime is deleted so a repeat records nothing" guarantee (C2). |
 | `TestScheduler_MintsLocallyIgnoringRemoteRunID`  | A queue item carrying a `RemoteRunID` produces a locally-minted `RunID`; the remote id is carried as a correlation attribute only. Covers Decision 2's reversal.                                                                      |
 | `TestSidecar_CarriesRunID`                       | `current-run.json` written by the scheduler contains `run_id` matching the runtime snapshot's filename component.                                                                                                                     |
+| `TestPersist_HoldsTheRunMutexAcrossTheWrite`     | A concurrent mutation cannot interleave between `Persist`'s marshal and its `AtomicWriteFile`; a sealed runtime's `Persist` writes nothing and returns `ErrRunSealed`. Run under `-race`. Covers the F27 mechanism at its own layer.  |
+| `TestIpcStageRunner_RefusesAnEmptyRunID`         | `RunStage` with an empty `RunID` returns an error **without** emitting `pipeline.runStage` and without spawning anything; the scheduler's ordinary path always supplies one. Pins Decision 10's step-0b assertion.                    |
 
 ### TypeScript — `packages/nightgauge-vscode/tests/`
 
-| Test                                                                                  | Must show                                                                                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ConcurrentPipelineManager.terminalDoubleBook.test.ts` (PROBE-X / PROBE-Y, committed) | The pre-fix sequences `after force-clear: failed=1 completed=0 \| final: failed=1 completed=1` and `afterForceClear=1 final onSlotFailed=2` become `failed=1 completed=0` at **both** checkpoints, with `onSlotFailed` called exactly once. Covers F18 and pins C10. |
-| `ConcurrentPipelineManager.runIdentity.test.ts`                                       | The minted `runId` reaches the slot, the reservation, the `PipelineStateService`, and `pipeline.abandonRun` on force-clear; `forceClearedRunIds` holds run ids and has no release path; the funnel calls `abandonRun` and **never** `notifyComplete`.                |
-| `PipelineStateService.identityIsNotAmbient.test.ts`                                   | `beginRun` on a service holding a live identity throws and mutates nothing; `retryFailedIssue` against an in-flight **same** issue surfaces the error instead of relabelling the live run. Covers F23.                                                               |
-| `PipelineStateService.stateChangedRouting.test.ts`                                    | A `stateChanged` for a **different** run id on the **same** issue is ignored; one with an **empty** run id is still applied via the issue pre-filter. Covers F19 and Decision 6's fallback.                                                                          |
-| `PipelineBridge.identity.test.ts`                                                     | Both raw IPC calls carry `ipcParams.runId`; neither is rejected; the ≥5s progress cadence produces no rejection log.                                                                                                                                                 |
-| `CliPipelineReconciliationService.test.ts` (extended)                                 | A sidecar carrying `run_id` discovers `runtime-{issue}-{runId}.json` and fires `onDiscovered`; a sidecar without `run_id` is skipped **with a log**, not silently. Covers F25.                                                                                       |
-| `pauseRestore.test.ts`                                                                | Two paused snapshots for one issue produce **one** QuickPick listing both by run id and `started_at`; resuming threads the parsed `runId` into `beginRun` + `runPipeline`; the un-chosen file is discarded, not left to re-prompt. Covers C5.                        |
-| `runtimeStubSweep.test.ts` (extended)                                                 | Legacy `runtime-\d+.json` files are **left untouched** by the TS sweep (Go owns them); identity-less new-scheme files classify as `delete`; paused, identified files classify as `keep`.                                                                             |
-| `IpcClient.protocolMismatch.test.ts`                                                  | A mismatched `ipc.ready` `protocolVersion` disconnects the client, raises the modal, and makes every subsequent `call()` reject with `protocol_mismatch` without touching the socket.                                                                                |
+| Test                                                                                  | Must show                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ConcurrentPipelineManager.terminalDoubleBook.test.ts` (PROBE-X / PROBE-Y, committed) | The pre-fix sequences `after force-clear: failed=1 completed=0 \| final: failed=1 completed=1` and `afterForceClear=1 final onSlotFailed=2` become `failed=1 completed=0` at **both** checkpoints, with `onSlotFailed` called exactly once. Covers F18 and pins C10.                                   |
+| `ConcurrentPipelineManager.runIdentity.test.ts`                                       | The minted `runId` reaches the slot, the reservation, the `PipelineStateService`, and `pipeline.abandonRun` on force-clear; `forceClearedRunIds` holds run ids and has no release path; the funnel calls `abandonRun` and **never** `notifyComplete`.                                                  |
+| `PipelineStateService.identityIsNotAmbient.test.ts`                                   | `beginRun` on a service holding a live identity throws and mutates nothing; `retryFailedIssue` against an in-flight **same** issue surfaces the error instead of relabelling the live run. Covers F23.                                                                                                 |
+| `PipelineStateService.stateChangedRouting.test.ts`                                    | A `stateChanged` for a **different** run id on the **same** issue is ignored; one with an **empty** run id is still applied via the issue pre-filter. Covers F19 and Decision 6's fallback.                                                                                                            |
+| `PipelineBridge.identity.test.ts`                                                     | Both raw IPC calls carry `ipcParams.runId`; neither is rejected; the ≥5s progress cadence produces no rejection log.                                                                                                                                                                                   |
+| `CliPipelineReconciliationService.test.ts` (extended)                                 | A sidecar carrying `run_id` discovers `runtime-{issue}-{runId}.json` and fires `onDiscovered`; a sidecar without `run_id` is skipped **with a log**, not silently. Covers F25.                                                                                                                         |
+| `pauseRestore.test.ts`                                                                | Two paused snapshots for one issue produce **one** QuickPick listing both by run id and `started_at`; resuming threads the parsed `runId` into `beginRun` + `runPipeline`; the un-chosen file is discarded, not left to re-prompt. Covers C5.                                                          |
+| `pauseRestore.exclusiveClaim.test.ts`                                                 | Two hosts racing one paused snapshot: exactly **one** rename succeeds and exactly **one** `runPipeline` is called; the loser gets `ENOENT`, logs once, deletes **nothing**, and never calls `beginRun`. A claim artifact left by a killed host is renamed back and re-prompts. Covers **F28** and C15. |
+| `attentionRaise.identity.test.ts`                                                     | A run-scoped raise carries the **installed** identity (not a file read), corroborates, and keeps #305's raise-and-retry ceiling option; `readCurrentRunId` no longer exists; a run-scoped raise with an empty id errors instead of failing corroboration silently. Covers **F31**.                     |
+| `runtimeStubSweep.test.ts` (extended)                                                 | Legacy `runtime-\d+.json` files are **left untouched** by the TS sweep (Go owns them); identity-less new-scheme files classify as `delete`; paused, identified files classify as `keep`.                                                                                                               |
+| `IpcClient.protocolMismatch.test.ts`                                                  | A mismatched `ipc.ready` `protocolVersion` disconnects the client, raises the modal, and makes every subsequent `call()` reject with `protocol_mismatch` without touching the socket.                                                                                                                  |
 
 ### Fences
 
@@ -1362,8 +2011,8 @@ One universal three-line rule for all identity-bearing calls.
 wrong for a caller asserting something **about** a run: an administrative verb
 that adopts can terminate or pause a run the server has never seen, invent a
 `pipeline_done` with `IssueNumber: 0`, and — with `closedRuns` — lock out a
-dispatch that had not yet reached Go. Decision 3's two verb classes are the
-answer.
+dispatch that had not yet reached Go. Decision 3's verb classes are the answer —
+four of them, resolved before any registry is consulted.
 
 ### H — Seed `runId` from the platform's `RemoteRunID` (the first draft)
 
@@ -1389,47 +2038,114 @@ retrying twice would produce 24 cards — the pattern ADR-015 §D/§L exist to
 prevent. The run id rides as a payload field and a trace ref, which is what was
 actually wanted.
 
+### J — Resume MINTS a fresh identity, carrying the paused one as a predecessor
+
+The other structurally-sound answer to F28: never replay an id, so a redelivered
+prompt cannot collide by construction.
+
+**Rejected.** The paused snapshot's stage history, accumulated cost, phase
+records, ADR-013 trace file and `run:<id>` ledger key are all keyed to the
+existing identity. A fresh id either orphans every one of them or requires a
+predecessor→successor mapping to stitch them back — and a mapping is a thing
+that can be stale, lost or disagreed about, which is **Alternative E's own
+refutation**. It would also make one logical run produce two learning-corpus
+rows and two authoritative records, forcing #313's merge rules to arbitrate
+something they were never designed for. Decision 9's consume-on-claim gets the
+same exclusion from a primitive the OS already makes atomic, and keeps "one run,
+one identity, for the run's whole life".
+
+### K — Adoption as one check-load-insert critical section holding `runtimesMu`
+
+The simplest fix for F30: hold the registry lock across the disk read so the
+check, the load and the insert cannot interleave.
+
+**Rejected on cost, not on correctness.** `runtimesMu` is server-global and is
+also taken by Decision 6's derived index scan and by the reconciler, so this
+serialises every unrelated run's handlers behind one run's disk latency — during
+the burst of concurrent adoptions that a restart produces, which is exactly the
+case the lock is being taken for. Decision 4's per-id singleflight gets the same
+exactly-once property with O(map) hold time. Recorded because "just hold the
+lock" is the reviewer's first instinct and the tradeoff should be visible.
+
+### L — A durable `closedRuns` journal on disk
+
+Persist the closed-run set so `run_closed` survives a restart and an eviction.
+
+**Rejected.** It is a second writer over run state with its own retention,
+corruption and compaction story — the #316 lesson ADR 015 Decision C already
+paid for once. The durable fact already exists in the right place: the `terminal`
+marker inside the run's own snapshot, written before removal. And the outcome
+when neither exists is bounded and specified (Decision 4's late-duplicate table):
+one spurious `pipeline_done`, no wrong record, no doubled outcome. Buying
+durability for that would cost more than the noise it removes.
+
+### M — A `pipeline.declareLiveRuns` handshake so the server learns which runs survived a restart
+
+Have the reconnecting client send the run ids it believes are live, so the
+startup sweep can skip them immediately instead of waiting out a grace window.
+
+**Rejected.** It adds an unauthenticated wire verb whose only effect is to
+**suppress reconciliation** — i.e. a primitive for stranding `running` platform
+rows, which is the defect #44 exists to prevent (C8 says no new verb may widen
+the socket's capability). And it buys almost nothing: the deferred sweep already
+distinguishes restart from cold start **behaviourally**, because a live run
+re-asserts inside the window and a dead one does not. The entire cost of not
+having it is that a genuinely-dead run's row closes 120 seconds later.
+
 ---
 
 ## Revision history — what design review changed
 
 Recorded because a Decided ADR is the permanent record and several of these
-reverse a sentence a reader may have seen.
+reverse a sentence a reader may have seen. Rows 1–22 are the first review's
+reversals; rows 23–32 are the second's.
 
-| #   | First draft                                                                           | Decided                                                                                                                                            |
-| --- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `abandonRun` is a full terminal claim, `closedRuns` insert included                   | `abandonRun` terminates the **dispatch**; the run stays adoptable and books its own honest completion (7.1, Alternative F)                         |
-| 2   | Universal "unknown → adopt"                                                           | Two verb classes: run-progress adopts, administrative resolves-or-refuses (Decision 3, Alternative G)                                              |
-| 3   | `abandonRun {runId, reason}`                                                          | `{runId, repo, issueNumber, reason, stage?}`, with all three corroborated against the resolved run (7.1)                                           |
-| 4   | Seed `runId` from `RemoteRunID`                                                       | Always mint locally; `remoteRunId` is a correlation attribute; the scheduler's `RemoteRunID` preference is deleted (Decision 2, Alternative H)     |
-| 5   | "A terminal run has no snapshot, so the file's presence is evidence"                  | A **durable** `terminal` marker is stamped before removal; adoption refuses a terminal snapshot; removal uses the snapshot's own repo (Decision 4) |
-| 6   | Terminal latch guarantees no resurrection                                             | Restated as in-process; the gate CLI's create-on-miss is **deleted** and it writes through `PersistExisting` (Decision 5)                          |
-| 7   | Index "current" ranked by `FirstSeen`, "self-correcting"                              | Ranked by `LastSeen`; abandoned entries drop out (Decision 6)                                                                                      |
-| 8   | `skipRun` consults the IPC registry                                                   | Consults **both** registries; `Scheduler.IsRunLive` added (7.2)                                                                                    |
-| 9   | Paused snapshots exempt from all retention                                            | Exempt from reconciliation while fresh; **subject to the 14-day cap** (7.4)                                                                        |
-| 10  | Retention/reconciliation as-is                                                        | Emission and removal split so both run on a local-only workspace (7.4)                                                                             |
-| 11  | `NIGHTGAUGE_RUN_ID` consumed, exporter unnamed                                        | Three exporters named and sequenced first; the gate CLI also gets `--run-id` explicitly from `HeadlessOrchestrator` (Decision 8)                   |
-| 12  | Producer table omits `PipelineBridge`, the raw progress sites, and the CLI reconciler | All enumerated; `PipelineBridge` uses the `ipcParams.runId` it already receives (Decision 10)                                                      |
-| 13  | "Every producer mints at its own dispatch point"                                      | Plus: identity is not ambient — `beginRun` refuses to overwrite a live identity (Decision 10)                                                      |
-| 14  | Pause-restore = a new regex                                                           | Full migration: parsed id, one QuickPick per issue, id threaded into resume, `setPaused` resolvable from disk (Decision 9)                         |
-| 15  | Legacy files swept by both Go and TypeScript                                          | Go owns legacy disposition exclusively; the TS sweep's filter is narrowed (Migration)                                                              |
-| 16  | "The TypeScript client already validates `protocolVersion` and rejects a mismatch"    | It does not — this ADR specifies the disconnect + modal + `protocol_mismatch` hard-fail (Migration)                                                |
-| 17  | "An error rejects the promise, so every existing try/catch at minimum logs it"        | False — five bare catches named; rejection observability is Go-side, and the catches gain a `warn` (Decision 3, Migration)                         |
-| 18  | #375 `IdempotencyKey` becomes run-scoped                                              | Key unchanged; the run id rides as a payload field and trace ref (Decision 9, Alternative I)                                                       |
-| 19  | `notifyPhaseTransition` "structurally" fixed                                          | Its second, scheduler-keyed arm is identity-gated (Decision 11)                                                                                    |
-| 20  | `runId` format mandated but unvalidated                                               | Validated at the wire boundary against the same constant the discovery regex uses (Decisions 1, 8)                                                 |
-| 21  | #305 corroboration "unchanged"                                                        | Explicit multi-run selection rule: match run id + repo + issue, else corroboration fails (Decision 9)                                              |
-| 22  | Failure catalogue and constraints cited but undefined                                 | Both inlined as tables above                                                                                                                       |
+| #   | Earlier draft                                                                         | Decided                                                                                                                                                                                                                                 |
+| --- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `abandonRun` is a full terminal claim, `closedRuns` insert included                   | `abandonRun` terminates the **dispatch**; the run stays adoptable and books its own honest completion (7.1, Alternative F)                                                                                                              |
+| 2   | Universal "unknown → adopt"                                                           | Two verb classes: run-progress adopts, administrative resolves-or-refuses (Decision 3, Alternative G)                                                                                                                                   |
+| 3   | `abandonRun {runId, reason}`                                                          | `{runId, repo, issueNumber, reason, stage?}`, with all three corroborated against the resolved run (7.1)                                                                                                                                |
+| 4   | Seed `runId` from `RemoteRunID`                                                       | Always mint locally; `remoteRunId` is a correlation attribute; the scheduler's `RemoteRunID` preference is deleted (Decision 2, Alternative H)                                                                                          |
+| 5   | "A terminal run has no snapshot, so the file's presence is evidence"                  | A **durable** `terminal` marker is stamped before removal; adoption refuses a terminal snapshot; removal uses the snapshot's own repo (Decision 4)                                                                                      |
+| 6   | Terminal latch guarantees no resurrection                                             | Restated as in-process; the gate CLI's create-on-miss is **deleted** and it writes through `PersistExisting` (Decision 5)                                                                                                               |
+| 7   | Index "current" ranked by `FirstSeen`, "self-correcting"                              | Ranked by `LastSeen`; abandoned entries drop out (Decision 6)                                                                                                                                                                           |
+| 8   | `skipRun` consults the IPC registry                                                   | Consults **both** registries; `Scheduler.IsRunLive` added (7.2)                                                                                                                                                                         |
+| 9   | Paused snapshots exempt from all retention                                            | Exempt from reconciliation while fresh; **subject to the 14-day cap** (7.4)                                                                                                                                                             |
+| 10  | Retention/reconciliation as-is                                                        | Emission and removal split so both run on a local-only workspace (7.4)                                                                                                                                                                  |
+| 11  | `NIGHTGAUGE_RUN_ID` consumed, exporter unnamed                                        | Three exporters named and sequenced first; the gate CLI also gets `--run-id` explicitly from `HeadlessOrchestrator` (Decision 8)                                                                                                        |
+| 12  | Producer table omits `PipelineBridge`, the raw progress sites, and the CLI reconciler | All enumerated; `PipelineBridge` uses the `ipcParams.runId` it already receives (Decision 10)                                                                                                                                           |
+| 13  | "Every producer mints at its own dispatch point"                                      | Plus: identity is not ambient — `beginRun` refuses to overwrite a live identity (Decision 10)                                                                                                                                           |
+| 14  | Pause-restore = a new regex                                                           | Full migration: parsed id, one QuickPick per issue, id threaded into resume, `setPaused` resolvable from disk (Decision 9)                                                                                                              |
+| 15  | Legacy files swept by both Go and TypeScript                                          | Go owns legacy disposition exclusively; the TS sweep's filter is narrowed (Migration)                                                                                                                                                   |
+| 16  | "The TypeScript client already validates `protocolVersion` and rejects a mismatch"    | It does not — this ADR specifies the disconnect + modal + `protocol_mismatch` hard-fail (Migration)                                                                                                                                     |
+| 17  | "An error rejects the promise, so every existing try/catch at minimum logs it"        | False — five bare catches named; rejection observability is Go-side, and the catches gain a `warn` (Decision 3, Migration)                                                                                                              |
+| 18  | #375 `IdempotencyKey` becomes run-scoped                                              | Key unchanged; the run id rides as a payload field and trace ref (Decision 9, Alternative I)                                                                                                                                            |
+| 19  | `notifyPhaseTransition` "structurally" fixed                                          | Its second, scheduler-keyed arm is identity-gated (Decision 11)                                                                                                                                                                         |
+| 20  | `runId` format mandated but unvalidated                                               | Validated at the wire boundary against the same constant the discovery regex uses (Decisions 1, 8)                                                                                                                                      |
+| 21  | #305 corroboration "unchanged"                                                        | Explicit multi-run selection rule: match run id + repo + issue, else corroboration fails (Decision 9)                                                                                                                                   |
+| 22  | Failure catalogue and constraints cited but undefined                                 | Both inlined as tables above                                                                                                                                                                                                            |
+| 23  | "Both call sites then work: `Server.Run` (fresh process, empty IPC registry…)"        | **False** — the client auto-restarts the backend under a surviving host, so the startup sweep closed live runs. `Server.Run` now **defers** 120s and re-evaluates; the ladder gains PID and file-age arms (F26, 7.2/7.3)                |
+| 24  | `Terminal` on `runEntry` only, "the entry refuses every further `Persist`"            | It could not — `Persist` is a `RuntimeState` method. `Terminal` is now a **persisted `RuntimeState` field**, `Persist` holds `rs.mu` across the write and refuses a **sealed** runtime (F27, Decisions 5 and 12)                        |
+| 25  | Resume "continues under the snapshot's own identity, so the snapshot is consumed"     | Never mechanised — two hosts could resume one id. Resume now requires winning an atomic **rename** (`resuming-{issue}-{runId}.{token}.json`) (F28, C15, Decision 9)                                                                     |
+| 26  | `abandoned` durable "in the file"; `skipRun` excluded abandoned runs                  | Ambiguous and destructive both ways. `abandoned` is a **`RuntimeState` field** re-stamped by every `Persist`, with no clear path, and it is **removed from the liveness predicate** (F4 of review 2, 7.1/7.2/7.4)                       |
+| 27  | Verb class branched at step 4 of Decision 11's order                                  | Class is decided **before** any registry is consulted; terminal and administrative verbs against a scheduler-resolved run are `run_wrong_owner` (F29, Decision 3's per-class table)                                                     |
+| 28  | Adoption "creates the entry" and separately "reads the snapshot"                      | Two concurrent adoptions could build two runtimes. Specified as a **per-id singleflight** with the I/O outside the lock (F30, C14, Decision 4; Alternative K records the rejected whole-lock form)                                      |
+| 29  | `PipelineBridge` "already receives `ipcParams.runId`"                                 | True, but the value is `omitempty` and empty when `Runtime` is nil. `StageRunParams.RunID` becomes explicit and **asserted at the emitter** in plan step **0b**, before the verbs require it (Decision 10)                              |
+| 30  | `attention.raise`'s `RunID` becomes a required selector                               | …with a guesser as its only producer. `readCurrentRunId` is **deleted** and the installed identity is threaded, preserving #305's ceiling option (F31, Decision 9)                                                                      |
+| 31  | #309's execution-path replay unplaced in the claim sequence                           | It is **step 1b**, inside the critical section and before the latch — the only mutation the latch admits (Decision 5)                                                                                                                   |
+| 32  | `closedRuns` "LRU-capped with a durable on-disk backing"                              | **Withdrawn.** It is a volatile **FIFO ring, cap 1024**; the durable authority is the snapshot's `terminal` marker, and the late-duplicate outcome under eviction is tabulated (Decision 4; Alternative L records the rejected journal) |
 
 ---
 
 ## Consequences
 
-**The registry becomes bounded.** Entries are evicted at terminal, reaped by the
-lease, and `closedRuns` is an LRU-capped set with a durable on-disk backing
-(Decision 4). Today every force-cleared run and every `setPaused` stub is
-retained for the life of the server, and `getState` serves the dead run's
-snapshot for that issue indefinitely (F12).
+**The registry becomes bounded.** Entries are evicted at terminal and reaped by
+the lease, and `closedRuns` is a **volatile FIFO ring capped at 1024 ids** whose
+authority is the snapshot's durable `terminal` marker, not the ring itself
+(Decision 4 — the first draft's "durable on-disk backing" is withdrawn, and
+Alternative L says why). Today every force-cleared run and every `setPaused`
+stub is retained for the life of the server, and `getState` serves the dead
+run's snapshot for that issue indefinitely (F12).
 
 **The snapshot directory becomes bounded too, for the first time.** One file per
 run instead of one per issue is strictly more files; the reconciler's
@@ -1480,26 +2196,53 @@ caller did not start is introduced by this ADR (C8).
 
 **A false-positive lease expiry can re-emit a terminal event — residual risk
 R-3.** A live-but-silent run reconciled after 30 minutes gets a `pipeline_done`
-it will later contradict. The event is keyed by run id, so the platform side is
-idempotent and last-writer-wins on outcome; the local snapshot removal is
-identity-safe; and the run re-adopts and re-persists on its next message.
-Bounded by the window and by `abandonRun` carrying the load in the common case.
+it will later contradict. The event is keyed by run id, so the platform side
+converges **under Assumption A-1**; the local snapshot removal is identity-safe;
+and the run re-adopts and re-persists on its next message. Bounded by the window,
+by the four other arms of the liveness ladder (a live PID or a fresh file both
+veto the expiry), and by `abandonRun` carrying the load in the common case.
 
-**`closedRuns` does not survive a server restart when the snapshot was removed
-cleanly — residual risk R-4.** After such a restart, a genuinely-closed run's
-late call adopts rather than being refused, re-creates a snapshot, and is closed
-again by the next reconcile — one spurious `pipeline_done`. It **cannot**
-double-book: the adopted runtime starts empty (rehydration from a terminal
-snapshot is refused, and there is no snapshot when removal succeeded), so
-#313's richer-upgrade-only rule drops its skeleton record, and Decision 9's
-corpus dedup — which reads the durable corpus, not memory — drops the duplicate
-outcome. Only the noise remains.
+**`closedRuns` does not survive a server restart or a ring eviction when the
+snapshot was removed cleanly — residual risk R-4.** In that case a
+genuinely-closed run's late call adopts rather than being refused, re-creates a
+snapshot, and is closed again by the next reconcile — one spurious
+`pipeline_done`. It **cannot** double-book: the adopted runtime starts empty
+(rehydration from a terminal snapshot is refused, and there is no snapshot when
+removal succeeded), so #313's richer-upgrade-only rule drops its skeleton record,
+and Decision 9's corpus dedup — which reads the durable corpus, not memory —
+drops the duplicate outcome. Only the noise remains, and Decision 4's
+late-duplicate table enumerates every case rather than leaving a reader to
+derive it.
 
 **The scheduler registry is still issue-keyed — residual risk R-5.** Decision 11
 guards its one externally-reachable write site on identity rather than re-keying
 it. That is sound because it has a single in-process writer per issue, but it is
 a compensating check, which this ADR elsewhere calls the signature of a wrong
 key. Re-keying `Scheduler.activeRuntimes` on `RunID` is filed as a follow-up.
+
+**Orphan reconciliation at startup is deferred by two minutes.** A genuinely
+dead run's platform row closes 120 seconds later than it does today. That is the
+price of C13's bias, it is paid once per activation, and it buys the difference
+between "a backend restart is invisible" and "a backend restart destroys every
+live run's record" (F26).
+
+**`Persist` becomes a serialising operation on its own run.** Holding `rs.mu`
+across the atomic write means one run's mutations queue behind that run's own
+file write. Runs do not contend with each other (different mutexes), the write
+is a few milliseconds, and the alternative is F27. Stated because it is a
+behaviour change to a hot path that a profiler will notice before a reader does.
+
+**Scope. #370 is materially larger than its first draft implied**, and the
+growth is recorded rather than discovered during implementation. Beyond the
+re-keying itself the ADR now requires: `current-run.json` to carry `run_id` (a Go
+sidecar change in `failure_handler.go`); the pause-restore prompt to become a
+per-issue QuickPick **with an atomic claim**; `RunOptions.RunID` threaded through
+eight adapter stage-env builders; `StageRunParams.RunID` explicit and asserted at
+`IpcStageRunner`; a `PersistExisting` primitive and a `SealAndRemove` primitive;
+`Persist` holding `rs.mu` across its write; an adoption singleflight; a deferred
+startup reconcile; a real `ProtocolVersion` hard-fail in `IpcClient`; and the
+deletion of `readCurrentRunId`. Steps 0 and 0b exist specifically to sequence the
+producers ahead of the consumers that would otherwise be inert or refused.
 
 **One deleted sentence is worth naming.** `server.go:2875-2880` currently reads:
 _"Idempotency is inherited, not enforced here … the runtime is deleted at the end
@@ -1512,25 +2255,59 @@ its own replacement, not assume this one.
 
 ---
 
+## Follow-up issues (filed at merge)
+
+This ADR names six pieces of work it deliberately does **not** do. They are
+listed here with the scope each one carries, so the issues can be filed from
+this section rather than reconstructed from prose. None of them gates #370; the
+A-1 verification gates one **step** of it, as noted.
+
+| Ref     | Title                                                                        | Scope                                                                                                                                                                                                                                                                                                                                  |
+| ------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R-1** | Give the runtime snapshot a single authoritative writer                      | Five writers in three processes share `Persist`'s whole-file last-write-wins contract. After #370 the residual is same-run field loss between the IPC server and `nightgauge gate verify --record`, narrowed to a rename race. Fix: the gate CLI posts its result through IPC when a server is reachable, mirroring #316's discipline. |
+| **R-2** | Authenticate the IPC socket                                                  | #370 closes the **addressing** half of ADR 015 §N's residual and explicitly not the **forgery** half: a writer that can reach the socket can still mint an id and drive a run of its own. §N is amended in #370's PR to say which half; this issue closes the other.                                                                   |
+| **R-5** | Re-key `Scheduler.activeRuntimes` on `RunID`                                 | Decision 11 guards its one externally-reachable write site on identity instead of re-keying — a compensating check, which this ADR elsewhere calls the signature of a wrong key. Re-keying it also gives scheduler runs a real IPC abandon/pause route, which Decision 3 currently refuses with `run_wrong_owner`.                     |
+| **A-1** | Verify the platform's `pipeline_runs` idempotency contract                   | Confirm two `pipeline_done` events for one `run_id` update one row and the later outcome wins. **Precondition on plan step 4** (the step that ships `abandonRun`); if it fails, apply the A-1-false variant in [Assumptions](#assumptions).                                                                                            |
+| **L-1** | Remove the one-shot Go legacy `runtime-{N}.json` sweep                       | Ships in #370 to avoid stranding phantom `running` rows across the upgrade; lands one release later so it cannot become an open-ended compatibility path.                                                                                                                                                                              |
+| **O-1** | Give the five bare `PipelineStateService` catches a shared rejection handler | #370 adds a `logger.warn` to each of `:717, 741, 787, 828, 966`. They should share one handler that classifies the JSON-RPC code, because five copies of a warn will drift. Observability follow-up, not a mechanism.                                                                                                                  |
+
+---
+
 ## Implementation tracking
 
 Tracked under issue #370. Suggested sequencing, each step independently
-mergeable and independently testable. **Step 0 is first because two consumers in
-step 5 are inert without it.**
+mergeable and independently testable. **Steps 0 and 0b are first because the
+consumers in later steps are inert (step 0) or hard-refused (step 0b) without
+them.**
 
 0. `NIGHTGAUGE_RUN_ID` exporters: `RunOptions.RunID` through the eight
    `internal/execution/adapters/*.go` stage env builders, and `SkillRunner`'s
    child env. No consumer changes yet — the variable simply starts existing.
+
+   0b. **The emitter's identity becomes non-optional.** `StageRunParams.RunID`
+   explicit and populated from `runtime.RunID` at `scheduler.go:3620`;
+   `Runtime` documented non-optional; `IpcStageRunner.RunStage` asserts a
+   non-empty id and errors instead of emitting; `RunStageParams.RunID` loses
+   `omitempty` on both sides of the wire. This must precede step 3, which is
+   where `run_id_required` becomes a hard refusal on the primary path.
+
 1. `RunID` as a `NewRuntimeState` constructor argument, immutable; `Persist`
-   refuses an empty identity; the shared identity regex; the new filename and
-   the `LoadPersistedState` / `FindPersistedStatesForIssue` split; the durable
-   `terminal` / `abandoned` snapshot fields; `PersistExisting`; the gate CLI's
-   create-on-miss deleted; `current-run.json` gains `run_id` (Go only).
-2. `runEntry` wrapper, the re-keyed registry, the two verb classes, adoption
-   with terminal-refusal, the terminal latch, compare-and-delete, the `LastSeen`
-   index ranking, `Scheduler.IsRunLive` / `LookupRunByID` /
-   `RecordPhaseStartForRun`, and the reconciler changes (both registries,
-   removal split from emission) — with the Go regression suite.
+   refuses an empty identity, **holds `rs.mu` across marshal + write**, and
+   refuses a sealed runtime; `MarkTerminal` / `MarkAbandoned` / `SealAndRemove`;
+   the shared identity regex and the `resuming-*` claim-artifact regex; the new
+   filename and the `LoadPersistedState` / `FindPersistedStatesForIssue` split;
+   the durable `terminal` / `abandoned` `RuntimeState` fields; `PersistExisting`;
+   the gate CLI's create-on-miss deleted; `current-run.json` gains `run_id` (Go
+   only).
+2. `runEntry` wrapper, the re-keyed registry, **verb-class-first resolution with
+   the per-class × per-registry policy** (including `run_wrong_owner`), adoption
+   via the **per-id singleflight** with terminal-refusal, the two-half terminal
+   latch with the #309 replay as claim step 1b, compare-and-delete, the
+   `closedRuns` FIFO ring, the `LastSeen` index ranking, `Scheduler.IsRunLive` /
+   `LookupRunByID` / `RecordPhaseStartForRun`, and the reconciler changes — the
+   **liveness ladder** (registries, PID, file age), the **deferred startup
+   sweep**, the 7.4 disposition table, and removal split from emission — with the
+   Go regression suite.
 3. The wire change: `runId` on all six methods, `repo` + `issueNumber` on the
    two administrative verbs, `pipeline.abandonRun`, `ProtocolVersion` 2 with the
    specified hard-fail, codegen regen.
@@ -1539,16 +2316,19 @@ step 5 are inert without it.**
    sites given identities, `stateChanged` / phase-event routing by run id with
    the empty-id fallback, `abandonRun` in the force-clear funnel (and the rule
    that the funnel never calls `notifyComplete`), the five `catch` logs, fence
-   re-pin.
-5. `learning.Recorder` idempotency key; #305's multi-run corroboration rule;
-   #375's run-id payload field and trace ref (key unchanged); `--run-id` on the
-   gate CLI plus explicit `--run-id` at `HeadlessOrchestrator`'s four spawn
-   sites; `NIGHTGAUGE_RUN_ID` in the SDK trace recorder with the
-   `runtime-${issue}.json` read deleted.
+   re-pin. **Gated on A-1's verification** — if the platform is first-writer-wins
+   on outcome, ship the A-1-false variant of `abandonRun` from
+   [Assumptions](#assumptions).
+5. `learning.Recorder` idempotency key; #305's multi-run corroboration rule with
+   the raise's identity **threaded** and `readCurrentRunId` **deleted**; the
+   `AttentionRaiseParams.RunID` doc-comment amendment; #375's run-id payload
+   field and trace ref (key unchanged); `--run-id` on the gate CLI plus explicit
+   `--run-id` at `HeadlessOrchestrator`'s four spawn sites; `NIGHTGAUGE_RUN_ID`
+   in the SDK trace recorder with the `runtime-${issue}.json` read deleted.
 6. `CliPipelineReconciliationService` reads `run_id` from the sidecar;
-   pause-restore migration (parsed id, per-issue QuickPick, id threaded into
-   resume); the TS stub sweep's filter narrowed to the new scheme.
-7. The one-shot Go legacy sweep, plus the follow-up issue for its own removal.
-8. Follow-ups filed at merge: R-1 (single authoritative snapshot writer), R-2
-   (IPC socket authentication, with the ADR 015 §N amendment landed in this PR),
-   R-5 (re-key `Scheduler.activeRuntimes`).
+   pause-restore migration (parsed id, per-issue QuickPick, **consume-on-claim
+   rename**, crashed-claim release in the reconciler); the TS stub sweep's filter
+   narrowed to the new scheme.
+7. The one-shot Go legacy sweep, plus L-1 for its own removal.
+8. File every row of [Follow-up issues](#follow-up-issues-filed-at-merge) — R-1,
+   R-2 (with the ADR 015 §N amendment landed in this PR), R-5, A-1, L-1, O-1.
