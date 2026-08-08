@@ -17,13 +17,23 @@ type RunStageParams struct {
 	Stage       string `json:"stage"`
 	IssueNumber int    `json:"issueNumber"`
 	// Model is the tier this stage runs on, and it is AUTHORITATIVE (#340).
-	// resolveDispatchModel has already applied post-failure escalation, sticky
-	// model-unavailable downgrades (#42), the model_routing.minimum_model
-	// floor (#366), the pr-create large-diff escalation, the feature-validate
-	// haiku gate and the pr-merge haiku floor (#197). The TS SkillRunner passes
-	// it straight to the CLI's --model and runs no resolution of its own; it
-	// only translates the tier band for adapters that need a concrete id
-	// (codex), and reports that translation back as ServedModel.
+	// resolveDispatchModel has already applied the per-stage base routing (the
+	// performance-mode pin, pipeline.stage_models and its env overrides,
+	// model_routing.mode, the lightweight stage defaults), post-failure
+	// escalation, sticky model-unavailable downgrades (#42), the
+	// model_routing.minimum_model floor (#366), the pr-create large-diff
+	// escalation, the feature-validate haiku gate and the pr-merge haiku floor
+	// (#197). The TS SkillRunner passes it straight to the CLI's --model and
+	// runs no resolution of its own; it only translates for adapters that need
+	// a provider-specific id (codex/gemini/copilot), and reports what it
+	// actually launched back as ServedModel.
+	//
+	// VOCABULARY: a registry tier BAND (haiku|sonnet|opus|fable) whenever the
+	// registry recognizes the model — resolveDispatchModel's last step is
+	// normalizeDispatchTier. A user-defined local model the registry does not
+	// know passes through as itself, because it has no band. Do not reintroduce
+	// a concrete id here: the extension's band-keyed lookups (`--effort`
+	// support, the performance-mode pin comparison) no-op SILENTLY on one.
 	Model             string   `json:"model"`
 	MaxTokens         int      `json:"maxTokens,omitempty"`
 	TimeoutMs         int      `json:"timeoutMs"`
@@ -173,15 +183,19 @@ type StageResultParams struct {
 
 	// ── #91 / #340 served-model attribution ───────────────────────────
 	// ServedModel is the model that ACTUALLY served the stage: the CLI
-	// stream's last observed message.model when it reported one, otherwise
-	// the concrete model the adapter was launched with. Sent only when it
-	// diverges from RunStageParams.Model, so healthy runs stay terse.
+	// stream's last observed message.model when it reported one, otherwise the
+	// concrete model the adapter PROCESS was spawned with — read out of the
+	// adapter's own env after model preflight, not from the extension's
+	// pre-spawn decision. Sent only when it diverges from RunStageParams.Model,
+	// so healthy runs stay terse.
 	//
-	// Two things produce a divergence. The claude CLI silently retries
+	// Three things produce a divergence. The claude CLI silently retries
 	// safety-refused turns on a fallback model (model_refusal_fallback) and
-	// still exits 0 (#91). And a non-Claude adapter translates the tier band
-	// into a concrete id — codex "sonnet" → "gpt-5.4" — which is the model
-	// that ran and therefore the one cost/telemetry/history must name (#340).
+	// still exits 0 (#91). A non-Claude adapter translates the tier band into a
+	// concrete id — codex "sonnet" → "gpt-5.4", or its own configured default
+	// when no band maps. And a performance-mode / supercharge override replaces
+	// that translation outright. All three are the model that ran, and
+	// therefore the one cost/telemetry/history must name (#340).
 	// See docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string `json:"servedModel,omitempty"`
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event

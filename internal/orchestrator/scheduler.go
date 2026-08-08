@@ -2847,6 +2847,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	if forcedTier, ok := ConsumeEscalationOverride(workspaceRoot, item.Number); ok {
 		log.Printf("#%d: run.retryWithEscalation applied — forcing model tier %q for this run", item.Number, forcedTier)
 		predictedModel = forcedTier
+		// A forced escalation is a run-wide FLOOR, not merely a prediction
+		// (#340). The prediction alone stopped being sufficient once
+		// stageBaseModel gained the lightweight-stage defaults, which sit
+		// ABOVE the prediction: an operator escalating a stalled pr-create
+		// would have watched the retry re-run it on haiku.
+		modelFloors = raiseStageFloors(modelFloors, forcedTier)
 	}
 
 	// Trace the scheduler's model-routing decision for the dev stage (#179).
@@ -5863,12 +5869,21 @@ func isHaikuModel(model string) bool {
 // now resolve here. That is a deliberate behavior change for the missing-file
 // case; a stage the operator floored to a premium tier should not run the
 // provider default, with no log line, because a context file failed to parse.
-const defaultDispatchModel = "sonnet"
+const defaultDispatchModel = tierSonnet
+
+// tierSonnet is the sonnet registry BAND, spelled out rather than reached for
+// as routing.ModelSonnet (#340). The three stage-specific haiku exclusions
+// below all escalate to sonnet, and until #340 they wrote the concrete id — so
+// resolveDispatchModel emitted two vocabularies on one field. Both this
+// package's ladders and the extension's band-keyed lookups fail SILENTLY on a
+// concrete id, which is why the ONE vocabulary is spelled the same way
+// everywhere it is produced.
+const tierSonnet = "sonnet"
 
 // resolveDispatchModel returns the model a stage will actually dispatch on,
-// after every override the run can apply: escalation, the configured minimum
-// floor, sticky model-unavailable downgrades, and the three stage-specific
-// haiku exclusions.
+// after every override the run can apply: the per-stage base routing, then
+// escalation, the configured minimum floor, sticky model-unavailable
+// downgrades, and the three stage-specific haiku exclusions.
 //
 // Extracted from the dispatch path in #79 so the result is available BEFORE
 // the skill is composed. Overlay keys are derived from this value (ADR 016 §2)
@@ -5878,6 +5893,17 @@ const defaultDispatchModel = "sonnet"
 // load-bearing and unchanged from the inline version: the floor lands before
 // ApplyDowngrades so a model-unavailable downgrade stays the final safety net
 // (a floor must never force a run back onto a tier the API just rejected).
+//
+// This is the ONLY router on both dispatch paths since #340. Everything the
+// TypeScript resolveModel chain used to contribute on the IPC path — the
+// performance-mode pin, pipeline.stage_models and its env overrides,
+// model_routing.mode, the lightweight-stage defaults — is applied by
+// stageBaseModel (dispatch_routing.go) before the first line below.
+//
+// The RETURN VALUE is always a registry band when the registry recognizes it
+// (normalizeDispatchTier, last line). The wire, both executors and every ladder
+// in this package speak that one vocabulary; a concrete id reaching a band-keyed
+// consumer fails silently rather than loudly.
 func (s *Scheduler) resolveDispatchModel(
 	stage state.PipelineStage,
 	issueNumber int,
@@ -5885,30 +5911,20 @@ func (s *Scheduler) resolveDispatchModel(
 	predictedModel string,
 	modelFloors map[string]string,
 ) string {
-	// An unrouted run dispatches on the general-purpose default tier. This
-	// default lives HERE and nowhere else (#304): it used to live in
-	// loadIssueContext, where the same value also reached the learning corpus
-	// and was recorded as a routing prediction the router never made. Deleting
-	// it there was right; deleting it outright was not, because four mechanisms
-	// below key on tier RECOGNITION and silently no-op on "" — the
-	// model_routing.minimum_model floor (#366) returns the selection untouched,
-	// the sticky model-unavailable downgrade (#42) reports
-	// model_not_in_registry, RecordStageModel drops the empty value so the run
-	// record carries no per-stage attribution, and tokens.CalculateCost("")
-	// returns a truthful-looking $0.
-	//
-	// It is the tier BAND ("sonnet"), never routing.ModelSonnet's concrete id:
-	// every consumer downstream — enforceMinimumModel, ApplyDowngrades and
-	// RetryEngine.NextModel — reads the band vocabulary, and NextModel in
-	// particular walks a literal ladder ([haiku sonnet opus]) that a dated id
-	// is not a member of. A concrete id here would resolve the floor and the
-	// downgrade but silently break escalation past the default
-	// (TestScheduler_BudgetAwareEscalationOnStallKill).
-	model := predictedModel
-	if model == "" {
-		model = defaultDispatchModel
-	}
-	// Escalation override if set, otherwise the (defaulted) predicted model.
+	// Per-stage base routing. An unrouted run still ends on the general-purpose
+	// default tier, and that default lives in stageBaseModel's last branch and
+	// nowhere else (#304): it used to live in loadIssueContext, where the same
+	// value also reached the learning corpus and was recorded as a routing
+	// prediction the router never made. Deleting it there was right; deleting
+	// it outright was not, because four mechanisms below key on tier
+	// RECOGNITION and silently no-op on "" — the model_routing.minimum_model
+	// floor (#366) returns the selection untouched, the sticky
+	// model-unavailable downgrade (#42) reports model_not_in_registry,
+	// RecordStageModel drops the empty value so the run record carries no
+	// per-stage attribution, and tokens.CalculateCost("") returns a
+	// truthful-looking $0.
+	model := stageBaseModel(workspaceRoot, stage, predictedModel)
+	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
 	}
@@ -5936,7 +5952,7 @@ func (s *Scheduler) resolveDispatchModel(
 			if diffLines := getDiffLineCount(workspaceRoot); diffLines > threshold {
 				log.Printf("#%d: pr-create diff is %d lines (threshold %d) — escalating to sonnet",
 					issueNumber, diffLines, threshold)
-				model = routing.ModelSonnet
+				model = tierSonnet
 			}
 		}
 	}
@@ -5948,7 +5964,7 @@ func (s *Scheduler) resolveDispatchModel(
 		if !devContextBuildPassed(workspaceRoot, issueNumber) {
 			log.Printf("#%d: feature-validate: dev build_verification not passed — disabling haiku, escalating to sonnet",
 				issueNumber)
-			model = routing.ModelSonnet
+			model = tierSonnet
 		}
 	}
 
@@ -5961,10 +5977,10 @@ func (s *Scheduler) resolveDispatchModel(
 	if stage == state.StagePRMerge && isHaikuModel(model) {
 		log.Printf("#%d: pr-merge LLM path runs only on deterministic punts — flooring haiku to sonnet (#197)",
 			issueNumber)
-		model = routing.ModelSonnet
+		model = tierSonnet
 	}
 
-	return model
+	return normalizeDispatchTier(model)
 }
 
 // devContextBuildPassed reads dev-{N}.json and returns true when

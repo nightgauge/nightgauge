@@ -137,6 +137,7 @@ import { Logger } from "../../src/utils/logger";
 import {
   getDefaultModel,
   getPerformanceMode,
+  getStageEffort,
   getSuperchargeCodexModel,
 } from "../../src/utils/incrediConfig";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -203,6 +204,7 @@ beforeEach(() => {
   vi.mocked(spawn).mockImplementation(() => createMockChildProcess());
   vi.mocked(getDefaultModel).mockReturnValue("sonnet");
   vi.mocked(getPerformanceMode).mockReturnValue("elevated");
+  vi.mocked(getStageEffort).mockReturnValue(undefined);
   vi.mocked(getSuperchargeCodexModel).mockReturnValue(undefined);
 });
 
@@ -347,5 +349,104 @@ describe("IPC path: Maximum-mode adapter mapping survives Go resolution (#340)",
     await dispatch(params({ model: "opus" }));
 
     expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+  });
+});
+
+// ── The wire field's VOCABULARY ────────────────────────────────────────────
+//
+// `RunStageParams.model` is a bare `string`, and two lookups downstream are
+// keyed on the registry BAND set {haiku, sonnet, opus, fable}: whether the
+// model takes `--effort`, and whether the active performance mode pinned this
+// tier. Both were safe only while every caller reached them through
+// `resolveModel`, which returns bands. Go emits a band today, but the wire
+// cannot enforce that and the HeadlessOrchestrator path passes concrete ids
+// (tests/services/SkillRunner.test.ts sends "claude-sonnet-4-20250514"), so the
+// extension normalizes at its own boundary. Each assertion below fails silently
+// without it: no error, no log line, just a missing flag or the adapter's
+// default model.
+describe("IPC path: a concrete registry id is understood, not silently mishandled (#340)", () => {
+  it("still passes --effort when the wire carries a concrete model id", async () => {
+    vi.mocked(getStageEffort).mockReturnValue("high");
+
+    await dispatch(params({ model: "claude-sonnet-5" }));
+
+    expect(flagValue(claudeArgs(), "--model")).toBe("claude-sonnet-5");
+    // Without band normalization EFFORT_SUPPORTING_MODELS never matches, and
+    // model_routing.stage_efforts / Maximum mode's effort:"high" vanish.
+    expect(flagValue(claudeArgs(), "--effort")).toBe("high");
+  });
+
+  it("passes --effort for the band form too — the control", async () => {
+    vi.mocked(getStageEffort).mockReturnValue("high");
+
+    await dispatch(params({ model: "sonnet" }));
+
+    expect(flagValue(claudeArgs(), "--effort")).toBe("high");
+  });
+
+  it("omits --effort for haiku in either spelling", async () => {
+    vi.mocked(getStageEffort).mockReturnValue("high");
+
+    await dispatch(params({ model: "claude-haiku-4-5-20251001" }));
+
+    expect(claudeArgs()).not.toContain("--effort");
+  });
+
+  it("maps the Maximum-mode Gemini model from a concrete tier id", async () => {
+    // reRouteContext writes `dev_model = rec.Model` — a concrete id — the
+    // moment an operator switches to Maximum, so this is the shape the mode
+    // predicate most has to handle.
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+
+    await dispatch(params({ model: "claude-opus-5" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+  });
+
+  it("applies the Maximum-mode Codex override from a concrete tier id", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
+    vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+    vi.mocked(getSuperchargeCodexModel).mockReturnValue("gpt-5.4");
+
+    await dispatch(params({ model: "claude-opus-5" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.4");
+  });
+});
+
+// ── servedModel names what actually launched ──────────────────────────────
+//
+// scheduler.go re-records the stage — and, when the CLI reports no native cost,
+// prices it — on this field. Reporting the extension's pre-spawn decision
+// instead of the process's real model attributes history to a model that never
+// ran.
+describe("IPC path: servedModel is the model the adapter process was launched with (#340)", () => {
+  it("reports the Codex supercharge override, not the tier translation", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
+    vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+    // Deliberately NOT the "opus" → "gpt-5.5" tier translation: the codex
+    // branch computes `heavyCodexOverride ?? modelDecision.model` and never
+    // stamps the result back, so reporting modelDecision.model names gpt-5.5
+    // while gpt-5.4 is what ran.
+    vi.mocked(getSuperchargeCodexModel).mockReturnValue("gpt-5.4");
+
+    const { result, proc } = await dispatch(params({ model: "opus" }));
+    finish(proc);
+
+    expect(lastSpawnEnv().NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.4");
+    expect((await result).servedModel).toBe("gpt-5.4");
+  });
+
+  it("reports the Gemini model the adapter launched when no mode mapping applies", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+
+    const { result, proc } = await dispatch(params({ model: "sonnet" }));
+    finish(proc);
+
+    // The orchestrator asked for the sonnet band; the adapter launched its
+    // configured model. History must name the latter.
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.0-flash");
+    expect((await result).servedModel).toBe("gemini-2.0-flash");
   });
 });

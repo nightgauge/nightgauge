@@ -102,6 +102,19 @@ func parseMode(s string) PerformanceMode {
 	return ""
 }
 
+// ModePin returns the model the given performance mode PINS for a stage, or ""
+// when the mode imposes no pin there (every stage under `elevated`).
+//
+// Exported for the dispatch path (#340). The router applies the same table once
+// — for `feature-dev`, at pickup/re-route — and the scheduler reused that single
+// answer for every stage, so a Maximum-mode run whose mode was set before
+// pickup dispatched the complexity band instead of Opus. The dispatch path now
+// asks per stage, through this one table: a second copy of the mode profile is
+// exactly how the extension and the scheduler drifted apart.
+func ModePin(mode PerformanceMode, stage string) string {
+	return applyModeOverride(mode, stage, "")
+}
+
 // applyModeOverride applies per-stage model overrides for the given mode.
 // Returns the overridden model, or baseModel when the mode imposes no override.
 func applyModeOverride(mode PerformanceMode, stage, baseModel string) string {

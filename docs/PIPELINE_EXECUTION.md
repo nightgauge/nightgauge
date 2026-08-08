@@ -237,11 +237,11 @@ resolvers producing the same decision is the Dual-Path Drift class in
 defect: the escalated tier was computed, logged, and recorded in run history,
 while the CLI kept spawning on the tier that had just failed.
 
-| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                 |
-| ----------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197) |
-| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths now agree                                                                                                                                                                         |
-| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins, `pipeline.stage_models`, lightweight stage defaults, adaptive policy override, A/B experiment assignment, `AutoModelSelector`, mode-envelope clamping                                    |
+| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197)                                                              |
+| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                 |
+| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins, `pipeline.stage_models` + env, `model_routing.mode`, lightweight stage defaults, `model_routing.minimum_model`, pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override, A/B experiment assignment and `AutoModelSelector` (with mode-envelope clamping). Escalation and sticky downgrades belong to whichever orchestrator drives this path. |
 
 On the IPC path the extension **executes** the wire model verbatim: it passes
 `RunStageParams.model` to `runStageSkillHeadless` as the authoritative
@@ -249,11 +249,19 @@ On the IPC path the extension **executes** the wire model verbatim: it passes
 event with no model fails the stage with an `[ipc-contract]` error rather than
 resolving a second answer.
 
-Stated consequence, so it is not silent: the TS-only routing adjustments listed
-in the third row live **inside** `resolveModel` and therefore apply only where
-`resolveModel` runs. They are not consulted on the IPC path, and the Go
-scheduler has no equivalent for the adaptive-policy override or the A/B
-experiment assignment — an autonomous run is routed by Go alone.
+Everything in the third row that the Go resolver needed in order to be a
+complete router lives in
+[`internal/orchestrator/dispatch_routing.go`](../internal/orchestrator/dispatch_routing.go),
+applied by `stageBaseModel` before escalation and the floors. Those tables are
+deliberate duplicates of named TypeScript counterparts (`MODE_PROFILES`,
+`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`), each
+annotated with its pair — threading TS config over the wire would put the
+extension back in the routing business, which is the drift #340 removed.
+
+Stated consequence, so it is not silent: three things have **no** Go
+counterpart, and are therefore not consulted on an autonomous run — the
+adaptive-policy override, the A/B experiment assignment, and `AutoModelSelector`
+(Go routes from the issue's complexity score at pickup instead).
 
 The visible routing delta on the IPC path, in the default `automatic` +
 `elevated` configuration:
@@ -262,28 +270,32 @@ The visible routing delta on the IPC path, in the default `automatic` +
   the run's complexity-routed tier from `issue-{N}.json`. Previously they got
   the global default, because the IPC path never passes `issueMetadata` and
   `AutoModelSelector` therefore never ran.
-- **`issue-pickup` / `pr-create` / `pr-merge`** now dispatch on that same run
-  tier (still subject to the pr-merge sonnet floor and the pr-create large-diff
-  escalation) rather than the built-in lightweight `haiku` default. Go's
-  `predictedModel` is the issue's `pickup_recommendation.dev_model`, applied
-  run-wide, which is what the auto/CLI path has always dispatched — so the two
-  paths agree, at the cost of a more expensive tier on plumbing stages for
-  high-complexity issues. Per-stage base routing in `resolveDispatchModel` is
-  the follow-up worth having; it is a routing-policy change that affects **both**
-  dispatch paths and does not belong in the ownership fix.
+- **`issue-pickup` / `pr-create`** keep the built-in lightweight `haiku` base
+  (still raised by the pr-create large-diff escalation, the `minimum_model`
+  floor and post-failure escalation). `pr-merge` has no lightweight base — #197
+  removed it, because the pr-merge LLM path runs only when the deterministic
+  runner punted, i.e. exclusively on the hardest merges — so it dispatches the
+  run tier, floored at sonnet.
 
 Two things the extension still owns on the IPC path, because Go resolves
 neither:
 
-- **Adapter tier translation.** Go speaks the registry band vocabulary its
-  ladders are built on (`haiku|sonnet|opus|fable`). Codex needs a concrete
-  model id, and only the extension knows which adapter it selected, so
-  `resolveCodexPipelineModel` translates the authoritative band at the last
-  mile. The translated id is reported back as `servedModel`, so run history
-  attributes the model that actually ran.
+- **Adapter model translation.** Go speaks one vocabulary: the registry tier
+  band its ladders are built on (`haiku|sonnet|opus|fable`), guaranteed by
+  `normalizeDispatchTier` as `resolveDispatchModel`'s last step. (A
+  user-configured local model the registry does not know has no band and passes
+  through as itself.) Codex, Gemini and Copilot need a provider-specific id, and
+  only the extension knows which adapter it selected, so the translation happens
+  at the last mile. The model the adapter process was actually spawned with is
+  reported back as `servedModel`, so run history attributes the model that ran
+  rather than the tier that was asked for.
 - **Effort.** Neither dispatch path passes `--effort` from Go, and
   `model_routing.stage_efforts` / `default_effort` are operator config, so the
-  stage's effort is resolved in TypeScript independently of the model.
+  stage's effort is resolved in TypeScript by `resolveStageEffort`,
+  independently of the model. Whether the model accepts `--effort` at all is a
+  question about its tier band, so the extension normalizes the wire value with
+  `modelTierBand` before asking — a concrete id would otherwise drop the flag
+  with no error and no log line.
 
 Attribution follows the same ownership. Go records the dispatch model up front
 (`runtime.RecordStageModel` at stage start) and re-records on the served model

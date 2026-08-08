@@ -599,8 +599,9 @@ type RoutingConfig struct {
 
 // ModelRoutingConfig mirrors the model_routing: section of config.yaml — the
 // TS ModelRoutingConfigSchema in packages/nightgauge-vscode/src/config/schema.ts.
-// The Go autonomous scheduler consumes only minimum_model (the per-stage model
-// floor); mode/effort_auto/confidence_threshold are TS model-selector concerns
+// The Go autonomous scheduler consumes minimum_model (the per-stage model
+// floor) and mode (which selects between explicit and router-driven per-stage
+// routing); effort_auto/confidence_threshold remain TS model-selector concerns
 // that the deterministic dispatch path does not read, so they are omitted here
 // per the "consume only what you need" rule.
 type ModelRoutingConfig struct {
@@ -611,6 +612,16 @@ type ModelRoutingConfig struct {
 	// Setting a stage floor of "fable" opts that stage into the premium
 	// frontier tier.
 	MinimumModel map[string]string `json:"minimumModel,omitempty" yaml:"minimum_model,omitempty"`
+
+	// Mode selects how a stage's BASE model is chosen: "manual" (explicit
+	// pipeline.stage_models, falling back to the built-in per-stage table),
+	// "automatic" (defer every stage to the complexity router — the default),
+	// or "hybrid" (explicit entries win; the rest defer). Read by the Go
+	// dispatch path since #340, when the scheduler became the only router on
+	// the IPC path — before that this key was inert on autonomous runs.
+	// Mirrors getModelRoutingMode in
+	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts.
+	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
 type Config struct {
@@ -969,6 +980,15 @@ type PipelineConfig struct {
 	// overrides the computed threshold×multiplier value. Mirrors the TypeScript
 	// pipeline.stall_idle_ms field (Issue #3484).
 	StallIdleMs YAMLDuration `yaml:"stall_idle_ms,omitempty" json:"stallIdleMs,omitempty"`
+
+	// StageModels is the operator's explicit per-stage model routing: stage
+	// name → tier (haiku|sonnet|opus|fable). Honored in the manual and hybrid
+	// model_routing modes; ignored in automatic, where every stage defers to
+	// the complexity router. Read by the Go dispatch path since #340 — before
+	// that only the TypeScript resolver consumed it, so the key was inert on
+	// autonomous runs. Mirrors pipeline.stage_models / getStageModel in
+	// packages/nightgauge-vscode/src/utils/resolvers/stageResolver.ts.
+	StageModels map[string]string `yaml:"stage_models,omitempty" json:"stageModels,omitempty"`
 
 	// Recovery holds the pipeline.recovery: block — the auto-triage recovery
 	// registry's tunables. The registry's per-run attempt cap is read directly
