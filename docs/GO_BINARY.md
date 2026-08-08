@@ -3147,23 +3147,24 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `config`      | `.nightgauge/config.yaml` parseable        | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
 
-Plus the leaked-machine-state checks (#330 / #332), both **warning-only**:
+Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 
-| Check key          | What it verifies                                                    |
-| ------------------ | ------------------------------------------------------------------- |
-| `worktree_leaks`   | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
-| `pipeline_stashes` | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
+| Check key            | What it verifies                                                    |
+| -------------------- | ------------------------------------------------------------------- |
+| `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
+| `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
 
-Both existed because a 2026-08-04 workspace audit found **9 leaked worktrees and
-5 leaked stashes** — all of them by running `git worktree list` and `git stash
-list` by hand in each repo, the oldest five months old — and `doctor` had
-reported none of them. Reclamation tooling that cannot see a leak is
-indistinguishable from a workspace that has none.
+The worktree and stash carriers exist because a 2026-08-04 workspace audit found
+**9 leaked worktrees and 5 leaked stashes** — all of them by running `git
+worktree list` and `git stash list` by hand in each repo, the oldest five months
+old — and `doctor` had reported none of them. Reclamation tooling that cannot
+see a leak is indistinguishable from a workspace that has none.
 
 Warning-only by design: a leaked worktree is untidy, not broken, and exiting 2
 on a workspace that runs perfectly well teaches operators to stop reading the
-output. Both report **unverifiable** rather than healthy when the scan cannot
-run — a clean report from a scan that never happened is #296's defect.
+output. All three report **unverifiable** rather than healthy when the scan
+cannot run — a clean report from a scan that never happened is #296's defect.
 
 A live run's worktree is excluded by **age**, not by the active-worktree set:
 `execution.ActiveWorktreeIssues` answers "which issues have a worktree
@@ -3172,6 +3173,86 @@ back in as `ActiveIssues` (whose contract is "runs in flight") makes every
 candidate skip as `active-run` and the check reports nothing, forever.
 
 \* Downgraded to warning for fresh repositories (no `config.yaml`).
+
+#### Orphaned processes (issue #341)
+
+A killed stage leaks its worktree; a stage that is never killed leaks
+**itself**. A `nightgauge autonomous run --dry-run` sat on a workstation for
+**31 hours** holding a scheduler slot while every doctor check passed — none of
+them enumerated processes, so the leak had no reporter at all.
+
+`orphaned_processes` enumerates `ps -axo pid=,etime=,command=` and classifies
+every row whose argv[0] **basename** is `nightgauge`:
+
+| Class    | Rule                                                              | Reported? |
+| -------- | ----------------------------------------------------------------- | --------- |
+| self     | PID equals this `doctor` process                                  | no        |
+| serve    | the verb (first non-flag token after argv[0]) is `serve`          | no        |
+| owned    | PID claimed by a sidecar that has made progress within 24h        | no        |
+| recent   | unowned, younger than `staleProcessAge` (1h)                      | counted   |
+| orphaned | unowned and at least 1h old                                       | **yes**   |
+
+- **argv is evidence, never ownership.** Matching the word `nightgauge`
+  anywhere in the command line would claim every `grep`, every editor with a
+  nightgauge file open, and the operator's own shell.
+- **Ownership is a recent-progress sidecar claim, not a PID's presence.** Every
+  long-lived verb writes its OWN pid into the sidecar it owns — the scheduler
+  into `.nightgauge/autonomous/state.json`, the runner into
+  `.nightgauge/pipeline/current-run.json` — so a presence test is
+  self-attestation, and the wedged 31-hour scheduler vouched for itself and
+  read as owned forever. A claim counts only while the sidecar's own progress
+  timestamp is within `staleSidecarClaim` (24h) of now: `lastScanAt` (rewritten
+  every scan cycle), `stage_started_at`, and run-state's `updated_at`, each
+  falling back to its start-of-life stamp when the progress field has not been
+  written yet. An undated or unparsable claim does not count.
+- **The 24h claim window is deliberately not the 1h age floor.** Scan and stage
+  cadence is operator-configurable (`autonomous run --interval` may legally
+  exceed an hour), so a claim window at the age floor would report healthy,
+  idle-but-scheduled schedulers. It mirrors the worktree carrier's
+  `staleWorktreeAge` — the same "this machine state has stopped moving"
+  threshold — and the incident specimen (31h) still surfaces.
+- **Sidecars are read across every repo root _plus the workspace root_.** The
+  scheduler's `state.json` is workspace-root-relative, and
+  `config.WorkspaceRepoRoots` answers a different question (which repo
+  _checkouts_ to scan), so in a multi-repo workspace the scheduler's own
+  sidecar sits in a directory that list never contains. A missing or unparsable
+  sidecar contributes no PIDs and does **not** undetermine the scan: ownership
+  is a narrowing filter, so failing to read one fails toward UNOWNED, which
+  fails toward REPORTING — safe only because this carrier never acts. Accepted
+  edge: a dead writer's PID recycled by another nightgauge process reads as
+  owned while the claim stays fresh.
+- **`serve` is a named exception.** The extension host's daemon is long-lived
+  by design, owns no run, and writes no sidecar, so every other rule would
+  report it on every invocation. **#388** replaces this argv test with a
+  sidecar the daemon writes; until then it is the one place argv decides
+  anything. Residual ambiguity accepted until then: the verb scan skips flags
+  but cannot skip a flag's _value_, so `nightgauge --config serve …` would read
+  `serve` as the verb — an error toward not reporting.
+- **The 1h age floor** keeps transient CLI invocations and scan races from
+  paging the operator: every verb except `serve` and `autonomous run` finishes
+  in minutes, and the incident specimen had been up for 31 hours.
+- **Unverifiable rather than healthy** when `ps` is absent (Windows), fails,
+  emits a row the parser does not understand, or returns a table that does not
+  list `doctor` itself (`ps -ax` always lists its caller, so a self-less table
+  did not enumerate this machine). One malformed row undetermines the **whole**
+  table — the same rule `execution.ActiveWorktreeIssues` applies to an
+  unreadable repo root, and for the same reason: the row that could not be read
+  is exactly as likely to be the leak as any other.
+- **Report-only.** The check names PIDs and says "verify and terminate
+  manually". It never signals a process — a health check that kills on the
+  strength of an argv string is a worse failure than the one it fixes.
+
+Accepted limitations, documented rather than papered over:
+
+| Limitation                | Effect                                                                                                                                                            |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Space in binary path**  | `ps` does not delimit argv[0], so a nightgauge binary installed under a path containing a space reads as a truncated argv[0] and is invisible to the basename test — inherent `ps` ambiguity, not a parser bug |
+| **Recycled PID**          | A dead writer's PID reused by another nightgauge process reads as owned until the claim goes stale                                                                 |
+| **Flag value named `serve`** | A global flag whose value is `serve` suppresses the report for that process (retired by #388)                                                                   |
+
+The parser is exercised against a **captured, redacted process table** from a
+real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the
+committed `capture-ps-snapshot.sh`), not an invented one.
 
 **Exit codes**:
 

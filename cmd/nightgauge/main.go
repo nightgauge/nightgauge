@@ -58,6 +58,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/pipeline"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	ibqueue "github.com/nightgauge/nightgauge/internal/queue"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scan"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/validation"
@@ -9190,9 +9191,7 @@ func autonomousStateIsStalled(state orchestrator.AutonomousState) bool {
 	if state.PID <= 0 {
 		return true
 	}
-	// Signal 0 performs no-op error checking: it succeeds iff the process
-	// exists and is signalable by this user.
-	return syscall.Kill(state.PID, 0) != nil
+	return !runstate.ProcessAlive(state.PID)
 }
 
 func autonomousStatusCmd() *cobra.Command {
@@ -9766,7 +9765,14 @@ Use --json for machine-readable output (skills parse this format).`,
 
 			// Human-readable output
 			fmt.Printf("nightgauge doctor — schema v%d\n\n", result.V)
-			checkOrder := []string{"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project"}
+			// The leak carriers are listed here so they render as named rows
+			// rather than only as anonymous Warnings lines; keys absent from
+			// result.Checks (compose_orphans writes nothing when healthy) are
+			// skipped below.
+			checkOrder := []string{
+				"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
+				"compose_orphans", "worktree_leaks", "pipeline_stashes", "orphaned_processes",
+			}
 			for _, key := range checkOrder {
 				item, ok := result.Checks[key]
 				if !ok {
@@ -9781,7 +9787,9 @@ Use --json for machine-readable output (skills parse this format).`,
 					detail = item.Error
 				}
 				if detail != "" {
-					fmt.Printf("  %s  %-14s  %s\n", status, key, detail)
+					// Wide enough for the longest check key
+					// (`orphaned_processes`) so the detail column stays aligned.
+					fmt.Printf("  %s  %-18s  %s\n", status, key, detail)
 				} else {
 					fmt.Printf("  %s  %s\n", status, key)
 				}

@@ -438,8 +438,14 @@ func TestDoctorResult_Schema(t *testing.T) {
 		t.Fatal("expected non-nil Checks map")
 	}
 
-	// All 8 check keys must always be present
-	expectedKeys := []string{"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project"}
+	// These check keys must always be present. The leak carriers are in the
+	// list because a carrier that silently stops registering is exactly the
+	// failure they exist to prevent (#330, #332, #341): a missing key renders
+	// as no output at all, which reads as health.
+	expectedKeys := []string{
+		"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
+		"orphaned_processes",
+	}
 	for _, key := range expectedKeys {
 		if _, ok := result.Checks[key]; !ok {
 			t.Errorf("expected check key %q to be present in result.Checks", key)
