@@ -274,11 +274,12 @@ to U+FFFD at exit 0. So the skill writer hashes the raw name with
 reported success for a path nothing can open, and — because both invalid names
 become the same U+FFFD string — a `group_by` on the path merged two distinct
 conflicting files into ONE entry, dropping the second from the document
-entirely. Entries for such a path are therefore grouped by the raw name's own
-object id, so two unrepresentable names stay two entries; each carries a
-per-entry `capture_error`, and the document-level `capture_error` counts them
-(the per-entry `path` values are identical mojibake and cannot). Readers hold
-the other half: a path containing U+FFFD is refused whatever writer produced it.
+entirely. In the skill writer's document such entries are therefore grouped by
+the raw name's own object id, so two unrepresentable names stay two entries;
+each carries a per-entry `capture_error`, and the document-level `capture_error`
+counts them (the per-entry `path` values are identical mojibake and cannot). The
+recovery loop holds the other half of the invariant: it refuses a path
+containing U+FFFD whatever writer produced it, marker or no marker.
 
 **A submodule pointer is metadata, not bytes.** `git ls-files -u` reports a
 conflicted gitlink with index mode `160000`, and its per-stage object ids are
@@ -424,8 +425,9 @@ Per `conflicting_files[]` entry:
 ¹ The one exception is a name JSON cannot hold at all: an entry whose
 `capture_error` says the path name is not valid UTF-8 carries the encoder's
 lossy rendering (U+FFFD per invalid byte), because there is no other way to put
-those bytes in a JSON string. Such an entry is never actionable — readers refuse
-it, and a path containing U+FFFD is refused even without the marker.
+those bytes in a JSON string. Such an entry is never actionable — the recovery
+loop refuses it on the `capture_error`, and refuses any path containing U+FFFD
+even without one.
 
 ```json
 {
