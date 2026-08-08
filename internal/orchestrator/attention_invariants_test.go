@@ -139,10 +139,28 @@ func TestProducerLabelsMatchTheADRNumbering(t *testing.T) {
 			"test is no longer reading it", len(declared))
 	}
 
-	src, err := os.ReadFile("attention_wiring.go")
-	if err != nil {
-		t.Fatalf("read attention_wiring.go: %v", err)
+	// Scan every Go file in the package — round-4 review found stale numbered
+	// labels hiding in attention_wiring_test.go while the guard read only the
+	// wiring file.
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob package files: %v (%d files)", err, len(files))
 	}
+	var srcBuilder strings.Builder
+	for _, f := range files {
+		// This file mentions the header prefix in its own regex literal and
+		// error strings — scanning it would count those as unparseable headers.
+		if f == "attention_invariants_test.go" {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		srcBuilder.Write(b)
+		srcBuilder.WriteString("\n")
+	}
+	src := []byte(srcBuilder.String())
 	header := regexp.MustCompile(`(?m)^// --- Producer ([^:]+): (.+?)\s*-{3,}$`)
 	matches := header.FindAllStringSubmatch(string(src), -1)
 	// A header the regex cannot parse is a header this test silently skips,

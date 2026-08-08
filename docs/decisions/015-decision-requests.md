@@ -443,11 +443,17 @@ same goroutine as its stage loop, so nothing else can declare a run abandoned
 while that defer is still owed. On the extension path,
 `forceClearStuckSlots` is reached only from `abortAll`'s abort deadline, and
 `abortAll` only from Stop / Abort / `deactivate()`, so **every** card it raises
-follows an operator's own Stop. It says what is worth knowing — the worktree was
-preserved and may hold uncommitted work, and the Go-side state for the issue may
-be stale — and nothing more. A `blocking_run` `unblock` with a "Retry" primary
-(its first cut) told the operator to undo their own Stop and routed to alerting
-per Decision I while nothing was blocked.
+follows an operator's own Stop. The card carries a closed `situation` enum —
+`reservation-never-started` (no stage ran, no worktree work to rescue, nothing
+stale), `slot-worktree-preserved` (the worktree may hold uncommitted work and
+Go-side run state may be stale), or `claim-taken-then-wedged` (the one arm
+where something is still held: the scheduler seat was never released) — and the
+builder emits per-situation prose so each body states only what is true for its
+arm. The enum selects prose only (key, kind, severity, options, and expiry are
+identical across arms); an unknown value is rejected, never defaulted. A
+`blocking_run` `unblock` with a "Retry" primary (its first cut) told the
+operator to undo their own Stop and routed to alerting per Decision I while
+nothing was blocked.
 
 Producer numbers are global across this section and its
 [repo-scoped companion](#producers-9-and-10): 9 and 10 are repo/sweep-scoped, 11
@@ -844,11 +850,18 @@ a bookkeeping verb" describe that pre-existing surface.
 **What `attention.raise` guarantees inside that model.** Three properties, none
 of which depend on the socket being authenticated:
 
-1. **A card's REMEDY arguments derive only from daemon-booked state.** No
+1. **A card's remedy VALUE arguments derive only from daemon-booked state.** No
    monetary field exists on `AttentionRaiseParams`. The enforced ceiling is read
    in-process (`PipelineBudgetCeilingUSD`, the same read the scheduler does) and
    the spend comes from the run's own recorded `RuntimeState`. A caller reports
-   that a condition happened; it cannot say what the condition cost.
+   that a condition happened; it cannot say what the condition cost. Card
+   IDENTITY fields (repo, issue, PR number) are caller-supplied addressing and
+   DO flow into remedy arguments as the target key (e.g.
+   `autonomous.clearIssueFailures` receives `repo#issue` from the raise): the
+   repo is bounded by the workspace registry check, the issue/PR numbers are
+   not corroborated against existence. That residual — a remedy addressed to an
+   issue the daemon has never seen — is accepted within the trust model and
+   listed under residual exposure below.
 2. **The raise path cannot MINT or INFLATE the state it is corroborated
    against.** This is the property round 3 missed: deriving the number
    "daemon-side" is worthless if one call can create the daemon-side record.

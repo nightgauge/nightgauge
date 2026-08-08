@@ -310,10 +310,15 @@ func corroboratedRunSpendUSD(rt *state.RuntimeState, repo string) (float64, bool
 func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, bool, error) {
 	switch p.Producer {
 	case ProducerBudgetCeiling:
-		// SERVER-DERIVED, EXACTLY AS THE SCHEDULER DERIVES IT. scheduler.go's
-		// call site is `ProposedCeilingUSD(PipelineBudgetCeilingUSD(root),
-		// runtime.TotalCostUSD)`; this is the same two inputs read the same two
-		// ways, in-process.
+		// SERVER-DERIVED, STRICTER THAN THE SCHEDULER. scheduler.go's call site
+		// is `ProposedCeilingUSD(PipelineBudgetCeilingUSD(root),
+		// runtime.TotalCostUSD)`. The ceiling input is the same in-process read;
+		// the spend input is DELIBERATELY not `TotalCostUSD` — that accumulator
+		// is writable by a single created-on-miss transition, so this path sums
+		// only CompletedStages entries with a BeginStage-stamped StartedAt (see
+		// corroboratedRunSpendUSD). The scheduler trusts its own accumulator
+		// because it wrote it; this handler cannot, because any socket caller
+		// can have.
 		//
 		// THE ROOT IS THE RUN'S REPO, not s.workspaceRoot (fixed in review).
 		// `s.workspaceRoot` is a MUTABLE pointer to whichever repo owns the

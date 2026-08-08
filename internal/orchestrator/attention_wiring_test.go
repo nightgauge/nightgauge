@@ -495,7 +495,7 @@ func TestProducerAuthFailureEmitsProvideInput(t *testing.T) {
 	assertSteerSet(t, r)
 }
 
-// --- Producer 9: terminal failure halt (#148) --------------------------------
+// --- Producer (unnumbered): terminal failure halt (#148) ---------------------
 
 func TestProducerTerminalFailureEmitsUnblockBlockingFleet(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
@@ -633,7 +633,7 @@ func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
 	}
 }
 
-// --- Producer 8b: unverified-deliverable streak (#177) ----------------------
+// --- Producer (unnumbered): unverified-deliverable streak (#177) -------------
 
 func TestUnverifiedDeliverableStreakFirstOccurrenceRaisesFYIStreakOne(t *testing.T) {
 	s := newAttentionProducerRunScheduler(t)
