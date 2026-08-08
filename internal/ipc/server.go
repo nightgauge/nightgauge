@@ -2528,7 +2528,13 @@ func (s *Server) registerMethods() {
 			if p.CostUsd > 0 {
 				rt.CompleteStageWithCost(0, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			} else {
-				rt.CompleteStage(0, p.InputTokens, p.OutputTokens, p.Model)
+				// No CacheCreation5m/1h: PipelineNotifyStageTransitionParams
+				// carries no cache-creation count, so this fallback prices the
+				// three pools it actually has. Plumbing the count (and its
+				// 5m/1h split) through the notify wire is #390.
+				rt.CompleteStage(0, tokens.TokenCounts{
+					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
+				}, p.Model)
 			}
 			// NOTE: Do NOT delete the runtime here on IsComplete().
 			// The HeadlessOrchestrator path has 8 stages (6 pipeline stages
@@ -2555,7 +2561,10 @@ func (s *Server) registerMethods() {
 			if p.CostUsd > 0 {
 				rt.CompleteStageWithCost(1, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			} else if p.InputTokens > 0 || p.OutputTokens > 0 {
-				rt.CompleteStage(1, p.InputTokens, p.OutputTokens, p.Model)
+				// No CacheCreation5m/1h — see the "complete" branch above (#390).
+				rt.CompleteStage(1, tokens.TokenCounts{
+					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
+				}, p.Model)
 			}
 			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			rt.SetStageError(stage, p.Error)

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 func TestNewRuntimeState(t *testing.T) {
@@ -30,7 +32,7 @@ func TestStageLifecycle(t *testing.T) {
 		t.Errorf("Stage = %q, want %q", rs.Stage, StageIssuePickup)
 	}
 
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1", len(rs.CompletedStages))
 	}
@@ -67,7 +69,7 @@ func TestIsComplete(t *testing.T) {
 	// Complete 4 stages, skip 2
 	for _, stage := range []PipelineStage{StageIssuePickup, StageFeaturePlanning, StageFeatureDev, StagePRCreate} {
 		rs.BeginStage(stage)
-		rs.CompleteStage(0, 100, 50, "")
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 	}
 	rs.SkipStage(StageFeatureValidate)
 	rs.SkipStage(StagePRMerge)
@@ -80,7 +82,7 @@ func TestIsComplete(t *testing.T) {
 func TestSnapshot(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, 500, 200, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 
 	snap := rs.Snapshot()
 	if snap.Repo != rs.Repo {
@@ -101,7 +103,7 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1845, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 1000, 500, "claude-haiku-4-5-20251001")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001")
 
 	if rs.TotalCostUSD == 0 {
 		t.Error("TotalCostUSD should be non-zero after CompleteStage")
@@ -116,7 +118,7 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 
 	// Add a second stage — verify accumulation
 	rs.BeginStage(StageFeaturePlanning)
-	rs.CompleteStage(0, 2000, 1000, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 1000}, "claude-sonnet-4-6")
 	if len(rs.CompletedStages) != 2 {
 		t.Fatal("should have 2 completed stages")
 	}
@@ -134,9 +136,9 @@ func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	// Second complete for the SAME occurrence (no BeginStage between).
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1 (duplicate complete must not append)", len(rs.CompletedStages))
@@ -152,12 +154,12 @@ func TestCompleteStageRetryStillAppends(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 100, 50, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 	// A real retry: BeginStage stamps a new StageStart. Sleep guarantees the
 	// timestamp advances so the occurrence is distinguishable.
 	time.Sleep(time.Millisecond)
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 100, 50, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 
 	if len(rs.CompletedStages) != 2 {
 		t.Fatalf("CompletedStages = %d, want 2 (a genuine retry must append)", len(rs.CompletedStages))
@@ -173,7 +175,7 @@ func TestConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rs.BeginStage(StageFeatureDev)
-			rs.CompleteStage(0, 10, 5, "")
+			rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "")
 			_ = rs.Snapshot()
 			_ = rs.IsComplete()
 			_ = rs.TotalDuration()
@@ -328,7 +330,7 @@ func TestPersistAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, 500, 200, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.SetStageError(StageFeaturePlanning, "timeout")
 

@@ -3,6 +3,8 @@ package state
 import (
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 func TestComputeAttemptsUntilSuccess(t *testing.T) {
@@ -35,7 +37,7 @@ func TestBuildV2RecordPopulatesAttempts(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	rs := NewRuntimeState("nightgauge/nightgauge", 4172, "item-attempts")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, 8000, 6000, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 6000}, "")
 
 	rs.RetryCount = 2
 	rs.EscalationHistory = []EscalationRecord{{}, {}} // 2 escalations

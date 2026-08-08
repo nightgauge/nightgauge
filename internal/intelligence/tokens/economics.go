@@ -242,15 +242,18 @@ type TokenCounts struct {
 //
 // All four billable pools are priced (#358). Cache dominates real agentic
 // usage — on the captured haiku stage in internal/execution/testdata, cache
-// read and cache creation are 99.2% of the bill, so an input+output-only
-// formula under-reported that stage by 9x. A model whose registry entry omits
-// a cache rate contributes $0 for that pool, matching the unknown-model shape.
+// read and cache creation are 88.9% of the bill (99.2% of the tokens), so an
+// input+output-only formula under-reported that stage by 9x. A model whose
+// registry entry omits a cache rate contributes $0 for that pool, matching the
+// unknown-model shape.
 //
 // CONVENTION for unsplit cache-creation totals: a caller that knows only a
 // single combined cache-creation count (most of the pipeline today, because
 // the tier split is not yet plumbed end to end — see #390) must put it in
 // CacheCreation5m. That is the cheaper tier, so the resulting estimate is a
-// floor rather than an overstatement.
+// floor rather than an overstatement. The gap is not academic: on captured
+// Claude CLI traffic the writes are 1h-heavy, so the floor under-prices the
+// cache-creation pool by ~1.6x on 1h-heavy stages until #390 plumbs the split.
 func CalculateCost(model string, t TokenCounts) float64 {
 	d, ok := models.Get(model)
 	if !ok {
@@ -263,8 +266,10 @@ func CalculateCost(model string, t TokenCounts) float64 {
 	return total / 1_000_000
 }
 
-// rate dereferences an optional registry rate. A provider that does not bill a
-// pool leaves it nil, which contributes $0 rather than a guessed default.
+// rate dereferences an optional registry rate. nil means this registry entry
+// carries no rate for that pool — either the provider does not bill it or the
+// rate is not recorded yet (#392) — so it contributes $0 rather than a guessed
+// default.
 func rate(r *float64) float64 {
 	if r == nil {
 		return 0

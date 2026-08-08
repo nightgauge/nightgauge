@@ -208,8 +208,10 @@ export function thinkingDisableConflict(
  * Cache creation is split by TTL tier because Anthropic prices the two pools
  * differently (#358). A caller that knows only a single combined
  * cache-creation count must put it in `cacheCreation5m` — that is the cheaper
- * tier, so the estimate is a floor rather than an overstatement. Plumbing the
- * real split end to end is #390.
+ * tier, so the estimate is a floor rather than an overstatement. On captured
+ * Claude CLI traffic the writes are 1h-heavy, so that floor under-prices the
+ * cache-creation pool by ~1.6x on 1h-heavy stages. Plumbing the real split end
+ * to end is #390.
  */
 export interface TokenCounts {
   input: number;

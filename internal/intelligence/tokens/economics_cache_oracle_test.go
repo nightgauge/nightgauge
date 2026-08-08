@@ -20,6 +20,12 @@ import (
 // documented in that directory's README, which forbids synthesizing a
 // replacement). They are READ here, never written: this package owns the
 // pricing formula, internal/execution owns the parser.
+//
+// Tier coverage — both cache-creation rates are bill-proven, by different
+// fixtures. The primary capture's cache creation is 100% 1h-tier, so it
+// bill-proves the 1h rate on its own. The subagent capture carries a turn-level
+// split (7890 5m / 5460 1h), so reproducing its bill to delta-zero proves BOTH
+// tiers: a wrong 5m rate cannot hide behind a correct 1h rate there.
 const fixtureDir = "../../execution/testdata"
 
 // streamEnvelope is the subset of a Claude CLI stream-json line this oracle

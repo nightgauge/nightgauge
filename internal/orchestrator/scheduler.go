@@ -3734,13 +3734,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		err = stageRunErr
 
 		exitCode := 0
-		inputTokens, outputTokens, cacheReadTokens := 0, 0, 0
+		inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens := 0, 0, 0, 0
 		var actualCostUsd float64
 		if result != nil {
 			exitCode = result.ExitCode
 			inputTokens = result.InputTokens
 			outputTokens = result.OutputTokens
 			cacheReadTokens = result.CacheReadTokens
+			cacheCreationTokens = result.CacheCreationTokens
 			actualCostUsd = result.CostUsd
 			// Capture last_output_lines so the V3 record's StageDetail carries
 			// the trailing stderr/stdout snippet when this stage fails terminally.
@@ -3813,7 +3814,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if actualCostUsd > 0 {
 			runtime.CompleteStageWithCost(exitCode, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
 		} else {
-			runtime.CompleteStage(exitCode, inputTokens, outputTokens, servedModel)
+			runtime.CompleteStage(exitCode, tokens.TokenCounts{
+				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+				// Unsplit cache-creation count booked as 5m per the
+				// CalculateCost convention. Per-stage 5m/1h split is #390.
+				CacheCreation5m: cacheCreationTokens,
+			}, servedModel)
 		}
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 
@@ -3962,8 +3968,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				if gates.IsAtomicEligible(stage) {
 					anomalyCost := actualCostUsd
 					if anomalyCost == 0 {
+						// The IPC-delivered cache-creation count is unsplit; booked as
+						// 5m per the CalculateCost convention. Per-stage 5m/1h split
+						// is #390.
 						anomalyCost = tokens.CalculateCost(servedModel, tokens.TokenCounts{
 							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+							CacheCreation5m: cacheCreationTokens,
 						})
 					}
 					anomalyFloor := getAnomalyFloorUSD(workspaceRoot)
@@ -4132,8 +4142,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if s.onStageComplete != nil {
 			stageCostForCb := actualCostUsd
 			if stageCostForCb == 0 {
+				// The IPC-delivered cache-creation count is unsplit; booked as 5m
+				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
 				stageCostForCb = tokens.CalculateCost(servedModel, tokens.TokenCounts{
 					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+					CacheCreation5m: cacheCreationTokens,
 				})
 			}
 			s.onStageComplete(item.Repo, item.Number, string(stage), err, inputTokens, outputTokens, cacheReadTokens, stageCostForCb, servedModel)
@@ -4862,8 +4875,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 
 		stageCost := actualCostUsd
 		if stageCost == 0 {
+			// The IPC-delivered cache-creation count is unsplit; booked as 5m per
+			// the CalculateCost convention. Per-stage 5m/1h split is #390.
 			stageCost = tokens.CalculateCost(model, tokens.TokenCounts{
 				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+				CacheCreation5m: cacheCreationTokens,
 			})
 		}
 		// source=llm: All Go-scheduler stages run via LLM in this iteration.

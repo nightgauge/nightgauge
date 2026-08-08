@@ -19,6 +19,7 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/models"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -164,7 +165,7 @@ func TestOutcomeRecording(t *testing.T) {
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
 	snap.BeginStage(state.StageFeatureDev)
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-4-6")
-	snap.CompleteStage(0, 100, 200, "claude-sonnet-4-6")
+	snap.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
 	snapshot := snap.Snapshot()
 
 	// Record a successful outcome. tmpDir stands in for the run's TARGET repo

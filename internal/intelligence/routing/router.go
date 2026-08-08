@@ -239,6 +239,8 @@ func estimateCost(model string, tokens TokenEstimate) float64 {
 // read from the model registry (the single pricing source). Unknown models
 // price at a truthful $0 — matching tokens.CalculateCost — because the only
 // unknown ids in practice are user-configured local models (#56).
+// Input/output only — routing projects fresh per-stage context, so there is no
+// cache term.
 func modelPricing(model string) (inputPerM, outputPerM float64) {
 	if m, ok := models.Get(model); ok {
 		return m.Rates.Input, m.Rates.Output

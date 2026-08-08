@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -26,7 +27,7 @@ func newInterruptedRuntime(issueNumber int, runID string) *state.RuntimeState {
 	rt := state.NewRuntimeState("nightgauge/acmeapp", issueNumber, "")
 	rt.RunID = runID
 	rt.BeginStage(state.StageIssuePickup)
-	rt.CompleteStage(0, 0, 0, "")
+	rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
 	rt.BeginStage(state.StageFeatureDev)
 	return rt
 }
