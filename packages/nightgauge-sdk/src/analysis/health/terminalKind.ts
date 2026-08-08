@@ -53,7 +53,7 @@ const NO_MARKER_SENTENCE = "nothing in this sentence resembles a terminal marker
 const CRASH_PREFIX = "exit 1: ";
 const PAIR_SEPARATOR = " | ";
 const TERM_SEPARATOR = " ";
-const BOUNDARY_VIOLATION_SUFFIX = "s";
+const BOUNDARY_VIOLATION_AFFIX = "s";
 
 /** A rule matched against an error text, or `undefined` when nothing matched. */
 function matchTerminalKindRule(errorText: string | undefined): TerminalKindRule | undefined {
@@ -221,6 +221,14 @@ export function classifyTerminalKind(
  * names a model records `model_unavailable` and reacts
  * `rate_limit_quota_exhausted`.
  *
+ * THE ORDER OF THESE TWO STATEMENTS IS THE WHOLE BOUND, AND IT IS PINNED.
+ * Swapping them is a four-line reorder with no literal and no import, and it
+ * used to move no answer at all — the derived set composed rules with rules
+ * only, so nothing in the system carried both a signal marker and extension
+ * wording. `terminalKindStressInputs` now composes every `signal: true` rule
+ * with every extension clause in both orders, and the corpus carries
+ * `order-signal-rule-beats-extension-*` rows on real wording.
+ *
  * The VSCode extension consumes this through `services/terminalKindSignal.ts`;
  * Go's NotifyComplete uses a non-empty answer VERBATIM, which is why both the
  * bound and its one exception have to be structural.
@@ -278,8 +286,9 @@ export function resolveTerminalKind(
  * THE ALGORITHM IS PART OF THE CONTRACT. Changing it here means changing
  * stress.go and regenerating the golden. Order is significant and stable —
  * the two baselines, then rule by rule and clause by clause, then the signal
- * extensions the same way, then every ordered pair of rules — and duplicates
- * keep their FIRST occurrence.
+ * extensions the same way, then every ordered pair of rules, then every
+ * `signal: true` rule composed with every extension clause in both orders — and
+ * duplicates keep their FIRST occurrence.
  */
 export function terminalKindStressInputs(): string[] {
   const out: string[] = [];
@@ -309,6 +318,27 @@ export function terminalKindStressInputs(): string[] {
     }
   }
 
+  // STAGE precedence: every `signal: true` rule composed with every extension
+  // CLAUSE, in both orders of appearance — the twin of the last block of
+  // StressInputs. The pair matrix above composes rules with rules only, so
+  // before these rows no input in the system carried both a signal marker and
+  // extension wording, and swapping the two statements of `signalTerminalKind`
+  // (a four-line reorder, no literal, no import) moved nothing: the production
+  // path would answer `rate_limit_quota_exhausted` for
+  // `[adapter-auth-failed] usage limit reached`, which is the case this file's
+  // own doc calls impossible.
+  for (const rule of TERMINAL_KIND_TABLE.rules) {
+    if (!rule.signal) continue;
+    for (const extension of TERMINAL_KIND_TABLE.signal_extensions) {
+      for (const clause of extension.clauses) {
+        const ruleSample = sampleClause(rule.clauses[0]);
+        const extensionSample = sampleClause(clause);
+        add(ruleSample + PAIR_SEPARATOR + extensionSample);
+        add(extensionSample + PAIR_SEPARATOR + ruleSample);
+      }
+    }
+  }
+
   return out;
 }
 
@@ -317,10 +347,14 @@ export function terminalKindStressInputs(): string[] {
  * stress.go. Rules and signal extensions share it so an extension's clauses can
  * never be sampled more thinly than a rule's.
  *
- * The last group is the TERM-KIND boundary. Everything else renders a `~term`
- * exactly as a plain one, so the whole derived set used to answer identically
- * with the marker and without it; these inputs are the ones the two semantics
- * disagree about — the literal with a word character glued to its right edge.
+ * The last group is the TERM-KIND boundary, ON BOTH EDGES. Everything else
+ * renders a `~term` exactly as a plain one, so the whole derived set used to
+ * answer identically with the marker and without it; these inputs are the ones
+ * the two semantics disagree about — the literal with a word character glued to
+ * an edge. Two of them, because `containsWordBounded` is a conjunction of two
+ * independent tests: with only the right-edge input, deleting the left conjunct
+ * (`!isWordChar(lowered, i - 1) && `) shipped a strictly wider matcher than
+ * main's `\b…\b` with the whole suite green and the golden byte-identical.
  */
 function addClauseSamples(add: (s: string) => void, clause: string[]): void {
   const s = sampleClause(clause);
@@ -330,20 +364,21 @@ function addClauseSamples(add: (s: string) => void, clause: string[]): void {
   for (const term of clause) add(sampleClause([term]));
   for (const [i, term] of clause.entries()) {
     if (!term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)) continue;
-    add(renderClause(clause, i));
+    add(renderClause(clause, i, false));
+    add(renderClause(clause, i, true));
   }
 }
 
 function sampleClause(clause: string[]): string {
-  return renderClause(clause, -1);
+  return renderClause(clause, -1, false);
 }
 
 /**
- * `BOUNDARY_VIOLATION_SUFFIX` is one word character: gluing it to a literal
- * preserves containment and destroys the right-hand word boundary, which is the
- * entire difference between a `~term` and a plain one.
+ * `BOUNDARY_VIOLATION_AFFIX` is one word character: gluing it to either edge of
+ * a literal preserves containment and destroys the word boundary on that side,
+ * which is the entire difference between a `~term` and a plain one.
  */
-function renderClause(clause: string[], violate: number): string {
+function renderClause(clause: string[], violate: number, atLeftEdge: boolean): string {
   return clause
     .map((term, i) => {
       if (term.startsWith(TERMINAL_KIND_PREDICATE_REF)) {
@@ -352,7 +387,8 @@ function renderClause(clause: string[], violate: number): string {
       const lit = term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)
         ? term.slice(TERMINAL_KIND_WORD_BOUNDARY_REF.length)
         : term;
-      return i === violate ? lit + BOUNDARY_VIOLATION_SUFFIX : lit;
+      if (i !== violate) return lit;
+      return atLeftEdge ? BOUNDARY_VIOLATION_AFFIX + lit : lit + BOUNDARY_VIOLATION_AFFIX;
     })
     .join(TERM_SEPARATOR);
 }

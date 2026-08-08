@@ -546,11 +546,16 @@ higher-precedence non-signal rule owns. That is the bug the old ladder had.)
   is not run in CI — so the guarantee is "this string is in the reviewed
   evidence file", enforced in the diff, not a proof of provenance.
 - **Equivalence** — `internal/terminalkind/stress.go` and its verbatim
-  TypeScript twin derive ~1,400 inputs _from the table_ (every clause, every
-  term, every ordered rule pair) and all three suites must reproduce
-  `testdata/stress-golden.json`. Deleting a clause, widening a literal or
-  swapping two rules changes a committed answer, so it lands in review as an
-  explicit before/after of the inputs whose routing changed.
+  TypeScript twin derive ~1,450 inputs _from the table_ (every clause, every
+  term, **both edges** of every `~` term, every ordered rule pair, and every
+  `signal: true` rule composed with every extension clause in both orders) and
+  all three suites must reproduce `testdata/stress-golden.json`. Deleting a
+  clause, widening a literal, dropping one half of the word boundary, swapping
+  two rules or swapping the two stages of the signal projection changes a
+  committed answer, so it lands in review as an explicit before/after of the
+  inputs whose routing changed. What the set does **not** derive, it cannot see:
+  before it composed rules with extensions, reversing the two statements of
+  `SignalKind` moved nothing at all.
 - **Distribution** — the generated SDK module and the golden are byte-compared
   by `TestGeneratedTypeScriptIsInSync` / `TestStressGoldenIsInSync`,
   `.husky/pre-commit` and `scripts/ci-local.sh`. A consumer cannot be edited on
@@ -599,6 +604,16 @@ declared extension to actually produce such a row; a test requiring every
 extension **clause** to be necessary to one of those rows (so a clause cannot be
 _added_ silently); and a test requiring every `~` word-bounded term to move a row
 when its boundary is dropped.
+
+The **ordering** that produces the bound is pinned too, and separately, because
+it is a property of the interpreter rather than of the table: the derived set
+composes every `signal: true` rule with every extension clause, the
+`order-signal-rule-beats-extension-*` corpus rows do the same on real wording,
+and `TestSignalNeverContradictsTheRecord` fails outright — on the shipped
+projection, not on a regenerable artifact — if an extension ever answers for text
+a signal rule already claims. Without those inputs the sentence above was true
+only by inspection: swapping the two blocks of `SignalKind` left every suite
+green.
 
 **One disclosed narrowing against the original.** The pre-#306 rule was
 `/\b(?:session|usage)\s+limit\b/i`. The `~` term keeps the word boundary — plain

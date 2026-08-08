@@ -51,6 +51,8 @@ first:
 | Every half of every multi-term clause changes a row when widened (Go)                            | An AND quietly widened into an OR — derived from the table, not remembered.       |
 | Every clause of every `signal_extension` changes a row when deleted (Go)                         | A clause ADDED to the reaction-only path with nothing able to see it.             |
 | Every `~` term changes a row when its word boundary is dropped (Go)                              | A two-character deletion widening a matcher whose kind halts the whole fleet.     |
+| Both EDGES of every `~` term are derived and pinned by rows (all three)                          | One conjunct of the boundary deleted — sampling one edge leaves the other blind.  |
+| A `signal: true` rule outranks every extension on text carrying both (all three)                 | The two stages of the signal projection swapped — no literal, no import.          |
 | A row's `expected_signal` may differ from `expected` only for a declared `signal_extension` (Go) | The reaction quietly leaving the record behind.                                   |
 | Every `TerminalKind*` constant has a rule and a row (Go)                                         | A **kind** added to the taxonomy and never routed to.                             |
 | The derived stress set reproduces `stress-golden.json` (all three)                               | A clause deleted, a literal widened, or two rules swapped.                        |
@@ -122,10 +124,37 @@ is red` would record `validation_failed` and make the fleet react
 `TestEveryWordBoundaryTermIsPinnedByANegativeRow` drops the `~` from each
 word-bounded term and requires the same. That two-character edit used to be
 completely invisible: every derived input rendered the literal identically with
-the marker and without it, so the golden came out **byte-identical**. The five
+the marker and without it, so the golden came out **byte-identical**. The
 `boundary-negative-*` rows are what the guard demands, and `stress.go` now also
-derives the input the two semantics disagree about (the literal with a word
-character glued to its right edge), so the mutation moves the golden as well.
+derives the inputs the two semantics disagree about (the literal with a word
+character glued to an edge), so the mutation moves the golden as well.
+
+**On BOTH edges**, which is a separate lesson. `containsWordBounded` is a
+conjunction of two independent tests, and the first version of this remedy
+sampled only the right edge — so `usage limits` was pinned five ways while
+`max_usage limit` appeared nowhere in either fixture, and deleting
+`!isWordByte(lowered, i-1) && ` (one contiguous deletion, one line, one file) was
+green in Go, green in the SDK, green in the extension, exit 0 on
+`codegen --check`, and byte-identical on every artifact — in either language
+independently, so it also reopened the cross-language split. A guard derived
+from a mechanism has to be derived from **all** of it: the sampler now emits one
+input per edge, and `boundary-negative-left-edge-*` rows pin the answers.
+
+### The two stages of the signal projection are pinned too
+
+The bound this branch states everywhere — an extension can never overrule a kind
+projected by a `signal: true` **rule** — is enforced by nothing more than
+`SignalKind` consulting the rule ladder before the extensions. Swapping those two
+blocks is a four-line reorder with no literal, no import and no artifact
+movement, and it used to move no answer at all: the derived set built its
+precedence matrix over rules × rules only, so no input in the system carried both
+a signal marker and extension wording. `StressInputs` now composes every
+`signal: true` rule with every extension clause in both orders. Those rows move
+the golden, and they feed `TestSignalNeverContradictsTheRecord` — which already
+asserted exactly this and had simply never been handed an input that could trip
+it. That test runs against the shipped projection, so regenerating the golden
+does not make the swap green again. Two `order-signal-rule-beats-extension-*`
+corpus rows pin the same thing on real wording in all three suites.
 
 Round 2 tried to close the pattern-level hole from the outside, with a guard
 requiring every matcher literal to APPEAR in some corpus input and a diff of the
@@ -133,10 +162,11 @@ two ladders' literal sequences. Both were evaded by execution: literal coverage
 was satisfied by negative rows and by rows an earlier rule already claimed, and a
 literal diff cannot see boolean structure, so flipping an `&&` to `||` in the
 authoritative ladder left all three suites green. Neither guard exists any more.
-They are unnecessary: `stress.go` derives an input for every clause, every term
-and every ordered rule pair straight from the table, and the answers are
-committed, so structure and precedence are checked directly rather than
-inferred from string lists.
+They are unnecessary: `stress.go` derives an input for every clause, every term,
+both edges of every `~` term, every ordered rule pair and every `signal: true`
+rule composed with every extension clause, straight from the table, and the
+answers are committed — so structure and precedence are checked directly rather
+than inferred from string lists.
 
 Two Go recovery paths ask a narrower question — "did the per-stage cost cap kill
 this?", which stays true even for text a higher rule claims for the RECORD. They

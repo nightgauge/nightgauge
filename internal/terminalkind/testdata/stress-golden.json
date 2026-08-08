@@ -1806,6 +1806,11 @@
       "signal": ""
     },
     {
+      "input": "ssession limit",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "exit 1: usage limit",
       "kind": "subagent_crash",
       "signal": "rate_limit_quota_exhausted"
@@ -1817,6 +1822,11 @@
     },
     {
       "input": "usage limits",
+      "kind": "",
+      "signal": ""
+    },
+    {
+      "input": "susage limit",
       "kind": "",
       "signal": ""
     },
@@ -7099,6 +7109,166 @@
       "input": "subagent crash | [permission-denied]",
       "kind": "permission_denied",
       "signal": ""
+    },
+    {
+      "input": "stream idle timeout | session limit",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "session limit | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "stream idle timeout | usage limit",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "usage limit | stream idle timeout",
+      "kind": "stream_idle_timeout",
+      "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "overloaded | session limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "session limit | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "overloaded | usage limit",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "usage limit | overloaded",
+      "kind": "api_overloaded",
+      "signal": "api_overloaded"
+    },
+    {
+      "input": "socket connection was closed | session limit",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "session limit | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "socket connection was closed | usage limit",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "usage limit | socket connection was closed",
+      "kind": "api_connection_lost",
+      "signal": "api_connection_lost"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | session limit",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "session limit | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | usage limit",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "usage limit | [rate-limit-quota-exhausted]",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "architecture approval required | session limit",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "session limit | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "architecture approval required | usage limit",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "usage limit | architecture approval required",
+      "kind": "architecture_approval_required",
+      "signal": "architecture_approval_required"
+    },
+    {
+      "input": "github-quota-low | session limit",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "session limit | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-quota-low | usage limit",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "usage limit | github-quota-low",
+      "kind": "github_quota_low",
+      "signal": "github_quota_low"
+    },
+    {
+      "input": "github-network-outage | session limit",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "session limit | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "github-network-outage | usage limit",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "usage limit | github-network-outage",
+      "kind": "github_network_outage",
+      "signal": "github_network_outage"
+    },
+    {
+      "input": "[adapter-auth-failed] | session limit",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "session limit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "[adapter-auth-failed] | usage limit",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "usage limit | [adapter-auth-failed]",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
     }
   ]
 }

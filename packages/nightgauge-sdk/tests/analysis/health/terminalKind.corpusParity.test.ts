@@ -11,8 +11,12 @@
  *   1. BEHAVIOUR — the shared corpus, whose `expected` is Go's answer because
  *      Go writes the run record.
  *   2. EQUIVALENCE — the derived stress set. Both languages derive the same
- *      inputs from the table (every clause, every term, every ordered rule
- *      pair) and must reproduce the golden Go generated from it.
+ *      inputs from the table (every clause, every term, both edges of every `~`
+ *      term, every ordered rule pair, and every `signal: true` rule composed
+ *      with every extension clause) and must reproduce the golden Go generated
+ *      from it. The golden is Go's answer and this package cannot regenerate
+ *      it, so a TypeScript-only change to clause evaluation or to the order of
+ *      the projection's two stages lands here as a diff.
  *   3. PREDICATES — the one term kind that is code rather than a literal, held
  *      to the probes the table declares. Go asserts the same probes.
  *
@@ -151,8 +155,10 @@ describe("interpreter equivalence (SDK vs Go, over the derived stress set)", () 
     expect(
       diffs.slice(0, 10),
       `The two interpreters disagree on ${diffs.length} of ${golden.cases.length} derived inputs. ` +
-        `The stress set covers every clause, every term and every ordered rule pair, so any ` +
-        `divergence in clause evaluation or precedence lands here.`
+        `The stress set covers every clause, every term, both edges of every \`~\` term, every ` +
+        `ordered rule pair and every signal rule composed with every extension clause, so a ` +
+        `divergence in clause evaluation, in the word boundary or in the order of the ` +
+        `projection's two stages lands here.`
     ).toEqual([]);
   });
 

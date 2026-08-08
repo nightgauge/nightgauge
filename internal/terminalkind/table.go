@@ -410,6 +410,17 @@ func (tb *Table) MatchSignalExtension(errorText string) (SignalExtension, bool) 
 // the signal subset already ignores. Note what that does and does not say — a
 // kind the record names through a NON-signal rule is not protected, and the one
 // declared extension deliberately overrules exactly that case.
+//
+// THE ORDER OF THESE TWO STATEMENTS IS THE WHOLE BOUND, AND IT IS PINNED.
+// Swapping them is a four-line reorder with no literal, no import and no artifact
+// movement, and it used to move no answer at all: StressInputs composed rules
+// with rules only, so nothing in the system carried both a signal marker and
+// extension wording. The derivation now composes every signal rule with every
+// extension clause in both orders (see stress.go), the corpus carries
+// order-signal-rule-beats-extension-* rows on real wording, and
+// TestSignalNeverContradictsTheRecord — which asks this question of the SHIPPED
+// projection rather than of a regenerable artifact — finally receives inputs
+// that can trip it.
 func SignalKind(errorText string) string { return Load().SignalKind(errorText) }
 
 // SignalKind on a parsed table is the same projection, on a table the caller

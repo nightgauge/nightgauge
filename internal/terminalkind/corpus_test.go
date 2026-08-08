@@ -361,7 +361,7 @@ func TestEveryWordBoundaryTermIsPinnedByANegativeRow(t *testing.T) {
 					"with every suite green.\n"+
 					"Add a row whose input contains %q with a word character glued to it (e.g. %q) "+
 					"and pin the answer the boundary gives it.",
-					lit, rule.ID, lit, lit+boundaryViolationSuffix)
+					lit, rule.ID, lit, lit+boundaryViolationAffix)
 			}
 		}
 	}
@@ -385,7 +385,7 @@ func TestEveryWordBoundaryTermIsPinnedByANegativeRow(t *testing.T) {
 					"as something else entirely.\n"+
 					"Add a row whose input contains %q with a word character glued to it (e.g. %q) "+
 					"and expected_signal \"\".",
-					lit, e.ID, e.Kind, lit, lit+boundaryViolationSuffix)
+					lit, e.ID, e.Kind, lit, lit+boundaryViolationAffix)
 			}
 		}
 	}

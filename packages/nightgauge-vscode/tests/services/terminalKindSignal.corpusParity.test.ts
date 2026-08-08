@@ -107,8 +107,9 @@ describe("terminal-kind signal parity (extension)", () => {
   });
 
   it("never signals a kind that disagrees with the record, outside declared extensions", () => {
-    // Over the derived stress set, not a sample: every clause, every term, every
-    // ordered rule pair, and every signal-extension clause.
+    // Over the derived stress set, not a sample: every clause, every term, both
+    // edges of every `~` term, every ordered rule pair, every signal-extension
+    // clause, and every signal rule composed with every extension clause.
     const conflicts: string[] = [];
     for (const input of terminalKindStressInputs()) {
       const signal = classifyTerminalKindForSignal(input);
