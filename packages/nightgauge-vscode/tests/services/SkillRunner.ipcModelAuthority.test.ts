@@ -407,7 +407,7 @@ describe("IPC path: a concrete registry id is understood, not silently mishandle
     await dispatch(params({ model: "claude-sonnet-5" }));
 
     expect(flagValue(claudeArgs(), "--model")).toBe("claude-sonnet-5");
-    // Without band normalization EFFORT_SUPPORTING_MODELS never matches, and
+    // Without band normalization the band-keyed effort gate never matches, and
     // model_routing.stage_efforts / Maximum mode's effort:"high" vanish.
     expect(flagValue(claudeArgs(), "--effort")).toBe("high");
   });
