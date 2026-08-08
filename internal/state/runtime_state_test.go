@@ -128,6 +128,43 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 	}
 }
 
+// #358: CompleteStage must price every pool it receives with the same
+// formula the scheduler's fallback estimate uses, and must record the
+// combined-input/cache-subset shape history.go readers depend on
+// (`InputTokens - CacheRead` and the cache-hit-rate divide). If either side
+// drifts, one stage reports two different costs again. Counts mirror the
+// committed real capture (internal/execution/testdata).
+func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
+	counts := tokens.TokenCounts{
+		Input:           18,
+		Output:          236,
+		CacheRead:       29622,
+		CacheCreation5m: 3308,
+	}
+	const model = "claude-haiku-4-5-20251001"
+
+	rs := NewRuntimeState("nightgauge/nightgauge", 358, "item-1")
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStage(0, counts, model)
+
+	sr := rs.CompletedStages[0]
+	if want := tokens.CalculateCost(model, counts); sr.CostUSD != want {
+		t.Errorf("CostUSD=%v, want CalculateCost's %v — CompleteStage and the fallback estimate diverged",
+			sr.CostUSD, want)
+	}
+	ioOnly := tokens.CalculateCost(model, tokens.TokenCounts{Input: counts.Input, Output: counts.Output})
+	if sr.CostUSD <= ioOnly {
+		t.Errorf("CostUSD=%v prices no cache pool (input+output alone = %v)", sr.CostUSD, ioOnly)
+	}
+	if sr.InputTokens != counts.Input+counts.CacheRead {
+		t.Errorf("InputTokens=%d, want combined %d (CacheRead is a subset of InputTokens)",
+			sr.InputTokens, counts.Input+counts.CacheRead)
+	}
+	if sr.CacheRead != counts.CacheRead {
+		t.Errorf("CacheRead=%d, want %d", sr.CacheRead, counts.CacheRead)
+	}
+}
+
 // #230: a stage completing twice for the same occurrence (same Stage + the
 // same BeginStage-stamped StageStart) must yield exactly one completedStages
 // entry and must not double-count tokens/cost. Guards against the duplicate
