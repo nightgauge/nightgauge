@@ -444,7 +444,7 @@ func TestGetPipelineBudgetCeilingUSD(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
 
 	// No config — maintainer-set default of $75.
-	if got := getPipelineBudgetCeilingUSD(t.TempDir()); got != 75.0 {
+	if got := PipelineBudgetCeilingUSD(t.TempDir()); got != 75.0 {
 		t.Errorf("default ceiling = %v, want 75", got)
 	}
 
@@ -458,7 +458,7 @@ func TestGetPipelineBudgetCeilingUSD(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.yaml"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := getPipelineBudgetCeilingUSD(root); got != 200.0 {
+	if got := PipelineBudgetCeilingUSD(root); got != 200.0 {
 		t.Errorf("config ceiling = %v, want 200", got)
 	}
 
@@ -467,13 +467,13 @@ func TestGetPipelineBudgetCeilingUSD(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.local.yaml"), []byte(localBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := getPipelineBudgetCeilingUSD(root); got != 250.0 {
+	if got := PipelineBudgetCeilingUSD(root); got != 250.0 {
 		t.Errorf("local-tier ceiling = %v, want 250", got)
 	}
 
 	// Env override wins over all file tiers + default.
 	t.Setenv("NIGHTGAUGE_PIPELINE_TOKEN_BUDGET_CEILING_CEILING_USD", "300")
-	if got := getPipelineBudgetCeilingUSD(root); got != 300.0 {
+	if got := PipelineBudgetCeilingUSD(root); got != 300.0 {
 		t.Errorf("env-override ceiling = %v, want 300", got)
 	}
 }

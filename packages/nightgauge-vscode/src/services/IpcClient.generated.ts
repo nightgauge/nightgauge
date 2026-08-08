@@ -23,6 +23,7 @@ import type {
   AttentionAcknowledgeResult,
   AttentionListResult,
   AttentionMuteResult,
+  AttentionRaiseResult,
   AttentionResolveResult,
   AttentionSweepResult,
   AuthDeviceCodeResult,
@@ -525,6 +526,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async attentionAcknowledge(id: string, actor?: string): Promise<AttentionAcknowledgeResult> {
     return this.call<AttentionAcknowledgeResult>('attention.acknowledge', { id, actor });
+  }
+
+  async attentionRaise(producer: string, repo: string, issue: number, runId?: string, pr?: number, prState?: string, mergeable?: string, mergeStateStatus?: string, reviewDecision?: string, checks?: unknown[], stage?: string, situation?: string): Promise<AttentionRaiseResult> {
+    return this.call<AttentionRaiseResult>('attention.raise', { producer, repo, issue, runId, pr, prState, mergeable, mergeStateStatus, reviewDecision, checks, stage, situation });
   }
 
   async attentionMute(id: string, actor?: string): Promise<AttentionMuteResult> {

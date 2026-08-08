@@ -478,8 +478,8 @@ func TestMergeBlockedByPendingCI(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := mergeBlockedByPendingCI(tc.snap); got != tc.want {
-				t.Errorf("mergeBlockedByPendingCI() = %v, want %v", got, tc.want)
+			if got := MergeBlockedByPendingCI(tc.snap); got != tc.want {
+				t.Errorf("MergeBlockedByPendingCI() = %v, want %v", got, tc.want)
 			}
 		})
 	}

@@ -155,12 +155,25 @@
     },
     {
       "name": "run-scoped-attention",
+      "note": "WIRED ON BOTH PATHS as of #305. The extension raises through the `attention.raise` IPC verb, whose handler builds the card with the SAME exported orchestrator builders the Go scheduler calls (BuildBudgetCeilingHit / BuildBranchProtectionBlock) and writes it through the SAME single authoritative store — so dedup by idempotency_key, standing-fingerprint semantics, the journal, the attention.event push, and resolve/verb execution are inherited, not reimplemented. The verb takes a CLOSED producer id plus typed scalars: it carries no options, no verb, and no args map, because card options are EXECUTED by the daemon on resolve and a free-form raise would let any surface mint a plausible card offering an arbitrary operation. Both halves of the parity are tested — internal/orchestrator TestRunScopedProducersDelegateToSharedBuilders pins the scheduler call site to the builder, internal/ipc TestAttentionRaiseProducesTheGoPathCard pins the IPC path to the same builder.\n\nNO NUMBER CROSSES THE WIRE, AND THE STATE IT IS DERIVED FROM CANNOT BE MINTED BY THE RAISER (security fix, rounds 2-4). The budget-ceiling card's primary option persists a per-repo runtime ceiling override on resolve, so the enforced ceiling and the run's spend are derived DAEMON-SIDE — the ceiling in-process via orchestrator.PipelineBudgetCeilingUSD (the same read scheduler.go does), the spend from the run's own recorded RuntimeState. Round 3 stopped at 'derived daemon-side' and left the derivation forgeable: the runtime map is filled by pipeline.notifyStageTransition, which CREATES an entry when none exists, so ONE call minted a $1e6 run and the next raise built a $1.5M raiseCeiling option out of it. Corroboration is now narrower on both arms (live runtime and persisted runtime-{N}.json): the record's repo must EQUAL the raise's repo — an empty one corroborates nothing, the same call #307 made when it refused to persist an unattributed runtime — and the figure is summed over CompletedStages the daemon watched BEGIN (non-zero StartedAt, stamped only by the 'running' transition's BeginStage), never off the TotalCostUSD accumulator. A created-on-miss terminal transition books a stage with a zero StartedAt and corroborates nothing. When the spend cannot be corroborated the card is still raised but WITHOUT the raiseCeiling option, and the repo must be one this daemon has configured. See ADR-015 §N for the trust model this sits inside and its residual exposure (#370). The remedy also has to WORK on the extension path, which it did not at first: getPipelineCeilingConfig now reads .nightgauge/pipeline/budget-override.json with Go's max(config, override) rule, and BOTH sides resolve that file under the RUN'S OWN REPO ROOT — HeadlessOrchestrator.getRunRepoRoot() on the read, Server.repoRoot(repo) on the raise and the resolve. Round 3 read workspaceFolders[0] and wrote s.workspaceRoot (a pointer that follows the focused editor), so in a multi-repo workspace neither was the run's repo and the remedy was inert again.\n\nTWO of the six run-scoped producers are wired; the other FOUR are deferred with reasons. budget-ceiling (the anchor below) and branch-protection fire from HeadlessOrchestrator. abandoned-dispatch is NOT one of the six — it is extension-only with no Go counterpart, so it neither adds to the wired count nor subtracts from the deferred one (see its own row). The deferred four are auth-preflight, branch-fork, unverified-deliverable and unverified-deliverable-streak; round 3 counted the streak as part of its parent and the arithmetic came out as three and three. DECLARED ASYMMETRY on budget-ceiling: HeadlessOrchestrator has THREE pipeline-ceiling stops and only the BETWEEN-STAGE one raises. The pre-stage hard stop (preCheck.shouldStop, 'refusing to start <stage>') and the mid-stage hard stop (ceilingCheck.shouldStop && !budgetTerminated) both terminate on the same ceiling and card nothing — setOutcomeType('budget-ceiling') appears at exactly one line. Not fixed here because the other two stops end the run through paths whose terminal funnel is not this one, and wiring a raise into each without tracing that funnel is how one condition becomes three cards. Declared rather than left silent, against this manifest's own standard. DECLARED ASYMMETRY on branch-protection: the Go path's DeterministicRunner.Run responds to MergeBlockedByPendingCI by WAITING out the bounded CI budget and re-Deciding, so a block that only becomes visible once a required check FAILS still gets carded there. The extension's fallback takes ONE `gh pr view` sample with no CI wait and never re-samples, so that same late-emerging block is never carded on the extension path. Suppressing the card for an undetermined condition is the right call (a card would be a confident wrong diagnostic), but the coverage it costs is declared here rather than left silent. DEFERRED (4): auth-preflight (the extension's analogues are network-vs-auth heuristics, not the fail-closed definitive block Go raises on); branch-fork (not detected on the extension path at all — needs the BranchFork probe ported first); unverified-deliverable and its streak counterpart (the derivation already runs in Go via `nightgauge gate verify feature-validate --record`, so the right seam is for THAT CLI to raise — routing it back through IPC would make the extension re-classify a finding Go already classified, the exact duplication deriveUnexercisedDeliverable's own doc comment warns against).",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID"
       },
       "extension": {
-        "pathSpecific": "NOT WIRED — no IPC verb exists to raise a DecisionRequest, so extension-path runs can produce zero run-scoped Action Center cards. Tracked by #305."
+        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "anchor": "producer: \"budget-ceiling\","
+      }
+    },
+    {
+      "name": "abandoned-dispatch-attention",
+      "note": "EXTENSION-ONLY BY DESIGN (#305, closing the gap #307 named). A dispatch the abort deadline force-cleared is booked as terminal but reported nothing durable — its only surfacing was a transient Stop toast and a warn log, and #307's own ledger listed run-scoped-attention as the reason. Both arms of the force-clear funnel now raise the card, so a wedge inside worktree creation is as visible as one mid-stage.\n\nAN INFORMATIONAL STOP CARD, NOT AN UNBLOCK (re-shaped in review once the population was traced). forceClearStuckSlots has exactly ONE call site — abortAll's ABORT_ALL_TIMEOUT_MS branch — and abortAll is reached only from nightgauge.stopPipeline, nightgauge.abortPipeline and deactivate(). Before the deadline can fire, abortAll has already cleared the queue and set userCancelled on every slot, and the terminal error booked is literally `Cancelled by user`, which is why the row below records that an operator Stop books as a generic failure on BOTH paths. So one hundred percent of this producer's population is `the operator pressed Stop and a slot took longer than the deadline to settle`. The first cut emitted kind=unblock, severity=blocking_run and a StylePrimary Retry that cleared the issue's failure cooldown and re-dispatched: stopping three wedged pipelines produced three blocking_run cards each recommending the operator undo their own Stop, at a severity ADR-015 §I routes to alerting while nothing was blocked. The card is now approve/fyi with two noop options, naming only what is true FOR THE SITUATION IT DESCRIBES.\n\nTHREE SITUATIONS, THREE BODIES, ONE PRODUCER (fixed in round 4). Round 3 emitted a single fixed body for a producer with three populations, and it was false for two of them. The `situation` field on attention.raise is a closed enum — reservation-never-started | slot-worktree-preserved | claim-taken-then-wedged — that selects PROSE and nothing else: the option set, kind, severity, key and expiry are identical in all three, so no caller-supplied value can change what a card can DO. It is required and rejected when unrecognised rather than defaulted, because a default prints a confident wrong body. (a) reservation-never-started: the dispatch wedged inside startSlotInner (worktree-manager resolution, a 15s git ls-remote, git worktree add), so NO stage ran, nothing was written and notifyStageTransition never fired — round 3 told that operator their worktree 'may hold uncommitted work' and that the Go-side state 'may be stale', both impossible. (b) slot-worktree-preserved: a real slot whose terminal outcome this funnel booked; the preserved worktree and the possibly-stale Go state are the true residue. (c) claim-taken-then-wedged: the dispatch had CLAIMED its own outcome, so step 2 stood down and nobody booked it — the queue mark is released but the Go scheduler's seat is NOT, and isRunning() keeps the issue ineligible for re-dispatch. Round 3's body told that operator 'NOTHING IS BLOCKED and no action is required' in the one case where something was held; the body now names the held seat and what clears it (the wedged process settling, or a scheduler restart). Severity stays fyi in all three: every card here follows the operator's own Stop, and ADR-015 §I routes blocking_run to alerting.\n\nSUPPRESSED ONLY BY A TERMINAL OUTCOME CALLBACK THAT ACTUALLY FIRED — `slot.ownTerminalOutcomeBooked` / `reservation.ownTerminalOutcomeBooked`, set immediately after a terminal outcome callback returns, NOT the `terminalOutcomeDispatched` claim that gates step 2 of the bookkeeping. (Precisely: on the SLOT arm only the dispatch's own callbacks set the flag; on the RESERVATION arm `claimReservationOutcome` sets it and `bookForceClearedReservation` calls that, so the force-clear can set it too. The property both arms share — and the only one the card depends on — is that the flag is READ into a local before any claim of ours fires, so a force-clear never suppresses its own card.) The claim is taken at terminal boundary 1 BEFORE `await slot.stateService.getState()` and the callback fires after it, so a run that wedges in that window holds the claim while having reported nothing at all: no autonomousComplete, the Go scheduler's running-slot seat still held, the queue mark the only bookkeeping performed. Gating the card on the claim silenced exactly that case end to end, which is what #305 exists to stop. A dispatch that genuinely booked its own outcome and merely wedged in post-terminal teardown sets the new flag and gets no card — that is a different condition with no producer today. NOTE the residual hole in the claimed-then-wedged interleaving: the card is raised, but no terminal outcome is booked by anyone (step 2 stands down on the claim), so the Go seat stays held. Still owned by #307/#370 — what round 4 changed is that the card now SAYS so, instead of asserting the opposite. See the claim-taken-then-wedged situation above.\n\nRAISED CONCURRENTLY WITH completeQueueItem, never chained after it. Both are IPC round-trips bounded by IpcClientBase's request timeout (30s by default) and the daemon is unresponsive by definition when this deadline fires; serialising them would double the window in which isShuttingDown makes IssueQueueService refuse every enqueue — the #3111 condition forceClearStuckSlots' own doc comment bounds, arriving through a change made inside the fix for it.\n\nKeyed per (repo, issue) and EVENT-shaped: a slot that wedges, is re-queued, and wedges again collapses onto one card via Store.Raise's open-record dedup. NOT standing — standing would inherit ADR-015 §M suppression (a raise whose fingerprint matches the latest human-RESOLVED record for the key writes nothing), and with a constant fingerprint, no pruning of resolved records and no auto-resolve call site, the operator's FIRST dismissal silenced that issue permanently. The card deliberately carries NO run_id — at force-clear time Go mints the RunID and the extension has no verb to ask for one, and the wedged run's run-state.json may already be archived; an empty run id is a handled case daemon-side, and synthesising one would put a fabricated identity into the audit trail. #370 is what improves this later.",
+      "go": {
+        "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare a run abandoned while that defer is still owed. There is no Go force-clear funnel, and therefore no Go condition to card."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "alreadyClaimed ? \"claim-taken-then-wedged\" : \"slot-worktree-preserved\""
       }
     },
     {
@@ -267,7 +280,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here. (19 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 20. TestForceClearAccountingIsExhaustive fails when a name is missing. (20 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       — completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -296,7 +309,7 @@
         "                                emptied is a no-op with a modal attached.",
         "  failure-issue-comment       — no public comment narrating the operator's own stop.",
         "",
-        "OMITTED — not reachable from this funnel (5):",
+        "OMITTED — not reachable from this funnel (6):",
         "  stage-gate-evaluation       — per-stage, inside HeadlessOrchestrator. A force-clear happens",
         "                                between/inside stages and runs no stage.",
         "  stage-exit-records          — written by the stage runner at each stage exit, not at run terminal.",
@@ -312,11 +325,41 @@
         "                                as they do on the settled path.)",
         "  orphaned-remote-branch-reclaim — already NOT WIRED on the extension path at all (see its row); the",
         "                                force-clear does not change that.",
+        "  run-scoped-attention        — the OTHER two run-scoped cards (budget-ceiling, branch-protection)",
+        "                                fire from HeadlessOrchestrator's own ceiling/pr-merge checks, which",
+        "                                a dispatch that never settles never reaches. Not deleted from this",
+        "                                list when #305 added abandoned-dispatch-attention (they are two",
+        "                                different behavior rows) — a force-cleared dispatch still raises",
+        "                                neither, and the honest disposition is 'not reachable from this",
+        "                                funnel', not absence.",
         "",
-        "NOT PERFORMED — real gaps, owned elsewhere (3):",
-        "  run-scoped-attention        — no `raise` verb exists on IPC or the CLI (#305). A force-cleared",
-        "                                dispatch's only surfacing is the Stop toast and the warn log. This is",
-        "                                the same hole every extension-path run has, not one this adds.",
+        "PERFORMED (added by #305) (1):",
+        "  abandoned-dispatch-attention— BOTH arms raise the `abandoned-dispatch` Action Center card through",
+        "                                the `attention.raise` IPC verb, so a force-cleared dispatch survives",
+        "                                the Stop toast. An approve/fyi INFORMATIONAL card with two noop",
+        "                                options — every dispatch that reaches here was cancelled by the",
+        "                                operator, so the card offers no Retry. THREE SITUATIONS, THREE",
+        "                                BODIES (round 4): the required `situation` enum names which of",
+        "                                reservation-never-started / slot-worktree-preserved /",
+        "                                claim-taken-then-wedged this force-clear is, and each body states only",
+        "                                what holds for it — a reservation that wedged in worktree setup has no",
+        "                                uncommitted work and no recorded state to be stale, and a claim-taken",
+        "                                wedge is the one case that must NOT say 'nothing is blocked'. The enum",
+        "                                selects prose only: key, kind, severity and options are identical in",
+        "                                all three. Gated on",
+        "                                `ownTerminalOutcomeBooked` (a terminal outcome CALLBACK that actually",
+        "                                fired), NOT on the `terminalOutcomeDispatched` claim step 2 uses: the",
+        "                                claim is taken before an await and the callback fires after it, so a",
+        "                                run that wedges in that window reported nothing and the card is the",
+        "                                only signal left. Issued CONCURRENTLY with completeQueueItem so the",
+        "                                funnel still pays ONE IPC timeout, not two. Event-shaped and keyed",
+        "                                per (repo, issue), so repeat wedges of one issue collapse onto one",
+        "                                card while a wedge AFTER a human dealt with the last one still",
+        "                                speaks up. Fail-open and never-throwing: a raise failure here would",
+        "                                abort the exactly-once bookkeeping this funnel exists to guarantee.",
+        "                                Carries no run_id — see the abandoned-dispatch-attention row.",
+        "",
+        "NOT PERFORMED — real gaps, owned elsewhere (2):",
         "  terminal-kind-classification— the error handed to onSlotFailed is byte-identical to the SETTLED Stop",
         "                                All path's (`Cancelled by user`), which neither classifier matches, so",
         "                                an operator Stop books as a generic failure on BOTH paths.",
@@ -369,8 +412,9 @@
         "    the queue mark and the Go seat is the whole point, and WorktreeManager keys one path per issue",
         "    number, so a successor is created in the tree the dead process may still be writing in. On main",
         "    the un-released `processing` mark serialized the two runs — i.e. the leak this fixes was also the",
-        "    accidental interlock. Gating re-dispatch on the tree being verifiably free needs a verb that does",
-        "    not exist yet (see run-scoped-attention).",
+        "    accidental interlock. Gating re-dispatch on the tree being verifiably free is still not done —",
+        "    #305 gave the funnel a way to TELL the operator (the abandoned-dispatch card names what THIS",
+        "    force-clear left behind and asks them to inspect it), but a card is a notification, not a gate.",
         "  * A reservation's `reservedSlots` entry is left in place on purpose: it is what stops a re-dispatch",
         "    from colliding with the still-running startSlot. A wedge that NEVER unwinds therefore holds that",
         "    reserved capacity for the life of the extension host, with no reaper. Unchanged from main, where",
@@ -410,7 +454,7 @@
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin force-clear-funnel",
       "end": "terminal-parity:end force-clear-funnel",
-      "sha256": "347ffe82d20598a1c95e230aaf9e1d6032021178d2858d2625835bf65b09909a"
+      "sha256": "b7e0a11d2986091e53e4a8510564e4152a61fffc0494e307afb9f9bffd716ad4"
     }
   ]
 }

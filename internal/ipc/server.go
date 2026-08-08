@@ -4064,6 +4064,14 @@ func (s *Server) registerMethods() {
 	//ipc:method attentionAcknowledge params:AttentionAcknowledgeParams result:AttentionAcknowledgeResult
 	s.methods["attention.acknowledge"] = s.handleAttentionAcknowledge
 
+	// The run-scoped producer entry point for the extension operating mode
+	// (#305). Closed producer allowlist + typed scalars — the card is built
+	// daemon-side from the same orchestrator builders the Go scheduler calls,
+	// so a surface can report a CONDITION but never describe a card or the
+	// verbs it offers. See internal/ipc/attention_raise.go.
+	//ipc:method attentionRaise params:AttentionRaiseParams result:AttentionRaiseResult
+	s.methods["attention.raise"] = s.handleAttentionRaise
+
 	//ipc:method attentionMute params:AttentionMuteParams result:AttentionMuteResult
 	s.methods["attention.mute"] = s.handleAttentionMute
 

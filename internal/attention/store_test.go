@@ -55,7 +55,7 @@ func TestRaiseRejectsIdentitylessRecords(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := validRequest(mustID(t), "k:"+name)
 			mutate(&req)
-			if _, err := s.Raise(req); err == nil {
+			if _, _, err := s.Raise(req); err == nil {
 				t.Fatalf("expected Raise to reject %s, got nil error", name)
 			}
 		})
@@ -65,7 +65,7 @@ func TestRaiseRejectsIdentitylessRecords(t *testing.T) {
 func TestRaiseAndGet(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond:1")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond:1")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	got, found, err := s.Get(id)
@@ -86,14 +86,14 @@ func TestRaiseAndGet(t *testing.T) {
 func TestRaiseDedupsOnIdempotencyKey(t *testing.T) {
 	s := New(t.TempDir())
 	first := mustID(t)
-	if _, err := s.Raise(validRequest(first, "same-cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(first, "same-cond")); err != nil {
 		t.Fatalf("Raise 1: %v", err)
 	}
 	// A second raise for the same condition (different id) must UPDATE in place,
 	// not spawn a duplicate.
 	second := validRequest(mustID(t), "same-cond")
 	second.Title = "updated title"
-	returnedID, err := s.Raise(second)
+	_, returnedID, err := s.Raise(second)
 	if err != nil {
 		t.Fatalf("Raise 2: %v", err)
 	}
@@ -124,7 +124,7 @@ func standingRaise(id, key, fingerprint string) DecisionRequest {
 func TestRaiseRejectsAStandingRequestWithNoFingerprint(t *testing.T) {
 	s := New(t.TempDir())
 	r := standingRaise(mustID(t), "cond", "")
-	if _, err := s.Raise(r); err == nil {
+	if _, _, err := s.Raise(r); err == nil {
 		t.Fatal("a standing request with no fingerprint must be rejected at the boundary")
 	}
 }
@@ -144,7 +144,7 @@ func TestReRaisingAnExpiredKeyRevivesTheSameRecord(t *testing.T) {
 		t.Helper()
 		r := standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101 ready but undispatched")
 		r.ExpiresAt = now.Add(30 * time.Minute).Format(tsLayout)
-		id, err := s.Raise(r)
+		_, id, err := s.Raise(r)
 		if err != nil {
 			t.Fatalf("Raise: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestRaiseIntoAStoreThatAlreadyAccumulatedDuplicates(t *testing.T) {
 		ids = append(ids, r.ID)
 	}
 
-	id, err := s.Raise(standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101"))
+	_, id, err := s.Raise(standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101"))
 	if err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestRaiseRefreshesAStandingConditionWithoutReAlerting(t *testing.T) {
 		t.Helper()
 		r := standingRaise(mustID(t), "cond", fingerprint)
 		r.Title = title
-		if _, err := s.Raise(r); err != nil {
+		if _, _, err := s.Raise(r); err != nil {
 			t.Fatalf("Raise: %v", err)
 		}
 	}
@@ -272,14 +272,14 @@ func TestRaiseRefreshesAStandingConditionWithoutReAlerting(t *testing.T) {
 // a condition that is still true must not return it on the next cycle.
 func TestRaiseDoesNotHandBackAConditionAHumanJustResolved(t *testing.T) {
 	s := New(t.TempDir())
-	id, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1"))
+	_, id, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1"))
 	if err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	if _, err := s.Resolve(context.Background(), id, "leave", "octocat", "", "", &spyExecutor{}); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1")); err != nil || got != id {
+	if _, got, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1")); err != nil || got != id {
 		t.Fatalf("re-raise after resolve returned (%q, %v), want the resolved id %q and no new card", got, err, id)
 	}
 	if open := mustList(t, s, ListFilter{}); len(open) != 0 {
@@ -288,7 +288,7 @@ func TestRaiseDoesNotHandBackAConditionAHumanJustResolved(t *testing.T) {
 	// The condition itself changing is news. The resolution stays on the record
 	// that earned it — a decision is a closed chapter — and the new condition
 	// gets its own card, matching what a repo sweep does with the same facts.
-	if _, err := s.Raise(standingRaise(mustID(t), "cond", "fp:2")); err != nil {
+	if _, _, err := s.Raise(standingRaise(mustID(t), "cond", "fp:2")); err != nil {
 		t.Fatalf("Raise after change: %v", err)
 	}
 	open := mustList(t, s, ListFilter{})
@@ -316,7 +316,7 @@ func TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions(t *tes
 		if !standing {
 			r.Fingerprint = ""
 		}
-		id, err := s.Raise(r)
+		_, id, err := s.Raise(r)
 		if err != nil {
 			t.Fatalf("Raise %s: %v", key, err)
 		}
@@ -369,7 +369,7 @@ func TestAutoResolveKeyRetractsOnlyTheTargetedKey(t *testing.T) {
 		if !standing {
 			r.Fingerprint = ""
 		}
-		id, err := s.Raise(r)
+		_, id, err := s.Raise(r)
 		if err != nil {
 			t.Fatalf("Raise %s: %v", key, err)
 		}
@@ -445,7 +445,7 @@ func (e *spyExecutor) ExecuteVerb(_ context.Context, _ *DecisionRequest, opt Opt
 func TestResolveIsIdempotentAndExecutesOnce(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	exec := &spyExecutor{}
@@ -479,7 +479,7 @@ func TestResolveIsIdempotentAndExecutesOnce(t *testing.T) {
 func TestResolveRejectsUnknownOption(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	if _, err := s.Resolve(context.Background(), id, "no-such-option", "octocat", "", "", &spyExecutor{}); err == nil {
@@ -495,7 +495,7 @@ func TestResolveRejectsUnknownOption(t *testing.T) {
 func TestResolveLeavesRequestUntouchedWhenVerbFails(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	exec := &spyExecutor{err: &VerbExecutionError{Verb: "go", Retryable: true, Err: fmt.Errorf("no daemon reachable")}}
@@ -529,7 +529,7 @@ func TestResolveLeavesRequestUntouchedWhenVerbFails(t *testing.T) {
 func TestAcknowledgeIsNonBlocking(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	if _, err := s.Acknowledge(id, "octocat"); err != nil {
@@ -554,11 +554,11 @@ func TestExpirySweepAppliesDefault(t *testing.T) {
 	// One request already past expiry, one still valid.
 	expired := validRequest(mustID(t), "stale")
 	expired.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(tsLayout)
-	if _, err := s.Raise(expired); err != nil {
+	if _, _, err := s.Raise(expired); err != nil {
 		t.Fatalf("Raise expired: %v", err)
 	}
 	fresh := validRequest(mustID(t), "fresh")
-	if _, err := s.Raise(fresh); err != nil {
+	if _, _, err := s.Raise(fresh); err != nil {
 		t.Fatalf("Raise fresh: %v", err)
 	}
 	n, err := s.SweepExpired(context.Background(), NoopExecutor{})
@@ -586,7 +586,7 @@ func TestListOrdersBySeverityThenNewest(t *testing.T) {
 	mk := func(sev Severity, key string) {
 		r := validRequest(mustID(t), key)
 		r.Severity = sev
-		if _, err := s.Raise(r); err != nil {
+		if _, _, err := s.Raise(r); err != nil {
 			t.Fatalf("Raise: %v", err)
 		}
 		time.Sleep(2 * time.Millisecond) // distinct created_at
@@ -612,7 +612,7 @@ func TestListOrdersBySeverityThenNewest(t *testing.T) {
 func TestJournalRecordsEveryTransition(t *testing.T) {
 	s := New(t.TempDir())
 	id := mustID(t)
-	if _, err := s.Raise(validRequest(id, "cond")); err != nil {
+	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 	if _, err := s.Acknowledge(id, "octocat"); err != nil {
@@ -650,7 +650,7 @@ func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
 
 	// Pre-create one request that many goroutines will race to resolve.
 	hot := mustID(t)
-	if _, err := s.Raise(validRequest(hot, "hot")); err != nil {
+	if _, _, err := s.Raise(validRequest(hot, "hot")); err != nil {
 		t.Fatalf("Raise hot: %v", err)
 	}
 	exec := &spyExecutor{}
@@ -664,7 +664,7 @@ func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id := fmt.Sprintf("dr_%016x-cafe-7000-8000-000000000000", i)
-			_, _ = s.Raise(validRequest(id, fmt.Sprintf("cond-%d", i)))
+			_, _, _ = s.Raise(validRequest(id, fmt.Sprintf("cond-%d", i)))
 		}(i)
 	}
 	for i := 0; i < resolvers; i++ {
@@ -688,5 +688,89 @@ func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
 	// no-op, so the verb ran a single time.
 	if got := exec.count.Load(); got != 1 {
 		t.Errorf("hot verb executed %d times, want exactly 1", got)
+	}
+}
+
+// TestRaiseOutcomesCoverAllFourValues restores the coverage the #305 round-2
+// fixup dropped. Round 1 exercised all four `RaiseOutcome` values through the
+// IPC verb; making every raiseable producer event-shaped (correctly) made
+// `refreshed` and `suppressed` unreachable from there, and the test went with
+// it — leaving `OutcomeRefreshed` and `OutcomeSuppressed` asserted nowhere in
+// the tree while `raiseThrough`, the only non-test caller of Raise, discards
+// the outcome entirely. A swapped mapping in the standing branch would have
+// passed CI.
+//
+// The standing producers that actually exercise that branch — stuck-epic,
+// architecture-approval, the unverified-deliverable streak — are modelled here
+// by a standing request whose fingerprint moves (or does not).
+func TestRaiseOutcomesCoverAllFourValues(t *testing.T) {
+	s := New(t.TempDir())
+	const key = "standing:octocat/acme#7"
+
+	standing := func(fingerprint string) DecisionRequest {
+		r := validRequest(mustID(t), key)
+		r.Standing = true
+		r.Fingerprint = fingerprint
+		return r
+	}
+
+	// created — no live record for the key.
+	outcome, firstID, err := s.Raise(standing("blockers:a,b"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeCreated {
+		t.Fatalf("first raise = %q, want %q", outcome, OutcomeCreated)
+	}
+
+	// refreshed — the SAME standing condition re-observed. Deliberately silent:
+	// content is refreshed, the operator is not re-alerted.
+	outcome, id, err := s.Raise(standing("blockers:a,b"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeRefreshed {
+		t.Errorf("re-observation of an unchanged standing condition = %q, want %q", outcome, OutcomeRefreshed)
+	}
+	if id != firstID {
+		t.Errorf("refreshed id = %q, want the open card's id %q", id, firstID)
+	}
+
+	// updated — the condition itself moved, so the card re-alerts.
+	outcome, id, err = s.Raise(standing("blockers:a,b,c"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeUpdated {
+		t.Errorf("moved standing condition = %q, want %q", outcome, OutcomeUpdated)
+	}
+	if id != firstID {
+		t.Errorf("updated id = %q, want the open card's id %q", id, firstID)
+	}
+
+	// suppressed — a human resolved THIS EXACT standing condition (ADR-015 §M),
+	// so re-observing it writes nothing and hands back the resolved record's id.
+	if _, err := s.Resolve(context.Background(), firstID, "leave", "octocat", "", "", nil); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	outcome, id, err = s.Raise(standing("blockers:a,b,c"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeSuppressed {
+		t.Errorf("re-raise of a resolved standing condition = %q, want %q", outcome, OutcomeSuppressed)
+	}
+	if id != firstID {
+		t.Errorf("suppressed id = %q, want the resolved record's id %q", id, firstID)
+	}
+
+	// And the four values are four DISTINCT strings — a surface that renders
+	// them differently depends on that.
+	seen := map[RaiseOutcome]bool{}
+	for _, o := range []RaiseOutcome{OutcomeCreated, OutcomeUpdated, OutcomeRefreshed, OutcomeSuppressed} {
+		if seen[o] {
+			t.Errorf("RaiseOutcome %q is not distinct", o)
+		}
+		seen[o] = true
 	}
 }

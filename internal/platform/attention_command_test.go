@@ -371,7 +371,7 @@ func TestAttentionResolve_RaceLocalVsCommand(t *testing.T) {
 		},
 		DefaultAction: "leave",
 	}
-	if _, err := store.Raise(req); err != nil {
+	if _, _, err := store.Raise(req); err != nil {
 		t.Fatalf("Raise: %v", err)
 	}
 

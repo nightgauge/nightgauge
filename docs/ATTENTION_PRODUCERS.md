@@ -306,9 +306,118 @@ today's output as the contract.
 
 ## Run-scoped producers
 
-Add a `raise*` method in `internal/orchestrator/attention_wiring.go` and call it
-at the trigger point. The same identity rules apply — a stable
-`idempotency_key`, options bound to registered verbs.
+Add an exported `Build*` function in
+`internal/orchestrator/attention_wiring.go` that returns the
+`attention.DecisionRequest`, plus a thin `raise*` method that hands it to
+`raiseAttention`, and call the `raise*` method at the trigger point. The same
+identity rules apply — a stable `idempotency_key`, options bound to registered
+verbs.
+
+**Then answer the second question: which execution path observes this
+condition?** (#305) A producer whose only call site is the Go scheduler is
+silent in the extension operating mode, which is where the overwhelming majority
+of runs happen. That is not a theoretical gap — it is how the run-scoped half of
+ADR 015 produced literally nothing for its first 1,800 headless runs.
+
+If the extension detects the condition too, wire it: declare the producer in the
+`attention.raise` allowlist (`internal/ipc/attention_raise.go`), give it typed
+scalar params, and have the handler call your `Build*` function. The builder is
+shared precisely so the two paths cannot render two different cards for one
+condition — pin BOTH halves, as
+`TestRunScopedProducersDelegateToSharedBuilders` (Go call site → builder) and
+`TestAttentionRaiseProducesTheGoPathCard` (IPC handler → same builder) do.
+
+Six rules on that wiring:
+
+- **The params never carry an option, a verb, or an args map.** Card options are
+  executed by the daemon on resolve, so a surface that could describe them could
+  mint a plausible card offering an arbitrary operation on an arbitrary issue.
+  The surface reports a CONDITION; the daemon decides what the card offers.
+- **Send structured inputs, classify daemon-side.** If Go decides the condition
+  from a machine value (`stages.Decide`'s reason codes, a gate verdict), send
+  that value, not the extension's own prose rendering of it. Two renderers put
+  two different sentences on the same condition with nothing failing. Send the
+  value **un-coerced**: an in-flight check's `conclusion` is `null` on the wire
+  and `""` in the projection, and substituting a friendly placeholder for it
+  makes the payload unable to express the very state the classifier keys on.
+- **Share the whole precondition, not just the classifier.** A pure decision
+  function is rarely the entire Go rule — `stages.Decide` says
+  `dirty-merge-state: BLOCKED` for a PR whose only blocker is a queued required
+  check, and the Go runner never acts on that punt because
+  `stages.MergeBlockedByPendingCI` intercepts first and waits out CI. A surface
+  that reuses `Decide` and not that predicate reproduces the classifier and
+  loses the guard, which is the same dual-path drift (#257) with the sign
+  flipped. Export the predicate and call it; never re-implement it — a third
+  copy of a matrix is a third thing to keep in sync.
+- **Never accept a number a card option will act on.** The allowlist bounds
+  _which_ operation a card offers; it says nothing about that operation's
+  magnitude. `budget-ceiling`'s primary option persists a per-repo ceiling
+  override, so while the enforced ceiling and the run's spend were params, any
+  caller on the workspace socket could choose the number one operator click
+  would write. Derive such values daemon-side from state the daemon itself
+  recorded (config, the run's own `RuntimeState`), and when they cannot be
+  corroborated, raise the card **without** the option rather than guessing — the
+  operator still learns the condition happened, and nothing executable rides on
+  an uncorroborated report.
+- **"Daemon-side" is not the property; UNMINTABLE is.** Deriving a number from
+  daemon state buys nothing if a caller can create that state. `budget-ceiling`
+  read the run's spend out of the runtime registry — which
+  `pipeline.notifyStageTransition` fills, booking `costUsd` verbatim AND
+  creating the entry when none exists, so one call minted a run and the next
+  raise built a remedy worth $1.5M out of it. Ask what the SHORTEST call
+  sequence is that manufactures the state you are about to trust, then require
+  evidence only the normal flow produces: an exact repo match (not "empty or
+  matching"), and progression markers the terminal call alone cannot write. See
+  [ADR-015 §N](decisions/015-decision-requests.md) for the boundary this sits
+  inside.
+- **A raise may never take a remedy off an open card.** Two structurally
+  different offers can share one `idempotency_key` — the corroborated and
+  uncorroborated `budget-ceiling` shapes do — and the open-record merge is
+  last-writer-wins over the whole payload. `Store.Raise` now keeps the record
+  that offers a real verb and reports `refreshed`; if your producer has a
+  degraded variant, that is the direction the asymmetry must point. Never the
+  other way: an observation that knows LESS must not overwrite one that knew
+  more.
+
+If the extension does NOT observe it, say so in the `run-scoped-attention` row
+of `internal/orchestrator/testdata/terminal_behaviors.json` with a reason. A
+Go-only producer is a legitimate choice; an undeclared one is a silent gap.
+
+**A producer raised over `attention.raise` is an EVENT, and the allowlist
+enforces it** (`TestNoRaiseableProducerIsStandingWithoutRetraction`). `Standing`
+is not a severity dial; it is a contract with two obligations (below), and a
+one-shot report from a surface that observed a transition can satisfy neither —
+there is no scan to reconcile against. Declaring it anyway inherits ADR-015 §M's
+"a human already resolved this exact condition, do not hand it back" rule with
+nothing that can ever lapse it, and the producer goes permanently silent for
+that key on the operator's first dismissal. Event shape gives what a
+re-observation actually needs anyway: `Raise` updates the open record for the
+key in place (one card per condition), while a recurrence _after_ a resolution —
+a new fact — gets a new card.
+
+**Shape the card around the population that will actually reach it, not the
+condition's name.** `abandoned-dispatch` reads like a stuck run, so its first
+cut shipped `unblock`/`blocking_run` with a primary "Retry". Tracing the call
+graph showed every card it could ever raise follows an operator pressing Stop —
+`forceClearStuckSlots` is reached only from the abort deadline, and `abortAll`
+only from Stop / Abort / `deactivate()`. The card was therefore telling
+operators to undo their own decision, three times over for three stopped
+pipelines, at a severity §I routes to alerting while nothing was blocked. Ask
+who sees this card and what they just did; if the honest answer is "nothing is
+blocked, but there is something worth knowing", that is an `fyi` with noop
+options, not an `unblock` with a remedy.
+
+**And if one producer covers several populations, give the body a parameter —
+do not average them.** The same card then shipped ONE body for three
+force-clear situations, and it was false for two: it promised a preserved
+worktree that "may hold uncommitted work" to a dispatch that wedged before any
+worktree existed, and "NOTHING IS BLOCKED and no action is required" to one
+still holding the Go scheduler's seat. A body that is true of the union of your
+populations is usually true of none of them. Pass the distinguishing facts the
+call site already holds (`abandoned-dispatch`'s `situation` enum), let them
+select PROSE only — never options, verbs or severity, or the parameter becomes
+a way for a caller to choose what the card can do — and reject an unrecognised
+value instead of defaulting, because a default prints a confident wrong body.
 
 A genuine event needs no fingerprint: it is observed once rather than
 reconciled. If instead your trigger site re-answers the same question on every

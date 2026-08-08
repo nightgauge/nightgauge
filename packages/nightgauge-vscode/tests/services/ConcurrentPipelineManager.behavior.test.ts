@@ -124,6 +124,7 @@ function createControllableFactory() {
 
     const orchestrator = {
       setWorktreeOverride: vi.fn(),
+      setRunRepoRoot: vi.fn(),
       setUnattended: vi.fn(),
       runPipeline: vi.fn().mockReturnValue(promise),
       stop: vi.fn(),

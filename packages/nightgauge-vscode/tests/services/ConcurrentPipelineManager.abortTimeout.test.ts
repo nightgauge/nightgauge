@@ -175,6 +175,7 @@ function createControllableFactory() {
       orchestrator: {
         setWorktreeOverride: vi.fn(),
         setRepoOverride: vi.fn(),
+        setRunRepoRoot: vi.fn(),
         setUnattended: vi.fn(),
         runPipeline: vi.fn().mockReturnValue(runPromise),
         stop: vi.fn(), // no-op — the stop that does not unblock runPipeline

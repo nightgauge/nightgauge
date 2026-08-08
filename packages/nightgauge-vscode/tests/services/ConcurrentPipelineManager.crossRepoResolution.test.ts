@@ -113,6 +113,7 @@ function createPendingFactory() {
   return vi.fn().mockImplementation((_workDir: string, _issueNumber: number) => ({
     orchestrator: {
       setRepoOverride: vi.fn(),
+      setRunRepoRoot: vi.fn(),
       setUnattended: vi.fn(),
       runPipeline: vi.fn().mockReturnValue(new Promise(() => {})),
       stop: vi.fn(),
@@ -206,6 +207,48 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
 
     expect(workspaceManager.findRepositoryByGitHub).toHaveBeenCalledWith("org/repo-a");
     expect(workspaceManager.findRepositoryByGitHub).toHaveBeenCalledWith("org/repo-b");
+  });
+
+  it("pins each run's OWN repo root on its orchestrator, so a per-repo ceiling override reaches it (#305)", async () => {
+    // The budget-ceiling remedy is per-repo on both sides: the daemon writes
+    // `.nightgauge/pipeline/budget-override.json` under the CARD's repo root
+    // (`Server.repoRoot(repo)`), and the run reads it under
+    // `HeadlessOrchestrator.getRunRepoRoot()`. The factory seeds `mainRepoRoot`
+    // from the RUNNER root — one fixed path for every slot — so without this
+    // pin a cross-repo run reads repo-a's override file while the operator's
+    // click wrote repo-b's, and the remedy is inert exactly as it was before
+    // #305 wired it.
+    const workspaceManager = makeWorkspaceManager({
+      "org/repo-a": "/workspace/repo-a",
+      "org/repo-b": "/workspace/repo-b",
+    });
+    const queue = makeQueueService([makeItem(10, "org/repo-a"), makeItem(20, "org/repo-b")]);
+    const factory = createPendingFactory();
+
+    const manager = new ConcurrentPipelineManager(
+      "/workspace/repo-a", // the RUNNER root — what mainRepoRoot would be for both
+      queue as any,
+      factory,
+      makeLogger() as any,
+      { maxConcurrent: 3, worktreeBase: ".worktrees" },
+      workspaceManager as any
+    );
+
+    await manager.fillSlots();
+
+    const pinnedFor = (issueNumber: number) => {
+      const call = factory.mock.calls.findIndex((c: unknown[]) => c[1] === issueNumber);
+      expect(call).toBeGreaterThanOrEqual(0);
+      const built = factory.mock.results[call].value as {
+        orchestrator: { setRunRepoRoot: ReturnType<typeof vi.fn> };
+      };
+      expect(built.orchestrator.setRunRepoRoot).toHaveBeenCalledTimes(1);
+      return built.orchestrator.setRunRepoRoot.mock.calls[0][0];
+    };
+
+    expect(pinnedFor(10)).toBe("/workspace/repo-a");
+    // The one that matters: repo-b's run must NOT be pinned to the runner root.
+    expect(pinnedFor(20)).toBe("/workspace/repo-b");
   });
 
   it("reuses the existing default WorktreeManager instance when the resolved repo has the same root (no redundant construction)", async () => {

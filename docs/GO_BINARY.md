@@ -1519,6 +1519,188 @@ store so a sweep's writes reach every subscribed surface):
 | `attention.mute`        | Silence until the condition changes                                       |
 | `attention.unmute`      | Restore alerting                                                          |
 | `attention.sweep`       | Evaluate repos; returns `busy` rather than duplicating an in-flight sweep |
+| `attention.raise`       | Raise a RUN-SCOPED request from a closed producer allowlist (see below)   |
+
+#### `attention.raise` — run-scoped producers off the Go path (issue #305)
+
+Every run-scoped producer used to hang off the Go scheduler, and the IPC surface
+had no verb to raise a request. Extension-path runs — the operating mode for the
+overwhelming majority of dispatches — therefore produced **zero** run-scoped
+Action Center cards by construction: a budget-ceiling stop, a branch-protection
+block, or an abandoned dispatch was detected, logged, and dropped. Fleet-scoped
+producers were unaffected because they route through `autonomous.complete` → Go.
+
+`attention.raise` closes that, without a second attention system. The handler
+builds the card with the **same exported builders the Go scheduler calls**
+(`orchestrator.BuildBudgetCeilingHit`, `BuildBranchProtectionBlock`,
+`BuildAbandonedDispatch`) and writes it through the **same** single authoritative
+store, so dedup by `idempotency_key`, standing-fingerprint semantics, the
+journal, the `attention.event` push, and resolve/verb execution are all
+inherited.
+
+**Closed producer, typed scalars — a security boundary, not a style choice.**
+The params carry a producer id plus scalars; there is no options array, no verb,
+and no args map. Card options are **executed** by the daemon on resolve, and
+`ValidateOption` re-checks that a verb is registered but not that a producer was
+_entitled_ to offer it against a particular target. A free-form raise would let
+any process with socket access mint a legitimate-looking card offering
+`issue.close` or `budget.raiseCeiling` on an arbitrary issue and wait for the
+operator to click it.
+
+| Producer             | Required params                            | Notes                                                                                                                                                                                                                                 |
+| -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `budget-ceiling`     | (none beyond repo/issue)                   | Both numbers are derived daemon-side — see "No money crosses this wire" below. No card option can be given a caller-chosen magnitude                                                                                                  |
+| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire. In-flight CI is excluded first (see below)                                                                                      |
+| `abandoned-dispatch` | `situation`                                | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) when the dispatch reported no outcome. `situation` is a closed enum selecting PROSE only — see below |
+
+**The repo must be one this daemon has configured.** `attention.raise` rejects a
+repo absent from the client resolver's registry. Dedup is per
+`(producer, repo, issue)`, so without that check a caller could fill
+`.nightgauge/attention/` with plausible cards naming repos the workspace has
+never heard of. **The bound is on the repo only** — the issue number is
+validated as positive but not as existing, so the key space is still unbounded
+in that dimension and card injection is reduced, not closed. See
+[ADR-015 §N](decisions/015-decision-requests.md) for the full trust boundary and
+its residual exposure.
+
+**No money crosses this wire.** The allowlist bounds _which_ operation a card
+may offer; it says nothing about that operation's _magnitude_. The
+`budget-ceiling` card's primary option is `budget.raiseCeiling`, whose
+resolution writes `.nightgauge/pipeline/budget-override.json`, which
+`orchestrator.PipelineBudgetCeilingUSD` takes as `max(config, override)` — a
+workspace-global spend control. So both inputs behind that offer are read
+daemon-side:
+
+- the **enforced ceiling** from `orchestrator.PipelineBudgetCeilingUSD`, the
+  same in-process read `scheduler.go` performs;
+- the **spend** from the run's own recorded `RuntimeState` (the live
+  `activeRuntimes` entry, or the persisted `runtime-{N}.json`), subject to two
+  corroboration rules that stop the raise path from minting the state it is
+  checked against:
+  1. the record's repo must **equal** the raise's repo — an empty one
+     corroborates nothing, because `pipeline.notifyStageTransition` seeds
+     `rt.Repo` only when the caller sends it, and the map is keyed by bare issue
+     number (#370's re-keying target);
+  2. the figure is summed over `CompletedStages` the daemon watched **begin** —
+     entries carrying the `StartedAt` stamp that only a `running` transition's
+     `BeginStage` writes — never off the `TotalCostUSD` accumulator. A
+     created-on-miss terminal transition books a stage with a zero `StartedAt`,
+     so a run minted in a single `notifyStageTransition` call corroborates
+     nothing.
+
+When the daemon has **no record** of that run's spend, the card is still raised
+— staying silent would reintroduce the hole this verb closes — but **without**
+the `raiseCeiling` option: an operator is told their run stopped on budget, and
+is not offered a one-click workspace write whose amount nothing corroborates.
+
+**The remedy has to work on the receiving path too.** A ceiling raised from a
+card was inert in extension mode until `getPipelineCeilingConfig` learned to
+read `budget-override.json` with the same `max(config, override)` rule Go uses.
+Before that, resolving the card wrote a file only Go read, the re-dispatched
+extension run enforced the old ceiling, tripped the same between-stage check,
+and re-raised the same `idempotency_key` — one more ceiling of tokens spent and
+no signal that the click had done nothing.
+
+**And both sides must agree about WHICH file.** The agreement is **per repo**:
+`budget-override.json` is written under the card's own repo root
+(`Server.repoRoot(context.repo)` — the same registry that scopes
+`runtime-{N}.json`, #215/#307) and read under the run's own repo root
+(`HeadlessOrchestrator.getRunRepoRoot()`, pinned per slot from the resolved
+`WorktreeManager`). Using `s.workspaceRoot` for the write was a second inertness
+bug in waiting: that field is a mutable pointer to whichever repo owns the
+focused editor (`workspace.setRoot` ← `resolveActiveRepository`), so in a
+multi-repo workspace the override landed wherever the operator happened to be
+looking, while the extension read `workspaceFolders[0]`. An override raised for
+repo A moves A's ceiling and leaves B's alone — by design, and asserted on both
+sides.
+
+**In-flight CI is not branch protection, and `Decide` alone cannot tell you
+that.** The Go pr-merge runner's pending-CI arm lives outside the matrix:
+`DeterministicRunner.Run` tests `stages.MergeBlockedByPendingCI` first, waits
+out a bounded CI budget, and on exhaustion punts `ci-wait-timeout` — a reason
+`IsBranchProtectionPunt` deliberately does not match. `attention.raise` applies
+the same exported predicate before classifying, because pr-merge starts
+immediately after pr-create and on repos whose CI takes minutes the first
+snapshot is routinely `BLOCKED`/`UNSTABLE` with checks still queued (#297).
+Without the exclusion those runs got a `blocking_run` card with a 48-hour TTL
+telling the operator to fix a check that was about to go green on its own. This
+also means `checks[].conclusion` must reach the daemon un-coerced: `""` is how
+an in-flight check is spelled, and a placeholder in its place is a lost signal.
+
+**Every raiseable producer is EVENT-shaped**, enforced by
+`TestNoRaiseableProducerIsStandingWithoutRetraction`. Standing carries a
+retraction contract (a fingerprint that moves plus an `AutoResolveUnobserved`
+call at the end of a scan) that a one-shot raise from a surface cannot satisfy;
+declaring it inherits §M suppression that can never lapse, so the first human
+resolution silences that `idempotency_key` forever. Repeat observations still
+collapse onto one card — that is `Raise`'s open-record dedup, not standing.
+
+`runId` is supplied by the **caller**, deliberately: resolving it daemon-side
+from the runtime registry would add a reader of the bare-issue-number keying
+that #370 must re-key, and would mis-stamp the card when a re-dispatch for the
+same issue is already in flight. An empty `runId` is a handled case — the card
+simply carries no trace back-reference.
+
+**Four outcomes, four values.** `created` (a card is in front of the operator),
+`updated` (an open card for the same condition absorbed the observation and its
+payload moved), `refreshed` (an open card absorbed the observation and was
+deliberately kept as it was), and `not_applicable` (the daemon evaluated the
+producer's own precondition and it does not hold, e.g. a pr-merge punt that
+turned out to be in-flight CI rather than branch protection). A failure is an
+**error**, never an outcome.
+
+`refreshed` is what a raise gets when replacing the open card would have
+**stripped a remedy off it**. `budget-ceiling:<repo>#<n>` is one idempotency key
+carrying two structurally different offers — with the `budget.raiseCeiling`
+option when the spend was corroborated, without it when it was not — and
+`Store.Raise`'s open-record branch replaced the whole payload, so a later
+uncorroborated observation silently rewrote a working one-click fix into two
+noops, including on a card the Go scheduler had raised. The store now keeps the
+stronger record. The rule is one-directional: a raise carrying a remedy still
+replaces (in-place escalation works), and a raise that ADDS one to a
+remedy-free card still replaces.
+
+`Store.Raise`'s `suppressed` is deliberately **not** part of this contract: it
+is a standing-only branch, and no raiseable producer may be standing. The
+handler treats it as a contract violation and errors, naming the value — which
+is what a future standing producer added to the allowlist would hit on its first
+raise.
+
+**The `abandoned-dispatch` card is informational, and it has THREE bodies.**
+`forceClearStuckSlots` has one call site — `abortAll`'s abort deadline — and
+`abortAll` is reached only from Stop / Abort / `deactivate()`, so every card
+this producer raises follows an operator's own Stop. It is `approve`/`fyi` with
+two noop options and no Retry, because re-dispatching work the operator just
+cancelled is not a remedy.
+
+The funnel has two arms and two booking outcomes, and what is TRUE differs on
+every fact an operator acts on, so the required `situation` param names which
+one this is:
+
+| `situation`                 | What happened                                                                                                 | What the body says                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `reservation-never-started` | Wedged inside `startSlotInner`'s worktree setup; never became a slot                                          | No stage ran, nothing was written, no run state exists. No uncommitted work to rescue and nothing recorded to be stale |
+| `slot-worktree-preserved`   | A real slot; the force-clear booked its terminal outcome                                                      | Nothing is blocked. The worktree is preserved and may hold uncommitted work; the Go-side state may be stale            |
+| `claim-taken-then-wedged`   | The dispatch had claimed its own outcome, so the force-clear stood down — and then wedged before its callback | **Something is still held**: the Go scheduler's running-slot seat was never released, so the issue is not dispatchable |
+
+`situation` selects **prose only** — key, kind, severity, options and expiry are
+identical in all three, so a caller-supplied value can never change what a card
+can DO. It is rejected when unrecognised rather than defaulted, because a
+default prints a confident wrong body. It cannot be derived daemon-side: only
+the calling frame knows which arm it is in and whether the dispatch's own
+terminal callback had already claimed the outcome.
+
+Four run-scoped producers remain Go-only, with reasons recorded in
+`internal/orchestrator/testdata/terminal_behaviors.json`: `auth-preflight`,
+`branch-fork`, `unverified-deliverable` and `unverified-deliverable-streak` —
+the last two share a seam (the `gate verify` CLI raising directly, rather than
+an IPC round-trip that would make the extension re-classify a finding Go
+already classified) but are two producers, not one.
+
+**One declared coverage gap on the extension path:** of
+`HeadlessOrchestrator`'s three pipeline-ceiling stops, only the BETWEEN-STAGE
+one raises. The pre-stage hard stop ("refusing to start `<stage>`") and the
+mid-stage hard stop terminate on the same ceiling and card nothing.
 
 ### Build Operations
 

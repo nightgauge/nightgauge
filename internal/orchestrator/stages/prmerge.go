@@ -261,7 +261,7 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	// LLM skill "won" only by babysitting CI at ~$3–4.44/run. On a hard blocker
 	// emerging mid-wait (a check fails, a conflict/review appears) or on timeout,
 	// re-Decide/return the appropriate punt so the LLM path still gets its turn.
-	if !decision.ShouldMerge && mergeBlockedByPendingCI(snap) {
+	if !decision.ShouldMerge && MergeBlockedByPendingCI(snap) {
 		waited, timedOut, waitErr := r.waitForCleanMergeState(ctx, prNumber, snap)
 		if waitErr != nil {
 			return finish(PRMergeResult{
@@ -389,7 +389,7 @@ func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, prNumber int
 	return last, nil
 }
 
-// mergeBlockedByPendingCI reports whether the ONLY thing preventing a clean
+// MergeBlockedByPendingCI reports whether the ONLY thing preventing a clean
 // merge is in-flight CI (Issue #297): the PR is OPEN and MERGEABLE (no
 // conflict), no check has reported FAILURE/ERROR, review is not blocking, the
 // merge state is BLOCKED or UNSTABLE (required/optional checks not yet green),
@@ -398,7 +398,15 @@ func (r *DeterministicRunner) fetchWithPolling(ctx context.Context, prNumber int
 // (conflict → DIRTY/CONFLICTING, review required, a failed check, BEHIND/DRAFT)
 // return false: those will not self-resolve by waiting, so the LLM path should
 // get its turn immediately.
-func mergeBlockedByPendingCI(snap PRViewSnapshot) bool {
+//
+// EXPORTED for the attention.raise verb (#305). Decide() alone cannot see
+// pending CI — the interception lives OUT here, in DeterministicRunner.Run,
+// which is why a caller that classifies with bare Decide() reads a
+// still-running required check as `dirty-merge-state: BLOCKED` and cards it as
+// branch protection. Any surface that asks "is this block human-needed?" must
+// gate on THIS predicate over the same snapshot, not re-derive a third copy of
+// the matrix.
+func MergeBlockedByPendingCI(snap PRViewSnapshot) bool {
 	if snap.State != "OPEN" {
 		return false
 	}
@@ -465,7 +473,7 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, prNumb
 		last = snap
 		// Resolved one way or another: either now mergeable/clean or a hard
 		// blocker (failed check, conflict, review, merged) has appeared.
-		if !mergeBlockedByPendingCI(snap) {
+		if !MergeBlockedByPendingCI(snap) {
 			return snap, false, nil
 		}
 	}
