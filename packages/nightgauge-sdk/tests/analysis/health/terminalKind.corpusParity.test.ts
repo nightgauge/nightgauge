@@ -265,7 +265,10 @@ describe("the interpreter module", () => {
   });
 
   it("contains no regex at all", () => {
-    const regexes = code.match(/[=(,[\s]\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n])+\/[gimsuy]*/g) ?? [];
+    // Mutually exclusive branches keep the scan linear (js/redos: the
+    // overlapping class/any-char form backtracked exponentially).
+    const regexes =
+      code.match(/[=(,[\s]\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\[\n])+\/[gimsuy]*/g) ?? [];
     expect(regexes, "a regex appeared in the terminal-kind interpreter").toEqual([]);
   });
 

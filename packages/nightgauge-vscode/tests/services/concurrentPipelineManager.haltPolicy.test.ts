@@ -164,7 +164,12 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     // String and template literals are blanked first: a log message containing
     // a slash otherwise reads as a regex and makes this assertion noise.
     const scannable = body.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
-    const regexes = scannable.match(/\/(?![/*])(?:\\.|\[[^\]]*\]|[^/\n])+\/[gimsuy]*/g) ?? [];
+    // Branches are mutually exclusive (escape starts with \, class starts with
+    // [, the rest excludes /, \, [ and newline) so the scan is linear — the
+    // overlapping form flagged as js/redos backtracked exponentially on
+    // bracket-heavy source.
+    const regexes =
+      scannable.match(/\/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\[\n])+\/[gimsuy]*/g) ?? [];
     expect(
       regexes,
       "a new regex appeared in haltQueueOnSlotFailure — resolve the kind through the canonical " +
