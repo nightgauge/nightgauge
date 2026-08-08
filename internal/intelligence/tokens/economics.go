@@ -140,7 +140,9 @@ func EstimateCost(stages []string, complexityScore int) CostEstimate {
 	for _, stage := range stages {
 		model := defaultModelForEstimate(stage, complexityScore)
 		tokens := estimateStageTokens(stage, complexityScore)
-		cost := CalculateCost(model, tokens.Input, tokens.Output)
+		// Estimation has no cache model: the projection is per-stage fresh
+		// context, so there is nothing cached to read or write.
+		cost := CalculateCost(model, TokenCounts{Input: tokens.Input, Output: tokens.Output})
 		minutes := estimateMinutes(stage, complexityScore)
 
 		total += cost
@@ -214,6 +216,20 @@ func estimateStageTokens(stage string, complexity int) tokenPair {
 	return tokenPair{int(float64(t.Input) * mult), int(float64(t.Output) * mult)}
 }
 
+// TokenCounts is one stage's billable token usage, split by the pools the
+// vendor prices separately. Cache fields are zero-valued for callers that have
+// no cache data, which is the honest reading: nothing was cached.
+type TokenCounts struct {
+	Input  int
+	Output int
+	// CacheRead is tokens served from an existing cache entry.
+	CacheRead int
+	// CacheCreation5m is cache writes bought with a 5-minute TTL.
+	CacheCreation5m int
+	// CacheCreation1h is cache writes bought with a 1-hour TTL.
+	CacheCreation1h int
+}
+
 // CalculateCost returns the USD cost for the given model and token counts.
 //
 // Rates come from the single-source model registry (internal/models, canonical
@@ -223,12 +239,37 @@ func estimateStageTokens(stage string, complexity int) tokenPair {
 // (ollama/lm-studio), whose marginal cost IS zero (#56). Deprecated models
 // (e.g. claude-opus-4-7, claude-sonnet-4-6) remain in the registry for
 // historical cost replay. See #4169.
-func CalculateCost(model string, inputTokens, outputTokens int) float64 {
+//
+// All four billable pools are priced (#358). Cache dominates real agentic
+// usage — on the captured haiku stage in internal/execution/testdata, cache
+// read and cache creation are 99.2% of the bill, so an input+output-only
+// formula under-reported that stage by 9x. A model whose registry entry omits
+// a cache rate contributes $0 for that pool, matching the unknown-model shape.
+//
+// CONVENTION for unsplit cache-creation totals: a caller that knows only a
+// single combined cache-creation count (most of the pipeline today, because
+// the tier split is not yet plumbed end to end — see #390) must put it in
+// CacheCreation5m. That is the cheaper tier, so the resulting estimate is a
+// floor rather than an overstatement.
+func CalculateCost(model string, t TokenCounts) float64 {
 	d, ok := models.Get(model)
 	if !ok {
 		return 0
 	}
-	return (float64(inputTokens)*d.Rates.Input + float64(outputTokens)*d.Rates.Output) / 1_000_000
+	total := float64(t.Input)*d.Rates.Input + float64(t.Output)*d.Rates.Output
+	total += float64(t.CacheRead) * rate(d.Rates.CacheRead)
+	total += float64(t.CacheCreation5m) * rate(d.Rates.CacheCreation5m)
+	total += float64(t.CacheCreation1h) * rate(d.Rates.CacheCreation1h)
+	return total / 1_000_000
+}
+
+// rate dereferences an optional registry rate. A provider that does not bill a
+// pool leaves it nil, which contributes $0 rather than a guessed default.
+func rate(r *float64) float64 {
+	if r == nil {
+		return 0
+	}
+	return *r
 }
 
 func estimateMinutes(stage string, complexity int) float64 {

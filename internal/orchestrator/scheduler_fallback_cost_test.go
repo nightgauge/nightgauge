@@ -22,7 +22,7 @@ func TestFallbackCostCalculation(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		cost := tokens.CalculateCost(tc.model, tc.inputTokens, tc.outputTokens)
+		cost := tokens.CalculateCost(tc.model, tokens.TokenCounts{Input: tc.inputTokens, Output: tc.outputTokens})
 		if cost <= 0 {
 			t.Errorf("CalculateCost(%s, %d, %d) = %f; want > 0",
 				tc.model, tc.inputTokens, tc.outputTokens, cost)
@@ -34,7 +34,7 @@ func TestFallbackCostCalculation(t *testing.T) {
 // so the Go fallback does not generate spurious non-zero costs for cache-hit
 // or skipped stages.
 func TestFallbackCostZeroTokens(t *testing.T) {
-	cost := tokens.CalculateCost("claude-sonnet-4-6", 0, 0)
+	cost := tokens.CalculateCost("claude-sonnet-4-6", tokens.TokenCounts{})
 	if cost != 0 {
 		t.Errorf("CalculateCost with zero tokens = %f; want 0", cost)
 	}
@@ -55,7 +55,7 @@ func TestSchedulerFallbackCostLogic(t *testing.T) {
 	actualCostUsd := 0.0123
 	stageCostForCb := actualCostUsd
 	if stageCostForCb == 0 {
-		stageCostForCb = tokens.CalculateCost(model, inputTokens, outputTokens)
+		stageCostForCb = tokens.CalculateCost(model, tokens.TokenCounts{Input: inputTokens, Output: outputTokens})
 	}
 	if stageCostForCb != actualCostUsd {
 		t.Errorf("expected CLI cost %f to be used unchanged, got %f", actualCostUsd, stageCostForCb)
@@ -65,7 +65,7 @@ func TestSchedulerFallbackCostLogic(t *testing.T) {
 	actualCostUsd = 0
 	stageCostForCb = actualCostUsd
 	if stageCostForCb == 0 {
-		stageCostForCb = tokens.CalculateCost(model, inputTokens, outputTokens)
+		stageCostForCb = tokens.CalculateCost(model, tokens.TokenCounts{Input: inputTokens, Output: outputTokens})
 	}
 	if stageCostForCb <= 0 {
 		t.Errorf("fallback cost for %s (%d/%d tokens) = %f; want > 0",

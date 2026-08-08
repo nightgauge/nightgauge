@@ -46,7 +46,13 @@ import type { ModelCostRate } from "../analysis/types.js";
  * so a $0 total is distinguishable from "not billed". Mirrors the Go
  * `tokens.CalculateCost` default.
  */
-const UNKNOWN_MODEL_RATES = { input: 0, output: 0, cache_read: 0, cache_creation: 0 } as const;
+const UNKNOWN_MODEL_RATES = {
+  input: 0,
+  output: 0,
+  cache_read: 0,
+  cache_creation_5m: 0,
+  cache_creation_1h: 0,
+} as const;
 
 /** Shape of the canonical registry file. Extra top-level keys (e.g. `$schema_note`) are ignored. */
 const RegistryFileSchema = z
@@ -196,12 +202,23 @@ export function thinkingDisableConflict(
   return { conflict: requestedIdx > limitIdx, limit };
 }
 
-/** Token counts for cost computation (cache fields optional). */
+/**
+ * Token counts for cost computation (cache fields optional).
+ *
+ * Cache creation is split by TTL tier because Anthropic prices the two pools
+ * differently (#358). A caller that knows only a single combined
+ * cache-creation count must put it in `cacheCreation5m` — that is the cheaper
+ * tier, so the estimate is a floor rather than an overstatement. Plumbing the
+ * real split end to end is #390.
+ */
 export interface TokenCounts {
   input: number;
   output: number;
   cacheRead?: number;
-  cacheCreation?: number;
+  /** Cache writes bought with a 5-minute TTL. */
+  cacheCreation5m?: number;
+  /** Cache writes bought with a 1-hour TTL. */
+  cacheCreation1h?: number;
 }
 
 /**
@@ -213,12 +230,14 @@ export interface TokenCounts {
 export function computeCostUsd(modelId: string, tokens: TokenCounts): number {
   const rates = getModelDescriptor(modelId)?.rates ?? UNKNOWN_MODEL_RATES;
   const cacheReadRate = rates.cache_read ?? 0;
-  const cacheCreationRate = rates.cache_creation ?? 0;
+  const cacheCreation5mRate = rates.cache_creation_5m ?? 0;
+  const cacheCreation1hRate = rates.cache_creation_1h ?? 0;
   return (
     (tokens.input * rates.input +
       tokens.output * rates.output +
       (tokens.cacheRead ?? 0) * cacheReadRate +
-      (tokens.cacheCreation ?? 0) * cacheCreationRate) /
+      (tokens.cacheCreation5m ?? 0) * cacheCreation5mRate +
+      (tokens.cacheCreation1h ?? 0) * cacheCreation1hRate) /
     1_000_000
   );
 }
@@ -237,7 +256,11 @@ export function deriveDefaultModelCostRates(): Record<string, ModelCostRate> {
       inputPerMillion: m.rates.input,
       outputPerMillion: m.rates.output,
       cacheReadPerMillion: m.rates.cache_read,
-      cacheCreationPerMillion: m.rates.cache_creation,
+      // ModelCostRate carries ONE cache-creation rate because every consumer
+      // of it holds an UNSPLIT cache-creation count. Per the #358 convention
+      // that is the 5m tier — the cheaper one, so the derived estimate is a
+      // floor. It stops being an approximation once #390 plumbs the split.
+      cacheCreationPerMillion: m.rates.cache_creation_5m,
     };
   }
   return out;

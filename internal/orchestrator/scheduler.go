@@ -3962,7 +3962,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				if gates.IsAtomicEligible(stage) {
 					anomalyCost := actualCostUsd
 					if anomalyCost == 0 {
-						anomalyCost = tokens.CalculateCost(servedModel, inputTokens, outputTokens)
+						anomalyCost = tokens.CalculateCost(servedModel, tokens.TokenCounts{
+							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+						})
 					}
 					anomalyFloor := getAnomalyFloorUSD(workspaceRoot)
 					executionPath := runtime.StageExecutionPath(stage)
@@ -4130,7 +4132,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if s.onStageComplete != nil {
 			stageCostForCb := actualCostUsd
 			if stageCostForCb == 0 {
-				stageCostForCb = tokens.CalculateCost(servedModel, inputTokens, outputTokens)
+				stageCostForCb = tokens.CalculateCost(servedModel, tokens.TokenCounts{
+					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+				})
 			}
 			s.onStageComplete(item.Repo, item.Number, string(stage), err, inputTokens, outputTokens, cacheReadTokens, stageCostForCb, servedModel)
 		}
@@ -4858,7 +4862,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 
 		stageCost := actualCostUsd
 		if stageCost == 0 {
-			stageCost = tokens.CalculateCost(model, inputTokens, outputTokens)
+			stageCost = tokens.CalculateCost(model, tokens.TokenCounts{
+				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
+			})
 		}
 		// source=llm: All Go-scheduler stages run via LLM in this iteration.
 		// Deterministic-first is TypeScript-only (Issue #2614); this field

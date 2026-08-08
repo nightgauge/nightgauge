@@ -262,7 +262,7 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // model is the AI model used (e.g., "claude-sonnet-4-6"). If empty, a default
 // cost rate is applied. Cost is calculated from token counts and model rates.
 func (rs *RuntimeState) CompleteStage(exitCode, inputTokens, outputTokens int, model string) {
-	cost := tokens.CalculateCost(model, inputTokens, outputTokens)
+	cost := tokens.CalculateCost(model, tokens.TokenCounts{Input: inputTokens, Output: outputTokens})
 	rs.completeStageInternal(exitCode, inputTokens, outputTokens, 0, cost)
 }
 

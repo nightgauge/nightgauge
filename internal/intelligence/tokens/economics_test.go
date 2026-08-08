@@ -119,7 +119,7 @@ func TestCalculateCost_OpusPricing(t *testing.T) {
 		{"claude-haiku-4-5-20251001", 1.00, 5.00, 6.00},
 	}
 	for _, tc := range cases {
-		got := CalculateCost(tc.model, 1_000_000, 1_000_000)
+		got := CalculateCost(tc.model, TokenCounts{Input: 1_000_000, Output: 1_000_000})
 		if got != tc.wantTotal1M {
 			t.Errorf("CalculateCost(%s, 1M, 1M) = %f, want %f", tc.model, got, tc.wantTotal1M)
 		}
@@ -143,7 +143,7 @@ func TestDefaultModelForEstimate_HighComplexityReturnsCurrentOpus(t *testing.T) 
 func TestCalculateCost_UnknownModelIsZero(t *testing.T) {
 	// Models unknown to the registry (user-configured local ollama/lm-studio
 	// models) cost a truthful $0 — never a fabricated sonnet default (#56).
-	if got := CalculateCost("qwen3-coder:32b", 1_000_000, 1_000_000); got != 0 {
+	if got := CalculateCost("qwen3-coder:32b", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 0 {
 		t.Errorf("CalculateCost(unknown, 1M, 1M) = %f, want 0", got)
 	}
 }
@@ -151,10 +151,10 @@ func TestCalculateCost_UnknownModelIsZero(t *testing.T) {
 func TestCalculateCost_NonAnthropicRegistryRates(t *testing.T) {
 	// Non-Anthropic registry entries cost at their own rates now that the
 	// registry carries every provider (#56).
-	if got := CalculateCost("gemini-2.5-flash", 1_000_000, 1_000_000); got != 2.80 {
+	if got := CalculateCost("gemini-2.5-flash", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 2.80 {
 		t.Errorf("CalculateCost(gemini-2.5-flash, 1M, 1M) = %f, want 2.80", got)
 	}
-	if got := CalculateCost("gpt-5.5", 1_000_000, 1_000_000); got != 11.25 {
+	if got := CalculateCost("gpt-5.5", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 11.25 {
 		t.Errorf("CalculateCost(gpt-5.5, 1M, 1M) = %f, want 11.25", got)
 	}
 }
