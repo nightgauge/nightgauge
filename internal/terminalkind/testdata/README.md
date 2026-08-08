@@ -28,8 +28,11 @@ three times, hand-written and held aligned by comments; the ladders disagreed on
 `expected_signal` is what the extension may forward — the winning rule's kind
 when that rule is in the signal subset, else a declared `signal_extension`'s
 kind, else empty. Outside those declared extensions it can never contradict
-`expected`, and the extensions themselves are consulted only when the rule
-ladder projects nothing.
+`expected`, because extensions are consulted only when the rule ladder projects
+no **signal**. Say that bound exactly: an extension can never overrule a kind
+projected by a `signal: true` **rule**. A kind the record names through a
+non-signal rule is not protected, and the one declared extension diverges from
+precisely that case on purpose (see [Changing a row](#changing-a-row)).
 
 Three suites read this one file, so a bad expectation fails whichever CI reaches
 first:
@@ -46,12 +49,42 @@ first:
 | Every row projects to `expected_signal` (all three suites)                                       | A rule joined or left the signal subset without anyone deciding to.               |
 | Every rule WINS at least one corpus row (Go)                                                     | A rung of the ladder with no argued example behind it.                            |
 | Every half of every multi-term clause changes a row when widened (Go)                            | An AND quietly widened into an OR — derived from the table, not remembered.       |
+| Every clause of every `signal_extension` changes a row when deleted (Go)                         | A clause ADDED to the reaction-only path with nothing able to see it.             |
+| Every `~` term changes a row when its word boundary is dropped (Go)                              | A two-character deletion widening a matcher whose kind halts the whole fleet.     |
 | A row's `expected_signal` may differ from `expected` only for a declared `signal_extension` (Go) | The reaction quietly leaving the record behind.                                   |
 | Every `TerminalKind*` constant has a rule and a row (Go)                                         | A **kind** added to the taxonomy and never routed to.                             |
 | The derived stress set reproduces `stress-golden.json` (all three)                               | A clause deleted, a literal widened, or two rules swapped.                        |
 | The generated SDK module is byte-identical to the table (Go + hooks)                             | A consumer edited on its own.                                                     |
 | Predicate probes hold in both languages (Go + SDK)                                               | The one non-literal term answering differently in the two runtimes.               |
+| The predicate reads exactly the declared registry fields (Go + SDK, one fixture)                 | A predicate widened to read one more field — no literal, no golden movement.      |
+| The import closure of both interpreters is an exact set (Go + SDK)                               | A marker declared in an unguarded module and merely NAMED in the guarded one.     |
 | `captured` rows exist in `captured-shapes.json`, and vice versa (Go)                             | A hand-authored string claims to be telemetry, or a real shape goes unclassified. |
+
+### What the fences bound, and what they do not
+
+The guards above fence the **classifiers**, not the kind. The guarded perimeter
+is exactly four surfaces:
+
+1. every non-test file of `internal/terminalkind` (literals, rune literals, and
+   the import closure, each an exact set in both directions);
+2. the body of `orchestrator.ClassifyTerminalKind`, asserted to be a bare
+   delegation;
+3. `packages/nightgauge-sdk/src/analysis/health/terminalKind.ts` (same three
+   exact sets), plus the registry fields its one predicate may read;
+4. the single `terminalFailureKind` line in the extension's
+   `bootstrap/services.ts`, the value Go's `NotifyComplete` uses verbatim.
+
+Everything **downstream** can still override the answer — `NotifyComplete`
+itself, `ipc/diagnostics_stage_exit.go`, `scheduler.go`, and the second
+`autonomousComplete` call site that already forwards a hardcoded kind. Guarding
+every consumer is not tractable and nothing here claims to; the claim is that
+classification has one definition and one interpreter per language.
+
+They are also written for **accidental** drift: a hand-written quick fix, a
+clause widened during a refactor, a field read added for convenience, a constant
+hoisted to a neighbouring module in good faith. Each of those is now a red test.
+A deliberately coordinated edit across code, fixtures and allowlists is what
+code review is for, and no test-based fence is exhaustive against one.
 
 ### The conjunction guard is derived, not remembered
 
@@ -71,6 +104,28 @@ regeneration, visible only as three shortened lines and one deletion inside a
 requirement, and the claim is now checked rather than asserted. A declared dead
 term is skipped, because no input can pin a half that cannot fire; the live half
 of the same clause is still required.
+
+### So are the extension-clause and word-boundary guards
+
+Two later escapes had the same shape — a discipline the rules had that the
+newest mechanism did not — and both are now derived the same way.
+
+`TestEveryExtensionClauseIsPinnedByACorpusRow` deletes each `signal_extensions`
+clause in turn and requires a corpus row to move. Extensions used to be pinned
+per **extension** (one divergence row per ID, and a table-level check that
+_some_ clause could fire), so appending `["429"]` and `["throttled"]` to the one
+extension left all three suites green with the only trace 28 lines inside the
+generated golden — while `exit 1: [validation-failed] the retry-on-429 unit test
+is red` would record `validation_failed` and make the fleet react
+`rate_limit_quota_exhausted`.
+
+`TestEveryWordBoundaryTermIsPinnedByANegativeRow` drops the `~` from each
+word-bounded term and requires the same. That two-character edit used to be
+completely invisible: every derived input rendered the literal identically with
+the marker and without it, so the golden came out **byte-identical**. The five
+`boundary-negative-*` rows are what the guard demands, and `stress.go` now also
+derives the input the two semantics disagree about (the literal with a word
+character glued to its right edge), so the mutation moves the golden as well.
 
 Round 2 tried to close the pattern-level hole from the outside, with a guard
 requiring every matcher literal to APPEAR in some corpus input and a diff of the
@@ -231,7 +286,7 @@ signature.
 
 Synthetic rows **extend** coverage to markers, ordering overlaps and negatives
 the live window happens not to contain. They never stand in for the real
-population. Current split: **18 captured / 105 synthetic**.
+population. Current split: **18 captured / 110 synthetic**.
 
 ## Why the captured set is smaller than the failure population
 
@@ -264,24 +319,35 @@ drift was not on exotic inputs.
 same diff. That is the point: a classifier edit that silently changes an outcome
 has to argue with a written claim rather than update a string.
 
-There is no `known_divergence` mechanism any more. Round 2 carried two — a usage
-limit that names a model, and an overload carrying an explicit quota marker —
-where the extension signalled one kind while the record said another, each
-"tracked" at an issue that had nothing to do with terminal-kind taxonomy. Both
-dissolved when the two sides started reading one table with one precedence: the
-corpus keeps their inputs as ordering rows, because the overlaps they exercise
-are real.
+There is no `known_divergence` mechanism any more. Round 2 carried two, each
+"tracked" at an issue that had nothing to do with terminal-kind taxonomy. They
+did **not** both dissolve, and saying so would misdescribe what ships:
 
-What replaces the mechanism is narrower and declared: the table's
-`signal_extensions`. One extension exists — `session-usage-limit-quota` — and it
-is the reason a bare Anthropic or Codex quota line still routes to
-`rate_limit_quota_exhausted` even though no RULE classifies it. Round 3 deleted
-that branch with nothing in its place, which converted every non-stream-json
-quota window into a counted crash plus a cascade strike; it is restored here as
-data, with its reason, its precedence and corpus rows on all three suites. See
+| Round 2 divergence                            | Now                                                                                                                          |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| An overload carrying an explicit quota marker | **Dissolved.** One table with one precedence settles it; the corpus keeps the input as an ordering row.                      |
+| A usage limit that **names a model**          | **Preserved**, as the declared `signal_extensions` entry. Record `model_unavailable`, reaction `rate_limit_quota_exhausted`. |
+
+The second is main's exact behaviour and it is live: `model-unavailable` is a
+`signal: false` rule, so the rule ladder projects no signal for it and the
+extension is consulted — which is why the corpus rows
+`order-model-unavailable-beats-quota-wording` and
+`model-unavailable-predicate-by-model-id` carry `expected` ≠ `expected_signal`,
+and why deleting the extension turns them red alongside the four bare-wording
+rows.
+
+So the mechanism's replacement is narrower and declared rather than absent: the
+table's `signal_extensions`. One extension exists — `session-usage-limit-quota`
+— and it covers **both** cases: a bare Anthropic or Codex quota line that no rule
+classifies at all, and a quota line that names a model, which a rule classifies
+as something else. Round 3 deleted that branch with nothing in its place, which
+converted every non-stream-json quota window into a counted crash plus a cascade
+strike; it is restored here as data, with its reason, its precedence and corpus
+rows on all three suites. See
 [docs/FAILURE_TAXONOMY.md](../../../docs/FAILURE_TAXONOMY.md#the-one-deliberate-record-vs-reaction-divergence).
 
 A site that disagrees with the table outside a declared extension is a bug in an
 interpreter, not a gap to record — and the corpus well-formedness test says so:
 `expected_signal` may differ from `expected` only when a declared extension
-produces it, and every declared extension must have such a row.
+produces it, every declared extension must have such a row, and every clause of
+every extension must be necessary to one.

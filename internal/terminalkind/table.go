@@ -97,12 +97,24 @@ type Rule struct {
 // answers nothing at all and the run would otherwise book a lifetime failure
 // and a cascade strike for an upstream quota window that clears on its own.
 //
-// Extensions are consulted ONLY when the rule table projects no signal of its
-// own (see SignalKind), so an extension can never overrule a kind the record
-// actually names — the widest it can reach is text the signal subset ignores.
+// THE BOUND, STATED EXACTLY. Extensions are consulted ONLY when the rule table
+// projects no signal of its own (see SignalKind), so an extension can never
+// overrule a kind projected by a `signal: true` RULE — the widest it can reach
+// is text the signal SUBSET ignores.
+//
+// That is narrower than "can never overrule a kind the record names", and the
+// difference is shipped behaviour rather than a hypothetical: when the winning
+// rule is NOT in the signal subset the record still names a kind, and the
+// extension may name a different one on top of it. `Claude Opus 4.5 usage limit
+// reached; resets at 5pm` records model_unavailable (a plan restriction) and
+// reacts rate_limit_quota_exhausted (an environmental window) — main's exact
+// behaviour, pinned by the corpus rows order-model-unavailable-beats-quota-
+// wording and model-unavailable-predicate-by-model-id.
+//
 // Every extension is pinned by corpus rows whose expected_signal deliberately
 // differs from expected, which the corpus well-formedness test permits for
-// declared extensions and for nothing else.
+// declared extensions and for nothing else, and every CLAUSE of every extension
+// must be necessary to some row (TestEveryExtensionClauseIsPinnedByACorpusRow).
 type SignalExtension struct {
 	ID      string     `json:"id"`
 	Kind    string     `json:"kind"`
@@ -140,6 +152,19 @@ const PredicateRef = "@"
 // A word character is [0-9a-z_] against the already-lowercased text. Anything
 // else, including any byte outside ASCII, is a boundary; the TypeScript twin
 // makes the same test on UTF-16 code units and agrees for the same reason.
+//
+// ONE DISCLOSED NARROWING against that regex, and it is the separator rather
+// than the boundary: `\s+` is one-or-more whitespace, while the term `~usage
+// limit` is a literal and requires EXACTLY ONE SPACE. `usage  limit`,
+// `usage\tlimit` and `usage\nlimit` matched on main and do not match here. The
+// shape is reachable — skillRunner's extractTailError joins the last three
+// non-empty lines with "\n", so a phrase split across lines arrives as
+// `usage\nlimit` — and the loss is one-directional (the reaction goes silent and
+// the run books a crash for a quota window). It is not closed here because a
+// whitespace-run term kind is a second matching semantic that both interpreters
+// would have to reproduce character-for-character; it is pinned instead by the
+// corpus row boundary-negative-usage-limit-double-space, so the current answer
+// is a written expectation rather than an accident.
 const WordBoundaryRef = "~"
 
 var load = sync.OnceValue(func() *Table {
@@ -382,9 +407,16 @@ func (tb *Table) MatchSignalExtension(errorText string) (SignalExtension, bool) 
 // They are the ONE deliberate record-vs-reaction divergence in the system,
 // declared as data with their reason (see SignalExtension), and their placement
 // after the projection is what bounds them: an extension can only claim text
-// the signal subset already ignores.
-func SignalKind(errorText string) string {
-	tb := Load()
+// the signal subset already ignores. Note what that does and does not say — a
+// kind the record names through a NON-signal rule is not protected, and the one
+// declared extension deliberately overrules exactly that case.
+func SignalKind(errorText string) string { return Load().SignalKind(errorText) }
+
+// SignalKind on a parsed table is the same projection, on a table the caller
+// supplies. The derived guards in corpus_test.go mutate a copy of the table and
+// re-ask this question, so the projection they probe is the shipped one rather
+// than a re-implementation that could drift away from it.
+func (tb *Table) SignalKind(errorText string) string {
 	if r, ok := tb.Match(errorText); ok && r.Signal {
 		return r.Kind
 	}

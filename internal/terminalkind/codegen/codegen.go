@@ -92,8 +92,12 @@ export interface TerminalKindRule {
  *
  * This is the one declared place where the kind the fleet reacts to may differ
  * from the kind the run record carries. Extensions are consulted ONLY when the
- * rule table itself projects no signal, so they can never overrule a kind the
- * record actually names.
+ * rule table itself projects no signal, so an extension can never overrule a
+ * kind projected by a `+"`signal: true`"+` RULE — the widest it can reach is text the
+ * signal SUBSET ignores. A kind the record names through a NON-signal rule is
+ * not protected, and the one declared extension deliberately diverges from
+ * exactly that case (a usage limit naming a model records `+"`model_unavailable`"+`
+ * and reacts `+"`rate_limit_quota_exhausted`"+`).
  */
 export interface TerminalKindSignalExtension {
   id: string;

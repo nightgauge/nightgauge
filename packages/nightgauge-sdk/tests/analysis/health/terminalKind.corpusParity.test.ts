@@ -236,6 +236,7 @@ describe("the interpreter module", () => {
     '"exit 1: "',
     '" | "',
     '" "',
+    '"s"',
   ];
 
   it("contains no string literal outside the declared allowlist", () => {
@@ -272,6 +273,64 @@ describe("the interpreter module", () => {
     );
     const implemented = [...block.matchAll(/^\s{2}(\w+):/gm)].map((m) => m[1]).sort();
     expect(implemented).toEqual(declared);
+  });
+
+  it("value-imports exactly the declared modules and bindings", () => {
+    // THE DEPENDENCY FENCE. The literal allowlist above is a FILE fence, and a
+    // file fence has an outside: adding
+    //
+    //   export const DEFERRED_MARKER = "[baseline-ci-deferred]";
+    //
+    // to failureClassifier.ts — a module nothing scans, whose specifier was
+    // ALREADY on the allowlist because terminalKind.ts imports a type from it —
+    // and value-importing it here put a marker branch at the top of
+    // `signalTerminalKind` with terminalKind.ts gaining no string literal at
+    // all. Every suite stayed green while the fleet reacted a kind the run
+    // record did not carry.
+    //
+    // So the imports themselves are an exact set, in both directions: the
+    // specifier, whether it is type-only, and every binding name. Turning
+    // `import type { TerminalFailureKind }` into a value import is a different
+    // statement and is red; so is one extra binding from either data module.
+    //
+    // The one value import from an unguarded module is MODEL_REGISTRY, and what
+    // it may contribute is bounded separately — terminalKind.predicateFields.
+    // test.ts pins which registry FIELDS the predicate reads, from the same
+    // fixture Go uses.
+    const EXPECTED_IMPORTS = [
+      "value ../../eval/modelRegistry.js { MODEL_REGISTRY }",
+      "type ./failureClassifier.js { TerminalFailureKind }",
+      "value ./terminalKindTable.generated.js { TERMINAL_KIND_PREDICATE_REF, " +
+        "TERMINAL_KIND_TABLE, TERMINAL_KIND_WORD_BOUNDARY_REF, type TerminalKindRule }",
+    ].sort();
+
+    const statements = code.match(/^[^\S\n]*import\b[\s\S]*?from\s*["'][^"']+["']\s*;?/gm) ?? [];
+    const importLines = code.match(/^[^\S\n]*import\b.*$/gm) ?? [];
+    expect(
+      statements.length,
+      "an import statement in terminalKind.ts is not of the form " +
+        '`import [type] { … } from "…";` — a side-effect, default or namespace import would ' +
+        "slip past the parse below"
+    ).toBe(importLines.length);
+
+    const parsed = statements.map((raw) => {
+      const m = /^\s*import\s+(type\s+)?\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']/.exec(raw);
+      expect(m, `unsupported import form in terminalKind.ts: ${raw}`).not.toBeNull();
+      const [, typeOnly, body, specifier] = m as RegExpExecArray;
+      const bindings = body
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .sort();
+      return `${typeOnly ? "type" : "value"} ${specifier} { ${bindings.join(", ")} }`;
+    });
+
+    expect(
+      parsed.sort(),
+      "terminalKind.ts's imports are not the declared set. A value import from an unguarded " +
+        "module is the hoist target the whole-file literal scan cannot see: the marker lives " +
+        "over there and this file only names it."
+    ).toEqual(EXPECTED_IMPORTS);
   });
 
   it("is the ONLY module that reads the generated table", () => {

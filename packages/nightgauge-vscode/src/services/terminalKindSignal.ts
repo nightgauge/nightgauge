@@ -23,11 +23,16 @@
  * lower-precedence signal rule could claim text that a higher-precedence
  * non-signal rule owns.
  *
- * ONE DECLARED EXCEPTION, and it is data. When the ladder projects nothing, the
- * table's `signal_extensions` are consulted; today there is one, for a bare
- * Anthropic/Codex session-or-usage-limit line that no rule classifies (#3792).
- * That is the single place the fleet's reaction may name a kind the record does
- * not, it carries its reason in the table, and it is pinned by corpus rows whose
+ * ONE DECLARED EXCEPTION, and it is data. When the ladder projects no SIGNAL,
+ * the table's `signal_extensions` are consulted; today there is one, for an
+ * Anthropic/Codex session-or-usage-limit line (#3792). Say its bound exactly:
+ * an extension can never overrule a kind projected by a `signal: true` RULE,
+ * which is narrower than "a kind the record names" — a kind the record names
+ * through a NON-signal rule is not protected, and this extension deliberately
+ * diverges from precisely that case. A quota line that names a model records
+ * `model_unavailable` (a plan restriction) and makes the fleet react
+ * `rate_limit_quota_exhausted` (an environmental window); a bare one records
+ * nothing at all and reacts the same way. Both are pinned by corpus rows whose
  * `expected_signal` differs from `expected` — which the corpus well-formedness
  * test permits for declared extensions and for nothing else. See
  * docs/FAILURE_TAXONOMY.md.

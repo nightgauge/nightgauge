@@ -199,6 +199,14 @@ describe("terminal-kind signal parity (extension)", () => {
     expect(src.match(/\.test\(|\.includes\(|\.match\(/g) ?? []).toEqual([]);
     // The only string literal permitted is the SDK import specifier.
     expect(src.match(/"[^"]*"|'[^']*'|`[^`]*`/g) ?? []).toEqual(['"@nightgauge/sdk"']);
+    // And the only thing imported is the classifier itself. A second binding
+    // would be a marker declared in a module nothing here scans and merely
+    // NAMED in this one — the file/package fence's blind spot, closed on the
+    // SDK side by terminalKind.corpusParity's import assertion and here by this.
+    expect(
+      (src.match(/^[^\S\n]*import\b.*$/gm) ?? []).map((l) => l.trim()),
+      "terminalKindSignal.ts imports something other than the guarded classifier"
+    ).toEqual(['import { signalTerminalKind } from "@nightgauge/sdk";']);
   });
 
   it("is the only producer of the kind services.ts sends to Go, and sends it unconditionally", () => {

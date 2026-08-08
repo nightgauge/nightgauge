@@ -1801,6 +1801,11 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "session limits",
+      "kind": "",
+      "signal": ""
+    },
+    {
       "input": "exit 1: usage limit",
       "kind": "subagent_crash",
       "signal": "rate_limit_quota_exhausted"
@@ -1809,6 +1814,11 @@
       "input": "USAGE LIMIT",
       "kind": "",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "usage limits",
+      "kind": "",
+      "signal": ""
     },
     {
       "input": "network unavailable: extended github connectivity loss | stream idle timeout",

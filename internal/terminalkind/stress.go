@@ -23,7 +23,10 @@ import (
 // too. Any change here must be made in both places and the golden regenerated.
 //
 // Order is significant and stable: first the two baselines, then rule by rule
-// and clause by clause, then every ordered pair of rules. Duplicates are
+// and clause by clause (each clause contributing its sample, the crash-wrapped
+// and uppercased twins, each term alone, and — for a `~term` — the input that
+// contains the literal but breaks its word boundary), then the signal
+// extensions the same way, then every ordered pair of rules. Duplicates are
 // dropped, keeping the FIRST occurrence.
 func StressInputs(tb *Table) []string {
 	var out []string
@@ -40,22 +43,7 @@ func StressInputs(tb *Table) []string {
 
 	for _, r := range tb.Rules {
 		for _, clause := range r.Clauses {
-			s := tb.sampleClause(clause)
-			add(s)
-			// Under the crash-fallback prefix: `exit ` is the last rule's
-			// literal and scheduler.SetStageError puts it in front of almost
-			// every real stage error, so this is the shape that actually
-			// reaches the classifier.
-			add("exit 1: " + s)
-			// Matching is case-insensitive; the uppercase twin proves it, and
-			// proves it identically in both languages.
-			add(strings.ToUpper(s))
-			// Clause boundary: each term on its own. For a multi-term clause
-			// these MUST NOT satisfy it — that is what pins the conjunction,
-			// which the round-2 literal diff could not see.
-			for _, term := range clause {
-				add(tb.sampleClause([]string{term}))
-			}
+			addClauseSamples(tb, add, clause)
 		}
 	}
 
@@ -63,13 +51,7 @@ func StressInputs(tb *Table) []string {
 	// the same per-clause coverage or the golden would say nothing about them.
 	for _, e := range tb.SignalExtensions {
 		for _, clause := range e.Clauses {
-			s := tb.sampleClause(clause)
-			add(s)
-			add("exit 1: " + s)
-			add(strings.ToUpper(s))
-			for _, term := range clause {
-				add(tb.sampleClause([]string{term}))
-			}
+			addClauseSamples(tb, add, clause)
 		}
 	}
 
@@ -87,16 +69,71 @@ func StressInputs(tb *Table) []string {
 	return out
 }
 
+// addClauseSamples emits every derived input for one clause. Factored out so
+// rules and signal extensions get IDENTICAL coverage — an extension whose
+// clauses were sampled more thinly than a rule's would be a hole in the golden
+// exactly where the one declared divergence lives.
+func addClauseSamples(tb *Table, add func(string), clause []string) {
+	s := tb.sampleClause(clause)
+	add(s)
+	// Under the crash-fallback prefix: `exit ` is the last rule's literal and
+	// scheduler.SetStageError puts it in front of almost every real stage
+	// error, so this is the shape that actually reaches the classifier.
+	add("exit 1: " + s)
+	// Matching is case-insensitive; the uppercase twin proves it, and proves it
+	// identically in both languages.
+	add(strings.ToUpper(s))
+	// Clause boundary: each term on its own. For a multi-term clause these MUST
+	// NOT satisfy it — that is what pins the conjunction, which the round-2
+	// literal diff could not see.
+	for _, term := range clause {
+		add(tb.sampleClause([]string{term}))
+	}
+	// TERM-KIND boundary, for a `~term`. Everything above renders a word-bounded
+	// literal exactly as a plain one — sampleClause strips the marker — so the
+	// whole derived set answered the same with the `~` and without it, and the
+	// two-character deletion that turns a word-bounded term into plain
+	// containment moved no derived answer at all. These inputs are the ones the
+	// two semantics disagree about: the literal with a word character glued to
+	// its right edge, which plain containment claims and the boundary must not.
+	for i, term := range clause {
+		if !strings.HasPrefix(term, WordBoundaryRef) {
+			continue
+		}
+		add(tb.sampleClauseViolatingBoundary(clause, i))
+	}
+}
+
 // sampleClause renders a clause as text that satisfies it: literals verbatim,
 // predicate references replaced by the predicate's first declared true-probe.
 func (tb *Table) sampleClause(clause []string) string {
+	return tb.renderClause(clause, -1)
+}
+
+// sampleClauseViolatingBoundary renders a clause the way sampleClause does but
+// glues boundaryViolationSuffix to the literal of the `~term` at idx, so the
+// result CONTAINS that literal without satisfying its word boundary.
+func (tb *Table) sampleClauseViolatingBoundary(clause []string, idx int) string {
+	return tb.renderClause(clause, idx)
+}
+
+// boundaryViolationSuffix is one word character. Appending it to any literal
+// preserves containment and destroys the right-hand word boundary, which is the
+// entire difference between a `~term` and a plain one.
+const boundaryViolationSuffix = "s"
+
+func (tb *Table) renderClause(clause []string, violate int) string {
 	parts := make([]string, 0, len(clause))
-	for _, term := range clause {
+	for i, term := range clause {
 		if name, ok := strings.CutPrefix(term, PredicateRef); ok {
 			parts = append(parts, tb.probeTrue(name))
 			continue
 		}
-		parts = append(parts, strings.TrimPrefix(term, WordBoundaryRef))
+		lit := strings.TrimPrefix(term, WordBoundaryRef)
+		if i == violate {
+			lit += boundaryViolationSuffix
+		}
+		parts = append(parts, lit)
 	}
 	return strings.Join(parts, " ")
 }

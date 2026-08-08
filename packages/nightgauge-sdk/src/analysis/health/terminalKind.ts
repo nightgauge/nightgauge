@@ -53,6 +53,7 @@ const NO_MARKER_SENTENCE = "nothing in this sentence resembles a terminal marker
 const CRASH_PREFIX = "exit 1: ";
 const PAIR_SEPARATOR = " | ";
 const TERM_SEPARATOR = " ";
+const BOUNDARY_VIOLATION_SUFFIX = "s";
 
 /** A rule matched against an error text, or `undefined` when nothing matched. */
 function matchTerminalKindRule(errorText: string | undefined): TerminalKindRule | undefined {
@@ -127,8 +128,33 @@ function isWordChar(s: string, i: number): boolean {
  * never declared.
  */
 function mentionsRegistryModel(t: string): boolean {
+  return mentionsAnyModel(MODEL_REGISTRY, t);
+}
+
+/**
+ * The registry fields the predicate is allowed to read. Declaring the parameter
+ * this narrowly makes a widening a COMPILE error — `m.provider` does not exist
+ * on this type — which is the half of the fence a literal scan cannot give:
+ * reading one more field needs no string literal, moves no golden row, and no
+ * corpus row can see it.
+ *
+ * The other half is behavioural and shared with Go:
+ * internal/terminalkind/testdata/predicate-registry-poison.json declares a
+ * synthetic model whose every non-read field carries a unique sentinel, and
+ * terminalKind.predicateFields.test.ts asserts no sentinel makes the predicate
+ * fire while every declared read field does. The Go twin runs the same fixture
+ * against `mentionsAnyModel` in internal/terminalkind/predicates.go, so the two
+ * implementations are pinned to ONE field set.
+ */
+interface RegistryModelIdentity {
+  readonly id?: string;
+  readonly display_name?: string;
+  readonly tiers?: readonly string[];
+}
+
+function mentionsAnyModel(registry: readonly RegistryModelIdentity[], t: string): boolean {
   const tiers = new Set<string>();
-  for (const m of MODEL_REGISTRY) {
+  for (const m of registry) {
     if (m.id && t.includes(m.id.toLowerCase())) return true;
     if (m.display_name && t.includes(m.display_name.toLowerCase())) return true;
     for (const tier of m.tiers ?? []) tiers.add(tier.toLowerCase());
@@ -187,7 +213,13 @@ export function classifyTerminalKind(
  * Only if that yields nothing are the table's declared `signal_extensions`
  * consulted. They are the ONE deliberate record-vs-reaction divergence, they are
  * data rather than code, and their position AFTER the projection is the bound:
- * an extension can only claim text the signal subset already ignores.
+ * an extension can only claim text the signal SUBSET already ignores. Read that
+ * exactly — an extension can never overrule a kind projected by a `signal: true`
+ * RULE, which is narrower than "a kind the record names". When the winning rule
+ * is not in the subset the record still names a kind, and the one declared
+ * extension deliberately names a different one on top of it: a usage limit that
+ * names a model records `model_unavailable` and reacts
+ * `rate_limit_quota_exhausted`.
  *
  * The VSCode extension consumes this through `services/terminalKindSignal.ts`;
  * Go's NotifyComplete uses a non-empty answer VERBATIM, which is why both the
@@ -244,8 +276,10 @@ export function resolveTerminalKind(
  * interpreters differed the answers would not.
  *
  * THE ALGORITHM IS PART OF THE CONTRACT. Changing it here means changing
- * stress.go and regenerating the golden. Order is significant and stable, and
- * duplicates keep their FIRST occurrence.
+ * stress.go and regenerating the golden. Order is significant and stable —
+ * the two baselines, then rule by rule and clause by clause, then the signal
+ * extensions the same way, then every ordered pair of rules — and duplicates
+ * keep their FIRST occurrence.
  */
 export function terminalKindStressInputs(): string[] {
   const out: string[] = [];
@@ -261,23 +295,11 @@ export function terminalKindStressInputs(): string[] {
   add(NO_MARKER_SENTENCE);
 
   for (const rule of TERMINAL_KIND_TABLE.rules) {
-    for (const clause of rule.clauses) {
-      const s = sampleClause(clause);
-      add(s);
-      add(CRASH_PREFIX + s);
-      add(s.toUpperCase());
-      for (const term of clause) add(sampleClause([term]));
-    }
+    for (const clause of rule.clauses) addClauseSamples(add, clause);
   }
 
   for (const extension of TERMINAL_KIND_TABLE.signal_extensions) {
-    for (const clause of extension.clauses) {
-      const s = sampleClause(clause);
-      add(s);
-      add(CRASH_PREFIX + s);
-      add(s.toUpperCase());
-      for (const term of clause) add(sampleClause([term]));
-    }
+    for (const clause of extension.clauses) addClauseSamples(add, clause);
   }
 
   for (const a of TERMINAL_KIND_TABLE.rules) {
@@ -290,15 +312,47 @@ export function terminalKindStressInputs(): string[] {
   return out;
 }
 
+/**
+ * Every derived input for one clause — the twin of `addClauseSamples` in
+ * stress.go. Rules and signal extensions share it so an extension's clauses can
+ * never be sampled more thinly than a rule's.
+ *
+ * The last group is the TERM-KIND boundary. Everything else renders a `~term`
+ * exactly as a plain one, so the whole derived set used to answer identically
+ * with the marker and without it; these inputs are the ones the two semantics
+ * disagree about — the literal with a word character glued to its right edge.
+ */
+function addClauseSamples(add: (s: string) => void, clause: string[]): void {
+  const s = sampleClause(clause);
+  add(s);
+  add(CRASH_PREFIX + s);
+  add(s.toUpperCase());
+  for (const term of clause) add(sampleClause([term]));
+  for (const [i, term] of clause.entries()) {
+    if (!term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)) continue;
+    add(renderClause(clause, i));
+  }
+}
+
 function sampleClause(clause: string[]): string {
+  return renderClause(clause, -1);
+}
+
+/**
+ * `BOUNDARY_VIOLATION_SUFFIX` is one word character: gluing it to a literal
+ * preserves containment and destroys the right-hand word boundary, which is the
+ * entire difference between a `~term` and a plain one.
+ */
+function renderClause(clause: string[], violate: number): string {
   return clause
-    .map((term) => {
+    .map((term, i) => {
       if (term.startsWith(TERMINAL_KIND_PREDICATE_REF)) {
         return probeTrue(term.slice(TERMINAL_KIND_PREDICATE_REF.length));
       }
-      return term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)
+      const lit = term.startsWith(TERMINAL_KIND_WORD_BOUNDARY_REF)
         ? term.slice(TERMINAL_KIND_WORD_BOUNDARY_REF.length)
         : term;
+      return i === violate ? lit + BOUNDARY_VIOLATION_SUFFIX : lit;
     })
     .join(TERM_SEPARATOR);
 }

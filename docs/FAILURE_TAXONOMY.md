@@ -588,11 +588,29 @@ result-envelope path, so for plain-text and Codex runs this branch _is_ the
 routing.
 
 **Why it is bounded.** Extensions are consulted only after the rule ladder has
-projected nothing, so an extension can never overrule a kind the record names
-through a signal rule. It is pinned from both sides: corpus rows where
+projected **no signal**, so an extension can never overrule a kind projected by a
+`signal: true` **rule** — the widest it can reach is text the signal subset
+ignores. That is deliberately narrower than "a kind the record names": a kind the
+record names through a **non-signal** rule is not protected, which is exactly the
+divergence described below. It is pinned from both sides: corpus rows where
 `expected_signal` differs from `expected`, which the corpus well-formedness test
-permits **only** for a declared extension, plus a table-level test requiring
-every declared extension to actually produce such a row.
+permits **only** for a declared extension; a table-level test requiring every
+declared extension to actually produce such a row; a test requiring every
+extension **clause** to be necessary to one of those rows (so a clause cannot be
+_added_ silently); and a test requiring every `~` word-bounded term to move a row
+when its boundary is dropped.
+
+**One disclosed narrowing against the original.** The pre-#306 rule was
+`/\b(?:session|usage)\s+limit\b/i`. The `~` term keeps the word boundary — plain
+containment would also claim `usage limits`, `usage limited` and
+`session limits`, and this kind triggers a **global** quota cooldown — but a
+literal term is exactly one space where `\s+` was one-or-more. So `usage  limit`
+and a phrase split across lines (`usage\nlimit`, which
+`SkillRunner.extractTailError` produces when it joins the last three non-empty
+lines) no longer signal, and those runs book a crash for a window that clears on
+its own. The loss is one-directional and pinned by the corpus row
+`boundary-negative-usage-limit-double-space`; closing it means a whitespace-run
+term kind reproduced character-for-character in both interpreters.
 
 **Where it still diverges from the record, on purpose.** A usage-limit line that
 _does_ name a model records `model_unavailable` (a plan restriction) and reacts

@@ -200,6 +200,12 @@ func TestCorpus_ExercisesEveryRule(t *testing.T) {
 // `["usage limit", "@mentions_registry_model"]` to `["@mentions_registry_model"]`
 // demands a row that names a model and is NOT model_unavailable, and widening it
 // to `["usage limit"]` demands one with the phrase and no model named.
+//
+// SIGNAL EXTENSIONS ARE INCLUDED. They were not, and that was the hole: their
+// clauses escaped every per-clause discipline the rules had, so widening one
+// with new terms left all three suites green. Their conjunctions are measured
+// against `expected_signal` rather than `expected`, because that is the half of
+// the answer an extension can move.
 func TestEveryConjunctionHalfIsPinnedByANegativeRow(t *testing.T) {
 	corpus := loadTerminalKindCorpus(t)
 	tb := Load()
@@ -223,19 +229,8 @@ func TestEveryConjunctionHalfIsPinnedByANegativeRow(t *testing.T) {
 				if dead[term] {
 					continue
 				}
-				widened := widenClause(tb, ri, ci, term)
-				changed := ""
-				for _, tc := range corpus.Cases {
-					got := ""
-					if r, ok := widened.Match(tc.Input); ok {
-						got = r.Kind
-					}
-					if got != tc.Expected {
-						changed = tc.ID
-						break
-					}
-				}
-				if changed != "" {
+				widened := withRuleClause(tb, ri, ci, []string{term})
+				if corpusMovedFor(corpus, widened) {
 					continue
 				}
 				t.Errorf("clause %v of rule %q has NO corpus row pinning the half %q.\n"+
@@ -249,25 +244,214 @@ func TestEveryConjunctionHalfIsPinnedByANegativeRow(t *testing.T) {
 			}
 		}
 	}
+	for ei, e := range tb.SignalExtensions {
+		for ci, clause := range e.Clauses {
+			if len(clause) < 2 {
+				continue
+			}
+			conjunctions++
+			for _, term := range clause {
+				if dead[term] {
+					continue
+				}
+				widened := withExtensionClauses(tb, ei, replaceClause(e.Clauses, ci, []string{term}))
+				if corpusMovedFor(corpus, widened) {
+					continue
+				}
+				t.Errorf("clause %v of signal extension %q has NO corpus row pinning the half %q.\n"+
+					"Widening it to that term alone changes no expectation, so the conjunction "+
+					"could be turned into a disjunction on the value Go's NotifyComplete uses "+
+					"verbatim, with every suite green.\n"+
+					"Add a row whose input satisfies %q WITHOUT satisfying the rest of the clause; "+
+					"the derived probe %q signals %q today.",
+					clause, e.ID, term, term,
+					tb.sampleClause([]string{term}), tb.SignalKind(tb.sampleClause([]string{term})))
+			}
+		}
+	}
 	if conjunctions == 0 {
 		t.Fatal("no multi-term clause found — either the table lost every conjunction or this " +
 			"guard stopped finding them")
 	}
 }
 
-// widenClause returns a copy of tb in which one clause is replaced by a single
-// one of its terms — the AND→OR mutation, applied one half at a time.
-func widenClause(tb *Table, ruleIdx, clauseIdx int, term string) *Table {
+// TestEveryExtensionClauseIsPinnedByACorpusRow closes the gap round 4 walked
+// through: extensions were pinned per EXTENSION, not per CLAUSE.
+//
+// TestCorpus_RowsAreWellFormed requires one divergence row per extension ID and
+// TestSignalExtensionsAreDeclaredAndBounded sets `fired` if ANY clause fires, so
+// both were satisfied by the clauses the extension already had. Appending
+// `["429"]` and `["throttled"]` to session-usage-limit-quota — two terms absent
+// from every fixture — left the Go suite, `codegen --check`, the SDK suite and
+// the extension suite all green, with the only trace 28 lines inside a
+// 7,000-line generated golden. `exit 1: [validation-failed] the retry-on-429
+// unit test is red` would then record validation_failed and make the fleet react
+// rate_limit_quota_exhausted.
+//
+// So every clause must be NECESSARY: delete it and at least one corpus row's
+// signal must change. That is the extension-side twin of
+// TestCorpus_ExercisesEveryRule, derived rather than remembered.
+func TestEveryExtensionClauseIsPinnedByACorpusRow(t *testing.T) {
+	corpus := loadTerminalKindCorpus(t)
+	tb := Load()
+
+	clauses := 0
+	for ei, e := range tb.SignalExtensions {
+		if len(e.Clauses) == 0 {
+			continue
+		}
+		for ci, clause := range e.Clauses {
+			clauses++
+			without := withExtensionClauses(tb, ei, dropClause(e.Clauses, ci))
+			if corpusMovedFor(corpus, without) {
+				continue
+			}
+			t.Errorf("clause %v of signal extension %q is claimed by NO corpus row.\n"+
+				"Deleting it changes no expectation, which means it could equally have been "+
+				"ADDED with nothing going red — and an extension clause is a rule the RECORD does "+
+				"not have, on the value Go's NotifyComplete uses verbatim.\n"+
+				"Add a row whose input this clause claims and whose expected_signal is %q; the "+
+				"derived probe %q classifies as %q today.",
+				clause, e.ID, e.Kind,
+				tb.sampleClause(clause), Classify(tb.sampleClause(clause)))
+		}
+	}
+	if clauses == 0 {
+		t.Fatal("no signal-extension clause found — either the table lost its extensions or this " +
+			"guard stopped finding them")
+	}
+}
+
+// TestEveryWordBoundaryTermIsPinnedByANegativeRow is the same derivation applied
+// to the `~` TERM KIND.
+//
+// The mechanism it guards was introduced with no pin at all: deleting the two
+// `~` characters from the extension's terms — a two-character edit in a data
+// file — left the Go suite, `codegen --check`, the SDK suite and the extension
+// suite green AND produced a byte-identical golden, because every derived input
+// rendered the literal the same either way. Word-bounded and plain containment
+// disagree about `usage limits` / `usage limited` / `session limits`, and the
+// kind this extension produces triggers a GLOBAL quota cooldown, so the widening
+// parks the whole fleet on a validation failure or a GitHub-token message.
+//
+// The requirement is therefore derived: drop the `~` from one term, re-ask the
+// corpus, and demand that some row moves. The stress derivation samples the same
+// disagreement (addClauseSamples in stress.go), so the mutation also moves the
+// golden — but a golden moves only until someone regenerates it, and a red row
+// does not.
+func TestEveryWordBoundaryTermIsPinnedByANegativeRow(t *testing.T) {
+	corpus := loadTerminalKindCorpus(t)
+	tb := Load()
+
+	terms := 0
+	for ri, rule := range tb.Rules {
+		for ci, clause := range rule.Clauses {
+			for ti, term := range clause {
+				lit, ok := strings.CutPrefix(term, WordBoundaryRef)
+				if !ok {
+					continue
+				}
+				terms++
+				plain := withRuleClause(tb, ri, ci, replaceTerm(clause, ti, lit))
+				if corpusMovedFor(corpus, plain) {
+					continue
+				}
+				t.Errorf("the word boundary on term %q of rule %q is pinned by NO corpus row.\n"+
+					"Deleting the `~` changes no expectation, so a strictly WIDER matcher ships "+
+					"with every suite green.\n"+
+					"Add a row whose input contains %q with a word character glued to it (e.g. %q) "+
+					"and pin the answer the boundary gives it.",
+					lit, rule.ID, lit, lit+boundaryViolationSuffix)
+			}
+		}
+	}
+	for ei, e := range tb.SignalExtensions {
+		for ci, clause := range e.Clauses {
+			for ti, term := range clause {
+				lit, ok := strings.CutPrefix(term, WordBoundaryRef)
+				if !ok {
+					continue
+				}
+				terms++
+				plain := withExtensionClauses(tb, ei,
+					replaceClause(e.Clauses, ci, replaceTerm(clause, ti, lit)))
+				if corpusMovedFor(corpus, plain) {
+					continue
+				}
+				t.Errorf("the word boundary on term %q of signal extension %q is pinned by NO "+
+					"corpus row.\n"+
+					"Deleting the `~` changes no expectation, and this is the reaction path: the "+
+					"widened matcher would make the fleet react %q to text the record classifies "+
+					"as something else entirely.\n"+
+					"Add a row whose input contains %q with a word character glued to it (e.g. %q) "+
+					"and expected_signal \"\".",
+					lit, e.ID, e.Kind, lit, lit+boundaryViolationSuffix)
+			}
+		}
+	}
+	if terms == 0 {
+		t.Fatal("no `~` term found — either the table stopped using word-bounded terms (delete " +
+			"the mechanism rather than leaving it inert) or this guard stopped finding them")
+	}
+}
+
+// corpusMovedFor reports whether ANY corpus row answers differently under the
+// mutated table — on the record kind or on the signal. Both halves are compared
+// because a mutation to a signal extension moves only the second.
+func corpusMovedFor(corpus terminalKindCorpus, mutated *Table) bool {
+	for _, tc := range corpus.Cases {
+		kind := ""
+		if r, ok := mutated.Match(tc.Input); ok {
+			kind = r.Kind
+		}
+		if kind != tc.Expected || mutated.SignalKind(tc.Input) != tc.ExpectedSignal {
+			return true
+		}
+	}
+	return false
+}
+
+// withRuleClause returns a copy of tb with one rule clause replaced.
+func withRuleClause(tb *Table, ruleIdx, clauseIdx int, clause []string) *Table {
 	out := *tb
 	out.Rules = make([]Rule, len(tb.Rules))
 	copy(out.Rules, tb.Rules)
 	r := out.Rules[ruleIdx]
-	clauses := make([][]string, len(r.Clauses))
-	copy(clauses, r.Clauses)
-	clauses[clauseIdx] = []string{term}
-	r.Clauses = clauses
+	r.Clauses = replaceClause(r.Clauses, clauseIdx, clause)
 	out.Rules[ruleIdx] = r
 	return &out
+}
+
+// withExtensionClauses returns a copy of tb with one extension's clause list
+// replaced wholesale.
+func withExtensionClauses(tb *Table, extIdx int, clauses [][]string) *Table {
+	out := *tb
+	out.SignalExtensions = make([]SignalExtension, len(tb.SignalExtensions))
+	copy(out.SignalExtensions, tb.SignalExtensions)
+	e := out.SignalExtensions[extIdx]
+	e.Clauses = clauses
+	out.SignalExtensions[extIdx] = e
+	return &out
+}
+
+func replaceClause(clauses [][]string, idx int, clause []string) [][]string {
+	out := make([][]string, len(clauses))
+	copy(out, clauses)
+	out[idx] = clause
+	return out
+}
+
+func dropClause(clauses [][]string, idx int) [][]string {
+	out := make([][]string, 0, len(clauses))
+	out = append(out, clauses[:idx]...)
+	return append(out, clauses[idx+1:]...)
+}
+
+func replaceTerm(clause []string, idx int, term string) []string {
+	out := make([]string, len(clause))
+	copy(out, clause)
+	out[idx] = term
+	return out
 }
 
 var terminalKindConstRe = regexp.MustCompile(`(?m)^\s*TerminalKind\w+\s*=\s*"([a-z_]+)"`)

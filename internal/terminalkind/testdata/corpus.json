@@ -14,10 +14,13 @@
     "",
     "`expected`        what the run record will say — Go's answer, because Go writes the record.",
     "`expected_signal` what the extension may forward to Go over IPC with autonomousComplete, or",
-    "                  \"\" to defer. It is the winning rule's kind when that rule is `signal: true`",
-    "                  in the table and \"\" otherwise, so it can never contradict `expected`. Both",
-    "                  bounds are asserted: a rule joining or leaving the signal subset turns every",
-    "                  row it wins red.",
+    "                  \"\" to defer. It is the winning rule's kind when that rule is `signal: true`,",
+    "                  else a declared signal_extension's kind, else \"\". Both bounds are asserted:",
+    "                  a rule joining or leaving the signal subset turns every row it wins red, and",
+    "                  a row may differ from `expected` ONLY where a declared extension produces",
+    "                  it. That difference is shipped behaviour, not a theoretical allowance — a",
+    "                  usage limit naming a model records model_unavailable and reacts",
+    "                  rate_limit_quota_exhausted, because the rule that claims it is signal:false.",
     "",
     "HOW TO CHANGE A ROW. `rationale` is mandatory and is the reason the row exists — not a",
     "restatement of `expected`. Editing an expectation means editing the argument for it, in the",
@@ -1132,6 +1135,51 @@
       "source": "synthetic",
       "producer": "The Codex CLI's account-limit wording, surfaced through SkillRunner.extractTailError (Codex has no stream-json result envelope to normalise, which is why the extension matters most here).",
       "rationale": "The non-Anthropic half of the same class. skillRunner normalises quota text to `[rate-limit-quota-exhausted]` only on the Claude stream-json result-envelope path, so for every other adapter the extension IS the routing. Deleting it silently converts each Codex quota window into a counted crash."
+    },
+    {
+      "id": "boundary-negative-usage-limits-plural",
+      "input": "exit 1: [validation-failed] the usage limits policy test is red",
+      "expected": "validation_failed",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "feature-validate's `[validation-failed]` stamp (#326) around a test name that happens to contain the plural of the extension's wording.",
+      "rationale": "THE WORD BOUNDARY, from the side that costs something. `usage limits` CONTAINS `usage limit`, so deleting the two-character `~` from the extension's term makes this fire — a run whose record says validation_failed would make the fleet react rate_limit_quota_exhausted, and that kind drives applyQuotaCooldownLocked: a cooldown across EVERY issue until an imaginary bucket resets. The pre-#306 rule was `/\\b(?:session|usage)\\s+limit\\b/i` precisely so this text did not route that way, and this row is what makes dropping the boundary red instead of invisible."
+    },
+    {
+      "id": "boundary-negative-usage-limited",
+      "input": "usage limited to 200 requests per hour for this token",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "A forge/proxy throttling sentence — the wording an HTTP 403 body carries when a token is rate-shaped rather than exhausted.",
+      "rationale": "The other suffix the plain-containment widening would claim, and the one main's `\\b` also rejected. Nothing classifies this text, so the honest answer is the unknown kind on both sides; if the boundary were dropped the record would stay empty while the reaction became a global quota cooldown, which is the exact record-vs-reaction split #306 exists to remove."
+    },
+    {
+      "id": "boundary-negative-session-limits-plural",
+      "input": "session limits are per-account, not per-workspace",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "Documentation/diagnostic prose about the limit policy, as it reaches the classifier through a stage's captured stderr tail.",
+      "rationale": "The `session limit` half of the same guard: the extension has two clauses and each needs its own boundary negative, or dropping the `~` from one of them alone would still leave a green suite. Same cost as its sibling — a global quota cooldown for text that describes a policy rather than reporting a quota window."
+    },
+    {
+      "id": "boundary-negative-github-usage-limits",
+      "input": "Error: GitHub API usage limits exceeded for this token",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The GitHub REST error body as it surfaces through the forge client's error wrapping — a token-scoped limit, not the model provider's.",
+      "rationale": "A boundary negative that is also a WRONG-PROVIDER negative. Under plain containment this GitHub message would route the fleet into an Anthropic/Codex quota cooldown, pausing every issue on a condition that belongs to one token. Kept as a row rather than left to the derived stress set because the stress set only ever composes the table's own vocabulary and would never produce this sentence."
+    },
+    {
+      "id": "boundary-negative-usage-limit-double-space",
+      "input": "You've hit your usage  limit - resets 3pm",
+      "expected": "",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "The same Anthropic plain-text limit line as signal-extension-bare-usage-limit, with the separator widened — the shape skillRunner.extractTailError produces when the phrase is split across the last three non-empty lines it joins.",
+      "rationale": "THE DISCLOSED NARROWING, pinned as a written expectation rather than left as an accident. main matched `/\\b(?:session|usage)\\s+limit\\b/i`, where `\\s+` is one-or-more whitespace; the restored term is a literal and requires exactly one space, so this input signals nothing and the run books a crash plus a cascade strike for a quota window that clears on its own. It is not closed because a whitespace-run term kind is a second matching semantic both interpreters would have to reproduce character-for-character. If one lands, this row flips — deliberately, with an argument, in the same diff."
     }
   ]
 }
