@@ -215,14 +215,17 @@ cannot be represented fails the whole capture.
 
 The three outcomes above are `branch-out-of-date`'s. The **skill writer** in
 `skills/nightgauge-pr-merge/_includes/merge.md`, which runs on the ordinary
-`MERGEABLE=CONFLICTING` route, enforces the same per-path precondition but
-cannot report it the same way: it has already emitted output by the time a blob
-read fails, so instead of writing nothing it writes the document with
-`capture_failed: true`, a document-level `capture_error`, and a per-path
-`capture_error` on each entry it could not record. It writes **no**
-`conflict-evidence-{N}/` dump, and the `git rebase --abort` that follows it is
-unconditional — so on that path a failed capture leaves the reason on disk and
-nothing else. Readers escalate on either shape; see
+`MERGEABLE=CONFLICTING` route, enforces the same per-path precondition — blob
+readable, blob survives a JSON round trip, under the size cap, and the path
+NAME survives a JSON round trip too — but cannot report it the same way: it has
+already emitted output by the time a blob read fails, so instead of writing
+nothing it writes the document with `capture_failed: true`, a document-level
+`capture_error`, and a per-path `capture_error` on each entry it could not
+record. It writes **no** `conflict-evidence-{N}/` dump, and the `git rebase
+--abort` that follows it is unconditional — so on that path a failed capture
+leaves the reason on disk and nothing else. It writes that document into the
+worktree it is running in (`git rev-parse --show-toplevel`), which is where
+every reader looks. Readers escalate on either shape; see
 [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301).
 
 **Why the failed case aborts rather than leaving the rebase live.** Leaving a

@@ -82,6 +82,24 @@
 #                            target path, so it must keep reading normally — the
 #                            control that stops the gitlink fix from being
 #                            written as "anything unusual is metadata-only".
+#               latin1-path  — a MULTI-FILE conflict where two of the paths have
+#                            NAMES that are not valid UTF-8 ("caf\351.txt" and
+#                            "caf\352.txt"). `jq --arg` rewrites every invalid
+#                            byte to U+FFFD at exit 0, so such a name ships as a
+#                            successful capture of a path nothing can open — and
+#                            BOTH names become the same string, so a group_by on
+#                            the path silently merges two conflicting files into
+#                            one entry. Unlike every other mode this one leaves
+#                            the rebase ALREADY PAUSED (see below).
+#               linked-worktree — the ordinary content conflict, but the feature
+#                            branch is checked out in a LINKED WORKTREE under
+#                            .nightgauge/worktrees/issue-301 and the main
+#                            checkout stays on main. That is the pipeline's
+#                            normal, worktree-isolated shape (#275): the readers
+#                            resolve the STAGE worktree, so a writer that
+#                            resolves the main one writes where nothing looks.
+#                            The path PRINTED for this mode is the linked
+#                            worktree, i.e. the stage workspace.
 #               mode-only    — an add/add conflict on an EMPTY placeholder file
 #                            (.gitkeep / __init__.py / py.typed shape) added on
 #                            both sides with DIFFERENT exec bits. git stages it
@@ -112,13 +130,13 @@ set -euo pipefail
 dest="${1:-}"
 mode="${2:-conflict}"
 
-modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink|mode-only"
+modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink|mode-only|latin1-path|linked-worktree"
 if [ -z "$dest" ]; then
   echo "usage: $0 <dest-dir> [$modes]" >&2
   exit 2
 fi
 case "$mode" in
-  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink | mode-only) ;;
+  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink | mode-only | latin1-path | linked-worktree) ;;
   *)
     echo "unknown mode: $mode (want $modes)" >&2
     exit 2
@@ -295,6 +313,59 @@ SEQEOF
   GIT_SEQUENCE_EDITOR="$seq_editor" git -C "$work" rebase --quiet -i HEAD~1 >/dev/null
   printf 'operator work in progress\n' >"$work/wip.txt"
   git -C "$work" add wip.txt
+fi
+
+if [ "$mode" = "latin1-path" ]; then
+  # A path NAME that is not valid UTF-8 is legal on ext4/xfs, but macOS/APFS
+  # REFUSES to create one ("illegal byte sequence"), so it can never reach a
+  # worktree here — while it is legal in a git INDEX on every platform, and the
+  # index is what the capture reads. So this mode does not hand-author a fixture
+  # shape either: git runs the real rebase (real content conflict on f.txt, real
+  # rebase-merge/head-name, HEAD really detached), and then git's own
+  # `update-index -z --index-info` adds stage 1/2/3 records for two names whose
+  # bytes are not valid UTF-8. `-z` takes NUL-terminated records, so the raw
+  # \351 / \352 bytes survive verbatim — the same way git itself stores them.
+  #
+  # Two such names, not one: they differ in the index and are the SAME string
+  # once jq has replaced the invalid byte with U+FFFD, which is what let a
+  # group_by(.path) merge two conflicting files into one entry and drop the
+  # second from the document with capture_failed:false (#301).
+  #
+  # This is the one mode that leaves the rebase ALREADY IN PROGRESS: the extra
+  # index records only exist inside the conflicted index, so the caller must not
+  # start the rebase itself.
+  git -C "$work" fetch --quiet origin main
+  git -C "$work" rebase origin/main >/dev/null 2>&1 || true
+  l1_base=$(printf 'line-1\nshared\nline-3\n' | git -C "$work" hash-object -t blob -w --stdin)
+  l1_main=$(printf 'line-1\nmain-side\nline-3\n' | git -C "$work" hash-object -t blob -w --stdin)
+  l1_feat=$(printf 'line-1\nfeature-side\nline-3\n' | git -C "$work" hash-object -t blob -w --stdin)
+  # Stage 2 is the base and stage 3 the PR branch's work under a rebase, exactly
+  # as git staged the real f.txt conflict a few lines above.
+  {
+    printf '100644 %s 1\tcaf\351.txt\000' "$l1_base"
+    printf '100644 %s 2\tcaf\351.txt\000' "$l1_main"
+    printf '100644 %s 3\tcaf\351.txt\000' "$l1_feat"
+    printf '100644 %s 1\tcaf\352.txt\000' "$l1_base"
+    printf '100644 %s 2\tcaf\352.txt\000' "$l1_main"
+    printf '100644 %s 3\tcaf\352.txt\000' "$l1_feat"
+  } | git -C "$work" update-index -z --index-info
+fi
+
+if [ "$mode" = "linked-worktree" ]; then
+  # The pipeline's normal shape (#275): the stage runs in a LINKED worktree
+  # under .nightgauge/worktrees/, while the main checkout sits on the default
+  # branch. `git worktree list` prints the MAIN worktree first from anywhere, so
+  # a writer that resolves it writes into a tree no reader consults — the
+  # recovery loop reads <stage worktree>/.nightgauge/pipeline/ and feature-dev's
+  # intake uses the relative path from the same cwd.
+  #
+  # The branch has to leave the main checkout first: git refuses to check out a
+  # branch that is already checked out somewhere else.
+  git -C "$work" checkout --quiet main
+  git -C "$work" worktree add --quiet "$work/.nightgauge/worktrees/issue-301" "$BRANCH"
+  # The STAGE worktree is the workspace under test, so that is what is printed.
+  echo "$work/.nightgauge/worktrees/issue-301"
+  exit 0
 fi
 
 echo "$work"

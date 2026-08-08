@@ -732,6 +732,35 @@ func treeEntry(t *testing.T, ws, rev, path string) (mode, oid string) {
 	return f[0], f[2]
 }
 
+// invalidUTF8UnmergedPaths returns the DISTINCT unmerged paths whose NAMES are
+// not valid UTF-8, read out of git's own index with `ls-files -u -z` — the same
+// raw-bytes enumeration the capture uses. It exists so a test asserts the class
+// it is exercising from git rather than from the fixture script's variables: a
+// name that reached the test as valid UTF-8 would mean the fixture stopped
+// reproducing #301 and the assertions below became vacuous.
+func invalidUTF8UnmergedPaths(t *testing.T, ws string) []string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", ws, "ls-files", "-u", "-z").Output()
+	if err != nil {
+		t.Fatalf("git ls-files -u -z: %v", err)
+	}
+	seen := map[string]bool{}
+	var paths []string
+	for _, rec := range bytes.Split(out, []byte{0}) {
+		_, path, ok := bytes.Cut(rec, []byte{'\t'})
+		if !ok {
+			continue
+		}
+		p := string(path)
+		if utf8.ValidString(p) || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	return paths
+}
+
 // startRebase runs the fetch+rebase BranchOutOfDate would run, so a test can
 // call the capture directly against a genuinely conflicted index.
 func startRebase(t *testing.T, ws string) {
@@ -940,6 +969,124 @@ func TestRealGit_SkillWriter_ReadByRecoveryLoop(t *testing.T) {
 		if res.FollowUp != FollowUpStageCanResume {
 			t.Fatalf("FollowUp = %q, want %q: %s\nentries: %v",
 				res.FollowUp, FollowUpStageCanResume, res.Reason, doc["conflicting_files"])
+		}
+	})
+
+	// #301 round-5. A path NAME is bytes, not text: `caf\351.txt` is a legal
+	// filename on ext4/xfs and a legal index entry everywhere, and `jq --arg`
+	// rewrites every invalid byte to U+FFFD at exit 0. The writer therefore
+	// shipped a SUCCESSFUL capture of a path nothing can open — #301's own
+	// failure class — and, worse, two DISTINCT invalid names became the same
+	// U+FFFD string, so `group_by(.path)` merged them and one conflicting file
+	// disappeared from the document with capture_failed:false. The Go writer has
+	// guarded this since round 2 (utf8.ValidString); until now the skill writer,
+	// which is the one that runs on the ordinary MERGEABLE=CONFLICTING route,
+	// did not — while docs/FEEDBACK_LOOPS.md asserted the rule for both.
+	t.Run("a path name JSON cannot represent fails the capture", func(t *testing.T) {
+		ws := realGitFixture(t, "latin1-path")
+		// The one mode that arrives already paused: such a name cannot be
+		// created in a worktree on macOS at all, so it exists only in the index.
+		if !rebaseInProgress(t, ws) {
+			t.Fatal("fixture precondition: the rebase must already be paused")
+		}
+		// Take the class from git's own index, never from the fixture's
+		// variables: two unmerged paths whose names are not valid UTF-8, and
+		// they must be different names.
+		invalid := invalidUTF8UnmergedPaths(t, ws)
+		if len(invalid) != 2 {
+			t.Fatalf("fixture is not exercising the class: %d unmerged paths with a non-UTF-8 name, want 2", len(invalid))
+		}
+		if invalid[0] == invalid[1] {
+			t.Fatalf("fixture must use two DISTINCT invalid names, got %q twice", invalid[0])
+		}
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", true)
+
+		doc := readConflictContext(t, ws, 301)
+		if doc["capture_failed"] != true {
+			t.Fatalf("capture_failed = %v, want true — %q cannot survive JSON; entries: %v",
+				doc["capture_failed"], invalid[0], doc["conflicting_files"])
+		}
+		entries, _ := doc["conflicting_files"].([]interface{})
+		var mangled, healthy int
+		for _, raw := range entries {
+			entry, _ := raw.(map[string]interface{})
+			path, _ := entry["path"].(string)
+			if !strings.ContainsRune(path, utf8.RuneError) {
+				healthy++
+				continue
+			}
+			mangled++
+			if ce, _ := entry["capture_error"].(string); !strings.Contains(ce, "not valid UTF-8") {
+				t.Errorf("entry %q capture_error = %q, want the path-name reason", path, ce)
+			}
+		}
+		// Two entries, not one: the collapse is the half of this defect that
+		// silently DROPS a conflicting file rather than mangling it.
+		if mangled != 2 {
+			t.Errorf("got %d unrepresentable entries, want 2 (two distinct names must not collapse into one); entries: %v",
+				mangled, doc["conflicting_files"])
+		}
+		if healthy != 1 {
+			t.Errorf("got %d healthy entries, want 1 (f.txt must still be recorded); entries: %v",
+				healthy, doc["conflicting_files"])
+		}
+		if why, _ := doc["capture_error"].(string); !strings.Contains(why, "2 conflicting path name(s)") {
+			t.Errorf("document capture_error = %q, want it to name how many paths were unrepresentable", why)
+		}
+
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpHumanTriageRequired {
+			t.Fatalf("FollowUp = %q, want %q — feature-dev must not be sent after a path nothing can open: %s",
+				res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+		}
+		if !strings.Contains(res.Reason, "capture_failed") {
+			t.Errorf("the escalation must name the marker it acted on: %q", res.Reason)
+		}
+	})
+
+	// #301 round-5. The writer resolved `git worktree list | head -1`, which is
+	// ALWAYS the main worktree, while every reader resolves the STAGE worktree:
+	// ConflictRecoveryLoop reads <Workspace>/.nightgauge/pipeline with Workspace
+	// = the run's worktree (#275), and feature-dev's intake and this skill's own
+	// context-bootstrap use the relative path from the same cwd. On a
+	// worktree-isolated run — the pipeline's normal mode — a perfectly faithful
+	// capture was therefore written where nothing looks, and every skill-captured
+	// conflict escalated "conflict-context-{N}.json not found".
+	t.Run("the capture lands in the worktree the reader resolves", func(t *testing.T) {
+		ws := realGitFixture(t, "linked-worktree")
+		// The fixture prints the STAGE worktree: <main>/.nightgauge/worktrees/issue-301.
+		mainRoot := filepath.Dir(filepath.Dir(filepath.Dir(ws)))
+		if _, err := os.Stat(filepath.Join(mainRoot, ".git")); err != nil {
+			t.Fatalf("fixture precondition: %s must be the main worktree: %v", mainRoot, err)
+		}
+		startRebase(t, ws)
+		// No HEAD_REF either: rebase-merge lives in the per-worktree git dir, so
+		// this also proves the branch fallback resolves from a linked worktree.
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", false)
+
+		for _, stray := range []string{conflictContextPathForTest(mainRoot, 301), feedbackPathForTest(mainRoot, 301)} {
+			if _, err := os.Stat(stray); err == nil {
+				t.Errorf("the capture escaped into the MAIN worktree: %s", stray)
+			}
+		}
+		// Fatals if the writer put the document anywhere else.
+		doc := readConflictContext(t, ws, 301)
+		if doc["capture_failed"] != false {
+			t.Fatalf("capture_failed = %v, want false — the conflict is an ordinary one: %v", doc["capture_failed"], doc["capture_error"])
+		}
+		if doc["branch"] != fixtureBranch {
+			t.Errorf("branch = %v, want %q resolved from the linked worktree's rebase-merge/head-name", doc["branch"], fixtureBranch)
+		}
+		if !hasConflictSignal(t, ws, 301) {
+			t.Errorf("the CONFLICT_RESOLUTION_NEEDED signal must land in the stage worktree too — feature-dev reads it from there")
+		}
+
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpStageCanResume {
+			t.Fatalf("FollowUp = %q, want %q: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+		}
+		if !strings.Contains(strings.Join(res.Evidence, " "), "conflicting_file=f.txt") {
+			t.Errorf("the reader must see the captured path, got %v", res.Evidence)
 		}
 	})
 

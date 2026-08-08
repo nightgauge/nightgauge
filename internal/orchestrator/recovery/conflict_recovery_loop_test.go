@@ -398,6 +398,46 @@ func TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates(t *testing.T) {
 	}
 }
 
+// TestAction_ConflictRecoveryLoop_RefusesUFFFDPath is the reader's independent
+// half of the path-name invariant (#301 round-5).
+//
+// A path name is bytes, and every JSON encoder — encoding/json, jq — replaces
+// an invalid byte with U+FFFD at no error. A document naming `caf�.txt` is
+// therefore naming a file nothing can open, whatever produced it: both writers
+// now refuse such a path at the source, but a reader that trusts the name would
+// still send feature-dev after it, burn the whole max_dev_redispatch budget,
+// and do it after `git rebase --abort` has already destroyed the only copy of
+// the conflict. The control case is the point of the check: `café.txt` is
+// perfectly valid UTF-8 and must keep flowing through.
+func TestAction_ConflictRecoveryLoop_RefusesUFFFDPath(t *testing.T) {
+	t.Run("a path carrying U+FFFD is not actionable", func(t *testing.T) {
+		ws := writeConflictContext(t, 301, 7, "feat/301", []string{"caf�.txt", "f.txt"})
+		res := NewConflictRecoveryLoop(3).Execute(context.Background(), StageFailure{
+			Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+			IssueNumber: 301, PRNumber: 7, Reason: "conflict",
+		})
+		if res.FollowUp != FollowUpHumanTriageRequired {
+			t.Fatalf("FollowUp = %q, want %q — the name in the document is not the name in the index: %s",
+				res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+		}
+		if !strings.Contains(strings.Join(res.Evidence, " "), "U+FFFD") {
+			t.Errorf("the escalation must name why the path is unusable, got %v", res.Evidence)
+		}
+	})
+
+	t.Run("a valid non-ASCII path is still actionable", func(t *testing.T) {
+		ws := writeConflictContext(t, 301, 7, "feat/301", []string{"café.txt", "f.txt"})
+		res := NewConflictRecoveryLoop(3).Execute(context.Background(), StageFailure{
+			Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+			IssueNumber: 301, PRNumber: 7, Reason: "conflict",
+		})
+		if res.FollowUp != FollowUpStageCanResume {
+			t.Fatalf("FollowUp = %q, want %q — café.txt is valid UTF-8 and opens fine: %s",
+				res.FollowUp, FollowUpStageCanResume, res.Reason)
+		}
+	})
+}
+
 // TestDefaultRegistry_ConflictRoutesToConflictRecovery locks the ordering: a
 // pr-merge no-op whose evidence names a CONFLICT must route to
 // conflict-recovery-loop, ahead of branch-out-of-date.

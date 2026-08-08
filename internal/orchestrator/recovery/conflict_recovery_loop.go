@@ -270,6 +270,21 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 			unrecordable = append(unrecordable, fmt.Sprintf("%s: %s", f.Path, truncate(f.CaptureError, 200)))
 			continue
 		}
+		// A path carrying U+FFFD is a path JSON could not represent. Every JSON
+		// encoder — encoding/json, jq — substitutes exactly that rune for an
+		// invalid byte, so the name in the document is not the name in the index
+		// and nothing can open it. Both writers refuse such a path at the source
+		// (the Go one with utf8.Valid, the skill one by re-hashing what jq gives
+		// back); this is the reader's independent half, so the invariant holds
+		// for ANY writer (#301 round-5). A file genuinely named with U+FFFD is
+		// indistinguishable from the mangled case from here, and escalating it
+		// costs one human triage — re-dispatching feature-dev against a
+		// fabricated name costs the whole budget AND the conflicted index, which
+		// `git rebase --abort` has already destroyed by now.
+		if strings.ContainsRune(f.Path, utf8.RuneError) {
+			unrecordable = append(unrecordable, fmt.Sprintf("%s: path name contains U+FFFD — a name JSON could not represent, so it names no file", f.Path))
+			continue
+		}
 		if f.unexplainedEmpty() {
 			degenerate = append(degenerate, f.Path)
 		}

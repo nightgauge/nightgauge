@@ -220,6 +220,17 @@ empty (`ConflictContextSchema` requires ≥ 1). A non-captured outcome also
 REMOVES a document a previous attempt left behind — `.nightgauge/pipeline/`
 outlives the run, and a stale context reads exactly like a fresh one.
 
+**Both writers write into the worktree the stage is running in**, never the
+main checkout: the Go writer uses the run's workspace and the skill writer
+`git rev-parse --show-toplevel`. On a worktree-isolated run — the pipeline's
+normal mode — the readers all resolve the STAGE worktree
+(`<workspace>/.nightgauge/pipeline/` for the recovery loop, the relative
+`.nightgauge/pipeline/` for feature-dev's intake and pr-merge's own
+context-bootstrap), so a capture written to the main worktree is invisible and
+every conflict escalates "conflict-context-{N}.json not found" no matter how
+faithfully it was recorded. `git worktree list` is not a way to find that
+directory — it prints the MAIN worktree first from anywhere (#301).
+
 There are two writers and they fail differently, on purpose:
 
 - **The Go writer** (`branch-out-of-date`) writes nothing at all on a failed or
@@ -253,6 +264,21 @@ skipped itself on any host without iconv — alpine/musl images ship none — an
 shipped a U+FFFD-corrupted capture as a success. The round trip needs only git
 and jq, the two commands the capture is already built from, and it also catches
 surrogate-encoded sequences that survive a byte-length comparison.)
+
+**The path NAME gets the same treatment as the blob.** A path is bytes, not
+text: `caf\351.txt` is a legal filename on ext4/xfs and a legal index entry
+everywhere, and `jq --arg` — like `encoding/json` — rewrites every invalid byte
+to U+FFFD at exit 0. So the skill writer hashes the raw name with
+`git hash-object`, hashes what jq gives back, and compares; the Go writer calls
+`utf8.ValidString` on the path before anything else. Without it the capture
+reported success for a path nothing can open, and — because both invalid names
+become the same U+FFFD string — a `group_by` on the path merged two distinct
+conflicting files into ONE entry, dropping the second from the document
+entirely. Entries for such a path are therefore grouped by the raw name's own
+object id, so two unrepresentable names stay two entries; each carries a
+per-entry `capture_error`, and the document-level `capture_error` counts them
+(the per-entry `path` values are identical mojibake and cannot). Readers hold
+the other half: a path containing U+FFFD is refused whatever writer produced it.
 
 **A submodule pointer is metadata, not bytes.** `git ls-files -u` reports a
 conflicted gitlink with index mode `160000`, and its per-stage object ids are
@@ -388,12 +414,18 @@ Per `conflicting_files[]` entry:
 
 | Field                           | Type    | Description                                                                    |
 | ------------------------------- | ------- | ------------------------------------------------------------------------------ |
-| `path`                          | string  | Repo-relative path, raw bytes from `ls-files -z` (never C-quoted)              |
+| `path`                          | string  | Repo-relative path, raw bytes from `ls-files -z` (never C-quoted)¹             |
 | `ours` / `theirs`               | string  | The PR branch's side / the base's side. Empty for a gitlink or an absent side  |
 | `ours_present` / `…_present`    | boolean | Whether the index carried that stage at all (`false` = deleted on that side)   |
 | `ours_mode` / `theirs_mode`     | string  | Index mode of that stage (`""` when absent). Non-blob ⇒ the entry is metadata  |
 | `ours_commit` / `theirs_commit` | string  | Submodule commit id. Present only when the corresponding mode is `160000`      |
 | `capture_error`                 | string  | Why THIS path was not recorded. Present ⇒ refuse the entry (skill writer only) |
+
+¹ The one exception is a name JSON cannot hold at all: an entry whose
+`capture_error` says the path name is not valid UTF-8 carries the encoder's
+lossy rendering (U+FFFD per invalid byte), because there is no other way to put
+those bytes in a JSON string. Such an entry is never actionable — readers refuse
+it, and a path containing U+FFFD is refused even without the marker.
 
 ```json
 {

@@ -126,15 +126,20 @@ rebase git calls the base "ours". The helper translates:
 | rebase    | index stage 3         | index stage 2 | `rebase-merge/` or `rebase-apply/` |
 | merge     | index stage 2         | index stage 3 | `MERGE_HEAD`                       |
 
-Four things the helper must never do, each of which shipped as a real defect
+Six things the helper must never do, each of which shipped as a real defect
 (#301): enumerate with `git diff --name-only` (it C-quotes any non-ASCII path,
 so `café.txt` comes back as the literal string `"caf\303\251.txt"` and every
 subsequent lookup fails); substitute `""` for a blob it could not read (the
 entry then looks like an ordinary conflict with two empty sides and costs the
 whole re-dispatch budget); default the branch to `unknown` (feature-dev skips
-the checkout on that sentinel); or run `cat-file blob` on a submodule pointer
+the checkout on that sentinel); run `cat-file blob` on a submodule pointer
 (mode `160000` object ids are COMMITs in the submodule's store — `cat-file
-blob` exits 128).
+blob` exits 128); pass a path NAME to `jq --arg` without checking it survives
+(jq substitutes U+FFFD for every invalid byte at exit 0, so an unopenable path
+ships as a successful capture and two such names collapse into one entry); or
+write the capture anywhere but **this** worktree (`git worktree list` names the
+MAIN worktree first, and on a worktree-isolated run the readers are all looking
+at the stage worktree).
 
 ```bash
 # capture_conflict_and_signal: writes conflict-context-{ISSUE}.json (conflicting
@@ -143,22 +148,33 @@ blob` exits 128).
 # NO branch deletion). Call BEFORE `git rebase --abort`. Requires bash.
 capture_conflict_and_signal() {
   _CCS_REASON="$1"
-  # Resolve the canonical repo root (worktree-aware) for the pipeline dir.
-  # `sed s/^worktree //`, never `awk '{print $2}'`: awk splits on whitespace, so
-  # a repo under `/src/has space/repo` yielded `/src/has` and the whole capture
-  # — context, feedback, and the stale-context cleanup below — landed in a
-  # directory OUTSIDE the repository while reporting success. The reader looks
-  # in the real pipeline dir, finds nothing, and the one capturable moment is
-  # gone (#301; out-of-worktree writes are forbidden besides — see
+  # Resolve THIS worktree's root for the pipeline dir — `rev-parse
+  # --show-toplevel`, the same call every sibling include uses, NEVER
+  # `git worktree list | head -1`. `worktree list` always prints the MAIN
+  # worktree first, so on a worktree-isolated run (the pipeline's normal mode)
+  # the capture landed in the main checkout while every reader resolves the
+  # STAGE worktree: the recovery loop reads `<stage worktree>/.nightgauge/
+  # pipeline/` (#275), and feature-dev's intake plus this skill's own
+  # context-bootstrap use the relative `.nightgauge/pipeline/`. The document was
+  # written faithfully, nothing ever saw it, and every skill-captured conflict
+  # escalated "conflict-context-{N}.json not found" (#301).
+  #
+  # Command substitution, never `awk '{print $2}'` over a path: awk splits on
+  # whitespace, so a repo under `/src/has space/repo` yielded `/src/has` and the
+  # whole capture — context, feedback, and the stale-context cleanup below —
+  # landed in a directory OUTSIDE the repository while reporting success
+  # (out-of-worktree writes are forbidden besides — see
   # docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129).
-  _CCS_MAIN=$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1)
-  [ -z "$_CCS_MAIN" ] && _CCS_MAIN=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-  mkdir -p "$_CCS_MAIN/.nightgauge/pipeline" 2>/dev/null || true
-  _CCS_CTX="$_CCS_MAIN/.nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
-  _CCS_FB="$_CCS_MAIN/.nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
+  _CCS_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  [ -z "$_CCS_ROOT" ] && _CCS_ROOT=$(pwd)
+  mkdir -p "$_CCS_ROOT/.nightgauge/pipeline" 2>/dev/null || true
+  _CCS_CTX="$_CCS_ROOT/.nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
+  _CCS_FB="$_CCS_ROOT/.nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
   _CCS_TMP=$(mktemp -d) || return 1
   _CCS_FAILED=false
   _CCS_WHY=""
+  _CCS_BADPATHS=0
+  _CCS_BADPREV=""
 
   # --- which operation produced this index decides which stage is whose side --
   if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
@@ -205,13 +221,49 @@ capture_conflict_and_signal() {
     _meta="${_rec%%$'\t'*}"
     _path="${_rec#*$'\t'}"
     read -r _mode _oid _stage <<<"$_meta"
+    if [ "$_stage" = "$_CCS_OURS_STAGE" ]; then _side="ours"
+    elif [ "$_stage" = "$_CCS_THEIRS_STAGE" ]; then _side="theirs"
+    else _side="base"; fi
+
+    # --- the path NAME has to survive JSON too, not just the blob ------------
+    # A path is BYTES, not text: `caf\351.txt` is a legal filename on ext4/xfs,
+    # and `jq --arg` rewrites every invalid byte to U+FFFD at exit 0. Without
+    # this clause the document named a path nothing can open while the capture
+    # reported success — #301's own failure class — and TWO distinct invalid
+    # names collapsed to the same U+FFFD string, so `group_by` merged them and
+    # one conflicting file vanished from the document entirely.
+    #
+    # The blob round trip applied to the path: hash the raw bytes, hash what jq
+    # gives back, compare. UNCONDITIONAL, and built from git and jq like the
+    # rest of the helper, so there is no host where it can skip itself. `_key`
+    # (the raw bytes' own object id) keeps two unrepresentable names in two
+    # groups; a name that round-trips carries no key and groups by its path, as
+    # before. _CCS_BADPATHS is counted in the SHELL because a delete/delete
+    # conflict has only stage-1 records, and the JSON assembly below reads
+    # errors off the ours/theirs sides only.
+    _raw_key=$(printf '%s' "$_path" | git hash-object -t blob --stdin 2>/dev/null)
+    _jq_key=$(jq -nj --arg p "$_path" '$p' 2>/dev/null | git hash-object -t blob --stdin 2>/dev/null)
+    if [ -z "$_raw_key" ] || [ "$_raw_key" != "$_jq_key" ]; then
+      # Empty _raw_key means the comparison itself could not be made; that is a
+      # failed check, never a passed one.
+      _key="invalid-utf8-path:${_raw_key:-unhashable}"
+      jq -nc --arg p "$_path" --arg k "$_key" --arg s "$_side" --arg m "$_mode" \
+        '{path:$p, key:$k, side:$s, mode:$m, path_error:"path name is not valid UTF-8 and cannot survive JSON"}' \
+        >>"$_CCS_TMP/sides.ndjson"
+      if [ "$_key" != "$_CCS_BADPREV" ]; then
+        _CCS_BADPREV="$_key"
+        _CCS_BADPATHS=$((_CCS_BADPATHS + 1))
+      fi
+      _CCS_FAILED=true
+      continue
+    fi
+
     # Stage 1 is the merge base: not a side, but the path must still appear so a
     # delete/delete conflict is never silently dropped from the file list.
-    if [ "$_stage" != "$_CCS_OURS_STAGE" ] && [ "$_stage" != "$_CCS_THEIRS_STAGE" ]; then
+    if [ "$_side" = "base" ]; then
       jq -nc --arg p "$_path" '{path:$p, side:"base"}' >>"$_CCS_TMP/sides.ndjson"
       continue
     fi
-    if [ "$_stage" = "$_CCS_OURS_STAGE" ]; then _side="ours"; else _side="theirs"; fi
 
     case "$_mode" in
       100644 | 100755 | 120000) ;; # blob: regular file, executable, symlink
@@ -261,10 +313,23 @@ capture_conflict_and_signal() {
     fi
   done <"$_CCS_TMP/u"
 
+  # The count of unrepresentable NAMES comes from the shell, not from the
+  # document: every such entry's `path` is the same U+FFFD mojibake, so a reason
+  # assembled out of the JSON cannot say how many distinct files it stands for.
+  if [ "${_CCS_BADPATHS:-0}" -gt 0 ] && [ -z "$_CCS_WHY" ]; then
+    _CCS_WHY="${_CCS_BADPATHS} conflicting path name(s) are not valid UTF-8 and cannot survive JSON"
+  fi
+
+  # group_by(.key // .path), not group_by(.path): two paths whose names JSON
+  # could not represent are the SAME U+FFFD string once jq has seen them, so
+  # grouping on the path merged them and dropped one conflicting file from the
+  # document. `key` is set only for those paths, and is the raw name's own
+  # object id — distinct names stay distinct entries (#301).
   _CCS_FILES_JSON=$(jq -s '
-    group_by(.path) | map(
+    group_by(.key // .path) | map(
       (map(select(.side=="ours"))   | first) as $o |
       (map(select(.side=="theirs")) | first) as $t |
+      (map(.path_error // empty) | first // "") as $pe |
       {
         path:           .[0].path,
         ours:           ($o.text // ""),
@@ -276,8 +341,8 @@ capture_conflict_and_signal() {
       }
       + (if ($o.commit // "") != "" then {ours_commit:   $o.commit} else {} end)
       + (if ($t.commit // "") != "" then {theirs_commit: $t.commit} else {} end)
-      + (if (($o.error // "") != "" or ($t.error // "") != "")
-         then {capture_error: ([($o.error // ""), ($t.error // "")] | map(select(. != "")) | join("; "))}
+      + (if (($pe != "") or ($o.error // "") != "" or ($t.error // "") != "")
+         then {capture_error: ([$pe, ($o.error // ""), ($t.error // "")] | map(select(. != "")) | join("; "))}
          else {} end)
     )' <"$_CCS_TMP/sides.ndjson" 2>/dev/null)
   [ -z "$_CCS_FILES_JSON" ] && { _CCS_FILES_JSON="[]"; _CCS_FAILED=true; _CCS_WHY="could not assemble the conflicting file list"; }
