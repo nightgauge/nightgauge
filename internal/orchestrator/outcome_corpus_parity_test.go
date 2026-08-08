@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -57,7 +58,7 @@ func TestRecordOutcome_LandsInTheRunsTargetRepo(t *testing.T) {
 	item := types.BoardItem{Number: 77, Repo: "acme/widget", Size: types.SizeM}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
 	snap.BeginStage(state.StageFeatureDev)
-	snap.CompleteStage(0, 10, 20, "claude-sonnet-5")
+	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5")
 
 	s.recordOutcome(item, snap.Snapshot(), true, 3, "sonnet", targetRepoRoot)
 

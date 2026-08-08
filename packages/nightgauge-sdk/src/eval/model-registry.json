@@ -1,5 +1,5 @@
 {
-  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) \u2014 the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, and Issue #56.",
+  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. Anthropic bills TWO cache-write tiers, so cache creation has two rates: `cache_creation_5m` (5-minute TTL, 1.25x base input) and `cache_creation_1h` (1-hour TTL, 2.0x base input) \u2014 the CLI reports the split as usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens (#358). `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) \u2014 the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, and Issue #56.",
   "version": "2",
   "models": [
     {
@@ -12,7 +12,8 @@
         "input": 5.0,
         "output": 25.0,
         "cache_read": 0.5,
-        "cache_creation": 6.25
+        "cache_creation_5m": 6.25,
+        "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -39,7 +40,8 @@
         "input": 5.0,
         "output": 25.0,
         "cache_read": 0.5,
-        "cache_creation": 6.25
+        "cache_creation_5m": 6.25,
+        "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -66,7 +68,8 @@
         "input": 3.0,
         "output": 15.0,
         "cache_read": 0.3,
-        "cache_creation": 3.75
+        "cache_creation_5m": 3.75,
+        "cache_creation_1h": 6.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -91,7 +94,8 @@
         "input": 1.0,
         "output": 5.0,
         "cache_read": 0.1,
-        "cache_creation": 1.25
+        "cache_creation_5m": 1.25,
+        "cache_creation_1h": 2.0
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -111,7 +115,8 @@
         "input": 10.0,
         "output": 50.0,
         "cache_read": 1.0,
-        "cache_creation": 12.5
+        "cache_creation_5m": 12.5,
+        "cache_creation_1h": 20.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -133,7 +138,8 @@
         "input": 3.0,
         "output": 15.0,
         "cache_read": 0.3,
-        "cache_creation": 3.75
+        "cache_creation_5m": 3.75,
+        "cache_creation_1h": 6.0
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -150,7 +156,8 @@
         "input": 5.0,
         "output": 25.0,
         "cache_read": 0.5,
-        "cache_creation": 6.25
+        "cache_creation_5m": 6.25,
+        "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -167,7 +174,8 @@
         "input": 5.0,
         "output": 25.0,
         "cache_read": 0.5,
-        "cache_creation": 6.25
+        "cache_creation_5m": 6.25,
+        "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],

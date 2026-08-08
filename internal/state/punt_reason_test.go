@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 // TestBuildV2RecordPopulatesExecutionPathAndPuntReason is the observability
@@ -18,12 +20,12 @@ func TestBuildV2RecordPopulatesExecutionPathAndPuntReason(t *testing.T) {
 
 	// pr-create ran deterministically (no punt reason).
 	rs.BeginStage(StagePRCreate)
-	rs.CompleteStage(0, 100, 50, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 	rs.RecordExecutionPath(StagePRCreate, "deterministic")
 
 	// pr-merge punted to the LLM with a machine-readable reason.
 	rs.BeginStage(StagePRMerge)
-	rs.CompleteStage(0, 200, 90, "claude-sonnet-5")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 200, Output: 90}, "claude-sonnet-5")
 	rs.RecordExecutionPath(StagePRMerge, "llm")
 	rs.RecordStagePuntReason(StagePRMerge, "dirty-merge-state: BLOCKED")
 

@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 func TestNewRuntimeState(t *testing.T) {
@@ -30,7 +32,7 @@ func TestStageLifecycle(t *testing.T) {
 		t.Errorf("Stage = %q, want %q", rs.Stage, StageIssuePickup)
 	}
 
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1", len(rs.CompletedStages))
 	}
@@ -67,7 +69,7 @@ func TestIsComplete(t *testing.T) {
 	// Complete 4 stages, skip 2
 	for _, stage := range []PipelineStage{StageIssuePickup, StageFeaturePlanning, StageFeatureDev, StagePRCreate} {
 		rs.BeginStage(stage)
-		rs.CompleteStage(0, 100, 50, "")
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 	}
 	rs.SkipStage(StageFeatureValidate)
 	rs.SkipStage(StagePRMerge)
@@ -80,7 +82,7 @@ func TestIsComplete(t *testing.T) {
 func TestSnapshot(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, 500, 200, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 
 	snap := rs.Snapshot()
 	if snap.Repo != rs.Repo {
@@ -101,7 +103,7 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1845, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 1000, 500, "claude-haiku-4-5-20251001")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001")
 
 	if rs.TotalCostUSD == 0 {
 		t.Error("TotalCostUSD should be non-zero after CompleteStage")
@@ -116,13 +118,50 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 
 	// Add a second stage — verify accumulation
 	rs.BeginStage(StageFeaturePlanning)
-	rs.CompleteStage(0, 2000, 1000, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 1000}, "claude-sonnet-4-6")
 	if len(rs.CompletedStages) != 2 {
 		t.Fatal("should have 2 completed stages")
 	}
 	expected := rs.CompletedStages[0].CostUSD + rs.CompletedStages[1].CostUSD
 	if rs.TotalCostUSD != expected {
 		t.Errorf("TotalCostUSD=%v, want %v", rs.TotalCostUSD, expected)
+	}
+}
+
+// #358: CompleteStage must price every pool it receives with the same
+// formula the scheduler's fallback estimate uses, and must record the
+// combined-input/cache-subset shape history.go readers depend on
+// (`InputTokens - CacheRead` and the cache-hit-rate divide). If either side
+// drifts, one stage reports two different costs again. Counts mirror the
+// committed real capture (internal/execution/testdata).
+func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
+	counts := tokens.TokenCounts{
+		Input:           18,
+		Output:          236,
+		CacheRead:       29622,
+		CacheCreation5m: 3308,
+	}
+	const model = "claude-haiku-4-5-20251001"
+
+	rs := NewRuntimeState("nightgauge/nightgauge", 358, "item-1")
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStage(0, counts, model)
+
+	sr := rs.CompletedStages[0]
+	if want := tokens.CalculateCost(model, counts); sr.CostUSD != want {
+		t.Errorf("CostUSD=%v, want CalculateCost's %v — CompleteStage and the fallback estimate diverged",
+			sr.CostUSD, want)
+	}
+	ioOnly := tokens.CalculateCost(model, tokens.TokenCounts{Input: counts.Input, Output: counts.Output})
+	if sr.CostUSD <= ioOnly {
+		t.Errorf("CostUSD=%v prices no cache pool (input+output alone = %v)", sr.CostUSD, ioOnly)
+	}
+	if sr.InputTokens != counts.Input+counts.CacheRead {
+		t.Errorf("InputTokens=%d, want combined %d (CacheRead is a subset of InputTokens)",
+			sr.InputTokens, counts.Input+counts.CacheRead)
+	}
+	if sr.CacheRead != counts.CacheRead {
+		t.Errorf("CacheRead=%d, want %d", sr.CacheRead, counts.CacheRead)
 	}
 }
 
@@ -134,9 +173,9 @@ func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	// Second complete for the SAME occurrence (no BeginStage between).
-	rs.CompleteStage(0, 1000, 500, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1 (duplicate complete must not append)", len(rs.CompletedStages))
@@ -152,12 +191,12 @@ func TestCompleteStageRetryStillAppends(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 100, 50, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 	// A real retry: BeginStage stamps a new StageStart. Sleep guarantees the
 	// timestamp advances so the occurrence is distinguishable.
 	time.Sleep(time.Millisecond)
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 100, 50, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
 
 	if len(rs.CompletedStages) != 2 {
 		t.Fatalf("CompletedStages = %d, want 2 (a genuine retry must append)", len(rs.CompletedStages))
@@ -173,7 +212,7 @@ func TestConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rs.BeginStage(StageFeatureDev)
-			rs.CompleteStage(0, 10, 5, "")
+			rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "")
 			_ = rs.Snapshot()
 			_ = rs.IsComplete()
 			_ = rs.TotalDuration()
@@ -328,7 +367,7 @@ func TestPersistAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, 500, 200, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.SetStageError(StageFeaturePlanning, "timeout")
 

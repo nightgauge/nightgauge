@@ -88,13 +88,24 @@ export type ReasoningLevel = z.infer<typeof ReasoningLevelSchema>;
 // Model descriptor + pricing (S2 populates the registry; this is the shape)
 // ---------------------------------------------------------------------------
 
-/** USD per 1,000,000 tokens. Cache rates optional (not all providers bill them). */
+/**
+ * USD per 1,000,000 tokens. Cache rates optional (not all providers bill them).
+ *
+ * Cache CREATION has two rates, not one (#358). Anthropic bills a cache write
+ * by the TTL it buys: 5-minute at 1.25x base input, 1-hour at 2.0x. The CLI
+ * reports which pool a write landed in via
+ * `usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens`, so a single
+ * blended rate mis-prices every run.
+ */
 export const TokenRatesSchema = z
   .object({
     input: z.number().nonnegative(),
     output: z.number().nonnegative(),
     cache_read: z.number().nonnegative().optional(),
-    cache_creation: z.number().nonnegative().optional(),
+    /** 5-minute TTL cache write (1.25x base input). */
+    cache_creation_5m: z.number().nonnegative().optional(),
+    /** 1-hour TTL cache write (2.0x base input). */
+    cache_creation_1h: z.number().nonnegative().optional(),
   })
   .strict();
 export type TokenRates = z.infer<typeof TokenRatesSchema>;

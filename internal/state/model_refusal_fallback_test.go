@@ -3,6 +3,8 @@ package state
 import (
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 // ── #91 served-model attribution ─────────────────────────────────────────
@@ -74,7 +76,7 @@ func TestBuildV2Record_RefusalFallbackModelSelection(t *testing.T) {
 	rs.RecordStageModel(StageFeatureDev, "claude-fable-5")
 	rs.RecordModelRefusalFallback(StageFeatureDev, "claude-fable-5", "claude-opus-4-8", "reasoning_extraction")
 	rs.RecordStageModel(StageFeatureDev, "claude-opus-4-8")
-	rs.CompleteStage(0, 100, 200, "claude-opus-4-8")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8")
 
 	hw := NewHistoryWriter(t.TempDir())
 	rec := hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{}, time.Now())
@@ -100,11 +102,11 @@ func TestBuildV2Record_RefusalFallbackDoesNotLeakAcrossStages(t *testing.T) {
 	rs.StartedAt = time.Now()
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageModel(StageIssuePickup, "claude-sonnet-4-6")
-	rs.CompleteStage(0, 10, 20, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-4-6")
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageModel(StageFeatureDev, "claude-opus-4-8")
 	rs.RecordModelRefusalFallback(StageFeatureDev, "claude-fable-5", "claude-opus-4-8", "reasoning_extraction")
-	rs.CompleteStage(0, 100, 200, "claude-opus-4-8")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8")
 
 	hw := NewHistoryWriter(t.TempDir())
 	rec := hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{}, time.Now())

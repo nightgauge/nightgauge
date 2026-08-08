@@ -170,12 +170,16 @@ export class ModelEvalRunner {
       // snake_case TokenUsage shape. Normalize so cache_read/cache_creation are
       // actually billed — otherwise cache (which dominates real agentic cost) is
       // silently priced at 0. @see modelRegistry "bills cache tokens" test.
+      //
+      // Eval TokenUsage carries a single unsplit cache-creation count, so it
+      // goes to the 5m tier per the #358 convention (cheaper pool → floor, not
+      // an overstatement). #390 plumbs the real split.
       const cost_usd = round6(
         computeCostUsd(cell.model_id, {
           input: exec.tokens.input,
           output: exec.tokens.output,
           cacheRead: exec.tokens.cache_read,
-          cacheCreation: exec.tokens.cache_creation,
+          cacheCreation5m: exec.tokens.cache_creation,
         })
       );
       return {

@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -430,4 +431,72 @@ func TestUnknownModelHasNoThinkingConstraint(t *testing.T) {
 			t.Errorf("zero descriptor conflicts at %q; unknown/local models must fail open", effort)
 		}
 	}
+}
+
+// TestAnthropicCacheRatesFollowPublishedMultipliers pins every Anthropic
+// entry's cache rates to the vendor's published multipliers off base input:
+// cache READ is 0.1x, a 5-minute cache WRITE is 1.25x, and a 1-hour cache
+// WRITE is 2.0x. These are not independent numbers to be maintained by hand —
+// they are derived, and #358 shipped a formula that bills all three pools, so
+// a typo in any one of them silently mis-prices every run on that model.
+//
+// If a future Anthropic model genuinely deviates from the published
+// multipliers, do NOT relax this test: add that id to an explicit exception
+// list here carrying the vendor's published per-1M number and a link to the
+// pricing page that states it. An exception must be visible and sourced; a
+// loosened assertion is neither.
+//
+// Comparison note: 1.25 and 2.0 are exactly representable in binary floating
+// point, so the write rates match their products bit-for-bit. 0.1 is not
+// (0.1*3.0 is 0.30000000000000004, while the published Sonnet read rate is
+// 0.30), so the check allows a relative epsilon rather than pretending the
+// product is exact.
+func TestAnthropicCacheRatesFollowPublishedMultipliers(t *testing.T) {
+	const (
+		cacheReadMultiplier       = 0.1
+		cacheCreation5mMultiplier = 1.25
+		cacheCreation1hMultiplier = 2.0
+	)
+
+	seen := 0
+	for _, m := range All() {
+		if m.Provider != "anthropic" {
+			continue
+		}
+		seen++
+		t.Run(m.ID, func(t *testing.T) {
+			for _, c := range []struct {
+				pool string
+				got  *float64
+				want float64
+			}{
+				{"cache_read", m.Rates.CacheRead, m.Rates.Input * cacheReadMultiplier},
+				{"cache_creation_5m", m.Rates.CacheCreation5m, m.Rates.Input * cacheCreation5mMultiplier},
+				{"cache_creation_1h", m.Rates.CacheCreation1h, m.Rates.Input * cacheCreation1hMultiplier},
+			} {
+				if c.got == nil {
+					t.Errorf("%s is nil; Anthropic bills every cache pool, so a nil "+
+						"rate prices it at $0 and under-reports the bill", c.pool)
+					continue
+				}
+				if !ratesEqual(*c.got, c.want) {
+					t.Errorf("%s = %g, want %g (input %g x published multiplier)",
+						c.pool, *c.got, c.want, m.Rates.Input)
+				}
+			}
+		})
+	}
+	if seen == 0 {
+		t.Fatal("no anthropic models in the registry; this test asserted nothing")
+	}
+}
+
+// ratesEqual compares two per-1M rates. Exact first — the 1.25x/2.0x products
+// are exact in binary — then a relative epsilon for the 0.1x read rate, whose
+// product is not.
+func ratesEqual(got, want float64) bool {
+	if got == want {
+		return true
+	}
+	return math.Abs(got-want) <= 1e-12*math.Abs(want)
 }

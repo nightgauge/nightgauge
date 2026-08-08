@@ -22,11 +22,21 @@ var registryJSON []byte
 
 // Rates are USD per 1,000,000 tokens. Cache rates are optional (pointer) because
 // not every provider bills them.
+//
+// Cache CREATION has two rates, not one (#358). Anthropic bills a cache write
+// by the TTL it buys: 5-minute at 1.25x base input, 1-hour at 2.0x. The CLI
+// reports which pool a write landed in via
+// usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens, and a single
+// blended rate mis-prices every run — a 1h-heavy stage by 1.6x on the cache
+// pool alone. A nil pointer means the provider does not bill that pool.
 type Rates struct {
-	Input         float64  `json:"input"`
-	Output        float64  `json:"output"`
-	CacheRead     *float64 `json:"cache_read,omitempty"`
-	CacheCreation *float64 `json:"cache_creation,omitempty"`
+	Input     float64  `json:"input"`
+	Output    float64  `json:"output"`
+	CacheRead *float64 `json:"cache_read,omitempty"`
+	// CacheCreation5m prices writes with a 5-minute TTL (1.25x base input).
+	CacheCreation5m *float64 `json:"cache_creation_5m,omitempty"`
+	// CacheCreation1h prices writes with a 1-hour TTL (2.0x base input).
+	CacheCreation1h *float64 `json:"cache_creation_1h,omitempty"`
 }
 
 // ModelDescriptor mirrors the SDK ModelDescriptor (modelEvalSchemas.ts).

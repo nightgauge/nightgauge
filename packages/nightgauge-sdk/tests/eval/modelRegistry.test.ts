@@ -178,15 +178,23 @@ describe("model registry — cost computation (parity with prior hardcoded rates
     expect(computeCostUsd("gpt-5.5", { input: M, output: M })).toBeCloseTo(1.25 + 10.0, 6);
   });
 
-  it("bills cache tokens at their rates", () => {
-    // opus: cache_read 0.5/M, cache_creation 6.25/M
+  it("bills cache tokens at their rates, with the two cache-write tiers priced apart (#358)", () => {
+    // opus: cache_read 0.5/M, cache_creation_5m 6.25/M, cache_creation_1h 10/M
     const cost = computeCostUsd("claude-opus-4-8", {
       input: 0,
       output: 0,
       cacheRead: M,
-      cacheCreation: M,
+      cacheCreation5m: M,
+      cacheCreation1h: M,
     });
-    expect(cost).toBeCloseTo(0.5 + 6.25, 6);
+    expect(cost).toBeCloseTo(0.5 + 6.25 + 10.0, 6);
+
+    // The tiers must not collapse into each other: an hour-long write costs
+    // 1.6x a five-minute one, which is exactly what a single blended rate hid.
+    const fiveMin = computeCostUsd("claude-opus-4-8", { input: 0, output: 0, cacheCreation5m: M });
+    const oneHour = computeCostUsd("claude-opus-4-8", { input: 0, output: 0, cacheCreation1h: M });
+    expect(fiveMin).toBeCloseTo(6.25, 6);
+    expect(oneHour).toBeCloseTo(10.0, 6);
   });
 });
 

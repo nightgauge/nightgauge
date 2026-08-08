@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 // TestAppendStageGateResultToDisk verifies the CLI/IPC persistence seam
@@ -122,7 +124,7 @@ func TestBuildV2Record_PopulatesGateResultsPerStage(t *testing.T) {
 	rs := NewRuntimeState("o/r", 42, "item-1")
 	rs.StartedAt = time.Now()
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, 100, 200, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
 	rs.AppendStageGateResult(StageIssuePickup, StageGateResult{
 		GateName:  "issue-pickup",
 		Passed:    true,

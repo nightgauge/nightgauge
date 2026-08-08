@@ -34,7 +34,7 @@ const OPUS: ModelDescriptor = {
   tiers: ["opus"],
   display_name: "Opus 4.8",
   concrete_version: "claude-opus-4-8",
-  rates: { input: 5, output: 25, cache_read: 0.5, cache_creation: 6.25 },
+  rates: { input: 5, output: 25, cache_read: 0.5, cache_creation_5m: 6.25, cache_creation_1h: 10 },
   supported_efforts: ["low", "medium", "high"],
   supported_reasoning: ["none", "low", "medium", "high"],
   context_window: 200000,

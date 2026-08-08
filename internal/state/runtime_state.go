@@ -261,9 +261,20 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // CompleteStage records the completion of the current stage.
 // model is the AI model used (e.g., "claude-sonnet-4-6"). If empty, a default
 // cost rate is applied. Cost is calculated from token counts and model rates.
-func (rs *RuntimeState) CompleteStage(exitCode, inputTokens, outputTokens int, model string) {
-	cost := tokens.CalculateCost(model, inputTokens, outputTokens)
-	rs.completeStageInternal(exitCode, inputTokens, outputTokens, 0, cost)
+//
+// counts carries every billable pool (#358): taking input/output alone here
+// while the caller's other cost path prices cache would produce two different
+// costs for one stage. Cache-creation feeds PRICING only — it is deliberately
+// not stored on StageResult; recording that count is #390's scope.
+//
+// counts.Input is NON-cached input (what CalculateCost prices at the base
+// rate), but StageResult.InputTokens is the COMBINED count with CacheRead as a
+// subset — readers subtract (history.go does `InputTokens - CacheRead`) and
+// divide by it for the cache-hit rate. So the recorded input adds CacheRead
+// back in, exactly as CompleteStageWithCost does.
+func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, model string) {
+	cost := tokens.CalculateCost(model, counts)
+	rs.completeStageInternal(exitCode, counts.Input+counts.CacheRead, counts.Output, counts.CacheRead, cost)
 }
 
 // CompleteStageWithCost records stage completion using the actual cost from

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -269,7 +270,7 @@ func TestScheduler_PRCreate_DeterministicPath_CostZero(t *testing.T) {
 		t.Fatalf("expected deterministic created=true")
 	}
 
-	rs.CompleteStage(0, 0, 0, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
 
 	if rs.TotalCostUSD != beforeCost {
 		t.Errorf("TotalCostUSD changed: before=%v after=%v", beforeCost, rs.TotalCostUSD)
