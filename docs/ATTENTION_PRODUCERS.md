@@ -327,7 +327,7 @@ condition — pin BOTH halves, as
 `TestRunScopedProducersDelegateToSharedBuilders` (Go call site → builder) and
 `TestAttentionRaiseProducesTheGoPathCard` (IPC handler → same builder) do.
 
-Four rules on that wiring:
+Six rules on that wiring:
 
 - **The params never carry an option, a verb, or an args map.** Card options are
   executed by the daemon on resolve, so a surface that could describe them could
@@ -351,14 +351,33 @@ Four rules on that wiring:
   copy of a matrix is a third thing to keep in sync.
 - **Never accept a number a card option will act on.** The allowlist bounds
   _which_ operation a card offers; it says nothing about that operation's
-  magnitude. `budget-ceiling`'s primary option persists a workspace-global
-  ceiling override, so while the enforced ceiling and the run's spend were
-  params, any caller on the workspace socket could choose the number one
-  operator click would write. Derive such values daemon-side from state the
-  daemon itself recorded (config, the run's own `RuntimeState`), and when they
-  cannot be corroborated, raise the card **without** the option rather than
-  guessing — the operator still learns the condition happened, and nothing
-  executable rides on an uncorroborated report.
+  magnitude. `budget-ceiling`'s primary option persists a per-repo ceiling
+  override, so while the enforced ceiling and the run's spend were params, any
+  caller on the workspace socket could choose the number one operator click
+  would write. Derive such values daemon-side from state the daemon itself
+  recorded (config, the run's own `RuntimeState`), and when they cannot be
+  corroborated, raise the card **without** the option rather than guessing — the
+  operator still learns the condition happened, and nothing executable rides on
+  an uncorroborated report.
+- **"Daemon-side" is not the property; UNMINTABLE is.** Deriving a number from
+  daemon state buys nothing if a caller can create that state. `budget-ceiling`
+  read the run's spend out of the runtime registry — which
+  `pipeline.notifyStageTransition` fills, booking `costUsd` verbatim AND
+  creating the entry when none exists, so one call minted a run and the next
+  raise built a remedy worth $1.5M out of it. Ask what the SHORTEST call
+  sequence is that manufactures the state you are about to trust, then require
+  evidence only the normal flow produces: an exact repo match (not "empty or
+  matching"), and progression markers the terminal call alone cannot write. See
+  [ADR-015 §N](decisions/015-decision-requests.md) for the boundary this sits
+  inside.
+- **A raise may never take a remedy off an open card.** Two structurally
+  different offers can share one `idempotency_key` — the corroborated and
+  uncorroborated `budget-ceiling` shapes do — and the open-record merge is
+  last-writer-wins over the whole payload. `Store.Raise` now keeps the record
+  that offers a real verb and reports `refreshed`; if your producer has a
+  degraded variant, that is the direction the asymmetry must point. Never the
+  other way: an observation that knows LESS must not overwrite one that knew
+  more.
 
 If the extension does NOT observe it, say so in the `run-scoped-attention` row
 of `internal/orchestrator/testdata/terminal_behaviors.json` with a reason. A
@@ -387,6 +406,18 @@ pipelines, at a severity §I routes to alerting while nothing was blocked. Ask
 who sees this card and what they just did; if the honest answer is "nothing is
 blocked, but there is something worth knowing", that is an `fyi` with noop
 options, not an `unblock` with a remedy.
+
+**And if one producer covers several populations, give the body a parameter —
+do not average them.** The same card then shipped ONE body for three
+force-clear situations, and it was false for two: it promised a preserved
+worktree that "may hold uncommitted work" to a dispatch that wedged before any
+worktree existed, and "NOTHING IS BLOCKED and no action is required" to one
+still holding the Go scheduler's seat. A body that is true of the union of your
+populations is usually true of none of them. Pass the distinguishing facts the
+call site already holds (`abandoned-dispatch`'s `situation` enum), let them
+select PROSE only — never options, verbs or severity, or the parameter becomes
+a way for a caller to choose what the card can do — and reject an unrecognised
+value instead of defaulting, because a default prints a confident wrong body.
 
 A genuine event needs no fingerprint: it is observed once rather than
 reconciled. If instead your trigger site re-answers the same question on every

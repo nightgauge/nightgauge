@@ -1551,6 +1551,16 @@ type AttentionRaiseParams struct {
 	// --- abandoned-dispatch ---
 	// Stage is the last stage the force-cleared dispatch was seen in.
 	Stage string `json:"stage,omitempty"`
+	// Situation is REQUIRED by abandoned-dispatch and names which of the three
+	// force-clear situations happened — see
+	// orchestrator.AbandonedDispatchSituations. A closed enum that selects
+	// PROSE, never options and never a number: the card's option set is
+	// identical in all three. The caller must send it because only the caller
+	// knows, synchronously, which funnel arm it is in and whether the
+	// dispatch's own terminal callback had claimed the outcome; the daemon
+	// cannot infer either after the fact. An unrecognised value is an ERROR
+	// rather than a default, because a default prints a confident wrong body.
+	Situation string `json:"situation,omitempty"`
 }
 
 // AttentionRaiseCheck is one statusCheckRollup row, mirroring
@@ -1569,23 +1579,33 @@ type AttentionRaiseCheck struct {
 	Conclusion string `json:"conclusion"`
 }
 
-// AttentionRaiseResult reports what the raise actually DID. THREE reachable
-// answers, three values: `created` (a card is now in front of the operator),
-// `updated` (an open card for the same condition absorbed this observation),
-// and `not_applicable` (the daemon evaluated the producer's own precondition
-// and it does not hold — e.g. the pr-merge block turned out to be in-flight
-// CI). A failure is an error, never an outcome.
+// AttentionRaiseResult reports what the raise actually DID. FOUR reachable
+// answers, four values: `created` (a card is now in front of the operator),
+// `updated` (an open card for the same condition absorbed this observation and
+// its payload moved), `refreshed` (an open card absorbed the observation and
+// was deliberately KEPT AS IT WAS), and `not_applicable` (the daemon evaluated
+// the producer's own precondition and it does not hold — e.g. the pr-merge
+// block turned out to be in-flight CI). A failure is an error, never an
+// outcome.
 //
-// Store.Raise also has `refreshed` and `suppressed`, and this contract
-// deliberately does NOT advertise them. Both are STANDING-only branches, and
+// `refreshed` is here because Store.Raise refuses to let a raise strip a remedy
+// off an open card (fixed in review). One idempotency key can carry two
+// structurally different offers — `budget-ceiling:<repo>#<n>` is raised with the
+// `budget.raiseCeiling` option when the daemon corroborated the run's spend and
+// without it when it could not — and last-writer-wins let the second, weaker
+// observation silently rewrite the operator's one-click fix into two noops,
+// including on a card the Go scheduler raised. The store keeps the stronger
+// record and reports `refreshed`; the caller learns its observation landed and
+// changed nothing visible.
+//
+// Store.Raise's fifth value, `suppressed`, is still deliberately NOT advertised:
+// it is a STANDING-only branch and
 // TestNoRaiseableProducerIsStandingWithoutRetraction structurally forbids a
 // standing card on this verb (a one-shot raise from a surface has no scan to
 // auto-resolve against, so it cannot satisfy standing's retraction contract).
-// Advertising five values while two are unreachable is the drift the repo's
-// "consolidate N overlapping options to one" rule exists to stop — so the
-// handler treats either as a contract violation and errors, naming the value.
+// The handler treats it as a contract violation and errors, naming the value.
 type AttentionRaiseResult struct {
-	// Outcome is one of created | updated | not_applicable.
+	// Outcome is one of created | updated | refreshed | not_applicable.
 	Outcome string `json:"outcome"`
 	// ID is the live request id; empty for not_applicable.
 	ID string `json:"id"`

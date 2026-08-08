@@ -19,20 +19,49 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
-	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // recordRunSpend seeds the DAEMON's own record of what a run has spent — the
 // only source attention.raise will accept for the budget-ceiling card's
-// numbers (#305 review). Mirrors what pipeline.notifyStageTransition
-// accumulates on the extension path.
+// numbers (#305 review).
+//
+// IT DRIVES THE REAL PUBLIC METHOD, and that is the point. Round 3's version
+// assigned `rt.TotalCostUSD` directly and every claim built on top of it
+// ("written by this process and neither by the caller") was therefore asserted
+// by assumption: the extension path books spend through
+// `pipeline.notifyStageTransition`, which takes `costUsd` from the caller and
+// CREATES the runtime when none exists. A helper that bypassed that method
+// could not see the hole in it. This one calls the registered handler exactly
+// as the extension does — `running` (which stamps `StageStart` via
+// `BeginStage`) then `complete` — so every test below exercises notify → raise
+// and a corroboration rule that a forged single call could satisfy would fail
+// here.
 func recordRunSpend(t *testing.T, s *Server, repo string, issue int, costUSD float64) {
 	t.Helper()
-	rt := state.NewRuntimeState(repo, issue, "")
-	rt.TotalCostUSD = costUSD
-	s.runtimesMu.Lock()
-	s.activeRuntimes[fmt.Sprintf("%d", issue)] = rt
-	s.runtimesMu.Unlock()
+	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running",
+	})
+	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete",
+		CostUsd: costUSD,
+	})
+}
+
+// notifyStageTransition invokes the registered IPC method, so tests reach the
+// same entry point any socket caller does.
+func notifyStageTransition(t *testing.T, s *Server, p PipelineNotifyStageTransitionParams) {
+	t.Helper()
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal notify params: %v", err)
+	}
+	m, ok := s.methods["pipeline.notifyStageTransition"]
+	if !ok {
+		t.Fatal("pipeline.notifyStageTransition is not registered")
+	}
+	if _, err := m(context.Background(), raw); err != nil {
+		t.Fatalf("pipeline.notifyStageTransition(%+v): %v", p, err)
+	}
 }
 
 func raiseParams(t *testing.T, p AttentionRaiseParams) json.RawMessage {
@@ -262,7 +291,7 @@ func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
 	s := newAttentionTestServer(t)
 	p := AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
-		RunID: "run-1", Stage: "feature-dev",
+		RunID: "run-1", Stage: "feature-dev", Situation: string(orchestrator.AbandonedSlotWorktreePreserved),
 	}
 
 	first := mustRaise(t, s, p)
@@ -302,7 +331,7 @@ func TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard(t *testing.T) {
 	s := newAttentionTestServer(t)
 	p := AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 9,
-		RunID: "run-1", Stage: "feature-dev",
+		RunID: "run-1", Stage: "feature-dev", Situation: string(orchestrator.AbandonedSlotWorktreePreserved),
 	}
 
 	first := mustRaise(t, s, p)
@@ -358,7 +387,8 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 		ProducerBranchProtection: {Producer: ProducerBranchProtection, Repo: "octocat/acme", Issue: 1,
 			RunID: "run-1", PR: 2, PRState: "OPEN", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
 		ProducerAbandonedDispatch: {Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 1,
-			RunID: "run-1", Stage: "feature-dev"},
+			RunID: "run-1", Stage: "feature-dev",
+			Situation: string(orchestrator.AbandonedSlotWorktreePreserved)},
 	}
 	for _, producer := range RaiseableProducers() {
 		p, ok := samples[producer]
@@ -771,8 +801,11 @@ func TestBudgetCeilingSpendComesFromTheRunsOwnRepo(t *testing.T) {
 }
 
 // TestBudgetCeilingSpendFallsBackToThePersistedRuntime — the daemon's own
-// persisted runtime-{N}.json is an equally valid corroboration source: it is
-// written by this process, never by the caller.
+// persisted runtime-{N}.json is an equally valid corroboration source, and it
+// is subject to the SAME two rules as the live one (exact repo, real stage
+// progression). The file is produced here by the normal flow — the notify
+// handler persists on every repo-carrying transition — and the live entry is
+// then dropped so only the persisted arm can answer.
 func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 	const (
 		repo  = "octocat/acme"
@@ -780,14 +813,15 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 		spend = 40.0
 	)
 	s := newAttentionTestServer(t)
-	dir := s.pipelineStateDir(repo)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	recordRunSpend(t, s, repo, issue, spend)
+	if _, err := os.Stat(filepath.Join(s.pipelineStateDir(repo), fmt.Sprintf("runtime-%d.json", issue))); err != nil {
+		t.Fatalf("notify did not persist the runtime snapshot: %v", err)
 	}
-	body := fmt.Sprintf(`{"repo":%q,"issueNumber":%d,"totalCostUsd":%v}`, repo, issue, spend)
-	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("runtime-%d.json", issue)), []byte(body), 0o644); err != nil {
-		t.Fatalf("write runtime: %v", err)
-	}
+	// Drop the live entry: without this the first arm answers and the persisted
+	// arm is never reached, so the test would pass while proving nothing.
+	s.runtimesMu.Lock()
+	delete(s.activeRuntimes, fmt.Sprintf("%d", issue))
+	s.runtimesMu.Unlock()
 
 	mustRaise(t, s, AttentionRaiseParams{
 		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
@@ -813,7 +847,8 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 // the card must not be a blocking_run unblock whose primary action re-dispatches
 // the work the operator just cancelled.
 func TestAbandonedDispatchCardIsInformationalNotARetry(t *testing.T) {
-	card := orchestrator.BuildAbandonedDispatch("octocat/acme", 9, "run-1", "feature-dev")
+	card := orchestrator.BuildAbandonedDispatch("octocat/acme", 9, "run-1", "feature-dev",
+		orchestrator.AbandonedSlotWorktreePreserved)
 
 	if card.Severity != attention.SeverityFYI {
 		t.Errorf("severity = %q, want fyi — nothing is blocked by an operator's own Stop", card.Severity)
@@ -852,6 +887,7 @@ func TestAttentionRaiseWithoutStoreIsAnError(t *testing.T) {
 
 	_, err := s.handleAttentionRaise(context.Background(), raiseParams(t, AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "o/r", Issue: 1,
+		Situation: string(orchestrator.AbandonedSlotWorktreePreserved),
 	}))
 	if err == nil {
 		t.Fatal("expected an error when no attention store is configured")
@@ -982,7 +1018,8 @@ func TestRaisedCardsMatchCapturedEnvelopeGrammar(t *testing.T) {
 	built := []attention.DecisionRequest{
 		orchestrator.BuildBudgetCeilingHit("octocat/acme", 1, "run-1", 10, 20),
 		orchestrator.BuildBranchProtectionBlock("octocat/acme", 1, 2, "run-1", "review-not-approved: REVIEW_REQUIRED"),
-		orchestrator.BuildAbandonedDispatch("octocat/acme", 1, "run-1", "feature-dev"),
+		orchestrator.BuildAbandonedDispatch("octocat/acme", 1, "run-1", "feature-dev",
+			orchestrator.AbandonedSlotWorktreePreserved),
 	}
 	for _, r := range built {
 		if !corpusKinds[string(r.Kind)] {
@@ -1003,5 +1040,295 @@ func TestRaisedCardsMatchCapturedEnvelopeGrammar(t *testing.T) {
 		if r.Context.RunID == "" {
 			t.Errorf("%s: context.run_id is empty — this is a RUN-SCOPED producer", r.Producer)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Round-4 review regressions
+// ---------------------------------------------------------------------------
+
+// TestOneCallMintedRunCannotCorroborateARaise is the round-3 attack chain,
+// re-executed against its fix.
+//
+// Round 3 moved the caller-controlled number one IPC method upstream instead of
+// removing it: `pipeline.notifyStageTransition` CREATES the runtime when none
+// exists and books `costUsd` verbatim, so ONE call minted a $1e6 run for an
+// issue that never ran, and the very next `attention.raise` built a
+// `budget.raiseCeiling` option worth $1.5M out of it — no operator click
+// required, because `attention.resolve` takes its actor as a caller string.
+//
+// The chain runs through the REAL registered methods. What must now happen: the
+// card still goes up (silence is the hole #305 closes), it carries NO remedy,
+// and resolving what it does offer writes no override.
+func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
+	const (
+		repo  = "octocat/acme"
+		issue = 4242
+	)
+	s := newAttentionTestServer(t)
+	before := orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(repo))
+
+	// STEP 1 — mint a run out of nothing, with a forged cost, in one call.
+	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete",
+		CostUsd: 1_000_000,
+	})
+	// The runtime EXISTS and carries the forged total — the bookkeeping verb is
+	// as writable as it ever was (ADR-015 §N: pre-existing, #370's to close).
+	// What changed is that it no longer corroborates anything.
+	s.runtimesMu.Lock()
+	minted, ok := s.activeRuntimes[fmt.Sprintf("%d", issue)]
+	s.runtimesMu.Unlock()
+	if !ok || minted.Snapshot().TotalCostUSD != 1_000_000 {
+		t.Fatal("precondition: one notify call should still mint a runtime with the forged total — " +
+			"if it no longer does, this test is no longer exercising the round-3 chain")
+	}
+	if spend, corroborated := s.recordedRunSpendUSD(repo, issue); corroborated {
+		t.Errorf("a runtime minted by ONE terminal transition corroborated $%v — no stage ever began", spend)
+	}
+
+	// STEP 2 — raise.
+	got := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
+	})
+	if got.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("outcome = %q, want created — the operator must still be told", got.Outcome)
+	}
+	card := onlyOpenRequest(t, s)
+	if card.FindOption("raise") != nil {
+		t.Fatalf("the minted run produced a raiseCeiling offer: %+v", card.Options)
+	}
+	if card.Context.CostSoFarUSD != 0 {
+		t.Errorf("cost_so_far_usd = %v, want 0 — the forged figure reached the card", card.Context.CostSoFarUSD)
+	}
+	if !strings.Contains(card.Title, "stop reported") {
+		t.Errorf("title = %q, want the uncorroborated variant", card.Title)
+	}
+
+	// STEP 3 — resolve every option the card DOES offer, as an arbitrary actor,
+	// and assert the enforced ceiling has not moved.
+	for _, o := range card.Options {
+		if _, err := s.attentionStore().Resolve(context.Background(), card.ID, o.ID, "attacker", "", "", s); err != nil {
+			t.Fatalf("Resolve(%s): %v", o.ID, err)
+		}
+		break // one resolve terminates the record
+	}
+	if after := orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(repo)); after != before {
+		t.Errorf("enforced ceiling moved from $%v to $%v on a card nothing corroborated", before, after)
+	}
+}
+
+// TestUnattributedRuntimeCorroboratesNothing — round 3's repo cross-check
+// accepted an EMPTY recorded repo (`snap.Repo == "" || snap.Repo == repo`), and
+// `notifyStageTransition` seeds `rt.Repo` only from a field the caller may
+// omit. Omitting one field therefore corroborated a raise for EVERY configured
+// repo carrying that issue number.
+func TestUnattributedRuntimeCorroboratesNothing(t *testing.T) {
+	const issue = 99
+	s := newAttentionTestServer(t)
+	// A full, well-formed run — except that no transition ever names a repo.
+	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
+		IssueNumber: issue, Stage: "feature-dev", Status: "running",
+	})
+	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
+		IssueNumber: issue, Stage: "feature-dev", Status: "complete", CostUsd: 500_000,
+	})
+
+	for _, repo := range []string{"octocat/acme", "o/r"} {
+		if spend, corroborated := s.recordedRunSpendUSD(repo, issue); corroborated {
+			t.Errorf("an unattributed runtime corroborated $%v for %s", spend, repo)
+		}
+	}
+	mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: "o/r", Issue: issue, RunID: "run-1",
+	})
+	if card := onlyOpenRequest(t, s); card.FindOption("raise") != nil {
+		t.Errorf("an unattributed runtime produced a raiseCeiling offer: %+v", card.Options)
+	}
+}
+
+// TestNotifyRaiseResolveMovesTheCeilingForARealRun is the positive control for
+// the two tests above, and the pin the round-3 review asked for: the FULL
+// public method surface (notify → raise → resolve) with the persisted override
+// asserted, not a reflection walk over one struct.
+//
+// A run that really progressed — `running` then `complete`, the shape the
+// extension emits — must still corroborate, offer the remedy, and have that
+// remedy move the enforced ceiling. Without this, "tighten corroboration" could
+// be satisfied by refusing everything.
+func TestNotifyRaiseResolveMovesTheCeilingForARealRun(t *testing.T) {
+	const (
+		repo  = "octocat/acme"
+		issue = 42
+		spend = 80.0
+	)
+	s := newAttentionTestServer(t)
+	root := s.repoRoot(repo)
+	before := orchestrator.PipelineBudgetCeilingUSD(root)
+
+	recordRunSpend(t, s, repo, issue, spend) // running + complete, through the real method
+
+	mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
+	})
+	card := onlyOpenRequest(t, s)
+	raise := card.FindOption("raise")
+	if raise == nil {
+		t.Fatalf("a real run's ceiling stop offered no remedy: %+v", card.Options)
+	}
+	want := orchestrator.ProposedCeilingUSD(before, spend)
+	if got, _ := raise.Args["ceilingUsd"].(float64); got != want {
+		t.Fatalf("raiseCeiling arg = %v, want %v", raise.Args["ceilingUsd"], want)
+	}
+	if _, err := s.attentionStore().Resolve(context.Background(), card.ID, "raise", "octocat", "", "", s); err != nil {
+		t.Fatalf("Resolve(raise): %v", err)
+	}
+	if after := orchestrator.PipelineBudgetCeilingUSD(root); after != want {
+		t.Errorf("enforced ceiling = $%v after the remedy, want $%v (was $%v)", after, want, before)
+	}
+}
+
+// TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot — the write side of the
+// root-scoping fix. `s.workspaceRoot` follows the operator's focused editor
+// (`workspace.setRoot` ← `resolveActiveRepository`), so in a multi-repo
+// workspace the override landed wherever they were looking. It must land under
+// the CARD's repo, and nowhere else.
+func TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot(t *testing.T) {
+	s := newAttentionTestServer(t)
+	repoA, repoB := "octocat/acme", "o/r"
+	rootA, rootB := t.TempDir(), t.TempDir()
+	ownerA, nameA := splitSlug(repoA)
+	ownerB, nameB := splitSlug(repoB)
+	s.resolver.RegisterRepo(ownerA, nameA, rootA)
+	s.resolver.RegisterRepo(ownerB, nameB, rootB)
+	// The focused editor is repo B's — the value round 3 wrote under.
+	s.workspaceRoot = rootB
+
+	recordRunSpend(t, s, repoA, 7, 80)
+	mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repoA, Issue: 7, RunID: "run-1",
+	})
+	card := onlyOpenRequest(t, s)
+	if card.FindOption("raise") == nil {
+		t.Fatalf("no remedy to resolve: %+v", card.Options)
+	}
+	if _, err := s.attentionStore().Resolve(context.Background(), card.ID, "raise", "octocat", "", "", s); err != nil {
+		t.Fatalf("Resolve(raise): %v", err)
+	}
+
+	overrideRel := filepath.Join(".nightgauge", "pipeline", "budget-override.json")
+	if _, err := os.Stat(filepath.Join(rootA, overrideRel)); err != nil {
+		t.Errorf("no override under the CARD's repo root %s: %v", rootA, err)
+	}
+	if _, err := os.Stat(filepath.Join(rootB, overrideRel)); err == nil {
+		t.Errorf("the override landed under the FOCUSED repo's root %s — read and write disagree "+
+			"about which budget-override.json is live", rootB)
+	}
+	if got := orchestrator.PipelineBudgetCeilingUSD(rootB); got != orchestrator.PipelineBudgetCeilingUSD(t.TempDir()) {
+		t.Errorf("repo B's enforced ceiling moved to $%v on repo A's remedy", got)
+	}
+}
+
+// TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard — finding 7.
+//
+// `budget-ceiling:<repo>#<n>` is ONE idempotency key carrying TWO structurally
+// different offers, and Store.Raise's open-record branch replaced the whole
+// payload. So an uncorroborated observation arriving second rewrote a card that
+// offered `budget.raiseCeiling` into one offering two noops: the operator's
+// one-click fix vanished with no signal, and any local process could do it on
+// purpose to a card the Go scheduler had raised.
+func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
+	const (
+		repo  = "octocat/acme"
+		issue = 42
+		spend = 80.0
+	)
+	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, repo, issue, spend)
+	first := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
+	})
+	corroborated := onlyOpenRequest(t, s)
+	if corroborated.FindOption("raise") == nil {
+		t.Fatalf("precondition: the first raise must carry the remedy: %+v", corroborated.Options)
+	}
+
+	// The run's record disappears (a restart, a re-key, a hostile delete) and
+	// the same condition is reported again.
+	s.runtimesMu.Lock()
+	delete(s.activeRuntimes, fmt.Sprintf("%d", issue))
+	s.runtimesMu.Unlock()
+	if err := os.Remove(filepath.Join(s.pipelineStateDir(repo), fmt.Sprintf("runtime-%d.json", issue))); err != nil {
+		t.Fatalf("remove persisted runtime: %v", err)
+	}
+	second := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-2",
+	})
+	if second.ID != first.ID {
+		t.Fatalf("second raise minted a new record (%s != %s) — the dedup this protects is gone",
+			second.ID, first.ID)
+	}
+	if second.Outcome != string(attention.OutcomeRefreshed) {
+		t.Errorf("outcome = %q, want %q — a raise that changes nothing must not report an update",
+			second.Outcome, attention.OutcomeRefreshed)
+	}
+	after := onlyOpenRequest(t, s)
+	raise := after.FindOption("raise")
+	if raise == nil {
+		t.Fatalf("the open card LOST its budget.raiseCeiling remedy: %+v", after.Options)
+	}
+	if raise.Verb != attention.VerbBudgetRaiseCeiling {
+		t.Errorf("remedy verb = %q, want %q", raise.Verb, attention.VerbBudgetRaiseCeiling)
+	}
+	if after.Title != corroborated.Title || after.Context.CostSoFarUSD != spend {
+		t.Errorf("payload moved with the stripped options: title %q→%q, cost %v→%v",
+			corroborated.Title, after.Title, spend, after.Context.CostSoFarUSD)
+	}
+	// And the kept remedy still works.
+	if _, err := s.attentionStore().Resolve(context.Background(), after.ID, "raise", "octocat", "", "", s); err != nil {
+		t.Fatalf("Resolve(raise) on the preserved remedy: %v", err)
+	}
+	if got := orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(repo)); got <= spend {
+		t.Errorf("enforced ceiling = $%v after resolving the preserved remedy, want above the $%v spend",
+			got, spend)
+	}
+}
+
+// TestRemedyPreservationProtectsTheGoPathsCardToo — the cross-path half. The
+// card here is raised through the shared Go builder exactly as
+// (*Scheduler).raiseBudgetCeilingHit does, so what the IPC verb must not be
+// able to do is downgrade a card the SCHEDULER put up.
+func TestRemedyPreservationProtectsTheGoPathsCardToo(t *testing.T) {
+	const (
+		repo  = "octocat/acme"
+		issue = 77
+	)
+	s := newAttentionTestServer(t)
+	store := s.attentionStore()
+
+	goCard := orchestrator.BuildBudgetCeilingHit(repo, issue, "go-run", 80, 112.5)
+	id, err := attention.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	goCard.ID = id
+	if _, _, err := store.Raise(goCard); err != nil {
+		t.Fatalf("Go-path Raise: %v", err)
+	}
+
+	// No daemon-side record for this issue at all, so the IPC raise builds the
+	// noop-only variant — the exact downgrade the probe executed.
+	res := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "ipc-run",
+	})
+	if res.Outcome != string(attention.OutcomeRefreshed) {
+		t.Errorf("outcome = %q, want %q", res.Outcome, attention.OutcomeRefreshed)
+	}
+	card := onlyOpenRequest(t, s)
+	if card.FindOption("raise") == nil {
+		t.Fatalf("an IPC raise stripped the SCHEDULER's remedy: %+v", card.Options)
+	}
+	if got, _ := card.FindOption("raise").Args["ceilingUsd"].(float64); got != 112.5 {
+		t.Errorf("scheduler's ceilingUsd arg moved to %v, want 112.5", got)
 	}
 }

@@ -183,8 +183,15 @@ const (
 	// payload, and the condition itself moved (event-shaped request, or a
 	// standing request whose fingerprint changed). Re-alerts.
 	OutcomeUpdated RaiseOutcome = ActionUpdated
-	// OutcomeRefreshed — an open STANDING record was re-observed unchanged.
-	// Content refreshed, deliberately silent (ADR-015 §M).
+	// OutcomeRefreshed — the open record for the key was re-observed and kept.
+	// Deliberately silent. Two routes reach it:
+	//
+	//  1. An open STANDING record re-observed with an unchanged fingerprint —
+	//     content refreshed, no re-alert (ADR-015 §M).
+	//  2. A raise that would have STRIPPED A REMEDY off the open card: the
+	//     stored record offers an option bound to a real verb and the incoming
+	//     one offers only noops. The observation is recorded; the payload is
+	//     not replaced. See the remedy-preservation block in Raise.
 	OutcomeRefreshed RaiseOutcome = ActionRefreshed
 	// OutcomeSuppressed — a human already RESOLVED this exact standing
 	// condition and its fingerprint has not moved, so nothing was written and
@@ -228,6 +235,44 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	// Dedup: an open (non-terminal) request with the same key is updated in
 	// place rather than duplicated.
 	if existing, path, ok := findOpenByKey(stored, req.IdempotencyKey); ok {
+		// A RAISE MAY NEVER TAKE A REMEDY OFF AN OPEN CARD (fixed in review).
+		//
+		// The merge below is last-writer-wins over the whole payload, which is
+		// right for content that moves (a spend that grew, a blocker that
+		// changed) and wrong for the OPTION SET. Two structurally different
+		// offers can share one idempotency key: `budget-ceiling:<repo>#<n>` is
+		// raised both with the `budget.raiseCeiling` option (the daemon
+		// corroborated the run's spend) and without it (it could not), and the
+		// Go scheduler and the IPC verb (#305) dedup onto the same record. So an
+		// uncorroborated observation arriving second silently rewrote a card the
+		// scheduler had raised WITH its remedy into one offering two noops — the
+		// operator lost a one-click fix and got no signal that it had gone.
+		//
+		// Keep the whole stored payload, not just its options: a card's title and
+		// body EXPLAIN its options ("Raise to $112.50 & retry"), so grafting new
+		// prose onto old options produces a card that contradicts itself. The
+		// observation is still recorded — ActionRefreshed, the existing
+		// non-alerting re-observation action, because nothing the operator sees
+		// changed.
+		//
+		// Strictly one-directional: it blocks DOWNGRADES only. A raise that
+		// carries a remedy still replaces (in-place escalation keeps working),
+		// and a raise that ADDS one to a remedy-free card still replaces.
+		if optionsOfferARemedy(existing.Options) && !optionsOfferARemedy(req.Options) {
+			kept := *existing
+			s.emitLocked(JournalEntry{
+				Action:         ActionRefreshed,
+				ID:             kept.ID,
+				IdempotencyKey: kept.IdempotencyKey,
+				Producer:       kept.Producer,
+				State:          kept.Lifecycle.State,
+				Fingerprint:    kept.Fingerprint,
+				Muted:          kept.IsMuted(),
+				At:             s.nowUTC().Format(tsLayout),
+			}, &kept)
+			return OutcomeRefreshed, kept.ID, nil
+		}
+
 		// Preserve durable identity + creation + lifecycle; refresh the payload.
 		merged := req
 		merged.ID = existing.ID
@@ -298,6 +343,23 @@ func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 		At:             s.nowUTC().Format(tsLayout),
 	}, &req)
 	return OutcomeCreated, req.ID, nil
+}
+
+// optionsOfferARemedy reports whether an option set contains anything that
+// DOES something on resolve.
+//
+// The test is "binds a verb other than noop", not a producer allowlist:
+// `noop` is the registry's explicit "resolve and change nothing" choice, so
+// every other registered verb is by definition an action the operator would
+// lose if the option disappeared. Keeping the rule at the verb level means a
+// new producer inherits the protection without registering anywhere.
+func optionsOfferARemedy(options []Option) bool {
+	for _, opt := range options {
+		if Verb(opt.Verb) != VerbNoop {
+			return true
+		}
+	}
+	return false
 }
 
 // validateForRaise rejects identity-less and malformed records BEFORE any disk

@@ -130,6 +130,53 @@ describe("getPipelineCeilingConfig honors the Action Center's runtime ceiling ov
     expect(effectiveCeiling()).toBe(150);
   });
 
+  it("is PER-REPO: an override written for repo A is not honored by repo B", () => {
+    // Round 3's read resolved `workspaceRoot ?? workspaceFolders[0]` and every
+    // production call site passed nothing, so the extension always read
+    // folder[0]; the write used the daemon's `s.workspaceRoot`, a pointer that
+    // follows the focused editor. In a multi-repo workspace those are different
+    // repos, so the operator's click moved a ceiling the run never reads — the
+    // remedy inert again, exactly as before the fix.
+    //
+    // Both sides are now scoped to the run's own repo root
+    // (`HeadlessOrchestrator.getRunRepoRoot()` reading,
+    // `Server.repoRoot(card.context.repo)` writing), which makes this test
+    // expressible: the raise for A must move A and leave B alone.
+    const repoA = root;
+    const repoB = fs.mkdtempSync(path.join(os.tmpdir(), "ng-budget-override-b-"));
+    try {
+      writeConfiguredCeiling(75); // repo A
+      fs.mkdirSync(path.join(repoB, ".nightgauge"), { recursive: true });
+      fs.writeFileSync(
+        path.join(repoB, ".nightgauge", "config.yaml"),
+        ["pipeline:", "  token_budget_ceiling:", "    ceiling_usd: 75", ""].join("\n"),
+        "utf-8"
+      );
+
+      // The operator resolves a card raised for a run in repo A.
+      writeRuntimeOverride(112.5); // lands under repo A
+
+      const ceilingFor = (repoRoot: string) =>
+        new PipelineBudgetCeiling(getPipelineCeilingConfig(repoRoot)).getEffectiveCeiling();
+
+      expect(ceilingFor(repoA)).toBe(112.5); // A's next dispatch honors it
+      expect(ceilingFor(repoB)).toBe(75); // B's does not
+    } finally {
+      fs.rmSync(repoB, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to no override when no root resolves — never to another repo's file", () => {
+    // The `workspaceFolders[0]` fallback is mocked to `undefined` here, which is
+    // the shape a caller with no run in hand sees. It must degrade to the
+    // configured ceiling, not silently pick up whichever repo happens to be
+    // first.
+    writeRuntimeOverride(999);
+    expect(
+      new PipelineBudgetCeiling(getPipelineCeilingConfig(undefined)).getEffectiveCeiling()
+    ).toBe(75); // DEFAULT_PIPELINE_CEILING_CONFIG.ceilingUsd
+  });
+
   it("treats a missing, malformed, or non-positive override as no override", () => {
     writeConfiguredCeiling(75);
     expect(effectiveCeiling()).toBe(75); // missing

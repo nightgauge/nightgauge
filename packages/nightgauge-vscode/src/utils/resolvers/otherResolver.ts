@@ -1183,6 +1183,17 @@ function applyRuntimeCeilingOverride(
  * the same resolution Go's `PipelineBudgetCeilingUSD` performs, so a ceiling
  * raised from a card takes effect on BOTH execution paths (#305).
  *
+ * PASS THE RUN'S OWN REPO ROOT. The agreement above is PER-REPO, not global:
+ * the daemon writes `budget-override.json` under the CARD's repo root
+ * (`Server.repoRoot(repo)` — the same registry that scopes runtime-{N}.json),
+ * so a reader looking anywhere else sees no override and stops on the
+ * unraised ceiling again. Every production caller
+ * (`HeadlessOrchestrator.getRunRepoRoot()`) passes the root the run targets;
+ * the `workspaceFolders[0]` fallback is for callers with no run in hand
+ * (config surfacing, tooling) and is deliberately NOT the production path —
+ * before #305's review it was, and in a multi-repo workspace it read a
+ * different repo's file from the one the operator's click had written.
+ *
  * @see Issue #1047 - Configurable token budget ceiling
  */
 export function getPipelineCeilingConfig(workspaceRoot?: string): PipelineCeilingConfig {

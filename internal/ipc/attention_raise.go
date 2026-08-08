@@ -161,14 +161,22 @@ func (s *Server) handleAttentionRaise(_ context.Context, raw json.RawMessage) (i
 		return nil, fmt.Errorf("attention.raise: %w", err)
 	}
 	switch outcome {
-	case attention.OutcomeCreated, attention.OutcomeUpdated:
+	case attention.OutcomeCreated, attention.OutcomeUpdated, attention.OutcomeRefreshed:
+		// `refreshed` re-entered this contract in review, and it is NOT the
+		// standing branch coming back. Store.Raise now refuses to let any raise
+		// strip a remedy off an open card: when the stored record offers an
+		// option bound to a real verb and this one offers only noops, the
+		// observation is recorded and the payload is kept. That is reachable on
+		// this verb by construction — the uncorroborated budget-ceiling card is
+		// exactly a noop-only variant of a key the corroborated card also
+		// raises — so declaring it is the honest contract, not drift.
 		return AttentionRaiseResult{Outcome: string(outcome), ID: liveID}, nil
 	default:
-		// Unreachable while every raiseable producer is event-shaped, which
-		// TestNoRaiseableProducerIsStandingWithoutRetraction enforces. Loud
-		// rather than silent: a standing producer added to the allowlist would
-		// otherwise start returning an outcome this contract never declared,
-		// and the TS union would accept it as `never`.
+		// `suppressed` only. Unreachable while every raiseable producer is
+		// event-shaped, which TestNoRaiseableProducerIsStandingWithoutRetraction
+		// enforces. Loud rather than silent: a standing producer added to the
+		// allowlist would otherwise start returning an outcome this contract
+		// never declared, and the TS union would accept it as `never`.
 		return nil, fmt.Errorf(
 			"attention.raise: store returned %q, which only standing producers can produce — "+
 				"no raiseable producer may be standing (see RaiseableProducers)", outcome)
@@ -200,25 +208,58 @@ func (s *Server) isConfiguredRepo(repo string) bool {
 }
 
 // recordedRunSpendUSD returns the spend the DAEMON recorded for this run, and
-// whether such a record exists.
+// whether a run record produced by the NORMAL run flow corroborates it.
 //
-// Two sources, both written by this process and neither by the caller: the live
-// RuntimeState the extension path accumulates through
-// pipeline.notifyStageTransition (`rt.CompleteStageWithCost` → TotalCostUSD),
-// and the same runtime persisted to the repo's own .nightgauge/pipeline dir.
-// The runtime map is keyed by bare issue number (#370's re-keying target), so
-// the repo is cross-checked before the figure is trusted — otherwise a raise
-// naming repo A could be corroborated by a live run of repo B's issue with the
-// same number.
+// THE TRUST MODEL THIS SITS INSIDE (ADR-015 §N). The daemon socket is a
+// trusted-operator channel: every pre-existing bookkeeping verb —
+// `pipeline.notifyStageTransition`, `queue.*`, `autonomous.*`,
+// `workspace.setRoot` — already accepts caller data unauthenticated, and
+// putting an identity on that channel is #370's rework, not this verb's job.
+// What THIS path must guarantee inside that model is narrower and absolute:
+// **the raise must not be able to mint or inflate the state it is corroborated
+// against.** Round 3 failed exactly there — a single
+// `notifyStageTransition{status:"complete", costUsd:1e6}` created a runtime out
+// of nothing, and the very next raise built a $1.5M `budget.raiseCeiling`
+// option out of it. Two rules close that, and neither depends on the socket
+// being authenticated:
+//
+//  1. EXACT REPO, BOTH ARMS. The runtime map is keyed by bare issue number
+//     (#370's re-keying target), so a raise naming repo A must not be
+//     corroborated by a run of repo B's issue with the same number. Round 3
+//     cross-checked the repo but accepted an EMPTY one — and
+//     `notifyStageTransition` seeds `rt.Repo` only when the caller sends it, so
+//     omitting one field re-opened the hole for every configured repo at once.
+//     An unattributed runtime now corroborates nothing, which is the same call
+//     #307 made when it refused to PERSIST one (server.go's `repo != ""` gate).
+//
+//  2. REAL PROGRESSION. A record only corroborates when it shows a stage the
+//     daemon watched BEGIN and then finish: `CompletedStages` entries whose
+//     `StartedAt` is non-zero. That timestamp is stamped by `BeginStage`, which
+//     only the "running" transition calls — so the created-on-miss "complete"
+//     that mints a runtime in one call books a stage with a ZERO StartedAt and
+//     an empty Stage, and corroborates nothing. The figure returned is the sum
+//     over those stages rather than the `TotalCostUSD` accumulator, so a spend
+//     booked onto a run with no begun stage cannot reach a card even when other
+//     stages did run.
+//
+// Residual exposure, stated rather than implied: a caller willing to spend two
+// calls (`running`, then `complete`) can still book a stage. That is the
+// pre-existing telemetry-forgery surface of `notifyStageTransition` itself,
+// unchanged by #305 and owned by #370 — see ADR-015 §N.
+//
+// Two sources, checked in order: the live RuntimeState the extension path
+// accumulates through `pipeline.notifyStageTransition`, and the same runtime
+// persisted to the run's own repo `.nightgauge/pipeline` dir. Both go through
+// the identical predicate, because the persisted file is written from the same
+// runtime.
 func (s *Server) recordedRunSpendUSD(repo string, issue int) (float64, bool) {
 	runtimeKey := fmt.Sprintf("%d", issue)
 	s.runtimesMu.Lock()
 	rt, ok := s.activeRuntimes[runtimeKey]
 	s.runtimesMu.Unlock()
 	if ok {
-		snap := rt.Snapshot()
-		if (snap.Repo == "" || snap.Repo == repo) && snap.TotalCostUSD > 0 {
-			return snap.TotalCostUSD, true
+		if spend, corroborated := corroboratedRunSpendUSD(rt.Snapshot(), repo); corroborated {
+			return spend, true
 		}
 	}
 	stateDir := s.pipelineStateDir(repo)
@@ -229,13 +270,33 @@ func (s *Server) recordedRunSpendUSD(repo string, issue int) (float64, bool) {
 	if err != nil || persisted == nil {
 		return 0, false
 	}
-	if persisted.Repo != "" && persisted.Repo != repo {
+	return corroboratedRunSpendUSD(persisted, repo)
+}
+
+// corroboratedRunSpendUSD applies the two rules above to one run record and
+// returns the spend attributable to stages that actually ran.
+//
+// Takes a snapshot/loaded copy, never the live registry entry, so it never
+// reads a RuntimeState another goroutine is mutating.
+func corroboratedRunSpendUSD(rt *state.RuntimeState, repo string) (float64, bool) {
+	if rt == nil || rt.Repo == "" || rt.Repo != repo {
 		return 0, false
 	}
-	if persisted.TotalCostUSD <= 0 {
+	total := 0.0
+	begun := 0
+	for _, sr := range rt.CompletedStages {
+		// StartedAt is BeginStage's stamp and Stage is what BeginStage set; a
+		// terminal transition that created its own runtime carries neither.
+		if sr.StartedAt.IsZero() || sr.Stage == "" {
+			continue
+		}
+		begun++
+		total += sr.CostUSD
+	}
+	if begun == 0 || total <= 0 {
 		return 0, false
 	}
-	return persisted.TotalCostUSD, true
+	return total, true
 }
 
 // buildRaise validates the producer-specific fields and constructs the card
@@ -252,12 +313,19 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		// SERVER-DERIVED, EXACTLY AS THE SCHEDULER DERIVES IT. scheduler.go's
 		// call site is `ProposedCeilingUSD(PipelineBudgetCeilingUSD(root),
 		// runtime.TotalCostUSD)`; this is the same two inputs read the same two
-		// ways, in-process. The workspace root is deliberately s.workspaceRoot,
-		// the SAME root ExecuteVerb hands to WriteBudgetCeilingOverride — read
-		// and write must agree about which budget-override.json is the live
-		// one, or a raise would propose against a ceiling the resolve then
-		// ignores.
-		facts := derivedFacts{enforcedCeilingUSD: orchestrator.PipelineBudgetCeilingUSD(s.workspaceRoot)}
+		// ways, in-process.
+		//
+		// THE ROOT IS THE RUN'S REPO, not s.workspaceRoot (fixed in review).
+		// `s.workspaceRoot` is a MUTABLE pointer to whichever repo owns the
+		// focused editor (`workspace.setRoot`, sent from
+		// `resolveActiveRepository`), so in a multi-repo workspace a raise and
+		// its resolve could read and write two different budget-override.json
+		// files — the remedy inert again, in the way #305 exists to close.
+		// `repoRoot` is the same per-repo registry that already decides where a
+		// run's runtime-{N}.json lives (#215/#307), and `ExecuteVerb`'s
+		// `budget.raiseCeiling` arm now writes through it too, so read and write
+		// agree per repo and stop moving with the operator's cursor.
+		facts := derivedFacts{enforcedCeilingUSD: orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(p.Repo))}
 		facts.spentUSD, facts.spendCorroborated = s.recordedRunSpendUSD(p.Repo, p.Issue)
 
 		proposed := 0.0
@@ -334,7 +402,21 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		return orchestrator.BuildBranchProtectionBlock(p.Repo, p.Issue, p.PR, p.RunID, d.Reason), true, nil
 
 	case ProducerAbandonedDispatch:
-		return orchestrator.BuildAbandonedDispatch(p.Repo, p.Issue, p.RunID, p.Stage), true, nil
+		// REQUIRED, and validated against the closed set rather than defaulted.
+		// One producer covers three force-clear situations whose operator-facing
+		// facts differ — whether a stage ran, whether there is a worktree
+		// holding uncommitted work, whether the dispatch's terminal outcome was
+		// booked by anyone. Defaulting an unrecognised value would print a
+		// confident wrong body, which is the defect this parameter fixes; the
+		// caller always knows which arm it is in, synchronously.
+		if !orchestrator.IsAbandonedDispatchSituation(p.Situation) {
+			return attention.DecisionRequest{}, false,
+				fmt.Errorf("attention.raise: %s requires situation to be one of %s",
+					ProducerAbandonedDispatch,
+					strings.Join(orchestrator.AbandonedDispatchSituations(), ", "))
+		}
+		return orchestrator.BuildAbandonedDispatch(p.Repo, p.Issue, p.RunID, p.Stage,
+			orchestrator.AbandonedDispatchSituation(p.Situation)), true, nil
 	}
 	// Unreachable: the allowlist check ran first. Kept so a producer added to
 	// the allowlist and not to the switch is a loud failure, not a silent

@@ -32,13 +32,22 @@ func newAttentionTestServer(t *testing.T) *Server {
 		owner, name := splitSlug(slug)
 		resolver.RegisterRepo(owner, name, root)
 	}
-	return &Server{
+	s := &Server{
 		autonomousScheduler: as,
 		writer:              io.Discard,
 		workspaceRoot:       root,
 		resolver:            resolver,
 		activeRuntimes:      make(map[string]*state.RuntimeState),
+		methods:             make(map[string]Handler),
 	}
+	// Register the real method table so tests can drive the daemon through the
+	// SAME entry points a socket caller uses (#305 round-4 review). The
+	// budget-ceiling corroboration rules are about what
+	// `pipeline.notifyStageTransition` can and cannot establish, and a test that
+	// seeded `activeRuntimes` by hand asserted their premise instead of
+	// exercising it.
+	s.registerMethods()
+	return s
 }
 
 func splitSlug(slug string) (owner, name string) {

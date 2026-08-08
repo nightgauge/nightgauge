@@ -392,7 +392,7 @@ func (as *AutonomousScheduler) raiseBlockedByDeferral(repo string, issue int, ti
 	})
 }
 
-// --- Producer 7b: architecture-approval gate (per-issue) ---------------------
+// --- Producer (unnumbered): architecture-approval gate (per-issue) -----------
 
 // raiseArchitectureApproval surfaces an issue the architecture-approval gate
 // (#4098/#4222) halted before feature-dev because a high-impact decision needs
@@ -564,7 +564,7 @@ func (as *AutonomousScheduler) retractArchitectureApproval(repo string, issue in
 	as.autoResolveAttention(producerArchitectureApprove, observed)
 }
 
-// --- Producer 9: terminal failure halt (per-issue, fleet-blocking) ----------
+// --- Producer (unnumbered): terminal failure halt (per-issue, fleet-blocking) ---
 
 // RaiseTerminalFailure surfaces the terminal stage failure that caused
 // haltQueueOnSlotFailure to pause the whole fleet (#148).
@@ -860,9 +860,79 @@ func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int,
 // first cut of this producer labelled itself 11 too, so the same number named
 // two different producers depending on which file you read (fixed in review).
 // ADR-015 §F carries the authoritative row.
+//
+// The numbering rule these headers follow (ADR-015 §F, and pinned by
+// TestProducerLabelsMatchTheADRNumbering): a number in a header must be the
+// ADR's row for THAT producer, and a producer the ADR does not enumerate is
+// labelled `(unnumbered)` rather than given a plausible-looking one. Round 3
+// declared the invariant and left four headers violating it — 8 named the
+// watchdog, the unexercised deliverable AND the branch fork; 9 named both
+// `default-branch-health` and the terminal-failure halt.
 
 // ProducerAbandonedDispatch names the force-clear producer (#305/#307).
 const ProducerAbandonedDispatch = "abandoned-dispatch"
+
+// AbandonedDispatchSituation names WHICH force-clear the card describes.
+//
+// One producer, THREE populations, and the first cut printed one fixed body for
+// all of them — two of which it was false for (fixed in review). The
+// force-clear funnel has two arms and each arm has two booking outcomes, and
+// what an operator needs to know differs on every axis: whether a stage ever
+// ran, whether a worktree exists to inspect, and whether the dispatch's
+// terminal bookkeeping was actually booked by anyone. The situation is decided
+// at the call site — `ConcurrentPipelineManager` already holds both facts
+// synchronously before it raises — and it selects the body, never the options.
+type AbandonedDispatchSituation string
+
+const (
+	// AbandonedReservationNeverStarted is the RESERVATION arm: the dispatch
+	// wedged inside `startSlotInner` (worktree-manager resolution, a 15s
+	// `git ls-remote`, `git worktree add`) and never became a slot. No stage
+	// ran, no agent wrote anything, no `notifyStageTransition` ever fired — so
+	// there is no uncommitted work to rescue and no recorded state to be stale.
+	AbandonedReservationNeverStarted AbandonedDispatchSituation = "reservation-never-started"
+
+	// AbandonedSlotWorktreePreserved is the SLOT arm with the force-clear
+	// booking the terminal outcome on the dispatch's behalf: the queue mark and
+	// the scheduler seat are released, and the run's per-issue worktree is
+	// deliberately left on disk because a killed process may still be writing
+	// in it.
+	AbandonedSlotWorktreePreserved AbandonedDispatchSituation = "slot-worktree-preserved"
+
+	// AbandonedClaimTakenThenWedged is either arm when the dispatch had already
+	// CLAIMED its terminal outcome and then wedged before its callback fired.
+	// The force-clear stands down on the claim (booking twice double-charges
+	// the cascade breaker and the per-issue lifetime cap), so nobody books it:
+	// the queue mark is released but the Go scheduler's running-slot seat is
+	// still held. This is the one situation where something IS held and an
+	// action IS required, which is exactly what the single fixed body used to
+	// deny.
+	AbandonedClaimTakenThenWedged AbandonedDispatchSituation = "claim-taken-then-wedged"
+)
+
+// AbandonedDispatchSituations returns the closed set, sorted, for validation,
+// error text and tests. Derived from one list so a situation added to the
+// builder cannot be missing from what the IPC boundary accepts.
+func AbandonedDispatchSituations() []string {
+	return []string{
+		string(AbandonedClaimTakenThenWedged),
+		string(AbandonedReservationNeverStarted),
+		string(AbandonedSlotWorktreePreserved),
+	}
+}
+
+// IsAbandonedDispatchSituation reports whether s is one of the three declared
+// situations. The IPC verb rejects anything else rather than defaulting: a
+// default would silently print the wrong body for an unrecognised arm, which is
+// the defect this parameter exists to fix.
+func IsAbandonedDispatchSituation(s string) bool {
+	for _, v := range AbandonedDispatchSituations() {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
 
 // BuildAbandonedDispatch constructs the card for a dispatch the extension's
 // abort deadline gave up on (ConcurrentPipelineManager.forceClearStuckSlots).
@@ -928,42 +998,39 @@ const ProducerAbandonedDispatch = "abandoned-dispatch"
 // state after a manual Stop) it cleared a cooldown, poked a channel nobody
 // reads, and resolved the card while nothing happened.
 //
-// What survives is the part that is true and useful: the worktree was PRESERVED
-// and may hold uncommitted work, and the Go-side view of this issue may be
-// stale. Both options are noops — this card asks a human to look, and does not
+// What survives is the part that is true and useful for the situation the call
+// site observed: which of the three the card describes is the `situation`
+// argument, and each body states only what holds for that arm (fixed in
+// review — one fixed body was false for two of the three). Both options are
+// noops in every situation — this card asks a human to look, and does not
 // pretend the pipeline can fix it.
-func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attention.DecisionRequest {
-	if stage == "" {
+func BuildAbandonedDispatch(repo string, issue int, runID, stage string, situation AbandonedDispatchSituation) attention.DecisionRequest {
+	title, body, blocker := abandonedDispatchProse(issue, stage, situation)
+	if situation == AbandonedReservationNeverStarted {
+		// No stage ever began, so the card must not name one. Context.Stage is
+		// the field the surfaces render as "last seen in"; a value here would be
+		// an invented waypoint.
+		stage = ""
+	} else if stage == "" {
 		stage = "unknown"
 	}
-	body := fmt.Sprintf(
-		"You stopped the pipeline, and issue #%d's dispatch did not settle before the abort deadline expired — "+
-			"so the extension force-cleared it and booked its terminal bookkeeping on its behalf (the queue mark "+
-			"and the scheduler seat are released). The last stage it was seen in is %s.\n\n"+
-			"NOTHING IS BLOCKED and no action is required. This card exists because two things are worth knowing "+
-			"before you touch that issue again:\n\n"+
-			"1. The worktree is PRESERVED on purpose — the stopped process may still have been writing in it, so "+
-			"nothing was stashed, committed, or deleted. It may hold uncommitted work. A re-dispatch reuses the "+
-			"same per-issue worktree path and re-derives the work from scratch, so inspect it first if the run had "+
-			"got anywhere.\n\n"+
-			"2. The Go-side state for this issue may be stale — the wedged process was killed mid-flight, so what "+
-			"the daemon recorded for the run stops wherever it stopped rather than at a real terminal.",
-		issue, stage)
 
 	return attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerAbandonedDispatch, repo, issue),
-		// approve + fyi: informational, badge-only, no interruption and no SLA.
-		// The same shape unverified-deliverable uses for "you should know this
-		// happened", and for the same reason — there is no pipeline action to
-		// take, only a human one.
+		// approve + fyi in all three situations, INCLUDING claim-taken-then-
+		// wedged. Every card this producer raises follows the operator's own
+		// Stop, and ADR-015 §I routes blocking_run to alerting — paging someone
+		// about the consequence of the button they just pressed is the pattern
+		// §D/§L exist to prevent. The held seat is real, so the BODY names it and
+		// names what clears it; the severity stays where the population puts it.
 		Kind:     attention.KindApprove,
 		Severity: attention.SeverityFYI,
-		Title:    fmt.Sprintf("Stop force-cleared #%d at %s — worktree preserved", issue, stage),
+		Title:    title,
 		Body:     body,
 		Producer: ProducerAbandonedDispatch,
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
-			Blocker:  "operator Stop: dispatch wedged past the abort deadline (#307 force-clear)",
+			Blocker:  blocker,
 			TraceRef: runTraceRef(runID),
 		},
 		// NO RETRY. Re-dispatching work the operator deliberately cancelled is
@@ -981,7 +1048,89 @@ func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attenti
 	}
 }
 
-// --- Producer 8: unexercised deliverable (run-scoped, Scheduler) -------------
+// abandonedDispatchProse returns the title, body and blocker for one force-clear
+// situation. Split out so the three bodies sit side by side and a claim made in
+// one is visibly absent from the others.
+//
+// The shared prologue is deliberately short. Everything after it is
+// situation-specific, because the three differ in every fact an operator acts
+// on: whether a stage ran, whether there is a worktree to inspect, whether
+// anything the daemon recorded can be stale, and whether the dispatch's terminal
+// bookkeeping was booked at all.
+func abandonedDispatchProse(issue int, stage string, situation AbandonedDispatchSituation) (title, body, blocker string) {
+	const prologue = "You stopped the pipeline, and issue #%d's dispatch did not settle before the abort deadline expired. "
+
+	switch situation {
+	case AbandonedReservationNeverStarted:
+		return fmt.Sprintf("Stop force-cleared #%d before any stage started", issue),
+			fmt.Sprintf(prologue+
+				"It never became a running slot — it was still inside worktree setup — so NO STAGE RAN, no agent "+
+				"wrote anything, and the daemon was never told about the run at all. The extension booked its "+
+				"terminal bookkeeping on its behalf: the queue mark and the scheduler seat are released.\n\n"+
+				"NOTHING IS BLOCKED and no action is required. One thing is worth knowing: worktree creation may "+
+				"have been interrupted part-way. The wedged process removes its own partial tree when it unwinds; "+
+				"if it never does, `nightgauge worktree sweep` reclaims it. There is no uncommitted agent work to "+
+				"rescue here and no recorded run state to be stale — neither was ever produced.",
+				issue),
+			"operator Stop: dispatch wedged during worktree setup, before any stage ran (#307 force-clear)"
+
+	case AbandonedClaimTakenThenWedged:
+		return fmt.Sprintf("Stop force-cleared #%d%s — its terminal bookkeeping is still owed", issue, atStageClause(stage)),
+			fmt.Sprintf(prologue+
+				"It had ALREADY CLAIMED its own terminal bookkeeping, so the force-clear stood down rather than "+
+				"booking a second one — and then it wedged before its callback fired, so nobody booked it.%s\n\n"+
+				"SOMETHING IS STILL HELD, and this is the one case where an action is worth taking:\n\n"+
+				"1. The Go scheduler's running-slot seat for #%d was NOT released. Nothing called "+
+				"`autonomous.complete` for this dispatch, so `isRunning()` keeps the issue ineligible for "+
+				"re-dispatch. It clears if the wedged process finally settles and fires its own callback; "+
+				"otherwise it is held until the autonomous scheduler restarts. Restart it if you need #%d "+
+				"dispatchable sooner. (The queue mark itself WAS released — that step does not wait on the "+
+				"claim.)\n\n"+
+				"2. The worktree is PRESERVED on purpose — the stopped process may still have been writing in it, "+
+				"so nothing was stashed, committed, or deleted. It may hold uncommitted work. Inspect it before "+
+				"re-dispatching: a re-dispatch reuses the same per-issue worktree path.\n\n"+
+				"3. The Go-side state for this issue may be stale — the wedged process was killed mid-flight, so "+
+				"what the daemon recorded for the run stops wherever it stopped rather than at a real terminal.",
+				issue, lastSeenClause(stage), issue, issue),
+			"operator Stop: dispatch claimed its terminal outcome then wedged — outcome unbooked (#307 force-clear)"
+
+	default: // AbandonedSlotWorktreePreserved
+		return fmt.Sprintf("Stop force-cleared #%d%s — worktree preserved", issue, atStageClause(stage)),
+			fmt.Sprintf(prologue+
+				"The extension force-cleared it and booked its terminal bookkeeping on its behalf: the queue mark "+
+				"and the scheduler seat are released.%s\n\n"+
+				"NOTHING IS BLOCKED and no action is required. This card exists because two things are worth "+
+				"knowing before you touch that issue again:\n\n"+
+				"1. The worktree is PRESERVED on purpose — the stopped process may still have been writing in it, "+
+				"so nothing was stashed, committed, or deleted. It may hold uncommitted work. A re-dispatch reuses "+
+				"the same per-issue worktree path and re-derives the work from scratch, so inspect it first if the "+
+				"run had got anywhere.\n\n"+
+				"2. The Go-side state for this issue may be stale — the wedged process was killed mid-flight, so "+
+				"what the daemon recorded for the run stops wherever it stopped rather than at a real terminal.",
+				issue, lastSeenClause(stage)),
+			"operator Stop: dispatch wedged past the abort deadline (#307 force-clear)"
+	}
+}
+
+// atStageClause renders the title's stage fragment, or nothing when the caller
+// could not name a stage. "at unknown" in a title is noise the operator has to
+// decode; absence says the same thing without pretending to a waypoint.
+func atStageClause(stage string) string {
+	if stage == "" {
+		return ""
+	}
+	return " at " + stage
+}
+
+// lastSeenClause renders the body's stage sentence, or nothing.
+func lastSeenClause(stage string) string {
+	if stage == "" {
+		return ""
+	}
+	return " The last stage it was seen in is " + stage + "."
+}
+
+// --- Producer 11: unexercised deliverable (run-scoped, Scheduler) ------------
 
 // raiseUnverifiedDeliverable surfaces a run that built a test suite it never
 // executed (#152).
@@ -1032,7 +1181,7 @@ func (s *Scheduler) raiseUnverifiedDeliverable(repo string, issue int, runID str
 	})
 }
 
-// --- Producer 8b: unverified-deliverable streak (standing, run-scoped) ------
+// --- Producer (unnumbered): unverified-deliverable streak (standing) ---------
 
 // raiseUnverifiedDeliverableStreak surfaces consecutive occurrences of the
 // same idle tier for the same repo (#177). raiseUnverifiedDeliverable already
@@ -1166,7 +1315,7 @@ func (s *Scheduler) raiseAuthFailure(repo string, issue int, runID, reason strin
 	})
 }
 
-// --- Producer 8: branch forked from its remote (run-scoped, Scheduler) ------
+// --- Producer (unnumbered): branch forked from its remote (run-scoped) -------
 
 // raiseBranchForked surfaces a branch whose remote head is not reachable from
 // the local tip (#163). unblock kind: no pipeline retry can clear it — the

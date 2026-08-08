@@ -133,6 +133,7 @@ function createPendingFactory() {
   const factory = vi.fn().mockImplementation((_workDir: string, _issueNumber: number) => {
     const orchestrator = {
       setRepoOverride: vi.fn(),
+      setRunRepoRoot: vi.fn(),
       setUnattended: vi.fn(),
       runPipeline: vi.fn().mockReturnValue(new Promise(() => {})),
       stop: vi.fn(),

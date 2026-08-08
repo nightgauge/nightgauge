@@ -995,7 +995,7 @@ func TestProposedCeilingUSDIsOneRule(t *testing.T) {
 // blocking_run card recommending a re-dispatch would tell the operator to undo
 // their own Stop, at a severity ADR-015 §I routes to alerting.
 func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
-	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev")
+	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev", AbandonedSlotWorktreePreserved)
 
 	if r.Producer != ProducerAbandonedDispatch {
 		t.Errorf("producer = %q, want %q", r.Producer, ProducerAbandonedDispatch)
@@ -1020,7 +1020,7 @@ func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
 	}
 	// A second force-clear of the same issue must be the SAME key, or a wedged
 	// slot that keeps re-wedging buries the inbox.
-	again := BuildAbandonedDispatch("octocat/acme", 42, "run-2", "pr-create")
+	again := BuildAbandonedDispatch("octocat/acme", 42, "run-2", "pr-create", AbandonedSlotWorktreePreserved)
 	if again.IdempotencyKey != r.IdempotencyKey {
 		t.Errorf("repeat force-clear changed identity: key %q→%q", r.IdempotencyKey, again.IdempotencyKey)
 	}
@@ -1054,12 +1054,159 @@ func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
 
 	// An unknown stage degrades to a named placeholder rather than an empty
 	// gap in the title.
-	if noStage := BuildAbandonedDispatch("octocat/acme", 42, "", ""); noStage.Context.Stage != "unknown" {
+	if noStage := BuildAbandonedDispatch("octocat/acme", 42, "", "", AbandonedSlotWorktreePreserved); noStage.Context.Stage != "unknown" {
 		t.Errorf("empty stage = %q, want %q", noStage.Context.Stage, "unknown")
 	}
 	// No run id is a HANDLED case: the force-clear caller often has none.
-	if noRun := BuildAbandonedDispatch("octocat/acme", 42, "", "feature-dev"); noRun.Context.TraceRef != nil {
+	if noRun := BuildAbandonedDispatch("octocat/acme", 42, "", "feature-dev", AbandonedSlotWorktreePreserved); noRun.Context.TraceRef != nil {
 		t.Error("an empty runId must produce no trace back-reference, not a synthetic one")
+	}
+}
+
+// TestAbandonedDispatchBodySaysOnlyWhatIsTrueOfItsSituation is the round-4
+// pin for the one-body-three-situations defect.
+//
+// The force-clear funnel has two arms and two booking outcomes, and round 3
+// printed a single fmt.Sprintf for all of them. It promised a preserved
+// worktree that "may hold uncommitted work" to a dispatch that wedged before
+// any worktree existed, and "NOTHING IS BLOCKED and no action is required" to
+// one still holding the Go scheduler's seat. Each body is now asserted to
+// CARRY its own facts and to NOT carry the other situations' — the second half
+// is what a shared body would break.
+func TestAbandonedDispatchBodySaysOnlyWhatIsTrueOfItsSituation(t *testing.T) {
+	cases := []struct {
+		situation   AbandonedDispatchSituation
+		stage       string
+		mustSay     []string
+		mustNotSay  []string
+		wantStage   string
+		titleHas    string
+		titleHasNot string
+	}{
+		{
+			situation: AbandonedReservationNeverStarted,
+			stage:     "", // the reservation arm has no stage to report
+			mustSay: []string{
+				"NO STAGE RAN",
+				"NOTHING IS BLOCKED and no action is required",
+				"nightgauge worktree sweep",
+			},
+			mustNotSay: []string{
+				// Both were false here and both were printed.
+				"may hold uncommitted work",
+				"The last stage it was seen in",
+			},
+			wantStage:   "",
+			titleHas:    "before any stage started",
+			titleHasNot: "unknown",
+		},
+		{
+			situation: AbandonedSlotWorktreePreserved,
+			stage:     "feature-dev",
+			mustSay: []string{
+				"worktree is PRESERVED",
+				"may hold uncommitted work",
+				"NOTHING IS BLOCKED and no action is required",
+				"The last stage it was seen in is feature-dev",
+			},
+			mustNotSay: []string{"SOMETHING IS STILL HELD"},
+			wantStage:  "feature-dev",
+			titleHas:   "worktree preserved",
+		},
+		{
+			situation: AbandonedClaimTakenThenWedged,
+			stage:     "pr-create",
+			mustSay: []string{
+				"SOMETHING IS STILL HELD",
+				"running-slot seat for #42 was NOT released",
+				"autonomous scheduler restarts",
+				"worktree is PRESERVED",
+			},
+			mustNotSay: []string{
+				// The exact sentence round 3 showed in the one case where an
+				// action WAS required.
+				"NOTHING IS BLOCKED and no action is required",
+			},
+			wantStage: "pr-create",
+			titleHas:  "terminal bookkeeping is still owed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.situation), func(t *testing.T) {
+			r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", tc.stage, tc.situation)
+			for _, want := range tc.mustSay {
+				if !strings.Contains(r.Body, want) {
+					t.Errorf("body for %s does not say %q", tc.situation, want)
+				}
+			}
+			for _, never := range tc.mustNotSay {
+				if strings.Contains(r.Body, never) {
+					t.Errorf("body for %s says %q, which is not true of this situation", tc.situation, never)
+				}
+			}
+			if !strings.Contains(r.Title, tc.titleHas) {
+				t.Errorf("title %q does not contain %q", r.Title, tc.titleHas)
+			}
+			if tc.titleHasNot != "" && strings.Contains(r.Title, tc.titleHasNot) {
+				t.Errorf("title %q contains %q", r.Title, tc.titleHasNot)
+			}
+			if r.Context.Stage != tc.wantStage {
+				t.Errorf("context.stage = %q, want %q", r.Context.Stage, tc.wantStage)
+			}
+			// The situation selects PROSE ONLY. Everything a card can DO must be
+			// identical across all three, or a caller-chosen enum would be
+			// choosing an operation — the boundary AttentionRaiseParams exists to
+			// hold.
+			if want := "abandoned-dispatch:octocat/acme#42"; r.IdempotencyKey != want {
+				t.Errorf("idempotency_key = %q, want %q — the situation must not fork identity", r.IdempotencyKey, want)
+			}
+			if r.Kind != attention.KindApprove || r.Severity != attention.SeverityFYI {
+				t.Errorf("kind/severity = %q/%q, want approve/fyi in every situation", r.Kind, r.Severity)
+			}
+			if len(r.Options) != 2 {
+				t.Fatalf("options = %d, want 2 in every situation", len(r.Options))
+			}
+			for _, o := range r.Options {
+				if o.Verb != attention.VerbNoop {
+					t.Errorf("option %q binds %q, want noop in every situation", o.ID, o.Verb)
+				}
+			}
+			if r.Options[0].ID != "acknowledged" || r.Options[1].ID != "will-inspect" {
+				t.Errorf("option ids = %q/%q, want acknowledged/will-inspect — stable ids let one key's "+
+					"successive raises share a record", r.Options[0].ID, r.Options[1].ID)
+			}
+		})
+	}
+}
+
+// TestAbandonedDispatchSituationsAreClosed pins the enum the IPC boundary
+// validates against to the set the builder actually switches on.
+func TestAbandonedDispatchSituationsAreClosed(t *testing.T) {
+	declared := AbandonedDispatchSituations()
+	if len(declared) != 3 {
+		t.Fatalf("AbandonedDispatchSituations() = %v, want the three declared situations", declared)
+	}
+	for _, s := range declared {
+		if !IsAbandonedDispatchSituation(s) {
+			t.Errorf("IsAbandonedDispatchSituation(%q) = false for a declared situation", s)
+		}
+	}
+	for _, s := range []string{"", "slot", "reservation", "SLOT-WORKTREE-PRESERVED", "unknown"} {
+		if IsAbandonedDispatchSituation(s) {
+			t.Errorf("IsAbandonedDispatchSituation(%q) = true — the set must be closed", s)
+		}
+	}
+	// Bodies must be distinct: a situation that fell through to a shared
+	// default would pass every "must say" assertion above and still be the
+	// defect this parameter exists to fix.
+	seen := map[string]string{}
+	for _, s := range declared {
+		r := BuildAbandonedDispatch("octocat/acme", 7, "", "feature-dev", AbandonedDispatchSituation(s))
+		if prior, dup := seen[r.Body]; dup {
+			t.Errorf("situations %q and %q produce the identical body", prior, s)
+		}
+		seen[r.Body] = s
 	}
 }
 

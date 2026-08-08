@@ -1114,6 +1114,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private mainRepoRoot: string | undefined;
   /**
+   * Filesystem root of the repo THIS RUN targets (#305 review).
+   *
+   * Distinct from {@link mainRepoRoot}, which is the RUNNER's root: the slot
+   * factory seeds it once from `resolveAgentRunnerRoot`, so every slot shares
+   * it even when a cross-repo item runs out of a sibling repo's worktree. The
+   * budget-ceiling remedy needs the other one. `budget.raiseCeiling` persists
+   * `.nightgauge/pipeline/budget-override.json` under the CARD's repo root
+   * (`Server.repoRoot(repo)`, the same per-repo registry that scopes
+   * runtime-{N}.json), so a run that reads its ceiling from anywhere else — the
+   * runner root, or `workspaceFolders[0]`, which is what the read side used
+   * before this — silently ignores the raise the operator just clicked and
+   * stops on the same ceiling again.
+   *
+   * Set by `ConcurrentPipelineManager.startSlotInner` from the slot's own
+   * `WorktreeManager.getRepoRoot()`. Unset on the interactive path, where
+   * {@link getRunRepoRoot} falls back to the persistent root.
+   */
+  private runRepoRoot: string | undefined;
+  /**
    * Worktree lifecycle manager for the completion-funnel cleanup call (#106).
    * Lazily constructed against getPersistentRoot() the first time it's needed
    * — mainRepoRoot is not guaranteed set at HeadlessOrchestrator construction
@@ -1275,6 +1294,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   setMainRepoRoot(repoRoot: string): void {
     this.mainRepoRoot = repoRoot;
+  }
+
+  /**
+   * Set the filesystem root of the repo THIS RUN targets. @see runRepoRoot
+   */
+  setRunRepoRoot(repoRoot: string): void {
+    this.runRepoRoot = repoRoot;
   }
 
   /**
@@ -1583,6 +1609,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private getPersistentRoot(): string {
     return this.mainRepoRoot ?? this.getWorkingDirectory();
+  }
+
+  /**
+   * Root of the repo THIS RUN targets — the one whose
+   * `.nightgauge/pipeline/budget-override.json` the daemon writes when the
+   * operator resolves a budget-ceiling card. @see runRepoRoot
+   *
+   * Falls back to the persistent root (interactive path, and any slot started
+   * before the pin), which is the same repo in a single-repo workspace.
+   */
+  private getRunRepoRoot(): string {
+    return this.runRepoRoot ?? this.getPersistentRoot();
   }
 
   /**
@@ -8661,7 +8699,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // hard-stop check further down re-resolves config fresh at every check
     // (Issue #257) rather than reusing this snapshot for the whole run.
     // ===================================================================
-    const ceilingConfig = getPipelineCeilingConfig();
+    const ceilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
     const pipelineCeiling = new PipelineBudgetCeiling(ceilingConfig);
 
     // ===================================================================
@@ -10778,7 +10816,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // loop, which kept enforcing the stale value for the rest of
               // the run. The read is cheap (small file read), matching the
               // freshness the per-stage instances already have.
-              const liveCeilingConfig = getPipelineCeilingConfig();
+              const liveCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
               const liveCeiling = new PipelineBudgetCeiling(liveCeilingConfig);
               // #253: honor a mid-run "Increase Ceiling & Continue" — layer
               // the confirmed escalation override on top of the freshly-read
@@ -10816,8 +10854,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 // workspace-global ceiling override, and the daemon must read
                 // both figures from its own state (see RunScopedAttentionRaise).
                 // The ceiling this check enforced is the same one the daemon
-                // resolves, because `getPipelineCeilingConfig` now layers the
-                // persisted `budget-override.json` on with Go's max() rule.
+                // resolves FOR THIS RUN'S REPO: `getPipelineCeilingConfig`
+                // layers the persisted `budget-override.json` on with Go's
+                // max() rule, and both sides now resolve that file under the
+                // run's own repo root — `getRunRepoRoot()` here,
+                // `Server.repoRoot(repo)` on the raise and on the resolve. It
+                // is a PER-REPO agreement, not a global one: an override raised
+                // for repo A moves A's ceiling and leaves B's alone, which is
+                // the point (#305 review — the read used `workspaceFolders[0]`
+                // and the write used the focused editor's repo, so in a
+                // multi-repo workspace neither was the run's).
                 await this.raiseRunScopedAttention({
                   producer: "budget-ceiling",
                   issueNumber,
@@ -12194,7 +12240,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     let compactionDetected = false;
 
     // Burn rate projector for early ceiling warnings (Issue #1935)
-    const ceilingConfigForProjector = getPipelineCeilingConfig();
+    const ceilingConfigForProjector = getPipelineCeilingConfig(this.getRunRepoRoot());
     const projectorCeiling =
       ceilingConfigForProjector.overrideCeilingUsd ?? ceilingConfigForProjector.ceilingUsd ?? 50;
     const burnRateProjector = new BurnRateProjector(projectorCeiling);
@@ -12216,7 +12262,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // #253: thread the per-run override through — a fresh per-stage instance
     // silently discarding a confirmed "Increase Ceiling & Continue" is what
     // stopped run #236 one second after the user chose to continue.
-    const stageCeilingConfig = getPipelineCeilingConfig();
+    const stageCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
     const stagePipelineCeiling = new PipelineBudgetCeiling({
       ...stageCeilingConfig,
       ...(this.ceilingOverrideUsd !== null ? { overrideCeilingUsd: this.ceilingOverrideUsd } : {}),

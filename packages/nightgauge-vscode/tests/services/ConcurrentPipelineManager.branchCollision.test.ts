@@ -87,6 +87,7 @@ function createMockOrchestratorFactory() {
     setWorktreeOverride: vi.fn(),
     setUnattended: vi.fn(),
     setRepoOverride: vi.fn(),
+    setRunRepoRoot: vi.fn(),
     runPipeline: vi.fn().mockReturnValue(runPromise),
     stop: vi.fn(),
     dispose: vi.fn(),

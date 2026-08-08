@@ -195,6 +195,7 @@ function createControllableFactory() {
       orchestrator: {
         setWorktreeOverride: vi.fn(),
         setRepoOverride: vi.fn(),
+        setRunRepoRoot: vi.fn(),
         setUnattended: vi.fn(),
         runPipeline: vi.fn().mockReturnValue(runPromise),
         stop: vi.fn(), // no-op — the stop that does not unblock runPipeline
@@ -229,12 +230,15 @@ vi.mock("../../src/services/IpcClient", () => ({
 /**
  * Positional-arg decoder for the generated `attentionRaise` signature:
  * (producer, repo, issue, runId, pr, prState, mergeable, mergeStateStatus,
- * reviewDecision, checks, stage). There is deliberately no cost or ceiling in
- * that list — both are derived daemon-side (#305 review), so no caller can
- * choose the magnitude of an option the daemon will execute.
+ * reviewDecision, checks, stage, situation). There is deliberately no cost or
+ * ceiling in that list — both are derived daemon-side (#305 review), so no
+ * caller can choose the magnitude of an option the daemon will execute.
+ * `situation` is the one thing the daemon CANNOT derive: which force-clear arm
+ * this is and whether the dispatch's terminal outcome was booked. It selects
+ * prose, never an option.
  */
 function decodeRaise(call: unknown[]) {
-  const [producer, repo, issue, runId, , , , , , , stage] = call as [
+  const [producer, repo, issue, runId, , , , , , , stage, situation] = call as [
     string,
     string,
     number,
@@ -246,8 +250,9 @@ function decodeRaise(call: unknown[]) {
     unknown,
     unknown,
     string | undefined,
+    string | undefined,
   ];
-  return { producer, repo, issue, runId, stage };
+  return { producer, repo, issue, runId, stage, situation };
 }
 
 describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch card (#305)", () => {
@@ -319,6 +324,10 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
     // archived. Synthesising one would put a fabricated identity into the audit
     // trail. #370 is what improves this later.
     expect(raises[0].runId).toBeUndefined();
+    // The SLOT arm with the force-clear booking the outcome: the preserved
+    // worktree is the true residue, and it is the only situation whose body may
+    // claim one.
+    expect(raises[0].situation).toBe("slot-worktree-preserved");
 
     // The #307 bookkeeping is untouched by the addition.
     expect(mockQueue.complete).toHaveBeenCalledWith("octocat/acme", 282);
@@ -350,6 +359,11 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
     expect(raises[0].issue).toBe(282);
     // No stage: the pipeline never started one.
     expect(raises[0].stage).toBeUndefined();
+    // …and the situation says so. Round 3 sent this arm down the slot body,
+    // which promised an operator a worktree that may hold uncommitted work and
+    // Go-side state that may be stale — neither of which can exist for a
+    // dispatch that wedged inside worktree creation.
+    expect(raises[0].situation).toBe("reservation-never-started");
   });
 
   it("does not raise when slots drain normally — no force-clear, no card", async () => {
@@ -429,11 +443,16 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
     expect(callbacks.onSlotCompleted).not.toHaveBeenCalled();
     expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
 
-    // …so the card is the only signal left, and it is raised.
+    // …so the card is the only signal left, and it is raised — as the
+    // claim-taken situation, because step 2 stood down and NOBODY booked the
+    // terminal outcome. This is the case round 3's single body told the
+    // operator "NOTHING IS BLOCKED and no action is required" while the Go
+    // scheduler's seat for the issue was still held.
     const raises = attentionRaise.mock.calls.map(decodeRaise);
     expect(raises).toHaveLength(1);
     expect(raises[0].producer).toBe("abandoned-dispatch");
     expect(raises[0].issue).toBe(282);
+    expect(raises[0].situation).toBe("claim-taken-then-wedged");
   });
 
   it("does NOT card a run whose own outcome callback fired before it wedged in teardown", async () => {
