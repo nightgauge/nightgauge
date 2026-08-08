@@ -3147,12 +3147,13 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `config`      | `.nightgauge/config.yaml` parseable        | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
 
-Plus the leaked-machine-state checks (#330 / #332), both **warning-only**:
+Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 
-| Check key          | What it verifies                                                    |
-| ------------------ | ------------------------------------------------------------------- |
-| `worktree_leaks`   | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
-| `pipeline_stashes` | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
+| Check key            | What it verifies                                                    |
+| -------------------- | ------------------------------------------------------------------- |
+| `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
+| `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv |
 
 Both existed because a 2026-08-04 workspace audit found **9 leaked worktrees and
 5 leaked stashes** — all of them by running `git worktree list` and `git stash
@@ -3170,6 +3171,57 @@ A live run's worktree is excluded by **age**, not by the active-worktree set:
 registered on disk?", which is every worktree this scan can see, so feeding it
 back in as `ActiveIssues` (whose contract is "runs in flight") makes every
 candidate skip as `active-run` and the check reports nothing, forever.
+
+#### Orphaned processes (issue #341)
+
+A killed stage leaks its worktree; a stage that is never killed leaks
+**itself**. A `nightgauge autonomous run --dry-run` sat on a workstation for
+**31 hours** holding a scheduler slot while all twelve doctor checks passed —
+none of them enumerated processes, so the leak had no reporter at all.
+
+`orphaned_processes` enumerates `ps -axo pid=,etime=,command=` and classifies
+every row whose argv[0] **basename** is `nightgauge`:
+
+| Class     | Rule                                                     | Reported? |
+| --------- | -------------------------------------------------------- | --------- |
+| self      | PID equals this `doctor` process                         | no        |
+| serve     | first subcommand token is `serve`                        | no        |
+| owned     | PID appears in a run sidecar under any resolved repo root | no        |
+| recent    | unowned, younger than `staleProcessAge` (1h)             | counted   |
+| orphaned  | unowned and at least 1h old                              | **yes**   |
+
+- **argv is evidence, never ownership.** Matching the word `nightgauge`
+  anywhere in the command line would claim every `grep`, every editor with a
+  nightgauge file open, and the operator's own shell.
+- **Ownership comes from sidecars**, read with minimal local structs:
+  `.nightgauge/autonomous/state.json` (`pid`),
+  `.nightgauge/pipeline/current-run.json` (`pid`), and each attempt's `pid` in
+  `.nightgauge/pipeline/run-state.json`, across the same repo roots the
+  worktree and stash carriers scan. A missing or unparsable sidecar contributes
+  no PIDs and does **not** undetermine the scan: ownership is a narrowing
+  filter, so failing to read one fails toward UNOWNED, which fails toward
+  REPORTING — safe only because this carrier never acts. Accepted edge: a dead
+  writer's PID recycled by another nightgauge process reads as owned.
+- **`serve` is a named exception.** The extension host's daemon is long-lived
+  by design, owns no run, and writes no sidecar, so every other rule would
+  report it on every invocation. **#388** replaces this argv test with a
+  sidecar the daemon writes; until then it is the one place argv decides
+  anything.
+- **The 1h age floor** keeps transient CLI invocations and scan races from
+  paging the operator: every verb except `serve` and `autonomous run` finishes
+  in minutes, and the incident specimen had been up for 31 hours.
+- **Unverifiable rather than healthy** when `ps` is absent (Windows), fails, or
+  emits a row the parser does not understand. One malformed row undetermines
+  the **whole** table — the same rule `execution.ActiveWorktreeIssues` applies
+  to an unreadable repo root, and for the same reason: the row that could not
+  be read is exactly as likely to be the leak as any other.
+- **Report-only.** The check names PIDs and says "verify and terminate
+  manually". It never signals a process — a health check that kills on the
+  strength of an argv string is a worse failure than the one it fixes.
+
+The parser is exercised against a **captured, redacted process table** from a
+real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the
+committed `capture-ps-snapshot.sh`), not an invented one.
 
 \* Downgraded to warning for fresh repositories (no `config.yaml`).
 
