@@ -14,9 +14,16 @@
 #     classifier reads (subcommand, --dry-run), so truncating it would remove
 #     the thing under test;
 #   * up to two non-nightgauge processes per etime format (mm:ss, hh:mm:ss,
-#     dd-hh:mm:ss), reduced to their executable path — the fixture must carry
-#     all three formats, and a third-party process's ARGUMENTS are where
-#     secrets and private paths live;
+#     dd-hh:mm:ss), reduced to their executable BASENAME — the fixture must
+#     carry all three formats, and a third-party process's ARGUMENTS are where
+#     secrets and private paths live. Basename rather than the whole first
+#     space-delimited token because `ps` does not delimit argv[0]: an
+#     executable under a path containing a space ("/Applications/Visual Studio
+#     Code.app/…") would otherwise be committed as the broken fragment
+#     "/Applications/Visual". The reduction is deliberately lossy — the fixture
+#     needs these rows for their COLUMNS, nothing else — and it also removes
+#     the last route by which a private directory name could reach a public
+#     repository through a third-party process;
 #   * every line's original column spacing, byte for byte outside the
 #     substitutions below.
 #
@@ -65,6 +72,10 @@ printf '%s\n' "$raw" | awk -v home="${HOME:-/nonexistent}" -v user="$(id -un)" '
 		else if (etime ~ /^[0-9]+:[0-9][0-9]:[0-9][0-9]$/) format = "hhmmss"
 		if (kept[format] >= 2) next
 		kept[format]++
-		print prefix scrub(argv[1])
+		# seg[] already holds argv[1] split on "/" — its last element is the
+		# basename. A path with a space yields the basename of the fragment
+		# before the space, which is opaque rather than a plausible-looking
+		# broken path; either way no directory survives.
+		print prefix scrub(seg[length(seg)])
 	}
 '

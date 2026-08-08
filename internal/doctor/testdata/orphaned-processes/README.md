@@ -36,10 +36,23 @@ bash internal/doctor/testdata/orphaned-processes/capture-ps-snapshot.sh \
 
 - The capturing machine's **home directory path** → `/Users/operator`.
 - The capturing machine's **login name**, anywhere it appears → `operator`.
-- **Non-nightgauge processes' arguments** — those rows are reduced to their
-  executable path. A third-party process's argv is where private paths, ticket
-  ids, and occasionally secrets live; its _columns_ are all this fixture needs
-  from it.
+- **Non-nightgauge processes' paths and arguments** — those rows are reduced to
+  their executable **basename**. A third-party process's argv is where private
+  paths, ticket ids, and occasionally secrets live; its _columns_ are all this
+  fixture needs from it. Basename rather than the first space-delimited token
+  because `ps` does not delimit argv[0]: an executable under a path containing
+  a space (`/Applications/Visual Studio Code.app/…`) would otherwise be
+  committed as the broken fragment `/Applications/Visual`. The reduction is
+  deliberately lossy in both directions — it removes the last route by which a
+  private directory name could reach a public repository through a third-party
+  process, and it costs the fixture nothing the parser reads.
+
+  The committed snapshot was captured before that narrowing and keeps the full
+  paths of the system executables it sampled (`/sbin/launchd`,
+  `/usr/libexec/logd`, …). It is deliberately **not** regenerated: those paths
+  are system-owned and carry nothing private, and re-capturing would churn the
+  one artifact whose value is that it came off a real machine at a known time.
+
 - All but **two non-nightgauge rows per etime format**. What remains covers
   each of the three formats `ps` emits, which is the coverage the parser needs:
 
