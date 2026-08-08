@@ -356,10 +356,28 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
   fi
 
   if [ "$REBASE_CONFLICT" = "true" ]; then
-    # AI-assisted conflict resolution
-    CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null)
+    # AI-assisted conflict resolution.
+    #
+    # Same enumeration rule as the capture helper, for the same reason (#301):
+    # `git diff --name-only --diff-filter=U` C-quotes any non-ASCII path, so a
+    # conflict in `café.txt` arrives as the literal `"caf\303\251.txt"` and the
+    # `git add` below fails on a path that does not exist — leaving that
+    # conflict unresolved while the loop reports having handled it, and
+    # `rebase --continue` then fails on it. `-z` gives raw path bytes; git
+    # sorts by path, so skipping a repeat of the previous path collapses that
+    # path's index stages to one entry.
+    CONFLICT_COUNT=0
+    CONFLICT_PREV=""
+    while IFS= read -r -d '' CONFLICT_REC; do
+      CONFLICT_PATH="${CONFLICT_REC#*$'\t'}"
+      if [ "$CONFLICT_PATH" != "$CONFLICT_PREV" ]; then
+        CONFLICT_FILES[$CONFLICT_COUNT]="$CONFLICT_PATH"
+        CONFLICT_COUNT=$((CONFLICT_COUNT + 1))
+        CONFLICT_PREV="$CONFLICT_PATH"
+      fi
+    done < <(git ls-files -u -z 2>/dev/null)
 
-    if [ -z "$CONFLICT_FILES" ]; then
+    if [ "$CONFLICT_COUNT" -eq 0 ]; then
       echo "ERROR: Rebase failed but no conflict markers found."
       # No conflicting files to hand to feature-dev — but the branch is still
       # preserved (no fresh-branch restart). Capture a context-less signal so
@@ -370,7 +388,9 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
       exit 1
     fi
 
-    echo "Resolving conflicts in: $CONFLICT_FILES"
+    printf 'Resolving conflicts in:'
+    printf ' %s' "${CONFLICT_FILES[@]}"
+    printf '\n'
 
     # For each conflicted file:
     # 1. Read the file with conflict markers
@@ -390,7 +410,7 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
     # - If resolution is ambiguous or risky, abort and exit with error
     # - After resolution, the code MUST compile and pass tests
 
-    for FILE in $CONFLICT_FILES; do
+    for FILE in "${CONFLICT_FILES[@]}"; do
       # Read the conflicted file, understand both sides, resolve logically
       # If you cannot confidently resolve a file, abort:
       #   git rebase --abort && exit 1
