@@ -306,9 +306,41 @@ today's output as the contract.
 
 ## Run-scoped producers
 
-Add a `raise*` method in `internal/orchestrator/attention_wiring.go` and call it
-at the trigger point. The same identity rules apply — a stable
-`idempotency_key`, options bound to registered verbs.
+Add an exported `Build*` function in
+`internal/orchestrator/attention_wiring.go` that returns the
+`attention.DecisionRequest`, plus a thin `raise*` method that hands it to
+`raiseAttention`, and call the `raise*` method at the trigger point. The same
+identity rules apply — a stable `idempotency_key`, options bound to registered
+verbs.
+
+**Then answer the second question: which execution path observes this
+condition?** (#305) A producer whose only call site is the Go scheduler is
+silent in the extension operating mode, which is where the overwhelming majority
+of runs happen. That is not a theoretical gap — it is how the run-scoped half of
+ADR 015 produced literally nothing for its first 1,800 headless runs.
+
+If the extension detects the condition too, wire it: declare the producer in the
+`attention.raise` allowlist (`internal/ipc/attention_raise.go`), give it typed
+scalar params, and have the handler call your `Build*` function. The builder is
+shared precisely so the two paths cannot render two different cards for one
+condition — pin BOTH halves, as
+`TestRunScopedProducersDelegateToSharedBuilders` (Go call site → builder) and
+`TestAttentionRaiseProducesTheGoPathCard` (IPC handler → same builder) do.
+
+Two rules on that wiring:
+
+- **The params never carry an option, a verb, or an args map.** Card options are
+  executed by the daemon on resolve, so a surface that could describe them could
+  mint a plausible card offering an arbitrary operation on an arbitrary issue.
+  The surface reports a CONDITION; the daemon decides what the card offers.
+- **Send structured inputs, classify daemon-side.** If Go decides the condition
+  from a machine value (`stages.Decide`'s reason codes, a gate verdict), send
+  that value, not the extension's own prose rendering of it. Two renderers put
+  two different sentences on the same condition with nothing failing.
+
+If the extension does NOT observe it, say so in the `run-scoped-attention` row
+of `internal/orchestrator/testdata/terminal_behaviors.json` with a reason. A
+Go-only producer is a legitimate choice; an undeclared one is a silent gap.
 
 A genuine event needs no fingerprint: it is observed once rather than
 reconciled. If instead your trigger site re-answers the same question on every

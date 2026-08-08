@@ -155,12 +155,25 @@
     },
     {
       "name": "run-scoped-attention",
+      "note": "WIRED ON BOTH PATHS as of #305. The extension raises through the `attention.raise` IPC verb, whose handler builds the card with the SAME exported orchestrator builders the Go scheduler calls (BuildBudgetCeilingHit / BuildBranchProtectionBlock) and writes it through the SAME single authoritative store — so dedup by idempotency_key, standing-fingerprint semantics, the journal, the attention.event push, and resolve/verb execution are inherited, not reimplemented. The verb takes a CLOSED producer id plus typed scalars: it carries no options, no verb, and no args map, because card options are EXECUTED by the daemon on resolve and a free-form raise would let any surface mint a plausible card offering an arbitrary operation. Both halves of the parity are tested — internal/orchestrator TestRunScopedProducersDelegateToSharedBuilders pins the scheduler call site to the builder, internal/ipc TestAttentionRaiseProducesTheGoPathCard pins the IPC path to the same builder.\n\nTHREE of the six run-scoped producers are wired; the other three are deferred with reasons. budget-ceiling (the anchor below) and branch-protection fire from HeadlessOrchestrator; abandoned-dispatch is extension-only by design (see its own row). DEFERRED: auth-preflight (the extension's analogues are network-vs-auth heuristics, not the fail-closed definitive block Go raises on); branch-fork (not detected on the extension path at all — needs the BranchFork probe ported first); unverified-deliverable and its streak counterpart (the derivation already runs in Go via `nightgauge gate verify feature-validate --record`, so the right seam is for THAT CLI to raise — routing it back through IPC would make the extension re-classify a finding Go already classified, the exact duplication deriveUnexercisedDeliverable's own doc comment warns against).",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID"
       },
       "extension": {
-        "pathSpecific": "NOT WIRED — no IPC verb exists to raise a DecisionRequest, so extension-path runs can produce zero run-scoped Action Center cards. Tracked by #305."
+        "file": "packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts",
+        "anchor": "producer: \"budget-ceiling\","
+      }
+    },
+    {
+      "name": "abandoned-dispatch-attention",
+      "note": "EXTENSION-ONLY BY DESIGN (#305, closing the gap #307 named). A dispatch the abort deadline force-cleared is booked as terminal but reported nothing durable — its only surfacing was a transient Stop toast and a warn log, and #307's own ledger listed run-scoped-attention as the reason. Both arms of the force-clear funnel now raise the card, so a wedge inside worktree creation is as visible as one mid-stage. Keyed per (repo, issue) and STANDING with a constant fingerprint: a slot that wedges, is re-queued, and wedges again collapses onto one card instead of one per attempt. The card deliberately carries NO run_id — at force-clear time Go mints the RunID and the extension has no verb to ask for one, and the wedged run's run-state.json may already be archived; an empty run id is a handled case daemon-side, and synthesising one would put a fabricated identity into the audit trail. #370 is what improves this later.",
+      "go": {
+        "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare a run abandoned while that defer is still owed. There is no Go force-clear funnel, and therefore no Go condition to card."
+      },
+      "extension": {
+        "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
+        "anchor": "await this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage)"
       }
     },
     {
@@ -267,7 +280,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here. (19 behaviors + this row.)",
+        "behavior row above, add its disposition here. (20 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       — completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -313,10 +326,16 @@
         "  orphaned-remote-branch-reclaim — already NOT WIRED on the extension path at all (see its row); the",
         "                                force-clear does not change that.",
         "",
-        "NOT PERFORMED — real gaps, owned elsewhere (3):",
-        "  run-scoped-attention        — no `raise` verb exists on IPC or the CLI (#305). A force-cleared",
-        "                                dispatch's only surfacing is the Stop toast and the warn log. This is",
-        "                                the same hole every extension-path run has, not one this adds.",
+        "PERFORMED (added by #305) (1):",
+        "  abandoned-dispatch-attention— BOTH arms raise the `abandoned-dispatch` Action Center card through",
+        "                                the `attention.raise` IPC verb, so a force-cleared dispatch survives",
+        "                                the Stop toast. Standing and keyed per (repo, issue), so repeat",
+        "                                wedges of one issue collapse onto one card. Fail-open and",
+        "                                never-throwing: a raise failure here would abort the exactly-once",
+        "                                bookkeeping this funnel exists to guarantee. Carries no run_id — see",
+        "                                the abandoned-dispatch-attention row.",
+        "",
+        "NOT PERFORMED — real gaps, owned elsewhere (2):",
         "  terminal-kind-classification— the error handed to onSlotFailed is byte-identical to the SETTLED Stop",
         "                                All path's (`Cancelled by user`), which neither classifier matches, so",
         "                                an operator Stop books as a generic failure on BOTH paths.",
@@ -369,8 +388,9 @@
         "    the queue mark and the Go seat is the whole point, and WorktreeManager keys one path per issue",
         "    number, so a successor is created in the tree the dead process may still be writing in. On main",
         "    the un-released `processing` mark serialized the two runs — i.e. the leak this fixes was also the",
-        "    accidental interlock. Gating re-dispatch on the tree being verifiably free needs a verb that does",
-        "    not exist yet (see run-scoped-attention).",
+        "    accidental interlock. Gating re-dispatch on the tree being verifiably free is still not done —",
+        "    #305 gave the funnel a way to TELL the operator (the abandoned-dispatch card names the preserved",
+        "    worktree and asks them to inspect it before retrying), but a card is a notification, not a gate.",
         "  * A reservation's `reservedSlots` entry is left in place on purpose: it is what stops a re-dispatch",
         "    from colliding with the still-running startSlot. A wedge that NEVER unwinds therefore holds that",
         "    reserved capacity for the life of the extension host, with no reaper. Unchanged from main, where",
@@ -410,7 +430,7 @@
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin force-clear-funnel",
       "end": "terminal-parity:end force-clear-funnel",
-      "sha256": "347ffe82d20598a1c95e230aaf9e1d6032021178d2858d2625835bf65b09909a"
+      "sha256": "b525a5c99831ab887af8eff91a9346ff73936badfef2440026810ea28726b3e0"
     }
   ]
 }

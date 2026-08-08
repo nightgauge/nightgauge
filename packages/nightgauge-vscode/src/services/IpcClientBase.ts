@@ -980,6 +980,29 @@ export interface AttentionMuteResult {
   muted: boolean;
 }
 
+/** Result from attention.raise — the run-scoped producer entry point for the
+ * extension operating mode (#305).
+ *
+ * Five genuine answers, five values. `created` means a card is now in front of
+ * the operator; `updated` / `refreshed` mean an existing card for the same
+ * condition absorbed this observation (refreshed is the deliberately silent
+ * standing re-observation); `suppressed` means the operator already resolved
+ * this exact condition and nothing was shown; `not_applicable` means the daemon
+ * evaluated the producer's own precondition and it does not hold. A failure is
+ * a rejected promise, never an outcome. */
+export interface AttentionRaiseResult {
+  outcome: "created" | "updated" | "refreshed" | "suppressed" | "not_applicable";
+  /** The live request id. Empty for `not_applicable`. */
+  id: string;
+}
+
+/** One statusCheckRollup row sent to attention.raise for the branch-protection
+ * producer. The daemon classifies; the extension never sends prose. */
+export interface AttentionRaiseCheck {
+  name: string;
+  conclusion: string;
+}
+
 /** One repo's outcome from attention.sweep. Every failure mode is a field, not
  * a thrown error: a sweep fires on activation and on a timer, and must never be
  * able to surface a modal because a token expired. */

@@ -1479,6 +1479,86 @@ type AttentionSweepParams struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// AttentionRaiseParams raises a RUN-SCOPED DecisionRequest from the extension
+// operating mode (#305).
+//
+// CLOSED PRODUCER, TYPED SCALARS — never a DecisionRequest, never an options
+// array, never a verb or an args map. This is a security boundary, not a style
+// choice: a card's options are EXECUTED by the daemon on resolve
+// (Store.Resolve → Server.ExecuteVerb). ValidateOption re-checks that a verb is
+// REGISTERED, but nothing checks that a producer was ENTITLED to offer it
+// against a particular target — so a raise that accepted caller-supplied
+// options would let any process with socket access mint a legitimate-looking
+// card offering `issue.close` or `budget.raiseCeiling` on an arbitrary issue
+// and wait for the operator to click it. Naming a producer instead means the
+// daemon builds the whole card from the same builder the Go scheduler uses, and
+// the blast radius stays at "this issue, this producer's declared options".
+//
+// Field validation is per-producer: an unknown Producer and a producer missing
+// its required fields are each a distinct ERROR, never a silent no-op.
+type AttentionRaiseParams struct {
+	// Producer is the closed enum — see ipc.RaiseableProducers.
+	Producer string `json:"producer"`
+	// Repo is "owner/name". Required by every producer.
+	Repo string `json:"repo"`
+	// Issue is the issue number. Required by every producer.
+	Issue int `json:"issue"`
+
+	// RunID is supplied by the CALLER, deliberately: resolving it daemon-side
+	// from the runtime registry would add a reader of the bare-issue-number
+	// keying #370 must re-key, and would mis-stamp the card when a re-dispatch
+	// is already in flight under the same issue number. Empty is a handled
+	// case (the card simply carries no trace back-reference).
+	RunID string `json:"runId,omitempty"`
+
+	// --- budget-ceiling ---
+	// CostUSD is the run's spend at the moment the ceiling stopped it.
+	CostUSD float64 `json:"costUsd,omitempty"`
+	// CeilingUSD is the ceiling that was ENFORCED (including any live
+	// override). The proposed higher ceiling is derived from it daemon-side by
+	// orchestrator.ProposedCeilingUSD so both paths offer the same number.
+	CeilingUSD float64 `json:"ceilingUsd,omitempty"`
+
+	// --- branch-protection ---
+	// PR is the blocked pull request number.
+	PR int `json:"pr,omitempty"`
+	// PRState / Mergeable / MergeStateStatus / ReviewDecision / Checks are the
+	// raw `gh pr view` projection. The daemon runs stages.Decide over them and
+	// uses ITS reason string — the extension never classifies. Sending prose
+	// here would produce two visibly different cards for the same block while
+	// every test still passed.
+	PRState          string                `json:"prState,omitempty"`
+	Mergeable        string                `json:"mergeable,omitempty"`
+	MergeStateStatus string                `json:"mergeStateStatus,omitempty"`
+	ReviewDecision   string                `json:"reviewDecision,omitempty"`
+	Checks           []AttentionRaiseCheck `json:"checks,omitempty"`
+
+	// --- abandoned-dispatch ---
+	// Stage is the last stage the force-cleared dispatch was seen in.
+	Stage string `json:"stage,omitempty"`
+}
+
+// AttentionRaiseCheck is one statusCheckRollup row, mirroring
+// stages.PRStatusCheckRow.
+type AttentionRaiseCheck struct {
+	Name       string `json:"name"`
+	Conclusion string `json:"conclusion"`
+}
+
+// AttentionRaiseResult reports what the raise actually DID. Four genuine
+// outcomes get four values (`created`, `updated`, `refreshed`, `suppressed`)
+// plus `not_applicable`, so a caller can tell "a card is in front of the
+// operator" from "the operator already dismissed this exact condition" from
+// "the daemon looked and this is not that producer's condition at all". A
+// failure is an error, never an outcome.
+type AttentionRaiseResult struct {
+	// Outcome is one of created | updated | refreshed | suppressed |
+	// not_applicable.
+	Outcome string `json:"outcome"`
+	// ID is the live request id; empty for not_applicable.
+	ID string `json:"id"`
+}
+
 // IssueRemoveBlockedByParams is the thin IPC wrapper the Action Center adds for
 // the existing internal RemoveBlockedByNumber call (ADR 015 §B). Optional fields
 // last so the generated TS signature keeps required params ahead of optional.

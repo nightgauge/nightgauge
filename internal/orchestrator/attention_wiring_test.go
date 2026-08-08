@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
 // newAttentionProducerScheduler builds a scheduler through the real constructor
@@ -881,5 +883,185 @@ func TestUnverifiedDeliverableStreakCountsAreScopedPerTier(t *testing.T) {
 	}
 	if got := s.attention.StreakCount(keyUnverifiedDeliverableStreak(repo, deliverable.TierE2E)); got != 1 {
 		t.Errorf("e2e streak = %d, want 1 (untouched by the unit tier executing)", got)
+	}
+}
+
+// --- #305: the Go call sites ARE the shared builders ------------------------
+
+// buildersIdentity renders the fields that must match across the Go and IPC
+// paths, through JSON so a persisted record (whose option Args have been
+// through a JSON round-trip) compares equal to an in-memory expectation.
+func buildersIdentity(t *testing.T, r attention.DecisionRequest) string {
+	t.Helper()
+	r.ID = ""
+	r.CreatedAt = ""
+	r.ExpiresAt = ""
+	r.SchemaVersion = attention.SchemaVersion
+	r.Lifecycle = attention.Lifecycle{State: attention.StateOpen}
+	raw, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var norm any
+	if err := json.Unmarshal(raw, &norm); err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	out, err := json.MarshalIndent(norm, "", "  ")
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	return string(out)
+}
+
+// TestRunScopedProducersDelegateToSharedBuilders is the Go half of the #305
+// parity contract. The IPC raise verb builds its card by calling
+// orchestrator.BuildBudgetCeilingHit / BuildBranchProtectionBlock; this asserts
+// the SCHEDULER call site persists exactly what those builders produce and
+// nothing else.
+//
+// Together the two halves mean the extension path and the Go path cannot drift:
+// there is one builder per producer, and both call sites are pinned to it. A
+// future edit that "just tweaks the title" at the scheduler call site turns
+// this red instead of silently giving the operator two different cards for one
+// condition depending on which surface saw it.
+func TestRunScopedProducersDelegateToSharedBuilders(t *testing.T) {
+	t.Run("budget-ceiling", func(t *testing.T) {
+		s := newAttentionProducerRunScheduler(t)
+		s.raiseBudgetCeilingHit("octocat/acme", 42, "run-1", 12.5, 25.0)
+
+		reqs := openRunRequests(t, s)
+		if len(reqs) != 1 {
+			t.Fatalf("got %d requests, want 1", len(reqs))
+		}
+		want := BuildBudgetCeilingHit("octocat/acme", 42, "run-1", 12.5, 25.0)
+		if got, wantJSON := buildersIdentity(t, reqs[0]), buildersIdentity(t, want); got != wantJSON {
+			t.Errorf("scheduler card != BuildBudgetCeilingHit\n got: %s\nwant: %s", got, wantJSON)
+		}
+	})
+
+	t.Run("branch-protection", func(t *testing.T) {
+		s := newAttentionProducerRunScheduler(t)
+		const reason = "review-not-approved: REVIEW_REQUIRED"
+		s.raiseBranchProtectionBlock("octocat/acme", 42, 99, "run-1", reason)
+
+		reqs := openRunRequests(t, s)
+		if len(reqs) != 1 {
+			t.Fatalf("got %d requests, want 1", len(reqs))
+		}
+		want := BuildBranchProtectionBlock("octocat/acme", 42, 99, "run-1", reason)
+		if got, wantJSON := buildersIdentity(t, reqs[0]), buildersIdentity(t, want); got != wantJSON {
+			t.Errorf("scheduler card != BuildBranchProtectionBlock\n got: %s\nwant: %s", got, wantJSON)
+		}
+	})
+}
+
+// TestProposedCeilingUSDIsOneRule pins the arithmetic BOTH paths use to compute
+// the ceiling the card offers. Before #305 it lived inline at the scheduler
+// call site, which is why the extension had nothing to reuse and would have had
+// to re-derive it in TypeScript — two implementations of one number, with
+// nothing that fails when they disagree.
+func TestProposedCeilingUSDIsOneRule(t *testing.T) {
+	cases := []struct {
+		ceiling, spent, want float64
+	}{
+		// A 50% raise above the enforced ceiling when spend is under it.
+		{ceiling: 10, spent: 8, want: 15},
+		// A between-stage overrun that the plain raise already clears.
+		{ceiling: 10, spent: 12.5, want: 15},
+		// Exactly at the proposal is still not ABOVE it, so the floor applies.
+		{ceiling: 10, spent: 15, want: 22.5},
+		// A run that blew far past its ceiling: offering a ceiling below the
+		// bill would be an offer that cannot help.
+		{ceiling: 10, spent: 100, want: 150},
+	}
+	for _, tc := range cases {
+		if got := ProposedCeilingUSD(tc.ceiling, tc.spent); got != tc.want {
+			t.Errorf("ProposedCeilingUSD(%v, %v) = %v, want %v", tc.ceiling, tc.spent, got, tc.want)
+		}
+		if got := ProposedCeilingUSD(tc.ceiling, tc.spent); got <= tc.spent {
+			t.Errorf("ProposedCeilingUSD(%v, %v) = %v, which is not above the spend", tc.ceiling, tc.spent, got)
+		}
+	}
+}
+
+// TestProducerAbandonedDispatchEmitsUnblock covers the one producer with no Go
+// counterpart (#307's force-clear funnel). Keyed per (repo, issue) and standing
+// with a constant fingerprint, so a slot that wedges repeatedly collapses onto
+// one card instead of one per force-clear.
+func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
+	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev")
+
+	if r.Producer != ProducerAbandonedDispatch {
+		t.Errorf("producer = %q, want %q", r.Producer, ProducerAbandonedDispatch)
+	}
+	if r.Kind != attention.KindUnblock || r.Severity != attention.SeverityBlockingRun {
+		t.Errorf("kind/severity = %q/%q, want unblock/blocking_run", r.Kind, r.Severity)
+	}
+	if !r.Standing || r.Fingerprint == "" {
+		t.Error("must be standing with a fingerprint — the wedge persists until someone deals with it")
+	}
+	if want := "abandoned-dispatch:octocat/acme#42"; r.IdempotencyKey != want {
+		t.Errorf("idempotency_key = %q, want %q (per-issue, NOT per force-clear generation)", r.IdempotencyKey, want)
+	}
+	// A second force-clear of the same issue must be the SAME key, or a wedged
+	// slot that keeps re-wedging buries the inbox.
+	again := BuildAbandonedDispatch("octocat/acme", 42, "run-2", "pr-create")
+	if again.IdempotencyKey != r.IdempotencyKey || again.Fingerprint != r.Fingerprint {
+		t.Errorf("repeat force-clear changed identity: key %q→%q fingerprint %q→%q",
+			r.IdempotencyKey, again.IdempotencyKey, r.Fingerprint, again.Fingerprint)
+	}
+	retry := r.FindOption("retry")
+	if retry == nil || retry.Verb != attention.VerbAutonomousClearIssueFailures {
+		t.Error("retry option must bind autonomous.clearIssueFailures")
+	}
+	if r.DefaultAction != attention.ExpireNoop {
+		t.Errorf("default_action = %q, want %q — expiry must not silently retry a wedged issue",
+			r.DefaultAction, attention.ExpireNoop)
+	}
+	assertSteerSet(t, r)
+
+	// An unknown stage degrades to a named placeholder rather than an empty
+	// gap in the title.
+	if noStage := BuildAbandonedDispatch("octocat/acme", 42, "", ""); noStage.Context.Stage != "unknown" {
+		t.Errorf("empty stage = %q, want %q", noStage.Context.Stage, "unknown")
+	}
+	// No run id is a HANDLED case: the force-clear caller often has none.
+	if noRun := BuildAbandonedDispatch("octocat/acme", 42, "", "feature-dev"); noRun.Context.TraceRef != nil {
+		t.Error("an empty runId must produce no trace back-reference, not a synthetic one")
+	}
+}
+
+// TestIsBranchProtectionPuntMatchesDecideReasons pins the gate to the reason
+// strings stages.Decide actually emits — the predicate and its inputs are now
+// used from two packages, so a rename on either side must fail here rather than
+// silently stop carding branch-protection blocks.
+func TestIsBranchProtectionPuntMatchesDecideReasons(t *testing.T) {
+	blocking := []pmstages.PRViewSnapshot{
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "REVIEW_REQUIRED"},
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "CHANGES_REQUESTED"},
+		{State: "OPEN", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "BLOCKED"},
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN",
+			StatusCheckRollup: []pmstages.PRStatusCheckRow{{Name: "ci", Conclusion: "FAILURE"}}},
+	}
+	for _, snap := range blocking {
+		d := pmstages.Decide(snap)
+		if !d.Punt {
+			t.Fatalf("Decide(%+v) did not punt", snap)
+		}
+		if !IsBranchProtectionPunt(d.Reason) {
+			t.Errorf("IsBranchProtectionPunt(%q) = false, want true", d.Reason)
+		}
+	}
+
+	notBlocking := []pmstages.PRViewSnapshot{
+		{State: "MERGED"},
+		{State: "CLOSED"},
+		{State: "OPEN", Mergeable: "MERGEABLE", MergeStateStatus: "CLEAN", ReviewDecision: "APPROVED"},
+	}
+	for _, snap := range notBlocking {
+		if d := pmstages.Decide(snap); IsBranchProtectionPunt(d.Reason) {
+			t.Errorf("IsBranchProtectionPunt(%q) = true for %+v, want false", d.Reason, snap)
+		}
 	}
 }

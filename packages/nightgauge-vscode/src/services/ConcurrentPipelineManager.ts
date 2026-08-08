@@ -2815,11 +2815,77 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       }
     }
 
+    // #305: raise the abandoned-dispatch card. #307 booked this dispatch's
+    // terminal state but had no way to TELL anyone — its only surfacing was a
+    // transient Stop toast and a warn log, and its own ledger named that the
+    // gap ("no `raise` verb exists on IPC or the CLI"). Raised BEFORE
+    // cleanupSlot because that disposes the state service; the raise itself
+    // does not need it, but ordering the notification ahead of teardown keeps
+    // the sequence readable and means a future field read here is still valid.
+    await this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage);
+
     try {
       await this.cleanupSlot(slot, /* preserveWorktree */ true, /* deleteBranch */ false);
     } catch (err) {
       this.logger.error("Force-clear: slot teardown failed — state service/tree item may leak", {
         issueNumber: slot.issueNumber,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Raise the `abandoned-dispatch` Action Center card for a force-cleared
+   * dispatch (#305).
+   *
+   * NO RUN ID, and that is correct rather than a shortcut. At force-clear time
+   * Go mints the RunID and the extension has no verb to ask for one; the wedged
+   * run's `run-state.json` may also already be archived. The card therefore
+   * carries no trace back-reference — an explicitly handled case daemon-side.
+   * Synthesising an id to fill the field would put a fabricated identity into
+   * the audit trail, which is worse than an honest gap. (#370, which threads
+   * run identity through the IPC surface, is what improves this later.)
+   *
+   * FAIL-OPEN AND NEVER-THROWING, twice over: every raise path is fail-open by
+   * contract, and this one sits inside the force-clear funnel, where a throw
+   * would abort the exactly-once terminal bookkeeping #307 exists to guarantee
+   * — turning a missing notification into a leaked queue mark and a held
+   * scheduler seat.
+   */
+  private async raiseAbandonedDispatchCard(
+    repo: string | undefined,
+    issueNumber: number,
+    stage: string | undefined
+  ): Promise<void> {
+    if (!repo || !repo.includes("/")) {
+      // A slot with no resolvable owner/name has no card identity. A legitimate
+      // local state, not a failure to report.
+      return;
+    }
+    try {
+      const result = await IpcClient.getInstance().attentionRaise(
+        "abandoned-dispatch",
+        repo,
+        issueNumber,
+        undefined, // runId — see the doc comment above
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        stage
+      );
+      this.logger.info("Force-clear: abandoned-dispatch card raised (#305)", {
+        issueNumber,
+        outcome: result.outcome,
+        requestId: result.id,
+      });
+    } catch (err) {
+      this.logger.warn("Force-clear: attention.raise failed (fail-open) — no card for this wedge", {
+        issueNumber,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -2874,6 +2940,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       { issueNumber, repoName: reservation.repo },
       "abort deadline force-cleared a stranded reservation"
     );
+
+    // #305: same card as the slot arm. A dispatch that wedged inside worktree
+    // creation is abandoned exactly as much as one that wedged mid-stage, and
+    // giving only one arm the notification is the asymmetry this fence exists
+    // to prevent. No stage: the pipeline never started one.
+    await this.raiseAbandonedDispatchCard(reservation.repo, issueNumber, undefined);
 
     // The `reservedSlots` entry is deliberately LEFT IN PLACE. It is what stops
     // a re-dispatch from colliding with the still-running `startSlot`, and that

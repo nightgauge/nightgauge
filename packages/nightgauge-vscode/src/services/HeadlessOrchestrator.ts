@@ -631,6 +631,59 @@ export function describeMergeBlocker(
 }
 
 /**
+ * The raw `gh pr view` projection for a PR the deterministic merge declined
+ * (#305). Sent verbatim to `attention.raise`, where the daemon runs the same
+ * `stages.Decide()` matrix the Go pr-merge path uses.
+ *
+ * Structured, not prose, deliberately: `describeMergeBlocker` renders a
+ * human-facing sentence and the Go path renders a machine reason code. Sending
+ * the sentence would put a visibly different string on the card depending on
+ * which path saw the block, with nothing failing.
+ *
+ * @internal Exported for testing.
+ */
+export interface MergeBlockerSnapshot {
+  prState: string;
+  mergeable: string;
+  mergeStateStatus: string;
+  /** "" means the branch ruleset requires no reviewers — not "unknown". */
+  reviewDecision: string;
+  checks: Array<{ name: string; conclusion: string }>;
+}
+
+/**
+ * One run-scoped Action Center raise from the extension path (#305).
+ *
+ * The producer is a CLOSED union mirroring the daemon's allowlist, and there is
+ * deliberately no place here for an option, a verb, or an args map: card
+ * options are executed by the daemon on resolve, so a surface that could
+ * describe them could mint a legitimate-looking card offering an arbitrary
+ * operation on an arbitrary issue. The extension reports a CONDITION; the
+ * daemon decides what the card says and what it offers.
+ *
+ * @internal Exported for testing.
+ */
+export interface RunScopedAttentionRaise {
+  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch";
+  issueNumber: number;
+  /** budget-ceiling: the run's spend when the ceiling stopped it. */
+  costUsd?: number;
+  /** budget-ceiling: the ceiling that was ENFORCED, including a live override.
+   * The proposed higher ceiling is derived from it daemon-side. */
+  ceilingUsd?: number;
+  /** branch-protection: the blocked PR plus the raw `gh pr view` projection.
+   * The daemon classifies with stages.Decide; prose never crosses the wire. */
+  pr?: number;
+  prState?: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
+  reviewDecision?: string;
+  checks?: Array<{ name: string; conclusion: string }>;
+  /** abandoned-dispatch / branch-protection: the last stage observed. */
+  stage?: string;
+}
+
+/**
  * Result of reconcileBookkeepingFromDiskState — the in-memory arrays plus
  * a list of stages that were recovered from disk and a flag indicating
  * whether anything changed.
@@ -1403,6 +1456,91 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Read the current run's id from run-state.json, or "" when there is none.
+   *
+   * Deliberately read here rather than resolved daemon-side from the runtime
+   * registry: that registry is keyed by bare issue number today, and adding a
+   * reader would both give #370 one more site to re-key and mis-stamp the card
+   * when a re-dispatch for the same issue is already in flight. An empty run id
+   * is a handled case — the card simply carries no trace back-reference.
+   */
+  private readCurrentRunId(): string {
+    try {
+      const runStatePath = path.join(
+        this.getWorkingDirectory(),
+        ".nightgauge",
+        "pipeline",
+        "run-state.json"
+      );
+      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as { run_id?: string };
+      return parsed.run_id ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Raise a RUN-SCOPED Action Center card for a condition this run just hit
+   * (#305).
+   *
+   * The extension operating mode could not do this at all before: every
+   * run-scoped producer hung off the Go scheduler, so a headless run — the
+   * operating mode for the overwhelming majority of dispatches — detected these
+   * conditions, logged them, and dropped them. `attention.raise` takes a CLOSED
+   * producer id plus typed scalars; the daemon builds the card with the same
+   * builders the Go scheduler uses and writes it through the same single store,
+   * so dedup, fingerprint semantics, and resolve/verb execution are inherited
+   * rather than reimplemented here.
+   *
+   * FAIL-OPEN, unconditionally. Every existing raise path is fail-open by
+   * contract (orchestrator.raiseThrough logs and returns), and this one crosses
+   * an IPC boundary that adds failure modes the in-process path never had — no
+   * daemon, request timeout, store unconfigured. A throw from here would turn
+   * an FYI into a run-killer.
+   */
+  private async raiseRunScopedAttention(params: RunScopedAttentionRaise): Promise<void> {
+    try {
+      const repo = await this.resolveRunRepoSlug();
+      if (!repo) {
+        // No resolvable repo identity is a legitimate local state, not a
+        // failure to report — the same stance attention.sweep takes.
+        this.logger.debug?.("attention.raise skipped: no resolvable repo slug", {
+          producer: params.producer,
+          issueNumber: params.issueNumber,
+        });
+        return;
+      }
+      const result = await IpcClient.getInstance().attentionRaise(
+        params.producer,
+        repo,
+        params.issueNumber,
+        this.readCurrentRunId(),
+        params.costUsd,
+        params.ceilingUsd,
+        params.pr,
+        params.prState,
+        params.mergeable,
+        params.mergeStateStatus,
+        params.reviewDecision,
+        params.checks,
+        params.stage
+      );
+      this.logger.info("Action Center card raised", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        outcome: result.outcome,
+        requestId: result.id,
+      });
+    } catch (err) {
+      this.logger.warn("attention.raise failed (fail-open)", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        err,
+      });
+    }
+  }
+
+  /**
    * Get the root directory for persistent data that must survive worktree
    * cleanup. Returns mainRepoRoot if set, otherwise falls back to
    * getWorkingDirectory().
@@ -1969,6 +2107,24 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // answer WHY the expensive path was needed (Issue #297).
         if (blockerReason) {
           this.stageExecutionPaths.set("pr-merge", { path: "llm", puntReason: blockerReason });
+        }
+        // #305: a branch-protection / required-check / review block is a
+        // human-needed dead end no retry can clear — the Go scheduler has
+        // carded it since ADR 015 §F #6, and until now the extension path
+        // recorded it as punt telemetry and nothing else. The daemon decides
+        // whether this particular block IS branch protection (some punts are
+        // in-flight CI, which a retry does clear) and stays silent if not.
+        if (fb.snapshot) {
+          await this.raiseRunScopedAttention({
+            producer: "branch-protection",
+            issueNumber,
+            pr: prNumber,
+            prState: fb.snapshot.prState,
+            mergeable: fb.snapshot.mergeable,
+            mergeStateStatus: fb.snapshot.mergeStateStatus,
+            reviewDecision: fb.snapshot.reviewDecision,
+            checks: fb.snapshot.checks,
+          });
         }
       }
 
@@ -2993,12 +3149,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     prNumber: number,
     issueNumber: number,
     cwd: string
-  ): Promise<{ merged: boolean; blocker?: string }> {
+  ): Promise<{ merged: boolean; blocker?: string; snapshot?: MergeBlockerSnapshot }> {
     const EC_POLL_INTERVAL_MS = 2_000;
     const EC_MAX_POLLS = 4;
 
+    let prState: string;
     let mergeable: string;
     let mergeStateStatus: string;
+    let reviewDecision: string;
     let checkConclusions: Array<{ name: string; conclusion: string }>;
 
     const fetchPrData = async () => {
@@ -3009,7 +3167,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "view",
           String(prNumber),
           "--json",
-          "state,statusCheckRollup,mergeable,mergeStateStatus",
+          // #305 adds reviewDecision: the Action Center card's reason is
+          // produced by the Go `stages.Decide()` matrix, which distinguishes
+          // "review-not-approved" from the other blockers. Without this field
+          // a review block would be indistinguishable from a clean PR on the
+          // daemon side and would raise no card at all.
+          "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
         ],
         { encoding: "utf-8", cwd, timeout: 30_000 }
       );
@@ -3021,13 +3184,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion || "UNKNOWN" })),
         mergeable: (data.mergeable as string) || "UNKNOWN",
         mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
+        // Empty is meaningful and NOT a fallback value: GitHub returns "" when
+        // the branch ruleset requires no reviewers, which Decide() reads as
+        // "review not blocking". Coercing it to "UNKNOWN" would invent a
+        // blocker that does not exist.
+        reviewDecision: (data.reviewDecision as string) ?? "",
       };
     };
 
     try {
       const data = await fetchPrData();
+      prState = data.state;
       mergeable = data.mergeable;
       mergeStateStatus = data.mergeStateStatus;
+      reviewDecision = data.reviewDecision;
       checkConclusions = data.checks;
     } catch (fetchErr) {
       if (isGithubRateLimitError(fetchErr)) {
@@ -3059,10 +3229,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         prNumber,
         mergeable,
         mergeStateStatus,
+        reviewDecision,
         failedCheckCount: failedChecks.length,
         blocker,
       });
-      return { merged: false, blocker };
+      // #305: the STRUCTURED projection travels alongside the prose. The prose
+      // is for the operator-facing error line and the retro classifier; the
+      // Action Center card's reason comes from the daemon running the same
+      // `stages.Decide()` matrix the Go path uses, so the same block produces
+      // the same card no matter which surface observed it.
+      return {
+        merged: false,
+        blocker,
+        snapshot: {
+          prState,
+          mergeable,
+          mergeStateStatus,
+          reviewDecision,
+          checks: checkConclusions,
+        },
+      };
     }
 
     this.logger.info("Post-merge verification: deterministic merge fallback triggered", {
@@ -10561,6 +10747,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 } catch {
                   // Non-critical
                 }
+
+                // #305: surface it in the Action Center. Before this, a
+                // headless run that hit the ceiling recorded an outcome type
+                // and wrote a log line — the operator got no card offering the
+                // raise-and-retry the Go path has always offered, for the
+                // condition the producer exists to surface. Fail-open inside.
+                await this.raiseRunScopedAttention({
+                  producer: "budget-ceiling",
+                  issueNumber,
+                  costUsd: ceilingCheck.currentCostUsd,
+                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
+                });
 
                 // Don't set failedStage — this is a controlled stop, not a
                 // failure. Flag it so the completion reconcile below doesn't

@@ -88,11 +88,15 @@ func keyTerminalFailure(repo string, issue int) string {
 	return fmt.Sprintf("%s:%s#%d", producerTerminalFailure, repo, issue)
 }
 
-// isBranchProtectionPunt reports whether a pr-merge punt reason is a
+// IsBranchProtectionPunt reports whether a pr-merge punt reason is a
 // branch-protection / required-check / review block that no LLM retry can clear
 // — the class that warrants a human-needed Action Center card (ADR 015 §F #6).
 // Reasons are prefixed (e.g. "review-not-approved: …"), so match by prefix.
-func isBranchProtectionPunt(reason string) bool {
+//
+// Exported for the IPC raise verb (#305): the extension path reaches the same
+// dead end and must gate on the same predicate over the same reason strings,
+// rather than re-deciding "is this branch protection?" from prose.
+func IsBranchProtectionPunt(reason string) bool {
 	for _, p := range []string{
 		pmstages.ReasonReviewMissing,
 		pmstages.ReasonFailedChecks,
@@ -735,11 +739,30 @@ func (as *AutonomousScheduler) raiseStuckEpic(repo string, epic int, title, summ
 
 // --- Producer 4: budget ceiling hit (run-scoped, Scheduler) ------------------
 
-// raiseBudgetCeilingHit surfaces a run terminated by the pipeline budget
-// ceiling. approve kind. raise-to option carries the proposed higher ceiling.
-func (s *Scheduler) raiseBudgetCeilingHit(repo string, issue int, runID string, costUSD, proposedCeilingUSD float64) {
+// ProposedCeilingUSD is the single rule for "what ceiling should the card
+// offer?" — a 50% raise above the enforced ceiling, floored above what the run
+// already spent so the offer is never below the bill.
+//
+// Extracted (#305) because BOTH terminal paths must propose the same number.
+// The Go scheduler and the extension's between-stage ceiling check reach the
+// same dead end; if each did the arithmetic itself, the two cards would offer
+// different ceilings for the same overrun and the parity test would still pass
+// on every field that is not a number.
+func ProposedCeilingUSD(enforcedCeilingUSD, spentUSD float64) float64 {
+	proposed := enforcedCeilingUSD * 1.5
+	if proposed <= spentUSD {
+		proposed = spentUSD * 1.5
+	}
+	return proposed
+}
+
+// BuildBudgetCeilingHit constructs the budget-ceiling card. Pure: it takes
+// scalars and returns the record, so the Go scheduler path and the IPC raise
+// verb (#305) produce a byte-identical DecisionRequest from the same inputs
+// rather than two hand-aligned builders.
+func BuildBudgetCeilingHit(repo string, issue int, runID string, costUSD, proposedCeilingUSD float64) attention.DecisionRequest {
 	owner, name := splitRepo(repo)
-	s.raiseAttention(attention.DecisionRequest{
+	return attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("budget-ceiling:%s#%d", repo, issue),
 		Kind:           attention.KindApprove,
 		Severity:       attention.SeverityBlockingRun,
@@ -755,15 +778,27 @@ func (s *Scheduler) raiseBudgetCeilingHit(repo string, issue int, runID string, 
 		DefaultAction: "halt",
 		ExpiresAt:     expiryFromNow(1 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Add context for raising the ceiling, or for halting"},
-	})
+	}
+}
+
+// raiseBudgetCeilingHit surfaces a run terminated by the pipeline budget
+// ceiling. approve kind. raise-to option carries the proposed higher ceiling.
+func (s *Scheduler) raiseBudgetCeilingHit(repo string, issue int, runID string, costUSD, proposedCeilingUSD float64) {
+	s.raiseAttention(BuildBudgetCeilingHit(repo, issue, runID, costUSD, proposedCeilingUSD))
 }
 
 // --- Producer 6: branch-protection block (run-scoped, Scheduler) -------------
 
-// raiseBranchProtectionBlock surfaces a pr-merge punt caused by branch
-// protection / a required check. unblock kind: it needs a human to fix.
-func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int, runID, reason string) {
-	s.raiseAttention(attention.DecisionRequest{
+// BuildBranchProtectionBlock constructs the branch-protection card. Pure, for
+// the same reason as BuildBudgetCeilingHit (#305).
+//
+// `reason` must be a pr-merge punt reason as produced by
+// stages.Decide — NOT prose. Both paths derive it from the same decision
+// matrix over the same PR snapshot, so the card's body and the
+// IsBranchProtectionPunt gate read identical text no matter which surface
+// observed the block.
+func BuildBranchProtectionBlock(repo string, issue, prNumber int, runID, reason string) attention.DecisionRequest {
+	return attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("branch-protection:%s#%d", repo, issue),
 		Kind:           attention.KindUnblock,
 		Severity:       attention.SeverityBlockingRun,
@@ -781,7 +816,78 @@ func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int,
 		DefaultAction: attention.ExpireNoop,
 		ExpiresAt:     expiryFromNow(48 * time.Hour),
 		Steer:         &attention.Steer{Enabled: true, Hint: "Tell the pipeline what to do differently on retry"},
-	})
+	}
+}
+
+// raiseBranchProtectionBlock surfaces a pr-merge punt caused by branch
+// protection / a required check. unblock kind: it needs a human to fix.
+func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int, runID, reason string) {
+	s.raiseAttention(BuildBranchProtectionBlock(repo, issue, prNumber, runID, reason))
+}
+
+// --- Producer 11: abandoned dispatch (run-scoped, extension-only) ------------
+
+// ProducerAbandonedDispatch names the force-clear producer (#305/#307).
+const ProducerAbandonedDispatch = "abandoned-dispatch"
+
+// BuildAbandonedDispatch constructs the card for a dispatch the extension's
+// abort deadline gave up on (ConcurrentPipelineManager.forceClearStuckSlots).
+//
+// Extension-only BY DESIGN, and the one producer here with no Go counterpart:
+// the Go scheduler's terminal defer runs in the same goroutine as its stage
+// loop, so nothing else can declare a run abandoned while that defer is still
+// owed. There is no Go force-clear funnel to keep in parity — see the
+// force-clear-terminal-bookkeeping row in terminal_behaviors.json.
+//
+// #307 booked the terminal state of a force-cleared dispatch but had no way to
+// TELL anyone: its only surfacing was a transient Stop toast and a warn log,
+// and its own ledger named this the gap. The card is what survives the toast.
+//
+// Keyed per (repo, issue), NOT per generation: a wedged slot that force-clears,
+// gets re-queued, and wedges again is one condition an operator has to deal
+// with once, not a new card per attempt. Standing with a constant fingerprint,
+// so repeat force-clears refresh silently instead of re-alerting.
+func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attention.DecisionRequest {
+	if stage == "" {
+		stage = "unknown"
+	}
+	body := fmt.Sprintf(
+		"Issue #%d was force-cleared: its dispatch stopped responding and the abort deadline gave up waiting for it. "+
+			"Terminal bookkeeping was booked on its behalf (the queue mark and the scheduler seat are released), "+
+			"but the run never reported an outcome of its own — the last stage it was seen in is %s.\n\n"+
+			"The worktree is PRESERVED on purpose: the wedged process may still be writing in it, so nothing was "+
+			"stashed, committed, or deleted. Inspect it before retrying — a retry re-dispatches into the same "+
+			"per-issue worktree path and re-derives the work from scratch.\n\n"+
+			"Retry clears this issue's failure cooldown and re-scans for it. Leave parks it for manual triage.",
+		issue, stage)
+
+	return attention.DecisionRequest{
+		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerAbandonedDispatch, repo, issue),
+		Kind:           attention.KindUnblock,
+		Severity:       attention.SeverityBlockingRun,
+		Title:          fmt.Sprintf("Dispatch abandoned — #%d force-cleared at %s", issue, stage),
+		Body:           body,
+		Producer:       ProducerAbandonedDispatch,
+		Context: attention.Context{
+			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
+			Blocker:  "dispatch wedged past the abort deadline (#307 force-clear)",
+			TraceRef: runTraceRef(runID),
+		},
+		Standing: true,
+		// Constant: the condition is binary — this issue's dispatch was
+		// abandoned and nobody has dealt with it. A counter or a timestamp here
+		// would re-alert on every repeat force-clear, which is the spam-folder
+		// failure mode invariant 2 exists to prevent.
+		Fingerprint: "abandoned:force-clear",
+		Options: []attention.Option{
+			{ID: "retry", Label: "Retry", Verb: attention.VerbAutonomousClearIssueFailures,
+				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
+			noopOption("leave", "Leave for manual triage"),
+		},
+		DefaultAction: attention.ExpireNoop,
+		ExpiresAt:     standingExpiry(),
+		Steer:         &attention.Steer{Enabled: true, Hint: "Note what the wedged run left behind, or what to check first"},
+	}
 }
 
 // --- Producer 8: unexercised deliverable (run-scoped, Scheduler) -------------

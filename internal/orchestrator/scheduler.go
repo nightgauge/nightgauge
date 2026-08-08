@@ -3317,10 +3317,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// approve card offering budget.raiseCeiling (a runtime override that
 			// getPipelineBudgetCeilingUSD honors) + retry, or halt. Propose a 50%
 			// raise above the current ceiling, floored above the current spend.
-			proposed := getPipelineBudgetCeilingUSD(workspaceRoot) * 1.5
-			if proposed <= runtime.TotalCostUSD {
-				proposed = runtime.TotalCostUSD * 1.5
-			}
+			proposed := ProposedCeilingUSD(getPipelineBudgetCeilingUSD(workspaceRoot), runtime.TotalCostUSD)
 			s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID, runtime.TotalCostUSD, proposed)
 			return
 		}
@@ -6394,7 +6391,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 	// branch-protection / required-check / review block is a human-needed
 	// dead-end no LLM retry can clear — surface an unblock card naming the exact
 	// blocker. Other punts (CI wait, unexpected) fall through silently.
-	if isBranchProtectionPunt(detResult.Reason) {
+	if IsBranchProtectionPunt(detResult.Reason) {
 		s.raiseBranchProtectionBlock(item.Repo, item.Number, detResult.PRNumber, runtime.RunID, detResult.Reason)
 	}
 	return false, "", false

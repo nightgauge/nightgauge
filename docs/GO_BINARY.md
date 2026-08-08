@@ -1519,6 +1519,60 @@ store so a sweep's writes reach every subscribed surface):
 | `attention.mute`        | Silence until the condition changes                                       |
 | `attention.unmute`      | Restore alerting                                                          |
 | `attention.sweep`       | Evaluate repos; returns `busy` rather than duplicating an in-flight sweep |
+| `attention.raise`       | Raise a RUN-SCOPED request from a closed producer allowlist (see below)   |
+
+#### `attention.raise` — run-scoped producers off the Go path (issue #305)
+
+Every run-scoped producer used to hang off the Go scheduler, and the IPC surface
+had no verb to raise a request. Extension-path runs — the operating mode for the
+overwhelming majority of dispatches — therefore produced **zero** run-scoped
+Action Center cards by construction: a budget-ceiling stop, a branch-protection
+block, or an abandoned dispatch was detected, logged, and dropped. Fleet-scoped
+producers were unaffected because they route through `autonomous.complete` → Go.
+
+`attention.raise` closes that, without a second attention system. The handler
+builds the card with the **same exported builders the Go scheduler calls**
+(`orchestrator.BuildBudgetCeilingHit`, `BuildBranchProtectionBlock`,
+`BuildAbandonedDispatch`) and writes it through the **same** single authoritative
+store, so dedup by `idempotency_key`, standing-fingerprint semantics, the
+journal, the `attention.event` push, and resolve/verb execution are all
+inherited.
+
+**Closed producer, typed scalars — a security boundary, not a style choice.**
+The params carry a producer id plus scalars; there is no options array, no verb,
+and no args map. Card options are **executed** by the daemon on resolve, and
+`ValidateOption` re-checks that a verb is registered but not that a producer was
+_entitled_ to offer it against a particular target. A free-form raise would let
+any process with socket access mint a legitimate-looking card offering
+`issue.close` or `budget.raiseCeiling` on an arbitrary issue and wait for the
+operator to click it.
+
+| Producer             | Required params                            | Notes                                                                                                                            |
+| -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `budget-ceiling`     | `costUsd`, `ceilingUsd`                    | The proposed higher ceiling is derived daemon-side by `orchestrator.ProposedCeilingUSD`, so both paths offer the same number     |
+| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire                             |
+| `abandoned-dispatch` | (none beyond repo/issue)                   | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) |
+
+`runId` is supplied by the **caller**, deliberately: resolving it daemon-side
+from the runtime registry would add a reader of the bare-issue-number keying
+that #370 must re-key, and would mis-stamp the card when a re-dispatch for the
+same issue is already in flight. An empty `runId` is a handled case — the card
+simply carries no trace back-reference.
+
+**Five outcomes, five values.** `created` (a card is in front of the operator),
+`updated` / `refreshed` (an existing card absorbed the observation; `refreshed`
+is the deliberately silent standing re-observation), `suppressed` (the operator
+already resolved this exact standing condition and nothing was shown — ADR-015
+§M), and `not_applicable` (the daemon evaluated the producer's own precondition
+and it does not hold, e.g. a pr-merge punt that turned out to be in-flight CI
+rather than branch protection). A failure is an **error**, never an outcome.
+
+Three run-scoped producers remain Go-only, with reasons recorded in
+`internal/orchestrator/testdata/terminal_behaviors.json`: `auth-preflight`,
+`branch-fork`, and `unverified-deliverable` (+ its streak counterpart, whose
+right seam is the `gate verify` CLI raising directly rather than an IPC
+round-trip that would make the extension re-classify a finding Go already
+classified).
 
 ### Build Operations
 
