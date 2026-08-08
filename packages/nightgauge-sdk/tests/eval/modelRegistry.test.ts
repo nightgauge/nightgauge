@@ -46,6 +46,20 @@ describe("model registry — integrity", () => {
     expect(getModelDescriptor("claude-sonnet-5")?.deprecated).toBeUndefined();
   });
 
+  it("declares Haiku's empty effort axis rather than inventing levels (#336)", () => {
+    // Haiku has no extended thinking, so it has no effort axis at all. `[]`
+    // says that; the previous ["low","medium","high"] was dead data that the
+    // dispatch path had to contradict with a hardcoded band set.
+    expect(getModelDescriptor("haiku")?.supported_efforts).toEqual([]);
+  });
+
+  it("every other non-deprecated Anthropic model declares a usable ladder", () => {
+    for (const m of activeModels()) {
+      if (m.provider !== "anthropic" || m.id === "claude-haiku-4-5-20251001") continue;
+      expect(m.supported_efforts?.length).toBeGreaterThan(0);
+    }
+  });
+
   it("includes at least one non-Anthropic provider-neutral model", () => {
     expect(MODEL_REGISTRY.some((m) => m.provider !== "anthropic")).toBe(true);
   });

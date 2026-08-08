@@ -103,6 +103,23 @@ describe("model-eval schemas — round-trip parse", () => {
     expect(ModelDescriptorSchema.parse(other)).toEqual(other);
   });
 
+  it("round-trips an EMPTY effort axis and an ABSENT one distinctly (#336)", () => {
+    // `[]` is a positive declaration — "this model has no effort axis" (Haiku
+    // has no extended thinking). Absent is "unknown". `.min(1)` used to make
+    // the first state inexpressible, which forced it into a hardcoded band set
+    // in the VSCode extension while the registry declared the opposite.
+    const noAxis = ModelDescriptorSchema.parse({ ...OPUS, supported_efforts: [] });
+    expect(noAxis.supported_efforts).toEqual([]);
+
+    const { supported_efforts: _omitted, ...withoutField } = OPUS;
+    const unknownAxis = ModelDescriptorSchema.parse(withoutField);
+    expect(unknownAxis.supported_efforts).toBeUndefined();
+    expect("supported_efforts" in unknownAxis).toBe(false);
+
+    // The two states are not the same value, so a consumer can branch on them.
+    expect(noAxis.supported_efforts).not.toEqual(unknownAxis.supported_efforts);
+  });
+
   it("parses a valid EvalTask", () => {
     expect(EvalTaskSchema.parse(TASK)).toEqual(TASK);
   });

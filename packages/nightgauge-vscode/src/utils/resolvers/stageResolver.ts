@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs";
 import * as vscode from "vscode";
-import { AutoModelSelector, type IssueMetadata } from "@nightgauge/sdk";
+import { AutoModelSelector, getModelDescriptor, type IssueMetadata } from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
@@ -312,31 +312,60 @@ export const DEFAULT_STAGE_EFFORTS: Partial<Record<PipelineStage, ClaudeEffort>>
 };
 
 /**
- * Models that support the Claude Code `--effort` flag.
- * Haiku does not support extended thinking, so `--effort` is silently skipped.
- * Update this list as new models gain effort support.
+ * The effort levels a model accepts, read from the model registry — the single
+ * authority on whether a model has an effort axis at all (#336).
  *
- * Fable note (#73): fable is in this set so explicit config and the frontier
- * xhigh escalation actually reach the CLI — but the value passed to Fable is
- * conformed first (floored at Fable's documented `high` default) in
- * `conformEffortForFable`, so a Sonnet-era `medium` default can never
- * downgrade a frontier run below the model's own server-side default.
+ * Three answers, all distinguishable, and the difference is load-bearing:
  *
- * @see Issue #1235 - Per-model effort level configuration
+ * - a **non-empty** array — the model takes `--effort`, at exactly these levels;
+ * - **`[]`** — the model is registered and DECLARES no effort axis. Haiku has
+ *   no extended thinking, so there is no level to request;
+ * - **`undefined`** — the registry has no entry for this model: an
+ *   unregistered id or a user-configured local (ollama/lm-studio) model, whose
+ *   catalog is unknowable here by design.
+ *
+ * `[]` and `undefined` are not synonyms. The two consumers below deliberately
+ * fail in opposite directions on them, so collapsing the states would silently
+ * break one of the two.
+ *
+ * `model` may be a routing band (`"sonnet"`) or a concrete id
+ * (`"claude-sonnet-5"`) — the registry resolves both.
+ *
+ * @see Issue #336 - the registry is the single authority on the effort axis
  */
-export const EFFORT_SUPPORTING_MODELS: ReadonlySet<DefaultModel> = new Set<DefaultModel>([
-  "sonnet",
-  "opus",
-  "fable",
-]);
+export function supportedEffortsFor(model: string): readonly ClaudeEffort[] | undefined {
+  return getModelDescriptor(model)?.supported_efforts;
+}
 
 /**
- * Returns true when the given model supports the `--effort` flag.
+ * Whether `--effort` may be emitted for this model AT ALL — the coarse gate on
+ * the flag, not on any particular level.
+ *
+ * Registry-derived (#336). This used to be a hardcoded `EFFORT_SUPPORTING_MODELS`
+ * band set, which encoded "haiku has no effort axis" a second time, next to a
+ * registry that (wrongly) claimed haiku accepted low/medium/high. Two copies of
+ * one fact, one of them dead and free to rot; the registry is now the only copy.
+ *
+ * **Fails CLOSED on an unknown model.** No registry entry means no `--effort`,
+ * matching the set this replaced (local models were never members) and keeping
+ * a flag off a provider that may reject it outright.
+ *
+ * Contrast {@link assertEffortSupported}, which fails OPEN on that same missing
+ * metadata: emitting a flag speculatively is a provider error, but blocking a
+ * stage because the registry is silent is a self-inflicted outage.
+ *
+ * Fable note (#73): fable declares an effort axis so explicit config and the
+ * frontier xhigh escalation actually reach the CLI — but the value passed to
+ * Fable is conformed first (floored at Fable's documented `high` default) in
+ * `conformEffortForFable`, so a Sonnet-era `medium` default can never downgrade
+ * a frontier run below the model's own server-side default.
  *
  * @see Issue #1235 - Per-model effort level configuration
+ * @see Issue #336 - registry authority, single source of truth
  */
-export function modelSupportsEffort(model: DefaultModel): boolean {
-  return EFFORT_SUPPORTING_MODELS.has(model);
+export function modelSupportsEffort(model: string): boolean {
+  const efforts = supportedEffortsFor(model);
+  return efforts !== undefined && efforts.length > 0;
 }
 
 /**
@@ -353,9 +382,12 @@ export function modelSupportsEffort(model: DefaultModel): boolean {
  * precisely the class of drift that let the opus band run a superseded model
  * for a full release cycle (#74).
  *
- * Unknown models (local ollama/lm-studio, unregistered ids) are NOT validated:
- * the registry has no entries for them by design, so there is nothing to
- * validate against and rejecting would break local runs.
+ * Fails OPEN, unlike the emission gate above: both `undefined` (no registry
+ * entry — local ollama/lm-studio models and unregistered ids) and `[]` (a model
+ * that declares no effort axis) skip validation. There is nothing to validate
+ * against in either case, and a stage must never be blocked for missing
+ * metadata. `[]` is unreachable in practice from the emission site, which has
+ * already declined to pass a flag for it.
  */
 export function assertEffortSupported(
   effort: ClaudeEffort,

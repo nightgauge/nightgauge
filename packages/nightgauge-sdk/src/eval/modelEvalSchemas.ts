@@ -216,7 +216,26 @@ export const ModelDescriptorSchema = z
     concrete_version: z.string().min(1),
     /** USD/MTok rates — the basis for all eval cost computation. */
     rates: TokenRatesSchema,
-    supported_efforts: z.array(EffortLevelSchema).min(1),
+    /**
+     * The effort levels this model accepts. Three states, all distinguishable
+     * and all meaningful (#336):
+     *
+     * - a **non-empty** array — the model takes an effort parameter, at these
+     *   levels;
+     * - **`[]`** — the model has NO effort axis. Haiku has no extended
+     *   thinking, so there is no level to request. This is a positive
+     *   declaration, not missing data, and it is what suppresses `--effort` at
+     *   the dispatch boundary;
+     * - **absent** — unknown. Reserved for entries that genuinely have not
+     *   been characterized; every model with no registry entry at all (local
+     *   ollama/lm-studio catalogs, unregistered ids) reads as absent too,
+     *   since there is no descriptor to read the field from.
+     *
+     * `.min(1)` used to make the middle state inexpressible, which forced the
+     * "haiku has no effort axis" fact into a hardcoded band set in the VSCode
+     * extension while the registry declared the opposite.
+     */
+    supported_efforts: z.array(EffortLevelSchema).optional(),
     supported_reasoning: z.array(ReasoningLevelSchema).min(1),
     context_window: z.number().int().positive(),
     deprecated: z.boolean().optional(),

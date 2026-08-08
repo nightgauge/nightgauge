@@ -3391,12 +3391,17 @@ When using the Claude adapter, effort is resolved with this precedence:
 6. Omit --effort           default Claude behavior
 ```
 
-> **Model capability guard (Issue #1235):** `--effort` is only passed to Claude
-> Code when the active model supports extended thinking. Sonnet, Opus, and
-> Fable support `--effort`; Haiku does not. When a Haiku stage resolves an
-> effort value it is silently dropped. The supported-model list is defined in
-> `EFFORT_SUPPORTING_MODELS` (`incrediConfig.ts`) and should be updated as new
-> models gain support. Valid levels: `low`, `medium`, `high`, `xhigh`, `max`.
+> **Model capability guard (Issue #1235, #336):** `--effort` is only passed to
+> Claude Code when the active model supports extended thinking. Sonnet, Opus,
+> and Fable support `--effort`; Haiku does not. When a Haiku stage resolves an
+> effort value it is silently dropped. This is **registry data, not a code
+> list**: a model whose `supported_efforts` is `[]` has no effort axis, and a
+> model with no registry entry at all (local ollama/lm-studio, unregistered
+> ids) gets no `--effort` either — the gate fails closed. To give a new model
+> an effort axis, edit its entry in
+> `packages/nightgauge-sdk/src/eval/model-registry.json` and run
+> `scripts/sync-model-registry.sh`. Valid levels: `low`, `medium`, `high`,
+> `xhigh`, `max`.
 
 > **`max` effort (#75):** `max` is the top of the ladder, introduced with Opus 5. Which levels a given model actually accepts is not hardcoded — the
 > registry's `supported_efforts` is authoritative, so requesting a level a

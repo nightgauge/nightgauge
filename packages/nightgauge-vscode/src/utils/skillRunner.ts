@@ -136,6 +136,8 @@ import {
   getStageModelsMatrix,
   getTypeOverrides,
   modelSupportsEffort,
+  supportedEffortsFor,
+  assertEffortSupported,
   getStageMcpTools,
   getMcpToolsConfig,
   getSuperchargeCodexModel,
@@ -981,10 +983,10 @@ const TIER_BANDS_STRONGEST_FIRST: readonly ModelTier[] = ["fable", "opus", "sonn
  * Collapse a model reference onto its registry tier band (#340).
  *
  * Two lookups in this file are keyed on the band vocabulary and fail SILENTLY
- * against a concrete id: `modelSupportsEffort` (whose EFFORT_SUPPORTING_MODELS
- * is `{sonnet, opus, fable}`, so `--effort` is simply never appended) and the
- * performance-mode pin comparison (whose MODE_PROFILES pin is the string
- * `"opus"`, so a Maximum-mode run falls back to the adapter's default model).
+ * against a concrete id: the effort gate (`--effort` is simply never appended,
+ * because per-stage effort config is band-keyed) and the performance-mode pin
+ * comparison (whose MODE_PROFILES pin is the string `"opus"`, so a
+ * Maximum-mode run falls back to the adapter's default model).
  * Both used to be safe by accident: every caller reached them through
  * `resolveModel`, which only ever returns a band. Once a caller can hand in a
  * pre-decided model — the Go scheduler's wire value, an operator's run override
@@ -3278,13 +3280,14 @@ export function runStageSkillHeadless(
     // server default applies. Sonnet/Opus values pass through untouched.
     //
     // Both questions below are asked of the model's registry BAND, not of the
-    // raw string (#340). `EFFORT_SUPPORTING_MODELS` holds `{sonnet, opus,
-    // fable}`, so a concrete id — the Go scheduler's wire value before it
-    // normalized, an operator's `--model claude-sonnet-4-6`, a dated pin —
-    // silently dropped `--effort` altogether, taking `model_routing.stage_efforts`
-    // and Maximum mode's `effort: high` with it. A band that the registry does
-    // not recognize (a local model) falls back to the raw string, which is
-    // still not in the set: local models take no `--effort`, correctly.
+    // raw string (#340). The band is what `model_routing.stage_efforts` and
+    // Maximum mode's `effort: high` are keyed on, so a concrete id — the Go
+    // scheduler's wire value before it normalized, an operator's
+    // `--model claude-sonnet-4-6`, a dated pin — used to drop `--effort`
+    // altogether, silently. A band the registry does not recognize (a local
+    // model) falls back to the raw string, which the registry also does not
+    // know: local models take no `--effort`, correctly, because the gate fails
+    // closed on an unknown model (#336).
     const modelBand = modelTierBand(modelDecision.model) ?? modelDecision.model;
     let effort = modelDecision.effort;
     if (modelBand === "fable") {
@@ -3301,9 +3304,17 @@ export function runStageSkillHeadless(
       effort = conformed.effort;
     }
     const finalEffort = effort;
-    const supportsEffort =
-      adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand as DefaultModel);
+    const supportsEffort = adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand);
     if (supportsEffort && finalEffort) {
+      // The gate above only says the model HAS an effort axis; this says the
+      // requested level is on it (#75). Throws rather than downgrading — an
+      // operator who configured `max` must not silently receive `xhigh`.
+      assertEffortSupported(
+        finalEffort,
+        modelDecision.model,
+        supportedEffortsFor(modelBand),
+        stage
+      );
       args.push("--effort", finalEffort);
     }
 
