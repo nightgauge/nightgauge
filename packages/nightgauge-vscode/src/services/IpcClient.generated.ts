@@ -528,8 +528,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<AttentionAcknowledgeResult>('attention.acknowledge', { id, actor });
   }
 
-  async attentionRaise(producer: string, repo: string, issue: number, runId?: string, costUsd?: number, ceilingUsd?: number, pr?: number, prState?: string, mergeable?: string, mergeStateStatus?: string, reviewDecision?: string, checks?: unknown[], stage?: string): Promise<AttentionRaiseResult> {
-    return this.call<AttentionRaiseResult>('attention.raise', { producer, repo, issue, runId, costUsd, ceilingUsd, pr, prState, mergeable, mergeStateStatus, reviewDecision, checks, stage });
+  async attentionRaise(producer: string, repo: string, issue: number, runId?: string, pr?: number, prState?: string, mergeable?: string, mergeStateStatus?: string, reviewDecision?: string, checks?: unknown[], stage?: string): Promise<AttentionRaiseResult> {
+    return this.call<AttentionRaiseResult>('attention.raise', { producer, repo, issue, runId, pr, prState, mergeable, mergeStateStatus, reviewDecision, checks, stage });
   }
 
   async attentionMute(id: string, actor?: string): Promise<AttentionMuteResult> {

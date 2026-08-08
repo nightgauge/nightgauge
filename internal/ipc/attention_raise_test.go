@@ -10,6 +10,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +19,21 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
+
+// recordRunSpend seeds the DAEMON's own record of what a run has spent — the
+// only source attention.raise will accept for the budget-ceiling card's
+// numbers (#305 review). Mirrors what pipeline.notifyStageTransition
+// accumulates on the extension path.
+func recordRunSpend(t *testing.T, s *Server, repo string, issue int, costUSD float64) {
+	t.Helper()
+	rt := state.NewRuntimeState(repo, issue, "")
+	rt.TotalCostUSD = costUSD
+	s.runtimesMu.Lock()
+	s.activeRuntimes[fmt.Sprintf("%d", issue)] = rt
+	s.runtimesMu.Unlock()
+}
 
 func raiseParams(t *testing.T, p AttentionRaiseParams) json.RawMessage {
 	t.Helper()
@@ -127,21 +142,21 @@ func onlyOpenRequest(t *testing.T, s *Server) attention.DecisionRequest {
 // really is that builder and nothing else.
 func TestAttentionRaiseProducesTheGoPathCard(t *testing.T) {
 	const (
-		repo    = "octocat/acme"
-		issue   = 4242
-		runID   = "019f0000-0000-7000-8000-000000000001"
-		cost    = 12.50
-		ceiling = 10.00
+		repo  = "octocat/acme"
+		issue = 4242
+		runID = "019f0000-0000-7000-8000-000000000001"
+		cost  = 12.50
 	)
 	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, repo, issue, cost)
+	// The enforced ceiling is read in-process, exactly as scheduler.go reads it.
+	ceiling := orchestrator.PipelineBudgetCeilingUSD(s.workspaceRoot)
 
 	got := mustRaise(t, s, AttentionRaiseParams{
-		Producer:   ProducerBudgetCeiling,
-		Repo:       repo,
-		Issue:      issue,
-		RunID:      runID,
-		CostUSD:    cost,
-		CeilingUSD: ceiling,
+		Producer: ProducerBudgetCeiling,
+		Repo:     repo,
+		Issue:    issue,
+		RunID:    runID,
 	})
 	if got.Outcome != string(attention.OutcomeCreated) {
 		t.Fatalf("outcome = %q, want %q", got.Outcome, attention.OutcomeCreated)
@@ -186,9 +201,10 @@ func TestAttentionRaiseProducesTheGoPathCard(t *testing.T) {
 // fires on a re-dispatch would stack cards for one overrun.
 func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
 	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, "octocat/acme", 7, 20)
 	p := AttentionRaiseParams{
 		Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 7,
-		RunID: "run-1", CostUSD: 20, CeilingUSD: 15,
+		RunID: "run-1",
 	}
 
 	first := mustRaise(t, s, p)
@@ -196,7 +212,7 @@ func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
 		t.Fatalf("first outcome = %q, want created", first.Outcome)
 	}
 
-	p.CostUSD = 25 // the run kept spending; same condition, same key
+	recordRunSpend(t, s, "octocat/acme", 7, 25) // the run kept spending; same condition, same key
 	second := mustRaise(t, s, p)
 	if second.Outcome != string(attention.OutcomeUpdated) {
 		t.Errorf("second outcome = %q, want updated", second.Outcome)
@@ -238,9 +254,10 @@ func TestAttentionRaiseDedupesOnIdempotencyKey(t *testing.T) {
 //	second (new run, new stage) outcome=suppressed id=dr_019fdf95-4952-…
 //	open cards after second wedge: 0
 //
-// "leave" is used rather than "retry" only to keep the test off the verb
-// executor; §M keys on the RESOLVED state, not on which option produced it, so
-// both dismissals silenced the issue identically.
+// The option used to dismiss is immaterial: §M keys on the RESOLVED state, not
+// on which option produced it, so every dismissal silenced the issue
+// identically. (The card's options are both noops now — see
+// TestAbandonedDispatchCardIsInformationalNotARetry.)
 func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
 	s := newAttentionTestServer(t)
 	p := AttentionRaiseParams{
@@ -252,7 +269,7 @@ func TestAbandonedDispatchReRaisesAfterAHumanResolution(t *testing.T) {
 	if first.Outcome != string(attention.OutcomeCreated) {
 		t.Fatalf("first outcome = %q, want created", first.Outcome)
 	}
-	if _, err := s.attentionStore().Resolve(context.Background(), first.ID, "leave", "octocat", "", "", s); err != nil {
+	if _, err := s.attentionStore().Resolve(context.Background(), first.ID, "acknowledged", "octocat", "", "", s); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 
@@ -333,9 +350,11 @@ func TestAttentionRaiseCollapsesRepeatForceClearsOntoOneCard(t *testing.T) {
 // standing condition ever needs the raise verb, this test is where the
 // retraction story has to be written down first.
 func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
+	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, "octocat/acme", 1, 20)
 	samples := map[string]AttentionRaiseParams{
 		ProducerBudgetCeiling: {Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 1,
-			RunID: "run-1", CostUSD: 20, CeilingUSD: 10},
+			RunID: "run-1"},
 		ProducerBranchProtection: {Producer: ProducerBranchProtection, Repo: "octocat/acme", Issue: 1,
 			RunID: "run-1", PR: 2, PRState: "OPEN", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
 		ProducerAbandonedDispatch: {Producer: ProducerAbandonedDispatch, Repo: "octocat/acme", Issue: 1,
@@ -347,7 +366,7 @@ func TestNoRaiseableProducerIsStandingWithoutRetraction(t *testing.T) {
 			t.Fatalf("producer %q is raiseable but has no sample here — add one and state its "+
 				"standing/retraction story", producer)
 		}
-		req, applicable, err := buildRaise(p)
+		req, applicable, err := s.buildRaise(p)
 		if err != nil || !applicable {
 			t.Fatalf("buildRaise(%s): applicable=%v err=%v — the sample must produce a card", producer, applicable, err)
 		}
@@ -582,8 +601,6 @@ func TestAttentionRaiseRequiresProducerFields(t *testing.T) {
 		name string
 		p    AttentionRaiseParams
 	}{
-		{"budget-ceiling without cost", AttentionRaiseParams{Producer: ProducerBudgetCeiling, Repo: "o/r", Issue: 1, CeilingUSD: 5}},
-		{"budget-ceiling without ceiling", AttentionRaiseParams{Producer: ProducerBudgetCeiling, Repo: "o/r", Issue: 1, CostUSD: 5}},
 		{"branch-protection without pr", AttentionRaiseParams{Producer: ProducerBranchProtection, Repo: "o/r", Issue: 1}},
 		// Missing merge state must NOT default to UNKNOWN: Decide would read
 		// that as not-mergeable and raise a card asserting the PR cannot merge
@@ -605,16 +622,242 @@ func TestAttentionRaiseRequiresProducerFields(t *testing.T) {
 	}
 }
 
+// --- the round-2 security finding, pinned -----------------------------------
+//
+// The reported attack, verbatim from the review's executed overlay probe:
+//
+//	STEP 1 handleAttentionRaise({producer:"budget-ceiling", repo:"victim/repo",
+//	       issue:1, costUsd:0.01, ceilingUsd:1000000})
+//	    -> outcome=created, option id=raise verb=budget.raiseCeiling
+//	       args=map[ceilingUsd:1.5e+06 issueNumber:1 owner:victim repo:repo]
+//	STEP 2 store.Resolve(ctx, id, "raise", "attacker", ..., s)
+//	    -> wrote .nightgauge/pipeline/budget-override.json
+//	       {"schema_version":1,"ceiling_usd":1500000,...}
+//
+// `PipelineBudgetCeilingUSD` takes max(config, override), so the workspace
+// spend control was gone — no breach, no operator click, from any local process
+// with socket access (#263).
+//
+// Three independent things now break that chain, one test each below: the repo
+// must be configured (step 1 never reaches a builder for `victim/repo`), the
+// ceiling is not a parameter (a caller cannot choose the number), and an
+// uncorroborated spend removes the option that does the write.
+
+// TestAttentionRaiseRejectsUnconfiguredRepo — the first step of the chain.
+func TestAttentionRaiseRejectsUnconfiguredRepo(t *testing.T) {
+	s := newAttentionTestServer(t)
+	for _, repo := range []string{"victim/repo", "attacker/anything", "octocat/not-registered"} {
+		_, err := s.handleAttentionRaise(context.Background(), raiseParams(t, AttentionRaiseParams{
+			Producer: ProducerBudgetCeiling, Repo: repo, Issue: 1, RunID: "run-1",
+		}))
+		if err == nil {
+			t.Errorf("raise against unconfigured repo %q was accepted, want rejection", repo)
+		}
+	}
+	if reqs, _ := s.attentionStore().List(attention.ListFilter{IncludeTerminal: true}); len(reqs) != 0 {
+		t.Errorf("rejected raises wrote %d record(s), want 0", len(reqs))
+	}
+}
+
+// TestBudgetCeilingNumbersAreNotCallerControlled — the second step.
+//
+// The params type carries no money at all, so the strongest possible statement
+// is structural: no field of AttentionRaiseParams can carry a ceiling or a
+// cost. The behavioural half follows — a raise that sends those keys anyway
+// (they are simply ignored by the decoder) produces the card the daemon's OWN
+// state dictates, and its raiseCeiling arg is exactly
+// ProposedCeilingUSD(PipelineBudgetCeilingUSD(root), recordedSpend).
+func TestBudgetCeilingNumbersAreNotCallerControlled(t *testing.T) {
+	typ := reflect.TypeOf(AttentionRaiseParams{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.ToLower(typ.Field(i).Name)
+		for _, bad := range []string{"cost", "ceiling", "usd", "budget", "price", "amount"} {
+			if strings.Contains(name, bad) {
+				t.Errorf("AttentionRaiseParams.%s: no monetary field may cross this wire — "+
+					"the raiseCeiling option's arg is persisted verbatim on resolve",
+					typ.Field(i).Name)
+			}
+		}
+	}
+
+	const (
+		repo      = "octocat/acme"
+		issue     = 1
+		realSpend = 12.0
+	)
+	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, repo, issue, realSpend)
+
+	// A caller sending the old, now-unknown keys with absurd values.
+	raw := json.RawMessage(fmt.Sprintf(
+		`{"producer":%q,"repo":%q,"issue":%d,"runId":"run-1","costUsd":0.01,"ceilingUsd":1000000}`,
+		ProducerBudgetCeiling, repo, issue))
+	res, err := s.handleAttentionRaise(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("handleAttentionRaise: %v", err)
+	}
+	if out := res.(AttentionRaiseResult); out.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("outcome = %q, want created", out.Outcome)
+	}
+
+	card := onlyOpenRequest(t, s)
+	raise := card.FindOption("raise")
+	if raise == nil {
+		t.Fatalf("no raise option on the card: %+v", card.Options)
+	}
+	wantCeiling := orchestrator.ProposedCeilingUSD(
+		orchestrator.PipelineBudgetCeilingUSD(s.workspaceRoot), realSpend)
+	gotCeiling, _ := raise.Args["ceilingUsd"].(float64)
+	if gotCeiling != wantCeiling {
+		t.Errorf("raiseCeiling arg = %v, want %v (server-derived) — the caller moved the number",
+			gotCeiling, wantCeiling)
+	}
+	if gotCeiling >= 1_000_000 {
+		t.Errorf("raiseCeiling arg = %v — the caller's ceiling reached the card", gotCeiling)
+	}
+	if card.Context.CostSoFarUSD != realSpend {
+		t.Errorf("context.cost_so_far_usd = %v, want the RECORDED spend %v",
+			card.Context.CostSoFarUSD, realSpend)
+	}
+}
+
+// TestBudgetCeilingWithoutCorroboratedSpendOffersNoRaise — the third step.
+//
+// A ceiling stop the daemon has no run record for still gets a card (staying
+// silent would reintroduce the hole #305 closes), but WITHOUT the option whose
+// resolution writes budget-override.json. Nothing that could execute a
+// workspace-wide write is offered on a report nothing corroborates.
+func TestBudgetCeilingWithoutCorroboratedSpendOffersNoRaise(t *testing.T) {
+	s := newAttentionTestServer(t) // no recorded runtime, no persisted runtime-N.json
+
+	got := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 1, RunID: "run-1",
+	})
+	if got.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("outcome = %q, want created — the operator must still be told", got.Outcome)
+	}
+	card := onlyOpenRequest(t, s)
+	if card.FindOption("raise") != nil {
+		t.Errorf("an uncorroborated ceiling stop offered `raise`: %+v", card.Options)
+	}
+	for _, o := range card.Options {
+		if o.Verb != attention.VerbNoop {
+			t.Errorf("option %q binds %q — an uncorroborated card must offer noops only", o.ID, o.Verb)
+		}
+	}
+}
+
+// TestBudgetCeilingSpendComesFromTheRunsOwnRepo — the runtime map is keyed by
+// bare issue number (#370's re-keying target), so a live run of repo B's issue
+// #7 must not corroborate a raise naming repo A's issue #7.
+func TestBudgetCeilingSpendComesFromTheRunsOwnRepo(t *testing.T) {
+	s := newAttentionTestServer(t)
+	recordRunSpend(t, s, "o/r", 7, 99) // a DIFFERENT repo's run, same issue number
+
+	got := mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: "octocat/acme", Issue: 7, RunID: "run-1",
+	})
+	if got.Outcome != string(attention.OutcomeCreated) {
+		t.Fatalf("outcome = %q, want created", got.Outcome)
+	}
+	card := onlyOpenRequest(t, s)
+	if card.Context.CostSoFarUSD != 0 {
+		t.Errorf("cost_so_far_usd = %v, want 0 — another repo's run corroborated this card",
+			card.Context.CostSoFarUSD)
+	}
+	if card.FindOption("raise") != nil {
+		t.Errorf("cross-repo runtime corroborated a raiseCeiling offer: %+v", card.Options)
+	}
+}
+
+// TestBudgetCeilingSpendFallsBackToThePersistedRuntime — the daemon's own
+// persisted runtime-{N}.json is an equally valid corroboration source: it is
+// written by this process, never by the caller.
+func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
+	const (
+		repo  = "octocat/acme"
+		issue = 21
+		spend = 40.0
+	)
+	s := newAttentionTestServer(t)
+	dir := s.pipelineStateDir(repo)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := fmt.Sprintf(`{"repo":%q,"issueNumber":%d,"totalCostUsd":%v}`, repo, issue, spend)
+	if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("runtime-%d.json", issue)), []byte(body), 0o644); err != nil {
+		t.Fatalf("write runtime: %v", err)
+	}
+
+	mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
+	})
+	card := onlyOpenRequest(t, s)
+	if card.Context.CostSoFarUSD != spend {
+		t.Errorf("cost_so_far_usd = %v, want the persisted %v", card.Context.CostSoFarUSD, spend)
+	}
+	wantCeiling := orchestrator.ProposedCeilingUSD(
+		orchestrator.PipelineBudgetCeilingUSD(s.workspaceRoot), spend)
+	raise := card.FindOption("raise")
+	if raise == nil {
+		t.Fatalf("persisted corroboration produced no raise option: %+v", card.Options)
+	}
+	if gotCeiling, _ := raise.Args["ceilingUsd"].(float64); gotCeiling != wantCeiling {
+		t.Errorf("raiseCeiling arg = %v, want %v", raise.Args["ceilingUsd"], wantCeiling)
+	}
+}
+
+// TestAbandonedDispatchCardIsInformationalNotARetry — finding 2. Every card
+// this producer raises is a consequence of an operator Stop
+// (`forceClearStuckSlots` has one call site: `abortAll`'s deadline branch), so
+// the card must not be a blocking_run unblock whose primary action re-dispatches
+// the work the operator just cancelled.
+func TestAbandonedDispatchCardIsInformationalNotARetry(t *testing.T) {
+	card := orchestrator.BuildAbandonedDispatch("octocat/acme", 9, "run-1", "feature-dev")
+
+	if card.Severity != attention.SeverityFYI {
+		t.Errorf("severity = %q, want fyi — nothing is blocked by an operator's own Stop", card.Severity)
+	}
+	if card.Kind != attention.KindApprove {
+		t.Errorf("kind = %q, want approve — there is no pipeline action to unblock", card.Kind)
+	}
+	for _, o := range card.Options {
+		if o.Verb != attention.VerbNoop {
+			t.Errorf("option %q binds %q — a Stop must never be undone by this card", o.ID, o.Verb)
+		}
+		if o.Style == attention.StylePrimary {
+			t.Errorf("option %q is StylePrimary — this card recommends nothing", o.ID)
+		}
+	}
+	if card.FindOption("retry") != nil {
+		t.Error("the card still offers `retry`, which re-dispatches deliberately-cancelled work")
+	}
+	for _, want := range []string{"stopped the pipeline", "worktree is PRESERVED", "may be stale"} {
+		if !strings.Contains(card.Body, want) {
+			t.Errorf("body does not mention %q — the card must name the Stop and the cleanup risk", want)
+		}
+	}
+}
+
 // TestAttentionRaiseWithoutStoreIsAnError — an unconfigured store is a FAULT,
 // not a fifth outcome. Callers swallow it (fail-open), but they swallow a
 // failure, not a decision.
 func TestAttentionRaiseWithoutStoreIsAnError(t *testing.T) {
-	s := &Server{}
+	// The repo IS configured, so the raise reaches the store check rather than
+	// stopping at the repo gate — otherwise this test would pass for the wrong
+	// reason and stop covering the case it names.
+	resolver := NewClientResolver(nil, false)
+	resolver.RegisterRepo("o", "r", t.TempDir())
+	s := &Server{resolver: resolver}
+
 	_, err := s.handleAttentionRaise(context.Background(), raiseParams(t, AttentionRaiseParams{
 		Producer: ProducerAbandonedDispatch, Repo: "o/r", Issue: 1,
 	}))
 	if err == nil {
 		t.Fatal("expected an error when no attention store is configured")
+	}
+	if !strings.Contains(err.Error(), "attention store not configured") {
+		t.Errorf("error = %q, want the store-not-configured fault", err)
 	}
 }
 

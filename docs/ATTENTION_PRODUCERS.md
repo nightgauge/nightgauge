@@ -327,7 +327,7 @@ condition — pin BOTH halves, as
 `TestRunScopedProducersDelegateToSharedBuilders` (Go call site → builder) and
 `TestAttentionRaiseProducesTheGoPathCard` (IPC handler → same builder) do.
 
-Two rules on that wiring:
+Four rules on that wiring:
 
 - **The params never carry an option, a verb, or an args map.** Card options are
   executed by the daemon on resolve, so a surface that could describe them could
@@ -349,6 +349,16 @@ Two rules on that wiring:
   loses the guard, which is the same dual-path drift (#257) with the sign
   flipped. Export the predicate and call it; never re-implement it — a third
   copy of a matrix is a third thing to keep in sync.
+- **Never accept a number a card option will act on.** The allowlist bounds
+  _which_ operation a card offers; it says nothing about that operation's
+  magnitude. `budget-ceiling`'s primary option persists a workspace-global
+  ceiling override, so while the enforced ceiling and the run's spend were
+  params, any caller on the workspace socket could choose the number one
+  operator click would write. Derive such values daemon-side from state the
+  daemon itself recorded (config, the run's own `RuntimeState`), and when they
+  cannot be corroborated, raise the card **without** the option rather than
+  guessing — the operator still learns the condition happened, and nothing
+  executable rides on an uncorroborated report.
 
 If the extension does NOT observe it, say so in the `run-scoped-attention` row
 of `internal/orchestrator/testdata/terminal_behaviors.json` with a reason. A
@@ -365,6 +375,18 @@ that key on the operator's first dismissal. Event shape gives what a
 re-observation actually needs anyway: `Raise` updates the open record for the
 key in place (one card per condition), while a recurrence _after_ a resolution —
 a new fact — gets a new card.
+
+**Shape the card around the population that will actually reach it, not the
+condition's name.** `abandoned-dispatch` reads like a stuck run, so its first
+cut shipped `unblock`/`blocking_run` with a primary "Retry". Tracing the call
+graph showed every card it could ever raise follows an operator pressing Stop —
+`forceClearStuckSlots` is reached only from the abort deadline, and `abortAll`
+only from Stop / Abort / `deactivate()`. The card was therefore telling
+operators to undo their own decision, three times over for three stopped
+pipelines, at a severity §I routes to alerting while nothing was blocked. Ask
+who sees this card and what they just did; if the honest answer is "nothing is
+blocked, but there is something worth knowing", that is an `fyi` with noop
+options, not an `unblock` with a remedy.
 
 A genuine event needs no fingerprint: it is observed once rather than
 reconciled. If instead your trigger site re-answers the same question on every

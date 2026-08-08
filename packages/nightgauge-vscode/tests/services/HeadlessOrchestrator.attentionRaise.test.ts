@@ -240,15 +240,23 @@ vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: { getInstance: () => ({ attentionRaise }) },
 }));
 
-/** Positional-arg decoder for the generated `attentionRaise` signature. */
+/**
+ * Positional-arg decoder for the generated `attentionRaise` signature.
+ *
+ * There is no `costUsd` and no `ceilingUsd` in it, and that absence is the
+ * point (#305 review). The budget-ceiling card's primary option persists a
+ * workspace-global runtime ceiling override on resolve; while those two were
+ * params, any caller on the workspace socket chose the number one operator
+ * click would write. Both are now read daemon-side — the ceiling in-process via
+ * orchestrator.PipelineBudgetCeilingUSD, the spend from the run's own recorded
+ * RuntimeState. The extension reports a CONDITION and nothing else.
+ */
 function decodeRaise(call: unknown[]) {
   const [
     producer,
     repo,
     issue,
     runId,
-    costUsd,
-    ceilingUsd,
     pr,
     prState,
     mergeable,
@@ -262,8 +270,6 @@ function decodeRaise(call: unknown[]) {
     number,
     string | undefined,
     number | undefined,
-    number | undefined,
-    number | undefined,
     string | undefined,
     string | undefined,
     string | undefined,
@@ -276,8 +282,6 @@ function decodeRaise(call: unknown[]) {
     repo,
     issue,
     runId,
-    costUsd,
-    ceilingUsd,
     pr,
     prState,
     mergeable,
@@ -352,15 +356,23 @@ describe("HeadlessOrchestrator run-scoped attention raises (Issue #305)", () => 
     const raised = ceilingCalls[0];
     expect(raised.repo).toBe("octocat/acme");
     expect(raised.issue).toBe(257);
-    // The ENFORCED ceiling and the actual spend, both as observed by the check
-    // that stopped the run. The proposed higher ceiling is NOT computed here —
-    // the daemon derives it with orchestrator.ProposedCeilingUSD so the two
-    // paths cannot offer different numbers for the same overrun.
-    expect(raised.costUsd).toBe(15);
-    expect(raised.ceilingUsd).toBe(10);
-    // Nothing that could describe or execute a card crosses the wire.
+    // The CONDITION and its identity, and nothing else. `currentCostUsd` and
+    // `effectiveCeilingUsd` are both in scope at the call site and are
+    // deliberately not sent: the card's raise option persists a workspace-wide
+    // ceiling override, so the daemon derives both numbers from its own state.
     expect(raised.pr).toBeUndefined();
     expect(raised.checks).toBeUndefined();
+    // Positionally, the argument right after the run id is `pr`. A cost or a
+    // ceiling reappearing in the params would land here.
+    expect(attentionRaise.mock.calls[0].slice(4)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   it("does not raise a budget-ceiling card when the run stays under the ceiling", async () => {

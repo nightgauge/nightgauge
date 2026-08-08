@@ -984,18 +984,25 @@ func TestProposedCeilingUSDIsOneRule(t *testing.T) {
 	}
 }
 
-// TestProducerAbandonedDispatchEmitsUnblock covers the one producer with no Go
-// counterpart (#307's force-clear funnel). Keyed per (repo, issue) so a slot
-// that wedges repeatedly collapses onto one card via Store.Raise's open-record
-// dedup, instead of one card per force-clear.
-func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
+// TestProducerAbandonedDispatchIsAnInformationalStopCard covers the one
+// producer with no Go counterpart (#307's force-clear funnel). Keyed per
+// (repo, issue) so a slot that wedges repeatedly collapses onto one card via
+// Store.Raise's open-record dedup, instead of one card per force-clear.
+//
+// INFORMATIONAL, not an unblock, because the whole population is an operator
+// Stop: `forceClearStuckSlots` is reached only from `abortAll`'s deadline, and
+// `abortAll` only from stopPipeline / abortPipeline / deactivate. A
+// blocking_run card recommending a re-dispatch would tell the operator to undo
+// their own Stop, at a severity ADR-015 §I routes to alerting.
+func TestProducerAbandonedDispatchIsAnInformationalStopCard(t *testing.T) {
 	r := BuildAbandonedDispatch("octocat/acme", 42, "run-1", "feature-dev")
 
 	if r.Producer != ProducerAbandonedDispatch {
 		t.Errorf("producer = %q, want %q", r.Producer, ProducerAbandonedDispatch)
 	}
-	if r.Kind != attention.KindUnblock || r.Severity != attention.SeverityBlockingRun {
-		t.Errorf("kind/severity = %q/%q, want unblock/blocking_run", r.Kind, r.Severity)
+	if r.Kind != attention.KindApprove || r.Severity != attention.SeverityFYI {
+		t.Errorf("kind/severity = %q/%q, want approve/fyi — an operator's own Stop blocks nothing",
+			r.Kind, r.Severity)
 	}
 	// EVENT-SHAPED. The force-clear funnel observes a transition once; it does
 	// not re-answer "is this dispatch abandoned?" on a loop, which is the test
@@ -1017,13 +1024,31 @@ func TestProducerAbandonedDispatchEmitsUnblock(t *testing.T) {
 	if again.IdempotencyKey != r.IdempotencyKey {
 		t.Errorf("repeat force-clear changed identity: key %q→%q", r.IdempotencyKey, again.IdempotencyKey)
 	}
-	retry := r.FindOption("retry")
-	if retry == nil || retry.Verb != attention.VerbAutonomousClearIssueFailures {
-		t.Error("retry option must bind autonomous.clearIssueFailures")
+	// NO RETRY, and no primary anything: every option is a noop acknowledgement.
+	// Re-dispatching work the operator just cancelled is not a remedy, and the
+	// verb pair the first cut used (clearIssueFailures + a non-blocking
+	// TriggerRescan poke) did nothing at all with the autonomous loop stopped —
+	// the ordinary state after a manual Stop.
+	if r.FindOption("retry") != nil {
+		t.Error("abandoned-dispatch must not offer `retry`: it re-dispatches deliberately-cancelled work")
+	}
+	for _, o := range r.Options {
+		if o.Verb != attention.VerbNoop {
+			t.Errorf("option %q binds %q, want noop", o.ID, o.Verb)
+		}
+		if o.Style == attention.StylePrimary {
+			t.Errorf("option %q is StylePrimary — this card recommends no action", o.ID)
+		}
 	}
 	if r.DefaultAction != attention.ExpireNoop {
 		t.Errorf("default_action = %q, want %q — expiry must not silently retry a wedged issue",
 			r.DefaultAction, attention.ExpireNoop)
+	}
+	// The two facts worth an operator's attention survive the re-shape.
+	for _, want := range []string{"stopped the pipeline", "worktree is PRESERVED", "may be stale"} {
+		if !strings.Contains(r.Body, want) {
+			t.Errorf("body does not mention %q", want)
+		}
 	}
 	assertSteerSet(t, r)
 

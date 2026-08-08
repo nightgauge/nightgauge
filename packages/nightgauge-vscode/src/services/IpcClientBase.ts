@@ -983,21 +983,35 @@ export interface AttentionMuteResult {
 /** Result from attention.raise — the run-scoped producer entry point for the
  * extension operating mode (#305).
  *
- * Five genuine answers, five values. `created` means a card is now in front of
- * the operator; `updated` / `refreshed` mean an existing card for the same
- * condition absorbed this observation (refreshed is the deliberately silent
- * standing re-observation); `suppressed` means the operator already resolved
- * this exact condition and nothing was shown; `not_applicable` means the daemon
- * evaluated the producer's own precondition and it does not hold. A failure is
- * a rejected promise, never an outcome. */
+ * THREE reachable answers, three values. `created` means a card is now in front
+ * of the operator; `updated` means an open card for the same condition absorbed
+ * this observation; `not_applicable` means the daemon evaluated the producer's
+ * own precondition and it does not hold (the commonest case: the pr-merge block
+ * turned out to be in-flight CI). A failure is a rejected promise, never an
+ * outcome.
+ *
+ * The store's `refreshed` and `suppressed` are deliberately absent: both are
+ * STANDING-only branches, and no raiseable producer may be standing (a one-shot
+ * raise from a surface has no scan to auto-resolve against, so it cannot
+ * satisfy standing's retraction contract — pinned by
+ * TestNoRaiseableProducerIsStandingWithoutRetraction). The daemon treats either
+ * value as a contract violation and errors rather than returning it. */
 export interface AttentionRaiseResult {
-  outcome: "created" | "updated" | "refreshed" | "suppressed" | "not_applicable";
+  outcome: "created" | "updated" | "not_applicable";
   /** The live request id. Empty for `not_applicable`. */
   id: string;
 }
 
 /** One statusCheckRollup row sent to attention.raise for the branch-protection
- * producer. The daemon classifies; the extension never sends prose. */
+ * producer. The daemon classifies; the extension never sends prose.
+ *
+ * The generated client types `checks` as `unknown[]` (the codegen imports
+ * result types only), so THIS declaration is where the shape is enforced —
+ * `HeadlessOrchestrator.MergeBlockerSnapshot.checks` and
+ * `RunScopedAttentionRaise.checks` both use it, which is the whole call path.
+ * `conclusion` is "" for a check that has not concluded; substituting a
+ * placeholder makes the payload unable to express in-flight CI and the daemon
+ * cards a still-running required check as a branch-protection block. */
 export interface AttentionRaiseCheck {
   name: string;
   conclusion: string;

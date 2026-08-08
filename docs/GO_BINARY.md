@@ -1547,11 +1547,45 @@ any process with socket access mint a legitimate-looking card offering
 `issue.close` or `budget.raiseCeiling` on an arbitrary issue and wait for the
 operator to click it.
 
-| Producer             | Required params                            | Notes                                                                                                                                                                |
-| -------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `budget-ceiling`     | `costUsd`, `ceilingUsd`                    | The proposed higher ceiling is derived daemon-side by `orchestrator.ProposedCeilingUSD`, so both paths offer the same number                                         |
-| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire. In-flight CI is excluded first (see below)                     |
-| `abandoned-dispatch` | (none beyond repo/issue)                   | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) when the dispatch booked no outcome |
+| Producer             | Required params                            | Notes                                                                                                                                                                  |
+| -------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `budget-ceiling`     | (none beyond repo/issue)                   | Both numbers are derived daemon-side — see "No money crosses this wire" below. No card option can be given a caller-chosen magnitude                                   |
+| `branch-protection`  | `pr`, plus the raw `gh pr view` projection | The daemon classifies with `stages.Decide` and uses ITS reason string — prose never crosses the wire. In-flight CI is excluded first (see below)                       |
+| `abandoned-dispatch` | (none beyond repo/issue)                   | Extension-only by design: there is no Go force-clear funnel. Raised from `ConcurrentPipelineManager.forceClearStuckSlots` (#307) when the dispatch reported no outcome |
+
+**The repo must be one this daemon has configured.** `attention.raise` rejects a
+repo absent from the client resolver's registry. Dedup is per
+`(producer, repo, issue)` and issue numbers are unbounded, so without that check
+the verb is a card-injection primitive: a caller could fill
+`.nightgauge/attention/` with plausible cards naming repos the workspace has
+never heard of.
+
+**No money crosses this wire.** The allowlist bounds _which_ operation a card
+may offer; it says nothing about that operation's _magnitude_. The
+`budget-ceiling` card's primary option is `budget.raiseCeiling`, whose
+resolution writes `.nightgauge/pipeline/budget-override.json`, which
+`orchestrator.PipelineBudgetCeilingUSD` takes as `max(config, override)` — a
+workspace-global spend control. So both inputs behind that offer are read
+daemon-side:
+
+- the **enforced ceiling** from `orchestrator.PipelineBudgetCeilingUSD`, the
+  same in-process read `scheduler.go` performs;
+- the **spend** from the run's own recorded `RuntimeState` (the live
+  `activeRuntimes` entry, or the persisted `runtime-{N}.json`), cross-checked
+  against the raise's repo because that map is keyed by bare issue number.
+
+When the daemon has **no record** of that run's spend, the card is still raised
+— staying silent would reintroduce the hole this verb closes — but **without**
+the `raiseCeiling` option: an operator is told their run stopped on budget, and
+is not offered a one-click workspace write whose amount nothing corroborates.
+
+**The remedy has to work on the receiving path too.** A ceiling raised from a
+card was inert in extension mode until `getPipelineCeilingConfig` learned to
+read `budget-override.json` with the same `max(config, override)` rule Go uses.
+Before that, resolving the card wrote a file only Go read, the re-dispatched
+extension run enforced the old ceiling, tripped the same between-stage check,
+and re-raised the same `idempotency_key` — one more ceiling of tokens spent and
+no signal that the click had done nothing.
 
 **In-flight CI is not branch protection, and `Decide` alone cannot tell you
 that.** The Go pr-merge runner's pending-CI arm lives outside the matrix:
@@ -1580,16 +1614,28 @@ that #370 must re-key, and would mis-stamp the card when a re-dispatch for the
 same issue is already in flight. An empty `runId` is a handled case — the card
 simply carries no trace back-reference.
 
-**Five outcomes, five values.** `created` (a card is in front of the operator),
-`updated` / `refreshed` (an existing card absorbed the observation; `refreshed`
-is the deliberately silent standing re-observation), `suppressed` (the operator
-already resolved this exact standing condition and nothing was shown — ADR-015
-§M), and `not_applicable` (the daemon evaluated the producer's own precondition
-and it does not hold, e.g. a pr-merge punt that turned out to be in-flight CI
-rather than branch protection). A failure is an **error**, never an outcome.
-`refreshed` and `suppressed` are `Store.Raise` outcomes the verb reports
-faithfully but, with every raiseable producer event-shaped, cannot currently
-produce; they exist so a caller reading the field never has to guess.
+**Three outcomes, three values.** `created` (a card is in front of the
+operator), `updated` (an open card for the same condition absorbed the
+observation), and `not_applicable` (the daemon evaluated the producer's own
+precondition and it does not hold, e.g. a pr-merge punt that turned out to be
+in-flight CI rather than branch protection). A failure is an **error**, never an
+outcome.
+
+`Store.Raise`'s `refreshed` and `suppressed` are deliberately **not** part of
+this contract: both are standing-only branches, and no raiseable producer may be
+standing. Advertising five values while two were structurally unreachable was
+drift, so the handler now treats either as a contract violation and errors,
+naming the value — which is what a future standing producer added to the
+allowlist would hit on its first raise.
+
+**The `abandoned-dispatch` card is informational.**
+`forceClearStuckSlots` has one call site — `abortAll`'s abort deadline — and
+`abortAll` is reached only from Stop / Abort / `deactivate()`, so every card
+this producer raises follows an operator's own Stop. It is `approve`/`fyi` with
+two noop options: it names the **preserved worktree** (which may hold
+uncommitted work — nothing was stashed, committed, or deleted) and the
+possibly-stale Go-side state, and offers no Retry, because re-dispatching work
+the operator just cancelled is not a remedy.
 
 Three run-scoped producers remain Go-only, with reasons recorded in
 `internal/orchestrator/testdata/terminal_behaviors.json`: `auth-preflight`,

@@ -22,10 +22,16 @@ scripts/capture-attention-fixture.sh [SOURCE_STORE_DIR] [OUT_FILE]
 ```
 
 The output is a pure function of the input store — envelopes are deduped and
-sorted, and no field is read from the wall clock — so re-running against the
-same store on a different day produces a byte-identical file. The three dated
-facts live in the table above rather than in the JSON, deliberately, so the
-fixture itself never churns.
+sorted, and no field is read from the wall clock. The three dated facts live in
+the table above rather than in the JSON, deliberately.
+
+**The ENVELOPE SET is stable; the counts are not.** Re-running against the same
+store on a different day reproduces every envelope exactly, which is what the
+tests assert. `journal_actions` is a different matter: the journal lives inside
+the store directory and keeps growing, so those counts move with real activity
+even though nothing reads a clock (observed: `refreshed` 3118 → 3148 across two
+runs on the same store). Treat a counts-only diff as normal churn, not as
+evidence the capture drifted.
 
 ## What is in it, and what is deliberately not
 

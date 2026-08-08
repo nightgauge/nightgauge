@@ -30,6 +30,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { IpcClient } from "./IpcClient";
+import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
   isGithubRateLimitError,
   noteRateLimitOk,
@@ -654,8 +655,14 @@ export interface MergeBlockerSnapshot {
    * `stages.MergeBlockedByPendingCI` reads as "CI is still going". Never
    * substitute a placeholder here: the payload would lose the only signal that
    * distinguishes "wait, this clears itself" from "a human must fix this".
+   *
+   * Typed as the wire row (`AttentionRaiseCheck`) rather than an inline shape:
+   * the generated client's signature is `checks?: unknown[]` (the codegen only
+   * imports RESULT types), so this declaration is where the contract is
+   * actually enforced. Leaving it structural made `AttentionRaiseCheck` a
+   * type nothing referenced, which read as an enforced contract and was not.
    */
-  checks: Array<{ name: string; conclusion: string }>;
+  checks: AttentionRaiseCheck[];
 }
 
 /**
@@ -673,11 +680,18 @@ export interface MergeBlockerSnapshot {
 export interface RunScopedAttentionRaise {
   producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch";
   issueNumber: number;
-  /** budget-ceiling: the run's spend when the ceiling stopped it. */
-  costUsd?: number;
-  /** budget-ceiling: the ceiling that was ENFORCED, including a live override.
-   * The proposed higher ceiling is derived from it daemon-side. */
-  ceilingUsd?: number;
+  /**
+   * budget-ceiling carries NO fields at all, and that is the security boundary
+   * rather than an omission (fixed in review). The card's primary option is
+   * `budget.raiseCeiling`, whose resolution persists a workspace-global runtime
+   * ceiling override; while the spend and the enforced ceiling were params, any
+   * caller on the workspace socket could choose the number that override would
+   * be written with. Both are now read daemon-side — the ceiling in-process via
+   * `orchestrator.PipelineBudgetCeilingUSD`, the spend from the run's own
+   * recorded RuntimeState. The extension says the condition happened; it does
+   * not get to say what it cost.
+   */
+
   /** branch-protection: the blocked PR plus the raw `gh pr view` projection.
    * The daemon classifies with stages.Decide; prose never crosses the wire. */
   pr?: number;
@@ -685,7 +699,7 @@ export interface RunScopedAttentionRaise {
   mergeable?: string;
   mergeStateStatus?: string;
   reviewDecision?: string;
-  checks?: Array<{ name: string; conclusion: string }>;
+  checks?: AttentionRaiseCheck[];
   /** abandoned-dispatch / branch-protection: the last stage observed. */
   stage?: string;
 }
@@ -1463,15 +1477,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Read the current run's id from run-state.json, or "" when there is none.
+   * Read THIS issue's run id from run-state.json, or "" when there is none.
    *
    * Deliberately read here rather than resolved daemon-side from the runtime
    * registry: that registry is keyed by bare issue number today, and adding a
    * reader would both give #370 one more site to re-key and mis-stamp the card
    * when a re-dispatch for the same issue is already in flight. An empty run id
    * is a handled case — the card simply carries no trace back-reference.
+   *
+   * GUARDED ON issue_number, exactly as this class's sibling reader of the same
+   * file does (`readRecoveryRunStateView`) — the codebase already treats a
+   * mismatched run-state.json as a live risk on this path. `getWorkingDirectory()`
+   * falls back to the first workspace folder when there is no worktree override,
+   * so a non-worktree run for #42 executing at a root where #37's run-state.json
+   * still sits would otherwise stamp #42's card with #37's run_id and trace_ref,
+   * and `nightgauge trace show` on that card would resolve to an unrelated run.
+   * A fabricated identity in the audit trail is worse than an honest empty gap —
+   * the same reasoning the force-clear arm applies when it declines to synthesise
+   * a run id.
    */
-  private readCurrentRunId(): string {
+  private readCurrentRunId(issueNumber: number): string {
     try {
       const runStatePath = path.join(
         this.getWorkingDirectory(),
@@ -1479,7 +1504,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         "pipeline",
         "run-state.json"
       );
-      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as { run_id?: string };
+      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
+        run_id?: string;
+        issue_number?: number;
+      };
+      if (parsed.issue_number !== undefined && parsed.issue_number !== issueNumber) {
+        return "";
+      }
       return parsed.run_id ?? "";
     } catch {
       return "";
@@ -1521,9 +1552,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         params.producer,
         repo,
         params.issueNumber,
-        this.readCurrentRunId(),
-        params.costUsd,
-        params.ceilingUsd,
+        this.readCurrentRunId(params.issueNumber),
         params.pr,
         params.prState,
         params.mergeable,
@@ -10780,11 +10809,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 // and wrote a log line — the operator got no card offering the
                 // raise-and-retry the Go path has always offered, for the
                 // condition the producer exists to surface. Fail-open inside.
+                //
+                // The condition travels; the NUMBERS do not. `currentCostUsd`
+                // and `effectiveCeilingUsd` are both in scope here and are
+                // deliberately not sent: the card's primary option persists a
+                // workspace-global ceiling override, and the daemon must read
+                // both figures from its own state (see RunScopedAttentionRaise).
+                // The ceiling this check enforced is the same one the daemon
+                // resolves, because `getPipelineCeilingConfig` now layers the
+                // persisted `budget-override.json` on with Go's max() rule.
                 await this.raiseRunScopedAttention({
                   producer: "budget-ceiling",
                   issueNumber,
-                  costUsd: ceilingCheck.currentCostUsd,
-                  ceilingUsd: ceilingCheck.effectiveCeilingUsd,
                 });
 
                 // Don't set failedStage — this is a controlled stop, not a

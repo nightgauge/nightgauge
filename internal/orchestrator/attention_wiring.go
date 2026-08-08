@@ -760,24 +760,53 @@ func ProposedCeilingUSD(enforcedCeilingUSD, spentUSD float64) float64 {
 // scalars and returns the record, so the Go scheduler path and the IPC raise
 // verb (#305) produce a byte-identical DecisionRequest from the same inputs
 // rather than two hand-aligned builders.
+//
+// proposedCeilingUSD <= 0 means THE SPEND COULD NOT BE CORROBORATED, and the
+// card is built WITHOUT the `budget.raiseCeiling` option (fixed in review).
+// Resolving that option persists a workspace-global dollar ceiling override, so
+// the offer may only be made when the numbers behind it came from state the
+// daemon itself recorded. When they did not, the honest card is the one that
+// says a ceiling stop was reported and asks a human to look — never a
+// one-click raise whose magnitude nothing corroborated. `costUSD` is likewise
+// the RECORDED spend; a builder that had to invent it would be printing a
+// caller's assertion as fact on an operator's screen.
 func BuildBudgetCeilingHit(repo string, issue int, runID string, costUSD, proposedCeilingUSD float64) attention.DecisionRequest {
 	owner, name := splitRepo(repo)
+
+	title := fmt.Sprintf("Budget ceiling hit — $%.2f spent on #%d", costUSD, issue)
+	body := fmt.Sprintf("Run #%d hit the pipeline budget ceiling. Raise the ceiling to $%.2f and retry, or halt.", issue, proposedCeilingUSD)
+	options := []attention.Option{
+		{ID: "raise", Label: fmt.Sprintf("Raise to $%.2f & retry", proposedCeilingUSD), Verb: attention.VerbBudgetRaiseCeiling,
+			Args: map[string]any{"owner": owner, "repo": name, "issueNumber": issue, "ceilingUsd": proposedCeilingUSD, "title": ""}, Style: attention.StylePrimary},
+		noopOption("halt", "Halt run"),
+	}
+	if proposedCeilingUSD <= 0 {
+		title = fmt.Sprintf("Budget ceiling stop reported for #%d", issue)
+		body = fmt.Sprintf(
+			"A budget-ceiling stop was reported for #%d, but this daemon has no recorded spend for that run — "+
+				"so the raise-and-retry option is deliberately NOT offered here.\n\n"+
+				"Resolving that option persists a workspace-wide runtime ceiling override, and the amount would "+
+				"have had to come from the report rather than from state this daemon recorded itself. "+
+				"Check the run's cost in the pipeline history, then raise the ceiling in config if it should go up.",
+			issue)
+		options = []attention.Option{
+			noopOption("acknowledged", "Acknowledged"),
+			noopOption("halt", "Halt run"),
+		}
+	}
+
 	return attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("budget-ceiling:%s#%d", repo, issue),
 		Kind:           attention.KindApprove,
 		Severity:       attention.SeverityBlockingRun,
-		Title:          fmt.Sprintf("Budget ceiling hit — $%.2f spent on #%d", costUSD, issue),
-		Body:           fmt.Sprintf("Run #%d hit the pipeline budget ceiling. Raise the ceiling to $%.2f and retry, or halt.", issue, proposedCeilingUSD),
+		Title:          title,
+		Body:           body,
 		Producer:       "budget-ceiling",
 		Context:        attention.Context{Repo: repo, Issue: issue, RunID: runID, CostSoFarUSD: costUSD, Blocker: "pipeline budget ceiling exceeded", TraceRef: runTraceRef(runID)},
-		Options: []attention.Option{
-			{ID: "raise", Label: fmt.Sprintf("Raise to $%.2f & retry", proposedCeilingUSD), Verb: attention.VerbBudgetRaiseCeiling,
-				Args: map[string]any{"owner": owner, "repo": name, "issueNumber": issue, "ceilingUsd": proposedCeilingUSD, "title": ""}, Style: attention.StylePrimary},
-			noopOption("halt", "Halt run"),
-		},
-		DefaultAction: "halt",
-		ExpiresAt:     expiryFromNow(1 * time.Hour),
-		Steer:         &attention.Steer{Enabled: true, Hint: "Add context for raising the ceiling, or for halting"},
+		Options:        options,
+		DefaultAction:  "halt",
+		ExpiresAt:      expiryFromNow(1 * time.Hour),
+		Steer:          &attention.Steer{Enabled: true, Hint: "Add context for raising the ceiling, or for halting"},
 	}
 }
 
@@ -825,7 +854,12 @@ func (s *Scheduler) raiseBranchProtectionBlock(repo string, issue, prNumber int,
 	s.raiseAttention(BuildBranchProtectionBlock(repo, issue, prNumber, runID, reason))
 }
 
-// --- Producer 11: abandoned dispatch (run-scoped, extension-only) ------------
+// --- Producer 12: abandoned dispatch (run-scoped, extension-only) ------------
+//
+// TWELVE, not eleven. Number 11 in ADR-015 §F is "Unexercised deliverable"; the
+// first cut of this producer labelled itself 11 too, so the same number named
+// two different producers depending on which file you read (fixed in review).
+// ADR-015 §F carries the authoritative row.
 
 // ProducerAbandonedDispatch names the force-clear producer (#305/#307).
 const ProducerAbandonedDispatch = "abandoned-dispatch"
@@ -872,43 +906,78 @@ const ProducerAbandonedDispatch = "abandoned-dispatch"
 // repeat force-clears while the card is OPEN update it in place (one card), a
 // resolved card's successor is a genuinely new fact and gets a new card, and an
 // EXPIRED predecessor is revived under its own id by findExpiredByKey.
+//
+// INFORMATIONAL / CLEANUP-SAFETY, NOT AN UNBLOCK — re-shaped in review after
+// the population was traced. `forceClearStuckSlots` has exactly ONE call site:
+// the ABORT_ALL_TIMEOUT_MS branch of `abortAll`, which is reached only from
+// `nightgauge.stopPipeline`, `nightgauge.abortPipeline`, and `deactivate()`.
+// Before that deadline can fire, `abortAll` has already cleared the queue and
+// set `userCancelled` on every slot, and the terminal error booked is literally
+// "Cancelled by user". So one hundred percent of this producer's population is
+// "the operator pressed Stop and a slot took longer than the deadline to
+// settle" — a fact about the operator's own action, not a blocked run.
+//
+// The first cut shipped Kind=unblock, Severity=blocking_run, and a StylePrimary
+// "Retry" that cleared the issue's failure cooldown and re-dispatched. Stopping
+// three wedged pipelines therefore produced three blocking_run cards each
+// recommending you undo your own Stop — the inbox-destroying pattern ADR-015
+// §D/§L exist to prevent, at a severity §I routes to alerting while nothing is
+// blocked. The Retry was also close to inert: its verb pair is
+// clearIssueFailures + `autonomous.rescan`, and `TriggerRescan` is a
+// non-blocking channel poke, so with the autonomous loop stopped (the ordinary
+// state after a manual Stop) it cleared a cooldown, poked a channel nobody
+// reads, and resolved the card while nothing happened.
+//
+// What survives is the part that is true and useful: the worktree was PRESERVED
+// and may hold uncommitted work, and the Go-side view of this issue may be
+// stale. Both options are noops — this card asks a human to look, and does not
+// pretend the pipeline can fix it.
 func BuildAbandonedDispatch(repo string, issue int, runID, stage string) attention.DecisionRequest {
 	if stage == "" {
 		stage = "unknown"
 	}
 	body := fmt.Sprintf(
-		"Issue #%d was force-cleared: its dispatch stopped responding and the abort deadline gave up waiting for it. "+
-			"Terminal bookkeeping was booked on its behalf (the queue mark and the scheduler seat are released), "+
-			"but the run never reported an outcome of its own — the last stage it was seen in is %s.\n\n"+
-			"The worktree is PRESERVED on purpose: the wedged process may still be writing in it, so nothing was "+
-			"stashed, committed, or deleted. Inspect it before retrying — a retry re-dispatches into the same "+
-			"per-issue worktree path and re-derives the work from scratch.\n\n"+
-			"Retry clears this issue's failure cooldown and re-scans for it. Leave parks it for manual triage.",
+		"You stopped the pipeline, and issue #%d's dispatch did not settle before the abort deadline expired — "+
+			"so the extension force-cleared it and booked its terminal bookkeeping on its behalf (the queue mark "+
+			"and the scheduler seat are released). The last stage it was seen in is %s.\n\n"+
+			"NOTHING IS BLOCKED and no action is required. This card exists because two things are worth knowing "+
+			"before you touch that issue again:\n\n"+
+			"1. The worktree is PRESERVED on purpose — the stopped process may still have been writing in it, so "+
+			"nothing was stashed, committed, or deleted. It may hold uncommitted work. A re-dispatch reuses the "+
+			"same per-issue worktree path and re-derives the work from scratch, so inspect it first if the run had "+
+			"got anywhere.\n\n"+
+			"2. The Go-side state for this issue may be stale — the wedged process was killed mid-flight, so what "+
+			"the daemon recorded for the run stops wherever it stopped rather than at a real terminal.",
 		issue, stage)
 
 	return attention.DecisionRequest{
 		IdempotencyKey: fmt.Sprintf("%s:%s#%d", ProducerAbandonedDispatch, repo, issue),
-		Kind:           attention.KindUnblock,
-		Severity:       attention.SeverityBlockingRun,
-		Title:          fmt.Sprintf("Dispatch abandoned — #%d force-cleared at %s", issue, stage),
-		Body:           body,
-		Producer:       ProducerAbandonedDispatch,
+		// approve + fyi: informational, badge-only, no interruption and no SLA.
+		// The same shape unverified-deliverable uses for "you should know this
+		// happened", and for the same reason — there is no pipeline action to
+		// take, only a human one.
+		Kind:     attention.KindApprove,
+		Severity: attention.SeverityFYI,
+		Title:    fmt.Sprintf("Stop force-cleared #%d at %s — worktree preserved", issue, stage),
+		Body:     body,
+		Producer: ProducerAbandonedDispatch,
 		Context: attention.Context{
 			Repo: repo, Issue: issue, RunID: runID, Stage: stage,
-			Blocker:  "dispatch wedged past the abort deadline (#307 force-clear)",
+			Blocker:  "operator Stop: dispatch wedged past the abort deadline (#307 force-clear)",
 			TraceRef: runTraceRef(runID),
 		},
+		// NO RETRY. Re-dispatching work the operator deliberately cancelled is
+		// not a remedy, and offering it as the PRIMARY action told them the
+		// opposite of what they had just decided.
 		Options: []attention.Option{
-			{ID: "retry", Label: "Retry", Verb: attention.VerbAutonomousClearIssueFailures,
-				Args: map[string]any{"key": fmt.Sprintf("%s#%d", repo, issue), "then": "autonomous.rescan"}, Style: attention.StylePrimary},
-			noopOption("leave", "Leave for manual triage"),
+			noopOption("acknowledged", "Acknowledged"),
+			noopOption("will-inspect", "Will inspect the worktree"),
 		},
 		DefaultAction: attention.ExpireNoop,
-		// The same window branch-protection declares: both are blocking_run
-		// unblock cards naming work only a human can do, and neither has an
+		// The same window branch-protection declares: neither has an
 		// auto-retraction path, so expiry is the only thing that clears them.
 		ExpiresAt: expiryFromNow(48 * time.Hour),
-		Steer:     &attention.Steer{Enabled: true, Hint: "Note what the wedged run left behind, or what to check first"},
+		Steer:     &attention.Steer{Enabled: true, Hint: "Note what the stopped run left behind, or what to check first"},
 	}
 }
 

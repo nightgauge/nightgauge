@@ -8,17 +8,46 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
+// testRepos are the repo slugs the attention tests raise against. They are
+// REGISTERED on the test server's resolver because attention.raise rejects a
+// repo this daemon has no configuration for (#305 review) — an unconfigured
+// (repo, issue) pair is an unbounded card-injection primitive.
+var testRepos = []string{"octocat/acme", "o/r"}
+
 // newAttentionTestServer builds a minimal Server backed by a real, store-wired
-// autonomous scheduler rooted at a temp workspace.
+// autonomous scheduler rooted at a temp workspace, with testRepos registered
+// and pointed at that same root.
 func newAttentionTestServer(t *testing.T) *Server {
 	t.Helper()
-	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), t.TempDir())
+	root := t.TempDir()
+	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), root)
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired")
 	}
-	return &Server{autonomousScheduler: as, writer: io.Discard}
+	resolver := NewClientResolver(nil, false)
+	for _, slug := range testRepos {
+		owner, name := splitSlug(slug)
+		resolver.RegisterRepo(owner, name, root)
+	}
+	return &Server{
+		autonomousScheduler: as,
+		writer:              io.Discard,
+		workspaceRoot:       root,
+		resolver:            resolver,
+		activeRuntimes:      make(map[string]*state.RuntimeState),
+	}
+}
+
+func splitSlug(slug string) (owner, name string) {
+	for i := 0; i < len(slug); i++ {
+		if slug[i] == '/' {
+			return slug[:i], slug[i+1:]
+		}
+	}
+	return "", slug
 }
 
 func TestAttentionIPCRoundTrip(t *testing.T) {

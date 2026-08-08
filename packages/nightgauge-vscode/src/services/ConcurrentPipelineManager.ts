@@ -135,6 +135,12 @@ interface SlotReservation {
    * `onSlotFailed` twice charges the Go scheduler's lifetime cap twice.
    */
   terminalOutcomeDispatched?: boolean;
+  /**
+   * Set once an outcome callback has ACTUALLY FIRED for this dispatch — see
+   * {@link PipelineSlot.ownTerminalOutcomeBooked} for why the claim is not the
+   * same fact.
+   */
+  ownTerminalOutcomeBooked?: boolean;
 }
 
 /**
@@ -225,6 +231,25 @@ interface PipelineSlot {
    * variable rather than re-reading this shared flag.
    */
   terminalOutcomeDispatched?: boolean;
+  /**
+   * Set the moment `runSlotPipeline` has actually FIRED one of its own outcome
+   * callbacks (#305 review). Distinct from {@link terminalOutcomeDispatched},
+   * and the distinction is load-bearing rather than pedantic.
+   *
+   * The claim above is taken at terminal boundary 1, BEFORE
+   * `await slot.stateService.getState()`; the callback fires after that await.
+   * A dispatch that wedges in that window has `terminalOutcomeDispatched=true`
+   * and has reported NOTHING — no `autonomousComplete`, so the Go scheduler's
+   * running-slot seat stays held, and the queue mark is the only bookkeeping
+   * that happened. Treating the claim as "it reported an outcome" made the
+   * abandoned-dispatch card suppress itself in exactly that case, leaving the
+   * condition silent end to end, which is the thing #305 exists to stop.
+   *
+   * ONLY THE DISPATCH'S OWN CALLBACKS SET IT. `bookForceClearedSlot` booking an
+   * outcome on a wedged run's behalf deliberately does not — that IS the
+   * abandoned case, and the card says so.
+   */
+  ownTerminalOutcomeBooked?: boolean;
   /**
    * Set by `cleanupSlot` on entry so the teardown runs at most once per slot
    * (#307). Both terminal funnels can reach it for the same slot: a run that
@@ -967,6 +992,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    // The callback has now ACTUALLY fired (or thrown from inside bootstrap's
+    // handler, which still means it ran). Distinct from the claim above — see
+    // SlotReservation.ownTerminalOutcomeBooked.
+    reservation.ownTerminalOutcomeBooked = true;
     return true;
   }
 
@@ -1475,6 +1504,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           slot.repo
         );
       }
+      // The dispatch reported its OWN outcome. Set only here and in the catch
+      // below — never where the claim is taken, and never by the force-clear
+      // (#305 review). See PipelineSlot.ownTerminalOutcomeBooked.
+      slot.ownTerminalOutcomeBooked = true;
 
       return result;
     } catch (error) {
@@ -1529,6 +1562,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         throwCostUsd,
         slot.repo
       );
+      slot.ownTerminalOutcomeBooked = true;
       throw error;
     } finally {
       // terminal-parity:begin runSlotPipeline-finally (#257 — this region is
@@ -2682,6 +2716,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * slots are booked concurrently precisely so `isShuttingDown` — which makes
    * IssueQueueService refuse every enqueue — is not held for N × that timeout
    * (the #3111 condition this whole deadline exists to bound).
+   *
+   * THAT BOUND SURVIVES THE #305 CARD RAISE, and only because the raise is
+   * issued CONCURRENTLY with `completeQueueItem` rather than after it. Two IPC
+   * calls in series per slot would have paid `IpcClientBase.getTimeoutMs()`
+   * (30s by default) twice, growing the worst-case `isShuttingDown` hold from
+   * ~30s to ~60s on top of the 30s deadline already spent — the #3111 condition
+   * arriving through a change made inside the fix for it, against a daemon that
+   * is unresponsive by definition when this deadline fires. In flight together,
+   * both calls share one timeout window, so the statement above stays true.
    */
   private async forceClearStuckSlots(): Promise<number> {
     // terminal-parity:begin force-clear-funnel (#257/#307 — this whole region,
@@ -2724,19 +2767,26 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   /**
    * Run the settled path's terminal bookkeeping for one force-cleared slot.
    *
-   * Three steps, each independently guarded:
+   * Three steps, each independently guarded, plus one notification:
    *   1. `completeQueueItem` — release the dequeue's `processing` mark, the
    *      terminal counterpart to `dequeueIndependent` (#254). Without it the
    *      issue is undispatchable for good.
    *   2. the terminal outcome callback — `onSlotFailed`, which is what
    *      bootstrap turns into `autonomousComplete` (frees the Go scheduler's
    *      running-slot entry), plus the phase-tracker / state-subscription /
-   *      tree / notifier teardown. Skipped when the run already claimed its own
+   *      tree / notifier teardown. Skipped when the run already CLAIMED its own
    *      outcome and was merely mid-teardown when the deadline fired —
    *      `autonomousComplete` is not idempotent (it feeds the cascade breaker
    *      and the per-issue lifetime cap), so booking twice double-charges.
    *   3. `cleanupSlot` with the worktree PRESERVED — a killed process may still
    *      hold the tree, and the settled Stop All path preserves it too (#66).
+   *
+   * The `abandoned-dispatch` card (#305) rides ALONGSIDE step 1 rather than
+   * after it, and is gated on a different flag from step 2: step 2 asks "may I
+   * book an outcome?" (the claim), the card asks "did this dispatch report
+   * one?" (`ownTerminalOutcomeBooked`). Those diverge for a run that took the
+   * claim and then wedged before its callback fired — a case where nothing was
+   * booked and the card is the only signal left.
    *
    * The error handed to `onSlotFailed` is byte-identical to the one the SETTLED
    * Stop All path emits (`runSlotPipeline`'s `slot.userCancelled` branch). Both
@@ -2759,6 +2809,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.forceClearedGenerations.add(slot.generation);
     const alreadyClaimed = slot.terminalOutcomeDispatched === true;
     if (!alreadyClaimed) slot.terminalOutcomeDispatched = true;
+    // Read in the SAME synchronous step, and read separately from the claim:
+    // "the run took the claim" and "the run reported an outcome" are different
+    // facts, and only the second one may silence the card (#305 review).
+    const runReportedItsOwnOutcome = slot.ownTerminalOutcomeBooked === true;
     // ── claim decision made; awaits are safe from here on ────────────────
 
     this.logger.warn("Force-clearing stuck slot — booking its terminal state (#307)", {
@@ -2766,7 +2820,32 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       issueNumber: slot.issueNumber,
       generation: slot.generation,
       runAlreadyClaimedItsOwnOutcome: alreadyClaimed,
+      runReportedItsOwnOutcome,
     });
+
+    // #305: tell the operator what their Stop left behind. Started HERE, in
+    // flight alongside `completeQueueItem`, and awaited below — NOT chained
+    // after it. Both are IPC round-trips bounded by the client's 30s request
+    // timeout, and the daemon is unresponsive by definition when this deadline
+    // fires; serialising them would double the window in which `isShuttingDown`
+    // makes IssueQueueService refuse every enqueue, which is the #3111
+    // condition `forceClearStuckSlots`' own doc comment bounds. Concurrency
+    // costs nothing here: the raise deliberately needs neither the queue result
+    // nor the state service.
+    //
+    // SUPPRESSED ONLY BY A CALLBACK THAT ACTUALLY FIRED, never by the claim
+    // (fixed in review). `terminalOutcomeDispatched` is taken at terminal
+    // boundary 1 BEFORE `await slot.stateService.getState()`, and the outcome
+    // callback fires after it — so a run that wedged in that window holds the
+    // claim while having reported nothing at all: no `autonomousComplete`, the
+    // Go scheduler's seat still held, the queue mark the only bookkeeping done.
+    // Gating on the claim silenced the card there, which made the condition
+    // silent end to end — the thing this producer exists to stop. A run that
+    // genuinely booked its own outcome and merely wedged in teardown sets
+    // `ownTerminalOutcomeBooked`, and only that suppresses.
+    const raisePromise = runReportedItsOwnOutcome
+      ? undefined
+      : this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage);
 
     try {
       await this.completeQueueItem(
@@ -2815,29 +2894,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       }
     }
 
-    // #305: raise the abandoned-dispatch card. #307 booked this dispatch's
-    // terminal state but had no way to TELL anyone — its only surfacing was a
-    // transient Stop toast and a warn log, and its own ledger named that the
-    // gap ("no `raise` verb exists on IPC or the CLI"). Raised BEFORE
-    // cleanupSlot because that disposes the state service; the raise itself
-    // does not need it, but ordering the notification ahead of teardown keeps
-    // the sequence readable and means a future field read here is still valid.
-    //
-    // GATED ON THE SAME FLAG STEP 2 IS, and for the same reason (fixed in
-    // review). `alreadyClaimed` means the run reached its OWN terminal boundary
-    // and took the claim — it reported an outcome, possibly a SUCCESS whose PR
-    // is merged, and merely wedged afterwards in teardown (an onSlotCompleted
-    // callback, cleanupSlot, a worktree removal blocked by a lingering
-    // process). The card's body asserts "the run never reported an outcome of
-    // its own" and its PRIMARY option re-dispatches the issue; on a claimed
-    // dispatch both are false, and #307 introduced this flag precisely to draw
-    // that distinction. docs/ATTENTION_PRODUCERS.md: say only what you
-    // observed — a specific, confident, wrong diagnostic is worse than none.
-    // A slow teardown after a booked outcome is a different condition and has
-    // no producer; inventing one here would be the same mistake twice.
-    if (!alreadyClaimed) {
-      await this.raiseAbandonedDispatchCard(slot.repo, slot.issueNumber, slot.currentStage);
-    }
+    // Settle the concurrent raise before teardown. Never throws (the method
+    // swallows its own failure), so this cannot abort the exactly-once
+    // bookkeeping below.
+    if (raisePromise) await raisePromise;
 
     try {
       await this.cleanupSlot(slot, /* preserveWorktree */ true, /* deleteBranch */ false);
@@ -2852,6 +2912,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   /**
    * Raise the `abandoned-dispatch` Action Center card for a force-cleared
    * dispatch (#305).
+   *
+   * AN INFORMATIONAL CARD, NOT A REMEDY. Everything that reaches here came from
+   * an operator Stop: `forceClearStuckSlots` has one call site (the abort
+   * deadline in `abortAll`), and `abortAll` is reached only from
+   * `nightgauge.stopPipeline`, `nightgauge.abortPipeline`, and `deactivate()`.
+   * The daemon-side builder therefore emits an `fyi` card naming the preserved
+   * worktree and the possibly-stale Go-side state, with two noop options and no
+   * Retry — re-dispatching work the operator just cancelled is not a fix, and
+   * offering it as the primary action told them to undo their own decision.
    *
    * NO RUN ID, and that is correct rather than a shortcut. At force-clear time
    * Go mints the RunID and the extension has no verb to ask for one; the wedged
@@ -2883,14 +2952,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         repo,
         issueNumber,
         undefined, // runId — see the doc comment above
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        undefined, // pr
+        undefined, // prState
+        undefined, // mergeable
+        undefined, // mergeStateStatus
+        undefined, // reviewDecision
+        undefined, // checks
         stage
       );
       this.logger.info("Force-clear: abandoned-dispatch card raised (#305)", {
@@ -2933,6 +3000,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   ): Promise<void> {
     // ── CHECK-AND-CLAIM, before the first await ──────────────────────────
     this.forceClearedGenerations.add(reservation.generation);
+    // Read BEFORE our own claim fires anything, for the same reason the slot
+    // arm reads its flag up front: the question is whether the DISPATCH
+    // reported an outcome, not whether anybody did (#305 review).
+    const dispatchReportedItsOwnOutcome = reservation.ownTerminalOutcomeBooked === true;
     const booked = this.claimReservationOutcome(reservation, () =>
       this.callbacks.onSlotFailed?.(
         reservation.index,
@@ -2949,31 +3020,36 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       issueNumber,
       generation: reservation.generation,
       dispatchAlreadyClaimedItsOwnOutcome: !booked,
+      dispatchReportedItsOwnOutcome,
     });
+
+    // #305: same card as the slot arm, gated the same way and issued the same
+    // way — CONCURRENTLY with `completeQueueItem`, not chained after it, so the
+    // funnel still pays one IPC timeout rather than two (see
+    // `forceClearStuckSlots`' bound). A dispatch that wedged inside worktree
+    // creation is as abandoned as one that wedged mid-stage; giving only one
+    // arm the notification is the asymmetry this fence exists to prevent. No
+    // stage: the pipeline never started one.
+    //
+    // `ownTerminalOutcomeBooked` — set inside `claimReservationOutcome` AFTER
+    // the callback returns — is the suppressing signal, not the claim. On
+    // today's code neither is ever set here: both `claimReservationOutcome`
+    // call sites in `startSlotInner` are followed immediately by
+    // `return "failed"`, whose `finally` releases the reservation, so a claimed
+    // reservation is gone before the deadline can see it. The guard is the
+    // structural half of the slot arm's, not dead weight — the invariant it
+    // encodes ("only card a dispatch that reported nothing") must not depend on
+    // which unwind path a future edit adds an await to.
+    const raisePromise = dispatchReportedItsOwnOutcome
+      ? undefined
+      : this.raiseAbandonedDispatchCard(reservation.repo, issueNumber, undefined);
 
     await this.completeQueueItem(
       { issueNumber, repoName: reservation.repo },
       "abort deadline force-cleared a stranded reservation"
     );
 
-    // #305: same card as the slot arm, and gated the same way. A dispatch that
-    // wedged inside worktree creation is abandoned exactly as much as one that
-    // wedged mid-stage, and giving only one arm the notification is the
-    // asymmetry this fence exists to prevent — but `booked === false` means the
-    // dispatch already claimed and fired its own outcome, which is the one
-    // thing the card says did not happen. No stage: the pipeline never started
-    // one.
-    //
-    // On today's code `booked` is always true here: both `claimReservationOutcome`
-    // call sites in `startSlotInner` are followed immediately by `return
-    // "failed"`, whose `finally` releases the reservation, so a claimed
-    // reservation is gone before the deadline can see it. The guard is the
-    // structural half of the slot arm's, not dead weight — the invariant it
-    // encodes ("only card a dispatch that reported nothing") must not depend on
-    // which unwind path a future edit adds an await to.
-    if (booked) {
-      await this.raiseAbandonedDispatchCard(reservation.repo, issueNumber, undefined);
-    }
+    if (raisePromise) await raisePromise;
 
     // The `reservedSlots` entry is deliberately LEFT IN PLACE. It is what stops
     // a re-dispatch from colliding with the still-running `startSlot`, and that

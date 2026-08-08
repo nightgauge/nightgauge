@@ -690,3 +690,87 @@ func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
 		t.Errorf("hot verb executed %d times, want exactly 1", got)
 	}
 }
+
+// TestRaiseOutcomesCoverAllFourValues restores the coverage the #305 round-2
+// fixup dropped. Round 1 exercised all four `RaiseOutcome` values through the
+// IPC verb; making every raiseable producer event-shaped (correctly) made
+// `refreshed` and `suppressed` unreachable from there, and the test went with
+// it — leaving `OutcomeRefreshed` and `OutcomeSuppressed` asserted nowhere in
+// the tree while `raiseThrough`, the only non-test caller of Raise, discards
+// the outcome entirely. A swapped mapping in the standing branch would have
+// passed CI.
+//
+// The standing producers that actually exercise that branch — stuck-epic,
+// architecture-approval, the unverified-deliverable streak — are modelled here
+// by a standing request whose fingerprint moves (or does not).
+func TestRaiseOutcomesCoverAllFourValues(t *testing.T) {
+	s := New(t.TempDir())
+	const key = "standing:octocat/acme#7"
+
+	standing := func(fingerprint string) DecisionRequest {
+		r := validRequest(mustID(t), key)
+		r.Standing = true
+		r.Fingerprint = fingerprint
+		return r
+	}
+
+	// created — no live record for the key.
+	outcome, firstID, err := s.Raise(standing("blockers:a,b"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeCreated {
+		t.Fatalf("first raise = %q, want %q", outcome, OutcomeCreated)
+	}
+
+	// refreshed — the SAME standing condition re-observed. Deliberately silent:
+	// content is refreshed, the operator is not re-alerted.
+	outcome, id, err := s.Raise(standing("blockers:a,b"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeRefreshed {
+		t.Errorf("re-observation of an unchanged standing condition = %q, want %q", outcome, OutcomeRefreshed)
+	}
+	if id != firstID {
+		t.Errorf("refreshed id = %q, want the open card's id %q", id, firstID)
+	}
+
+	// updated — the condition itself moved, so the card re-alerts.
+	outcome, id, err = s.Raise(standing("blockers:a,b,c"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeUpdated {
+		t.Errorf("moved standing condition = %q, want %q", outcome, OutcomeUpdated)
+	}
+	if id != firstID {
+		t.Errorf("updated id = %q, want the open card's id %q", id, firstID)
+	}
+
+	// suppressed — a human resolved THIS EXACT standing condition (ADR-015 §M),
+	// so re-observing it writes nothing and hands back the resolved record's id.
+	if _, err := s.Resolve(context.Background(), firstID, "leave", "octocat", "", "", nil); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	outcome, id, err = s.Raise(standing("blockers:a,b,c"))
+	if err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+	if outcome != OutcomeSuppressed {
+		t.Errorf("re-raise of a resolved standing condition = %q, want %q", outcome, OutcomeSuppressed)
+	}
+	if id != firstID {
+		t.Errorf("suppressed id = %q, want the resolved record's id %q", id, firstID)
+	}
+
+	// And the four values are four DISTINCT strings — a surface that renders
+	// them differently depends on that.
+	seen := map[RaiseOutcome]bool{}
+	for _, o := range []RaiseOutcome{OutcomeCreated, OutcomeUpdated, OutcomeRefreshed, OutcomeSuppressed} {
+		if seen[o] {
+			t.Errorf("RaiseOutcome %q is not distinct", o)
+		}
+		seen[o] = true
+	}
+}

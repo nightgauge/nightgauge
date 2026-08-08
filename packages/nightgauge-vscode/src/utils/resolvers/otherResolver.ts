@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { DEFAULT_RETRY_CONFIG, type RetryConfig } from "../retryHelpers";
@@ -1109,14 +1110,87 @@ const DEFAULT_PIPELINE_CEILING_CONFIG: PipelineCeilingConfig = {
   checkpointThresholdPercent: 85,
 };
 
+/** Where `budget.raiseCeiling` persists a runtime ceiling raise. Mirrors Go's
+ * `budgetOverrideRelPath` (internal/orchestrator/attention_verb_primitives.go). */
+const BUDGET_OVERRIDE_REL_PATH = [".nightgauge", "pipeline", "budget-override.json"];
+
+/**
+ * Read the runtime USD ceiling override the Action Center's
+ * `budget.raiseCeiling` verb persists, or 0 when there is none (#305).
+ *
+ * THE EXTENSION HAD NO READER OF THIS FILE AT ALL, which made the
+ * budget-ceiling card's primary remedy inert on the path #305 wired it onto.
+ * Resolving "Raise to $X & retry" ran `orchestrator.WriteBudgetCeilingOverride`
+ * → `.nightgauge/pipeline/budget-override.json`, and exactly one function in
+ * the tree read it back: Go's `PipelineBudgetCeilingUSD`. The extension
+ * resolved its ceiling here, from env vars and config.yaml only — so the
+ * re-dispatched run enforced the OLD ceiling, tripped the same between-stage
+ * check, and re-raised the same idempotency key. The operator's click cost
+ * another ceiling of tokens and changed nothing, with no signal that it had
+ * not worked. That is the dual-path drift #305 exists to close, reappearing at
+ * the resolution end.
+ *
+ * Best-effort by construction: a missing, unreadable, or malformed file means
+ * "no override", never a throw — this is on the hot path of every stage's
+ * ceiling check.
+ */
+function readRuntimeCeilingOverrideUsd(root: string | undefined): number {
+  if (!root) return 0;
+  try {
+    const raw = fs.readFileSync(path.join(root, ...BUDGET_OVERRIDE_REL_PATH), "utf-8");
+    const parsed = JSON.parse(raw) as { ceiling_usd?: unknown };
+    const value = typeof parsed.ceiling_usd === "number" ? parsed.ceiling_usd : 0;
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Layer the persisted runtime ceiling override onto a resolved config with the
+ * SAME PRECEDENCE Go uses: `max(configured, override)`
+ * (`PipelineBudgetCeilingUSD` → `maxFloat64(base, readBudgetCeilingOverrideUSD)`).
+ *
+ * Max, not replace: the override exists to RAISE a ceiling for a run that
+ * legitimately needs headroom. A stale override from last month must never be
+ * able to lower a ceiling the operator has since raised in config — and both
+ * paths have to agree on that, or the card's remedy works on one path only,
+ * which is the defect this closes.
+ *
+ * It lands on `overrideCeilingUsd` because that is the field
+ * `PipelineBudgetCeiling.getEffectiveCeiling()` prefers, so every existing
+ * consumer of this config — the between-stage stop, the per-stage checks, the
+ * projector — honors it without a second code path.
+ */
+function applyRuntimeCeilingOverride(
+  config: PipelineCeilingConfig,
+  root: string | undefined
+): PipelineCeilingConfig {
+  const runtimeOverrideUsd = readRuntimeCeilingOverrideUsd(root);
+  if (runtimeOverrideUsd <= 0) return config;
+  const configured = config.overrideCeilingUsd ?? config.ceilingUsd;
+  if (runtimeOverrideUsd > configured) {
+    config.overrideCeilingUsd = runtimeOverrideUsd;
+  }
+  return config;
+}
+
 /**
  * Get pipeline budget ceiling configuration.
  *
- * Reads from env vars → config.yaml → defaults.
+ * Reads from env vars → config.yaml → defaults, then layers the Action
+ * Center's persisted runtime ceiling override on top with `max()` semantics —
+ * the same resolution Go's `PipelineBudgetCeilingUSD` performs, so a ceiling
+ * raised from a card takes effect on BOTH execution paths (#305).
  *
  * @see Issue #1047 - Configurable token budget ceiling
  */
 export function getPipelineCeilingConfig(workspaceRoot?: string): PipelineCeilingConfig {
+  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  return applyRuntimeCeilingOverride(resolveCeilingConfigFromEnvAndFile(root), root);
+}
+
+function resolveCeilingConfigFromEnvAndFile(root: string | undefined): PipelineCeilingConfig {
   const config: PipelineCeilingConfig = { ...DEFAULT_PIPELINE_CEILING_CONFIG };
 
   // Environment variable overrides
@@ -1175,7 +1249,6 @@ export function getPipelineCeilingConfig(workspaceRoot?: string): PipelineCeilin
   }
 
   // Read from config.yaml
-  const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
     return config;
   }

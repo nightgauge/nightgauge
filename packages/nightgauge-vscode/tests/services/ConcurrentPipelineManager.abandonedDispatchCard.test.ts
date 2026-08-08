@@ -226,15 +226,19 @@ vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: { getInstance: () => ({ attentionRaise }) },
 }));
 
-/** Positional-arg decoder for the generated `attentionRaise` signature. */
+/**
+ * Positional-arg decoder for the generated `attentionRaise` signature:
+ * (producer, repo, issue, runId, pr, prState, mergeable, mergeStateStatus,
+ * reviewDecision, checks, stage). There is deliberately no cost or ceiling in
+ * that list — both are derived daemon-side (#305 review), so no caller can
+ * choose the magnitude of an option the daemon will execute.
+ */
 function decodeRaise(call: unknown[]) {
-  const [producer, repo, issue, runId, , , , , , , , , stage] = call as [
+  const [producer, repo, issue, runId, , , , , , , stage] = call as [
     string,
     string,
     number,
     string | undefined,
-    unknown,
-    unknown,
     unknown,
     unknown,
     unknown,
@@ -383,29 +387,27 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
     );
   });
 
-  it("does NOT card a run that already claimed its own outcome and wedged in teardown", async () => {
-    // `terminalOutcomeDispatched` is set at terminal boundary 1 on the RESOLVED
-    // path regardless of result.success — so a run that COMPLETED, possibly
-    // merging its PR, and then wedged in post-terminal teardown (an
-    // onSlotCompleted callback, cleanupSlot, a worktree removal blocked by a
-    // lingering process) is still in `slots` when the 30s deadline fires, with
-    // alreadyClaimed === true.
+  it("STILL cards a run that took the claim and wedged BEFORE its outcome callback fired", async () => {
+    // The round-2 finding, made executable. `terminalOutcomeDispatched` is set
+    // at terminal boundary 1 BEFORE `await slot.stateService.getState()`; the
+    // outcome callback fires after that await. A run wedged in that window
+    // holds the claim and has reported NOTHING:
     //
-    // The card's body asserts "the run never reported an outcome of its own"
-    // and its primary option is Retry → clearIssueFailures + rescan. Both are
-    // false here, and the log line two statements above the raise already says
-    // so (`runAlreadyClaimedItsOwnOutcome: true`). #307 introduced this flag to
-    // draw exactly that distinction; raising anyway discards it and produces
-    // the confident-wrong diagnostic docs/ATTENTION_PRODUCERS.md forbids.
+    //   - no onSlotCompleted / onSlotFailed, so bootstrap never called
+    //     autonomousComplete and the Go scheduler's running-slot seat is held;
+    //   - step 2 of the force-clear stands down on the claim, so nobody books
+    //     one on its behalf either.
+    //
+    // Gating the card on the claim (round 2's fix for a different case)
+    // therefore made this condition silent END TO END — the exact thing #305
+    // exists to stop. The card is now gated on `ownTerminalOutcomeBooked`, set
+    // only after a callback actually returns, so this wedge speaks up.
     const { factory, handles } = createControllableFactory();
     const manager = newManager(factory);
 
     mockQueue.dequeueIndependent.mockResolvedValueOnce([repoQueueItem(282)]);
     await manager.fillSlots();
 
-    // The run settles SUCCESSFULLY, takes the claim at boundary 1, and then
-    // wedges on the first await past it — so the slot is still in `slots` when
-    // the 30s deadline fires, with terminalOutcomeDispatched already true.
     const handle = handles.get(282)!;
     handle.wedgeAfterClaim();
     handle.resolveRun({ success: true, completedStages: [], failedStage: undefined });
@@ -415,14 +417,90 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
     await vi.advanceTimersByTimeAsync(31_000);
     await abortPromise;
 
-    // Premise: the force-clear really did run and really did see a claimed run.
+    // Premise: the claim WAS taken, and the outcome callback never fired.
     expect(mockLogger.warn).toHaveBeenCalledWith(
       "Force-clearing stuck slot — booking its terminal state (#307)",
-      expect.objectContaining({ issueNumber: 282, runAlreadyClaimedItsOwnOutcome: true })
+      expect.objectContaining({
+        issueNumber: 282,
+        runAlreadyClaimedItsOwnOutcome: true,
+        runReportedItsOwnOutcome: false,
+      })
     );
-    // …and step 2 stood down, which is the whole reason the card must too.
+    expect(callbacks.onSlotCompleted).not.toHaveBeenCalled();
     expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+
+    // …so the card is the only signal left, and it is raised.
+    const raises = attentionRaise.mock.calls.map(decodeRaise);
+    expect(raises).toHaveLength(1);
+    expect(raises[0].producer).toBe("abandoned-dispatch");
+    expect(raises[0].issue).toBe(282);
+  });
+
+  it("does NOT card a run whose own outcome callback fired before it wedged in teardown", async () => {
+    // The case round 2 was right about, gated on the right signal. Here the run
+    // reached its terminal branch, FIRED onSlotCompleted (bootstrap turned that
+    // into autonomousComplete — the Go seat is freed, the cascade breaker is
+    // charged) and only then wedged, in the finally's queue-mark release. The
+    // card would assert the run reported nothing, which is false.
+    const { factory, handles } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([repoQueueItem(282)]);
+    await manager.fillSlots();
+
+    // The run's OWN completeQueueItem never settles; the force-clear's later
+    // one does. That wedges the slot strictly after the outcome callback.
+    mockQueue.complete.mockImplementationOnce(() => new Promise<void>(() => {}));
+
+    const handle = handles.get(282)!;
+    handle.resolveRun({ success: true, completedStages: [], failedStage: undefined });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callbacks.onSlotCompleted).toHaveBeenCalledTimes(1);
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+    await abortPromise;
+
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      "Force-clearing stuck slot — booking its terminal state (#307)",
+      expect.objectContaining({ issueNumber: 282, runReportedItsOwnOutcome: true })
+    );
     expect(attentionRaise).not.toHaveBeenCalled();
+    // Step 2 also stood down — the outcome was already booked, once.
+    expect(callbacks.onSlotFailed).not.toHaveBeenCalled();
+  });
+
+  it("issues the raise CONCURRENTLY with the queue-mark release, not chained after it", async () => {
+    // Both are IPC round-trips bounded by IpcClientBase's 30s request timeout,
+    // and the daemon is unresponsive by definition when this deadline fires.
+    // Serialising them would grow the worst-case `isShuttingDown` hold from
+    // ~30s to ~60s on top of the 30s deadline already spent — the #3111
+    // condition arriving through the fix for it, and the bound
+    // `forceClearStuckSlots`' own doc comment still states.
+    const { factory } = createControllableFactory();
+    const manager = newManager(factory);
+
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([repoQueueItem(282)]);
+    await manager.fillSlots();
+
+    let releaseComplete!: () => void;
+    mockQueue.complete.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseComplete = () => resolve();
+        })
+    );
+
+    const abortPromise = manager.abortAll();
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    // The queue-mark release is STILL in flight, and the raise has already been
+    // issued. Chained, this would be zero.
+    expect(attentionRaise).toHaveBeenCalledTimes(1);
+
+    releaseComplete();
+    await vi.advanceTimersByTimeAsync(0);
+    await abortPromise;
   });
 
   it("skips the card when the slot has no owner/name identity", async () => {

@@ -18,9 +18,9 @@ import (
 // --- budget.raiseCeiling -----------------------------------------------------
 //
 // The USD pipeline ceiling is a config value resolved once per run by
-// getPipelineBudgetCeilingUSD and enforced terminally (budget_ceiling_hit). A
+// PipelineBudgetCeilingUSD and enforced terminally (budget_ceiling_hit). A
 // resolution of the budget-ceiling DecisionRequest writes a RUNTIME override
-// that getPipelineBudgetCeilingUSD reads and takes as the effective ceiling —
+// that PipelineBudgetCeilingUSD reads and takes as the effective ceiling —
 // so the next dispatch runs under the raised ceiling without editing config.
 
 const budgetOverrideRelPath = ".nightgauge/pipeline/budget-override.json"
@@ -39,7 +39,7 @@ func budgetOverridePath(workspaceRoot string) string {
 }
 
 // WriteBudgetCeilingOverride persists a runtime USD ceiling override. Honored by
-// getPipelineBudgetCeilingUSD (which takes the max of config and override) so a
+// PipelineBudgetCeilingUSD (which takes the max of config and override) so a
 // raised ceiling lets the run continue past the previous cap. Atomic
 // temp+rename — a concurrent reader never sees a half-written file.
 func WriteBudgetCeilingOverride(workspaceRoot string, ceilingUSD float64, actor, reason string) error {

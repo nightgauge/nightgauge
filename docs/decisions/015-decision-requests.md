@@ -396,11 +396,29 @@ single writer.
 | 7   | Definitive auth failure    | `identity_preflight.go` `CheckIdentity` (fail-closed) / taxonomy `CatPermission` (401/403); [adapter doctor](../ADAPTER_DOCTOR.md)                             | `provide_input` | login-and-retry (guidance + `autonomous.clearIssueFailures`) · halt                            | halt · 12h                          |
 | 8   | Watchdog / health findings | `autonomous_stuck_epic.go` `surfaceStuckEpics`; TS stall detector → `stall_recovery.go` `ClassifyStallSignal`; [health](../HEALTH_MONITORING.md) · stage quiet | `choose`        | wait · kill+retry (`pipeline.stop` + `queue.add`) · escalate-model (`run.retryWithEscalation`) | wait (bounded), then escalate · 30m |
 | 11  | Unexercised deliverable    | `gates/feature_validate_gate.go` `markUnexercisedDeliverable` → `scheduler.go` post-gate · run introduced test files no executed tier could run (#152)         | `approve`       | acknowledged (noop) · will-verify (noop)                                                       | noop · 72h                          |
+| 12  | Abandoned dispatch (Stop)  | `ConcurrentPipelineManager.forceClearStuckSlots` via `attention.raise` · a slot the abort deadline gave up on after an operator Stop (#305/#307)               | `approve`       | acknowledged (noop) · will-inspect (noop)                                                      | noop · 48h                          |
 
 Each producer replaces a dead-end that is today silent or one-way. Producers
 2 and 8 are the direct fixes for the motivating incidents (the invisible
 owner-action skip; the 19-minute quiet stage). Producers 4 and 8 are the ones
 that require the two E1 verbs from Decision B.
+
+**Producer 12 is extension-only, `fyi`, and deliberately offers no remedy.**
+There is no Go force-clear funnel — the scheduler's terminal defer runs in the
+same goroutine as its stage loop, so nothing else can declare a run abandoned
+while that defer is still owed. On the extension path,
+`forceClearStuckSlots` is reached only from `abortAll`'s abort deadline, and
+`abortAll` only from Stop / Abort / `deactivate()`, so **every** card it raises
+follows an operator's own Stop. It says what is worth knowing — the worktree was
+preserved and may hold uncommitted work, and the Go-side state for the issue may
+be stale — and nothing more. A `blocking_run` `unblock` with a "Retry" primary
+(its first cut) told the operator to undo their own Stop and routed to alerting
+per Decision I while nothing was blocked.
+
+Producer numbers are global across this section and its
+[repo-scoped companion](#producers-9-and-10): 9 and 10 are repo/sweep-scoped, 11
+is unexercised deliverable, 12 is above. Reusing a number splits one identity
+across two producers depending on which file a reader opens.
 
 ### G — Free-text steer becomes pinned next-stage context
 

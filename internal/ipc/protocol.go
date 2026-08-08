@@ -1494,12 +1494,29 @@ type AttentionSweepParams struct {
 // daemon builds the whole card from the same builder the Go scheduler uses, and
 // the blast radius stays at "this issue, this producer's declared options".
 //
+// NO MONEY CROSSES THIS WIRE, and that is the second half of the same boundary
+// (added in review). The allowlist bounds WHICH operation a card may offer; it
+// says nothing about that operation's MAGNITUDE. The first cut took `costUsd`
+// and `ceilingUsd` as params and fed both into orchestrator.ProposedCeilingUSD,
+// whose result became the `budget.raiseCeiling` option's `ceilingUsd` arg
+// verbatim — so `{producer:"budget-ceiling", repo:"victim/repo", issue:1,
+// costUsd:0.01, ceilingUsd:1000000}` minted a genuine card offering a $1.5M
+// workspace ceiling, and one resolve persisted it to budget-override.json.
+// Both inputs are now derived DAEMON-SIDE: the enforced ceiling from
+// orchestrator.PipelineBudgetCeilingUSD (the same in-process read the scheduler
+// does) and the spend from the run's own recorded RuntimeState. A caller
+// reports that a CONDITION happened; it cannot say what the condition cost.
+//
 // Field validation is per-producer: an unknown Producer and a producer missing
-// its required fields are each a distinct ERROR, never a silent no-op.
+// its required fields are each a distinct ERROR, never a silent no-op. The repo
+// must additionally be one this daemon has configured — an unbounded
+// (repo, issue) pair is an unbounded card-injection primitive into
+// .nightgauge/attention/, since dedup is per (producer, repo, issue).
 type AttentionRaiseParams struct {
 	// Producer is the closed enum — see ipc.RaiseableProducers.
 	Producer string `json:"producer"`
-	// Repo is "owner/name". Required by every producer.
+	// Repo is "owner/name", and must resolve to a repo this daemon has
+	// configured. Required by every producer.
 	Repo string `json:"repo"`
 	// Issue is the issue number. Required by every producer.
 	Issue int `json:"issue"`
@@ -1508,16 +1525,14 @@ type AttentionRaiseParams struct {
 	// from the runtime registry would add a reader of the bare-issue-number
 	// keying #370 must re-key, and would mis-stamp the card when a re-dispatch
 	// is already in flight under the same issue number. Empty is a handled
-	// case (the card simply carries no trace back-reference).
+	// case (the card simply carries no trace back-reference). It is an audit
+	// back-reference only — nothing is authorized by it.
 	RunID string `json:"runId,omitempty"`
 
 	// --- budget-ceiling ---
-	// CostUSD is the run's spend at the moment the ceiling stopped it.
-	CostUSD float64 `json:"costUsd,omitempty"`
-	// CeilingUSD is the ceiling that was ENFORCED (including any live
-	// override). The proposed higher ceiling is derived from it daemon-side by
-	// orchestrator.ProposedCeilingUSD so both paths offer the same number.
-	CeilingUSD float64 `json:"ceilingUsd,omitempty"`
+	//
+	// NO FIELDS. The condition is "this run hit the ceiling"; every number on
+	// the resulting card comes from daemon-side state. See the type doc.
 
 	// --- branch-protection ---
 	// PR is the blocked pull request number.
@@ -1554,15 +1569,23 @@ type AttentionRaiseCheck struct {
 	Conclusion string `json:"conclusion"`
 }
 
-// AttentionRaiseResult reports what the raise actually DID. Four genuine
-// outcomes get four values (`created`, `updated`, `refreshed`, `suppressed`)
-// plus `not_applicable`, so a caller can tell "a card is in front of the
-// operator" from "the operator already dismissed this exact condition" from
-// "the daemon looked and this is not that producer's condition at all". A
-// failure is an error, never an outcome.
+// AttentionRaiseResult reports what the raise actually DID. THREE reachable
+// answers, three values: `created` (a card is now in front of the operator),
+// `updated` (an open card for the same condition absorbed this observation),
+// and `not_applicable` (the daemon evaluated the producer's own precondition
+// and it does not hold — e.g. the pr-merge block turned out to be in-flight
+// CI). A failure is an error, never an outcome.
+//
+// Store.Raise also has `refreshed` and `suppressed`, and this contract
+// deliberately does NOT advertise them. Both are STANDING-only branches, and
+// TestNoRaiseableProducerIsStandingWithoutRetraction structurally forbids a
+// standing card on this verb (a one-shot raise from a surface has no scan to
+// auto-resolve against, so it cannot satisfy standing's retraction contract).
+// Advertising five values while two are unreachable is the drift the repo's
+// "consolidate N overlapping options to one" rule exists to stop — so the
+// handler treats either as a contract violation and errors, naming the value.
 type AttentionRaiseResult struct {
-	// Outcome is one of created | updated | refreshed | suppressed |
-	// not_applicable.
+	// Outcome is one of created | updated | not_applicable.
 	Outcome string `json:"outcome"`
 	// ID is the live request id; empty for not_applicable.
 	ID string `json:"id"`
