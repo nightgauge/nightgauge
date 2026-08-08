@@ -44,7 +44,8 @@
         "input": 1.0,
         "output": 2.0,
         "cache_read": 3.0,
-        "cache_creation": 4.0
+        "cache_creation_5m": 4.0,
+        "cache_creation_1h": 5.0
       },
       "supported_efforts": ["zqxsentinel-supported-effort"],
       "supported_reasoning": ["zqxsentinel-supported-reasoning"],
