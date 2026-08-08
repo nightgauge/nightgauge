@@ -315,6 +315,21 @@ fallback, is **not** on that list: it is mirrored by `workspaceDefaultModel`
 model for every reasoning stage on the IPC path — `services/SkillRunner.ts`
 passed no issue metadata, so Step 2 never fired and Step 3 always won.
 
+And a fourth consequence, of the translation gap above rather than of a missing
+table: **on a `gemini`, `gemini-sdk`, `copilot` or `lm-studio` workspace outside
+Maximum mode, everything this resolver decides is inert.** The tier, the
+`minimum_model` floor, the post-failure escalation ladder and the sticky #42
+downgrade all reach the extension, which then spawns the adapter's configured
+model regardless — so a failed stage re-runs on the same model, and the corpus's
+`actualModel` is a function of static config rather than of the run (see
+[OUTCOME_RECORDING.md](OUTCOME_RECORDING.md)). This is accepted for now rather
+than hidden: Claude and Codex are the adapters the pipeline is operated on, the
+band → provider-id maps already exist (`getModeStageAdapterModel`), and wiring
+them onto the non-Maximum path is a behavior change for every existing
+gemini/copilot workspace — it gets its own issue rather than riding along with
+the ownership change. Until then, an operator who wants Go's routing to bind
+should run `codex` or `claude`, or pin the adapter's model to match.
+
 And the reverse, stated for the same reason: two **post-base** mechanisms exist
 only in `resolveDispatchModel`, so the two resolvers deliberately disagree
 where they fire — the `feature-validate` haiku gate (#3041: haiku shortcuts
@@ -323,6 +338,20 @@ stage's build verification passed) and the `pr-merge` haiku floor (#197). Both
 raise a haiku result to sonnet on the Go path only. Post-failure escalation and
 the sticky model-unavailable downgrade (#42) are likewise Go's, and belong to
 whichever orchestrator drives the run.
+
+The `pr-create` large-diff escalation is **not** a third one — it is shared, and
+it fires under the same condition on both resolvers: **only over a base the
+pipeline chose.** In `resolveModel` that is structural (it lives inside the Step
+1.5 lightweight branch, which Step 1 returns before ever reaching); in
+`resolveDispatchModel` it is an explicit guard on `stageBaseModel`'s `explicit`
+flag. Without the guard it also fired over an explicit `pipeline.stage_models`
+entry, a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` override and the whole
+`model_routing.mode: manual` table — where `defaultStageModels[pr-create]` is
+haiku and all three recommended `CONFIGURATION.md` profiles live — so one
+workspace and one 900-line diff ran `pr-create` on sonnet autonomously and haiku
+from the extension. Explicit operator configuration wins; the escalation exists
+to stop the pipeline's own cheap default from stalling, not to overrule a
+choice.
 
 The mode × knob matrix both resolvers must agree on is asserted twice, once per
 resolver: `TestDispatchModelModeKnobMatrix`
@@ -350,11 +379,21 @@ neither:
   band its ladders are built on (`haiku|sonnet|opus|fable`), guaranteed by
   `normalizeDispatchTier` as `resolveDispatchModel`'s last step. (A
   user-configured local model the registry does not know has no band and passes
-  through as itself.) Codex, Gemini and Copilot need a provider-specific id, and
-  only the extension knows which adapter it selected, so the translation happens
-  at the last mile. The model the adapter process was actually spawned with is
-  reported back as `servedModel`, so run history attributes — and prices — the
-  model that ran rather than the tier that was asked for.
+  through as itself.) Non-Claude CLIs need a provider-specific id, and only the
+  extension knows which adapter it selected, so the translation happens at the
+  last mile. The model the adapter process was actually spawned with is reported
+  back as `servedModel`, so run history attributes — and prices — the model that
+  ran rather than the tier that was asked for.
+
+  **Exactly one adapter translates the dispatched band today: `codex`.**
+  `utils/skillRunner.ts` runs `resolveCodexPipelineModel(model)` on the wire
+  value unconditionally, so a codex run honors every tier Go resolved.
+  `gemini` / `gemini-sdk`, `copilot` and `lm-studio` consult the dispatched band
+  only through `modePinnedTier`, which is true for **Maximum** alone (the only
+  mode whose `MODE_PROFILES` entry still pins a stage). In every other mode they
+  launch their own configured model — `getGeminiModel` / `getCopilotModel` /
+  `getLmStudioModel` — and `lm-studio` cannot honor a tier alias at all, by
+  design (#3214: it logs the mismatch and demotes the decision's source).
 
   `servedModel` therefore carries a CONCRETE id, deliberately, and the two
   questions asked about it live in one space each. "Did the process run what the

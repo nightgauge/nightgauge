@@ -1019,26 +1019,33 @@ function modelTierBand(model: string | undefined): ModelTier | undefined {
  * working when the model arrives pre-decided. `resolveModel` returns effort as
  * a by-product of resolving the model, so the path that skips it needs this.
  *
- * Mirrors `resolveModel`'s Step 0 + envelope clamp for EFFORT: a mode that pins
- * the stage supplies the effort, otherwise the configured/derived effort is
- * clamped into the mode's `[effortFloor, effortCeiling]` band (Issue #19).
+ * Mirrors `resolveModel`'s Step 0 + envelope clamp for EFFORT, including the
+ * SUPPRESSION (#340): a per-stage `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` override
+ * short-circuits Step 0 there, so the mode's stage profile supplies neither the
+ * model nor the effort and the configured effort is merely clamped into the
+ * mode's `[effortFloor, effortCeiling]` band (Issue #19). This has to read the
+ * same override for the same reason, or one config yields two thinking budgets:
+ * the clamp only RAISES to the floor, so any effort stronger than the pin —
+ * `ClaudeEffort` includes `xhigh` and `max` — survives on the `resolveModel`
+ * path and was overwritten here. Concretely: Maximum + `stage_efforts: xhigh` +
+ * that env override spawned `--effort xhigh` from the HeadlessOrchestrator and
+ * `--effort high` from the IPC path, which is the one path this function
+ * exists to serve.
  *
- * The per-stage MODEL env override does not suppress the pinned effort the way
- * it suppresses the pinned model (#340): that override names a model, and the
- * mode still governs how hard the stage thinks. Both paths agree anyway —
- * Maximum's `effortFloor: "high"` clamps the configured effort to the same
- * "high" its stage profile pins.
+ * With no such override the mode's pin still wins on both paths — the mode
+ * governs how hard a stage thinks whenever the operator has not overridden that
+ * stage.
  */
-function resolveStageEffort(
+export function resolveStageEffort(
   stage: PipelineStage,
   workspaceRoot: string,
   issueMetadata?: IssueMetadata
 ): ClaudeEffort | undefined {
   const mode = getPerformanceMode(workspaceRoot);
   const envelope = getModeEnvelope(mode);
-  if (mode !== "elevated") {
-    const pinned = getModeStageProfile(mode, stage)?.effort;
-    if (pinned) return pinned;
+  if (mode !== "elevated" && !getStageEnvModel(stage)) {
+    const profile = getModeStageProfile(mode, stage);
+    if (profile?.model && profile.effort) return profile.effort;
   }
   return clampEffortToEnvelope(getStageEffort(stage, workspaceRoot, issueMetadata), envelope);
 }
@@ -1114,17 +1121,25 @@ export function resolveModel(
   // and the plumbing stages top out at Opus even under `frontier`. Go clamps
   // against the same narrowed band (routing.RoutedTierEnvelope). Effort keeps
   // the raw envelope — the narrowing is about tiers, not thinking budget.
+  //
+  // "Every" means every branch below EXCEPT Step 1: the lightweight defaults,
+  // the adaptive-policy override (1.6), the A/B assignment (1.7), the
+  // selector's pick (2), `ui.core.default_model` (3) and the hardcoded
+  // fallback (4). Step 1 — the env override, `pipeline.stage_models`, the
+  // manual-mode table — is the operator overriding the mode for one stage, and
+  // is returned unclamped on both resolvers.
   const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage);
 
   // The `model_routing.minimum_model` floor applies to EVERY tier the pipeline
   // chose, not just the selector's pick (#340). Before this it was reachable
   // only from Step 2, so a run that never reached the selector — no issue
   // metadata (the pre-#340 IPC path passed none), a lightweight stage, an
-  // explicit `stage_models` entry — silently ignored a configured floor that
-  // Go's `resolveDispatchModel` was applying to the same config. `withFloor`
-  // is that one rule: raise to the floor, then land inside the stage's
-  // routed-tier CEILING. The floor half of the envelope is deliberately not
-  // re-applied (see `clampModelToCeiling`).
+  // explicit `stage_models` entry, an adaptive-policy override (Step 1.6) or
+  // an A/B experiment assignment (Step 1.7) — silently ignored a configured
+  // floor that Go's `resolveDispatchModel` was applying to the same config.
+  // `withFloor` is that one rule: raise to the floor, then land inside the
+  // stage's routed-tier CEILING. The floor half of the envelope is
+  // deliberately not re-applied (see `clampModelToCeiling`).
   const minModel = getMinimumModel(stage, workspaceRoot);
   const withFloor = (chosen: DefaultModel): DefaultModel =>
     clampModelToCeiling(enforceMinimumModel(chosen, minModel), modelEnvelope);
@@ -1194,11 +1209,18 @@ export function resolveModel(
   // (env always wins) and lightweight defaults, but before experiment and
   // AutoModelSelector. Only active in automatic or hybrid modes (manual mode
   // uses explicit stage_models which are handled in Step 1).
+  //
+  // `withFloor`, like every other pipeline-chosen branch (#340). A policy
+  // override is the pipeline routing itself from its own health signals, not
+  // the operator naming a tier for this stage, so it gets no exemption from
+  // the `minimum_model` floor or the routed-tier ceiling — Go's
+  // `resolveDispatchModel` applies both to every base it produces, and an
+  // unclamped branch here means one config file dispatches two tiers.
   if (routingMode === "automatic" || routingMode === "hybrid") {
     const policyOverride = getStageOverrideModel(stage, workspaceRoot);
     if (policyOverride !== undefined) {
       return {
-        model: policyOverride,
+        model: withFloor(policyOverride),
         source: "config",
         mode: routingMode,
         effort,
@@ -1208,6 +1230,14 @@ export function resolveModel(
 
   // Step 1.7: Active A/B experiment override (Issue #949)
   // Experiments override auto-selection but not explicit env/config overrides.
+  //
+  // The assignment is honored; its TIER is bounded (#340). An experiment is a
+  // pipeline choice too, and an unclamped one was the last door out of the
+  // envelope: an efficiency-mode treatment of `opus` escaped the [haiku,
+  // sonnet] band the operator selected, and a `frontier` treatment escaped the
+  // `feature-validate` Opus cap MODE_PROFILES.frontier documents as deliberate
+  // ("empirically failed validation in dogfooding"). Clamping the tier does not
+  // change which arm the issue landed in, so the experiment stays measurable.
   if (issueNumber !== undefined && issueNumber > 0) {
     const experimentConfig = getExperimentConfig(workspaceRoot);
     if (experimentConfig) {
@@ -1224,7 +1254,7 @@ export function resolveModel(
       });
       if (assignment) {
         return {
-          model: assignment.model as DefaultModel,
+          model: withFloor(assignment.model as DefaultModel),
           source: "experiment",
           mode: routingMode,
           effort: assignment.effort as ClaudeEffort | undefined,

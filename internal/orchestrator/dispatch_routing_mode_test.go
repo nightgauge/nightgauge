@@ -1,6 +1,10 @@
 package orchestrator
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -396,6 +400,143 @@ func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
 		s := testScheduler(t)
 		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "sonnet" {
 			t.Errorf("feature-dev = %q, want the hardcoded sonnet fallback", got)
+		}
+	})
+
+	// `fable` is the cell the guard above does not cover, and the one where the
+	// two readers disagreed: getDefaultModel's ENV branch accepts all four
+	// registry bands while its FILE branch matched only three (a regex written
+	// before Fable existed), so `ui.core.default_model: fable` dispatched Fable
+	// autonomously and Sonnet — the Step 4 hardcoded fallback — from the
+	// extension, from one config file with no log line on either side. The TS
+	// twin is resolveModel.modeKnobAgreement.test.ts §"Step 3 reads the same
+	// band set Go does".
+	t.Run("fable is accepted from the file, like every other registry band", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: fable\n")
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "fable" {
+			t.Errorf("feature-dev = %q, want fable — DefaultModelSchema permits it and validStageModel accepts it", got)
+		}
+	})
+
+	t.Run("a fable default is still clamped into the mode envelope", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: fable\n")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "opus" {
+			t.Errorf("feature-dev = %q, want opus — elevated tops out there; accepting the band does not exempt it from the ceiling", got)
+		}
+	})
+}
+
+// gitWorkspaceWithLargeDiff returns a REAL git repository whose checked-out
+// branch differs from `main` by `lines` inserted lines, with `body` as its
+// .nightgauge/config.yaml.
+//
+// The pr-create escalation reads `git diff main --shortstat`, which returns 0
+// on any error — so a fake workspace would silently make every assertion below
+// pass for the wrong reason.
+func gitWorkspaceWithLargeDiff(t *testing.T, body string, lines int) string {
+	t.Helper()
+	isolateRoutingEnv(t)
+	root := t.TempDir()
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@example.com",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	git("init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-m", "seed")
+
+	git("checkout", "-b", "feat/large")
+	if err := os.WriteFile(filepath.Join(root, "big.txt"),
+		[]byte(strings.Repeat("a line of a very large changeset\n", lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-m", "large")
+
+	if body != "" {
+		dir := filepath.Join(root, ".nightgauge")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "config.yaml"),
+			[]byte("owner: nightgauge\nrepo: nightgauge\nproject: 1\n"+body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// TestDispatchModelPRCreateLargeDiffSpares AnExplicitBase pins the rule both
+// resolvers now follow: EXPLICIT OPERATOR CONFIGURATION WINS, and the
+// large-diff escalation applies only over a base the PIPELINE chose (#340).
+//
+// In `resolveModel` that rule is structural — the escalation lives inside Step
+// 1.5, which Step 1 returns before ever reaching whenever `getStageModel`
+// answers. Go evaluated it on the resolved model regardless of provenance, so
+// with `model_routing.mode: manual` — set by all three recommended
+// docs/CONFIGURATION.md profiles, and where the explicit chain answers for
+// EVERY stage out of defaultStageModels (pr-create: haiku) — the same workspace
+// and the same 900-line diff ran pr-create on sonnet autonomously and haiku
+// from the extension. That is the default cell for those operators, not an
+// exotic one.
+func TestDispatchModelPRCreateLargeDiffSparesAnExplicitBase(t *testing.T) {
+	const bigDiff = 900
+
+	t.Run("a pipeline-chosen lightweight base still escalates", func(t *testing.T) {
+		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", bigDiff)
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil); got != "sonnet" {
+			t.Errorf("pr-create = %q, want sonnet — lightweightStageDefaults is the pipeline's own choice, and haiku stalls on a big changeset", got)
+		}
+	})
+
+	t.Run("the manual-mode table is explicit, so it is left alone", func(t *testing.T) {
+		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: manual\n", bigDiff)
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil); got != "haiku" {
+			t.Errorf("pr-create = %q, want haiku — resolveModel Step 1 answers from DEFAULT_STAGE_MODELS and never reaches the escalation", got)
+		}
+	})
+
+	t.Run("an explicit pipeline.stage_models entry is left alone", func(t *testing.T) {
+		dir := gitWorkspaceWithLargeDiff(t,
+			"model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    pr-create: haiku\n", bigDiff)
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil); got != "haiku" {
+			t.Errorf("pr-create = %q, want haiku — the operator named the tier for this stage", got)
+		}
+	})
+
+	t.Run("the env override is left alone", func(t *testing.T) {
+		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", bigDiff)
+		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_CREATE", "haiku")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil); got != "haiku" {
+			t.Errorf("pr-create = %q, want haiku — the env override wins in every mode, on both resolvers", got)
+		}
+	})
+
+	t.Run("a small diff escalates nothing", func(t *testing.T) {
+		dir := gitWorkspaceWithLargeDiff(t, "model_routing:\n  mode: automatic\n", 3)
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "", nil); got != "haiku" {
+			t.Errorf("pr-create = %q, want haiku — the diff is below the threshold", got)
 		}
 	})
 }

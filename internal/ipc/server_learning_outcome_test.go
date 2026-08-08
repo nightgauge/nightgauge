@@ -17,10 +17,13 @@
 package ipc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -866,5 +869,94 @@ func TestLearningOutcomeFor_SkipVerdictsFromRecordFields(t *testing.T) {
 	netdown.TerminalFailureKind = orchestrator.TerminalKindNetworkUnavailable
 	if _, d := learningOutcomeFor(netdown, issueClassification{}, nil, "acme/widget", time.Now()); d != outcomeSkipNetworkUnavailable {
 		t.Errorf("network-unavailable record: decision = %s, want %s", d, outcomeSkipNetworkUnavailable)
+	}
+}
+
+// captureLog redirects the standard logger for the duration of fn.
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	fn()
+	return buf.String()
+}
+
+// The extension writer's diagnostics have the SAME three causes as the
+// scheduler's, and must name the same one (#340). This is the surface an
+// operator debugging an empty ModelAccuracy actually reads: on a gemini,
+// lm-studio or ollama workspace the implementation stage DOES report a served
+// model — it just has no registry band — and "the feature-dev stage reported no
+// served model" tells them the stage never ran.
+func TestNotifyComplete_DiagnosesAnUnregisteredServedModel(t *testing.T) {
+	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 3401)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	out := captureLog(t, func() {
+		for _, msg := range []string{
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+		} {
+			if _, err := transition(t.Context(), []byte(msg)); err != nil {
+				t.Fatalf("notifyStageTransition: %v\nmsg=%s", err, msg)
+			}
+		}
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3401,"success":true,"totalDurationMs":1000}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	outcomes, exists := readOutcomes(t, dir)
+	if !exists || len(outcomes) != 1 {
+		t.Fatalf("expected exactly one learning outcome (exists=%v, n=%d)", exists, len(outcomes))
+	}
+	if outcomes[0].ActualModel != "" {
+		t.Fatalf("ActualModel = %q, want \"\" — gemini-2.0-flash has no registry band, so this test is not exercising the empty-band diagnostic", outcomes[0].ActualModel)
+	}
+
+	if strings.Contains(out, "reported no served model") {
+		t.Errorf("log says the stage reported no served model, but it reported gemini-2.0-flash:\n%s", out)
+	}
+	if !strings.Contains(out, "gemini-2.0-flash") {
+		t.Errorf("log does not name the served id, so the operator cannot tell which of the three causes fired:\n%s", out)
+	}
+}
+
+// Both writers emit the SAME sentence for the same cause. The corpus has two
+// writers and one reader; a diagnostic that differs between them is a second,
+// quieter drift of exactly the kind #340 removed.
+func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
+	dir := t.TempDir()
+	writeCapturedIssueContext(t, dir, 3402)
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	out := captureLog(t, func() {
+		for _, msg := range []string{
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+		} {
+			if _, err := transition(t.Context(), []byte(msg)); err != nil {
+				t.Fatalf("notifyStageTransition: %v", err)
+			}
+		}
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3402,"success":true,"totalDurationMs":1000}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	want := orchestrator.OutcomeActualModelDiagnostic("gemini-2.0-flash")
+	if !strings.Contains(out, want) {
+		t.Errorf("extension writer did not emit the shared diagnostic.\nwant substring: %s\ngot:\n%s", want, out)
 	}
 }

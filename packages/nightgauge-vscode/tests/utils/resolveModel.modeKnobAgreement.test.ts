@@ -46,7 +46,7 @@ vi.mock("../../src/utils/mergedConfigReader", () => ({
   readEffectiveConfigTextSync: vi.fn(() => configText),
 }));
 
-import { resolveModel } from "../../src/utils/skillRunner";
+import { resolveModel, resolveStageEffort } from "../../src/utils/skillRunner";
 
 /** The tier both resolvers are handed for the un-overridden step. */
 const ROUTED_TIER = "opus";
@@ -74,6 +74,7 @@ beforeEach(() => {
   process.env = { ...originalEnv };
   delete process.env.NIGHTGAUGE_PERFORMANCE_MODE;
   delete process.env.NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV;
+  delete process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV;
   delete process.env.NIGHTGAUGE_MODEL_ROUTING_MODE;
   process.env.NIGHTGAUGE_UI_CORE_DEFAULT_MODEL = ROUTED_TIER;
   configText = AUTOMATIC;
@@ -262,5 +263,146 @@ describe("resolveModel × resolveDispatchModel — mode × knob agreement (#340)
     expect(decision.source).toBe("env");
     // The mode still governs the effort — the override named a model.
     expect(decision.effort).toBe("high");
+  });
+});
+
+/**
+ * Steps 1.6 and 1.7 are the two branches that used to return their model RAW
+ * (#340 round 3). Every other branch runs it through `withFloor` — the
+ * `model_routing.minimum_model` raise, landed inside the stage's routed-tier
+ * ceiling — so a policy override or an A/B treatment was the one door out of
+ * the envelope that every other door closed. The `frontier` +
+ * `feature-validate` cell is the specific escape MODE_PROFILES.frontier
+ * documents as deleted: "feature-validate never exceeds Opus", the behavior
+ * that "empirically failed validation in dogfooding".
+ *
+ * These are ALSO cross-path cells: Go's `resolveDispatchModel` applies the
+ * floor and the ceiling to every base it produces, so an unclamped TS branch
+ * means one config file dispatches two different tiers.
+ */
+describe("resolveModel Steps 1.6/1.7 stay inside the envelope (#340)", () => {
+  const POLICY_HAIKU_FLOOR_OPUS =
+    "model_routing:\n  mode: automatic\n  minimum_model:\n    feature-dev: opus\n" +
+    "  stage_overrides:\n    feature-dev: haiku\n";
+  const POLICY_OPUS =
+    "model_routing:\n  mode: automatic\n  stage_overrides:\n    feature-dev: opus\n";
+  const POLICY_VALIDATE_FABLE =
+    "model_routing:\n  mode: automatic\n  stage_overrides:\n    feature-validate: fable\n";
+  /** split_percent 100 → every issue lands in the treatment arm. */
+  const EXPERIMENT_OPUS =
+    "model_routing:\n  mode: automatic\n  experiment:\n    name: tier-probe\n    active: true\n" +
+    "    split_percent: 100\n    control:\n      model: haiku\n    treatment:\n      model: opus\n";
+
+  it("Step 1.6: the minimum_model floor binds an adaptive-policy override", () => {
+    configText = POLICY_HAIKU_FLOOR_OPUS;
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "Go applies the floor to every base it produces — an unfloored policy override is one config, two tiers"
+    ).toBe("opus");
+  });
+
+  it("Step 1.6: the mode ceiling binds an adaptive-policy override", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
+    configText = POLICY_OPUS;
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "a cost-capping mode that a policy override can raise out of caps nothing"
+    ).toBe("sonnet");
+  });
+
+  it("Step 1.6: frontier's fable ceiling still stops at Opus on feature-validate", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText = POLICY_VALIDATE_FABLE;
+    expect(
+      resolveModel(VALIDATE_STAGE, "/test/workspace").model,
+      "MODE_PROFILES.frontier: plumbing stays Haiku and feature-validate never exceeds Opus"
+    ).toBe("opus");
+  });
+
+  it("Step 1.7: an A/B treatment is clamped like every other pipeline choice", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
+    configText = EXPERIMENT_OPUS;
+    const decision = resolveModel(STAGE, "/test/workspace", undefined, 7);
+    expect(decision.source, "the assignment still happened — only its tier is bounded").toBe(
+      "experiment"
+    );
+    expect(
+      decision.model,
+      "an experiment must not be the one mechanism that escapes the envelope"
+    ).toBe("sonnet");
+  });
+});
+
+/**
+ * `ui.core.default_model` (Step 3) read from the FILE, not the env var (#340).
+ *
+ * `getDefaultModel`'s env branch accepts all four registry bands and its file
+ * branch accepted three: a regex written before Fable existed. Go's
+ * `workspaceDefaultModel` accepts four from both, so `ui.core.default_model:
+ * fable` dispatched Fable autonomously and Sonnet (the Step 4 hardcoded
+ * fallback) from the extension — from one config file, with no log line on
+ * either side. The Go twin is TestDispatchModelResolvesTheWorkspaceDefault.
+ */
+describe("resolveModel Step 3 reads the same band set Go does (#340)", () => {
+  beforeEach(() => {
+    // This suite is about the FILE half — the env var is the half that already
+    // agreed.
+    delete process.env.NIGHTGAUGE_UI_CORE_DEFAULT_MODEL;
+  });
+
+  it("accepts `fable` from ui.core.default_model", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText = "ui:\n  core:\n    default_model: fable\n";
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "fable is a registry band; DefaultModelSchema permits it and Go dispatches it"
+    ).toBe("fable");
+  });
+
+  it("clamps a `fable` default into the mode envelope, like every other Step 3 value", () => {
+    configText = "ui:\n  core:\n    default_model: fable\n";
+    expect(
+      resolveModel(STAGE, "/test/workspace").model,
+      "elevated tops out at opus — accepting the band does not exempt it from the ceiling"
+    ).toBe("opus");
+  });
+});
+
+/**
+ * `resolveStageEffort` is the effort half of the IPC path: with the model
+ * pre-decided on the wire, `runStageSkillHeadless` skips `resolveModel`
+ * entirely and asks this instead. One config must therefore yield one thinking
+ * budget on both paths (#340).
+ */
+describe("resolveStageEffort mirrors resolveModel Step 0's env suppression (#340)", () => {
+  it("an explicit per-stage model override suppresses the mode's effort pin", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "maximum";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV = "opus";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV = "xhigh";
+
+    expect(
+      resolveModel(STAGE, "/test/workspace").effort,
+      "Step 0 is suppressed by the env override, so the configured effort is only floored"
+    ).toBe("xhigh");
+    expect(
+      resolveStageEffort(STAGE, "/test/workspace"),
+      "the IPC path must not spawn a different thinking budget than the orchestrated one"
+    ).toBe("xhigh");
+  });
+
+  it("keeps the mode's pin when no per-stage model override is set", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "maximum";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV = "xhigh";
+
+    expect(resolveModel(STAGE, "/test/workspace").effort).toBe("high");
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("high");
+  });
+
+  it("control: efficiency caps both paths at medium", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV = "xhigh";
+
+    expect(resolveModel(STAGE, "/test/workspace").effort).toBe("medium");
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
   });
 });

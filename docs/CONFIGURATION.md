@@ -1859,7 +1859,8 @@ Provider scale defaults (seeded from C1 pricing-table ratios — see
 | `ollama`     | 0.0           | _switches to time-based cap_                                     |
 
 **Cross-axis composition example.** `feature-dev` on `gemini` with the
-default `gemini-2.5-pro` model in `elevated` mode:
+`gemini-2.5-pro` model (the shipped default is `gemini-2.5-flash`) in
+`elevated` mode:
 
 ```
 $23.00 × 1.0 (no Claude family match) × 1.0 (elevated) × 0.4 (gemini) = $9.20
@@ -4603,8 +4604,8 @@ Core VSCode extension settings for authentication and paths.
 | ---------------- | ------ | ------------------------ | --------------------------------------------------------------------------------------------- |
 | `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental) |
 | `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                 |
-| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku                                                            |
-| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku (#626)                                        |
+| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                              |
+| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                 |
 | `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                          |
 | `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                              |
 

@@ -169,10 +169,22 @@ func resolveOutcomeRepo(record state.V2RunRecord, repo string) string {
 // refusal-fallback served model); the runtime is the fallback for a snapshot
 // that observed a dev-stage refusal swap the record has not yet absorbed.
 func servedDevModel(record state.V2RunRecord, snap *state.RuntimeState, predicted string) string {
+	return orchestrator.OutcomeActualBand(rawServedDevModel(record, snap), predicted)
+}
+
+// rawServedDevModel is servedDevModel BEFORE the band normalization — the id
+// the implementation stage actually reported, or "" when it reported none.
+//
+// The diagnostic needs it because those two inputs produce the same empty band
+// for different reasons: "the stage reported nothing" and "the stage served an
+// id the registry has no band for" (every gemini / lm-studio / ollama run, and
+// a codex id the registry does not carry). Logging one sentence for both told
+// exactly the operators with the second problem that their stage never ran.
+func rawServedDevModel(record state.V2RunRecord, snap *state.RuntimeState) string {
 	if m := stageModel(record, string(orchestrator.OutcomeModelStage)); m != "" {
-		return orchestrator.OutcomeActualBand(m, predicted)
+		return m
 	}
-	return orchestrator.OutcomeActualBand(orchestrator.OutcomeServedDevModel(snap), predicted)
+	return orchestrator.OutcomeServedDevModel(snap)
 }
 
 // sortedStageNames returns the record's stage names in a stable order.

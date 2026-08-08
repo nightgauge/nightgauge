@@ -2888,17 +2888,22 @@ func (s *Server) registerMethods() {
 					// — but only if somebody knows it happened: the pre-#304
 					// corpus was 100% model-less and nobody noticed for the life
 					// of the product.
+					//
+					// The sentences come from orchestrator.Outcome*Diagnostic,
+					// beside the rule that produces the empty band, because the
+					// band has THREE causes and this writer and the scheduler's
+					// must not name different ones for one corpus field: absent,
+					// or a value the registry has no band for. On a gemini /
+					// lm-studio / ollama workspace the implementation stage DOES
+					// report a model — so the old single sentence told exactly
+					// those operators that the stage never ran (#340).
 					if outcome.PredictedModel == "" {
-						log.Printf(
-							"notifyComplete: #%d learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
-							p.IssueNumber, p.IssueNumber,
-						)
+						log.Printf("notifyComplete: #%d %s", p.IssueNumber,
+							orchestrator.OutcomePredictedModelDiagnostic(p.IssueNumber, cls.PredictedModel))
 					}
 					if outcome.ActualModel == "" {
-						log.Printf(
-							"notifyComplete: #%d learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
-							p.IssueNumber, orchestrator.OutcomeModelStage,
-						)
+						log.Printf("notifyComplete: #%d %s", p.IssueNumber,
+							orchestrator.OutcomeActualModelDiagnostic(rawServedDevModel(record, snap)))
 					}
 					if err := learning.NewRecorder(root).Record(outcome); err != nil {
 						log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)

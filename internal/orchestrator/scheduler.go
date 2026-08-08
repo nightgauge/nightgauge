@@ -5721,13 +5721,19 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 	// loadIssueContext reads <runRoot>/.nightgauge/pipeline/issue-{N}.json and
 	// stages write that file into the run's WORKTREE, so an autonomous row can
 	// carry score 0 and no prediction at all.
+	//
+	// WHICH cause fired is the whole point, and there are three (see
+	// OutcomePredictedModelDiagnostic): absent, or present-but-unregistered on
+	// either half. The sentences live in outcome_semantics.go beside the rule
+	// that produces the empty band, so this writer and the extension's cannot
+	// name different causes for one corpus field.
 	if outcome.PredictedModel == "" {
-		log.Printf("#%d: learning outcome has no PREDICTED model — issue-%d.json carried no routing.pickup_recommendation.dev_model, so model routing cannot be calibrated for this run (#304)",
-			item.Number, item.Number)
+		log.Printf("#%d: %s", item.Number,
+			OutcomePredictedModelDiagnostic(item.Number, predictedModel))
 	}
 	if outcome.ActualModel == "" {
-		log.Printf("#%d: learning outcome has no ACTUAL model — the %s stage reported no served model, so this run measures nothing about model routing (#304)",
-			item.Number, OutcomeModelStage)
+		log.Printf("#%d: %s", item.Number,
+			OutcomeActualModelDiagnostic(OutcomeServedDevModel(snap)))
 	}
 	if complexityScore <= 0 {
 		log.Printf("#%d: learning outcome has no routing.complexity_score — no issue context reached this handler, so the run records no size prediction at all (#304)",
@@ -5997,7 +6003,22 @@ func (s *Scheduler) resolveDispatchModel(
 
 	// For pr-create, escalate from haiku to sonnet when the diff is large.
 	// Large diffs cause haiku to stall before producing a complete PR.
-	if stage == state.StagePRCreate && isHaikuModel(model) {
+	//
+	// Only over a base the PIPELINE chose. In `resolveModel` this rule is
+	// structural rather than stated: the escalation lives inside Step 1.5, the
+	// lightweight-stage branch, which Step 1 returns before ever reaching
+	// whenever `getStageModel` answers. Evaluating it here on the resolved
+	// model regardless of provenance made it fire over an explicit
+	// `pipeline.stage_models` entry, a `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`
+	// override, and the whole `model_routing.mode: manual` table — where
+	// defaultStageModels[pr-create] is haiku and all three recommended
+	// docs/CONFIGURATION.md profiles live. One workspace and one 900-line diff
+	// then ran pr-create on sonnet autonomously and haiku from the extension.
+	//
+	// So: explicit operator configuration wins, on both resolvers. An operator
+	// who names haiku for pr-create gets haiku; the escalation exists to keep
+	// the PIPELINE's own cheap default from stalling, not to overrule a choice.
+	if stage == state.StagePRCreate && !explicitBase && isHaikuModel(model) {
 		threshold := getLargeDiffThreshold(workspaceRoot)
 		if threshold > 0 {
 			if diffLines := getDiffLineCount(workspaceRoot); diffLines > threshold {
