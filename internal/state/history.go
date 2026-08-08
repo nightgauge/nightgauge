@@ -382,11 +382,21 @@ type OutcomePrediction struct {
 	PredictedSize string `json:"predicted_size"`
 	ActualSize    string `json:"actual_size,omitempty"`
 	// PredictedModel / ActualModel: registry model bands
-	// (haiku|sonnet|opus|fable), with unregistered models passed through
-	// verbatim. Predicted is the router's pickup recommendation for the
-	// implementation stage; actual is the model THAT stage served (including a
-	// #91 CLI refusal-fallback swap in it), empty when it never ran. Never a
-	// copy of the prediction, and never another stage's model.
+	// (haiku|sonnet|opus|fable) and NOTHING ELSE. A model reference the registry
+	// has no band for records "" — the pair is compared for equality against a
+	// band, so a verbatim id (a user-defined local model, #56) would be a
+	// guaranteed miss rather than kept attribution; the concrete id lives in the
+	// per-stage `model_selection` block instead.
+	//
+	// Predicted is the router's pickup recommendation for the implementation
+	// stage (orchestrator.OutcomeModelBand). Actual is the band THAT stage
+	// served (orchestrator.OutcomeActualBand, including a #91 CLI
+	// refusal-fallback swap in it) — the adapter mapping inverted against the
+	// prediction, not a strongest-band collapse, so a codex run that served
+	// gpt-5.6-sol for an "opus" request records "opus" rather than "fable".
+	// Empty when the stage never ran, reported no model, or served an id with no
+	// registry band. Never a copy of the prediction, and never another stage's
+	// model.
 	PredictedModel string `json:"predicted_model"`
 	ActualModel    string `json:"actual_model,omitempty"`
 }

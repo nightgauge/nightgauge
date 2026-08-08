@@ -73,10 +73,13 @@ Both writers derive these four fields through the **same** helpers, in
 of them. Three rules hold everywhere:
 
 1. **One vocabulary per pair.** Sizes are `small｜medium｜large`; models are
-   registry bands (`haiku｜sonnet｜opus｜fable`), with unregistered models passed
-   through verbatim. A pair written in two vocabularies reports a _measured_ 0%
+   registry bands (`haiku｜sonnet｜opus｜fable`) **and nothing else** — a model
+   reference the registry has no band for records `""` and is excluded, never
+   the id verbatim. A pair written in two vocabularies reports a _measured_ 0%
    forever — worse than no data, because the reader stops saying "bootstrapping"
-   and starts asserting a number that can never move.
+   and starts asserting a number that can never move. (Attribution of what
+   actually ran is not lost: the run record's per-stage `model_selection` keeps
+   the concrete id.)
 2. **Absent means empty.** Unknown is `""`, never a plausible default. Every
    consumer counts a row toward an accuracy only when **both** halves of that
    pair are non-empty, so an absent value is excluded rather than booked as a
@@ -84,12 +87,22 @@ of them. Three rules hold everywhere:
 3. **An `actual` is a measurement.** It must be something the run produced,
    never a second reading of the same pre-run inputs the prediction came from.
 
-| Field            | Meaning                                                              | Absent when                                                                  |
-| ---------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                       | the issue carried no size input (see below), or is unscored                  |
-| `actualSize`     | how big the change turned out to be, bucketed from lines **changed** | **always, today** — no terminal boundary carries a lines-changed measurement |
-| `predictedModel` | `routing.pickup_recommendation.dev_model`, normalized to its band    | the router made no recommendation                                            |
-| `actualModel`    | the band the **`feature-dev`** stage actually served, normalized     | that stage never ran or reported no model                                    |
+The model pair has one more rule, because the two halves are written in
+different places: the run is JUDGED for divergence in the concrete-id space
+(what the adapter actually launched) and RECORDED in the band space (what the
+prediction is written in). A non-Claude adapter translates a band into a
+multi-band id — `opus` → `gpt-5.6-sol`, which also serves `fable` — so
+collapsing the served id onto its strongest band would book every
+codex/gemini/copilot run as a routing miss. `OutcomeActualBand` inverts the
+mapping against the prediction instead. See
+[OUTCOME_RECORDING.md](OUTCOME_RECORDING.md) for the worked table.
+
+| Field            | Meaning                                                                                                                                                | Absent when                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                                                                                                         | the issue carried no size input (see below), or is unscored                    |
+| `actualSize`     | how big the change turned out to be, bucketed from lines **changed**                                                                                   | **always, today** — no terminal boundary carries a lines-changed measurement   |
+| `predictedModel` | `routing.pickup_recommendation.dev_model` as a registry band (`OutcomeModelBand`)                                                                      | the router made no recommendation, or the recommendation has no registry band  |
+| `actualModel`    | the band the **`feature-dev`** stage served — the adapter mapping inverted against the prediction (`OutcomeActualBand`), not a strongest-band collapse | that stage never ran, reported no model, or served an id with no registry band |
 
 **What counts as a size input, and why it is one rule.** Presence follows the
 **router's own** resolution order — project board **Size** field, then a `size:*`
