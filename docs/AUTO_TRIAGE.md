@@ -159,13 +159,106 @@ Recovery is **not** a bare rebase. After `git fetch origin main` →
    lands instead of being skipped while the scheduler advances. A runner punt
    (e.g. review still required) returns `FollowUp=issue requires human triage`.
 
-Real rebase **conflicts** now defer to `conflict-recovery-loop` (#4072): the
-action captures the conflicting files + both sides into
-`conflict-context-{N}.json` and emits a `CONFLICT_RESOLUTION_NEEDED` feedback
-signal **before** `git rebase --abort` (the conflict blobs vanish after the
-abort), then returns `FollowUp=stage can resume` so the scheduler rewinds to
-feature-dev. It still aborts the rebase to leave the tree clean for the
-re-dispatch. It never resolves the conflict itself.
+Real rebase **conflicts** defer to `conflict-recovery-loop` (#4072): the action
+captures the conflicting files + both sides into `conflict-context-{N}.json` and
+emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal **before**
+`git rebase --abort` (the conflict blobs vanish after the abort), then returns
+`FollowUp=stage can resume` so the scheduler rewinds to feature-dev. It never
+resolves the conflict itself.
+
+Before any of that, the action **refuses outright when a rebase is already in
+progress** in the worktree. Everything below assumes the rebase state it meets is
+state this invocation created, and `git rebase --abort` acts on that assumption —
+but a worktree parked in `git rebase -i` at an `edit` step is the operator's, and
+aborting it destroys their in-progress work with no record that anything was
+lost. The action cannot tell whose rebase it is, so it performs no fetch, no
+rebase and no abort: evidence carries `preexisting_rebase=true` and the follow-up
+is human triage.
+
+That hand-off is claimed **only when the capture actually succeeded** (#301). The
+branch is resolved _before_ the rebase runs — git detaches HEAD for a rebase's
+duration, so asking afterwards yields the `"unknown"` sentinel that feature-dev
+refuses to check out — with `rebase-merge/head-name` as the fallback. The capture
+then reports one of three outcomes, and each gets its own handling:
+
+- **captured** — every conflicting path is representable and the branch
+  resolved. A blob side must be readable, valid UTF-8 and under the per-side size
+  cap — `branch-out-of-date` checks each with `utf8.Valid` and a byte count, on
+  every path, unconditionally. A **gitlink** (index mode `160000`) side is
+  representable by definition — its content is a commit id, recorded as
+  `ours_commit`/`theirs_commit` with no object read at all. Two present blob
+  sides that are both EMPTY are also representable when their modes differ: that
+  is a mode-only conflict on an empty placeholder, and the differing modes are
+  the conflict. Writes the context file + signal, aborts the rebase (the
+  context carries both sides of every path, so it IS the durable copy), returns
+  `stage can resume`. The abort's exit status is checked here and only here: a
+  failed abort downgrades to human triage rather than resuming a stage into a
+  live rebase.
+- **no-conflict-state** — the rebase failed but nothing is conflicted (dirty
+  index, unborn base). Writes nothing, aborts, escalates to human triage with the
+  raw rebase error — git writes that diagnosis to stderr, so the evidence carries
+  `(*exec.ExitError).Stderr` and not the contentless "exit status 1". Emitting a
+  conflict signal here would spend the whole `max_dev_redispatch` budget
+  re-running feature-dev against a context naming zero files.
+- **failed** — the index could not be enumerated, the branch could not be named,
+  or at least one conflicting path cannot be represented in a context (unreadable
+  blob, binary/non-UTF-8 content, over the size cap). Writes no context and no
+  signal. The raw index stages are first copied out verbatim to
+  `.nightgauge/pipeline/conflict-evidence-{N}/`, and only then is the rebase
+  aborted — evidence carries `evidence_preserved=true` and `evidence_dir=…`. The
+  follow-up is always human triage, never a resumable stage, since a dev stage
+  must not be dispatched against a conflict nobody could record.
+
+The capture precondition is **per path**, not aggregate: one readable file does
+not license a capture whose siblings landed with both sides empty. Any path that
+cannot be represented fails the whole capture.
+
+The three outcomes above are `branch-out-of-date`'s. The **skill writer** in
+`skills/nightgauge-pr-merge/_includes/merge.md`, which runs on the ordinary
+`MERGEABLE=CONFLICTING` route, enforces the same per-path precondition — blob
+readable, blob survives a JSON round trip, under the size cap, and the path
+NAME survives a JSON round trip too — but cannot report it the same way: it has
+already emitted output by the time a blob read fails, so instead of writing
+nothing it writes the document with `capture_failed: true`, a document-level
+`capture_error`, and a per-path `capture_error` on each entry it could not
+record. It writes **no** `conflict-evidence-{N}/` dump, and the `git rebase
+--abort` that follows it is unconditional — so on that path a failed capture
+leaves the reason on disk and nothing else. It writes that document into the
+worktree it is running in (`git rev-parse --show-toplevel`), which is where
+every reader looks. Readers escalate on either shape; see
+[FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301).
+
+**Why the failed case aborts rather than leaving the rebase live.** Leaving a
+conflicted index in place does not preserve it in this system: `git status`
+reports the conflicted path as `UU`, which `reclaim.ClassifyStatus` calls
+blocking, so the scheduler's terminal defer treats it as uncommitted work and
+runs `RecoverUncommittedWork` — whose `git add -A` collapses the very `:2:`/`:3:`
+stages the skipped abort was protecting, commits conflict markers onto the
+rebase's detached HEAD, and relabels the run `worktree_uncommitted` ("recovered,
+not a failure"). Meanwhile the detached worktree is skipped by the sweep forever
+and is unusable (`git checkout` and `git stash` both refuse on an unmerged
+index). Copying the evidence out and then aborting keeps the bytes and leaves a
+worktree every consumer can still handle. `RecoverUncommittedWork` additionally
+refuses an unmerged index outright, so the collapse cannot happen even if some
+other path leaves one behind.
+
+Only one case still leaves the rebase in progress: the capture failed AND the raw
+index could not be copied out either — an unwritable tree, or git failing to read
+back a blob it had just listed. Aborting then would leave zero record, so the
+in-index stages are kept as the last copy, with `evidence_preserved=false` and
+`rebase_left_in_progress=true`.
+
+Nothing in the pipeline reclaims that worktree: `RecoverUncommittedWork` refuses
+an unmerged index, the reconcile sweep skips a detached HEAD, and worktree reuse
+hands the same tree to the next run untouched. That is why the escalation's
+Reason spells out the manual remedy (copy each side out with
+`git show :2:<path>` / `:3:<path>`, or read the commit ids from
+`git ls-files -u` for a submodule, then `git rebase --abort`). It is deliberately
+a last resort and not an ordinary conflict class — a **submodule pointer conflict
+used to land here on every occurrence**, because the dump ran `cat-file blob` on
+a commit id; it now dumps such stages as metadata (`gitlink: true`, mode, sha)
+and the abort runs normally. Any error mid-dump also removes the whole evidence
+directory, so a partial dump never survives as orphan blobs with no manifest.
 
 ### Conflict-recovery-loop (#4072)
 
@@ -192,8 +285,9 @@ termination bound (reliable on every path, cleared per run), while the
 the primary escalation trigger on the normal path (the pr-merge skill appends one
 signal per failure). Whichever trips first stops the loop at exactly
 `max_dev_redispatch` re-dispatches. Once exhausted — or when the context file is
-missing (e.g. a rebase failed with no markers) — the loop ends with a terminal
-state naming the specific conflicting files. This converts the old dead-stop
+unusable: missing, naming zero conflicting files, or naming no resolvable branch
+— the loop ends with a terminal state naming the specific conflicting files. This
+converts the old dead-stop
 (blind fresh-branch restart that discarded all dev work, then human triage) into
 either active dev work on the same branch or an explicit, file-named escalation.
 

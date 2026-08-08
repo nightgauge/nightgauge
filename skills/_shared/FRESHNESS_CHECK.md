@@ -35,16 +35,47 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
       echo "WARNING: Failed to push rebased branch. Continuing with local rebase."
     fi
   else
-    # Rebase failed — check if conflicts are resolvable
-    CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null)
+    # Rebase failed — check if conflicts are resolvable.
+    #
+    # Enumerated with `ls-files -u -z`, NOT `git diff --name-only
+    # --diff-filter=U`: the latter C-quotes any path with a non-ASCII or
+    # control byte, so a conflict in `café.txt` arrives as the literal
+    # 12-character string `"caf\303\251.txt"` and the `git add` below fails on
+    # a path that does not exist — leaving that conflict silently unresolved
+    # and `rebase --continue` failing on it (#301). `-z` emits raw path bytes
+    # with a NUL terminator, so neither quoting nor a newline in a path can
+    # confuse the loop. git sorts the output by path, so skipping a repeat of
+    # the previous path collapses that path's index stages to one entry.
+    #
+    # Append with `+=`, never `CONFLICT_FILES[$N]=` from N=0: zsh arrays are
+    # 1-indexed and abort the whole loop with "assignment to invalid subscript
+    # range" on index 0, enumerating nothing — and the agent shell is not
+    # guaranteed to be bash (zsh has been the macOS login shell since Catalina).
+    CONFLICT_FILES=()
+    CONFLICT_PREV=""
+    while IFS= read -r -d '' CONFLICT_REC; do
+      CONFLICT_PATH="${CONFLICT_REC#*$'\t'}"
+      if [ "$CONFLICT_PATH" != "$CONFLICT_PREV" ]; then
+        CONFLICT_FILES+=("$CONFLICT_PATH")
+        CONFLICT_PREV="$CONFLICT_PATH"
+      fi
+    done < <(git ls-files -u -z 2>/dev/null)
+    CONFLICT_COUNT=${#CONFLICT_FILES[@]}
 
-    if [ -n "$CONFLICT_FILES" ]; then
-      echo "Rebase conflicts detected in: $CONFLICT_FILES"
+    if [ "$CONFLICT_COUNT" -gt 0 ]; then
+      printf 'Rebase conflicts detected in:'
+      printf ' %s' "${CONFLICT_FILES[@]}"
+      printf '\n'
       echo "Attempting AI-assisted conflict resolution..."
 
       # For each conflicted file:
       # 1. Read the file with conflict markers
-      # 2. Understand BOTH sides (ours = feature work, theirs = base updates)
+      # 2. Understand BOTH sides. git's marker labels are relative to what is
+      #    CHECKED OUT, and a rebase checks out the base and replays your
+      #    commits onto it — so under `git rebase origin/$FRESHNESS_BASE` the
+      #    `<<<<<<< HEAD` side is the BASE and the `>>>>>>> <sha>` side is this
+      #    branch's own feature work. That is the inverse of a merge; do not
+      #    read "HEAD" as "mine" (#301).
       # 3. Produce a logically correct merge preserving BOTH changes
       # 4. Stage the resolved file
       #
@@ -53,7 +84,7 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
       # - If resolution is ambiguous, abort and fail with clear error
       # - After resolution, code MUST compile
 
-      for FILE in $CONFLICT_FILES; do
+      for FILE in "${CONFLICT_FILES[@]}"; do
         echo "Resolving: $FILE"
         # ... AI resolves the conflict ...
         git add "$FILE"

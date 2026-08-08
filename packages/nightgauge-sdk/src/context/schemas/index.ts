@@ -27,6 +27,7 @@ export {
   FeedbackContextSchema,
   ConflictFileSchema,
   ConflictContextSchema,
+  isUnrecordedConflictFile,
   ReviewerSignalTypeSchema,
   ReviewerSignalSchema,
   type PipelineFeedbackSignalType,

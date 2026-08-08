@@ -2577,6 +2577,19 @@ func untrackedExhaust(worktreePath string) []string {
 	return reclaim.ClassifyStatus(string(out)).Exhaust
 }
 
+// hasUnmergedIndex reports whether the worktree's index carries conflict stages
+// — a merge or rebase stopped at a conflict. `ls-files -u -z` prints nothing at
+// all when the index is clean, so an empty result is an unambiguous "no". A git
+// error answers false: this guards a rescue, and a repo git cannot read has no
+// rescue to guard.
+func hasUnmergedIndex(worktreePath string) bool {
+	out, err := exec.Command("git", "-C", worktreePath, "ls-files", "-u", "-z").Output()
+	if err != nil {
+		return false
+	}
+	return len(out) > 0
+}
+
 func onlyManagedAgentsChange(worktreePath string) bool {
 	working, err := os.ReadFile(filepath.Join(worktreePath, "AGENTS.md"))
 	if err != nil {
@@ -2603,6 +2616,20 @@ func onlyManagedAgentsChange(worktreePath string) bool {
 func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) error {
 	if worktreePath == "" {
 		return fmt.Errorf("worktreePath is empty")
+	}
+	// An unmerged index is not uncommitted work and this rescue cannot handle it
+	// (#301). `git status --porcelain` reports a conflicted path as `UU`, which
+	// reclaim.ClassifyStatus correctly calls Blocking, so hasUncommittedWork says
+	// "work to save" and lands here — but `git add -A` COLLAPSES the :2:/:3:
+	// index stages (verified: `git show :2:<path>` afterwards is
+	// "in the index, but not at stage 2"), and the commit then writes files full
+	// of conflict markers onto whatever HEAD a rebase happens to have detached
+	// to. The caller treats a nil return as "recovered", which reclassifies a
+	// real failure as worktree_uncommitted — a kind that skips the
+	// lifetime-failure increment and the board revert. Refuse instead: the caller
+	// logs the reason and preserves the worktree.
+	if hasUnmergedIndex(worktreePath) {
+		return fmt.Errorf("worktree has an unmerged index (a merge or rebase is stopped at a conflict) — refusing to stage it, which would collapse the conflict stages and commit conflict markers")
 	}
 	// Read the tree BEFORE staging: `git add -A` collapses the distinction
 	// this rescue turns on. A staged deletion and an untracked scaffold look

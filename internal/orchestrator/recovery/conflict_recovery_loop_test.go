@@ -196,6 +196,175 @@ func TestAction_ConflictRecoveryLoop_NoContext_Escalates(t *testing.T) {
 	}
 }
 
+// TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates locks the reader
+// half of the #301 invariant. A missing context file already escalated; a
+// context file that is PRESENT but degenerate — naming zero conflicting files,
+// or naming no resolvable branch — slipped straight through and produced another
+// feature-dev re-dispatch. Both are equally un-actionable: there is nothing to
+// resolve, and feature-dev's intake skips the branch checkout entirely on
+// "unknown". Enforcing it here as well as at the writer means a degenerate
+// context from ANY writer (including the pr-merge skill, whose shell capture has
+// the same empty-default shape) costs one honest escalation instead of the whole
+// max_dev_redispatch budget.
+func TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates(t *testing.T) {
+	cases := []struct {
+		name   string
+		branch string
+		files  []string
+	}{
+		{"zero conflicting files", "feat/12-thing", nil},
+		{"unknown branch", unknownBranch, []string{"internal/foo.go"}},
+		{"empty branch", "", []string{"internal/foo.go"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := writeConflictContext(t, 12, 34, c.branch, c.files)
+			a := NewConflictRecoveryLoop(2)
+			failure := StageFailure{
+				Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+				IssueNumber: 12, PRNumber: 34, Reason: "conflict",
+				Evidence: []string{"conflict"},
+			}
+			res := a.Execute(context.Background(), failure)
+			if res.Recovered {
+				t.Error("a degenerate conflict context cannot recover")
+			}
+			if res.FollowUp != FollowUpHumanTriageRequired {
+				t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
+			}
+			// No rewind signal may be written for a context nobody can act on.
+			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a degenerate context")
+			}
+		})
+	}
+}
+
+// writeRawConflictContext drops a conflict-context-{issue}.json whose
+// conflicting_files[] entries are given VERBATIM, so a test can pin the exact
+// document a particular writer emits — including shapes the Go writer cannot
+// produce (the shell writer's).
+func writeRawConflictContext(t *testing.T, issue, pr int, branch string, extra map[string]interface{}, entries []map[string]interface{}) string {
+	t.Helper()
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	doc := map[string]interface{}{
+		"schema_version":    "1.1",
+		"issue_number":      issue,
+		"pr_number":         pr,
+		"branch":            branch,
+		"base_ref":          "main",
+		"conflicting_files": entries,
+	}
+	for k, v := range extra {
+		doc[k] = v
+	}
+	data, _ := json.MarshalIndent(doc, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "conflict-context-"+strconv.Itoa(issue)+".json"), data, 0o644); err != nil {
+		t.Fatalf("write context: %v", err)
+	}
+	return ws
+}
+
+func conflictFailureFor(ws string, issue, pr int) StageFailure {
+	return StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+		IssueNumber: issue, PRNumber: pr, Reason: "conflict",
+		Evidence: []string{"conflict"},
+	}
+}
+
+// TestAction_ConflictRecoveryLoop_PerFileGuard is the #301 round-2 finding-2/4
+// regression. The reader was hardened only against WHOLE-DOCUMENT degeneracy
+// (zero files, unnamed branch), and the code comment plus docs/FEEDBACK_LOOPS.md
+// both claimed that covered "a degenerate context from ANY writer (including the
+// pr-merge skill)". It did not: the skill's shell capture read blobs with
+// `git show ":2:$_f" || echo ""`, so a C-quoted or otherwise unreadable path
+// landed as {path, ours:"", theirs:""} NEXT TO a healthy sibling — a two-file
+// context that passed every check and cost the full max_dev_redispatch budget.
+//
+// The entries here are exactly what each writer emits, so the table doubles as a
+// statement of which shapes are legitimate.
+func TestAction_ConflictRecoveryLoop_PerFileGuard(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name         string
+		extra        map[string]interface{}
+		entries      []map[string]interface{}
+		wantResume   bool
+		wantInReason string
+	}{
+		{
+			name: "silent empty pair next to a healthy sibling",
+			entries: []map[string]interface{}{
+				{"path": "f.txt", "ours": "feature", "theirs": "base"},
+				{"path": `"caf\303\251.txt"`, "ours": "", "theirs": ""},
+			},
+			wantInReason: "both sides empty",
+		},
+		{
+			name:  "writer admitted the capture failed",
+			extra: map[string]interface{}{"capture_failed": true},
+			entries: []map[string]interface{}{
+				{"path": "f.txt", "ours": "feature", "theirs": "base"},
+			},
+			wantInReason: "capture_failed",
+		},
+		{
+			// A submodule pointer has no bytes on either side: its content IS the
+			// commit id. Rejecting this would re-break the gitlink case.
+			name: "gitlink is metadata-only, not degenerate",
+			entries: []map[string]interface{}{
+				{"path": "sub", "ours": "", "theirs": "",
+					"ours_present": &yes, "theirs_present": &yes,
+					"ours_mode": "160000", "theirs_mode": "160000",
+					"ours_commit":   "1111111111111111111111111111111111111111",
+					"theirs_commit": "2222222222222222222222222222222222222222"},
+			},
+			wantResume: true,
+		},
+		{
+			// Delete/delete: the index carries stage 1 only, so both sides are
+			// legitimately absent and the writer says so.
+			name: "both-deleted is explained by the presence flags",
+			entries: []map[string]interface{}{
+				{"path": "gone.txt", "ours": "", "theirs": "",
+					"ours_present": &no, "theirs_present": &no,
+					"ours_mode": "", "theirs_mode": ""},
+			},
+			wantResume: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := writeRawConflictContext(t, 12, 34, "feat/12-thing", c.extra, c.entries)
+			a := NewConflictRecoveryLoop(2)
+			res := a.Execute(context.Background(), conflictFailureFor(ws, 12, 34))
+			if c.wantResume {
+				if res.FollowUp != FollowUpStageCanResume {
+					t.Fatalf("FollowUp = %q, want %q — this shape is a legitimate capture: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+				}
+				return
+			}
+			if res.FollowUp != FollowUpHumanTriageRequired {
+				t.Fatalf("FollowUp = %q, want %q — this context did not record the conflict: %s", res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+			}
+			if res.Recovered {
+				t.Error("an unrecorded conflict cannot recover")
+			}
+			if !strings.Contains(res.Reason, c.wantInReason) {
+				t.Errorf("reason %q must say why (%q)", res.Reason, c.wantInReason)
+			}
+			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a context nobody can act on")
+			}
+		})
+	}
+}
+
 // TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates: once the feedback file
 // carries more than max_dev_redispatch CONFLICT_RESOLUTION_NEEDED signals (each
 // distinct pr-merge conflict failure appends one), the action escalates with the
@@ -227,6 +396,46 @@ func TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates(t *testing.T) {
 	if !strings.Contains(joined, "x.go") || !strings.Contains(joined, "y.go") {
 		t.Errorf("exhaustion evidence must name the conflicting files; got %v", res.Evidence)
 	}
+}
+
+// TestAction_ConflictRecoveryLoop_RefusesUFFFDPath is the reader's independent
+// half of the path-name invariant (#301 round-5).
+//
+// A path name is bytes, and every JSON encoder — encoding/json, jq — replaces
+// an invalid byte with U+FFFD at no error. A document naming `caf�.txt` is
+// therefore naming a file nothing can open, whatever produced it: both writers
+// now refuse such a path at the source, but a reader that trusts the name would
+// still send feature-dev after it, burn the whole max_dev_redispatch budget,
+// and do it after `git rebase --abort` has already destroyed the only copy of
+// the conflict. The control case is the point of the check: `café.txt` is
+// perfectly valid UTF-8 and must keep flowing through.
+func TestAction_ConflictRecoveryLoop_RefusesUFFFDPath(t *testing.T) {
+	t.Run("a path carrying U+FFFD is not actionable", func(t *testing.T) {
+		ws := writeConflictContext(t, 301, 7, "feat/301", []string{"caf�.txt", "f.txt"})
+		res := NewConflictRecoveryLoop(3).Execute(context.Background(), StageFailure{
+			Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+			IssueNumber: 301, PRNumber: 7, Reason: "conflict",
+		})
+		if res.FollowUp != FollowUpHumanTriageRequired {
+			t.Fatalf("FollowUp = %q, want %q — the name in the document is not the name in the index: %s",
+				res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+		}
+		if !strings.Contains(strings.Join(res.Evidence, " "), "U+FFFD") {
+			t.Errorf("the escalation must name why the path is unusable, got %v", res.Evidence)
+		}
+	})
+
+	t.Run("a valid non-ASCII path is still actionable", func(t *testing.T) {
+		ws := writeConflictContext(t, 301, 7, "feat/301", []string{"café.txt", "f.txt"})
+		res := NewConflictRecoveryLoop(3).Execute(context.Background(), StageFailure{
+			Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+			IssueNumber: 301, PRNumber: 7, Reason: "conflict",
+		})
+		if res.FollowUp != FollowUpStageCanResume {
+			t.Fatalf("FollowUp = %q, want %q — café.txt is valid UTF-8 and opens fine: %s",
+				res.FollowUp, FollowUpStageCanResume, res.Reason)
+		}
+	})
 }
 
 // TestDefaultRegistry_ConflictRoutesToConflictRecovery locks the ordering: a

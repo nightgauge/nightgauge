@@ -268,7 +268,12 @@ MUST:
 1. Re-attempt the rebase of the PR branch onto `$CONFLICT_BASE` and read each
    conflicting file. For each conflict, the `conflict-context-{N}.json` entry
    carries the `ours` (this PR's feature work) and `theirs` (rebased base)
-   blobs — use them to understand both sides.
+   blobs — use them to understand both sides. Those names are the document's,
+   not git's index-stage names, which a rebase inverts; the writer has already
+   translated. An entry with `ours_mode`/`theirs_mode` `160000` is a submodule
+   pointer: it has no blobs, and `ours_commit`/`theirs_commit` are the two
+   commits to choose between. An entry with `ours_present`/`theirs_present`
+   `false` was deleted on that side (not emptied).
 2. Resolve each file to a logically correct merge that **preserves BOTH
    changes** (same rules as `nightgauge-pr-merge` Step 6.1.5: never blindly
    accept one side; integrate new code with base updates; re-apply refactors
