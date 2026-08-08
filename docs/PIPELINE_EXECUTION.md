@@ -237,11 +237,11 @@ resolvers producing the same decision is the Dual-Path Drift class in
 defect: the escalated tier was computed, logged, and recorded in run history,
 while the CLI kept spawning on the tier that had just failed.
 
-| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin **and envelope**, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197)                                             |
-| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                 |
-| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins, `pipeline.stage_models` + env, `model_routing.mode`, lightweight stage defaults, `model_routing.minimum_model`, pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override, A/B experiment assignment and `AutoModelSelector` (with mode-envelope clamping). Escalation and sticky downgrades belong to whichever orchestrator drives this path. |
+| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin **and envelope**, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, `ui.core.default_model` + `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL` (Step 3), post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197)                          |
+| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins **and envelope**, `pipeline.stage_models` + env, `model_routing.mode`, lightweight stage defaults, `model_routing.minimum_model`, `ui.core.default_model` (Step 3), pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override (Step 1.6), A/B experiment assignment (Step 1.7) and `AutoModelSelector` (Step 2). Escalation and sticky downgrades belong to whichever orchestrator drives this path. |
 
 On the IPC path the extension **executes** the wire model verbatim: it passes
 `RunStageParams.model` to `runStageSkillHeadless` as the authoritative
@@ -254,9 +254,10 @@ complete router lives in
 [`internal/orchestrator/dispatch_routing.go`](../internal/orchestrator/dispatch_routing.go),
 applied by `stageBaseModel` before escalation and the floors. Its tables are
 deliberate duplicates of named TypeScript counterparts
-(`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`), each
-annotated with its pair — threading TS config over the wire would put the
-extension back in the routing business, which is the drift #340 removed.
+(`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`,
+`getDefaultModel`), each annotated with its pair — threading TS config over the
+wire would put the extension back in the routing business, which is the drift
+#340 removed.
 
 The performance mode is the exception: it is not duplicated in that file. Both
 Go callers — the router's recommendation at pickup and this per-stage
@@ -272,32 +273,56 @@ ceiling]` envelopes instead.
 decisions rather than translations:
 
 - The **ceiling binds everything the pipeline chose** — the routed tier, the
-  lightweight defaults, post-failure escalation, the `minimum_model` floor and
-  the `run.retryWithEscalation` forced tier. A cost-capping mode that any later
-  mechanism can raise out of caps nothing. `resolveModel` applies the same rule
-  when it re-clamps its own `enforceMinimumModel` result to the ceiling.
-- An **explicit per-stage model is not clamped** (`pipeline.stage_models` and
-  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`): that is the operator overriding the mode
-  for one stage, and `resolveModel` Step 1 returns it unclamped too. The env
-  override is read ahead of the Maximum pin, on both resolvers, so it wins in
-  every mode.
+  lightweight defaults, `ui.core.default_model`, post-failure escalation, the
+  `minimum_model` floor and the `run.retryWithEscalation` forced tier. A
+  cost-capping mode that any later mechanism can raise out of caps nothing.
+  `resolveModel` applies the same rule to its own `enforceMinimumModel` result.
+  The clamp is applied to **what the raising mechanisms produced**, never
+  skipped on the provenance of the base they raised — gating it on "the base was
+  explicit" makes it a no-op under `model_routing.mode: manual`, where the
+  explicit chain answers for _every_ stage.
+- An **explicit per-stage model is not clamped** (`pipeline.stage_models`,
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, and the manual-mode table): that is the
+  operator overriding the mode for one stage, and `resolveModel` Step 1 returns
+  it unclamped too. The env override is read ahead of the Maximum pin, on both
+  resolvers, so it wins in every mode. The exemption covers the operator's own
+  value and only it: a floor still binds that value, the ceiling still binds the
+  raise, and the result is never **below** what the operator named — forcing a
+  tier must not downgrade.
 - The **envelope floor is never re-applied after the sticky #42 downgrade**, or
   a Maximum-mode run whose API rejection lowered the tier would be forced
   straight back onto the rejected one.
-
-One narrowing is Go-only, because the shape of the two paths differs: Go applies
-ONE routed tier (the feature-dev recommendation from `issue-{N}.json`) to every
-stage, where `resolveModel` re-runs `AutoModelSelector` per stage. So the
-`fable` ceiling is offered only to the heavy reasoning stages
-(`feature-planning`, `feature-dev`), mirroring the selector's own
-frontier-reasoning rule; every other stage — `feature-validate` included, which
-`MODE_PROFILES.frontier` documents as capped at Opus — tops out at Opus.
+- The band a pipeline-chosen tier is clamped into is the stage's **routed-tier
+  envelope** (`routing.RoutedTierEnvelope` / `getRoutedTierEnvelope`), not the
+  raw mode band: a `fable` ceiling is offered only to the heavy reasoning stages
+  (`feature-planning`, `feature-dev`), mirroring `AutoModelSelector`'s own
+  frontier-reasoning rule. Every other stage — `feature-validate` included,
+  which `MODE_PROFILES.frontier` documents as capped at Opus — tops out at Opus,
+  **including** when a `minimum_model` floor or a forced tier is what named
+  Fable. Both resolvers narrow, for different reasons: Go applies ONE routed
+  tier (the feature-dev recommendation from `issue-{N}.json`) to every stage, and
+  TypeScript's floor arrives after the per-stage selector has already made its
+  own pick.
 
 Stated consequence, so it is not silent: three things have **no** Go
 counterpart, and are therefore not consulted on an autonomous run — the
-adaptive-policy override, the A/B experiment assignment, and `AutoModelSelector`
-(Go routes from the issue's complexity score at pickup instead; its
-frontier-reasoning escalation is mirrored in `routeLocal`).
+adaptive-policy override (Step 1.6), the A/B experiment assignment (Step 1.7),
+and `AutoModelSelector` (Step 2 — Go routes from the issue's complexity score at
+pickup instead; its frontier-reasoning escalation is mirrored in `routeLocal`).
+Step 3, the global `ui.core.default_model` / `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL`
+fallback, is **not** on that list: it is mirrored by `workspaceDefaultModel`
+(`dispatch_routing.go`). It had to be, because pre-#340 it was the _effective_
+model for every reasoning stage on the IPC path — `services/SkillRunner.ts`
+passed no issue metadata, so Step 2 never fired and Step 3 always won.
+
+And the reverse, stated for the same reason: two **post-base** mechanisms exist
+only in `resolveDispatchModel`, so the two resolvers deliberately disagree
+where they fire — the `feature-validate` haiku gate (#3041: haiku shortcuts
+real build/test commands, so the stage escalates to sonnet unless the dev
+stage's build verification passed) and the `pr-merge` haiku floor (#197). Both
+raise a haiku result to sonnet on the Go path only. Post-failure escalation and
+the sticky model-unavailable downgrade (#42) are likewise Go's, and belong to
+whichever orchestrator drives the run.
 
 The mode × knob matrix both resolvers must agree on is asserted twice, once per
 resolver: `TestDispatchModelModeKnobMatrix`

@@ -198,6 +198,41 @@ export function getModeEnvelope(mode: PerformanceMode): ModeEnvelope {
 }
 
 /**
+ * Heavy generative reasoning stages — the only ones a `fable` ceiling
+ * escalates. Mirrors `AutoModelSelector`'s frontier-reasoning rule
+ * (`stageCategory === "planning" || stageCategory === "dev"`) and its Go pair
+ * `frontierReasoningStage` (internal/intelligence/routing/performance_mode.go).
+ */
+function isFrontierReasoningStage(stage: PipelineStage): boolean {
+  return stage === "feature-planning" || stage === "feature-dev";
+}
+
+/**
+ * `getModeEnvelope` narrowed to the band a PIPELINE-CHOSEN tier may land in for
+ * one stage (#340). Go pair: `routing.RoutedTierEnvelope`.
+ *
+ * One rule differs from the raw mode band, and it is the rule
+ * `MODE_PROFILES.frontier`'s own comment states: "plumbing stays Haiku and
+ * feature-validate never exceeds Opus". `AutoModelSelector` already applies it
+ * to its own pick, but the selector is not the only thing that chooses a tier —
+ * the `model_routing.minimum_model` floor and (on the Go path) a
+ * `run.retryWithEscalation` forced tier arrive after it. Clamping those against
+ * the raw `fable` ceiling put `feature-validate` back on Fable, which is the
+ * behavior #19 deleted for having "empirically failed validation in
+ * dogfooding" — reached through a different door.
+ *
+ * An explicit per-stage model is NOT clamped by this (or any) envelope; that is
+ * the operator overriding the mode, not the pipeline choosing within it.
+ */
+export function getRoutedTierEnvelope(mode: PerformanceMode, stage: PipelineStage): ModeEnvelope {
+  const envelope = getModeEnvelope(mode);
+  if (envelope.ceiling === "fable" && !isFrontierReasoningStage(stage)) {
+    return { ...envelope, ceiling: "opus" };
+  }
+  return envelope;
+}
+
+/**
  * Convert a mode's `ModeEnvelope` (vscode-side) to the SDK's `ModelEnvelope`
  * shape consumed by `AutoModelSelector.selectModel()` /
  * `estimatePipelineCost()`. Tier names line up 1:1 (`DefaultModel` /

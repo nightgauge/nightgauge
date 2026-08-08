@@ -182,26 +182,66 @@ func TestDispatchModelFrontierNeverCarriesFableOffTheReasoningStages(t *testing.
 // of them can raise out of caps nothing. The ceiling binds them — the same rule
 // resolveModel applies when it re-clamps its own enforceMinimumModel result to
 // the envelope ceiling.
+//
+// EVERY cell is run twice: once from a router-chosen base, and once from the
+// explicit base `model_routing.mode: manual` produces. The second half is the
+// point. The round-2 fixup gated the clamp on a flag describing the BASE, and
+// in manual mode stageConfiguredModel answers for every stage
+// (defaultStageModels), so the flag was true everywhere and the ceiling bound
+// nothing — for exactly the operators who copied a docs/CONFIGURATION.md
+// profile, all three of which set `model_routing.mode: manual`. Asserting the
+// rule only where the base is router-chosen is asserting it only where it
+// already held.
 func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
-	t.Run("the minimum_model floor cannot exceed the mode ceiling", func(t *testing.T) {
-		dir := isolatedWorkspace(t)
-		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
-		s := testScheduler(t)
-		floors := map[string]string{string(state.StageFeatureDev): "opus"}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors); got != "sonnet" {
-			t.Errorf("floored feature-dev = %q, want sonnet — Efficiency's ceiling binds the floor", got)
-		}
-	})
+	// manualHaikuDev is the shape of every recommended CONFIGURATION.md
+	// profile: explicit routing mode, explicit per-stage model.
+	const manualHaikuDev = "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: haiku\n"
 
-	t.Run("post-failure escalation cannot exceed the mode ceiling", func(t *testing.T) {
-		dir := isolatedWorkspace(t)
-		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
-		s := testScheduler(t)
-		s.retryEngine.RecordEscalation("feature-dev", "opus")
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", nil); got != "sonnet" {
-			t.Errorf("escalated feature-dev = %q, want sonnet — Efficiency's ceiling binds the escalation ladder", got)
-		}
-	})
+	bases := []struct {
+		name string
+		// workspace returns the root a cell resolves against.
+		workspace func(t *testing.T) string
+	}{
+		{"router-chosen base", func(t *testing.T) string { return isolatedWorkspace(t) }},
+		{"explicit base (manual + stage_models)", func(t *testing.T) string {
+			return routedWorkspace(t, manualHaikuDev)
+		}},
+	}
+
+	for _, base := range bases {
+		t.Run(base.name, func(t *testing.T) {
+			t.Run("the minimum_model floor cannot exceed the mode ceiling", func(t *testing.T) {
+				dir := base.workspace(t)
+				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+				s := testScheduler(t)
+				floors := map[string]string{string(state.StageFeatureDev): "opus"}
+				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors); got != "sonnet" {
+					t.Errorf("floored feature-dev = %q, want sonnet — Efficiency's ceiling binds the floor", got)
+				}
+			})
+
+			t.Run("post-failure escalation cannot exceed the mode ceiling", func(t *testing.T) {
+				dir := base.workspace(t)
+				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+				s := testScheduler(t)
+				s.retryEngine.RecordEscalation("feature-dev", "opus")
+				if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", nil); got != "sonnet" {
+					t.Errorf("escalated feature-dev = %q, want sonnet — Efficiency's ceiling binds the escalation ladder", got)
+				}
+			})
+
+			t.Run("the run.retryWithEscalation forced tier cannot exceed the mode ceiling", func(t *testing.T) {
+				dir := base.workspace(t)
+				t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+				s := testScheduler(t)
+				if got := s.resolveDispatchModel(
+					state.StageFeatureDev, 1, dir, "haiku", raiseStageFloors(nil, "opus"),
+				); got != "sonnet" {
+					t.Errorf("forced feature-dev = %q, want sonnet — an operator forcing a tier gets it inside the band they selected", got)
+				}
+			})
+		})
+	}
 
 	t.Run("an explicit per-stage model is outside the mode's governance", func(t *testing.T) {
 		dir := isolatedWorkspace(t)
@@ -210,6 +250,36 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		s := testScheduler(t)
 		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", nil); got != "opus" {
 			t.Errorf("feature-dev = %q, want opus — an explicit per-stage model overrides the mode, exactly as in resolveModel Step 1", got)
+		}
+	})
+
+	// The exemption covers the operator's OWN value, and only it. A floor is a
+	// RAISE, so clamping the raise must never leave the stage below the model
+	// the operator named: "force at least Fable" turning an explicit Opus into
+	// Sonnet is a downgrade dressed as an escalation.
+	t.Run("a clamped raise never lowers an explicit per-stage model", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "opus")
+		s := testScheduler(t)
+		floors := map[string]string{string(state.StageFeatureDev): "fable"}
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors); got != "opus" {
+			t.Errorf("feature-dev = %q, want opus — the ceiling discards the raise, not the operator's own model", got)
+		}
+	})
+
+	// Bounding a raise uses the CEILING only. Maximum's envelope is
+	// [opus, opus], so re-applying the floor half here would turn a floor into
+	// a mode-driven upgrade — and on this path it would also hand the #42
+	// sticky downgrade back the tier the API just rejected.
+	t.Run("a clamped raise is bounded by the ceiling only, never the envelope floor", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
+		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
+		s := testScheduler(t)
+		floors := map[string]string{string(state.StageFeatureDev): "sonnet"}
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors); got != "sonnet" {
+			t.Errorf("feature-dev = %q, want sonnet — the floored value is capped, not re-raised by maximum's [opus, opus] floor", got)
 		}
 	})
 
@@ -223,6 +293,109 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		s.retryEngine.RecordDowngrade("opus", "sonnet")
 		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "sonnet" {
 			t.Errorf("feature-dev = %q, want sonnet — the #42 downgrade must survive the mode envelope", got)
+		}
+	})
+}
+
+// TestDispatchModelFrontierCeilingIsPerStageForFloorsToo closes the other half
+// of the narrowing: stageBaseModel clamps the ROUTED tier with
+// RoutedTierEnvelope, but a floor arrives after it, so the post-raise clamp has
+// to use the same narrowed envelope or the promise only holds for stages
+// nothing raised.
+//
+// `feature-validate` is the specific stage MODE_PROFILES.frontier caps at Opus,
+// and the specific stage the codebase records as having "empirically failed
+// validation in dogfooding" on Fable — so a run-wide `minimum_model` or a
+// forced tier putting it on Fable is the behavior #19 deleted, arriving through
+// a different door.
+func TestDispatchModelFrontierCeilingIsPerStageForFloorsToo(t *testing.T) {
+	capped := []state.PipelineStage{
+		state.StageFeatureValidate, state.StagePRMerge, state.StageIssuePickup, state.StagePRCreate,
+	}
+	for _, stage := range capped {
+		t.Run("minimum_model fable is capped at opus on "+string(stage), func(t *testing.T) {
+			dir := isolatedWorkspace(t)
+			t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+			s := testScheduler(t)
+			floors := map[string]string{string(stage): "fable"}
+			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", floors); got != "opus" {
+				t.Errorf("%s = %q, want opus — the frontier ceiling is offered to feature-planning/feature-dev only", stage, got)
+			}
+		})
+	}
+
+	for _, stage := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev} {
+		t.Run("minimum_model fable reaches fable on "+string(stage), func(t *testing.T) {
+			dir := isolatedWorkspace(t)
+			t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+			s := testScheduler(t)
+			floors := map[string]string{string(stage): "fable"}
+			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", floors); got != "fable" {
+				t.Errorf("%s = %q, want fable — the heavy reasoning stages are what the frontier ceiling is for", stage, got)
+			}
+		})
+	}
+
+	t.Run("a run-wide forced tier does not carry fable onto feature-validate", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "frontier")
+		s := testScheduler(t)
+		floors := raiseStageFloors(nil, "fable")
+		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "sonnet", floors); got != "opus" {
+			t.Errorf("feature-validate = %q, want opus", got)
+		}
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", floors); got != "fable" {
+			t.Errorf("feature-dev = %q, want fable", got)
+		}
+	})
+}
+
+// TestDispatchModelResolvesTheWorkspaceDefault pins `resolveModel` Step 3 on the
+// Go side. On the pre-#340 IPC path this was the EFFECTIVE model for every
+// reasoning stage — services/SkillRunner.ts passed no issue metadata, so Step 2
+// never fired and Step 3 always won — so a Go router that stopped at its own
+// hardcoded sonnet would have dropped the knob silently for exactly the runs it
+// used to govern.
+func TestDispatchModelResolvesTheWorkspaceDefault(t *testing.T) {
+	t.Run("ui.core.default_model answers an unrouted stage", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "opus" {
+			t.Errorf("feature-dev = %q, want opus — ui.core.default_model is Step 3", got)
+		}
+	})
+
+	t.Run("the env override wins over the file, as in getDefaultModel", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: haiku\n")
+		t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "opus")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "opus" {
+			t.Errorf("feature-dev = %q, want opus", got)
+		}
+	})
+
+	t.Run("the routed tier still wins over it", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", nil); got != "haiku" {
+			t.Errorf("feature-dev = %q, want the routed haiku — Step 2 precedes Step 3", got)
+		}
+	})
+
+	t.Run("it is clamped into the mode envelope, like Step 3 in resolveModel", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: opus\n")
+		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "efficiency")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "sonnet" {
+			t.Errorf("feature-dev = %q, want sonnet", got)
+		}
+	})
+
+	t.Run("a non-band value is ignored, as in getDefaultModel's validModels guard", func(t *testing.T) {
+		dir := routedWorkspace(t, "ui:\n  core:\n    default_model: gpt-5.6-sol\n")
+		s := testScheduler(t)
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "sonnet" {
+			t.Errorf("feature-dev = %q, want the hardcoded sonnet fallback", got)
 		}
 	})
 }

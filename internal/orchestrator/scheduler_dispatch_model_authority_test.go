@@ -36,6 +36,7 @@ func isolateRoutingEnv(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", t.TempDir())
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_MODE", "")
 	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "")
+	t.Setenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL", "")
 }
 
 // isolatedWorkspace returns an empty (config-less) workspace root.

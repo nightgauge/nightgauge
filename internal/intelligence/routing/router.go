@@ -24,8 +24,10 @@ import (
 // from any mode, because neither is clamped: a per-run model override and an
 // explicit per-stage model (`pipeline.stage_models` /
 // NIGHTGAUGE_PIPELINE_STAGE_MODEL_*). A `model_routing.minimum_model.<stage>:
-// fable` floor is NOT one of them outside `frontier` — floors land inside the
-// mode envelope, so a non-frontier ceiling caps them at Opus.
+// fable` floor is NOT one of them: floors land inside the stage's ROUTED-TIER
+// envelope (RoutedTierEnvelope), so a non-frontier ceiling caps them at Opus,
+// and even under `frontier` a floor reaches Fable only on feature-planning and
+// feature-dev — feature-validate and the plumbing stages stay at Opus.
 var (
 	ModelHaiku  = mustCurrentModelID("haiku")
 	ModelSonnet = mustCurrentModelID("sonnet")

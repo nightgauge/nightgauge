@@ -5926,7 +5926,8 @@ func (s *Scheduler) resolveDispatchModel(
 	// per-stage attribution, and tokens.CalculateCost("") returns a
 	// truthful-looking $0.
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	model, explicitModel := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
+	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
+	model := baseModel
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
@@ -5950,15 +5951,40 @@ func (s *Scheduler) resolveDispatchModel(
 	// stage escalates, and an operator forcing a tier through
 	// run.retryWithEscalation gets it within the band they selected.
 	//
-	// Two deliberate exclusions:
-	//   - An explicit per-stage model (the env override, pipeline.stage_models)
-	//     is the operator overriding the MODE for that stage. resolveModel
-	//     returns those unclamped at Step 1; so does this.
+	// The clamp is applied to what the RAISING MECHANISMS PRODUCED, never
+	// skipped on the provenance of the base they raised. Gating it on
+	// `explicitBase` was the round-2 defect: under `model_routing.mode: manual`
+	// — which every recommended docs/CONFIGURATION.md profile sets, and where
+	// stageConfiguredModel answers for EVERY stage from defaultStageModels —
+	// the flag was true on every stage, so the ceiling never bound escalation,
+	// the floor or the forced tier for the operators most likely to have chosen
+	// a cost-capping mode.
+	//
+	// Two rules, and only these:
+	//   - An explicit per-stage model (the env override, pipeline.stage_models,
+	//     the manual-mode table) is the operator overriding the MODE for that
+	//     stage. resolveModel Step 1 returns it unclamped; so does this. That
+	//     exemption covers the operator's OWN value — it is the strongest tier
+	//     this stage can end on when nothing raised it, and a floor may never
+	//     LOWER a dispatch below it (forcing a tier must never downgrade).
 	//   - The floor half of the envelope is not applied here. It would re-raise
 	//     a tier the sticky #42 downgrade just lowered — the ONE thing the
 	//     ordering below exists to prevent.
-	if !explicitModel {
-		if capped := routing.ClampToCeiling(model, routing.Envelope(mode)); capped != model {
+	//
+	// The envelope is the stage's ROUTED-TIER envelope, not the raw mode band:
+	// a `fable` ceiling belongs only to the heavy reasoning stages, so a
+	// run-wide floor (or a forced tier) cannot put feature-validate or the
+	// plumbing on Fable under `frontier` — the exact behavior #19 deleted for
+	// having "empirically failed validation in dogfooding". stageBaseModel
+	// clamps its own branches against the same narrowed envelope.
+	envelope := routing.RoutedTierEnvelope(mode, string(stage))
+	if capped := routing.ClampToCeiling(model, envelope); capped != model {
+		if explicitBase && routing.TierRank(capped) < routing.TierRank(baseModel) {
+			// The ceiling landed below the operator's own per-stage model.
+			// Keep theirs: the raise is discarded, not the override.
+			capped = baseModel
+		}
+		if capped != model {
 			log.Printf("#%d: stage %s — performance mode %s caps %s → %s",
 				issueNumber, stage, mode, model, capped)
 			model = capped

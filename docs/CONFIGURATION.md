@@ -1295,17 +1295,27 @@ trivial work and empirically failed validation in dogfooding.) No other mode can
 route to Fable. Two knobs reach it from any mode because no mode clamps them —
 an explicit `pipeline.stage_models` entry (or its
 `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env override) and a per-run override.
-`model_routing.minimum_model: fable` is a floor, and floors land inside the
-mode envelope, so it reaches Fable only under `frontier`. Unlike
-`maximum`, `frontier` leaves the budget ceiling enabled.
+`model_routing.minimum_model: fable` is a floor, not an explicit model, and
+floors land inside the mode envelope: it reaches Fable only under `frontier`,
+and there only on `feature-planning` / `feature-dev` — the two stages the
+frontier ceiling is offered to. On `feature-validate` and the plumbing stages a
+`fable` floor is capped at Opus, in every mode. Unlike `maximum`, `frontier`
+leaves the budget ceiling enabled.
 
 Only `maximum` pins per stage (Opus everywhere, effort `high`). `efficiency`
 (`[haiku, sonnet]`), `elevated` (`[haiku, opus]`) and `frontier`
 (`[haiku, fable]`) are `[floor, ceiling]` **envelopes**: the router picks inside
-the band, and the ceiling also caps post-failure escalation and the
-`model_routing.minimum_model` floor, so a cost-capping mode actually caps. An
-explicit per-stage model (`pipeline.stage_models`, or the env override below) is
-the operator overriding the mode for that stage and is not clamped.
+the band, and the ceiling also caps post-failure escalation, the
+`model_routing.minimum_model` floor and the `run.retryWithEscalation` forced
+tier, so a cost-capping mode actually caps. An explicit per-stage model
+(`pipeline.stage_models`, the manual-mode table, or the env override below) is
+the operator overriding the mode for that stage and is not clamped — but a floor
+still binds it, the ceiling still binds the raise, and the result is never
+**below** the model the operator named. So under `efficiency`,
+`stage_models.feature-dev: haiku` + `minimum_model.feature-dev: opus` dispatches
+Sonnet (the ceiling caps the raise), while `stage_models.feature-dev: opus` +
+`minimum_model.feature-dev: fable` dispatches Opus (the raise is discarded, the
+operator's own model stands).
 
 The active mode is normally driven by the status-bar QuickPick (writes
 `.nightgauge/performance-mode.yaml`); `pipeline.performance_mode.default`
@@ -3488,37 +3498,64 @@ export NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV=high
 
 **Resolution Chain:**
 
-The full model resolution chain, implemented in `skillRunner.ts`, is:
+The full model resolution chain is:
 
 ```
-1.   Environment variable    NIGHTGAUGE_PIPELINE_STAGE_MODEL_*         → highest priority
-1.5. Lightweight stage default  issue-pickup, pr-create, pr-merge → haiku   → before AutoModelSelector
+0.   Performance-mode pin    maximum only (Opus, every stage)               → env override wins over it
+1.   Environment variable    NIGHTGAUGE_PIPELINE_STAGE_MODEL_*              → highest priority
 2.   Config stage override   pipeline.stage_models.<stage>                  → mode-aware
-3.   AutoModelSelector       complexity × stage matrix                      → automatic/hybrid only
-4.   Global default          pipeline.default_model                         → fallback
+2.5. Lightweight stage default  issue-pickup, pr-create → haiku             → before the router
+3.   Router                  complexity × stage matrix                      → automatic/hybrid only
+4.   Global default          ui.core.default_model                          → fallback
 5.   Hardcoded fallback      'sonnet'                                       → final safety net
 ```
 
-This chain applies identically in all three modes. The `mode` setting controls
-whether step 2 returns `undefined` (deferring to step 3) or a static value.
+This chain applies identically in all three `model_routing` modes. The `mode`
+setting controls whether step 2 returns nothing (deferring to step 3) or a
+static value — in `manual` it always answers, from `pipeline.stage_models` or
+the built-in per-stage table.
 
-Step 1.5 applies only when no environment variable override is set and the stage
-is one of the three lightweight stages (`issue-pickup`, `pr-create`,
-`pr-merge`). These stages perform structured, template-driven work (JSON
-extraction, PR description filling, merge flow) that does not require advanced
-reasoning, so they default to `haiku` without requiring any config entry. The
+**Which resolver runs it (#340).** Both do, and they agree by construction. The
+extension-driven path (`HeadlessOrchestrator`) runs `resolveModel` in
+`utils/skillRunner.ts`; the autonomous path (Go scheduler → IPC → extension, and
+Go scheduler → `ExecutionManager`) runs `resolveDispatchModel` in
+`internal/orchestrator/`, and on the IPC path the extension executes that value
+rather than resolving a second one. Step 3 is where they legitimately differ in
+INPUT — the extension re-runs `AutoModelSelector` per stage, Go applies the
+routed tier the router chose at pickup. Everything else is mirrored table for
+table; the agreement matrix is asserted twice, in
+`internal/orchestrator/dispatch_routing_mode_test.go` and
+`tests/utils/resolveModel.modeKnobAgreement.test.ts`. See
+[PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340)
+for the three extension-only mechanisms (adaptive-policy override, A/B
+assignment, `AutoModelSelector`) that are not consulted on an autonomous run.
+
+The performance mode wraps the whole chain: steps 2.5–5 are clamped into the
+stage's routed-tier envelope, and so is any later raise (post-failure
+escalation, the `model_routing.minimum_model` floor, a
+`run.retryWithEscalation` forced tier). Steps 0 and 1–2 are not clamped.
+
+Step 2.5 applies only when no environment variable override and no explicit
+stage model is set, and the stage is one of the two lightweight stages
+(`issue-pickup`, `pr-create`). These stages perform structured, template-driven
+work (JSON extraction, PR description filling) that does not require advanced
+reasoning, so they default to `haiku` without requiring any config entry.
+`pr-merge` was removed from the set in #197 — its LLM path runs only when the
+deterministic merge runner punts, i.e. exclusively on the hardest merges. The
 resolved source is annotated as `stage-default` in `ModelDecision.source`.
 
 **`ModelSource` values** (annotated on `ModelDecision.source` for
 observability):
 
-| Value           | Resolved by                                           |
-| --------------- | ----------------------------------------------------- |
-| `env`           | Step 1 — environment variable override                |
-| `stage-default` | Step 1.5 — built-in lightweight stage default (haiku) |
-| `config`        | Step 2 — explicit `pipeline.stage_models` entry       |
-| `auto`          | Step 3 — AutoModelSelector complexity × stage matrix  |
-| `default`       | Steps 4–5 — global default or hardcoded fallback      |
+| Value              | Resolved by                                                   |
+| ------------------ | ------------------------------------------------------------- |
+| `performance-mode` | Step 0 — a `maximum` stage pin                                |
+| `env`              | Step 1 — environment variable override                        |
+| `config`           | Step 2 — explicit `pipeline.stage_models` entry               |
+| `stage-default`    | Step 2.5 — built-in lightweight stage default (haiku)         |
+| `auto`             | Step 3 — AutoModelSelector complexity × stage matrix          |
+| `default`          | Steps 4–5 — `ui.core.default_model` or the hardcoded fallback |
+| `go-scheduler`     | the whole chain, resolved by Go and executed verbatim (#340)  |
 
 **Migration Guide:**
 

@@ -697,9 +697,11 @@ type Config struct {
 	// packages/nightgauge-vscode/src/config/schema.ts.
 	ModelRouting *ModelRoutingConfig `json:"modelRouting,omitempty" yaml:"model_routing,omitempty"`
 
-	// UI holds the subset of the ui: section the Go binary reads — today only
+	// UI holds the subset of the ui: section the Go binary reads —
 	// ui.core.adapter, the global execution-adapter default in the canonical
-	// per-stage adapter schema (#54). Mirrors UICoreConfigSchema.adapter in
+	// per-stage adapter schema (#54), and ui.core.default_model, the global
+	// model fallback the dispatch path resolves at `resolveModel` Step 3's
+	// position (#340). Mirrors UICoreConfigSchema in
 	// packages/nightgauge-vscode/src/config/schema.ts.
 	UI *UIConfig `json:"ui,omitempty" yaml:"ui,omitempty"`
 
@@ -967,9 +969,24 @@ type UIConfig struct {
 	Core *UICoreConfig `yaml:"core,omitempty" json:"core,omitempty"`
 }
 
-// UICoreConfig carries ui.core.adapter — the global execution-adapter default.
+// UICoreConfig carries the two ui.core defaults the Go dispatch path reads:
+// the global execution-adapter default (#54) and the global model default.
 type UICoreConfig struct {
 	Adapter string `yaml:"adapter,omitempty" json:"adapter,omitempty"`
+
+	// DefaultModel is the workspace-wide model fallback for a stage no
+	// explicit knob and no router recommendation answered for — `resolveModel`
+	// Step 3, `getDefaultModel` in
+	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts, with the
+	// NIGHTGAUGE_UI_CORE_DEFAULT_MODEL env override winning over the file.
+	//
+	// Read by the Go dispatch path since #340. Before that only the TypeScript
+	// resolver consumed it, and on the IPC path it was the EFFECTIVE model for
+	// every reasoning stage (services/SkillRunner.ts passed no issueMetadata,
+	// so `resolveModel` Step 2 never fired and Step 3 always won). Making the
+	// wire model authoritative without mirroring this step would have dropped
+	// the knob silently for exactly the runs it used to govern.
+	DefaultModel string `yaml:"default_model,omitempty" json:"defaultModel,omitempty"`
 }
 
 // PipelineConfig captures the subset of the YAML pipeline: block that the Go

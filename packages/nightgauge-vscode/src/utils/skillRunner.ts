@@ -141,6 +141,7 @@ import {
   getSuperchargeCodexModel,
   getPerformanceMode,
   getModeEnvelope,
+  getRoutedTierEnvelope,
   type ModeEnvelope,
   getModeStageProfile,
   getModeStageAdapterModel,
@@ -775,10 +776,21 @@ export interface ModelDecision {
 }
 
 /**
+ * Capability order of the four registry bands, weakest first. Declared once:
+ * `enforceMinimumModel` and `clampModelToCeiling` both compare against it, and
+ * two declarations of one ladder is how a band ends up strong in one function
+ * and weak in another. Go pair: `routing.TierRank`.
+ */
+const TIER_ORDER: Record<DefaultModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
+
+/**
  * Enforce a minimum model floor.
  *
  * If the selected model is lighter than the minimum, returns the minimum.
- * Model tier ordering: haiku (0) < sonnet (1) < opus (2).
+ * Model tier ordering: haiku (0) < sonnet (1) < opus (2) < fable (3).
+ *
+ * Also serves as "the stronger of two bands" — which is how the Step 1 floor
+ * keeps a clamped raise from landing below the operator's own per-stage model.
  *
  * @param selected - The model selected by AutoModelSelector
  * @param minimum - The minimum model floor (from config)
@@ -791,8 +803,24 @@ function enforceMinimumModel(
   minimum: DefaultModel | undefined
 ): DefaultModel {
   if (!minimum) return selected;
-  const tiers: Record<DefaultModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
-  return tiers[selected] >= tiers[minimum] ? selected : minimum;
+  return TIER_ORDER[selected] >= TIER_ORDER[minimum] ? selected : minimum;
+}
+
+/**
+ * Lower a model to the envelope's ceiling; never raise it. The TS pair of
+ * `routing.ClampToCeiling` (#340).
+ *
+ * The floor half is deliberately absent, because this is what bounds a RAISE
+ * (the `model_routing.minimum_model` floor over an explicit per-stage model).
+ * Re-applying the envelope floor there would let a mode turn a floor into an
+ * upgrade — under `maximum`, whose envelope is `[opus, opus]`, an env override
+ * of `haiku` floored to `sonnet` would come back as `opus`, which neither
+ * resolver's ordering intends. Go leaves the floor off for a second reason that
+ * matters more on its path: it would force a run back onto a tier the API just
+ * rejected (the sticky #42 downgrade).
+ */
+function clampModelToCeiling(model: DefaultModel, envelope: ModeEnvelope): DefaultModel {
+  return TIER_ORDER[model] > TIER_ORDER[envelope.ceiling] ? envelope.ceiling : model;
 }
 
 /**
@@ -1080,6 +1108,27 @@ export function resolveModel(
   // effort — only the automatic/lightweight/default paths use this value.
   const effort = clampEffortToEnvelope(stageEffort, envelope);
 
+  // Every MODEL the pipeline chooses below is clamped into the stage's
+  // routed-tier envelope rather than the raw mode band (#340): a `fable`
+  // ceiling belongs to the heavy reasoning stages only, so `feature-validate`
+  // and the plumbing stages top out at Opus even under `frontier`. Go clamps
+  // against the same narrowed band (routing.RoutedTierEnvelope). Effort keeps
+  // the raw envelope — the narrowing is about tiers, not thinking budget.
+  const modelEnvelope = getRoutedTierEnvelope(performanceMode, stage);
+
+  // The `model_routing.minimum_model` floor applies to EVERY tier the pipeline
+  // chose, not just the selector's pick (#340). Before this it was reachable
+  // only from Step 2, so a run that never reached the selector — no issue
+  // metadata (the pre-#340 IPC path passed none), a lightweight stage, an
+  // explicit `stage_models` entry — silently ignored a configured floor that
+  // Go's `resolveDispatchModel` was applying to the same config. `withFloor`
+  // is that one rule: raise to the floor, then land inside the stage's
+  // routed-tier CEILING. The floor half of the envelope is deliberately not
+  // re-applied (see `clampModelToCeiling`).
+  const minModel = getMinimumModel(stage, workspaceRoot);
+  const withFloor = (chosen: DefaultModel): DefaultModel =>
+    clampModelToCeiling(enforceMinimumModel(chosen, minModel), modelEnvelope);
+
   // Step 1: Check stage-level config (env var > config > defaults based on mode)
   const routingMode = getModelRoutingMode(workspaceRoot);
   const stageModel = getStageModel(stage, workspaceRoot);
@@ -1088,7 +1137,25 @@ export function resolveModel(
     // is the same read Step 0 used, so the source label and the precedence
     // decision cannot disagree about whether an env override exists.
     const source: ModelSource = stageEnvModel ? "env" : "config";
-    return { model: stageModel, source, mode: routingMode, effort };
+    // The `model_routing.minimum_model` floor binds an explicit per-stage model
+    // too (#340). It used to be reachable only from Step 2, so in
+    // `model_routing.mode: manual` — where `getStageModel` answers for EVERY
+    // stage out of DEFAULT_STAGE_MODELS — the floor was silently inert, while
+    // Go's `resolveDispatchModel` applied it. One config, two dispatch paths,
+    // a 4×-cost disagreement: `minimum_model.feature-dev: fable` ran Fable on
+    // an autonomous run and Sonnet on an extension-driven one.
+    //
+    // A floor only RAISES, and a raise lands inside the mode's ceiling — the
+    // same rule Step 2 applies to its own `enforceMinimumModel` result. The
+    // operator's OWN model is exempt from the ceiling (it overrides the mode
+    // for that stage), so the clamp may discard the raise but never drop the
+    // stage below `stageModel`: forcing a tier must not downgrade.
+    const floored = enforceMinimumModel(stageModel, minModel);
+    const model =
+      floored === stageModel
+        ? stageModel
+        : enforceMinimumModel(clampModelToCeiling(floored, modelEnvelope), stageModel);
+    return { model, source, mode: routingMode, effort };
   }
 
   // Step 1.5: Per-stage defaults for lightweight stages (mode-agnostic)
@@ -1106,7 +1173,7 @@ export function resolveModel(
           // Clamp to the mode envelope (e.g. Efficiency caps at sonnet anyway;
           // Maximum's floor would raise it — though Maximum returns pins earlier).
           return {
-            model: clampModelToEnvelope("sonnet", envelope),
+            model: withFloor(clampModelToEnvelope("sonnet", modelEnvelope)),
             source: "stage-default",
             mode: routingMode,
             effort,
@@ -1115,7 +1182,7 @@ export function resolveModel(
       }
     }
     return {
-      model: clampModelToEnvelope(lightweightDefault, envelope),
+      model: withFloor(clampModelToEnvelope(lightweightDefault, modelEnvelope)),
       source: "stage-default",
       mode: routingMode,
       effort,
@@ -1200,15 +1267,14 @@ export function resolveModel(
         envelope
       );
       const threshold = getConfidenceThreshold(workspaceRoot);
-      const minModel = getMinimumModel(stage, workspaceRoot);
 
       if (result.confidence >= threshold) {
-        // enforceMinimumModel may raise above the selector's pick; re-clamp to
-        // the envelope ceiling so a config minimum can't exceed the mode band.
-        const model = clampModelToEnvelope(
-          enforceMinimumModel(result.model as DefaultModel, minModel),
-          envelope
-        );
+        // `withFloor` is the same floor + ceiling rule every other branch uses:
+        // enforceMinimumModel may raise above the selector's pick, and the raise
+        // lands inside the stage's routed-tier ceiling — so a `fable` floor
+        // cannot put feature-validate or the plumbing on Fable under `frontier`
+        // (#340).
+        const model = withFloor(result.model as DefaultModel);
 
         return {
           model,
@@ -1229,7 +1295,7 @@ export function resolveModel(
   const defaultModel = getDefaultModel(workspaceRoot);
   if (defaultModel) {
     return {
-      model: clampModelToEnvelope(defaultModel, envelope),
+      model: withFloor(clampModelToEnvelope(defaultModel, modelEnvelope)),
       source: "default",
       mode: routingMode,
       effort,
@@ -1238,7 +1304,7 @@ export function resolveModel(
 
   // Step 4: Hardcoded fallback (clamped to the mode envelope)
   return {
-    model: clampModelToEnvelope("sonnet", envelope),
+    model: withFloor(clampModelToEnvelope("sonnet", modelEnvelope)),
     source: "default",
     mode: routingMode,
     effort,

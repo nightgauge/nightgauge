@@ -15,13 +15,23 @@ import (
 // It exists because #340 made `RunStageParams.Model` authoritative: the
 // extension now executes the wire value instead of running its own
 // `resolveModel` chain. Everything that chain contributed had to move here or
-// stop existing. What moved: the performance-mode pin, `pipeline.stage_models`
-// + its `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env overrides, `model_routing.mode`
-// (manual/automatic/hybrid), and the lightweight-stage defaults. Without them a
-// high-complexity issue ran `issue-pickup` and `pr-create` on Opus, Maximum
+// stop existing. What moved: the performance-mode pin AND its envelope,
+// `pipeline.stage_models` + its `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env
+// overrides, `model_routing.mode` (manual/automatic/hybrid), the
+// lightweight-stage defaults, and `ui.core.default_model` /
+// `NIGHTGAUGE_UI_CORE_DEFAULT_MODEL` (Step 3 — pre-#340 that was the EFFECTIVE
+// model for every reasoning stage on the IPC path, because services/
+// SkillRunner.ts passed no issue metadata so Step 2 never fired). Without them
+// a high-complexity issue ran `issue-pickup` and `pr-create` on Opus, Maximum
 // mode stopped pinning anything, Efficiency stopped capping anything, and the
 // only remaining knob (`model_routing.minimum_model`) could raise a stage but
 // never cap one.
+//
+// What did NOT move, stated so the gap is not silent: the adaptive-policy
+// override (Step 1.6), the A/B experiment assignment (Step 1.7) and
+// `AutoModelSelector` (Step 2 — Go routes from the issue's complexity score at
+// pickup instead). Those three are simply not consulted on an autonomous run,
+// and docs/PIPELINE_EXECUTION.md names the same three.
 //
 // Every table here mirrors a named TypeScript counterpart, and each mirror is
 // annotated with it. This is duplication, deliberately: threading TS config
@@ -142,6 +152,26 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 	return ""
 }
 
+// workspaceDefaultModel resolves `ui.core.default_model` with the same
+// precedence as the TS getDefaultModel (modelResolver.ts): the
+// NIGHTGAUGE_UI_CORE_DEFAULT_MODEL env var wins over config, and a value that
+// is not one of the four registry bands is ignored rather than dispatched.
+//
+// This is `resolveModel` Step 3, and it is not decoration on the Go side: on
+// the IPC path it used to be the EFFECTIVE model for every reasoning stage,
+// because services/SkillRunner.ts passed no issue metadata, so Step 2
+// (AutoModelSelector) never fired and Step 3 always won.
+func workspaceDefaultModel(workspaceRoot string) string {
+	if env := validStageModel(strings.TrimSpace(os.Getenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL"))); env != "" {
+		return env
+	}
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil || cfg == nil || cfg.UI == nil || cfg.UI.Core == nil {
+		return ""
+	}
+	return validStageModel(strings.TrimSpace(cfg.UI.Core.DefaultModel))
+}
+
 // stageBaseModel resolves the tier a stage STARTS from, before escalation, the
 // minimum_model floor, sticky downgrades and the stage-specific haiku
 // exclusions (#340). Mirrors `resolveModel`
@@ -157,14 +187,17 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 //	                                       manual-mode table
 //	Step 1.5 lightweight stage defaults  — issue-pickup, pr-create → haiku
 //	Step 2   the run's routed tier       — pickup_recommendation.dev_model
-//	Step 3   defaultDispatchModel        — an unrouted run still dispatches
+//	Step 3   ui.core.default_model       — the workspace-wide fallback
+//	Step 4   defaultDispatchModel        — an unrouted run still dispatches
 //
-// Steps 1.5–3 are clamped into the mode's routed-tier envelope, at the same
+// Steps 1.5–4 are clamped into the mode's routed-tier envelope, at the same
 // position `resolveModel` clamps them (clampModelToEnvelope on the
 // lightweight/auto/default branches). Step 1 is NOT clamped, also mirroring
 // resolveModel: an explicit per-stage model is the operator overriding the
 // mode for that stage, not the pipeline choosing within it. `explicit` reports
-// that, so resolveDispatchModel can leave the mode ceiling off it too.
+// that, so resolveDispatchModel knows which value the mode ceiling is allowed
+// to leave alone — and, once a raising mechanism has fired, which value it may
+// not lower below.
 //
 // The performance mode and the config are read fresh per stage, like the
 // router's own mode lookup: an operator who switches to Maximum mid-run gets it
@@ -190,6 +223,9 @@ func stageBaseModel(
 	}
 	if predictedModel != "" {
 		return routing.ClampToEnvelope(predictedModel, envelope), false
+	}
+	if def := workspaceDefaultModel(workspaceRoot); def != "" {
+		return routing.ClampToEnvelope(def, envelope), false
 	}
 	return routing.ClampToEnvelope(defaultDispatchModel, envelope), false
 }
@@ -227,9 +263,13 @@ func normalizeDispatchTier(model string) string {
 // enough once stageBaseModel exists: the lightweight defaults sit ABOVE the
 // prediction, so an operator escalating a stalled pr-create would have watched
 // it re-run on haiku. "Run at least this tier" is a floor, so it is expressed
-// as one — and like every other floor it lands inside the active performance
-// mode's envelope (resolveDispatchModel), so forcing Opus under Efficiency
-// runs sonnet until the operator changes the mode too.
+// as one — and like every other floor it lands inside the stage's routed-tier
+// envelope (resolveDispatchModel), so forcing Opus under Efficiency runs sonnet
+// until the operator changes the mode too, and forcing Fable under Frontier
+// reaches Fable only on feature-planning/feature-dev. The one thing the ceiling
+// may not do is drop the stage BELOW an explicit `pipeline.stage_models` entry:
+// a forced tier is a raise, so a no-op raise leaves the operator's own model
+// standing.
 func raiseStageFloors(floors map[string]string, tier string) map[string]string {
 	if strings.TrimSpace(tier) == "" {
 		return floors

@@ -209,6 +209,7 @@ export {
   type ModeEnvelope,
   DEFAULT_MODE_ENVELOPE,
   getModeEnvelope,
+  getRoutedTierEnvelope,
   type StageProfile as PerformanceStageProfile,
   type PipelineProfile as PerformancePipelineProfile,
   getModeStageProfile,

@@ -59,6 +59,15 @@ const MANUAL_OPUS =
   "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: opus\n";
 const AUTOMATIC = "model_routing:\n  mode: automatic\n";
 
+/** `model_routing.mode: manual` + an explicit model + a floor above it. */
+const MANUAL_HAIKU_FLOOR_OPUS =
+  "model_routing:\n  mode: manual\n  minimum_model:\n    feature-dev: opus\n" +
+  "pipeline:\n  stage_models:\n    feature-dev: haiku\n";
+/** The same, with the floor above the operator's own (stronger) model. */
+const MANUAL_OPUS_FLOOR_FABLE =
+  "model_routing:\n  mode: manual\n  minimum_model:\n    feature-dev: fable\n" +
+  "pipeline:\n  stage_models:\n    feature-dev: opus\n";
+
 const originalEnv = process.env;
 
 beforeEach(() => {
@@ -161,7 +170,60 @@ const MATRIX: Cell[] = [
     want: "haiku",
     why: "the per-stage env override is resolved ahead of the pin, on both resolvers",
   },
+  // The minimum_model floor × manual mode (#340). Before this, Step 1 returned
+  // the explicit model and never consulted the floor, while Go's
+  // resolveDispatchModel applied it — so `minimum_model.feature-dev: fable`
+  // dispatched Fable on an autonomous run and Sonnet on an extension-driven
+  // one, from one config file. `manual` is not an exotic cell: every
+  // recommended profile in docs/CONFIGURATION.md sets it, and there
+  // getStageModel answers for EVERY stage out of DEFAULT_STAGE_MODELS.
+  {
+    name: "unset + manual + minimum_model above the explicit model",
+    config: MANUAL_HAIKU_FLOOR_OPUS,
+    want: "opus",
+    why: "a floor binds an explicit per-stage model too — one config cannot mean two things",
+  },
+  {
+    name: "efficiency + manual + minimum_model above the mode ceiling",
+    mode: "efficiency",
+    config: MANUAL_HAIKU_FLOOR_OPUS,
+    want: "sonnet",
+    why: "the raise the floor produced lands inside the mode ceiling — a cost-capping mode caps",
+  },
+  {
+    name: "efficiency + manual + a floor above the operator's stronger model",
+    mode: "efficiency",
+    config: MANUAL_OPUS_FLOOR_FABLE,
+    want: "opus",
+    why: "the ceiling discards the raise, never the operator's own model — a floor must not downgrade",
+  },
+  {
+    name: "maximum + env override + a floor below the mode's envelope floor",
+    mode: "maximum",
+    env: "haiku",
+    config: "model_routing:\n  minimum_model:\n    feature-dev: sonnet\n",
+    want: "sonnet",
+    why: "bounding a raise uses the CEILING only — re-applying maximum's [opus, opus] floor would turn a floor into an upgrade",
+  },
+  {
+    name: "frontier + manual + minimum_model fable on a reasoning stage",
+    mode: "frontier",
+    config:
+      "model_routing:\n  mode: manual\n  minimum_model:\n    feature-dev: fable\n" +
+      "pipeline:\n  stage_models:\n    feature-dev: haiku\n",
+    want: "fable",
+    why: "feature-planning/feature-dev are the stages the frontier ceiling is offered to",
+  },
 ];
+
+/**
+ * `feature-validate` under `frontier` — the one stage MODE_PROFILES.frontier
+ * caps at Opus, and the one the codebase records as having "empirically failed
+ * validation in dogfooding" on Fable. The floor arrives after the selector, so
+ * clamping it against the raw `fable` ceiling re-creates exactly the behavior
+ * #19 deleted.
+ */
+const VALIDATE_STAGE = "feature-validate" as PipelineStage;
 
 describe("resolveModel × resolveDispatchModel — mode × knob agreement (#340)", () => {
   for (const cell of MATRIX) {
@@ -180,6 +242,17 @@ describe("resolveModel × resolveDispatchModel — mode × knob agreement (#340)
     // removed.
     process.env.NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV = "gpt-5.6-sol";
     expect(resolveModel(STAGE, "/test/workspace").model).toBe(ROUTED_TIER);
+  });
+
+  it("caps a fable floor at opus on feature-validate under frontier", () => {
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "frontier";
+    configText =
+      "model_routing:\n  mode: manual\n  minimum_model:\n    feature-validate: fable\n" +
+      "pipeline:\n  stage_models:\n    feature-validate: sonnet\n";
+    expect(
+      resolveModel(VALIDATE_STAGE, "/test/workspace").model,
+      "MODE_PROFILES.frontier caps this stage at Opus — a floor is not an explicit per-stage model"
+    ).toBe("opus");
   });
 
   it("attributes an env-sourced model to `env`, not `config`", () => {
