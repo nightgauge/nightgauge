@@ -158,10 +158,55 @@ func (s *Store) pathFor(id string) (string, error) {
 	return filepath.Join(s.dir, id+".json"), nil
 }
 
+// RaiseOutcome names what a Raise actually DID. Raise has four genuine
+// results and they are not interchangeable — a caller that only learns "some
+// id" cannot tell "a card is now in front of the operator" from "the operator
+// already dismissed this exact condition and nothing was shown". The IPC
+// raise verb (#305) surfaces this verbatim so a remote producer knows which
+// of the four happened, exactly as an in-process Go producer could infer from
+// the journal action.
+//
+// A store that is not configured is an ERROR, not a fifth outcome: "I could
+// not write" is never "I wrote nothing on purpose".
+type RaiseOutcome string
+
+// The four values are the SAME vocabulary the standing reconciler already
+// reports on StandingOutcome.Action — deliberately aliased to the journal
+// action constants rather than re-spelled, so "created" means one thing in this
+// package and a surface never has to learn a second set of words for the same
+// four facts.
+const (
+	// OutcomeCreated — no live record existed for the key; a new card was
+	// materialized (or an EXPIRED predecessor revived under its own id).
+	OutcomeCreated RaiseOutcome = ActionCreated
+	// OutcomeUpdated — an open record for the key was refreshed with new
+	// payload, and the condition itself moved (event-shaped request, or a
+	// standing request whose fingerprint changed). Re-alerts.
+	OutcomeUpdated RaiseOutcome = ActionUpdated
+	// OutcomeRefreshed — the open record for the key was re-observed and kept.
+	// Deliberately silent. Two routes reach it:
+	//
+	//  1. An open STANDING record re-observed with an unchanged fingerprint —
+	//     content refreshed, no re-alert (ADR-015 §M).
+	//  2. A raise that would have STRIPPED A REMEDY off the open card: the
+	//     stored record offers an option bound to a real verb and the incoming
+	//     one offers only noops. The observation is recorded; the payload is
+	//     not replaced. See the remedy-preservation block in Raise.
+	OutcomeRefreshed RaiseOutcome = ActionRefreshed
+	// OutcomeSuppressed — a human already RESOLVED this exact standing
+	// condition and its fingerprint has not moved, so nothing was written and
+	// no card is showing (ADR-015 §M). The returned id is the prior record's.
+	//
+	// Not a journal action: nothing was persisted, so there is nothing to
+	// audit. It is still an OUTCOME, because the caller has to be able to tell
+	// it apart from a card that is now on screen.
+	OutcomeSuppressed RaiseOutcome = "suppressed"
+)
+
 // Raise creates a new request, or folds it into the record that already exists
 // for the same idempotency_key (ADR-015 §C/§D). It rejects identity-less
 // records (empty id/idempotency_key/producer) — the #316 lesson encoded.
-// Returns the id of the live request.
+// Returns what it did and the id of the live request.
 //
 // "One record per key" holds across expiry, not just while a card is open
 // (#108). An open record is updated in place; an EXPIRED one is revived under
@@ -172,9 +217,9 @@ func (s *Store) pathFor(id string) (string, error) {
 // Standing requests additionally follow the §M rules: an unchanged fingerprint
 // refreshes the card without re-alerting, and a condition a human already
 // resolved is not handed straight back until its fingerprint moves.
-func (s *Store) Raise(req DecisionRequest) (string, error) {
+func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
 	if err := validateForRaise(&req); err != nil {
-		return "", err
+		return "", "", err
 	}
 	s.applyRaiseDefaults(&req)
 
@@ -184,22 +229,62 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 
 	stored, err := s.scanLocked()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	// Dedup: an open (non-terminal) request with the same key is updated in
 	// place rather than duplicated.
 	if existing, path, ok := findOpenByKey(stored, req.IdempotencyKey); ok {
+		// A RAISE MAY NEVER TAKE A REMEDY OFF AN OPEN CARD (fixed in review).
+		//
+		// The merge below is last-writer-wins over the whole payload, which is
+		// right for content that moves (a spend that grew, a blocker that
+		// changed) and wrong for the OPTION SET. Two structurally different
+		// offers can share one idempotency key: `budget-ceiling:<repo>#<n>` is
+		// raised both with the `budget.raiseCeiling` option (the daemon
+		// corroborated the run's spend) and without it (it could not), and the
+		// Go scheduler and the IPC verb (#305) dedup onto the same record. So an
+		// uncorroborated observation arriving second silently rewrote a card the
+		// scheduler had raised WITH its remedy into one offering two noops — the
+		// operator lost a one-click fix and got no signal that it had gone.
+		//
+		// Keep the whole stored payload, not just its options: a card's title and
+		// body EXPLAIN its options ("Raise to $112.50 & retry"), so grafting new
+		// prose onto old options produces a card that contradicts itself. The
+		// observation is still recorded — ActionRefreshed, the existing
+		// non-alerting re-observation action, because nothing the operator sees
+		// changed.
+		//
+		// Strictly one-directional: it blocks DOWNGRADES only. A raise that
+		// carries a remedy still replaces (in-place escalation keeps working),
+		// and a raise that ADDS one to a remedy-free card still replaces.
+		if optionsOfferARemedy(existing.Options) && !optionsOfferARemedy(req.Options) {
+			kept := *existing
+			s.emitLocked(JournalEntry{
+				Action:         ActionRefreshed,
+				ID:             kept.ID,
+				IdempotencyKey: kept.IdempotencyKey,
+				Producer:       kept.Producer,
+				State:          kept.Lifecycle.State,
+				Fingerprint:    kept.Fingerprint,
+				Muted:          kept.IsMuted(),
+				At:             s.nowUTC().Format(tsLayout),
+			}, &kept)
+			return OutcomeRefreshed, kept.ID, nil
+		}
+
 		// Preserve durable identity + creation + lifecycle; refresh the payload.
 		merged := req
 		merged.ID = existing.ID
 		merged.CreatedAt = existing.CreatedAt
 		merged.Lifecycle = existing.Lifecycle
 		action := ActionUpdated
+		outcome := OutcomeUpdated
 		if merged.Standing && merged.Fingerprint == existing.Fingerprint {
 			// The same condition re-observed: bodies and titles move on their
 			// own, so refresh the content and stay silent.
 			action = ActionRefreshed
+			outcome = OutcomeRefreshed
 		} else if merged.Standing {
 			// The condition itself moved. Drop a mute pinned to the fingerprint
 			// that no longer applies, and re-open an acknowledgement that was
@@ -211,7 +296,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 			}
 		}
 		if err := s.writeMaterializedLocked(path, &merged); err != nil {
-			return "", err
+			return "", "", err
 		}
 		s.emitLocked(JournalEntry{
 			Action:         action,
@@ -223,7 +308,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 			Muted:          merged.IsMuted(),
 			At:             s.nowUTC().Format(tsLayout),
 		}, &merged)
-		return merged.ID, nil
+		return outcome, merged.ID, nil
 	}
 
 	// No open record. A human who already resolved THIS EXACT standing
@@ -232,7 +317,7 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 	// it back on the next observation.
 	if req.Standing {
 		if prior, ok := latestResolvedByKey(stored, req.IdempotencyKey); ok && prior.Fingerprint == req.Fingerprint {
-			return prior.ID, nil
+			return OutcomeSuppressed, prior.ID, nil
 		}
 	}
 
@@ -243,10 +328,10 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 	}
 	path, err := s.pathFor(req.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if err := s.writeMaterializedLocked(path, &req); err != nil {
-		return "", err
+		return "", "", err
 	}
 	s.emitLocked(JournalEntry{
 		Action:         ActionCreated,
@@ -257,7 +342,24 @@ func (s *Store) Raise(req DecisionRequest) (string, error) {
 		Fingerprint:    req.Fingerprint,
 		At:             s.nowUTC().Format(tsLayout),
 	}, &req)
-	return req.ID, nil
+	return OutcomeCreated, req.ID, nil
+}
+
+// optionsOfferARemedy reports whether an option set contains anything that
+// DOES something on resolve.
+//
+// The test is "binds a verb other than noop", not a producer allowlist:
+// `noop` is the registry's explicit "resolve and change nothing" choice, so
+// every other registered verb is by definition an action the operator would
+// lose if the option disappeared. Keeping the rule at the verb level means a
+// new producer inherits the protection without registering anywhere.
+func optionsOfferARemedy(options []Option) bool {
+	for _, opt := range options {
+		if Verb(opt.Verb) != VerbNoop {
+			return true
+		}
+	}
+	return false
 }
 
 // validateForRaise rejects identity-less and malformed records BEFORE any disk

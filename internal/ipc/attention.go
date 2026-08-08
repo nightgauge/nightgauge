@@ -231,7 +231,16 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 
 	case attention.VerbBudgetRaiseCeiling:
 		ceiling := argFloat(opt.Args, "ceilingUsd")
-		if err := orchestrator.WriteBudgetCeilingOverride(s.workspaceRoot, ceiling, actor, "action-center: budget.raiseCeiling"); err != nil {
+		// THE CARD'S OWN REPO ROOT, not s.workspaceRoot (fixed in #305 review).
+		// `s.workspaceRoot` is a mutable pointer to whichever repo owns the
+		// focused editor (`workspace.setRoot` ← `resolveActiveRepository`), so
+		// in a multi-repo workspace the override landed under whatever the
+		// operator happened to be looking at when they clicked — while the run
+		// that needs it reads its OWN repo's `.nightgauge/pipeline/`. Same
+		// per-repo registry that scopes run state (#215/#307), and the same root
+		// the raise resolved its enforced ceiling from, so proposal and
+		// persistence cannot disagree about which file is live.
+		if err := orchestrator.WriteBudgetCeilingOverride(s.repoRoot(repo), ceiling, actor, "action-center: budget.raiseCeiling"); err != nil {
 			return err
 		}
 		s.redispatchAfterOverride(key, repo, issue)

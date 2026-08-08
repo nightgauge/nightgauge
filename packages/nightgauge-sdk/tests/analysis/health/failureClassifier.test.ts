@@ -8,11 +8,13 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyFailureCategory,
-  classifyTerminalKind,
-  resolveTerminalKind,
   FAILURE_CATEGORY_WEIGHTS,
   type FailureCategory,
 } from "../../../src/analysis/health/failureClassifier.js";
+import {
+  classifyTerminalKind,
+  resolveTerminalKind,
+} from "../../../src/analysis/health/terminalKind.js";
 
 // ── classifyTerminalKind ───────────────────────────────────────────────────────
 

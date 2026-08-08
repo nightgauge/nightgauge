@@ -1,0 +1,792 @@
+/**
+ * terminalKindTable.generated.ts — GENERATED. DO NOT EDIT.
+ *
+ * Source:    internal/terminalkind/table.json
+ * Generator: cmd/terminalkind-codegen (`make generate-terminal-kind-table`)
+ *
+ * This is the canonical terminal-kind rule table (#306), the single definition
+ * of how a failed stage's error text becomes a `terminal_kind`. Go embeds the
+ * same file; this module is how TypeScript sees it. Hand-editing it is caught
+ * by the drift check wired into .husky/pre-commit, scripts/ci-local.sh and
+ * TestGeneratedTypeScriptIsInSync — the way to change classification is to edit
+ * table.json and regenerate, which updates every consumer at once.
+ *
+ * See terminalKind.ts for the interpreter and internal/terminalkind/table.go
+ * for its Go twin.
+ */
+
+/** A named check the table references as a `@name` term because it cannot be a literal. */
+export interface TerminalKindPredicateDoc {
+  name: string;
+  description: string;
+  go: string;
+  ts: string;
+  why_both_sides_agree: string;
+  /** Strings the predicate MUST accept — asserted in Go and in TypeScript. */
+  probes_true: string[];
+  /** Strings the predicate MUST reject — asserted in Go and in TypeScript. */
+  probes_false: string[];
+}
+
+/** A term that can never be satisfied, preserved verbatim with its reason. */
+export interface TerminalKindDeadTerm {
+  term: string;
+  rule: string;
+  why: string;
+}
+
+/** One rung of the ladder. Clauses are OR-ed; the terms of a clause are AND-ed. */
+export interface TerminalKindRule {
+  id: string;
+  kind: string;
+  /** Whether the extension may forward this rule's kind to Go over IPC. */
+  signal: boolean;
+  clauses: string[][];
+  why: string;
+}
+
+/**
+ * A SIGNAL-ONLY rule: matched by the reaction path and never by the record.
+ *
+ * This is the one declared place where the kind the fleet reacts to may differ
+ * from the kind the run record carries. Extensions are consulted ONLY when the
+ * rule table itself projects no signal, so an extension can never overrule a
+ * kind projected by a `signal: true` RULE — the widest it can reach is text the
+ * signal SUBSET ignores. A kind the record names through a NON-signal rule is
+ * not protected, and the one declared extension deliberately diverges from
+ * exactly that case (a usage limit naming a model records `model_unavailable`
+ * and reacts `rate_limit_quota_exhausted`).
+ */
+export interface TerminalKindSignalExtension {
+  id: string;
+  kind: string;
+  clauses: string[][];
+  why: string;
+}
+
+export interface TerminalKindTable {
+  $comment: string[];
+  schema_version: number;
+  predicates: TerminalKindPredicateDoc[];
+  dead_terms: TerminalKindDeadTerm[];
+  kinds_without_rules: string[];
+  rules: TerminalKindRule[];
+  signal_extensions: TerminalKindSignalExtension[];
+}
+
+/** The prefix marking a term as a named-predicate reference. */
+export const TERMINAL_KIND_PREDICATE_REF = "@";
+
+/**
+ * The prefix marking a term as a WORD-BOUNDED literal: satisfied only when the
+ * text contains it with a non-word character (or a string edge) on each side.
+ * A word character is [0-9a-z_] against the already-lowercased text.
+ */
+export const TERMINAL_KIND_WORD_BOUNDARY_REF = "~";
+
+export const TERMINAL_KIND_TABLE: TerminalKindTable = {
+  "$comment": [
+    "CANONICAL TERMINAL-KIND RULE TABLE (#306) — the single definition of how a failure's error",
+    "text becomes a terminal_kind. There is no second ladder to keep aligned: every consumer",
+    "INTERPRETS this file.",
+    "",
+    "  Go   internal/terminalkind    embeds this file (go:embed) and interprets it.",
+    "       orchestrator.ClassifyTerminalKind delegates here. AUTHORITATIVE: it writes",
+    "       terminal_kind into the run record and drives the scheduler's recovery routing.",
+    "  SDK  packages/nightgauge-sdk/src/analysis/health/terminalKindTable.generated.ts is",
+    "       GENERATED from this file by `make generate-terminal-kind-table`; classifyTerminalKind",
+    "       interprets it. A drift check (pre-commit, ci-local, and a Go test) fails if the",
+    "       generated module is not byte-identical to what this file renders.",
+    "  Ext  packages/nightgauge-vscode/src/services/terminalKindSignal.ts runs the SAME ladder",
+    "       and returns the winning rule's kind only when that rule is `signal: true`, so on",
+    "       every rule it either answers Go's answer or answers nothing. The single declared",
+    "       exception is signal_extensions below, and it is data, not code.",
+    "",
+    "SEMANTICS. Rules are evaluated IN ORDER; the first rule with a satisfied clause wins.",
+    "A rule fires when ANY of its clauses is satisfied (OR); a clause is satisfied when EVERY",
+    "one of its terms holds (AND). A term is either a literal — satisfied when the lowercased",
+    "error text CONTAINS it — a WORD-BOUNDED literal `~text`, satisfied when the text contains it",
+    "with a non-word character on each side — or a predicate reference `@name`, satisfied when",
+    "that named predicate returns true for the lowercased text. No match anywhere yields the empty kind;",
+    "callers fall back to subagent_crash (the most generic). Matching is ASCII-only in",
+    "practice: every term here is ASCII, and the two languages' case folding differs on 56",
+    "non-ASCII code points (see the package doc in table.go).",
+    "",
+    "SIGNAL EXTENSIONS are rules the REACTION path has and the RECORD path does not — the one",
+    "declared place where the kind the fleet reacts to may differ from the kind the run record",
+    "carries. They are consulted ONLY when the rule ladder projects no SIGNAL, so an extension",
+    "can never overrule a kind projected by a `signal: true` RULE — the widest it can reach is",
+    "text the signal SUBSET ignores. Read that bound exactly: a kind the record names through a",
+    "NON-signal rule is NOT protected, and the one declared extension deliberately diverges from",
+    "precisely that case — `Claude Opus 4.5 usage limit reached; resets at 5pm` records",
+    "model_unavailable (a plan restriction) and makes the fleet react rate_limit_quota_exhausted",
+    "(an environmental window), which is what main did and what the corpus now pins. Every",
+    "extension is pinned by corpus rows whose expected_signal differs from expected, which the",
+    "corpus well-formedness test permits for declared extensions and for nothing else, and every",
+    "CLAUSE of every extension must be necessary to one of those rows.",
+    "",
+    "ORDER IS THE CONTRACT. Many real failure strings satisfy two rules and the earlier one",
+    "wins on purpose — see budget-ceiling-hit vs budget-enforcer, runaway-ceiling vs",
+    "cost-cap-exceeded, and the four narrow no-op kinds vs premature-turn-end. Moving a rule is",
+    "a routing change, not a refactor.",
+    "",
+    "TO CHANGE BEHAVIOUR: edit this file, run `make generate-terminal-kind-table`, and update the",
+    "shared corpus (internal/terminalkind/testdata/corpus.json) in the same commit. Every",
+    "consumer follows automatically; none of them can be changed on its own."
+  ],
+  "schema_version": 2,
+  "predicates": [
+    {
+      "name": "mentions_registry_model",
+      "description": "True when the text names a model from the model registry — by concrete id (`claude-opus-4-5-20251101`), display name (`Claude Opus 4.5`), or tier (`opus`/`sonnet`/`haiku`/…), all compared lowercased. Registry-derived rather than hardcoded so new models are covered as the registry evolves (#42).",
+      "go": "internal/terminalkind/predicates.go — iterates models.All().",
+      "ts": "packages/nightgauge-sdk/src/analysis/health/terminalKind.ts — iterates MODEL_REGISTRY.",
+      "why_both_sides_agree": "Both registries are the SAME FILE: packages/nightgauge-sdk/src/eval/model-registry.json is canonical and internal/models/model-registry.json is a byte copy kept in sync by scripts/sync-model-registry.sh, with internal/models/registry_test.go (TestParityWithCanonicalSDKRegistry) failing on drift. The predicate is additionally pinned by dedicated corpus rows on both sides — id, display name, tier, and the negative case.",
+      "probes_true": [
+        "gpt-5.6-terra",
+        "GPT-5.6 Sol",
+        "opus"
+      ],
+      "probes_false": [
+        "no recognisable engine is named in this text",
+        "exit 1: the stage died"
+      ]
+    }
+  ],
+  "dead_terms": [
+    {
+      "term": "exitSignalSource",
+      "rule": "runaway-progress",
+      "why": "PRESERVED VERBATIM AND PROVABLY UNREACHABLE. Terms are matched against the LOWERCASED error text, and this one carries capitals, so its clause (`exitSignalSource` AND `runaway-progress`) can never be satisfied by any input. It has been dead in Go since it was written; the SDK mirror silently omitted it, which is precisely the kind of one-sided difference #306 exists to remove. Lowercasing it would be a live routing change and is out of scope for a unification, so it stays exactly as Go has it and is declared here instead: the schema lint requires every term with an uppercase character to be listed, and the corpus pins the fall-through (row runaway-progress-exit-signal-source-dead-branch)."
+    }
+  ],
+  "kinds_without_rules": [
+    "orchestrator_crash",
+    "abandoned_commit"
+  ],
+  "rules": [
+    {
+      "id": "network-unavailable",
+      "kind": "network_unavailable",
+      "signal": false,
+      "clauses": [
+        [
+          "network unavailable: extended github connectivity loss"
+        ]
+      ],
+      "why": "The TS stall watchdog observed N consecutive connectivity failures and the Go scheduler cancelled the active stage with cause ErrNetworkUnavailable. First in the ladder because the message surfaces from context.Cause and must not be claimed by a generic `exit`/`stall` rule below."
+    },
+    {
+      "id": "stream-idle-timeout",
+      "kind": "stream_idle_timeout",
+      "signal": true,
+      "clauses": [
+        [
+          "stream idle timeout"
+        ]
+      ],
+      "why": "Anthropic stream idle timeout (#3398), surfaced by the Claude CLI as a result envelope with is_error:true and the message `API Error: Stream idle timeout - partial response received`. Above the stall-kill rules: the literal `timeout` in that text would otherwise bucket a mid-stream API cut into an infrastructure stall."
+    },
+    {
+      "id": "api-overloaded",
+      "kind": "api_overloaded",
+      "signal": true,
+      "clauses": [
+        [
+          "overloaded"
+        ]
+      ],
+      "why": "Anthropic 529 (#3835 WS4) — a transient capacity blip the CLI reports as `API Error: Overloaded`. Above the stall-kill and crash rules so a momentary overload routes to the transient path (short backoff, no pause) instead of reading as a code fault. `overloaded` is distinctive to this API error in failure text."
+    },
+    {
+      "id": "api-connection-lost",
+      "kind": "api_connection_lost",
+      "signal": true,
+      "clauses": [
+        [
+          "socket connection was closed"
+        ],
+        [
+          "socket hang up"
+        ],
+        [
+          "api_connection_lost"
+        ],
+        [
+          "api error",
+          "econnreset"
+        ],
+        [
+          "api error",
+          "econnrefused"
+        ],
+        [
+          "api error",
+          "enotfound"
+        ],
+        [
+          "api error",
+          "eai_again"
+        ],
+        [
+          "api error",
+          "getaddrinfo"
+        ],
+        [
+          "api error",
+          "fetch failed"
+        ],
+        [
+          "api error",
+          "connection reset"
+        ],
+        [
+          "api error",
+          "connection refused"
+        ],
+        [
+          "api error",
+          "connection closed"
+        ]
+      ],
+      "why": "Anthropic transport drop (#4002): the result envelope carries the raw transport error, canonically `API Error: The socket connection was closed unexpectedly`. Above the crash rules so a seconds-long blip is not misread as a process death. The bare error-code alternatives are gated on `api error` so an unrelated stage failure that merely mentions ECONNRESET (a failing integration test, say) does not misclassify. #227 added `connection closed`: the live wording `API Error: Connection closed mid-response` matched none of the socket patterns and halted the fleet on a blip."
+    },
+    {
+      "id": "rate-limit-quota-exhausted",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": true,
+      "clauses": [
+        [
+          "[rate-limit-quota-exhausted]"
+        ],
+        [
+          "rate-limit-quota-exhausted"
+        ],
+        [
+          "rate_limit_quota_exhausted"
+        ]
+      ],
+      "why": "Stamped by skillRunner (#3386) when an idle stall coincides with a quota-exhausted rate_limit_event. Above the stall-kill rules: the kill reason embeds `idle` / `stall idle threshold` and would otherwise retry in minutes against a bucket that resets in hours."
+    },
+    {
+      "id": "model-unavailable",
+      "kind": "model_unavailable",
+      "signal": false,
+      "clauses": [
+        [
+          "not_found_error",
+          "model"
+        ],
+        [
+          "model not found"
+        ],
+        [
+          "invalid model"
+        ],
+        [
+          "unknown model"
+        ],
+        [
+          "not available on your",
+          "@mentions_registry_model"
+        ],
+        [
+          "not included in your",
+          "@mentions_registry_model"
+        ],
+        [
+          "not offered on your",
+          "@mentions_registry_model"
+        ],
+        [
+          "not supported on your",
+          "@mentions_registry_model"
+        ],
+        [
+          "usage limit",
+          "@mentions_registry_model"
+        ],
+        [
+          "usage cap",
+          "@mentions_registry_model"
+        ],
+        [
+          "weekly limit",
+          "@mentions_registry_model"
+        ]
+      ],
+      "why": "The API rejected the model (#42). BELOW the explicit quota marker — an explicit stamp beats a heuristic — and above the generic rules. The plan-restriction and usage-cap wordings are each gated on the mentions_registry_model predicate so an unrelated failure that merely says `limit` or `not found` does not misclassify; the 404 `not_found_error` shape and the invalid/unknown-model wordings are specific enough to stand alone."
+    },
+    {
+      "id": "issue-closed",
+      "kind": "issue_closed",
+      "signal": false,
+      "clauses": [
+        [
+          "pipeline-start-failure",
+          "issue-closed"
+        ],
+        [
+          "issue_closed"
+        ]
+      ],
+      "why": "Issue-closed non-failure (#3661): issue-pickup found the issue already CLOSED before any AI stage ran. Above the generic rules so the `exit` substring in the wrapper text does not bucket it into subagent_crash."
+    },
+    {
+      "id": "blocked-dependency",
+      "kind": "blocked_dependency",
+      "signal": false,
+      "clauses": [
+        [
+          "[blocked-dependency]"
+        ],
+        [
+          "blocked_dependency"
+        ]
+      ],
+      "why": "Blocked-dependency deferral (#305): the scheduler dispatched an issue whose blockedBy dependencies are still open and the pipeline defers before any AI stage runs. NOT a failure. Above the generic rules so neither the `pipeline-start-failure` wrapper nor `exit` claims it."
+    },
+    {
+      "id": "architecture-approval-required",
+      "kind": "architecture_approval_required",
+      "signal": true,
+      "clauses": [
+        [
+          "architecture approval required"
+        ],
+        [
+          "[architecture-approval-required]"
+        ],
+        [
+          "architecture_approval_required"
+        ]
+      ],
+      "why": "The architecture-approval gate halted the run before feature-dev because a human must approve a high-impact decision (#4098/#4222). NOT a failure. The sentinel is the human-readable ARCHITECTURE_APPROVAL_REQUIRED_MARKER text rather than a bracketed token — it is already load-bearing in failureComment.ts and ConcurrentPipelineManager.ts — so that is what the first clause matches, lowercased."
+    },
+    {
+      "id": "github-quota-low",
+      "kind": "github_quota_low",
+      "signal": true,
+      "clauses": [
+        [
+          "github-quota-low"
+        ],
+        [
+          "github_quota_low"
+        ],
+        [
+          "pipeline-start-failure",
+          "github api quota too low"
+        ]
+      ],
+      "why": "GitHub REST/GraphQL quota too low at the pipeline-start preflight (#3896). Environmental and transient: the bucket resets within the hour. Emitted by HeadlessOrchestrator.preCheckAuth as `[pipeline-start-failure] github-quota-low`; the legacy descriptive wording is kept as a conjunction so it cannot claim an unrelated pipeline-start failure."
+    },
+    {
+      "id": "github-network-outage",
+      "kind": "github_network_outage",
+      "signal": true,
+      "clauses": [
+        [
+          "github-network-outage"
+        ],
+        [
+          "github_network_outage"
+        ]
+      ],
+      "why": "api.github.com unreachable at the pipeline-start preflight (#4002) — the connectivity sibling of github-quota-low. Above the generic rules so the `pipeline-start-failure` wrapper does not bucket it elsewhere."
+    },
+    {
+      "id": "pr-merge-unmerged",
+      "kind": "pr_merge_unmerged",
+      "signal": false,
+      "clauses": [
+        [
+          "[pr-merge-unmerged"
+        ],
+        [
+          "pr_merge_unmerged"
+        ],
+        [
+          "pr-merge reported success",
+          "is not merged"
+        ]
+      ],
+      "why": "pr-merge completed but the PR is not merged (#3691). HeadlessOrchestrator.diagnosePrMergeBlocker classifies the blocker and stamps `[pr-merge-unmerged:\u003cblocker\u003e]`, so the prefix is matched without its closing bracket. The post-merge verification gate is a SECOND route to the same state and phrases it without the stamp; pre-fix that route fell through to the generic failure path and every CI-blocked merge incremented LifetimeIssueFailures until the cap tripped the whole scheduler. Above premature-turn-end, which would otherwise claim the same no-op shape and describe the wrong problem."
+    },
+    {
+      "id": "containment-breach",
+      "kind": "containment_breach",
+      "signal": false,
+      "clauses": [
+        [
+          "[stage:worktree-containment]"
+        ],
+        [
+          "containment_breach"
+        ]
+      ],
+      "why": "Write-containment breach (#129, classified in #230), emitted by the TS worktreeContainment check as `[stage:worktree-containment]`. Above the stage-behaviour rules because a breaching stage usually ALSO exits 0 cleanly, and premature_turn_end would otherwise claim it."
+    },
+    {
+      "id": "dev-produced-no-changes",
+      "kind": "dev_produced_no_changes",
+      "signal": false,
+      "clauses": [
+        [
+          "[dev-produced-no-changes]"
+        ],
+        [
+          "dev_produced_no_changes"
+        ]
+      ],
+      "why": "A NARROWER premature turn end (#202), so it MUST be matched first: the scheduler wraps every KindNoOp gate reason into a `premature turn end:` string, which means the generic rule below would swallow this kind on every text-classified path and only the gate path would ever report it."
+    },
+    {
+      "id": "dev-handoff-missing",
+      "kind": "dev_handoff_missing",
+      "signal": false,
+      "clauses": [
+        [
+          "[dev-handoff-missing]"
+        ],
+        [
+          "dev_handoff_missing"
+        ]
+      ],
+      "why": "The inverse kind (#223), matched here for the same reason and with the same urgency: its gate reason is embedded in exactly the `premature turn end:` wrapper on some paths. The distinction is what tells a triager whether there is anything on disk worth saving."
+    },
+    {
+      "id": "premature-turn-end",
+      "kind": "premature_turn_end",
+      "signal": false,
+      "clauses": [
+        [
+          "premature turn end"
+        ],
+        [
+          "premature_turn_end"
+        ],
+        [
+          "exited 0 but did not write expected output context"
+        ]
+      ],
+      "why": "The stage exited 0 but produced no state change (#74) — the agent ended its turn on a promise. Two structural producers: the gate hook stamps `premature turn end:` on a gates.KindNoOp result, and validateStageOutput (#2870) emits `exited 0 but did not write expected output context` when the context file is missing entirely. That check only runs on exit-0 paths, so the phrase always means this failure mode (it previously bucketed into validation_error)."
+    },
+    {
+      "id": "worktree-uncommitted",
+      "kind": "worktree_uncommitted",
+      "signal": false,
+      "clauses": [
+        [
+          "worktree_uncommitted"
+        ],
+        [
+          "stop_hook_uncommitted"
+        ]
+      ],
+      "why": "The scheduler auto-recovered uncommitted work into a recovery commit (#3542) — a failure whose WORK SURVIVED. `stop_hook_uncommitted` is the forward-compatible alias for a stop-hook kill marker carrying the same meaning. Above the generic exit/stall rules so they cannot shadow it."
+    },
+    {
+      "id": "budget-ceiling-hit",
+      "kind": "budget_ceiling_hit",
+      "signal": false,
+      "clauses": [
+        [
+          "budget_ceiling_hit"
+        ],
+        [
+          "pipeline budget ceiling"
+        ]
+      ],
+      "why": "USD-based pipeline budget ceiling kill (#3542). MUST precede the token-based budget rule: `PIPELINE BUDGET CEILING` lowercased CONTAINS `budget ceiling`, so the later rule would otherwise claim it and report the wrong ceiling. The SDK mirror had these two the wrong way round while carrying a comment saying they must be in this order (#306)."
+    },
+    {
+      "id": "runaway-progress",
+      "kind": "runaway_progress",
+      "signal": false,
+      "clauses": [
+        [
+          "[runaway-progress-exceeded]"
+        ],
+        [
+          "runaway-progress-exceeded"
+        ],
+        [
+          "exitSignalSource",
+          "runaway-progress"
+        ]
+      ],
+      "why": "Progress-based runaway kill (#3783). Recovers like a stall (backoff, no lifetime-cap increment) but keeps its own kind so the monitor's false-positive rate stays measurable. Above the runaway-ceiling and stall rules."
+    },
+    {
+      "id": "runaway-ceiling",
+      "kind": "stall_kill",
+      "signal": false,
+      "clauses": [
+        [
+          "[runaway-ceiling-exceeded]"
+        ],
+        [
+          "runaway-ceiling-exceeded"
+        ],
+        [
+          "runaway cost ceiling exceeded"
+        ]
+      ],
+      "why": "Runaway-ceiling kill (#3508) — a safety rail, not the operator's spending decision, so it recovers like a stall rather than a budget stop. MUST precede cost-cap-exceeded so the two ceilings do not swap recoveries."
+    },
+    {
+      "id": "cost-cap-exceeded",
+      "kind": "budget_exceeded",
+      "signal": false,
+      "clauses": [
+        [
+          "[cost-cap-exceeded]"
+        ],
+        [
+          "cost-cap-exceeded"
+        ],
+        [
+          "cost cap exceeded"
+        ]
+      ],
+      "why": "A cost-cap kill is budget_exceeded even though the underlying TS kill path is stall-shaped (an idle SIGTERM on a polling tick), so it must be claimed before the stall rules — otherwise a run that deliberately spent its cap is retried as a transient stall and spends it again (#3002/#3207)."
+    },
+    {
+      "id": "zombie-run",
+      "kind": "stall_kill",
+      "signal": false,
+      "clauses": [
+        [
+          "stale-slot-orphan"
+        ],
+        [
+          "stage-no-output-timeout"
+        ]
+      ],
+      "why": "Zombie-run guards (#252). `[stale-slot-orphan]` is written by StaleSlotRecoveryService when a reload sweeps a run whose process died without its close handler; `[stage-no-output-timeout]` is the first-output watchdog killing a stage that never produced any session output. Both are transient-stall shaped: retry with backoff is the right recovery and neither should count against the lifetime failure cap."
+    },
+    {
+      "id": "stall-kill",
+      "kind": "stall_kill",
+      "signal": false,
+      "clauses": [
+        [
+          "[stall-killed]"
+        ],
+        [
+          "stall-killed"
+        ],
+        [
+          "stall kill threshold"
+        ],
+        [
+          "stalled and killed"
+        ],
+        [
+          "heartbeat stall"
+        ],
+        [
+          "exceeded stall idle threshold"
+        ],
+        [
+          "exceeded stage_hard_cap"
+        ],
+        [
+          "hard cap"
+        ]
+      ],
+      "why": "Stall-kill markers (#3207) as PipelineBridge writes them into the IPC stage result, plus the auto-mode wordings. All three real phrasings differ by a word, so a matcher written for one leaves the others unclassified — which is exactly what had happened to the SDK mirror, on the most common failure this machine produces (#306)."
+    },
+    {
+      "id": "budget-enforcer",
+      "kind": "budget_exceeded",
+      "signal": false,
+      "clauses": [
+        [
+          "pipeline_budget_exceeded"
+        ],
+        [
+          "stage_budget_exceeded"
+        ],
+        [
+          "budget exceeded"
+        ],
+        [
+          "budget ceiling"
+        ]
+      ],
+      "why": "Budget-enforcer reasons (internal/orchestrator/budget_enforcer.go BudgetDecision.Reason). `budget ceiling` is intentionally here as well as in budget-ceiling-hit above: this rule is reachable only for text the USD-ceiling rule did not claim."
+    },
+    {
+      "id": "validation-error",
+      "kind": "validation_error",
+      "signal": false,
+      "clauses": [
+        [
+          "schema validation"
+        ],
+        [
+          "invalid json"
+        ],
+        [
+          "not valid json"
+        ],
+        [
+          "unparseable json"
+        ],
+        [
+          "missing prerequisite"
+        ]
+      ],
+      "why": "Schema / output-validation failures. The `did not write expected output context` phrase deliberately lives in premature-turn-end instead: its only producer, validateStageOutput, runs exclusively on exit-0 paths."
+    },
+    {
+      "id": "adapter-auth-failed",
+      "kind": "adapter_auth_failed",
+      "signal": true,
+      "clauses": [
+        [
+          "[adapter-auth-failed]"
+        ],
+        [
+          "adapter-auth-failed"
+        ],
+        [
+          "adapter_auth_failed"
+        ]
+      ],
+      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306)."
+    },
+    {
+      "id": "no-changes-produced",
+      "kind": "no_changes_produced",
+      "signal": false,
+      "clauses": [
+        [
+          "[no-changes-produced]"
+        ],
+        [
+          "no_changes_produced"
+        ]
+      ],
+      "why": "pr-create's deterministic fallback confirmed the feature branch has zero commits ahead of base (#317) — genuinely nothing to open a PR for. Deliberately NOT matched on the bare phrase `no commits ahead of`: that phrase also appears in feature-validate's unrelated lost-implementation check, which must keep its organic classification."
+    },
+    {
+      "id": "validation-failed",
+      "kind": "validation_failed",
+      "signal": false,
+      "clauses": [
+        [
+          "[validation-failed]"
+        ],
+        [
+          "validation_failed"
+        ]
+      ],
+      "why": "feature-validate exited 0 but wrote validation_status=\"failed\" and left the code uncommitted for retry (#326) — a real organic implementation failure caught by the pipeline's own gate, not a process death."
+    },
+    {
+      "id": "validation-inconclusive",
+      "kind": "validation_inconclusive",
+      "signal": false,
+      "clauses": [
+        [
+          "[validation-inconclusive]"
+        ],
+        [
+          "validation_inconclusive"
+        ]
+      ],
+      "why": "feature-validate ran zero tests (#221): the gate learned nothing, usually from an environmental misconfiguration. Kept adjacent to validation-failed because the two validation-status outcomes make opposite claims about the code."
+    },
+    {
+      "id": "branch-forked",
+      "kind": "branch_forked",
+      "signal": false,
+      "clauses": [
+        [
+          "[branch-forked]"
+        ],
+        [
+          "branch_forked"
+        ],
+        [
+          "non-fast-forward"
+        ],
+        [
+          "push rejected",
+          "fetch first"
+        ]
+      ],
+      "why": "The branch forked from its remote (#163). Two entry points, one kind: the Go scheduler's pre-stage fork preflight stamps `[branch-forked]` before the stage spends a token, and a fork that first surfaces at push time is recognised by the skills' `PUSH REJECTED: non-fast-forward` sentence. `non-fast-forward` is enough alone — git emits it for exactly this condition — but `rejected` is not, so it must co-occur with a push. Above the crash fallback, whose `exit ` substring made every retry look like a fresh crash instead of the same unrecoverable fork."
+    },
+    {
+      "id": "commit-orphaned",
+      "kind": "commit_orphaned",
+      "signal": false,
+      "clauses": [
+        [
+          "[commit-orphaned]"
+        ],
+        [
+          "commit_orphaned"
+        ]
+      ],
+      "why": "A commit stranded on the wrong branch after a SIGKILL bypassed pre_push.go's restore-defer (#266). Emitted by feature-validate's branch-identity guard when HEAD is not on the issue's expected feature branch and self-heal cannot recover it. Unrecoverable by retry."
+    },
+    {
+      "id": "permission-denied",
+      "kind": "permission_denied",
+      "signal": false,
+      "clauses": [
+        [
+          "[permission-denied]"
+        ],
+        [
+          "permission_denied"
+        ],
+        [
+          "user rejected tool use"
+        ],
+        [
+          "tool_use_result",
+          "rejected"
+        ]
+      ],
+      "why": "Harness tool-call denial (#289) — most commonly a stage reaching for a forbidden foreground `sleep` wait loop, surfaced as `tool_use_result: \"User rejected tool use\"`. A denial is the harness saying \"not that way\", not a defect; above the crash fallback, whose `exit ` substring turned one rejected tool call into a permanently killed run and a fleet-wide pause. Deliberately NOT matched on the bare phrase `permission denied`: a filesystem `EACCES: permission denied` is an infrastructure fault with the opposite recovery."
+    },
+    {
+      "id": "subagent-crash",
+      "kind": "subagent_crash",
+      "signal": false,
+      "clauses": [
+        [
+          "subagent crash"
+        ],
+        [
+          "exit "
+        ],
+        [
+          "killed by signal"
+        ]
+      ],
+      "why": "Process death / non-zero exit fallback. Everything specific is matched above because scheduler.SetStageError prefixes almost every stage error with `exit N: `, so this rule can claim any string that reaches it — a rule appended after it would be dead code."
+    }
+  ],
+  "signal_extensions": [
+    {
+      "id": "session-usage-limit-quota",
+      "kind": "rate_limit_quota_exhausted",
+      "clauses": [
+        [
+          "~session limit"
+        ],
+        [
+          "~usage limit"
+        ]
+      ],
+      "why": "THE ONE DELIBERATE RECORD-VS-REACTION DIVERGENCE, restored as data (#3792). A bare Anthropic session/usage-limit line — `You've hit your usage limit · resets 3pm`, `Claude AI usage limit reached|\u003cunix\u003e`, codex's `usage limit reached for this account` — is an environmental quota window, but no RULE above classifies it: the two `usage limit`/`weekly limit` clauses belong to model-unavailable and are gated on a model actually being named, and with no model named the record ladder answers nothing. Go's NotifyComplete then falls back to subagent_crash, which increments LifetimeIssueFailures and feeds the cascade breaker for a window that clears on its own, instead of applyQuotaCooldownLocked + RecordNonFaultOutcome. skillRunner normalises this shape to `[rate-limit-quota-exhausted]` ONLY on the Claude stream-json result-envelope path, so the extension is live defense-in-depth for the plain-text/Codex paths (extractTailError) — which is exactly what ConcurrentPipelineManager's surviving raw-text halt condition says in place. Precedence: the pre-#306 extension ladder evaluated this at position 3, ahead of overloaded / github-network-outage / socket-drop / adapter-auth / architecture-approval; here every signal RULE outranks it instead. That narrowing only affects text carrying BOTH a signal marker and session/usage-limit wording — no producer emits that shape, and in every such case the old ladder's answer contradicted its own record, which is the split #306 removes. Where the record DOES classify the text (a usage limit that names a model → model_unavailable) the extension still fires, because the record ladder marks that rule non-signal: that pair is pinned by corpus rows with expected != expected_signal and is the whole reason this section is declared rather than implied. FIDELITY TO THE ORIGINAL REGEX, EXACTLY. The terms are `~`-prefixed because plain containment is strictly wider than `\\b…\\b` and would also claim `usage limits` / `usage limited` / `session limits` — a global quota cooldown for a validation failure or a GitHub-token message — and the boundary-negative-* corpus rows make deleting the `~` red rather than invisible. One thing is NARROWER than main: `\\s+` was one-or-more whitespace and a literal term is exactly one space, so `usage  limit` and a phrase split across lines (`usage\\nlimit`, which extractTailError produces when it joins the last three non-empty lines) no longer signal. That is disclosed here, in table.go's WordBoundaryRef doc and in docs/FAILURE_TAXONOMY.md, and pinned by boundary-negative-usage-limit-double-space; closing it means a whitespace-run term kind reproduced character-for-character in both interpreters."
+    }
+  ]
+};

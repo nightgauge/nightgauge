@@ -8,17 +8,55 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
+// testRepos are the repo slugs the attention tests raise against. They are
+// REGISTERED on the test server's resolver because attention.raise rejects a
+// repo this daemon has no configuration for (#305 review) — an unconfigured
+// (repo, issue) pair is an unbounded card-injection primitive.
+var testRepos = []string{"octocat/acme", "o/r"}
+
 // newAttentionTestServer builds a minimal Server backed by a real, store-wired
-// autonomous scheduler rooted at a temp workspace.
+// autonomous scheduler rooted at a temp workspace, with testRepos registered
+// and pointed at that same root.
 func newAttentionTestServer(t *testing.T) *Server {
 	t.Helper()
-	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), t.TempDir())
+	root := t.TempDir()
+	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), root)
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired")
 	}
-	return &Server{autonomousScheduler: as, writer: io.Discard}
+	resolver := NewClientResolver(nil, false)
+	for _, slug := range testRepos {
+		owner, name := splitSlug(slug)
+		resolver.RegisterRepo(owner, name, root)
+	}
+	s := &Server{
+		autonomousScheduler: as,
+		writer:              io.Discard,
+		workspaceRoot:       root,
+		resolver:            resolver,
+		activeRuntimes:      make(map[string]*state.RuntimeState),
+		methods:             make(map[string]Handler),
+	}
+	// Register the real method table so tests can drive the daemon through the
+	// SAME entry points a socket caller uses (#305 round-4 review). The
+	// budget-ceiling corroboration rules are about what
+	// `pipeline.notifyStageTransition` can and cannot establish, and a test that
+	// seeded `activeRuntimes` by hand asserted their premise instead of
+	// exercising it.
+	s.registerMethods()
+	return s
+}
+
+func splitSlug(slug string) (owner, name string) {
+	for i := 0; i < len(slug); i++ {
+		if slug[i] == '/' {
+			return slug[:i], slug[i+1:]
+		}
+	}
+	return "", slug
 }
 
 func TestAttentionIPCRoundTrip(t *testing.T) {
@@ -29,7 +67,7 @@ func TestAttentionIPCRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewID: %v", err)
 	}
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "roundtrip:1",
 		Kind:           attention.KindChoose,
@@ -97,7 +135,7 @@ func TestAttentionResolveRejectsUnknownOption(t *testing.T) {
 	s := newAttentionTestServer(t)
 	store := s.attentionStore()
 	id, _ := attention.NewID()
-	if _, err := store.Raise(attention.DecisionRequest{
+	if _, _, err := store.Raise(attention.DecisionRequest{
 		ID:             id,
 		IdempotencyKey: "reject:1",
 		Kind:           attention.KindApprove,

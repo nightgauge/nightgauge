@@ -93,6 +93,7 @@ var contractTestedMethods = map[string]bool{
 	"attention.list":        true,
 	"attention.resolve":     true,
 	"attention.acknowledge": true,
+	"attention.raise":       true,
 	"attention.mute":        true,
 	"attention.unmute":      true,
 	"attention.sweep":       true,
@@ -1210,6 +1211,17 @@ func TestContract_Attention(t *testing.T) {
 	t.Run("attention.acknowledge/registered", func(t *testing.T) {
 		id := h.sendRequest("attention.acknowledge", map[string]interface{}{"id": "dr_x"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.acknowledge")
+	})
+
+	// attention.raise is the run-scoped producer entry point (#305). With no
+	// autonomous scheduler attached the daemon has no attention store, so this
+	// returns an internal error — which is the point of the assertion: the
+	// method must EXIST. Before #305 it returned -32601.
+	t.Run("attention.raise/registered", func(t *testing.T) {
+		id := h.sendRequest("attention.raise", map[string]interface{}{
+			"producer": "abandoned-dispatch", "repo": "o/r", "issue": 1, "stage": "feature-dev",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.raise")
 	})
 
 	t.Run("attention.mute/registered", func(t *testing.T) {

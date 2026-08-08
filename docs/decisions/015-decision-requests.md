@@ -294,16 +294,37 @@ Surface {
   list(filter)     -> DecisionRequest[]     // open (and optionally recent) requests
   subscribe(onEvent) -> Disposable          // push: created | updated | resolved | expired
                                             //       | refreshed | auto_resolved (M)
-  resolve(id, option_id, actor, steer_text?) -> Result  // the ONLY mutation
+  resolve(id, option_id, actor, steer_text?) -> Result  // the LIFECYCLE mutation
+  raise(producer, scope)                    -> Outcome  // OPTIONAL: report a condition (#305)
 }
 ```
 
-`resolve` is the sole write path and always terminates at the single Go writer
-(Decision C). Binding per surface:
+**TWO mutations, not one — amended by #305.** `resolve` is still the only way
+to move a request through its lifecycle, and it still terminates at the single
+Go writer (Decision C). What #305 adds is the ability for a surface to report
+that a CONDITION happened, which creates a record. The original contract had
+exactly one mutation because every producer lived in-process; a surface that
+runs the pipeline itself (the extension operating mode) is also a producer, and
+without `raise` a headless run could observe a budget-ceiling stop and produce
+no card by construction.
+
+The zero-refactor property survives because `raise` is deliberately **not** the
+producer API: it takes a closed producer id plus typed scalars, never a
+`DecisionRequest`, never options, never a verb. The daemon builds the card with
+the same in-process builder the Go producer uses. A surface therefore still
+cannot DESCRIBE a card — it can only say which of a fixed set of conditions it
+saw. `raise` is optional: a surface that only displays and resolves (Discord,
+the dashboard) implements the first three and is unaffected. See §N for the
+security boundary this shape draws and what it does and does not guarantee.
+
+Binding per surface:
 
 - **VSCode extension (IPC).** New `//ipc:method` registrations on
   `internal/ipc/server.go` (structs in `internal/ipc/protocol.go`):
-  `attention.list`, `attention.resolve`, and `attention.acknowledge`; live
+  `attention.list`, `attention.resolve`, `attention.acknowledge`, and — added
+  by #305 — `attention.raise`, the surface's binding for the optional `raise`
+  above (`attention.mute`/`attention.unmute`/`attention.sweep` are operator
+  affordances over the same store, not part of the Surface contract); live
   updates ride the existing Go→TS event push (the newline-delimited
   `on("attention.event")` channel `IpcClientBase` already dispatches, the same
   channel that streams pipeline progress). They enter the typed client via the
@@ -380,10 +401,23 @@ Surface {
 
 A **producer** is any component that raises a DecisionRequest. The contract:
 _at the trigger point, instead of (or in addition to) a one-way notify, call
-`attention.raise(request)` with a stable `idempotency_key`, a declared
-`default_action`/`expires_at`, and options bound to registry verbs._ Producers
-never write `.nightgauge/attention/` directly — `attention.raise` routes to the
+the in-process `Store.Raise(request)` with a stable `idempotency_key`, a
+declared `default_action`/`expires_at`, and options bound to registry verbs._
+Producers never write `.nightgauge/attention/` directly — `Store.Raise` is the
 single writer.
+
+> **`Store.Raise` and the `attention.raise` IPC verb are different things, and
+> the difference is the security boundary (#305).** The sentence above is the
+> IN-PROCESS producer API: a Go component that already runs inside the single
+> writer hands it a whole `DecisionRequest`, options and all, because it IS the
+> pipeline. `attention.raise` is the **IPC verb a SURFACE calls** (§E), and it
+> deliberately refuses that signature — a closed producer id plus typed
+> scalars, no request, no options, no verbs, no monetary figures. A card's
+> options are EXECUTED by the daemon on resolve, so a wire-level API shaped
+> like the producer API would let any caller mint a legitimate-looking card
+> offering an arbitrary registered operation. When you are implementing a NEW
+> PRODUCER, the paragraph above applies. When you are implementing a NEW
+> SURFACE, §E and §N apply. The two share a name and nothing else.
 
 | #   | Producer                   | Trigger point (file · condition)                                                                                                                               | kind            | Options → verbs                                                                                | Default / expiry                    |
 | --- | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------- |
@@ -396,11 +430,47 @@ single writer.
 | 7   | Definitive auth failure    | `identity_preflight.go` `CheckIdentity` (fail-closed) / taxonomy `CatPermission` (401/403); [adapter doctor](../ADAPTER_DOCTOR.md)                             | `provide_input` | login-and-retry (guidance + `autonomous.clearIssueFailures`) · halt                            | halt · 12h                          |
 | 8   | Watchdog / health findings | `autonomous_stuck_epic.go` `surfaceStuckEpics`; TS stall detector → `stall_recovery.go` `ClassifyStallSignal`; [health](../HEALTH_MONITORING.md) · stage quiet | `choose`        | wait · kill+retry (`pipeline.stop` + `queue.add`) · escalate-model (`run.retryWithEscalation`) | wait (bounded), then escalate · 30m |
 | 11  | Unexercised deliverable    | `gates/feature_validate_gate.go` `markUnexercisedDeliverable` → `scheduler.go` post-gate · run introduced test files no executed tier could run (#152)         | `approve`       | acknowledged (noop) · will-verify (noop)                                                       | noop · 72h                          |
+| 12  | Abandoned dispatch (Stop)  | `ConcurrentPipelineManager.forceClearStuckSlots` via `attention.raise` · a slot the abort deadline gave up on after an operator Stop (#305/#307)               | `approve`       | acknowledged (noop) · will-inspect (noop)                                                      | noop · 48h                          |
 
 Each producer replaces a dead-end that is today silent or one-way. Producers
 2 and 8 are the direct fixes for the motivating incidents (the invisible
 owner-action skip; the 19-minute quiet stage). Producers 4 and 8 are the ones
 that require the two E1 verbs from Decision B.
+
+**Producer 12 is extension-only, `fyi`, and deliberately offers no remedy.**
+There is no Go force-clear funnel — the scheduler's terminal defer runs in the
+same goroutine as its stage loop, so nothing else can declare a run abandoned
+while that defer is still owed. On the extension path,
+`forceClearStuckSlots` is reached only from `abortAll`'s abort deadline, and
+`abortAll` only from Stop / Abort / `deactivate()`, so **every** card it raises
+follows an operator's own Stop. The card carries a closed `situation` enum —
+`reservation-never-started` (no stage ran, no worktree work to rescue, nothing
+stale), `slot-worktree-preserved` (the worktree may hold uncommitted work and
+Go-side run state may be stale), or `claim-taken-then-wedged` (the one arm
+where something is still held: the scheduler seat was never released) — and the
+builder emits per-situation prose so each body states only what is true for its
+arm. The enum selects prose only (key, kind, severity, options, and expiry are
+identical across arms); an unknown value is rejected, never defaulted. A
+`blocking_run` `unblock` with a "Retry" primary (its first cut) told the
+operator to undo their own Stop and routed to alerting per Decision I while
+nothing was blocked.
+
+Producer numbers are global across this section and its
+[repo-scoped companion](#producers-9-and-10): 9 and 10 are repo/sweep-scoped, 11
+is unexercised deliverable, 12 is above. Reusing a number splits one identity
+across two producers depending on which file a reader opens.
+
+**The tables above are the whole registry of NUMBERS, not of producers.**
+`internal/orchestrator/attention_wiring.go` implements several producers these
+tables do not enumerate (the terminal-failure halt, the architecture-approval
+gate, the branch-fork probe, the unverified-deliverable streak). Their section
+headers are labelled `Producer (unnumbered): <name>` — a producer the registry
+does not number carries no number rather than a plausible-looking one, because
+a fabricated number is exactly the split-identity this invariant forbids.
+`TestProducerLabelsMatchTheADRNumbering` (internal/orchestrator) reads this
+file and fails on either violation: a number that is not in a table above, or
+one used twice. Round 3 declared this invariant in prose and left four headers
+breaking it, which is why it is now mechanical.
 
 ### G — Free-text steer becomes pinned next-stage context
 
@@ -754,6 +824,84 @@ same blocked PR seen from a run and from a repo scan is one fact, and the
 operator gets one card. Above a configured cap, producer 10 collapses its
 individual cards into one aggregate — thirty stale green PRs is a backlog
 problem, not thirty decisions.
+
+---
+
+## Amendment: the `attention.raise` trust boundary (#305, 2026-08)
+
+### N — What the raise verb guarantees, and inside what
+
+`attention.raise` (§E) is the first IPC verb whose effect an operator can turn
+into a **privileged write** with one click: the budget-ceiling card's primary
+option persists a runtime ceiling override that
+`orchestrator.PipelineBudgetCeilingUSD` folds in as `max(config, override)`.
+That makes the boundary worth stating exactly, because two rounds of review
+found it stated too broadly.
+
+**What the daemon socket trusts (pre-existing, not introduced here).** The
+workspace-scoped Unix socket (§E, #263) is a **trusted-operator channel**. Every
+verb that was already on it — `pipeline.notifyStageTransition`, `queue.*`,
+`autonomous.*`, `workspace.setRoot` — accepts caller data unauthenticated, and
+several mutate real state. A hostile local process is out of scope for the
+socket as a whole; putting an identity on it is the **#370 identity rework**,
+tracked there rather than here. Reviews of the form "a socket caller can poison
+a bookkeeping verb" describe that pre-existing surface.
+
+**What `attention.raise` guarantees inside that model.** Three properties, none
+of which depend on the socket being authenticated:
+
+1. **A card's remedy VALUE arguments derive only from daemon-booked state.** No
+   monetary field exists on `AttentionRaiseParams`. The enforced ceiling is read
+   in-process (`PipelineBudgetCeilingUSD`, the same read the scheduler does) and
+   the spend comes from the run's own recorded `RuntimeState`. A caller reports
+   that a condition happened; it cannot say what the condition cost. Card
+   IDENTITY fields (repo, issue, PR number) are caller-supplied addressing and
+   DO flow into remedy arguments as the target key (e.g.
+   `autonomous.clearIssueFailures` receives `repo#issue` from the raise): the
+   repo is bounded by the workspace registry check, the issue/PR numbers are
+   not corroborated against existence. That residual — a remedy addressed to an
+   issue the daemon has never seen — is accepted within the trust model and
+   listed under residual exposure below.
+2. **The raise path cannot MINT or INFLATE the state it is corroborated
+   against.** This is the property round 3 missed: deriving the number
+   "daemon-side" is worthless if one call can create the daemon-side record.
+   `pipeline.notifyStageTransition` creates a runtime entry when none exists, so
+   a single `{status:"complete", costUsd:1e6}` minted a $1e6 run and the next
+   raise built a $1.5M `budget.raiseCeiling` option from it. Corroboration now
+   reads **only records produced by the normal run flow**: the record's repo
+   must EQUAL the raise's repo (an empty one corroborates nothing — the same
+   call #307 made when it refused to persist an unattributed runtime), and the
+   figure is summed over completed stages the daemon watched BEGIN, identified
+   by the `StartedAt` stamp only a `running` transition's `BeginStage` writes.
+   A created-on-miss terminal transition books a stage with a zero `StartedAt`
+   and corroborates nothing. When corroboration fails the card is still raised —
+   silence would reintroduce the gap #305 closes — but WITHOUT the
+   raise-and-retry option.
+3. **A raise can never take a remedy off an open card.** One idempotency key
+   carries both the corroborated and uncorroborated budget-ceiling shapes, and
+   the Go scheduler and the IPC verb dedup onto the same record, so
+   last-writer-wins let a weaker observation silently strip a working
+   `budget.raiseCeiling` option off a card the scheduler had raised.
+   `Store.Raise` now keeps the stronger record and reports `refreshed`.
+
+Two supporting constraints: the producer id is a **closed allowlist**, so the
+verb can never offer an operation its producers do not declare; and the repo
+must resolve in the daemon's own repo registry, which bounds card injection to
+repos this workspace runs.
+
+**Residual exposure, stated rather than implied.** A caller willing to spend two
+calls (`running`, then `complete`) can still book a stage and be corroborated
+for its amount. That is the telemetry-forgery surface of
+`notifyStageTransition` itself — present before #305, unchanged by it, and
+closed by giving the socket an identity (#370), not by the raise verb. The
+offer's MAGNITUDE is likewise still unbounded: `ProposedCeilingUSD` returns
+`max(enforced, spent) * 1.5` with no cap, so a large corroborated spend yields a
+proportionally large proposal. Clamping the offer against the CONFIGURED
+ceiling (never against `PipelineBudgetCeilingUSD`, which already folds the
+override in and would therefore ratchet) is the next tightening and is not done
+here. Issue numbers are validated as positive but not as existing, so the
+per-`(producer, repo, issue)` dedup key is still unbounded in the issue
+dimension.
 
 ## Alternatives considered
 

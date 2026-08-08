@@ -30,6 +30,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 import { BinaryResolver } from "./BinaryResolver";
 import { IpcClient } from "./IpcClient";
+import type { AttentionRaiseCheck } from "./IpcClientBase";
 import {
   isGithubRateLimitError,
   noteRateLimitOk,
@@ -544,8 +545,8 @@ const STAGE_STATUS_VALUES: Partial<Record<PipelineStage, ProjectStatusValue>> = 
  * Build the synthetic Error used when a stage is forcibly terminated by the
  * idle-stall watchdog. Preserves any upstream kill marker text (e.g.
  * `[rate-limit-quota-exhausted]` from #3386) that arrived on the original
- * skillRunner error so downstream classifiers (bootstrap/services.ts
- * terminalFailureKind regex, Go ClassifyTerminalKind fallback) can still
+ * skillRunner error so downstream classifiers (the extension's signal ladder in
+ * services/terminalKindSignal.ts, Go's ClassifyTerminalKind fallback) can still
  * match. See Issue #3442 — pre-fix this code discarded `result.error` and
  * synthesized a generic message, which broke the global quota cooldown
  * (#3434) by routing every quota-exhausted kill into the GENERIC failure
@@ -628,6 +629,79 @@ export function describeMergeBlocker(
     return `blocked by required review or branch protection (mergeStateStatus=${mergeStateStatus}).`;
   }
   return `blocked by non-mergeable state (mergeable=${mergeable}, mergeStateStatus=${mergeStateStatus}).`;
+}
+
+/**
+ * The raw `gh pr view` projection for a PR the deterministic merge declined
+ * (#305). Sent verbatim to `attention.raise`, where the daemon runs the same
+ * `stages.Decide()` matrix the Go pr-merge path uses.
+ *
+ * Structured, not prose, deliberately: `describeMergeBlocker` renders a
+ * human-facing sentence and the Go path renders a machine reason code. Sending
+ * the sentence would put a visibly different string on the card depending on
+ * which path saw the block, with nothing failing.
+ *
+ * @internal Exported for testing.
+ */
+export interface MergeBlockerSnapshot {
+  prState: string;
+  mergeable: string;
+  mergeStateStatus: string;
+  /** "" means the branch ruleset requires no reviewers — not "unknown". */
+  reviewDecision: string;
+  /**
+   * `conclusion` is "" for a check that has NOT concluded — GitHub returns null
+   * for an in-flight run, and "" is what the daemon's
+   * `stages.MergeBlockedByPendingCI` reads as "CI is still going". Never
+   * substitute a placeholder here: the payload would lose the only signal that
+   * distinguishes "wait, this clears itself" from "a human must fix this".
+   *
+   * Typed as the wire row (`AttentionRaiseCheck`) rather than an inline shape:
+   * the generated client's signature is `checks?: unknown[]` (the codegen only
+   * imports RESULT types), so this declaration is where the contract is
+   * actually enforced. Leaving it structural made `AttentionRaiseCheck` a
+   * type nothing referenced, which read as an enforced contract and was not.
+   */
+  checks: AttentionRaiseCheck[];
+}
+
+/**
+ * One run-scoped Action Center raise from the extension path (#305).
+ *
+ * The producer is a CLOSED union mirroring the daemon's allowlist, and there is
+ * deliberately no place here for an option, a verb, or an args map: card
+ * options are executed by the daemon on resolve, so a surface that could
+ * describe them could mint a legitimate-looking card offering an arbitrary
+ * operation on an arbitrary issue. The extension reports a CONDITION; the
+ * daemon decides what the card says and what it offers.
+ *
+ * @internal Exported for testing.
+ */
+export interface RunScopedAttentionRaise {
+  producer: "budget-ceiling" | "branch-protection" | "abandoned-dispatch";
+  issueNumber: number;
+  /**
+   * budget-ceiling carries NO fields at all, and that is the security boundary
+   * rather than an omission (fixed in review). The card's primary option is
+   * `budget.raiseCeiling`, whose resolution persists a workspace-global runtime
+   * ceiling override; while the spend and the enforced ceiling were params, any
+   * caller on the workspace socket could choose the number that override would
+   * be written with. Both are now read daemon-side — the ceiling in-process via
+   * `orchestrator.PipelineBudgetCeilingUSD`, the spend from the run's own
+   * recorded RuntimeState. The extension says the condition happened; it does
+   * not get to say what it cost.
+   */
+
+  /** branch-protection: the blocked PR plus the raw `gh pr view` projection.
+   * The daemon classifies with stages.Decide; prose never crosses the wire. */
+  pr?: number;
+  prState?: string;
+  mergeable?: string;
+  mergeStateStatus?: string;
+  reviewDecision?: string;
+  checks?: AttentionRaiseCheck[];
+  /** abandoned-dispatch / branch-protection: the last stage observed. */
+  stage?: string;
 }
 
 /**
@@ -1040,6 +1114,25 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private mainRepoRoot: string | undefined;
   /**
+   * Filesystem root of the repo THIS RUN targets (#305 review).
+   *
+   * Distinct from {@link mainRepoRoot}, which is the RUNNER's root: the slot
+   * factory seeds it once from `resolveAgentRunnerRoot`, so every slot shares
+   * it even when a cross-repo item runs out of a sibling repo's worktree. The
+   * budget-ceiling remedy needs the other one. `budget.raiseCeiling` persists
+   * `.nightgauge/pipeline/budget-override.json` under the CARD's repo root
+   * (`Server.repoRoot(repo)`, the same per-repo registry that scopes
+   * runtime-{N}.json), so a run that reads its ceiling from anywhere else — the
+   * runner root, or `workspaceFolders[0]`, which is what the read side used
+   * before this — silently ignores the raise the operator just clicked and
+   * stops on the same ceiling again.
+   *
+   * Set by `ConcurrentPipelineManager.startSlotInner` from the slot's own
+   * `WorktreeManager.getRepoRoot()`. Unset on the interactive path, where
+   * {@link getRunRepoRoot} falls back to the persistent root.
+   */
+  private runRepoRoot: string | undefined;
+  /**
    * Worktree lifecycle manager for the completion-funnel cleanup call (#106).
    * Lazily constructed against getPersistentRoot() the first time it's needed
    * — mainRepoRoot is not guaranteed set at HeadlessOrchestrator construction
@@ -1201,6 +1294,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   setMainRepoRoot(repoRoot: string): void {
     this.mainRepoRoot = repoRoot;
+  }
+
+  /**
+   * Set the filesystem root of the repo THIS RUN targets. @see runRepoRoot
+   */
+  setRunRepoRoot(repoRoot: string): void {
+    this.runRepoRoot = repoRoot;
   }
 
   /**
@@ -1403,12 +1503,124 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Read THIS issue's run id from run-state.json, or "" when there is none.
+   *
+   * Deliberately read here rather than resolved daemon-side from the runtime
+   * registry: that registry is keyed by bare issue number today, and adding a
+   * reader would both give #370 one more site to re-key and mis-stamp the card
+   * when a re-dispatch for the same issue is already in flight. An empty run id
+   * is a handled case — the card simply carries no trace back-reference.
+   *
+   * GUARDED ON issue_number, exactly as this class's sibling reader of the same
+   * file does (`readRecoveryRunStateView`) — the codebase already treats a
+   * mismatched run-state.json as a live risk on this path. `getWorkingDirectory()`
+   * falls back to the first workspace folder when there is no worktree override,
+   * so a non-worktree run for #42 executing at a root where #37's run-state.json
+   * still sits would otherwise stamp #42's card with #37's run_id and trace_ref,
+   * and `nightgauge trace show` on that card would resolve to an unrelated run.
+   * A fabricated identity in the audit trail is worse than an honest empty gap —
+   * the same reasoning the force-clear arm applies when it declines to synthesise
+   * a run id.
+   */
+  private readCurrentRunId(issueNumber: number): string {
+    try {
+      const runStatePath = path.join(
+        this.getWorkingDirectory(),
+        ".nightgauge",
+        "pipeline",
+        "run-state.json"
+      );
+      const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
+        run_id?: string;
+        issue_number?: number;
+      };
+      if (parsed.issue_number !== undefined && parsed.issue_number !== issueNumber) {
+        return "";
+      }
+      return parsed.run_id ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Raise a RUN-SCOPED Action Center card for a condition this run just hit
+   * (#305).
+   *
+   * The extension operating mode could not do this at all before: every
+   * run-scoped producer hung off the Go scheduler, so a headless run — the
+   * operating mode for the overwhelming majority of dispatches — detected these
+   * conditions, logged them, and dropped them. `attention.raise` takes a CLOSED
+   * producer id plus typed scalars; the daemon builds the card with the same
+   * builders the Go scheduler uses and writes it through the same single store,
+   * so dedup, fingerprint semantics, and resolve/verb execution are inherited
+   * rather than reimplemented here.
+   *
+   * FAIL-OPEN, unconditionally. Every existing raise path is fail-open by
+   * contract (orchestrator.raiseThrough logs and returns), and this one crosses
+   * an IPC boundary that adds failure modes the in-process path never had — no
+   * daemon, request timeout, store unconfigured. A throw from here would turn
+   * an FYI into a run-killer.
+   */
+  private async raiseRunScopedAttention(params: RunScopedAttentionRaise): Promise<void> {
+    try {
+      const repo = await this.resolveRunRepoSlug();
+      if (!repo) {
+        // No resolvable repo identity is a legitimate local state, not a
+        // failure to report — the same stance attention.sweep takes.
+        this.logger.debug?.("attention.raise skipped: no resolvable repo slug", {
+          producer: params.producer,
+          issueNumber: params.issueNumber,
+        });
+        return;
+      }
+      const result = await IpcClient.getInstance().attentionRaise(
+        params.producer,
+        repo,
+        params.issueNumber,
+        this.readCurrentRunId(params.issueNumber),
+        params.pr,
+        params.prState,
+        params.mergeable,
+        params.mergeStateStatus,
+        params.reviewDecision,
+        params.checks,
+        params.stage
+      );
+      this.logger.info("Action Center card raised", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        outcome: result.outcome,
+        requestId: result.id,
+      });
+    } catch (err) {
+      this.logger.warn("attention.raise failed (fail-open)", {
+        producer: params.producer,
+        issueNumber: params.issueNumber,
+        err,
+      });
+    }
+  }
+
+  /**
    * Get the root directory for persistent data that must survive worktree
    * cleanup. Returns mainRepoRoot if set, otherwise falls back to
    * getWorkingDirectory().
    */
   private getPersistentRoot(): string {
     return this.mainRepoRoot ?? this.getWorkingDirectory();
+  }
+
+  /**
+   * Root of the repo THIS RUN targets — the one whose
+   * `.nightgauge/pipeline/budget-override.json` the daemon writes when the
+   * operator resolves a budget-ceiling card. @see runRepoRoot
+   *
+   * Falls back to the persistent root (interactive path, and any slot started
+   * before the pin), which is the same repo in a single-repo workspace.
+   */
+  private getRunRepoRoot(): string {
+    return this.runRepoRoot ?? this.getPersistentRoot();
   }
 
   /**
@@ -1969,6 +2181,34 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // answer WHY the expensive path was needed (Issue #297).
         if (blockerReason) {
           this.stageExecutionPaths.set("pr-merge", { path: "llm", puntReason: blockerReason });
+        }
+        // #305: a branch-protection / required-check / review block is a
+        // human-needed dead end no retry can clear — the Go scheduler has
+        // carded it since ADR 015 §F #6, and until now the extension path
+        // recorded it as punt telemetry and nothing else. The daemon decides
+        // whether this particular block IS branch protection and stays silent
+        // if not.
+        //
+        // The commonest not-applicable case is in-flight CI. This fallback
+        // takes ONE `gh pr view` sample with no CI wait (the EC budget above is
+        // eventual-consistency, not a CI wait), and pr-merge runs right after
+        // pr-create, so on a repo whose CI takes minutes that sample is
+        // routinely BLOCKED/UNSTABLE with checks still queued. The daemon gates
+        // on `stages.MergeBlockedByPendingCI` — the same predicate the Go
+        // runner uses before its bounded CI wait — and returns `not_applicable`
+        // for exactly that shape. Which is why `checks[].conclusion` must reach
+        // it un-coerced (see fetchPrData).
+        if (fb.snapshot) {
+          await this.raiseRunScopedAttention({
+            producer: "branch-protection",
+            issueNumber,
+            pr: prNumber,
+            prState: fb.snapshot.prState,
+            mergeable: fb.snapshot.mergeable,
+            mergeStateStatus: fb.snapshot.mergeStateStatus,
+            reviewDecision: fb.snapshot.reviewDecision,
+            checks: fb.snapshot.checks,
+          });
         }
       }
 
@@ -2993,12 +3233,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     prNumber: number,
     issueNumber: number,
     cwd: string
-  ): Promise<{ merged: boolean; blocker?: string }> {
+  ): Promise<{ merged: boolean; blocker?: string; snapshot?: MergeBlockerSnapshot }> {
     const EC_POLL_INTERVAL_MS = 2_000;
     const EC_MAX_POLLS = 4;
 
+    let prState: string;
     let mergeable: string;
     let mergeStateStatus: string;
+    let reviewDecision: string;
     let checkConclusions: Array<{ name: string; conclusion: string }>;
 
     const fetchPrData = async () => {
@@ -3009,25 +3251,47 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           "view",
           String(prNumber),
           "--json",
-          "state,statusCheckRollup,mergeable,mergeStateStatus",
+          // #305 adds reviewDecision: the Action Center card's reason is
+          // produced by the Go `stages.Decide()` matrix, which distinguishes
+          // "review-not-approved" from the other blockers. Without this field
+          // a review block would be indistinguishable from a clean PR on the
+          // daemon side and would raise no card at all.
+          "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision",
         ],
         { encoding: "utf-8", cwd, timeout: 30_000 }
       );
       const data = JSON.parse(stdout);
       return {
         state: data.state as string,
+        // An in-flight check's conclusion is NULL on the wire, and empty is the
+        // meaningful value for it — `stages.PRStatusCheckRow` documents `""
+        // (in-flight)` and `stages.MergeBlockedByPendingCI` keys on
+        // ""/"PENDING". Coercing null to "UNKNOWN" (#305 review) made this
+        // projection unable to express "CI is still running", so the daemon
+        // read a queued required check as a branch-protection block and told
+        // the operator to fix a failing check that does not exist.
         checks: (
-          (data.statusCheckRollup ?? []) as Array<{ name?: string; conclusion?: string }>
-        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion || "UNKNOWN" })),
+          (data.statusCheckRollup ?? []) as Array<{
+            name?: string;
+            conclusion?: string | null;
+          }>
+        ).map((c) => ({ name: c.name || "unknown", conclusion: c.conclusion ?? "" })),
         mergeable: (data.mergeable as string) || "UNKNOWN",
         mergeStateStatus: (data.mergeStateStatus as string) || "UNKNOWN",
+        // Empty is meaningful and NOT a fallback value: GitHub returns "" when
+        // the branch ruleset requires no reviewers, which Decide() reads as
+        // "review not blocking". Coercing it to "UNKNOWN" would invent a
+        // blocker that does not exist.
+        reviewDecision: (data.reviewDecision as string) ?? "",
       };
     };
 
     try {
       const data = await fetchPrData();
+      prState = data.state;
       mergeable = data.mergeable;
       mergeStateStatus = data.mergeStateStatus;
+      reviewDecision = data.reviewDecision;
       checkConclusions = data.checks;
     } catch (fetchErr) {
       if (isGithubRateLimitError(fetchErr)) {
@@ -3059,10 +3323,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         prNumber,
         mergeable,
         mergeStateStatus,
+        reviewDecision,
         failedCheckCount: failedChecks.length,
         blocker,
       });
-      return { merged: false, blocker };
+      // #305: the STRUCTURED projection travels alongside the prose. The prose
+      // is for the operator-facing error line and the retro classifier; the
+      // Action Center card's reason comes from the daemon running the same
+      // `stages.Decide()` matrix the Go path uses, so the same block produces
+      // the same card no matter which surface observed it.
+      return {
+        merged: false,
+        blocker,
+        snapshot: {
+          prState,
+          mergeable,
+          mergeStateStatus,
+          reviewDecision,
+          checks: checkConclusions,
+        },
+      };
     }
 
     this.logger.info("Post-merge verification: deterministic merge fallback triggered", {
@@ -8419,7 +8699,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // hard-stop check further down re-resolves config fresh at every check
     // (Issue #257) rather than reusing this snapshot for the whole run.
     // ===================================================================
-    const ceilingConfig = getPipelineCeilingConfig();
+    const ceilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
     const pipelineCeiling = new PipelineBudgetCeiling(ceilingConfig);
 
     // ===================================================================
@@ -10536,7 +10816,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               // loop, which kept enforcing the stale value for the rest of
               // the run. The read is cheap (small file read), matching the
               // freshness the per-stage instances already have.
-              const liveCeilingConfig = getPipelineCeilingConfig();
+              const liveCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
               const liveCeiling = new PipelineBudgetCeiling(liveCeilingConfig);
               // #253: honor a mid-run "Increase Ceiling & Continue" — layer
               // the confirmed escalation override on top of the freshly-read
@@ -10561,6 +10841,33 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 } catch {
                   // Non-critical
                 }
+
+                // #305: surface it in the Action Center. Before this, a
+                // headless run that hit the ceiling recorded an outcome type
+                // and wrote a log line — the operator got no card offering the
+                // raise-and-retry the Go path has always offered, for the
+                // condition the producer exists to surface. Fail-open inside.
+                //
+                // The condition travels; the NUMBERS do not. `currentCostUsd`
+                // and `effectiveCeilingUsd` are both in scope here and are
+                // deliberately not sent: the card's primary option persists a
+                // workspace-global ceiling override, and the daemon must read
+                // both figures from its own state (see RunScopedAttentionRaise).
+                // The ceiling this check enforced is the same one the daemon
+                // resolves FOR THIS RUN'S REPO: `getPipelineCeilingConfig`
+                // layers the persisted `budget-override.json` on with Go's
+                // max() rule, and both sides now resolve that file under the
+                // run's own repo root — `getRunRepoRoot()` here,
+                // `Server.repoRoot(repo)` on the raise and on the resolve. It
+                // is a PER-REPO agreement, not a global one: an override raised
+                // for repo A moves A's ceiling and leaves B's alone, which is
+                // the point (#305 review — the read used `workspaceFolders[0]`
+                // and the write used the focused editor's repo, so in a
+                // multi-repo workspace neither was the run's).
+                await this.raiseRunScopedAttention({
+                  producer: "budget-ceiling",
+                  issueNumber,
+                });
 
                 // Don't set failedStage — this is a controlled stop, not a
                 // failure. Flag it so the completion reconcile below doesn't
@@ -11933,7 +12240,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     let compactionDetected = false;
 
     // Burn rate projector for early ceiling warnings (Issue #1935)
-    const ceilingConfigForProjector = getPipelineCeilingConfig();
+    const ceilingConfigForProjector = getPipelineCeilingConfig(this.getRunRepoRoot());
     const projectorCeiling =
       ceilingConfigForProjector.overrideCeilingUsd ?? ceilingConfigForProjector.ceilingUsd ?? 50;
     const burnRateProjector = new BurnRateProjector(projectorCeiling);
@@ -11955,7 +12262,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // #253: thread the per-run override through — a fresh per-stage instance
     // silently discarding a confirmed "Increase Ceiling & Continue" is what
     // stopped run #236 one second after the user chose to continue.
-    const stageCeilingConfig = getPipelineCeilingConfig();
+    const stageCeilingConfig = getPipelineCeilingConfig(this.getRunRepoRoot());
     const stagePipelineCeiling = new PipelineBudgetCeiling({
       ...stageCeilingConfig,
       ...(this.ceilingOverrideUsd !== null ? { overrideCeilingUsd: this.ceilingOverrideUsd } : {}),
@@ -13367,9 +13674,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // stderr via inferProcessError). Pre-fix this branch synthesized
             // a generic `[stall-killed] {stage} terminated...` message and
             // discarded `result.error`, which destroyed the
-            // `[rate-limit-quota-exhausted]` marker (#3386) that
-            // bootstrap/services.ts depends on for terminalFailureKind
-            // classification. Without that classification the autonomous
+            // `[rate-limit-quota-exhausted]` marker (#3386) that the
+            // terminal-kind rule table (internal/terminalkind/table.json)
+            // keys on. Without that classification the autonomous
             // scheduler's global quota cooldown (#3434) is bypassed and
             // every quota-exhausted kill increments the lifetime failure
             // cap — exactly the regression #3440 was supposed to close but

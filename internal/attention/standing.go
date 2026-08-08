@@ -129,10 +129,6 @@ type StandingOutcome struct {
 	Action string `json:"action"`
 }
 
-// OutcomeSuppressed marks a condition that was NOT raised because a human
-// already resolved this exact condition and it has not changed since.
-const OutcomeSuppressed = "suppressed"
-
 // StandingResult summarises a reconciliation.
 type StandingResult struct {
 	Repo         string            `json:"repo"`
@@ -201,7 +197,7 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 			res.Updated++
 		case ActionRefreshed:
 			res.Refreshed++
-		case OutcomeSuppressed:
+		case string(OutcomeSuppressed):
 			res.Suppressed++
 		}
 		res.Outcomes = append(res.Outcomes, outcome)
@@ -443,7 +439,7 @@ func (s *Store) reconcileOneLocked(o *DecisionRequest, stored []storedRequest) (
 	// decision).
 	if prior, ok := latestResolvedByKey(stored, o.IdempotencyKey); ok && prior.Fingerprint == o.Fingerprint {
 		outcome.ID = prior.ID
-		outcome.Action = OutcomeSuppressed
+		outcome.Action = string(OutcomeSuppressed)
 		return outcome, nil
 	}
 

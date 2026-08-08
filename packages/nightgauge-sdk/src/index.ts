@@ -602,6 +602,8 @@ export {
   // Failure Category Classifier (Issue #1260) + Terminal Kind Classifier (Issue #3001)
   classifyFailureCategory,
   classifyTerminalKind,
+  signalTerminalKind,
+  terminalKindStressInputs,
   FAILURE_CATEGORY_WEIGHTS,
   type FailureWeightCategory,
   type TerminalFailureKind,

@@ -113,6 +113,7 @@ function createControllableFactory() {
         setWorktreeOverride: vi.fn(),
         setUnattended: vi.fn(),
         setRepoOverride: vi.fn(),
+        setRunRepoRoot: vi.fn(),
         runPipeline: vi.fn().mockReturnValue(promise),
         stop: vi.fn(),
         dispose: vi.fn(),

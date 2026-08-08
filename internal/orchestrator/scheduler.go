@@ -2662,13 +2662,22 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
-// getPipelineBudgetCeilingUSD resolves pipeline.token_budget_ceiling.ceiling_usd
+// PipelineBudgetCeilingUSD resolves pipeline.token_budget_ceiling.ceiling_usd
 // through the tier-merged config (machine → project → local via config.Load),
 // mirroring the TypeScript-side getPipelineCeilingConfig resolution so the Go
 // scheduler's budget-aware model escalation (Issue #3542) uses the same ceiling
 // the TS ceiling enforcement does. The env override wins over all file tiers.
 // Returns the maintainer-set default of $75 when the key is absent.
-func getPipelineBudgetCeilingUSD(workspaceRoot string) float64 {
+//
+// EXPORTED (#305) because the ENFORCED ceiling must never cross a wire. The IPC
+// `attention.raise` verb derives it here, in-process, exactly as the scheduler
+// does — a raise that accepted the ceiling as a parameter would let any caller
+// with socket access decide the number a `budget.raiseCeiling` option persists
+// to the workspace on one operator click. Deriving it here also removes the
+// second implementation: before #305 the extension resolved its own ceiling in
+// TypeScript and sent the result back, so "the enforced ceiling" had two
+// readers that could disagree with nothing failing.
+func PipelineBudgetCeilingUSD(workspaceRoot string) float64 {
 	const defaultCeilingUSD = 75.0
 	// A runtime override raised via the Action Center `budget.raiseCeiling` verb
 	// (ADR 015 §B) wins when higher than the configured/default ceiling — this is
@@ -3162,7 +3171,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// Issue #3542: resolve the USD budget ceiling once per run — it is config,
 	// not runtime state, so re-reading it inside the stall-kill retry path
 	// would just re-parse the same file.
-	pipelineBudgetCeilingUSD := getPipelineBudgetCeilingUSD(workspaceRoot)
+	pipelineBudgetCeilingUSD := PipelineBudgetCeilingUSD(workspaceRoot)
 
 	stages := []state.PipelineStage{
 		state.StageIssuePickup,
@@ -3315,12 +3324,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			terminalFailureKind = TerminalKindBudgetExceeded
 			// Action Center budget-ceiling producer (ADR 015 §F #4): surface an
 			// approve card offering budget.raiseCeiling (a runtime override that
-			// getPipelineBudgetCeilingUSD honors) + retry, or halt. Propose a 50%
+			// PipelineBudgetCeilingUSD honors) + retry, or halt. Propose a 50%
 			// raise above the current ceiling, floored above the current spend.
-			proposed := getPipelineBudgetCeilingUSD(workspaceRoot) * 1.5
-			if proposed <= runtime.TotalCostUSD {
-				proposed = runtime.TotalCostUSD * 1.5
-			}
+			proposed := ProposedCeilingUSD(PipelineBudgetCeilingUSD(workspaceRoot), runtime.TotalCostUSD)
 			s.raiseBudgetCeilingHit(item.Repo, item.Number, runtime.RunID, runtime.TotalCostUSD, proposed)
 			return
 		}
@@ -6394,7 +6400,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 	// branch-protection / required-check / review block is a human-needed
 	// dead-end no LLM retry can clear — surface an unblock card naming the exact
 	// blocker. Other punts (CI wait, unexpected) fall through silently.
-	if isBranchProtectionPunt(detResult.Reason) {
+	if IsBranchProtectionPunt(detResult.Reason) {
 		s.raiseBranchProtectionBlock(item.Repo, item.Number, detResult.PRNumber, runtime.RunID, detResult.Reason)
 	}
 	return false, "", false

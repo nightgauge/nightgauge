@@ -980,6 +980,71 @@ export interface AttentionMuteResult {
   muted: boolean;
 }
 
+/** Result from attention.raise — the run-scoped producer entry point for the
+ * extension operating mode (#305).
+ *
+ * FOUR reachable answers, four values. `created` means a card is now in front
+ * of the operator; `updated` means an open card for the same condition absorbed
+ * this observation and its payload moved; `refreshed` means an open card
+ * absorbed the observation and was deliberately KEPT AS IT WAS; `not_applicable`
+ * means the daemon evaluated the producer's own precondition and it does not
+ * hold (the commonest case: the pr-merge block turned out to be in-flight CI).
+ * A failure is a rejected promise, never an outcome.
+ *
+ * `refreshed` is what a raise gets when replacing the open card would have
+ * STRIPPED A REMEDY off it. One idempotency key can carry two structurally
+ * different offers — `budget-ceiling:<repo>#<n>` is raised with the
+ * `budget.raiseCeiling` option when the daemon corroborated the run's spend and
+ * without it when it could not — and last-writer-wins let the weaker
+ * observation silently rewrite the operator's one-click fix into two noops,
+ * including on a card the Go scheduler raised. The store keeps the stronger
+ * record; the raiser learns its observation landed and changed nothing visible.
+ *
+ * The store's `suppressed` is still deliberately absent: it is a STANDING-only
+ * branch, and no raiseable producer may be standing (a one-shot raise from a
+ * surface has no scan to auto-resolve against, so it cannot satisfy standing's
+ * retraction contract — pinned by
+ * TestNoRaiseableProducerIsStandingWithoutRetraction). The daemon treats that
+ * value as a contract violation and errors rather than returning it. */
+export interface AttentionRaiseResult {
+  outcome: "created" | "updated" | "refreshed" | "not_applicable";
+  /** The live request id. Empty for `not_applicable`. */
+  id: string;
+}
+
+/** Which force-clear situation an `abandoned-dispatch` raise describes.
+ *
+ * REQUIRED by that producer and validated against this closed set daemon-side —
+ * the mirror of `orchestrator.AbandonedDispatchSituations()`. One producer
+ * covers three populations whose operator-facing facts differ, so the daemon
+ * builds a different body for each and refuses an unrecognised value rather
+ * than defaulting to a confident wrong one.
+ *
+ * - `reservation-never-started` — wedged inside `startSlotInner`'s worktree
+ *   setup. No stage ran, nothing was written, nothing was recorded.
+ * - `slot-worktree-preserved` — a real slot; the force-clear booked its
+ *   terminal outcome and left the worktree on disk.
+ * - `claim-taken-then-wedged` — the dispatch had claimed its own terminal
+ *   outcome and then wedged before its callback fired, so NOBODY booked it and
+ *   the Go scheduler's seat is still held. */
+export type AbandonedDispatchSituation =
+  "reservation-never-started" | "slot-worktree-preserved" | "claim-taken-then-wedged";
+
+/** One statusCheckRollup row sent to attention.raise for the branch-protection
+ * producer. The daemon classifies; the extension never sends prose.
+ *
+ * The generated client types `checks` as `unknown[]` (the codegen imports
+ * result types only), so THIS declaration is where the shape is enforced —
+ * `HeadlessOrchestrator.MergeBlockerSnapshot.checks` and
+ * `RunScopedAttentionRaise.checks` both use it, which is the whole call path.
+ * `conclusion` is "" for a check that has not concluded; substituting a
+ * placeholder makes the payload unable to express in-flight CI and the daemon
+ * cards a still-running required check as a branch-protection block. */
+export interface AttentionRaiseCheck {
+  name: string;
+  conclusion: string;
+}
+
 /** One repo's outcome from attention.sweep. Every failure mode is a field, not
  * a thrown error: a sweep fires on activation and on a timer, and must never be
  * able to surface a modal because a token expired. */

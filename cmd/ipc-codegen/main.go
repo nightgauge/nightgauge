@@ -379,6 +379,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AttentionAcknowledgeResult":         true, // ADR 015
 		"AttentionMuteResult":                true, // Issue #92 — mute/unmute
 		"AttentionSweepResult":               true, // Issue #93 — repo-scoped sweep
+		"AttentionRaiseResult":               true, // Issue #305 — run-scoped raise
 	}
 
 	for _, m := range methods {

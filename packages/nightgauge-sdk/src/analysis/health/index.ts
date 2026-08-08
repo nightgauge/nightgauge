@@ -48,11 +48,17 @@ export {
 
 export {
   classifyFailureCategory,
-  classifyTerminalKind,
   FAILURE_CATEGORY_WEIGHTS,
   type FailureCategory,
   type TerminalFailureKind,
 } from "./failureClassifier.js";
+
+export {
+  classifyTerminalKind,
+  signalTerminalKind,
+  resolveTerminalKind,
+  terminalKindStressInputs,
+} from "./terminalKind.js";
 
 export { analyzeTokenEconomics } from "./dimensions/tokenEconomics.js";
 export { analyzeCostHealth } from "./dimensions/costHealth.js";

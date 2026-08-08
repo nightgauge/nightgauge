@@ -65,6 +65,12 @@ if [ -f Makefile ] && grep -q '^generate-ipc-client:' Makefile; then
     git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts
 fi
 
+# 2b. Canonical terminal-kind rule table (#306) — the generated SDK module and
+#     the behaviour golden must be exactly what table.json renders.
+if [ -f Makefile ] && grep -q '^check-terminal-kind-table:' Makefile; then
+  run_step "terminal-kind table consumers in sync" make check-terminal-kind-table
+fi
+
 # 3. npm audit allow-list
 if [ -f scripts/npm-audit-check.js ]; then
   run_step "npm audit allow-list" node scripts/npm-audit-check.js

@@ -3,10 +3,10 @@ package recovery
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
 // StallKilledOnPRMerge recovers from a stall-killed pr-merge stage when the
@@ -86,14 +86,12 @@ func (a *StallKilledOnPRMerge) Execute(ctx context.Context, failure StageFailure
 	}
 }
 
-// hasCostCapMarker mirrors orchestrator.HasCostCapKillMarker — duplicated
-// here to keep the recovery package free of a reverse import on orchestrator.
+// hasCostCapMarker asks the canonical rule table whether the cost-cap rule
+// fires (#306). It used to be a hand-copied mirror of
+// orchestrator.HasCostCapKillMarker, "duplicated here to keep the recovery
+// package free of a reverse import on orchestrator" — a real constraint, and
+// the reason the copy existed at all. internal/terminalkind is a leaf package,
+// so there is no cycle to avoid any more and no second copy of the markers.
 func hasCostCapMarker(s string) bool {
-	if s == "" {
-		return false
-	}
-	t := strings.ToLower(s)
-	return strings.Contains(t, "[cost-cap-exceeded]") ||
-		strings.Contains(t, "cost-cap-exceeded") ||
-		strings.Contains(t, "cost cap exceeded")
+	return terminalkind.RuleFires(terminalkind.RuleCostCapExceeded, s)
 }

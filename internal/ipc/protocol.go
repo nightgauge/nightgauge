@@ -1479,6 +1479,138 @@ type AttentionSweepParams struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// AttentionRaiseParams raises a RUN-SCOPED DecisionRequest from the extension
+// operating mode (#305).
+//
+// CLOSED PRODUCER, TYPED SCALARS — never a DecisionRequest, never an options
+// array, never a verb or an args map. This is a security boundary, not a style
+// choice: a card's options are EXECUTED by the daemon on resolve
+// (Store.Resolve → Server.ExecuteVerb). ValidateOption re-checks that a verb is
+// REGISTERED, but nothing checks that a producer was ENTITLED to offer it
+// against a particular target — so a raise that accepted caller-supplied
+// options would let any process with socket access mint a legitimate-looking
+// card offering `issue.close` or `budget.raiseCeiling` on an arbitrary issue
+// and wait for the operator to click it. Naming a producer instead means the
+// daemon builds the whole card from the same builder the Go scheduler uses, and
+// the blast radius stays at "this issue, this producer's declared options".
+//
+// NO MONEY CROSSES THIS WIRE, and that is the second half of the same boundary
+// (added in review). The allowlist bounds WHICH operation a card may offer; it
+// says nothing about that operation's MAGNITUDE. The first cut took `costUsd`
+// and `ceilingUsd` as params and fed both into orchestrator.ProposedCeilingUSD,
+// whose result became the `budget.raiseCeiling` option's `ceilingUsd` arg
+// verbatim — so `{producer:"budget-ceiling", repo:"victim/repo", issue:1,
+// costUsd:0.01, ceilingUsd:1000000}` minted a genuine card offering a $1.5M
+// workspace ceiling, and one resolve persisted it to budget-override.json.
+// Both inputs are now derived DAEMON-SIDE: the enforced ceiling from
+// orchestrator.PipelineBudgetCeilingUSD (the same in-process read the scheduler
+// does) and the spend from the run's own recorded RuntimeState. A caller
+// reports that a CONDITION happened; it cannot say what the condition cost.
+//
+// Field validation is per-producer: an unknown Producer and a producer missing
+// its required fields are each a distinct ERROR, never a silent no-op. The repo
+// must additionally be one this daemon has configured — an unbounded
+// (repo, issue) pair is an unbounded card-injection primitive into
+// .nightgauge/attention/, since dedup is per (producer, repo, issue).
+type AttentionRaiseParams struct {
+	// Producer is the closed enum — see ipc.RaiseableProducers.
+	Producer string `json:"producer"`
+	// Repo is "owner/name", and must resolve to a repo this daemon has
+	// configured. Required by every producer.
+	Repo string `json:"repo"`
+	// Issue is the issue number. Required by every producer.
+	Issue int `json:"issue"`
+
+	// RunID is supplied by the CALLER, deliberately: resolving it daemon-side
+	// from the runtime registry would add a reader of the bare-issue-number
+	// keying #370 must re-key, and would mis-stamp the card when a re-dispatch
+	// is already in flight under the same issue number. Empty is a handled
+	// case (the card simply carries no trace back-reference). It is an audit
+	// back-reference only — nothing is authorized by it.
+	RunID string `json:"runId,omitempty"`
+
+	// --- budget-ceiling ---
+	//
+	// NO FIELDS. The condition is "this run hit the ceiling"; every number on
+	// the resulting card comes from daemon-side state. See the type doc.
+
+	// --- branch-protection ---
+	// PR is the blocked pull request number.
+	PR int `json:"pr,omitempty"`
+	// PRState / Mergeable / MergeStateStatus / ReviewDecision / Checks are the
+	// raw `gh pr view` projection. The daemon runs stages.Decide over them and
+	// uses ITS reason string — the extension never classifies. Sending prose
+	// here would produce two visibly different cards for the same block while
+	// every test still passed.
+	PRState          string                `json:"prState,omitempty"`
+	Mergeable        string                `json:"mergeable,omitempty"`
+	MergeStateStatus string                `json:"mergeStateStatus,omitempty"`
+	ReviewDecision   string                `json:"reviewDecision,omitempty"`
+	Checks           []AttentionRaiseCheck `json:"checks,omitempty"`
+
+	// --- abandoned-dispatch ---
+	// Stage is the last stage the force-cleared dispatch was seen in.
+	Stage string `json:"stage,omitempty"`
+	// Situation is REQUIRED by abandoned-dispatch and names which of the three
+	// force-clear situations happened — see
+	// orchestrator.AbandonedDispatchSituations. A closed enum that selects
+	// PROSE, never options and never a number: the card's option set is
+	// identical in all three. The caller must send it because only the caller
+	// knows, synchronously, which funnel arm it is in and whether the
+	// dispatch's own terminal callback had claimed the outcome; the daemon
+	// cannot infer either after the fact. An unrecognised value is an ERROR
+	// rather than a default, because a default prints a confident wrong body.
+	Situation string `json:"situation,omitempty"`
+}
+
+// AttentionRaiseCheck is one statusCheckRollup row, mirroring
+// stages.PRStatusCheckRow.
+type AttentionRaiseCheck struct {
+	Name string `json:"name"`
+	// Conclusion is SUCCESS | FAILURE | ERROR | NEUTRAL | SKIPPED, or the EMPTY
+	// STRING for a check that has not concluded. Empty is the load-bearing
+	// value, not a missing one: GitHub returns a null conclusion for an
+	// in-flight check, and stages.MergeBlockedByPendingCI keys on ""/"PENDING"
+	// to tell "CI is still running, this will clear itself" from "a human must
+	// fix something". A caller that coerces null to a placeholder like
+	// "UNKNOWN" makes the wire payload unable to express in-flight CI, and the
+	// daemon then cards a still-running required check as a branch-protection
+	// block.
+	Conclusion string `json:"conclusion"`
+}
+
+// AttentionRaiseResult reports what the raise actually DID. FOUR reachable
+// answers, four values: `created` (a card is now in front of the operator),
+// `updated` (an open card for the same condition absorbed this observation and
+// its payload moved), `refreshed` (an open card absorbed the observation and
+// was deliberately KEPT AS IT WAS), and `not_applicable` (the daemon evaluated
+// the producer's own precondition and it does not hold — e.g. the pr-merge
+// block turned out to be in-flight CI). A failure is an error, never an
+// outcome.
+//
+// `refreshed` is here because Store.Raise refuses to let a raise strip a remedy
+// off an open card (fixed in review). One idempotency key can carry two
+// structurally different offers — `budget-ceiling:<repo>#<n>` is raised with the
+// `budget.raiseCeiling` option when the daemon corroborated the run's spend and
+// without it when it could not — and last-writer-wins let the second, weaker
+// observation silently rewrite the operator's one-click fix into two noops,
+// including on a card the Go scheduler raised. The store keeps the stronger
+// record and reports `refreshed`; the caller learns its observation landed and
+// changed nothing visible.
+//
+// Store.Raise's fifth value, `suppressed`, is still deliberately NOT advertised:
+// it is a STANDING-only branch and
+// TestNoRaiseableProducerIsStandingWithoutRetraction structurally forbids a
+// standing card on this verb (a one-shot raise from a surface has no scan to
+// auto-resolve against, so it cannot satisfy standing's retraction contract).
+// The handler treats it as a contract violation and errors, naming the value.
+type AttentionRaiseResult struct {
+	// Outcome is one of created | updated | refreshed | not_applicable.
+	Outcome string `json:"outcome"`
+	// ID is the live request id; empty for not_applicable.
+	ID string `json:"id"`
+}
+
 // IssueRemoveBlockedByParams is the thin IPC wrapper the Action Center adds for
 // the existing internal RemoveBlockedByNumber call (ADR 015 §B). Optional fields
 // last so the generated TS signature keeps required params ahead of optional.

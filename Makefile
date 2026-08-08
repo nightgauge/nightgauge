@@ -1,5 +1,6 @@
 .PHONY: generate generate-go generate-ts install-codegen \
 	build-cli test-go test-integration vet lint-go build-all generate-ipc-client \
+	generate-terminal-kind-table check-terminal-kind-table \
 	test-platform-integration test-e2e-docker integration-gitlab \
 	integration-gitlab-up integration-gitlab-down test-parity \
 	integration-mattermost integration-mattermost-up integration-mattermost-down
@@ -29,6 +30,17 @@ generate-ipc-client:
 		--server internal/ipc/server.go \
 		--protocol internal/ipc/protocol.go \
 		--out packages/nightgauge-vscode/src/services/IpcClient.generated.ts
+
+# Generate the TypeScript view of the canonical terminal-kind rule table (#306)
+# plus its behaviour golden. The table itself is hand-maintained at
+# internal/terminalkind/table.json and embedded by Go; these outputs are how the
+# SDK and the test suites see it, and they must never be edited by hand.
+generate-terminal-kind-table:
+	go run ./cmd/terminalkind-codegen --root .
+
+# Drift check for the above — used by .husky/pre-commit and scripts/ci-local.sh.
+check-terminal-kind-table:
+	go run ./cmd/terminalkind-codegen --root . --check
 
 # --- Go CLI Binary ---
 
