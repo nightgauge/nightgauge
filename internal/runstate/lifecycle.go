@@ -59,7 +59,7 @@ func MarkRunning(baseDir string, opts MarkRunningOptions) (*RunState, error) {
 	}
 	if cur != nil && cur.State == StateRunning && !opts.Force {
 		last := lastAttempt(cur)
-		if last != nil && last.PID != nil && processAlive(*last.PID) {
+		if last != nil && last.PID != nil && ProcessAlive(*last.PID) {
 			return nil, &ConcurrentRunRefusedError{
 				IssueNumber: cur.IssueNumber,
 				HolderPID:   *last.PID,

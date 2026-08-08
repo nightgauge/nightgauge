@@ -55,7 +55,7 @@ func DetectResume(baseDir, branch string, hasContextFiles bool) (*ResumeDetectio
 		last := lastAttempt(rs)
 		alive := false
 		if last != nil && last.PID != nil {
-			alive = processAlive(*last.PID)
+			alive = ProcessAlive(*last.PID)
 		}
 		reason := "stale_writer"
 		if alive {

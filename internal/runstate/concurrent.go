@@ -43,7 +43,7 @@ func DetectConcurrent(baseDir string) (bool, *ConcurrentRunRefusedError) {
 	if last == nil || last.PID == nil {
 		return false, nil
 	}
-	if !processAlive(*last.PID) {
+	if !ProcessAlive(*last.PID) {
 		return false, nil
 	}
 	return true, &ConcurrentRunRefusedError{
@@ -53,13 +53,16 @@ func DetectConcurrent(baseDir string) (bool, *ConcurrentRunRefusedError) {
 	}
 }
 
-// processAlive reports whether `pid` is a live process on the current host.
+// ProcessAlive reports whether `pid` is a live process on the current host.
+// Exported as the ONE liveness probe (#341): `autonomous status` carried an
+// inline copy of this body, and two probes are two answers to "is the writer
+// still there?" waiting to disagree.
 // We use signal 0 (no actual signal delivered) on POSIX — a successful
 // kill(pid, 0) means the process exists. On Windows, syscall.Kill is not
 // available; we fall back to FindProcess which returns a non-nil result for
 // any pid on Windows but we wrap with a Signal call that does fail. The
 // codepath is best-effort across all platforms.
-func processAlive(pid int) bool {
+func ProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
