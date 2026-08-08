@@ -316,19 +316,26 @@ model for every reasoning stage on the IPC path — `services/SkillRunner.ts`
 passed no issue metadata, so Step 2 never fired and Step 3 always won.
 
 And a fourth consequence, of the translation gap above rather than of a missing
-table: **on a `gemini`, `gemini-sdk`, `copilot` or `lm-studio` workspace outside
-Maximum mode, everything this resolver decides is inert.** The tier, the
-`minimum_model` floor, the post-failure escalation ladder and the sticky #42
-downgrade all reach the extension, which then spawns the adapter's configured
-model regardless — so a failed stage re-runs on the same model, and the corpus's
-`actualModel` is a function of static config rather than of the run (see
-[OUTCOME_RECORDING.md](OUTCOME_RECORDING.md)). This is accepted for now rather
+table — scoped to the **extension's dispatch paths** (IPC and
+HeadlessOrchestrator): **there, a `gemini`, `gemini-sdk`, `copilot` or
+`lm-studio` workspace outside Maximum mode ignores everything this resolver
+decides.** The tier, the `minimum_model` floor, the post-failure escalation
+ladder and the sticky #42 downgrade all reach the extension, which then spawns
+the adapter's configured model regardless — so a failed stage re-runs on the
+same model, and the corpus's `actualModel` is a function of static config
+rather than of the run (see [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md)). The
+Go executor does **not** share the gap: on the `nightgauge run` path (the
+second row of the resolver table above), `internal/execution/adapters`
+translates the dispatched band for `codex`, `gemini`, `gemini-sdk` and
+`copilot` in every mode (`resolveGeminiModel`, `resolveCopilotModel`), and
+`lm-studio`/`ollama` receive the band verbatim — autonomous runs honor Go's
+routing on every adapter. The extension-side gap is accepted for now rather
 than hidden: Claude and Codex are the adapters the pipeline is operated on, the
 band → provider-id maps already exist (`getModeStageAdapterModel`), and wiring
 them onto the non-Maximum path is a behavior change for every existing
 gemini/copilot workspace — it gets its own issue rather than riding along with
-the ownership change. Until then, an operator who wants Go's routing to bind
-should run `codex` or `claude`, or pin the adapter's model to match.
+the ownership change. Until then, an extension operator who wants Go's routing
+to bind should run `codex` or `claude`, or pin the adapter's model to match.
 
 And the reverse, stated for the same reason: two **post-base** mechanisms exist
 only in `resolveDispatchModel`, so the two resolvers deliberately disagree
@@ -385,15 +392,20 @@ neither:
   back as `servedModel`, so run history attributes — and prices — the model that
   ran rather than the tier that was asked for.
 
-  **Exactly one adapter translates the dispatched band today: `codex`.**
-  `utils/skillRunner.ts` runs `resolveCodexPipelineModel(model)` on the wire
-  value unconditionally, so a codex run honors every tier Go resolved.
-  `gemini` / `gemini-sdk`, `copilot` and `lm-studio` consult the dispatched band
-  only through `modePinnedTier`, which is true for **Maximum** alone (the only
-  mode whose `MODE_PROFILES` entry still pins a stage). In every other mode they
-  launch their own configured model — `getGeminiModel` / `getCopilotModel` /
+  **On the extension's dispatch paths, exactly one adapter translates the
+  dispatched band today: `codex`.** `utils/skillRunner.ts` runs
+  `resolveCodexPipelineModel(model)` on the wire value unconditionally, so a
+  codex run honors every tier Go resolved. `gemini` / `gemini-sdk`, `copilot`
+  and `lm-studio` consult the dispatched band only through `modePinnedTier`,
+  which is true for **Maximum** alone (the only mode whose `MODE_PROFILES`
+  entry still pins a stage). In every other mode they launch their own
+  configured model — `getGeminiModel` / `getCopilotModel` /
   `getLmStudioModel` — and `lm-studio` cannot honor a tier alias at all, by
-  design (#3214: it logs the mismatch and demotes the decision's source).
+  design (#3214: it logs the mismatch and demotes the decision's source). The
+  Go executor's adapters (`internal/execution/adapters`, the `nightgauge run`
+  path) are not subject to this rule: they translate the band for `codex`,
+  `gemini`, `gemini-sdk` and `copilot` in every mode, and pass it verbatim to
+  `lm-studio`/`ollama`.
 
   `servedModel` therefore carries a CONCRETE id, deliberately, and the two
   questions asked about it live in one space each. "Did the process run what the

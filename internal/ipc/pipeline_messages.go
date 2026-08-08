@@ -25,9 +25,12 @@ type RunStageParams struct {
 	// model_routing.minimum_model floor (#366), the pr-create large-diff
 	// escalation, the feature-validate haiku gate and the pr-merge haiku floor
 	// (#197). The TS SkillRunner passes it straight to the CLI's --model and
-	// runs no resolution of its own; it only translates for adapters that need
-	// a provider-specific id (codex/gemini/copilot), and reports what it
-	// actually launched back as ServedModel.
+	// runs no resolution of its own. On this wire only codex translates the
+	// band to a provider id (resolveCodexPipelineModel); gemini/copilot/
+	// lm-studio launch their configured model outside Maximum mode — the
+	// mode-pinned Maximum path is the sole exception (docs/PIPELINE_EXECUTION.md
+	// § Who Resolves the Model). Whatever actually launched is reported back as
+	// ServedModel.
 	//
 	// VOCABULARY: a registry tier BAND (haiku|sonnet|opus|fable) whenever the
 	// registry recognizes the model — resolveDispatchModel's last step is

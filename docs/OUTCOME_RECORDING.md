@@ -63,23 +63,29 @@ The mapping is therefore inverted through the registry rather than collapsed:
 | `gpt-5.6-sol`      | `opus`    | `opus`        | the model the opus band maps to — a HIT                     |
 | `gpt-5.6-sol`      | `fable`   | `fable`       | same id, and the request says which band                    |
 | `gpt-5.6-terra`    | `opus`    | `sonnet`      | genuinely weaker serve — a MISS                             |
-| `gemini-2.5-pro`   | `opus`    | `opus`        | Maximum-mode gemini: the opus band's id — a HIT             |
+| `gemini-2.5-pro`   | `opus`    | `opus`        | gemini honoring the opus band — a HIT                       |
 | `gemini-2.5-flash` | `opus`    | `sonnet`      | serves [haiku, sonnet]: a real, correctly-booked MISS       |
 | `gemini-2.0-flash` | `opus`    | `""`          | no registry band: excluded, never a miss                    |
 | `gpt-5.5`          | `opus`    | `""`          | a configurable codex model the registry carries no band for |
 
 The last four rows are the common case on a non-Claude workspace, and they are
-correct rather than unfortunate. **Only `codex` translates the dispatched band
-outside Maximum mode** (docs/PIPELINE_EXECUTION.md § Who Resolves the Model):
-`gemini`, `gemini-sdk`, `copilot` and `lm-studio` launch their configured model,
-so on the shipped gemini default (`gemini-2.5-flash`, bands `[haiku, sonnet]`)
-an `opus`- or `fable`-predicted `feature-dev` records `sonnet` and books a
-genuine MISS — the router asked for a tier the run did not serve. A workspace on
-a model with no registry band records `""` and is excluded from the accuracy
+correct rather than unfortunate. Which id gets served depends on the dispatch
+path. On the **Go executor** path (`nightgauge run` — `Scheduler.recordOutcome`
+is this corpus writer's autonomous caller), `internal/execution/adapters`
+translates the dispatched band for `codex`, `gemini`, `gemini-sdk` and
+`copilot` in every mode, so a gemini run asked for `opus` serves
+`gemini-2.5-pro` and books a HIT. On **extension-dispatched** runs, only
+`codex` translates the dispatched band outside Maximum mode
+(docs/PIPELINE_EXECUTION.md § Who Resolves the Model): `gemini`, `gemini-sdk`,
+`copilot` and `lm-studio` launch their configured model, so on the shipped
+gemini default (`gemini-2.5-flash`, bands `[haiku, sonnet]`) an `opus`- or
+`fable`-predicted `feature-dev` records `sonnet` and books a genuine MISS —
+the router asked for a tier that run did not serve. A workspace on a model
+with no registry band records `""` and is excluded from the accuracy
 denominator entirely, so such a workspace calibrates model routing from no
-samples rather than from fabricated ones. Both readings describe the
-translation gap accurately; closing that gap is a routing change, not a corpus
-change.
+samples rather than from fabricated ones. All of these readings describe the
+extension-side translation gap accurately; closing that gap is a routing
+change, not a corpus change.
 
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.

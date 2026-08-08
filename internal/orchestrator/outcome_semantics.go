@@ -95,16 +95,21 @@ func OutcomeModelBand(model string) string {
 // any other (unregistered) records "" — an honest unknown, excluded — rather
 // than a value guaranteed to compare unequal.
 //
-// This function does NOT assume the adapter was asked for the dispatched band.
-// Outside Maximum mode, gemini/copilot/lm-studio launch their CONFIGURED model
-// and ignore the wire tier (docs/PIPELINE_EXECUTION.md § Who Resolves the
-// Model), so `served` there is a fact about the workspace's config rather than
-// about the run — and it is scored honestly on that basis: the shipped gemini
-// default `gemini-2.5-flash` serves [haiku, sonnet], so an opus-predicted
-// feature-dev records "sonnet" and books a real MISS. That is the correct
-// reading of the corpus's question ("did the run serve the band the router
-// predicted?"), not a defect in this helper — the defect it would report is the
-// translation gap, and that has its own issue.
+// This function does NOT assume the adapter was asked for the dispatched band,
+// and its callers sit on both sides of the translation gap. On the Go-executor
+// path (Scheduler.recordOutcome, the `nightgauge run` dispatch),
+// internal/execution/adapters translates the band for codex/gemini/gemini-sdk/
+// copilot in EVERY mode, so a gemini run asked for opus serves gemini-2.5-pro
+// and books a HIT. On extension-dispatched (IPC) runs outside Maximum mode,
+// gemini/copilot/lm-studio launch their CONFIGURED model and ignore the wire
+// tier (docs/PIPELINE_EXECUTION.md § Who Resolves the Model), so `served`
+// there is a fact about the workspace's config rather than about the run — and
+// it is scored honestly on that basis: the shipped gemini default
+// `gemini-2.5-flash` serves [haiku, sonnet], so an opus-predicted feature-dev
+// records "sonnet" and books a real MISS. Both are correct readings of the
+// corpus's question ("did the run serve the band the router predicted?"), not
+// defects in this helper — the defect the extension-side reading reports is
+// the translation gap, and that has its own issue.
 //
 // The comparison and the recording therefore happen in ONE space each, on
 // purpose: divergence is judged in the concrete-id space where the adapter
