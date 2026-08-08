@@ -9787,7 +9787,9 @@ Use --json for machine-readable output (skills parse this format).`,
 					detail = item.Error
 				}
 				if detail != "" {
-					fmt.Printf("  %s  %-14s  %s\n", status, key, detail)
+					// Wide enough for the longest check key
+					// (`orphaned_processes`) so the detail column stays aligned.
+					fmt.Printf("  %s  %-18s  %s\n", status, key, detail)
 				} else {
 					fmt.Printf("  %s  %s\n", status, key)
 				}
