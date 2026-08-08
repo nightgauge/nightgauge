@@ -187,13 +187,24 @@ func TestRealGit_RebaseConflict_CapturesThenAborts(t *testing.T) {
 	if entry["path"] != "f.txt" {
 		t.Errorf("conflicting file path = %v, want f.txt", entry["path"])
 	}
+	// ours = the PR branch's work, theirs = the base. That is the contract every
+	// consumer is written against (ConflictFileSchema, feature-dev's Step 0.7.1b,
+	// merge.md), and under a REBASE it is the INVERSE of git's own stage names:
+	// git checks out the upstream and replays the feature commit onto it, so
+	// stage 2 (git's "ours") is origin/main and stage 3 (git's "theirs") is the
+	// feature branch. Passing git's naming through handed feature-dev the base
+	// under the field labelled "this PR's feature work" (#301 round-2 findings
+	// 3/5).
 	ours, _ := entry["ours"].(string)
 	theirs, _ := entry["theirs"].(string)
-	if !strings.Contains(ours, "main-side") {
-		t.Errorf("ours blob missing — captured after the abort? got %q", ours)
+	if !strings.Contains(ours, "feature-side") {
+		t.Errorf("ours must be the PR branch's work; got %q", ours)
 	}
-	if !strings.Contains(theirs, "feature-side") {
-		t.Errorf("theirs blob missing — captured after the abort? got %q", theirs)
+	if !strings.Contains(theirs, "main-side") {
+		t.Errorf("theirs must be the rebase base; got %q", theirs)
+	}
+	if doc["conflict_operation"] != "rebase" {
+		t.Errorf("conflict_operation = %v, want \"rebase\" — the mapping above is only correct for a rebase", doc["conflict_operation"])
 	}
 
 	if !hasConflictSignal(t, ws, 301) {
@@ -305,10 +316,12 @@ func evidenceStage(t *testing.T, ws string, issue int, path string, stage int) [
 type evidenceEntry struct {
 	Path   string `json:"path"`
 	Stages []struct {
-		Stage int    `json:"stage"`
-		SHA   string `json:"sha"`
-		Bytes int64  `json:"bytes"`
-		File  string `json:"file"`
+		Stage   int    `json:"stage"`
+		Mode    string `json:"mode"`
+		SHA     string `json:"sha"`
+		Bytes   int64  `json:"bytes"`
+		File    string `json:"file"`
+		Gitlink bool   `json:"gitlink"`
 	} `json:"stages"`
 }
 
@@ -376,10 +389,9 @@ func TestRealGit_MultiFileConflict_NonASCIIPathCaptured(t *testing.T) {
 	if len(byPath) != 2 {
 		t.Fatalf("conflicting_files = %v, want exactly f.txt and %q", doc["conflicting_files"], unicodePath)
 	}
-	// Stage 2 / stage 3 are git's, and under a REBASE git replays the feature
-	// commit onto the upstream, so stage 2 ("ours") is origin/main's version and
-	// stage 3 ("theirs") is the feature branch's — the inverse of a merge. The
-	// assertion follows git, matching TestRealGit_RebaseConflict_CapturesThenAborts.
+	// ours = the PR branch's work, theirs = the base — the consumer contract, not
+	// git's stage naming. Under a rebase that means stage 3 and stage 2
+	// respectively; see TestRealGit_RebaseConflict_CapturesThenAborts.
 	for _, want := range []string{"f.txt", unicodePath} {
 		entry, ok := byPath[want]
 		if !ok {
@@ -387,14 +399,17 @@ func TestRealGit_MultiFileConflict_NonASCIIPathCaptured(t *testing.T) {
 		}
 		ours, _ := entry["ours"].(string)
 		theirs, _ := entry["theirs"].(string)
-		if !strings.Contains(ours, "main-side") {
-			t.Errorf("%s ours (stage 2, the rebase upstream) = %q, want origin/main's version", want, ours)
+		if !strings.Contains(ours, "feature-side") {
+			t.Errorf("%s ours = %q, want the PR branch's version", want, ours)
 		}
-		if !strings.Contains(theirs, "feature-side") {
-			t.Errorf("%s theirs (stage 3, the replayed commit) = %q, want the feature branch's version", want, theirs)
+		if !strings.Contains(theirs, "main-side") {
+			t.Errorf("%s theirs = %q, want the rebase base's version", want, theirs)
 		}
 		if entry["ours_present"] != true || entry["theirs_present"] != true {
 			t.Errorf("%s: both sides exist in the index, so neither empty-side flag may be false: %v", want, entry)
+		}
+		if entry["ours_mode"] != "100644" || entry["theirs_mode"] != "100644" {
+			t.Errorf("%s: both sides are ordinary files, so both modes must be 100644: %v", want, entry)
 		}
 	}
 	if !hasConflictSignal(t, ws, 301) {
@@ -421,14 +436,17 @@ func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
 	ws := realGitFixture(t, "binary")
 	const binPath = "bin.dat"
 
-	// Under a rebase git replays the feature commit onto the upstream, so stage 2
-	// ("ours") holds origin/main's bytes and stage 3 ("theirs") the feature
-	// branch's. Both expected values come straight out of git.
-	wantOurs := gitShow(t, ws, "origin/main", binPath)
-	wantTheirs := gitShow(t, ws, fixtureBranch, binPath)
-	if utf8.Valid(wantOurs) || utf8.Valid(wantTheirs) {
-		t.Fatalf("fixture is not exercising the binary class: ours valid=%v theirs valid=%v",
-			utf8.Valid(wantOurs), utf8.Valid(wantTheirs))
+	// The evidence dump is a RAW index dump and keys by git's own stage numbers,
+	// so the expectation here is stated in git's terms: under a rebase stage 2
+	// holds origin/main's bytes and stage 3 the feature branch's. (The CONTEXT
+	// document is the one that translates those into ours/theirs — see
+	// TestRealGit_RebaseConflict_CapturesThenAborts.) Both expected values come
+	// straight out of git.
+	wantStage2 := gitShow(t, ws, "origin/main", binPath)
+	wantStage3 := gitShow(t, ws, fixtureBranch, binPath)
+	if utf8.Valid(wantStage2) || utf8.Valid(wantStage3) {
+		t.Fatalf("fixture is not exercising the binary class: stage2 valid=%v stage3 valid=%v",
+			utf8.Valid(wantStage2), utf8.Valid(wantStage3))
 	}
 
 	a := NewBranchOutOfDate(&fakePRMergeRunner{})
@@ -453,14 +471,350 @@ func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
 		t.Errorf("escalation must name every conflicting path, got %v", res.Evidence)
 	}
 
-	if got := evidenceStage(t, ws, 301, binPath, 2); !bytes.Equal(got, wantOurs) {
-		t.Errorf("preserved ours blob is not byte-identical: got %d bytes, want %d", len(got), len(wantOurs))
+	if got := evidenceStage(t, ws, 301, binPath, 2); !bytes.Equal(got, wantStage2) {
+		t.Errorf("preserved stage-2 blob is not byte-identical: got %d bytes, want %d", len(got), len(wantStage2))
 	}
-	if got := evidenceStage(t, ws, 301, binPath, 3); !bytes.Equal(got, wantTheirs) {
-		t.Errorf("preserved theirs blob is not byte-identical: got %d bytes, want %d", len(got), len(wantTheirs))
+	if got := evidenceStage(t, ws, 301, binPath, 3); !bytes.Equal(got, wantStage3) {
+		t.Errorf("preserved stage-3 blob is not byte-identical: got %d bytes, want %d", len(got), len(wantStage3))
 	}
 	if rebaseInProgress(t, ws) {
 		t.Error("the bytes are preserved verbatim on disk, so the abort is safe and must run")
+	}
+}
+
+// TestRealGit_GitlinkConflict_CapturedAsMetadata is the #301 round-2 finding-1/6
+// regression: a SUBMODULE POINTER conflict must capture, and must not wedge the
+// worktree.
+//
+// `git ls-files -u` lists a conflicted gitlink as mode 160000 whose stage object
+// ids are COMMITs in the submodule's own store. The previous code parsed the
+// mode field and threw it away, so `git cat-file blob <commit-id>` exited 128 —
+// which (a) made the path uncapturable and failed the whole capture, and then
+// (b) failed the raw evidence dump for the same reason, leaving EvidenceDir
+// empty. With no evidence anywhere, BranchOutOfDate deliberately skipped
+// `git rebase --abort` — so an ordinary pointer conflict in any repo with
+// submodules left a detached worktree with an unmerged index that nothing in the
+// pipeline reclaims (the sweep skips detached, ClassifyStatus calls `UU`
+// blocking, and every later attempt hits the pre-existing-rebase guard forever).
+//
+// A gitlink's content IS its commit id, so it captures as metadata: no blob read
+// anywhere, both sides empty with ours_commit/theirs_commit naming the two
+// commits, and the sibling text conflict captured normally alongside it.
+func TestRealGit_GitlinkConflict_CapturedAsMetadata(t *testing.T) {
+	ws := realGitFixture(t, "gitlink")
+	const subPath = "sub"
+
+	// The two commit ids come from git's own trees, not from the fixture script's
+	// variables. Under a rebase the PR branch's side becomes index stage 3 and the
+	// base's stage 2, so this is also the expectation for the ours/theirs mapping.
+	oursMode, wantOurs := treeEntry(t, ws, fixtureBranch, subPath)
+	theirsMode, wantTheirs := treeEntry(t, ws, "origin/main", subPath)
+	if oursMode != "160000" || theirsMode != "160000" {
+		t.Fatalf("fixture precondition: %s must be a gitlink on both sides, got %q/%q", subPath, oursMode, theirsMode)
+	}
+	if wantOurs == "" || wantOurs == wantTheirs {
+		t.Fatalf("fixture precondition: the two sides must point at different commits, got %q vs %q", wantOurs, wantTheirs)
+	}
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+
+	if res.FollowUp != FollowUpStageCanResume {
+		t.Fatalf("FollowUp = %q, want %q — a submodule pointer conflict is capturable: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+	}
+	if rebaseInProgress(t, ws) {
+		t.Error("the capture succeeded, so the abort must run — a wedged mid-rebase worktree is never reclaimed")
+	}
+
+	doc := readConflictContext(t, ws, 301)
+	rawFiles, _ := doc["conflicting_files"].([]interface{})
+	byPath := map[string]map[string]interface{}{}
+	for _, rf := range rawFiles {
+		entry, _ := rf.(map[string]interface{})
+		p, _ := entry["path"].(string)
+		byPath[p] = entry
+	}
+	if len(byPath) != 2 {
+		t.Fatalf("conflicting_files = %v, want f.txt and %q", doc["conflicting_files"], subPath)
+	}
+	sub, ok := byPath[subPath]
+	if !ok {
+		t.Fatalf("%q missing from the capture: %v", subPath, byPath)
+	}
+	if sub["ours_mode"] != "160000" || sub["theirs_mode"] != "160000" {
+		t.Errorf("%s: modes must be carried through so a reader can tell this is metadata-only: %v", subPath, sub)
+	}
+	if sub["ours"] != "" || sub["theirs"] != "" {
+		t.Errorf("%s: a gitlink has no blob bytes to inline: %v", subPath, sub)
+	}
+	if sub["ours_commit"] != wantOurs {
+		t.Errorf("%s ours_commit = %v, want %q (the PR branch's submodule commit)", subPath, sub["ours_commit"], wantOurs)
+	}
+	if sub["theirs_commit"] != wantTheirs {
+		t.Errorf("%s theirs_commit = %v, want %q (the base's submodule commit)", subPath, sub["theirs_commit"], wantTheirs)
+	}
+	// The sibling text conflict is unaffected.
+	if txt := byPath["f.txt"]; txt == nil || !strings.Contains(txt["ours"].(string), "feature-side") {
+		t.Errorf("f.txt must still capture normally alongside the gitlink: %v", byPath["f.txt"])
+	}
+	if !hasConflictSignal(t, ws, 301) {
+		t.Error("a captured conflict must emit CONFLICT_RESOLUTION_NEEDED")
+	}
+}
+
+// TestRealGit_GitlinkConflict_EvidenceDumpSurvives covers the OTHER half of the
+// same root cause: preserveConflictEvidence ran the identical `cat-file blob` on
+// the gitlink stages, so the dump failed too — after having already streamed
+// some blobs to disk, leaving orphan files (one of them zero-byte) and NO
+// manifest.json, which readEvidenceManifest cannot interpret at all.
+//
+// Driven through the capture-failed path by giving the capture no resolvable
+// branch, so the gitlink reaches the dump rather than the context.
+func TestRealGit_GitlinkConflict_EvidenceDumpSurvives(t *testing.T) {
+	ws := realGitFixture(t, "gitlink")
+	const subPath = "sub"
+
+	startRebase(t, ws)
+	cap := captureConflictContextFromIndex(context.Background(), ws, 301, 7, unknownBranch, "main")
+
+	if cap.Outcome != captureFailed {
+		t.Fatalf("precondition: an unresolvable branch is a failed capture, got %q", cap.Outcome)
+	}
+	if cap.EvidenceDir == "" {
+		t.Fatalf("the raw index must be preserved even when a stage is a gitlink: %v", cap.Err)
+	}
+	entries := readEvidenceManifest(t, ws, 301)
+	var sub *evidenceEntry
+	for i := range entries {
+		if entries[i].Path == subPath {
+			sub = &entries[i]
+		}
+	}
+	if sub == nil {
+		t.Fatalf("manifest must record the gitlink path; entries=%+v", entries)
+	}
+	for _, st := range sub.Stages {
+		if st.Mode != "160000" {
+			t.Errorf("stage %d mode = %q, want 160000", st.Stage, st.Mode)
+		}
+		if !st.Gitlink {
+			t.Errorf("stage %d must be flagged gitlink so an operator knows the sha is a commit, not a blob: %+v", st.Stage, st)
+		}
+		if st.File != "" {
+			t.Errorf("stage %d must not claim a dumped blob file (%q) — nothing is readable for a gitlink", st.Stage, st.File)
+		}
+	}
+	// The text sibling's bytes still land on disk, so the dump is a real dump.
+	if got := evidenceStage(t, ws, 301, "f.txt", 2); len(got) == 0 {
+		t.Error("f.txt's stage-2 blob must still be preserved byte-for-byte")
+	}
+}
+
+// TestRealGit_SymlinkConflict_ReadsAsBlob is the control for the gitlink fix: a
+// SYMLINK is index mode 120000 and is a perfectly ordinary blob whose bytes are
+// the target path. It must keep being read and inlined — the fix must key on
+// "is this a blob", not on "is this mode unusual".
+func TestRealGit_SymlinkConflict_ReadsAsBlob(t *testing.T) {
+	ws := realGitFixture(t, "symlink")
+	const linkPath = "link"
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+
+	if res.FollowUp != FollowUpStageCanResume {
+		t.Fatalf("FollowUp = %q, want %q — a symlink conflict is ordinary blob content: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+	}
+	doc := readConflictContext(t, ws, 301)
+	rawFiles, _ := doc["conflicting_files"].([]interface{})
+	for _, rf := range rawFiles {
+		entry, _ := rf.(map[string]interface{})
+		if entry["path"] != linkPath {
+			continue
+		}
+		if entry["ours_mode"] != "120000" {
+			t.Errorf("%s ours_mode = %v, want 120000", linkPath, entry["ours_mode"])
+		}
+		if ours, _ := entry["ours"].(string); ours != "target-feature-side" {
+			t.Errorf("%s ours = %q, want the PR branch's link target inlined verbatim", linkPath, ours)
+		}
+		if theirs, _ := entry["theirs"].(string); theirs != "target-main-side" {
+			t.Errorf("%s theirs = %q, want the base's link target inlined verbatim", linkPath, theirs)
+		}
+		return
+	}
+	t.Fatalf("%q missing from the capture: %v", linkPath, doc["conflicting_files"])
+}
+
+// treeEntry reads one path's mode and object id out of a committed tree via
+// `git ls-tree`, so the expected values in the gitlink test are git's own rather
+// than the fixture script's local variables. Output shape:
+// "<mode> <type> <oid>\t<path>".
+func treeEntry(t *testing.T, ws, rev, path string) (mode, oid string) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", ws, "ls-tree", rev, "--", path).Output()
+	if err != nil {
+		t.Fatalf("git ls-tree %s -- %s: %v", rev, path, err)
+	}
+	meta, p, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
+	if !ok || p != path {
+		t.Fatalf("git ls-tree %s -- %s produced no entry for that path: %q", rev, path, out)
+	}
+	f := strings.Fields(meta)
+	if len(f) != 3 {
+		t.Fatalf("unparseable ls-tree metadata %q", meta)
+	}
+	return f[0], f[2]
+}
+
+// startRebase runs the fetch+rebase BranchOutOfDate would run, so a test can
+// call the capture directly against a genuinely conflicted index.
+func startRebase(t *testing.T, ws string) {
+	t.Helper()
+	if out, err := exec.Command("git", "-C", ws, "fetch", "origin", "main").CombinedOutput(); err != nil {
+		t.Fatalf("git fetch: %v\n%s", err, out)
+	}
+	// A conflicting rebase exits non-zero; that is the point.
+	_ = exec.Command("git", "-C", ws, "rebase", "origin/main").Run()
+	if !rebaseInProgress(t, ws) {
+		t.Fatal("precondition: the rebase must be paused on a conflict")
+	}
+}
+
+// runSkillCapture executes the pr-merge skill's capture_conflict_and_signal
+// helper VERBATIM out of skills/nightgauge-pr-merge/_includes/merge.md against a
+// real conflicted index.
+//
+// The function body is extracted from the shipped markdown at test time rather
+// than copied here, so the test cannot pass against a skill that has drifted —
+// which is the whole point: the reader's guard is only as good as its agreement
+// with the writer that actually runs on the normal pr-merge path.
+func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, withHeadRef bool) {
+	t.Helper()
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH — the skill capture is a jq pipeline")
+	}
+	src, err := filepath.Abs(filepath.Join("..", "..", "..", "skills", "nightgauge-pr-merge", "_includes", "merge.md"))
+	if err != nil {
+		t.Fatalf("resolve merge.md: %v", err)
+	}
+	body, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read merge.md: %v", err)
+	}
+	const start = "capture_conflict_and_signal() {"
+	i := strings.Index(string(body), start)
+	if i < 0 {
+		t.Fatalf("capture_conflict_and_signal not found in %s", src)
+	}
+	rest := string(body)[i:]
+	end := strings.Index(rest, "\n}\n")
+	if end < 0 {
+		t.Fatalf("capture_conflict_and_signal has no closing brace in %s", src)
+	}
+	fn := rest[:end+3]
+
+	script := filepath.Join(t.TempDir(), "capture.sh")
+	if err := os.WriteFile(script, []byte("set -u\n"+fn+"\ncapture_conflict_and_signal \"$CCS_REASON\"\n"), 0o644); err != nil {
+		t.Fatalf("write capture script: %v", err)
+	}
+	cmd := exec.Command("bash", script)
+	cmd.Dir = ws
+	cmd.Env = append(os.Environ(),
+		"ISSUE_NUMBER="+strconv.Itoa(issue),
+		"PR_NUMBER="+strconv.Itoa(pr),
+		"BASE_REF=main",
+		"CCS_REASON="+reason,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	if withHeadRef {
+		cmd.Env = append(cmd.Env, "HEAD_REF="+fixtureBranch)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("skill capture failed: %v\n%s", err, out)
+	}
+	t.Logf("skill capture said: %s", strings.TrimSpace(string(out)))
+}
+
+// TestRealGit_SkillWriter_ReadByRecoveryLoop closes the #301 round-2 finding-2/4
+// loop end to end: the SKILL's shell capture — the writer that runs on the
+// normal MERGEABLE=CONFLICTING pr-merge path, and the one the reader hardening
+// claimed to cover but did not — writes the document, and
+// ConflictRecoveryLoop.Execute reads exactly that document.
+//
+// Two halves, both against real git:
+//
+//   - a healthy multi-file conflict including a non-ASCII path must be read as
+//     actionable, with the path intact. The old writer enumerated with
+//     `git diff --name-only --diff-filter=U`, which C-quotes `café.txt` into the
+//     literal `"caf\303\251.txt"`; `git show ":2:<that>"` then failed and the
+//     entry landed with both sides empty NEXT TO a healthy f.txt — a document
+//     the reader accepted and spent the whole max_dev_redispatch budget on.
+//   - a conflict the writer could not record faithfully (binary content) must
+//     be escalated rather than resolved against.
+func TestRealGit_SkillWriter_ReadByRecoveryLoop(t *testing.T) {
+	t.Run("captured conflict is actionable and keeps the non-ASCII path", func(t *testing.T) {
+		ws := realGitFixture(t, "unicode-path")
+		startRebase(t, ws)
+		// No HEAD_REF: this also exercises the head-name branch fallback, since
+		// git has HEAD detached for the rebase's duration.
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", false)
+
+		doc := readConflictContext(t, ws, 301)
+		if doc["branch"] != fixtureBranch {
+			t.Errorf("branch = %v, want %q resolved from rebase-merge/head-name", doc["branch"], fixtureBranch)
+		}
+		if doc["capture_failed"] != false {
+			t.Errorf("capture_failed = %v, want false — every path read cleanly", doc["capture_failed"])
+		}
+
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpStageCanResume {
+			t.Fatalf("FollowUp = %q, want %q: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+		}
+		joined := strings.Join(res.Evidence, " ")
+		if !strings.Contains(joined, "conflicting_file=café.txt") {
+			t.Errorf("the non-ASCII path must survive to the reader intact, got %v", res.Evidence)
+		}
+	})
+
+	t.Run("unrecordable conflict escalates instead of burning the budget", func(t *testing.T) {
+		ws := realGitFixture(t, "binary")
+		startRebase(t, ws)
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", true)
+
+		doc := readConflictContext(t, ws, 301)
+		if doc["capture_failed"] != true {
+			t.Fatalf("capture_failed = %v, want true — bin.dat cannot round-trip through JSON", doc["capture_failed"])
+		}
+
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpHumanTriageRequired {
+			t.Fatalf("FollowUp = %q, want %q — the writer said it could not record this: %s",
+				res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+		}
+		if !strings.Contains(res.Reason, "capture_failed") {
+			t.Errorf("the escalation must name the marker it acted on: %q", res.Reason)
+		}
+	})
+}
+
+// TestRealGit_RebaseBranch_ResolvesHeadName covers rebaseBranch returning a REAL
+// branch. Every other test resolves the branch before the steps loop with HEAD
+// still attached, so the fallback only ever ran in the detached case where it
+// correctly returns "" — leaving its `rev-parse --git-path` + os.ReadFile
+// plumbing, the sole protection for a worktree that is ALREADY detached when
+// Execute starts, entirely unexercised (#301 round-2 advisory).
+func TestRealGit_RebaseBranch_ResolvesHeadName(t *testing.T) {
+	ws := realGitFixture(t, "conflict")
+	startRebase(t, ws)
+
+	if got := currentBranch(context.Background(), ws); got != unknownBranch {
+		t.Fatalf("precondition: git detaches HEAD during a rebase, so currentBranch must degrade to %q, got %q", unknownBranch, got)
+	}
+	if got := rebaseBranch(context.Background(), ws); got != fixtureBranch {
+		t.Errorf("rebaseBranch = %q, want %q from rebase-merge/head-name", got, fixtureBranch)
 	}
 }
 

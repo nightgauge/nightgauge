@@ -69,6 +69,19 @@
 #                            --abort` here throws away the operator's work. No
 #                            conflict is present, so a capture probe reports zero
 #                            unmerged paths.
+#               gitlink      — a MULTI-FILE content conflict where one path is a
+#                            SUBMODULE POINTER (index mode 160000). Its stage
+#                            1/2/3 object ids are COMMITs living in the
+#                            submodule's own object store, so
+#                            `git cat-file blob <id>` in the superproject exits
+#                            128 ("bad file"). Only git decides that a
+#                            conflicted gitlink is listed by `ls-files -u` with
+#                            mode 160000 alongside ordinary blob entries.
+#               symlink      — a content conflict on a SYMLINK (index mode
+#                            120000). A symlink IS a blob whose bytes are the
+#                            target path, so it must keep reading normally — the
+#                            control that stops the gitlink fix from being
+#                            written as "anything unusual is metadata-only".
 #
 # Prints the path of the working clone on stdout. That clone is left checked out
 # on the feature branch with origin/main already advanced, i.e. positioned
@@ -89,13 +102,13 @@ set -euo pipefail
 dest="${1:-}"
 mode="${2:-conflict}"
 
-modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase"
+modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink"
 if [ -z "$dest" ]; then
   echo "usage: $0 <dest-dir> [$modes]" >&2
   exit 2
 fi
 case "$mode" in
-  conflict | dirty-index | detached | unicode-path | binary | operator-rebase) ;;
+  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink) ;;
   *)
     echo "unknown mode: $mode (want $modes)" >&2
     exit 2
@@ -137,24 +150,66 @@ extra=""
 case "$mode" in
   unicode-path) extra="café.txt" ;;
   binary) extra="bin.dat" ;;
+  gitlink) extra="sub" ;;
+  symlink) extra="link" ;;
 esac
 
-# write_extra <variant> — emit the extra path's content for one side. Byte
-# sequences are written with printf octal escapes rather than /dev/urandom so
-# the fixture is reproducible: \377 and \376 are never valid UTF-8 anywhere,
-# and \000 is what makes git call the file binary.
+# Three real commit objects for the gitlink to point at, one per side. They are
+# built with `commit-tree` over the empty tree, so they are genuine commit
+# objects in this repository's store with no branch pointing at them — which is
+# exactly the shape a submodule pointer has from the superproject's side (the
+# superproject never holds the submodule's objects either). Distinct messages
+# give distinct object ids; the pinned identity/date keeps them reproducible.
+if [ "$mode" = "gitlink" ]; then
+  empty_tree=$(git -C "$work" hash-object -t tree -w /dev/null)
+  gl_shared=$(git -C "$work" commit-tree "$empty_tree" -m "submodule commit: shared")
+  gl_feature=$(git -C "$work" commit-tree "$empty_tree" -m "submodule commit: feature-side")
+  gl_main=$(git -C "$work" commit-tree "$empty_tree" -m "submodule commit: main-side")
+fi
+
+# write_extra <variant> — emit the extra path's content for one side, for the
+# modes whose extra path is a real file in the worktree. Byte sequences are
+# written with printf octal escapes rather than /dev/urandom so the fixture is
+# reproducible: \377 and \376 are never valid UTF-8 anywhere, and \000 is what
+# makes git call the file binary.
+#
+# The gitlink mode has NO worktree file (an uninitialized submodule is an empty
+# directory at most) — it is staged straight into the index by stage_extra.
 write_extra() {
   [ -n "$extra" ] || return 0
   case "$mode" in
     unicode-path) printf 'line-1\n%s\nline-3\n' "$1" >"$work/$extra" ;;
     binary) printf '\377\376%s\000\001\002\377' "$1" >"$work/$extra" ;;
+    symlink)
+      rm -f "$work/$extra"
+      ln -s "target-$1" "$work/$extra"
+      ;;
   esac
+}
+
+# stage_extra <variant> — runs AFTER `git add -A`, for extras that exist only as
+# an index entry. `git add -A` would otherwise stage the gitlink's DELETION
+# (its path has no worktree file), so the order matters.
+stage_extra() {
+  [ "$mode" = "gitlink" ] || return 0
+  local oid
+  case "$1" in
+    shared) oid="$gl_shared" ;;
+    feature-side) oid="$gl_feature" ;;
+    main-side) oid="$gl_main" ;;
+    *)
+      echo "stage_extra: unknown variant $1" >&2
+      exit 2
+      ;;
+  esac
+  git -C "$work" update-index --add --cacheinfo "160000,$oid,$extra"
 }
 
 # --- base commit on main -------------------------------------------------
 printf 'line-1\nshared\nline-3\n' >"$work/f.txt"
 write_extra shared
 git -C "$work" add -A
+stage_extra shared
 git -C "$work" commit --quiet -m "base"
 git -C "$work" push --quiet origin main
 
@@ -163,6 +218,7 @@ git -C "$work" checkout --quiet -b "$BRANCH"
 printf 'line-1\nfeature-side\nline-3\n' >"$work/f.txt"
 write_extra feature-side
 git -C "$work" add -A
+stage_extra feature-side
 git -C "$work" commit --quiet -m "feat: rewrite shared line on the feature branch"
 
 # --- main advances, editing the SAME line differently --------------------
@@ -170,6 +226,7 @@ git -C "$work" checkout --quiet main
 printf 'line-1\nmain-side\nline-3\n' >"$work/f.txt"
 write_extra main-side
 git -C "$work" add -A
+stage_extra main-side
 git -C "$work" commit --quiet -m "fix: rewrite shared line on main"
 git -C "$work" push --quiet origin main
 

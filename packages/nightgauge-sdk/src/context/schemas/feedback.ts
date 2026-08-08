@@ -82,24 +82,83 @@ export type FeedbackContext = z.infer<typeof FeedbackContextSchema>;
 //
 // conflict-context-{N}.json is written by the pr-merge stage (merge.md Step
 // 6.1.5) when a rebase hits a non-trivial conflict that the skill cannot
-// resolve in-place. It captures the conflicting files and BOTH sides of each
-// conflict (ours = the PR's feature work, theirs = the rebased base branch)
+// resolve in-place (and by the Go branch-out-of-date recovery action, which
+// mirrors it). It captures the conflicting files and BOTH sides of each conflict
 // BEFORE `git rebase --abort` discards the conflict state. The recovery loop
 // pairs it with a CONFLICT_RESOLUTION_NEEDED feedback signal so feature-dev is
 // re-dispatched on the SAME branch to resolve the conflict, rather than the
 // whole branch being deleted for a fresh-branch restart.
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// ours / theirs are the CONSUMER's vocabulary, not git's (#301)
+//
+//   ours   = the PR branch's own work
+//   theirs = the base the PR is being landed onto
+//
+// Git's index stage names are relative to what is CHECKED OUT, and a rebase
+// checks out the upstream and replays your commits onto it — so under a rebase
+// git calls the base "ours" and your work "theirs", the exact inverse of a
+// merge. Every writer of this document MUST translate; passing git's naming
+// through handed feature-dev the base branch under the field it is told is its
+// own feature work, and its resolution then inverted both sides.
+//
+//   operation | ours (PR branch work) | theirs (base)  | detected from
+//   ----------|-----------------------|----------------|------------------------
+//   rebase    | index stage 3         | index stage 2  | rebase-merge/ or
+//             |                       |                | rebase-apply/ exists
+//   merge     | index stage 2         | index stage 3  | MERGE_HEAD exists
+//
+// `conflict_operation` on the context records which mapping was applied.
+// ----------------------------------------------------------------------------
+
+// Index modes that carry inlinable blob content. 160000 (a submodule pointer,
+// "gitlink") does not: its object id is a COMMIT in the submodule's own store,
+// so ours/theirs stay empty and ours_commit/theirs_commit carry the ids.
+const BLOB_MODES = ["100644", "100755", "120000"] as const;
+
 // A single conflicting file with both sides of the conflict.
 export const ConflictFileSchema = z.object({
   /** Repo-relative path of the conflicting file. */
   path: z.string().min(1),
-  /** "ours" side blob — the PR branch's version (git show :2:<path>). */
+  /** "ours" side blob — the PR branch's own work. Empty for a gitlink or an absent side. */
   ours: z.string(),
-  /** "theirs" side blob — the rebased base version (git show :3:<path>). */
+  /** "theirs" side blob — the base being landed onto. Empty for a gitlink or an absent side. */
   theirs: z.string(),
+  /**
+   * Whether the index carried an "ours" stage at all. false is a real conflict
+   * shape (modify/delete, delete/delete), NOT a failed read — which is why an
+   * empty `ours` is only ambiguous when this flag is missing.
+   */
+  ours_present: z.boolean().optional(),
+  /** Whether the index carried a "theirs" stage at all. */
+  theirs_present: z.boolean().optional(),
+  /** Index mode of the "ours" stage ("" when absent). Anything outside BLOB_MODES is metadata-only. */
+  ours_mode: z.string().optional(),
+  /** Index mode of the "theirs" stage ("" when absent). */
+  theirs_mode: z.string().optional(),
+  /** Submodule commit id on the "ours" side. Present only when ours_mode is 160000. */
+  ours_commit: z.string().optional(),
+  /** Submodule commit id on the "theirs" side. Present only when theirs_mode is 160000. */
+  theirs_commit: z.string().optional(),
 });
 export type ConflictFile = z.infer<typeof ConflictFileSchema>;
+
+/**
+ * True when neither side of the entry has content and nothing in the entry
+ * explains it — the shape a writer produces when its blob reads failed and it
+ * substituted "". Consumers must refuse such an entry rather than resolve
+ * against it. Mirrors conflictContextEntry.unexplainedEmpty in
+ * internal/orchestrator/recovery/conflict_recovery_loop.go.
+ */
+export function isUnrecordedConflictFile(f: ConflictFile): boolean {
+  if (f.ours !== "" || f.theirs !== "") return false;
+  const nonBlob = (m?: string) =>
+    m !== undefined && m !== "" && !(BLOB_MODES as readonly string[]).includes(m);
+  if (nonBlob(f.ours_mode) || nonBlob(f.theirs_mode)) return false;
+  if (f.ours_present === false || f.theirs_present === false) return false;
+  return true;
+}
 
 // Standalone conflict-context-{N}.json schema. Extra fields are tolerated so a
 // future capture can add hunk context without a schema bump.
@@ -110,6 +169,15 @@ export const ConflictContextSchema = z
     pr_number: z.number().int().nonnegative(),
     branch: z.string().min(1),
     base_ref: z.string().min(1),
+    /** Which stage→side mapping the writer applied. See the table above. */
+    conflict_operation: z.enum(["rebase", "merge"]).optional(),
+    /**
+     * The writer's own admission that it could not record this conflict
+     * faithfully. A consumer must escalate rather than resolve. Only the shell
+     * capture in skills/nightgauge-pr-merge sets it; the Go capture writes no
+     * document at all when it fails.
+     */
+    capture_failed: z.boolean().optional(),
     conflicting_files: z.array(ConflictFileSchema).min(1),
     created_at: z.string().datetime().nullish(),
   })

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,21 +34,46 @@ func stubExecGitToFile(t *testing.T, fn func(ctx context.Context, dir, dest stri
 	t.Cleanup(func() { execGitToFile = prev })
 }
 
-// Stub index-stage blob ids. Real object ids so isBlobSHA accepts them — the
-// capture path reads every blob BY ID now, never by path.
+// Stub index-stage blob ids, named by git's STAGE NUMBER rather than by
+// ours/theirs: which stage is whose side depends on the operation (a rebase
+// inverts them), and encoding the answer in the fixture's names is how the
+// inversion hid (#301).
 const (
-	stubBaseSHA   = "1111111111111111111111111111111111111111"
-	stubOursSHA   = "2222222222222222222222222222222222222222"
-	stubTheirsSHA = "3333333333333333333333333333333333333333"
+	stubStage1SHA = "1111111111111111111111111111111111111111"
+	stubStage2SHA = "2222222222222222222222222222222222222222"
+	stubStage3SHA = "3333333333333333333333333333333333333333"
+	// Under a rebase, stage 2 is the upstream and stage 3 the replayed commit.
+	stubStage2Content = "base-side-content"
+	stubStage3Content = "feature-side-content"
 )
 
 // stubUnmergedIndex renders `git ls-files -u -z` output for one conflicting
 // path with all three stages: NUL-terminated records of "<mode> <sha> <stage>\t<path>".
 func stubUnmergedIndex(path string) []byte {
 	return []byte(
-		"100644 " + stubBaseSHA + " 1\t" + path + "\x00" +
-			"100644 " + stubOursSHA + " 2\t" + path + "\x00" +
-			"100644 " + stubTheirsSHA + " 3\t" + path + "\x00")
+		"100644 " + stubStage1SHA + " 1\t" + path + "\x00" +
+			"100644 " + stubStage2SHA + " 2\t" + path + "\x00" +
+			"100644 " + stubStage3SHA + " 3\t" + path + "\x00")
+}
+
+// stubCatFile answers the `cat-file -s` / `cat-file blob` pair for the stub
+// index stages. The size query is first and is not optional: the capture bounds
+// a blob before reading it, so a stub that answers only `blob` makes every path
+// unrepresentable.
+func stubCatFile(joined string) ([]byte, bool) {
+	for sha, content := range map[string]string{
+		stubStage1SHA: "base-content",
+		stubStage2SHA: stubStage2Content,
+		stubStage3SHA: stubStage3Content,
+	} {
+		switch joined {
+		case "cat-file -s " + sha:
+			return []byte(strconv.Itoa(len(content)) + "\n"), true
+		case "cat-file blob " + sha:
+			return []byte(content), true
+		}
+	}
+	return nil, false
 }
 
 // greenChecksGh stubs execGh so the rebased PR's check rollup reads all-green.
@@ -271,14 +297,27 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 	aborted := false
 	rebasing := false
 	capturedBeforeAbort := false
+	// A REAL rebase-merge directory, created and removed in step with the stubbed
+	// rebase. The pre-flight guard, the operation detection (which decides the
+	// stage→side mapping) and the abort all read this state, so a stub that
+	// leaves it absent describes a rebase git never performs.
+	rebaseDir := filepath.Join(ws, ".git", "rebase-merge")
 	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
 		joined := strings.Join(args, " ")
+		if out, ok := stubCatFile(joined); ok {
+			return out, nil
+		}
 		switch {
 		case joined == "fetch origin main":
 			return []byte(""), nil
 		case joined == "rebase origin/main":
 			rebasing = true
+			if err := os.MkdirAll(rebaseDir, 0o755); err != nil {
+				return nil, err
+			}
 			return []byte("CONFLICT (content): Merge conflict in foo.go"), errors.New("exit 1: rebase conflict")
+		case joined == "rev-parse --git-path rebase-merge":
+			return []byte(rebaseDir + "\n"), nil
 		case joined == "rev-parse --abbrev-ref HEAD":
 			if rebasing {
 				// Detached HEAD — what git actually answers mid-rebase.
@@ -291,13 +330,10 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 				capturedBeforeAbort = true
 			}
 			return stubUnmergedIndex("foo.go"), nil
-		case joined == "cat-file blob "+stubOursSHA:
-			return []byte("ours-content"), nil
-		case joined == "cat-file blob "+stubTheirsSHA:
-			return []byte("theirs-content"), nil
 		case joined == "rebase --abort":
 			aborted = true
 			rebasing = false
+			_ = os.RemoveAll(rebaseDir)
 			return []byte(""), nil
 		}
 		return []byte(""), nil
@@ -332,6 +368,22 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 	}
 	if ctxDoc["branch"] != "feat/77-thing" {
 		t.Errorf("conflict-context branch = %v, want %q", ctxDoc["branch"], "feat/77-thing")
+	}
+	// ours = the PR branch's work, theirs = the base, which under a rebase means
+	// stage 3 and stage 2 — the inverse of git's own stage names (#301).
+	if ctxDoc["conflict_operation"] != "rebase" {
+		t.Errorf("conflict_operation = %v, want \"rebase\"", ctxDoc["conflict_operation"])
+	}
+	entries, _ := ctxDoc["conflicting_files"].([]interface{})
+	if len(entries) != 1 {
+		t.Fatalf("conflicting_files = %v, want one entry", ctxDoc["conflicting_files"])
+	}
+	entry, _ := entries[0].(map[string]interface{})
+	if entry["ours"] != stubStage3Content {
+		t.Errorf("ours = %v, want %q (index stage 3 — the replayed PR commit)", entry["ours"], stubStage3Content)
+	}
+	if entry["theirs"] != stubStage2Content {
+		t.Errorf("theirs = %v, want %q (index stage 2 — the rebase upstream)", entry["theirs"], stubStage2Content)
 	}
 	// feedback-77.json must carry a CONFLICT_RESOLUTION_NEEDED signal.
 	fbData, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json"))

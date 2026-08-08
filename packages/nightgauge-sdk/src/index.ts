@@ -315,6 +315,7 @@ export {
   FeedbackContextSchema,
   ConflictFileSchema,
   ConflictContextSchema,
+  isUnrecordedConflictFile,
   type PipelineFeedbackSignalType,
   type PipelineFeedbackSignal,
   type PipelineFeedback,

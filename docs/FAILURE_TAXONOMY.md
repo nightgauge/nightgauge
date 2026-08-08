@@ -865,7 +865,12 @@ excluded. The confirmed instances are filed as:
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage
   killed before the `result` event books zero tokens
 - **#301** — `captureConflictContextFromIndex` writes an empty capture as
-  success, then `rebase --abort` destroys the evidence
+  success, then `rebase --abort` destroys the evidence. **Fixed:** the capture
+  returns three distinct outcomes and writes a document only for the one that
+  earned it; both writers mark or omit a failure rather than emitting empty
+  sides; and `conflict-recovery-loop` rejects a degenerate document per entry,
+  not just per document. See
+  [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301)
 - **#302** — batch of four small guards (bash-ring correlation self-check,
   zero-root worktree sweep, nil-state card retraction, unlogged
   `autonomousComplete` skip)

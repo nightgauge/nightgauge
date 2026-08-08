@@ -181,16 +181,21 @@ duration, so asking afterwards yields the `"unknown"` sentinel that feature-dev
 refuses to check out — with `rebase-merge/head-name` as the fallback. The capture
 then reports one of three outcomes, and each gets its own handling:
 
-- **captured** — every conflicting path has index blobs that can be represented
-  in the context (readable, valid UTF-8, under the per-side size cap) and the
-  branch resolved. Writes the context file + signal, aborts the rebase (the
+- **captured** — every conflicting path is representable and the branch
+  resolved. A blob side must be readable, valid UTF-8 and under the per-side size
+  cap; a **gitlink** (index mode `160000`) side is representable by definition —
+  its content is a commit id, recorded as `ours_commit`/`theirs_commit` with no
+  object read at all. Writes the context file + signal, aborts the rebase (the
   context carries both sides of every path, so it IS the durable copy), returns
-  `stage can resume`.
+  `stage can resume`. The abort's exit status is checked here and only here: a
+  failed abort downgrades to human triage rather than resuming a stage into a
+  live rebase.
 - **no-conflict-state** — the rebase failed but nothing is conflicted (dirty
   index, unborn base). Writes nothing, aborts, escalates to human triage with the
-  raw rebase error. Emitting a conflict signal here would spend the whole
-  `max_dev_redispatch` budget re-running feature-dev against a context naming
-  zero files.
+  raw rebase error — git writes that diagnosis to stderr, so the evidence carries
+  `(*exec.ExitError).Stderr` and not the contentless "exit status 1". Emitting a
+  conflict signal here would spend the whole `max_dev_redispatch` budget
+  re-running feature-dev against a context naming zero files.
 - **failed** — the index could not be enumerated, the branch could not be named,
   or at least one conflicting path cannot be represented in a context (unreadable
   blob, binary/non-UTF-8 content, over the size cap). Writes no context and no
@@ -218,11 +223,23 @@ worktree every consumer can still handle. `RecoverUncommittedWork` additionally
 refuses an unmerged index outright, so the collapse cannot happen even if some
 other path leaves one behind.
 
-Only one narrow case still leaves the rebase in progress: the capture failed AND
-the raw index could not be copied out either (unwritable tree, or git could not
-read back a blob it had just listed). Aborting then would leave zero record, so
-the in-index stages are kept as the last copy. That result carries
-`evidence_preserved=false` and `rebase_left_in_progress=true`.
+Only one case still leaves the rebase in progress: the capture failed AND the raw
+index could not be copied out either — an unwritable tree, or git failing to read
+back a blob it had just listed. Aborting then would leave zero record, so the
+in-index stages are kept as the last copy, with `evidence_preserved=false` and
+`rebase_left_in_progress=true`.
+
+Nothing in the pipeline reclaims that worktree: `RecoverUncommittedWork` refuses
+an unmerged index, the reconcile sweep skips a detached HEAD, and worktree reuse
+hands the same tree to the next run untouched. That is why the escalation's
+Reason spells out the manual remedy (copy each side out with
+`git show :2:<path>` / `:3:<path>`, or read the commit ids from
+`git ls-files -u` for a submodule, then `git rebase --abort`). It is deliberately
+a last resort and not an ordinary conflict class — a **submodule pointer conflict
+used to land here on every occurrence**, because the dump ran `cat-file blob` on
+a commit id; it now dumps such stages as metadata (`gitlink: true`, mode, sha)
+and the abort runs normally. Any error mid-dump also removes the whole evidence
+directory, so a partial dump never survives as orphan blobs with no manifest.
 
 ### Conflict-recovery-loop (#4072)
 

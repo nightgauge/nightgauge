@@ -2,8 +2,11 @@ package recovery
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 // execGh is the indirection point for `gh`-backed recovery actions so tests
@@ -53,6 +56,32 @@ var execGitToFile = func(ctx context.Context, dir, destPath string, args ...stri
 		return runErr
 	}
 	return closeErr
+}
+
+// gitErrDetail renders a git failure the way an operator needs to read it:
+// the exit status PLUS the stderr git actually wrote.
+//
+// execGit uses cmd.Output(), which returns stdout only, and an *exec.ExitError's
+// Error() is the bare string "exit status 1". Git puts its entire diagnosis on
+// stderr — `git rebase` refusing a dirty index prints NOTHING on stdout and
+// "error: cannot rebase: Your index contains uncommitted changes." on stderr —
+// so an escalation built from err.Error() and stdout carries no diagnosis at
+// all. That is a contentless escalation replacing a wrong success, which is only
+// half a fix for a silent-no-op issue (#301 round-2 advisory).
+//
+// cmd.Output() captures stderr into ExitError.Stderr precisely so this is
+// possible; nothing else needs to change at the call sites.
+func gitErrDetail(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if stderr := strings.TrimSpace(string(ee.Stderr)); stderr != "" {
+			return fmt.Sprintf("%s: %s", err.Error(), stderr)
+		}
+	}
+	return err.Error()
 }
 
 // execNightgauge is the indirection point for the local nightgauge

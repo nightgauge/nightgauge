@@ -175,7 +175,10 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 				}
 				capture := captureConflictContextFromIndex(ctx, failure.Workspace,
 					failure.IssueNumber, failure.PRNumber, branch, "main")
-				rebaseErr := truncate(err.Error(), 200)
+				// gitErrDetail, not err.Error(): git writes its whole diagnosis to
+				// stderr and execGit returns stdout, so the bare error is the
+				// contentless string "exit status 1" (#301 round-2 advisory).
+				rebaseErr := truncate(gitErrDetail(err), 300)
 				conflictEvidence := append(evidence, "step=rebase", fmt.Sprintf("branch=%s", branch))
 
 				switch capture.Outcome {
@@ -183,7 +186,31 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 					// The evidence is on disk and the signal is written; the index
 					// has done its job. Abort to leave a clean tree for the dev
 					// re-dispatch.
-					_, _ = execGit(ctx, failure.Workspace, "rebase", "--abort")
+					//
+					// This abort's exit status is CHECKED, unlike the two below,
+					// because this is the only branch that returns
+					// FollowUpStageCanResume. An abort that failed (index.lock,
+					// permissions) leaves a live rebase and an unmerged index while
+					// telling the scheduler to rewind — and feature-dev's intake
+					// runs `git checkout "$CONFLICT_BRANCH" || true`, which git
+					// refuses on an unmerged index, so the agent would commit onto
+					// the rebase's detached HEAD. Dispatching a dev stage into a
+					// conflicted index is the one thing this whole path exists to
+					// prevent (#301 round-2 advisory).
+					if _, aerr := execGit(ctx, failure.Workspace, "rebase", "--abort"); aerr != nil {
+						return RecoveryResult{
+							Action: a.Name(),
+							Reason: fmt.Sprintf("rebase conflict captured for %q, but `git rebase --abort` failed (%s) — refusing to resume a stage into a live rebase with an unmerged index",
+								capture.Branch, truncate(gitErrDetail(aerr), 200)),
+							Evidence: append(append(conflictEvidence,
+								"capture=captured",
+								"abort_failed=true",
+								"rebase_left_in_progress=true",
+								fmt.Sprintf("abort_error=%s", truncate(gitErrDetail(aerr), 200))),
+								prefixed("conflicting_file=", capture.Files)...),
+							FollowUp: FollowUpHumanTriageRequired,
+						}
+					}
 					return RecoveryResult{
 						Action: a.Name(),
 						Reason: fmt.Sprintf("rebase conflict — deferring to conflict-recovery (re-dispatch feature-dev on %q, %d file(s))", capture.Branch, len(capture.Files)),
@@ -257,7 +284,7 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 					// conflict, so do not — the in-index stages are all that is left.
 					return RecoveryResult{
 						Action: a.Name(),
-						Reason: fmt.Sprintf("rebase conflict could not be captured or preserved (%s) — leaving the rebase in progress so the conflicted index survives for triage", captureErr),
+						Reason: fmt.Sprintf("rebase conflict could not be captured or preserved (%s) — leaving the rebase in progress so the conflicted index survives for triage. To clear it: copy each conflicting path's sides out with `git show :2:<path>` / `git show :3:<path>` (a submodule pointer's sides are the commit ids in `git ls-files -u`), then `git rebase --abort`; nothing in the pipeline reclaims a mid-rebase worktree on its own", captureErr),
 						Evidence: append(append(conflictEvidence,
 							"capture=failed",
 							"evidence_preserved=false",
@@ -271,7 +298,7 @@ func (a *BranchOutOfDate) Execute(ctx context.Context, failure StageFailure) Rec
 			}
 			return RecoveryResult{
 				Action: a.Name(),
-				Reason: fmt.Sprintf("git %s failed: %s", step.label, truncate(err.Error(), 200)),
+				Reason: fmt.Sprintf("git %s failed: %s", step.label, truncate(gitErrDetail(err), 300)),
 				Evidence: append(evidence,
 					fmt.Sprintf("step=%s", step.label),
 					fmt.Sprintf("output=%s", truncate(string(out), 200)),

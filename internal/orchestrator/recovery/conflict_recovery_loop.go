@@ -111,13 +111,71 @@ func mentionsConflict(reason string, evidence []string) bool {
 // conflictContextFile is the on-disk shape of conflict-context-{N}.json. Only
 // the fields this action reads are modeled; extra fields are tolerated.
 type conflictContextFile struct {
-	IssueNumber      int    `json:"issue_number"`
-	PRNumber         int    `json:"pr_number"`
-	Branch           string `json:"branch"`
-	BaseRef          string `json:"base_ref"`
-	ConflictingFiles []struct {
-		Path string `json:"path"`
-	} `json:"conflicting_files"`
+	IssueNumber int    `json:"issue_number"`
+	PRNumber    int    `json:"pr_number"`
+	Branch      string `json:"branch"`
+	BaseRef     string `json:"base_ref"`
+	// CaptureFailed is the writer's own admission that it could not record the
+	// conflict faithfully. The shell writer in
+	// skills/nightgauge-pr-merge/_includes/merge.md sets it whenever a blob read
+	// or the enumeration failed, so a partial document is never mistaken for a
+	// complete one (#301 round-2 finding 2/4). The Go writer never emits a
+	// failed capture at all — it writes nothing — so this is only ever true for
+	// a skill-written document.
+	CaptureFailed    bool                   `json:"capture_failed"`
+	Operation        string                 `json:"conflict_operation"`
+	ConflictingFiles []conflictContextEntry `json:"conflicting_files"`
+}
+
+// conflictContextEntry is one conflicting_files[] element as a READER sees it.
+// The presence flags are pointers so "the writer said false" is distinguishable
+// from "the writer did not say" — that difference is what lets the reader tell a
+// legitimately-empty side from a silently-failed blob read.
+type conflictContextEntry struct {
+	Path          string `json:"path"`
+	Ours          string `json:"ours"`
+	Theirs        string `json:"theirs"`
+	OursPresent   *bool  `json:"ours_present"`
+	TheirsPresent *bool  `json:"theirs_present"`
+	OursMode      string `json:"ours_mode"`
+	TheirsMode    string `json:"theirs_mode"`
+}
+
+// unexplainedEmpty reports whether BOTH sides of this entry are empty with
+// nothing in the entry accounting for it — the exact shape a writer produces
+// when its blob reads failed and it substituted "" (#301 round-2 finding 4).
+//
+// Three things legitimately produce an empty side, and all three are visible in
+// the document:
+//
+//   - a non-blob mode (160000, a submodule pointer): the side's "content" IS a
+//     commit id, recorded in ours_commit/theirs_commit, so there are no bytes to
+//     inline and empty is the correct encoding;
+//   - a side the index does not carry at all (delete/delete, modify/delete),
+//     which the writer states via ours_present/theirs_present = false;
+//   - genuinely empty file content on one side, in which case the OTHER side is
+//     non-empty and this predicate is false anyway.
+//
+// Anything else — `{"path":"x","ours":"","theirs":""}` with no metadata — is the
+// legacy shell writer's silent failure, and re-dispatching feature-dev against
+// it burns the whole max_dev_redispatch budget resolving nothing.
+func (e conflictContextEntry) unexplainedEmpty() bool {
+	if e.Ours != "" || e.Theirs != "" {
+		return false
+	}
+	if e.OursMode != "" && !isBlobMode(e.OursMode) {
+		return false
+	}
+	if e.TheirsMode != "" && !isBlobMode(e.TheirsMode) {
+		return false
+	}
+	if e.OursPresent != nil && !*e.OursPresent {
+		return false
+	}
+	if e.TheirsPresent != nil && !*e.TheirsPresent {
+		return false
+	}
+	return true
 }
 
 // feedbackOnDisk is the read/write shape of feedback-{N}.json. It preserves
@@ -181,9 +239,32 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	}
 
 	files := make([]string, 0, len(cc.ConflictingFiles))
+	var degenerate []string
 	for _, f := range cc.ConflictingFiles {
-		if f.Path != "" {
-			files = append(files, f.Path)
+		if f.Path == "" {
+			continue
+		}
+		files = append(files, f.Path)
+		if f.unexplainedEmpty() {
+			degenerate = append(degenerate, f.Path)
+		}
+	}
+
+	// The writer said outright that it could not record this conflict. Believe
+	// it: the document is partial by its author's own admission, so anything
+	// feature-dev resolved from it would be resolved against a fiction (#301
+	// round-2 findings 2/4).
+	if cc.CaptureFailed {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: fmt.Sprintf("conflict-context-%d.json is marked capture_failed — the writer could not record the conflict, so there is nothing sound to re-dispatch feature-dev against", failure.IssueNumber),
+			Evidence: append([]string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				fmt.Sprintf("branch=%s", cc.Branch),
+				"capture_failed=true",
+				fmt.Sprintf("context=%s", contextPath),
+			}, prefixed("conflicting_file=", files)...),
+			FollowUp: FollowUpHumanTriageRequired,
 		}
 	}
 
@@ -191,9 +272,15 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 	// actionable: feature-dev would be re-dispatched with nothing to resolve (and
 	// with "unknown" it skips the branch checkout outright), spinning through the
 	// whole max_dev_redispatch budget and terminating in triage anyway. Escalate
-	// here instead — the reader enforces the same invariant the writer does, so a
-	// degenerate context from ANY writer (including the pr-merge skill) stops at
-	// one honest escalation rather than N useless dispatches (#301).
+	// here instead.
+	//
+	// The per-entry check below is what makes that claim true for the SKILL
+	// writer as well as the Go one. Rejecting only the whole-document shapes
+	// (zero files, unnamed branch) let a two-file context through when just ONE
+	// entry had both sides empty — precisely what a failed `git show ":2:$f"`
+	// used to produce next to a healthy sibling — and that context cost the full
+	// re-dispatch budget (#301 round-2 finding 4). Now any writer's degenerate
+	// entry stops at one honest escalation.
 	if len(files) == 0 {
 		return RecoveryResult{
 			Action: a.Name(),
@@ -203,6 +290,20 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 				fmt.Sprintf("branch=%s", cc.Branch),
 				fmt.Sprintf("context=%s", contextPath),
 			},
+			FollowUp: FollowUpHumanTriageRequired,
+		}
+	}
+	if len(degenerate) > 0 {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: fmt.Sprintf("conflict-context-%d.json carries %d of %d entries with both sides empty and nothing explaining why — those conflicts were never recorded",
+				failure.IssueNumber, len(degenerate), len(files)),
+			Evidence: append(append([]string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				fmt.Sprintf("branch=%s", cc.Branch),
+				fmt.Sprintf("context=%s", contextPath),
+			}, prefixed("unrecorded_file=", degenerate)...),
+				prefixed("conflicting_file=", files)...),
 			FollowUp: FollowUpHumanTriageRequired,
 		}
 	}
@@ -395,15 +496,109 @@ type conflictCapture struct {
 // what the context says and would write back the truncation (#301 review).
 const maxConflictBlobBytes = 1 << 20 // 1 MiB
 
-// unmergedPath is one path with an unmerged index entry, plus the blob SHA of
-// each stage git actually recorded for it (1 = merge base, 2 = ours, 3 =
-// theirs). Which stages exist is decided by the conflict's SHAPE, not by us: a
-// modify/delete conflict genuinely has no stage 3, an add/add has no stage 1.
-// Reading them from git rather than assuming is what lets a missing side be
-// reported as missing instead of as an empty string.
+// unmergedStage is one index stage of one conflicting path: the mode git
+// recorded for it and the object id at that stage.
+//
+// The MODE is load-bearing and used to be discarded (#301 round-2 findings 1/6).
+// `git ls-files -u` prints it as the first field, and for a conflicted submodule
+// pointer it is 160000 — a GITLINK, whose object id names a COMMIT in the
+// submodule's own object store, not a blob in this repository. Running
+// `git cat-file blob <that id>` exits 128 ("bad file"), which used to fail the
+// whole capture AND the evidence dump, which in turn suppressed
+// `git rebase --abort` and left the worktree permanently detached with an
+// unmerged index — from an ordinary submodule-pointer conflict.
+type unmergedStage struct {
+	Mode string
+	OID  string
+}
+
+// unmergedPath is one path with an unmerged index entry, plus the stage entries
+// git actually recorded for it (1 = merge base, 2 = git's "ours", 3 = git's
+// "theirs"). Which stages exist is decided by the conflict's SHAPE, not by us: a
+// modify/delete conflict genuinely has no stage 3, an add/add has no stage 1,
+// and a delete/delete has only stage 1. Reading them from git rather than
+// assuming is what lets a missing side be reported as missing instead of as an
+// empty string.
 type unmergedPath struct {
 	Path   string
-	Stages map[int]string
+	Stages map[int]unmergedStage
+}
+
+// isBlobMode reports whether an index mode names an object this repository can
+// read with `git cat-file blob`. Regular files (100644), executables (100755)
+// and symlinks (120000) are blobs — a symlink's "content" is its target path,
+// which reads and inlines exactly like text. 160000 (gitlink) is not: its id is
+// a commit in another repository's object store. Any other mode is likewise
+// treated as not-a-blob rather than guessed at.
+func isBlobMode(mode string) bool {
+	switch mode {
+	case "100644", "100755", "120000":
+		return true
+	default:
+		return false
+	}
+}
+
+// conflictOperation names which git operation produced the conflicted index.
+// It decides the stage→side mapping and NOTHING else — see conflictSides.
+type conflictOperation string
+
+const (
+	opRebase conflictOperation = "rebase"
+	opMerge  conflictOperation = "merge"
+)
+
+// conflictSides maps the operation to the index stages that hold the PR
+// branch's work ("ours" in the CONSUMER's vocabulary) and the base ("theirs").
+//
+//	operation | ours (PR branch work) | theirs (base)
+//	----------|-----------------------|--------------
+//	rebase    | stage 3               | stage 2
+//	merge     | stage 2               | stage 3
+//
+// git's own stage names are relative to what is CHECKED OUT, and a rebase checks
+// out the upstream and replays your commits onto it — so git calls the base
+// "ours" and your work "theirs", the exact inverse of a merge. Every consumer of
+// conflict-context-{N}.json (the SDK schema, feature-dev's Step 0.7.1b intake,
+// merge.md) defines ours as the PR's feature work, so the writer must do this
+// translation rather than pass git's naming through (#301 round-2 findings 3/5).
+func conflictSides(op conflictOperation) (oursStage, theirsStage int) {
+	if op == opRebase {
+		return 3, 2
+	}
+	return 2, 3
+}
+
+// detectConflictOperation asks the repository which operation is in progress,
+// rather than assuming. A rebase state directory means rebase; MERGE_HEAD means
+// a merge. Anything else (including a cherry-pick, which like a merge replays
+// onto the checked-out branch) uses git's plain stage naming.
+func detectConflictOperation(ctx context.Context, workspace string) conflictOperation {
+	if rebaseStateDir(ctx, workspace) != "" {
+		return opRebase
+	}
+	if gitPathExists(ctx, workspace, "MERGE_HEAD") {
+		return opMerge
+	}
+	return opMerge
+}
+
+// gitPathExists resolves a $GIT_DIR-relative path through `rev-parse --git-path`
+// (worktree-safe) and reports whether it exists.
+func gitPathExists(ctx context.Context, workspace, rel string) bool {
+	out, err := execGit(ctx, workspace, "rev-parse", "--git-path", rel)
+	if err != nil {
+		return false
+	}
+	p := strings.TrimSpace(string(out))
+	if p == "" {
+		return false
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workspace, p)
+	}
+	_, statErr := os.Stat(p)
+	return statErr == nil
 }
 
 // listUnmergedPaths enumerates the conflicted index via `git ls-files -u -z`.
@@ -428,7 +623,7 @@ func listUnmergedPaths(ctx context.Context, workspace string) ([]unmergedPath, e
 		return nil, err
 	}
 	var order []string
-	byPath := make(map[string]map[int]string)
+	byPath := make(map[string]map[int]unmergedStage)
 	for _, rec := range strings.Split(string(out), "\x00") {
 		if rec == "" {
 			continue
@@ -447,10 +642,12 @@ func listUnmergedPaths(ctx context.Context, workspace string) ([]unmergedPath, e
 			return nil, fmt.Errorf("unparseable index stage in `git ls-files -u -z` record: %q", truncate(rec, 120))
 		}
 		if _, seen := byPath[p]; !seen {
-			byPath[p] = make(map[int]string)
+			byPath[p] = make(map[int]unmergedStage)
 			order = append(order, p)
 		}
-		byPath[p][stage] = fields[1]
+		// fields[0] is the MODE. Keeping it is what stops a gitlink (160000)
+		// being handed to `cat-file blob` (#301 round-2 findings 1/6).
+		byPath[p][stage] = unmergedStage{Mode: fields[0], OID: fields[1]}
 	}
 	paths := make([]unmergedPath, 0, len(order))
 	for _, p := range order {
@@ -487,6 +684,12 @@ func isBlobSHA(s string) bool {
 // of replacement runes and was still reported `capture=captured` before the
 // abort deleted the original. Bytes that cannot survive JSON do not go into
 // JSON.
+// The size cap is enforced BEFORE the read, not after it. `git cat-file -s` answers
+// the object's size in O(1) without materializing it; checking `len(b)` after an
+// `execGit` that already buffered the whole object into memory enforced the cap
+// only once the allocation it exists to prevent had happened, so a
+// multi-hundred-megabyte conflicting asset OOM'd the long-lived scheduler
+// process before being politely refused (#301 round-2 advisory).
 func capturableBlob(ctx context.Context, workspace, sha string, present bool) (string, error) {
 	if !present {
 		return "", nil
@@ -494,17 +697,48 @@ func capturableBlob(ctx context.Context, workspace, sha string, present bool) (s
 	if !isBlobSHA(sha) {
 		return "", fmt.Errorf("git reported a malformed blob id %q", truncate(sha, 80))
 	}
-	b, err := execGit(ctx, workspace, "cat-file", "blob", sha)
+	sizeOut, err := execGit(ctx, workspace, "cat-file", "-s", sha)
 	if err != nil {
 		return "", fmt.Errorf("index blob %s is unreadable: %w", sha[:8], err)
 	}
-	if len(b) > maxConflictBlobBytes {
-		return "", fmt.Errorf("index blob %s is %d bytes, over the %d-byte context cap", sha[:8], len(b), maxConflictBlobBytes)
+	size, perr := strconv.ParseInt(strings.TrimSpace(string(sizeOut)), 10, 64)
+	if perr != nil {
+		return "", fmt.Errorf("index blob %s has an unparseable size %q", sha[:8], truncate(string(sizeOut), 40))
+	}
+	if size > maxConflictBlobBytes {
+		return "", fmt.Errorf("index blob %s is %d bytes, over the %d-byte context cap", sha[:8], size, maxConflictBlobBytes)
+	}
+	b, err := execGit(ctx, workspace, "cat-file", "blob", sha)
+	if err != nil {
+		return "", fmt.Errorf("index blob %s is unreadable: %w", sha[:8], err)
 	}
 	if !utf8.Valid(b) {
 		return "", fmt.Errorf("index blob %s is not valid UTF-8 (binary conflict)", sha[:8])
 	}
 	return string(b), nil
+}
+
+// conflictSide renders ONE side of ONE conflicting path for the context
+// document. It returns the inlined text, the commit id when the side is a
+// gitlink (metadata-only), and an error only when the side genuinely could not
+// be represented.
+//
+// A non-blob mode is not a failure and never reads an object: a submodule
+// pointer's entire content IS the commit id, so it is recorded as such and the
+// text stays empty. That is the difference between capturing a submodule
+// conflict and wedging the worktree (#301 round-2 findings 1/6).
+func conflictSide(ctx context.Context, workspace string, st unmergedStage, present bool) (text, commit string, err error) {
+	if !present {
+		return "", "", nil
+	}
+	if !isBlobMode(st.Mode) {
+		if !isBlobSHA(st.OID) {
+			return "", "", fmt.Errorf("git reported a malformed object id %q for mode %s", truncate(st.OID, 80), truncate(st.Mode, 12))
+		}
+		return "", st.OID, nil
+	}
+	text, err = capturableBlob(ctx, workspace, st.OID, true)
+	return text, "", err
 }
 
 // buildConflictFiles turns the unmerged index into conflicting_files[] entries,
@@ -518,43 +752,59 @@ func capturableBlob(ctx context.Context, workspace, sha string, present bool) (s
 // fail; a partial capture is not a capture.
 //
 // ours_present / theirs_present are recorded alongside the blobs so an empty
-// side is never ambiguous between "deleted on that side" and "empty file". The
-// published ConflictContextSchema is a passthrough object, so these ride along
-// without a schema bump.
-func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedPath) ([]map[string]interface{}, []string) {
+// side is never ambiguous between "deleted on that side" and "empty file", and
+// ours_mode / theirs_mode so a metadata-only (gitlink) side is likewise
+// self-describing. All four are declared in the published ConflictFileSchema —
+// zod strips unknown keys from a plain object, so a field that is not in the
+// schema never reaches a TypeScript consumer at all.
+//
+// `op` decides which index stage is which side; see conflictSides for the table
+// and why git's own naming cannot be passed through.
+func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedPath, op conflictOperation) ([]map[string]interface{}, []string) {
+	oursStage, theirsStage := conflictSides(op)
 	files := make([]map[string]interface{}, 0, len(paths))
 	var uncapturable []string
 	for _, p := range paths {
-		// Stage 2 / stage 3 keep git's names, and under a REBASE those names are
-		// counter-intuitive: git replays each feature commit ONTO the upstream, so
-		// stage 2 ("ours") holds the rebase base's version and stage 3 ("theirs")
-		// the feature branch's — the inverse of a merge. Verified against real git
-		// by TestRealGit_RebaseConflict_CapturesThenAborts. The published
-		// ConflictFileSchema describes these fields the other way round; that
-		// mislabeling predates this code and is tracked separately.
-		oursSHA, hasOurs := p.Stages[2]
-		theirsSHA, hasTheirs := p.Stages[3]
-		if !hasOurs && !hasTheirs {
-			uncapturable = append(uncapturable, fmt.Sprintf("%s (index carries neither an ours nor a theirs stage)", p.Path))
+		// A path whose NAME is not valid UTF-8 (legal on ext4/xfs) would be
+		// silently rewritten by encoding/json — every invalid byte becomes U+FFFD
+		// — producing a context that names a path nothing can open while the
+		// capture reported success (#301 round-2 advisory).
+		if !utf8.ValidString(p.Path) {
+			uncapturable = append(uncapturable, fmt.Sprintf("%q (path name is not valid UTF-8 and cannot survive JSON)", p.Path))
 			continue
 		}
-		ours, oerr := capturableBlob(ctx, workspace, oursSHA, hasOurs)
+		oursSt, hasOurs := p.Stages[oursStage]
+		theirsSt, hasTheirs := p.Stages[theirsStage]
+		ours, oursCommit, oerr := conflictSide(ctx, workspace, oursSt, hasOurs)
 		if oerr != nil {
 			uncapturable = append(uncapturable, fmt.Sprintf("%s ours: %s", p.Path, oerr))
 			continue
 		}
-		theirs, terr := capturableBlob(ctx, workspace, theirsSHA, hasTheirs)
+		theirs, theirsCommit, terr := conflictSide(ctx, workspace, theirsSt, hasTheirs)
 		if terr != nil {
 			uncapturable = append(uncapturable, fmt.Sprintf("%s theirs: %s", p.Path, terr))
 			continue
 		}
-		files = append(files, map[string]interface{}{
+		// Neither side present is a delete/delete conflict (stage 1 only). It is a
+		// real conflict class with a real decision to make, and it is fully
+		// described by the two presence flags — failing the capture over it only
+		// suppressed the abort and wedged the worktree.
+		entry := map[string]interface{}{
 			"path":           p.Path,
 			"ours":           ours,
 			"theirs":         theirs,
 			"ours_present":   hasOurs,
 			"theirs_present": hasTheirs,
-		})
+			"ours_mode":      oursSt.Mode,
+			"theirs_mode":    theirsSt.Mode,
+		}
+		if oursCommit != "" {
+			entry["ours_commit"] = oursCommit
+		}
+		if theirsCommit != "" {
+			entry["theirs_commit"] = theirsCommit
+		}
+		files = append(files, entry)
 	}
 	return files, uncapturable
 }
@@ -576,68 +826,96 @@ func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedP
 // Blobs are stored content-addressed under blobs/<sha> and streamed rather than
 // buffered, so neither a hostile path nor a huge binary can hurt this. The
 // manifest names which stage of which path each blob was.
-func preserveConflictEvidence(ctx context.Context, workspace string, issue, pr int, branch, baseRef string, paths []unmergedPath) (string, error) {
+//
+// A stage whose MODE is not a blob (160000, a submodule pointer) is recorded as
+// metadata — stage, mode, commit id — and no object is read for it. Feeding such
+// an id to `cat-file blob` exits 128, which used to abort the dump after it had
+// already written some blobs, leaving orphan files and no manifest to interpret
+// them, and leaving the caller with nothing that licensed the abort (#301
+// round-2 findings 1/6).
+//
+// Any error removes the whole directory: a half-written dump is unreadable
+// debris that no tool ever cleans up, and its presence would misreport the
+// conflict as preserved.
+func preserveConflictEvidence(ctx context.Context, workspace string, issue, pr int, branch, baseRef string, paths []unmergedPath, op conflictOperation) (dumpDir string, err error) {
 	dir := filepath.Join(workspace, ".nightgauge", "pipeline", fmt.Sprintf("conflict-evidence-%d", issue))
 	// A dump from an earlier attempt describes an earlier conflict; leaving it
 	// merged with this one would produce an artifact that is true of neither.
-	if err := os.RemoveAll(dir); err != nil {
-		return "", fmt.Errorf("clear stale evidence dir: %w", err)
+	if rerr := os.RemoveAll(dir); rerr != nil {
+		return "", fmt.Errorf("clear stale evidence dir: %w", rerr)
 	}
-	if err := os.MkdirAll(filepath.Join(dir, "blobs"), 0o755); err != nil {
-		return "", fmt.Errorf("create evidence dir: %w", err)
+	if merr := os.MkdirAll(filepath.Join(dir, "blobs"), 0o755); merr != nil {
+		return "", fmt.Errorf("create evidence dir: %w", merr)
 	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 
 	type stageRecord struct {
-		Stage int    `json:"stage"`
-		SHA   string `json:"sha"`
-		Bytes int64  `json:"bytes"`
-		File  string `json:"file"`
+		Stage   int    `json:"stage"`
+		Mode    string `json:"mode"`
+		SHA     string `json:"sha"`
+		Bytes   int64  `json:"bytes,omitempty"`
+		File    string `json:"file,omitempty"`
+		Gitlink bool   `json:"gitlink,omitempty"`
 	}
 	type entryRecord struct {
 		Path   string        `json:"path"`
 		Stages []stageRecord `json:"stages"`
 	}
 
+	oursStage, theirsStage := conflictSides(op)
 	entries := make([]entryRecord, 0, len(paths))
 	for _, p := range paths {
 		entry := entryRecord{Path: p.Path}
 		for _, stage := range []int{1, 2, 3} {
-			sha, ok := p.Stages[stage]
+			st, ok := p.Stages[stage]
 			if !ok {
 				continue
 			}
-			if !isBlobSHA(sha) {
-				return "", fmt.Errorf("git reported a malformed blob id %q for %s", truncate(sha, 80), p.Path)
+			if !isBlobSHA(st.OID) {
+				return "", fmt.Errorf("git reported a malformed object id %q for %s", truncate(st.OID, 80), p.Path)
 			}
-			rel := "blobs/" + sha
-			if err := execGitToFile(ctx, workspace, filepath.Join(dir, "blobs", sha), "cat-file", "blob", sha); err != nil {
-				return "", fmt.Errorf("preserve stage %d blob for %s: %w", stage, p.Path, err)
+			if !isBlobMode(st.Mode) {
+				// Metadata only. The commit id IS the content of a gitlink, and
+				// the object lives in the submodule's store, not this one.
+				entry.Stages = append(entry.Stages, stageRecord{Stage: stage, Mode: st.Mode, SHA: st.OID, Gitlink: true})
+				continue
+			}
+			rel := "blobs/" + st.OID
+			if werr := execGitToFile(ctx, workspace, filepath.Join(dir, "blobs", st.OID), "cat-file", "blob", st.OID); werr != nil {
+				return "", fmt.Errorf("preserve stage %d blob for %s: %w", stage, p.Path, werr)
 			}
 			size := int64(-1)
-			if fi, err := os.Stat(filepath.Join(dir, "blobs", sha)); err == nil {
+			if fi, serr := os.Stat(filepath.Join(dir, "blobs", st.OID)); serr == nil {
 				size = fi.Size()
 			}
-			entry.Stages = append(entry.Stages, stageRecord{Stage: stage, SHA: sha, Bytes: size, File: rel})
+			entry.Stages = append(entry.Stages, stageRecord{Stage: stage, Mode: st.Mode, SHA: st.OID, Bytes: size, File: rel})
 		}
 		entries = append(entries, entry)
 	}
 
 	manifest := map[string]interface{}{
-		"schema_version": "1.0",
-		"issue_number":   issue,
-		"pr_number":      pr,
-		"branch":         branch,
-		"base_ref":       baseRef,
-		"captured_at":    time.Now().UTC().Format(time.RFC3339),
-		"note":           "raw git index stages preserved before `git rebase --abort`; stage 1 = merge base, 2 = ours, 3 = theirs",
-		"entries":        entries,
+		"schema_version":     "1.1",
+		"issue_number":       issue,
+		"pr_number":          pr,
+		"branch":             branch,
+		"base_ref":           baseRef,
+		"conflict_operation": string(op),
+		"captured_at":        time.Now().UTC().Format(time.RFC3339),
+		"note": fmt.Sprintf(
+			"raw git index stages preserved before `git rebase --abort`. Stage 1 = merge base; under a %s stage %d is the PR branch's work and stage %d is the base. A stage with gitlink=true is a submodule pointer: its sha is a COMMIT in the submodule's own store, so no bytes are dumped for it.",
+			op, oursStage, theirsStage),
+		"entries": entries,
 	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("encode evidence manifest: %w", err)
+	data, merr := json.MarshalIndent(manifest, "", "  ")
+	if merr != nil {
+		return "", fmt.Errorf("encode evidence manifest: %w", merr)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644); err != nil {
-		return "", fmt.Errorf("write evidence manifest: %w", err)
+	if werr := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644); werr != nil {
+		return "", fmt.Errorf("write evidence manifest: %w", werr)
 	}
 	return dir, nil
 }
@@ -680,13 +958,18 @@ func rebaseStateDir(ctx context.Context, workspace string) string {
 //
 // INVARIANT (#301): it writes conflict-context-{N}.json and emits
 // CONFLICT_RESOLUTION_NEEDED for captureCaptured and for NOTHING else. A failed
-// or empty capture leaves no context at all — absence is already handled
-// correctly by ConflictRecoveryLoop.Execute (missing context → human triage),
-// whereas a "capture_failed: true" marker would only work for readers that
-// remembered to check it, and the first reader that forgot would reintroduce
-// this bug. Writing nothing also keeps the emitted document conformant with the
+// or empty capture leaves no context at all, and actively REMOVES one left by an
+// earlier attempt, so absence really is the state — which
+// ConflictRecoveryLoop.Execute already routes correctly (missing context → human
+// triage). Writing nothing also keeps the emitted document conformant with the
 // published ConflictContextSchema, which requires conflicting_files to be
 // non-empty.
+//
+// The `capture_failed` marker the reader understands exists for the SKILL
+// writer, which — being an LLM-driven shell function that has already emitted
+// output by the time a blob read fails — cannot always take the
+// write-nothing option. Two writers, two mechanisms, one reader that rejects
+// both failure shapes.
 //
 // A captureFailed that HAS unmerged paths does write one thing, and it is not a
 // context: the raw index stages are dumped to conflict-evidence-{N}/ (see
@@ -699,20 +982,37 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 	if baseRef == "" {
 		baseRef = "main"
 	}
+	pipelineDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
 
 	// Enumerate the conflicted index. An ERROR here is not "no conflicting
 	// files" — it means we do not know, which is a failed capture, not an empty
 	// one. Nothing has been enumerated yet, so there is nothing to preserve.
+	//
+	// Absence is this function's signal for "not captured", so every non-captured
+	// exit also drops a document left by an EARLIER attempt:
+	// `.nightgauge/pipeline/` outlives the run, and a stale context is read by
+	// ConflictRecoveryLoop exactly like a fresh one — re-dispatching feature-dev
+	// against files and blobs from a conflict that no longer exists (#301 round-2
+	// advisory). Best-effort: a context we cannot remove is still handled by the
+	// reader's own guards.
 	paths, err := listUnmergedPaths(ctx, workspace)
 	if err != nil {
+		_ = os.Remove(contextPath)
 		return conflictCapture{
 			Outcome: captureFailed,
 			Err:     fmt.Errorf("could not list unmerged paths: %w", err),
 		}
 	}
 	if len(paths) == 0 {
+		_ = os.Remove(contextPath)
 		return conflictCapture{Outcome: captureNoConflictState}
 	}
+
+	// Which operation produced this index decides which stage is whose work.
+	// Asked while the operation is still in progress — after the abort the answer
+	// is gone.
+	op := detectConflictOperation(ctx, workspace)
 
 	files := make([]string, 0, len(paths))
 	for _, p := range paths {
@@ -723,8 +1023,9 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 	// durable dump first: whatever went wrong, these bytes are about to be the
 	// only copy.
 	failed := func(cause error) conflictCapture {
+		_ = os.Remove(contextPath)
 		res := conflictCapture{Outcome: captureFailed, Files: files, Err: cause}
-		dir, perr := preserveConflictEvidence(ctx, workspace, issue, pr, branch, baseRef, paths)
+		dir, perr := preserveConflictEvidence(ctx, workspace, issue, pr, branch, baseRef, paths, op)
 		if perr != nil {
 			res.Err = fmt.Errorf("%w; and the raw index could not be preserved either: %v", cause, perr)
 			return res
@@ -740,30 +1041,32 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 		return failed(errors.New("could not resolve the branch under rebase"))
 	}
 
-	cf, uncapturable := buildConflictFiles(ctx, workspace, paths)
+	cf, uncapturable := buildConflictFiles(ctx, workspace, paths, op)
 	if len(uncapturable) > 0 {
 		return failed(fmt.Errorf("%d of %d conflicting path(s) cannot be represented in a conflict context: %s",
 			len(uncapturable), len(paths), truncate(strings.Join(uncapturable, "; "), 300)))
 	}
 
 	contextDoc := map[string]interface{}{
-		"schema_version":    "1.0",
-		"issue_number":      issue,
-		"pr_number":         pr,
-		"branch":            branch,
-		"base_ref":          baseRef,
-		"conflicting_files": cf,
-		"created_at":        time.Now().UTC().Format(time.RFC3339),
+		"schema_version": "1.1",
+		"issue_number":   issue,
+		"pr_number":      pr,
+		"branch":         branch,
+		"base_ref":       baseRef,
+		// Which git operation the sides were read from. The mapping is already
+		// applied to ours/theirs below — this records WHY, so a reader can tell
+		// the document was written by an operation-aware writer.
+		"conflict_operation": string(op),
+		"conflicting_files":  cf,
+		"created_at":         time.Now().UTC().Format(time.RFC3339),
 	}
 	data, err := json.MarshalIndent(contextDoc, "", "  ")
 	if err != nil {
 		return failed(fmt.Errorf("encode conflict context: %w", err))
 	}
-	pipelineDir := filepath.Join(workspace, ".nightgauge", "pipeline")
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		return failed(fmt.Errorf("create pipeline dir: %w", err))
 	}
-	contextPath := filepath.Join(pipelineDir, fmt.Sprintf("conflict-context-%d.json", issue))
 	if err := os.WriteFile(contextPath, data, 0o644); err != nil {
 		return failed(fmt.Errorf("write conflict context: %w", err))
 	}

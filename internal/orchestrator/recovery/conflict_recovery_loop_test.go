@@ -240,6 +240,131 @@ func TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates(t *testing.T) {
 	}
 }
 
+// writeRawConflictContext drops a conflict-context-{issue}.json whose
+// conflicting_files[] entries are given VERBATIM, so a test can pin the exact
+// document a particular writer emits — including shapes the Go writer cannot
+// produce (the shell writer's).
+func writeRawConflictContext(t *testing.T, issue, pr int, branch string, extra map[string]interface{}, entries []map[string]interface{}) string {
+	t.Helper()
+	ws := t.TempDir()
+	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	doc := map[string]interface{}{
+		"schema_version":    "1.1",
+		"issue_number":      issue,
+		"pr_number":         pr,
+		"branch":            branch,
+		"base_ref":          "main",
+		"conflicting_files": entries,
+	}
+	for k, v := range extra {
+		doc[k] = v
+	}
+	data, _ := json.MarshalIndent(doc, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "conflict-context-"+strconv.Itoa(issue)+".json"), data, 0o644); err != nil {
+		t.Fatalf("write context: %v", err)
+	}
+	return ws
+}
+
+func conflictFailureFor(ws string, issue, pr int) StageFailure {
+	return StageFailure{
+		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
+		IssueNumber: issue, PRNumber: pr, Reason: "conflict",
+		Evidence: []string{"conflict"},
+	}
+}
+
+// TestAction_ConflictRecoveryLoop_PerFileGuard is the #301 round-2 finding-2/4
+// regression. The reader was hardened only against WHOLE-DOCUMENT degeneracy
+// (zero files, unnamed branch), and the code comment plus docs/FEEDBACK_LOOPS.md
+// both claimed that covered "a degenerate context from ANY writer (including the
+// pr-merge skill)". It did not: the skill's shell capture read blobs with
+// `git show ":2:$_f" || echo ""`, so a C-quoted or otherwise unreadable path
+// landed as {path, ours:"", theirs:""} NEXT TO a healthy sibling — a two-file
+// context that passed every check and cost the full max_dev_redispatch budget.
+//
+// The entries here are exactly what each writer emits, so the table doubles as a
+// statement of which shapes are legitimate.
+func TestAction_ConflictRecoveryLoop_PerFileGuard(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name         string
+		extra        map[string]interface{}
+		entries      []map[string]interface{}
+		wantResume   bool
+		wantInReason string
+	}{
+		{
+			name: "silent empty pair next to a healthy sibling",
+			entries: []map[string]interface{}{
+				{"path": "f.txt", "ours": "feature", "theirs": "base"},
+				{"path": `"caf\303\251.txt"`, "ours": "", "theirs": ""},
+			},
+			wantInReason: "both sides empty",
+		},
+		{
+			name:  "writer admitted the capture failed",
+			extra: map[string]interface{}{"capture_failed": true},
+			entries: []map[string]interface{}{
+				{"path": "f.txt", "ours": "feature", "theirs": "base"},
+			},
+			wantInReason: "capture_failed",
+		},
+		{
+			// A submodule pointer has no bytes on either side: its content IS the
+			// commit id. Rejecting this would re-break the gitlink case.
+			name: "gitlink is metadata-only, not degenerate",
+			entries: []map[string]interface{}{
+				{"path": "sub", "ours": "", "theirs": "",
+					"ours_present": &yes, "theirs_present": &yes,
+					"ours_mode": "160000", "theirs_mode": "160000",
+					"ours_commit":   "1111111111111111111111111111111111111111",
+					"theirs_commit": "2222222222222222222222222222222222222222"},
+			},
+			wantResume: true,
+		},
+		{
+			// Delete/delete: the index carries stage 1 only, so both sides are
+			// legitimately absent and the writer says so.
+			name: "both-deleted is explained by the presence flags",
+			entries: []map[string]interface{}{
+				{"path": "gone.txt", "ours": "", "theirs": "",
+					"ours_present": &no, "theirs_present": &no,
+					"ours_mode": "", "theirs_mode": ""},
+			},
+			wantResume: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := writeRawConflictContext(t, 12, 34, "feat/12-thing", c.extra, c.entries)
+			a := NewConflictRecoveryLoop(2)
+			res := a.Execute(context.Background(), conflictFailureFor(ws, 12, 34))
+			if c.wantResume {
+				if res.FollowUp != FollowUpStageCanResume {
+					t.Fatalf("FollowUp = %q, want %q — this shape is a legitimate capture: %s", res.FollowUp, FollowUpStageCanResume, res.Reason)
+				}
+				return
+			}
+			if res.FollowUp != FollowUpHumanTriageRequired {
+				t.Fatalf("FollowUp = %q, want %q — this context did not record the conflict: %s", res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+			}
+			if res.Recovered {
+				t.Error("an unrecorded conflict cannot recover")
+			}
+			if !strings.Contains(res.Reason, c.wantInReason) {
+				t.Errorf("reason %q must say why (%q)", res.Reason, c.wantInReason)
+			}
+			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a context nobody can act on")
+			}
+		})
+	}
+}
+
 // TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates: once the feedback file
 // carries more than max_dev_redispatch CONFLICT_RESOLUTION_NEEDED signals (each
 // distinct pr-merge conflict failure appends one), the action escalates with the
