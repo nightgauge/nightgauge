@@ -348,6 +348,14 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 		warnings = append(warnings, stashWarning)
 	}
 
+	// A killed stage leaks its worktree; a stage that is never killed leaks
+	// ITSELF (#341). Report-only — this check never signals a process.
+	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)
+	result.Checks["orphaned_processes"] = processLeaks
+	if processWarning != "" {
+		warnings = append(warnings, processWarning)
+	}
+
 	// --- per-adapter health (Issue #4031, opt-in) ---
 	// Deterministic binary/version/MCP facts for the requested adapters. An
 	// unhealthy adapter is surfaced as a warning (degraded, ExitCode 1) — never

@@ -1,0 +1,7 @@
+    1 02-23:14:35 /sbin/launchd
+  329 02-23:14:14 /usr/libexec/logd
+ 2717       22:30 /System/Library/PrivateFrameworks/AOSKit.framework/Versions/A/XPCServices/com.apple.iCloudHelper.xpc/Contents/MacOS/com.apple.iCloudHelper
+ 2869       16:34 /System/Library/PrivateFrameworks/CoreParsec.framework/parsec-fbf
+ 4156       15:29 /Users/operator/.vscode/extensions/nightgauge.nightgauge-vscode-0.1.1786218489/dist/bin/nightgauge serve --workspace /Users/operator/Repositories/nightgauge/nightgauge
+ 5308    20:04:18 /System/Library/Frameworks/CoreGraphics.framework/Versions/A/XPCServices/CGPDFService.xpc/Contents/MacOS/CGPDFService
+ 6021    06:14:17 /System/Library/PrivateFrameworks/CoreSuggestions.framework/Versions/A/Support/reversetemplated
