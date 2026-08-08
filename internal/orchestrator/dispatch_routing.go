@@ -274,7 +274,7 @@ func raiseStageFloors(floors map[string]string, tier string) map[string]string {
 	if strings.TrimSpace(tier) == "" {
 		return floors
 	}
-	raised := make(map[string]string, len(floors)+len(dispatchStages))
+	raised := make(map[string]string, len(dispatchStages))
 	for k, v := range floors {
 		raised[k] = v
 	}
