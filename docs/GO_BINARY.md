@@ -1200,6 +1200,52 @@ snapshots. It only accepts snapshots whose repository identity matches the
 registered root and whose owning process is alive; stale and unregistered
 runtime files are ignored.
 
+#### Run Identity Keying (Issue #370 / ADR 017)
+
+**Status: decided, not yet implemented.** The prose in this document describes
+the registry as it exists on `main`; this section is the pointer to what
+replaces it. See
+[docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
+for the full decision, the refuted alternatives and their probe evidence.
+
+Today the IPC server's runtime registry (`internal/ipc/server.go`,
+`activeRuntimes`) is keyed by **bare issue number** — the struct comment claims
+`"repo#issueNumber"`, but all seven key-construction sites build
+`fmt.Sprintf("%d", p.IssueNumber)`. An issue number is not an identity: it is
+shared by every dispatch of that issue, by every repo in a multi-repo workspace
+that numbers an issue the same, and by the zombie of a force-cleared run that
+unwedges later. The consequences are catalogued under
+[Force-Clear Terminal Bookkeeping](#force-clear-terminal-bookkeeping-issue-307).
+
+ADR 017 decides:
+
+| Concept              | Today                                                                | After #370                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Registry key         | `"{issue}"`                                                          | `run_id` — a **locally** minted UUIDv7 that **is** `RuntimeState.RunID` and **is** the #307 dispatch generation. A platform `RemoteRunID` never seeds it; it stays a correlation attribute                                                                                                                                                                                                                                                                                                                                     |
+| Who mints            | the server, lazily, on any `notifyStageTransition` miss              | the **dispatcher**, before any I/O; the server never mints, and the value is validated against a canonical-UUIDv7 regex before it becomes a map key, a filename component, or a trace path                                                                                                                                                                                                                                                                                                                                     |
+| Handshake            | none (identity is a server-side side effect)                         | `run_id` on every `pipeline.*` call — re-asserted, never latched on `initialized`                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Unknown identity     | mint a new one (identity laundering)                                 | **verb class is decided before any registry is consulted**: run-progress and terminal verbs **adopt** (via a per-id singleflight, rehydrating from a non-terminal snapshot); administrative verbs adopt through the **same** singleflight but only an **existing** snapshot and without refreshing liveness — they never invent a target; terminal and administrative verbs against a **scheduler-owned** run are refused `run_wrong_owner`                                                                                    |
+| Terminal write       | `delete` + `os.Remove` keyed by issue, after seconds of unlocked I/O | claim under the lock — resolving/adopting **before** the critical section opens and calling the state layer's `…Locked` variants inside it, because Go mutexes are not reentrant — replaying #309's execution paths, then latching **both** the registry entry and the persisted `RuntimeState.Terminal` → work unlocked → **compare-and-delete** → seal-and-remove under the run's own mutex. `Persist` holds that mutex across its write and refuses a sealed runtime, so an in-flight persist cannot resurrect the snapshot |
+| Snapshot file        | `runtime-{issue}.json`                                               | `runtime-{issue}-{runId}.json`; `current-run.json` gains `run_id` so the extension's CLI-run reconciler can still find it                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Issue number         | the key                                                              | a **derived index** for lookup and UX, ranked by `LastSeen`; two runs of one issue coexist                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Reconcile skip (#44) | `skipIssue` — "this issue has an entry"                              | `skipRun` — "this **run** is live", on a five-arm ladder: the IPC registry's non-terminal entry with a fresh `LastSeen`, `Scheduler.IsRunLive`, the snapshot's own live `PID` (extension-path runs report their stage child's pid over the wire, so the arm exists for them too), the snapshot's file age, and the startup grace window. Every arm can only produce a **skip**, never a close, and the ADR carries a per-population table of which arms actually carry which runs                                              |
+| Startup reconcile    | runs inline in `Server.Run`, before any client can reconnect         | **deferred 120s and re-evaluated**: the client auto-restarts the Go backend under a surviving extension host, so an inline sweep terminated every live extension-path run and deleted its crash snapshot. Terminal snapshots are still removed immediately                                                                                                                                                                                                                                                                     |
+| Force-clear → Go     | no runtime IPC call at all                                           | `pipeline.abandonRun {runId, repo, issueNumber, reason}` — terminates the **dispatch**: emits the terminal `pipeline_done` and frees local bookkeeping, but leaves the run adoptable so a late honest completion still books under its own identity                                                                                                                                                                                                                                                                            |
+| Retention            | none                                                                 | one disposition table per snapshot state: terminal claim, reconciler emit-and-remove, no-emit removal of terminal snapshots and of abandoned snapshots **past** the liveness window (a fresh abandoned run keeps its crash snapshot — its dispatch is abandoned, the run may still be streaming), and a 14-day cap — **removal never gated on the platform**, so a local-only workspace collects too                                                                                                                           |
+| Pause-restore        | prompt reads the snapshot and resumes; nothing consumes the file     | resume must first win an **atomic rename** to `resuming-{issue}-{runId}.{token}.json`, so two extension hosts cannot resume one run id; the token is a UUIDv7 minted at claim time and the claim is aged from it — never from the file's mtime, which `rename(2)` does not update — and a released claim never renames back over an occupied canonical name                                                                                                                                                                    |
+| `LoadPersistedState` | `(stateDir, issueNumber)`                                            | `(stateDir, runID)` + `FindPersistedStatesForIssue(stateDir, issueNumber)`                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Stage env            | no run id                                                            | `NIGHTGAUGE_RUN_ID` exported by the adapter stage-env builders and by `SkillRunner`, so `nightgauge gate verify --record` and the SDK trace recorder are **handed** the identity instead of guessing it                                                                                                                                                                                                                                                                                                                        |
+
+The wire change bumps `ProtocolVersion` 1 → 2, and ADR 017 specifies the
+hard-fail rather than assuming one exists: on a mismatch the TypeScript client
+disconnects, raises a blocking modal, and rejects every later call with
+`protocol_mismatch`. Per the pre-customer no-compat rule the issue-keyed paths
+are deleted outright; a one-shot **Go** startup sweep reconciles-then-deletes
+legacy `runtime-{N}.json` files so the upgrade does not strand phantom `running`
+rows, and that sweep's own removal is filed as a follow-up. Legacy disposition
+belongs to that sweep **exclusively** — the extension's activation stub sweep is
+narrowed to the new filename scheme so the two cannot race.
+
 #### `cost by-class`
 
 Reads the recorded pipeline run history and reports cost (p50/p95/mean) and
@@ -1580,7 +1626,9 @@ daemon-side:
   1. the record's repo must **equal** the raise's repo — an empty one
      corroborates nothing, because `pipeline.notifyStageTransition` seeds
      `rt.Repo` only when the caller sends it, and the map is keyed by bare issue
-     number (#370's re-keying target);
+     number ([#370's re-keying target](#run-identity-keying-issue-370--adr-017)
+     — ADR 017 keeps both corroboration rules verbatim and resolves the run
+     through the issue index rather than letting a raise name one by id);
   2. the figure is summed over `CompletedStages` the daemon watched **begin** —
      entries carrying the `StartedAt` stamp that only a `running` transition's
      `BeginStage` writes — never off the `TotalCostUSD` accumulator. A
@@ -4516,6 +4564,18 @@ no learning outcome, no telemetry, frozen UI. Re-keying the runtime registry by
 run identity, with a handshake that is self-healing rather than
 single-message-fatal, is ADR-scale work tracked as issue #370.
 
+**Now decided — see [Run Identity Keying](#run-identity-keying-issue-370--adr-017)
+and [ADR 017](decisions/017-runtime-identity-keying.md).** The latch-on-
+`initialized` design described in the paragraph above is the one that was
+refuted, by a probe showing a live successful run locked out of every write. The
+adopted design re-asserts the identity on **every** message, so no single
+message is load-bearing, and it **unifies** the generation token with the run
+identity rather than adding a second one: `slot.generation` becomes
+`slot.runId`, `forceClearedGenerations` becomes `forceClearedRunIds` with the
+same permanence and no release path, and the three await-free check-and-claim
+boundaries are preserved unchanged. Implementation has not landed; this
+paragraph describes `main`.
+
 One consequence worth naming: because the force-clear makes no pipeline-runtime
 IPC call (`queue.complete` and `autonomous.complete` never touch the runtime
 registry), the dead run keeps its `activeRuntimes` entry for the life of the
@@ -4526,6 +4586,13 @@ the next server start only** — the `workspace.setRoot` reconcile call site ski
 it. The force-clear deliberately does not delete that snapshot: for a run that
 stays hung forever it is the only remaining path to a terminal event, and a
 paused snapshot additionally powers the pause-restore prompt.
+
+ADR 017 closes that consequence three ways: the force-clear gains an explicit
+`pipeline.abandonRun {runId, reason}` call, the reconcile skip predicate becomes
+"this **run** is live" (non-terminal entry **and** a `LastSeen` lease) instead of
+"this issue has an entry", and the abandoned run's terminal event is emitted from
+its own claimed snapshot. Paused snapshots stay exempt, so the pause-restore
+prompt is unaffected.
 
 ### Modernize — Assessment Aggregation
 
