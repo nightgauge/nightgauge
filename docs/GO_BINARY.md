@@ -1219,24 +1219,30 @@ unwedges later. The consequences are catalogued under
 
 ADR 017 decides:
 
-| Concept              | Today                                                                | After #370                                                                                                                                       |
-| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Registry key         | `"{issue}"`                                                          | `run_id` — a client-minted UUIDv7 that **is** `RuntimeState.RunID` and **is** the #307 dispatch generation                                       |
-| Who mints            | the server, lazily, on any `notifyStageTransition` miss              | the **dispatcher**, before any I/O; the server never mints                                                                                       |
-| Handshake            | none (identity is a server-side side effect)                         | `run_id` on every `pipeline.*` call — re-asserted, never latched on `initialized`                                                                |
-| Unknown identity     | mint a new one (identity laundering)                                 | **adopt**, rehydrating from the on-disk snapshot when present; refuse only a provably-closed run, as a JSON-RPC error                            |
-| Terminal write       | `delete` + `os.Remove` keyed by issue, after seconds of unlocked I/O | claim under the lock → work unlocked → **compare-and-delete** under the lock; the snapshot filename carries the identity                         |
-| Snapshot file        | `runtime-{issue}.json`                                               | `runtime-{issue}-{runId}.json`                                                                                                                   |
-| Issue number         | the key                                                              | a **derived index** for lookup and UX; two runs of one issue coexist                                                                             |
-| Reconcile skip (#44) | `skipIssue` — "this issue has an entry"                              | `skipRun` — "this **run** is live", by non-terminal entry plus a `LastSeen` lease, so the `workspace.setRoot` call site stops skipping dead runs |
-| Force-clear → Go     | no runtime IPC call at all                                           | `pipeline.abandonRun {runId, reason}`                                                                                                            |
-| `LoadPersistedState` | `(stateDir, issueNumber)`                                            | `(stateDir, runID)` + `FindPersistedStatesForIssue(stateDir, issueNumber)`                                                                       |
+| Concept              | Today                                                                | After #370                                                                                                                                                                                                                                                   |
+| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Registry key         | `"{issue}"`                                                          | `run_id` — a **locally** minted UUIDv7 that **is** `RuntimeState.RunID` and **is** the #307 dispatch generation. A platform `RemoteRunID` never seeds it; it stays a correlation attribute                                                                   |
+| Who mints            | the server, lazily, on any `notifyStageTransition` miss              | the **dispatcher**, before any I/O; the server never mints, and the value is validated against a canonical-UUIDv7 regex before it becomes a map key, a filename component, or a trace path                                                                   |
+| Handshake            | none (identity is a server-side side effect)                         | `run_id` on every `pipeline.*` call — re-asserted, never latched on `initialized`                                                                                                                                                                            |
+| Unknown identity     | mint a new one (identity laundering)                                 | **two verb classes**: run-progress verbs **adopt** (rehydrating from a non-terminal on-disk snapshot); administrative verbs (`setPaused`, `abandonRun`) resolve from the registry or from disk and otherwise refuse — they never invent a target             |
+| Terminal write       | `delete` + `os.Remove` keyed by issue, after seconds of unlocked I/O | claim under the lock → work unlocked → **compare-and-delete** under the lock; a durable `terminal` marker is stamped into the snapshot before removal, and the removal directory comes from the claimed snapshot's own repo                                  |
+| Snapshot file        | `runtime-{issue}.json`                                               | `runtime-{issue}-{runId}.json`; `current-run.json` gains `run_id` so the extension's CLI-run reconciler can still find it                                                                                                                                    |
+| Issue number         | the key                                                              | a **derived index** for lookup and UX, ranked by `LastSeen`; two runs of one issue coexist                                                                                                                                                                   |
+| Reconcile skip (#44) | `skipIssue` — "this issue has an entry"                              | `skipRun` — "this **run** is live", consulting **both** registries (the IPC registry's non-terminal entry plus a `LastSeen` lease, **and** `Scheduler.IsRunLive`), so `workspace.setRoot` stops skipping dead runs and stops terminating live scheduler runs |
+| Force-clear → Go     | no runtime IPC call at all                                           | `pipeline.abandonRun {runId, repo, issueNumber, reason}` — terminates the **dispatch**: emits the terminal `pipeline_done` and frees local bookkeeping, but leaves the run adoptable so a late honest completion still books under its own identity          |
+| Retention            | none                                                                 | terminal claim, reconciler emit-and-remove, no-emit removal of terminal/abandoned snapshots, and a 14-day cap — **removal never gated on the platform**, so a local-only workspace collects too                                                              |
+| `LoadPersistedState` | `(stateDir, issueNumber)`                                            | `(stateDir, runID)` + `FindPersistedStatesForIssue(stateDir, issueNumber)`                                                                                                                                                                                   |
+| Stage env            | no run id                                                            | `NIGHTGAUGE_RUN_ID` exported by the adapter stage-env builders and by `SkillRunner`, so `nightgauge gate verify --record` and the SDK trace recorder are **handed** the identity instead of guessing it                                                      |
 
-The wire change bumps `ProtocolVersion` 1 → 2 and hard-fails a mismatched
-extension/binary pair. Per the pre-customer no-compat rule the issue-keyed paths
-are deleted outright; a one-shot startup sweep reconciles-then-deletes legacy
-`runtime-{N}.json` files so the upgrade does not strand phantom `running` rows,
-and that sweep's own removal is filed as a follow-up.
+The wire change bumps `ProtocolVersion` 1 → 2, and ADR 017 specifies the
+hard-fail rather than assuming one exists: on a mismatch the TypeScript client
+disconnects, raises a blocking modal, and rejects every later call with
+`protocol_mismatch`. Per the pre-customer no-compat rule the issue-keyed paths
+are deleted outright; a one-shot **Go** startup sweep reconciles-then-deletes
+legacy `runtime-{N}.json` files so the upgrade does not strand phantom `running`
+rows, and that sweep's own removal is filed as a follow-up. Legacy disposition
+belongs to that sweep **exclusively** — the extension's activation stub sweep is
+narrowed to the new filename scheme so the two cannot race.
 
 #### `cost by-class`
 
