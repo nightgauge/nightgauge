@@ -9765,7 +9765,14 @@ Use --json for machine-readable output (skills parse this format).`,
 
 			// Human-readable output
 			fmt.Printf("nightgauge doctor — schema v%d\n\n", result.V)
-			checkOrder := []string{"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project"}
+			// The leak carriers are listed here so they render as named rows
+			// rather than only as anonymous Warnings lines; keys absent from
+			// result.Checks (compose_orphans writes nothing when healthy) are
+			// skipped below.
+			checkOrder := []string{
+				"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
+				"compose_orphans", "worktree_leaks", "pipeline_stashes", "orphaned_processes",
+			}
 			for _, key := range checkOrder {
 				item, ok := result.Checks[key]
 				if !ok {
