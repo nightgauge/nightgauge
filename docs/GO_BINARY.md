@@ -1200,6 +1200,44 @@ snapshots. It only accepts snapshots whose repository identity matches the
 registered root and whose owning process is alive; stale and unregistered
 runtime files are ignored.
 
+#### Run Identity Keying (Issue #370 / ADR 017)
+
+**Status: decided, not yet implemented.** The prose in this document describes
+the registry as it exists on `main`; this section is the pointer to what
+replaces it. See
+[docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
+for the full decision, the refuted alternatives and their probe evidence.
+
+Today the IPC server's runtime registry (`internal/ipc/server.go`,
+`activeRuntimes`) is keyed by **bare issue number** — the struct comment claims
+`"repo#issueNumber"`, but all seven key-construction sites build
+`fmt.Sprintf("%d", p.IssueNumber)`. An issue number is not an identity: it is
+shared by every dispatch of that issue, by every repo in a multi-repo workspace
+that numbers an issue the same, and by the zombie of a force-cleared run that
+unwedges later. The consequences are catalogued under
+[Force-Clear Terminal Bookkeeping](#force-clear-terminal-bookkeeping-issue-307).
+
+ADR 017 decides:
+
+| Concept              | Today                                                                | After #370                                                                                                                                       |
+| -------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Registry key         | `"{issue}"`                                                          | `run_id` — a client-minted UUIDv7 that **is** `RuntimeState.RunID` and **is** the #307 dispatch generation                                       |
+| Who mints            | the server, lazily, on any `notifyStageTransition` miss              | the **dispatcher**, before any I/O; the server never mints                                                                                       |
+| Handshake            | none (identity is a server-side side effect)                         | `run_id` on every `pipeline.*` call — re-asserted, never latched on `initialized`                                                                |
+| Unknown identity     | mint a new one (identity laundering)                                 | **adopt**, rehydrating from the on-disk snapshot when present; refuse only a provably-closed run, as a JSON-RPC error                            |
+| Terminal write       | `delete` + `os.Remove` keyed by issue, after seconds of unlocked I/O | claim under the lock → work unlocked → **compare-and-delete** under the lock; the snapshot filename carries the identity                         |
+| Snapshot file        | `runtime-{issue}.json`                                               | `runtime-{issue}-{runId}.json`                                                                                                                   |
+| Issue number         | the key                                                              | a **derived index** for lookup and UX; two runs of one issue coexist                                                                             |
+| Reconcile skip (#44) | `skipIssue` — "this issue has an entry"                              | `skipRun` — "this **run** is live", by non-terminal entry plus a `LastSeen` lease, so the `workspace.setRoot` call site stops skipping dead runs |
+| Force-clear → Go     | no runtime IPC call at all                                           | `pipeline.abandonRun {runId, reason}`                                                                                                            |
+| `LoadPersistedState` | `(stateDir, issueNumber)`                                            | `(stateDir, runID)` + `FindPersistedStatesForIssue(stateDir, issueNumber)`                                                                       |
+
+The wire change bumps `ProtocolVersion` 1 → 2 and hard-fails a mismatched
+extension/binary pair. Per the pre-customer no-compat rule the issue-keyed paths
+are deleted outright; a one-shot startup sweep reconciles-then-deletes legacy
+`runtime-{N}.json` files so the upgrade does not strand phantom `running` rows,
+and that sweep's own removal is filed as a follow-up.
+
 #### `cost by-class`
 
 Reads the recorded pipeline run history and reports cost (p50/p95/mean) and
@@ -1580,7 +1618,9 @@ daemon-side:
   1. the record's repo must **equal** the raise's repo — an empty one
      corroborates nothing, because `pipeline.notifyStageTransition` seeds
      `rt.Repo` only when the caller sends it, and the map is keyed by bare issue
-     number (#370's re-keying target);
+     number ([#370's re-keying target](#run-identity-keying-issue-370--adr-017)
+     — ADR 017 keeps both corroboration rules verbatim and resolves the run
+     through the issue index rather than letting a raise name one by id);
   2. the figure is summed over `CompletedStages` the daemon watched **begin** —
      entries carrying the `StartedAt` stamp that only a `running` transition's
      `BeginStage` writes — never off the `TotalCostUSD` accumulator. A
@@ -4516,6 +4556,18 @@ no learning outcome, no telemetry, frozen UI. Re-keying the runtime registry by
 run identity, with a handshake that is self-healing rather than
 single-message-fatal, is ADR-scale work tracked as issue #370.
 
+**Now decided — see [Run Identity Keying](#run-identity-keying-issue-370--adr-017)
+and [ADR 017](decisions/017-runtime-identity-keying.md).** The latch-on-
+`initialized` design described in the paragraph above is the one that was
+refuted, by a probe showing a live successful run locked out of every write. The
+adopted design re-asserts the identity on **every** message, so no single
+message is load-bearing, and it **unifies** the generation token with the run
+identity rather than adding a second one: `slot.generation` becomes
+`slot.runId`, `forceClearedGenerations` becomes `forceClearedRunIds` with the
+same permanence and no release path, and the three await-free check-and-claim
+boundaries are preserved unchanged. Implementation has not landed; this
+paragraph describes `main`.
+
 One consequence worth naming: because the force-clear makes no pipeline-runtime
 IPC call (`queue.complete` and `autonomous.complete` never touch the runtime
 registry), the dead run keeps its `activeRuntimes` entry for the life of the
@@ -4526,6 +4578,13 @@ the next server start only** — the `workspace.setRoot` reconcile call site ski
 it. The force-clear deliberately does not delete that snapshot: for a run that
 stays hung forever it is the only remaining path to a terminal event, and a
 paused snapshot additionally powers the pause-restore prompt.
+
+ADR 017 closes that consequence three ways: the force-clear gains an explicit
+`pipeline.abandonRun {runId, reason}` call, the reconcile skip predicate becomes
+"this **run** is live" (non-terminal entry **and** a `LastSeen` lease) instead of
+"this issue has an entry", and the abandoned run's terminal event is emitted from
+its own claimed snapshot. Paused snapshots stay exempt, so the pause-restore
+prompt is unaffected.
 
 ### Modernize — Assessment Aggregation
 
