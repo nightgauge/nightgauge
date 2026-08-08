@@ -46,16 +46,21 @@ if [ "$BEHIND_COUNT" -gt 0 ]; then
     # with a NUL terminator, so neither quoting nor a newline in a path can
     # confuse the loop. git sorts the output by path, so skipping a repeat of
     # the previous path collapses that path's index stages to one entry.
-    CONFLICT_COUNT=0
+    #
+    # Append with `+=`, never `CONFLICT_FILES[$N]=` from N=0: zsh arrays are
+    # 1-indexed and abort the whole loop with "assignment to invalid subscript
+    # range" on index 0, enumerating nothing — and the agent shell is not
+    # guaranteed to be bash (zsh has been the macOS login shell since Catalina).
+    CONFLICT_FILES=()
     CONFLICT_PREV=""
     while IFS= read -r -d '' CONFLICT_REC; do
       CONFLICT_PATH="${CONFLICT_REC#*$'\t'}"
       if [ "$CONFLICT_PATH" != "$CONFLICT_PREV" ]; then
-        CONFLICT_FILES[$CONFLICT_COUNT]="$CONFLICT_PATH"
-        CONFLICT_COUNT=$((CONFLICT_COUNT + 1))
+        CONFLICT_FILES+=("$CONFLICT_PATH")
         CONFLICT_PREV="$CONFLICT_PATH"
       fi
     done < <(git ls-files -u -z 2>/dev/null)
+    CONFLICT_COUNT=${#CONFLICT_FILES[@]}
 
     if [ "$CONFLICT_COUNT" -gt 0 ]; then
       printf 'Rebase conflicts detected in:'

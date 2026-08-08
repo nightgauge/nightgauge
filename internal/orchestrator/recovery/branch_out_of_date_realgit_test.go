@@ -610,6 +610,72 @@ func TestRealGit_GitlinkConflict_EvidenceDumpSurvives(t *testing.T) {
 	}
 }
 
+// TestRealGit_ModeOnlyConflict_SurvivesItsOwnReader is the #301 round-4b
+// regression for the ONE real conflict whose faithful record is byte-identical
+// to a failed blob read: an empty placeholder (`.gitkeep`, `__init__.py`,
+// `py.typed`) added on both sides with different exec bits. git stages it as
+// `100644 e69de29 2` / `100755 e69de29 3` — two PRESENT blob sides, both
+// legitimately empty, the conflict being the mode.
+//
+// The writer records that correctly. The reader's `unexplainedEmpty` guard then
+// rejected it, because it excused an all-empty entry only via a non-blob mode or
+// a `*_present:false` flag and never considered the modes DISAGREEING. By the
+// time the reader ran, `branch-out-of-date` had already aborted the rebase on
+// the captured path (which writes no evidence dump, the context being the
+// durable copy) — so the escalation said the conflict "was never recorded"
+// about a document that recorded it, with the index already gone. On main the
+// same conflict got a context and a feature-dev re-dispatch.
+//
+// Writer and reader are asserted together on purpose: this defect existed only
+// in the seam between them, and each half is correct in isolation.
+func TestRealGit_ModeOnlyConflict_SurvivesItsOwnReader(t *testing.T) {
+	ws := realGitFixture(t, "mode-only")
+	const placeholder = "n.txt"
+
+	a := NewBranchOutOfDate(&fakePRMergeRunner{})
+	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
+	if res.FollowUp != FollowUpStageCanResume {
+		t.Fatalf("FollowUp = %q, want %q — a mode conflict on an empty file is resolvable: %s",
+			res.FollowUp, FollowUpStageCanResume, res.Reason)
+	}
+
+	doc := readConflictContext(t, ws, 301)
+	rawFiles, _ := doc["conflicting_files"].([]interface{})
+	var entry map[string]interface{}
+	for _, rf := range rawFiles {
+		e, _ := rf.(map[string]interface{})
+		if e["path"] == placeholder {
+			entry = e
+		}
+	}
+	if entry == nil {
+		t.Fatalf("%q missing from the capture: %v", placeholder, doc["conflicting_files"])
+	}
+	// The record git's own index dictates: both sides present, both empty, modes
+	// differing. Nothing here is hand-authored — see the fixture's mode-only mode.
+	if entry["ours"] != "" || entry["theirs"] != "" {
+		t.Fatalf("fixture is not exercising the mode-only class; both sides must be empty: %v", entry)
+	}
+	if entry["ours_present"] != true || entry["theirs_present"] != true {
+		t.Errorf("both stages exist in the index, so neither presence flag may be false: %v", entry)
+	}
+	if entry["ours_mode"] == entry["theirs_mode"] {
+		t.Fatalf("fixture is not exercising the mode-only class; the modes must differ: %v", entry)
+	}
+
+	// The reader must accept the document the writer just produced. This is the
+	// half that failed: "carries 1 of 1 entries with both sides empty and nothing
+	// explaining why — those conflicts were never recorded".
+	loop := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+	if loop.FollowUp != FollowUpStageCanResume {
+		t.Fatalf("the reader rejected a faithful capture (index already aborted, nothing left to triage from): FollowUp = %q, reason = %s",
+			loop.FollowUp, loop.Reason)
+	}
+	if rebaseInProgress(t, ws) {
+		t.Error("a captured conflict must abort the rebase")
+	}
+}
+
 // TestRealGit_SymlinkConflict_ReadsAsBlob is the control for the gitlink fix: a
 // SYMLINK is index mode 120000 and is a perfectly ordinary blob whose bytes are
 // the target path. It must keep being read and inlined — the fix must key on
@@ -688,30 +754,14 @@ func startRebase(t *testing.T, ws string) {
 // than copied here, so the test cannot pass against a skill that has drifted —
 // which is the whole point: the reader's guard is only as good as its agreement
 // with the writer that actually runs on the normal pr-merge path.
-func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, withHeadRef bool) {
+// extraEnv entries are appended last, so a "PATH=…" there wins (os/exec keeps
+// the last value for a duplicated key).
+func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, withHeadRef bool, extraEnv ...string) {
 	t.Helper()
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH — the skill capture is a jq pipeline")
 	}
-	src, err := filepath.Abs(filepath.Join("..", "..", "..", "skills", "nightgauge-pr-merge", "_includes", "merge.md"))
-	if err != nil {
-		t.Fatalf("resolve merge.md: %v", err)
-	}
-	body, err := os.ReadFile(src)
-	if err != nil {
-		t.Fatalf("read merge.md: %v", err)
-	}
-	const start = "capture_conflict_and_signal() {"
-	i := strings.Index(string(body), start)
-	if i < 0 {
-		t.Fatalf("capture_conflict_and_signal not found in %s", src)
-	}
-	rest := string(body)[i:]
-	end := strings.Index(rest, "\n}\n")
-	if end < 0 {
-		t.Fatalf("capture_conflict_and_signal has no closing brace in %s", src)
-	}
-	fn := rest[:end+3]
+	fn := skillShellFragment(t, mergeIncludePath(t), "capture_conflict_and_signal() {", "\n}\n")
 
 	script := filepath.Join(t.TempDir(), "capture.sh")
 	if err := os.WriteFile(script, []byte("set -u\n"+fn+"\ncapture_conflict_and_signal \"$CCS_REASON\"\n"), 0o644); err != nil {
@@ -730,11 +780,75 @@ func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, with
 	if withHeadRef {
 		cmd.Env = append(cmd.Env, "HEAD_REF="+fixtureBranch)
 	}
+	cmd.Env = append(cmd.Env, extraEnv...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("skill capture failed: %v\n%s", err, out)
 	}
 	t.Logf("skill capture said: %s", strings.TrimSpace(string(out)))
+}
+
+func mergeIncludePath(t *testing.T) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("..", "..", "..", "skills", "nightgauge-pr-merge", "_includes", "merge.md"))
+	if err != nil {
+		t.Fatalf("resolve merge.md: %v", err)
+	}
+	return p
+}
+
+// skillShellFragment lifts a shell fragment out of a shipped skill markdown by
+// its first line and its terminator, VERBATIM. Extracting at test time rather
+// than copying the shell in here is the point: a test that carries its own copy
+// of the code passes against a skill that has drifted.
+func skillShellFragment(t *testing.T, src, start, end string) string {
+	t.Helper()
+	body, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+	i := strings.Index(string(body), start)
+	if i < 0 {
+		t.Fatalf("%q not found in %s", start, src)
+	}
+	rest := string(body)[i:]
+	j := strings.Index(rest, end)
+	if j < 0 {
+		t.Fatalf("%q has no %q terminator in %s", start, end, src)
+	}
+	return rest[:j+len(end)]
+}
+
+// pathWithoutIconv builds a PATH containing everything the capture helper
+// shells out to EXCEPT iconv, by symlinking each tool into a fresh directory.
+//
+// It exists because the helper's UTF-8 guard used to be `command -v iconv && …`,
+// which silently skipped itself — and shipped a U+FFFD-corrupted capture as a
+// success — on any host without iconv (alpine/musl images ship none). Inheriting
+// the developer's PATH, where iconv exists, is precisely why the binary-conflict
+// test could not catch that.
+func pathWithoutIconv(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	// Every external command in capture_conflict_and_signal. printf/echo/[ are
+	// bash builtins and need no entry.
+	for _, tool := range []string{"git", "jq", "mktemp", "date", "cat", "sed", "head", "mkdir", "rm", "mv"} {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			t.Skipf("%s not on PATH — cannot build an iconv-free environment for the capture", tool)
+		}
+		if err := os.Symlink(p, filepath.Join(dir, tool)); err != nil {
+			t.Fatalf("symlink %s: %v", tool, err)
+		}
+	}
+	// Assert the precondition rather than assume it: if iconv were reachable the
+	// test would silently stop testing anything.
+	if _, err := exec.LookPath("iconv"); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "iconv")); err == nil {
+			t.Fatalf("the iconv-free PATH contains iconv")
+		}
+	}
+	return dir
 }
 
 // TestRealGit_SkillWriter_ReadByRecoveryLoop closes the #301 round-2 finding-2/4
@@ -798,6 +912,114 @@ func TestRealGit_SkillWriter_ReadByRecoveryLoop(t *testing.T) {
 			t.Errorf("the escalation must name the marker it acted on: %q", res.Reason)
 		}
 	})
+
+	// #301 round-4b. The subtest above inherits the developer's PATH, where
+	// iconv exists — so it passed while the guard it was checking was
+	// `command -v iconv && ! iconv …`, a check that skips ITSELF wherever iconv
+	// is not installed. On such a host the binary blob went straight to
+	// `jq --rawfile`, which substitutes U+FFFD for every invalid byte, and the
+	// document came back `capture_failed: false` with mojibake in `ours`; the
+	// reader then returned "stage can resume" and feature-dev resolved the
+	// conflict against fabricated bytes before `rebase --abort` destroyed the
+	// originals. The verdict must not depend on which optional tools a runner
+	// happens to have.
+	// The shell writer records a mode-only conflict the same way the Go writer
+	// does — two present blob sides, both empty, modes differing — so the
+	// reader's mode-only clause has to hold for BOTH writers or the pr-merge
+	// path escalates a faithful capture after its index is already gone.
+	t.Run("mode-only conflict written by the skill is actionable", func(t *testing.T) {
+		ws := realGitFixture(t, "mode-only")
+		startRebase(t, ws)
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", true)
+
+		doc := readConflictContext(t, ws, 301)
+		if doc["capture_failed"] != false {
+			t.Fatalf("capture_failed = %v, want false — every path read cleanly", doc["capture_failed"])
+		}
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpStageCanResume {
+			t.Fatalf("FollowUp = %q, want %q: %s\nentries: %v",
+				res.FollowUp, FollowUpStageCanResume, res.Reason, doc["conflicting_files"])
+		}
+	})
+
+	t.Run("unrecordable conflict escalates on a host without iconv", func(t *testing.T) {
+		ws := realGitFixture(t, "binary")
+		startRebase(t, ws)
+		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", true,
+			"PATH="+pathWithoutIconv(t))
+
+		doc := readConflictContext(t, ws, 301)
+		if doc["capture_failed"] != true {
+			t.Fatalf("capture_failed = %v, want true even with no iconv on PATH; entries: %v",
+				doc["capture_failed"], doc["conflicting_files"])
+		}
+		res := (&ConflictRecoveryLoop{maxDevRedispatch: 3}).Execute(context.Background(), prMergeConflictFailure(ws, 301))
+		if res.FollowUp != FollowUpHumanTriageRequired {
+			t.Fatalf("FollowUp = %q, want %q: %s", res.FollowUp, FollowUpHumanTriageRequired, res.Reason)
+		}
+	})
+}
+
+// TestSkillWriter_ConflictEnumerationIsShellPortable runs the conflict
+// enumeration loops shipped in skills/nightgauge-pr-merge/_includes/merge.md and
+// skills/_shared/FRESHNESS_CHECK.md under BOTH bash and zsh, against a real
+// two-file conflict.
+//
+// The loops assigned into `CONFLICT_FILES[$CONFLICT_COUNT]` starting at index 0.
+// zsh arrays are 1-indexed and abort on that with "assignment to invalid
+// subscript range", so under zsh the enumeration produced nothing — and the
+// caller then reported "Rebase failed but no conflict markers found" for a
+// conflict that demonstrably exists, aborted the rebase and exited 1. The agent
+// shell is not guaranteed to be bash (#301 round-4b).
+func TestSkillWriter_ConflictEnumerationIsShellPortable(t *testing.T) {
+	shells := []string{"bash"}
+	if _, err := exec.LookPath("zsh"); err == nil {
+		shells = append(shells, "zsh")
+	} else {
+		t.Log("zsh not installed — only bash is covered on this host")
+	}
+
+	sharedInclude, err := filepath.Abs(filepath.Join("..", "..", "..", "skills", "_shared", "FRESHNESS_CHECK.md"))
+	if err != nil {
+		t.Fatalf("resolve FRESHNESS_CHECK.md: %v", err)
+	}
+	sources := map[string]string{
+		"merge.md":           mergeIncludePath(t),
+		"FRESHNESS_CHECK.md": sharedInclude,
+	}
+
+	ws := realGitFixture(t, "unicode-path")
+	startRebase(t, ws)
+
+	for name, src := range sources {
+		// Verbatim from the shipped markdown: the array reset through the count.
+		loop := skillShellFragment(t, src, "CONFLICT_FILES=()", "CONFLICT_COUNT=${#CONFLICT_FILES[@]}\n")
+		script := filepath.Join(t.TempDir(), "enumerate.sh")
+		if err := os.WriteFile(script, []byte(loop+"printf '%s\\n' \"$CONFLICT_COUNT\"\nprintf '%s\\n' \"${CONFLICT_FILES[@]}\"\n"), 0o644); err != nil {
+			t.Fatalf("write enumeration script: %v", err)
+		}
+		for _, sh := range shells {
+			t.Run(name+"/"+sh, func(t *testing.T) {
+				cmd := exec.Command(sh, script)
+				cmd.Dir = ws
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("%s could not run the shipped enumeration: %v\n%s", sh, err, out)
+				}
+				got := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+				want := []string{"2", "café.txt", "f.txt"}
+				if len(got) != len(want) {
+					t.Fatalf("%s enumerated %v, want %v", sh, got, want)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Errorf("%s line %d = %q, want %q (full: %v)", sh, i, got[i], want[i], got)
+					}
+				}
+			})
+		}
+	}
 }
 
 // TestRealGit_RebaseBranch_ResolvesHeadName covers rebaseBranch returning a REAL

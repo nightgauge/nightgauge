@@ -114,6 +114,39 @@ describe("ConflictContextSchema", () => {
   it("accepts the capture_failed marker the shell writer sets on a failed capture", () => {
     expect(ConflictContextSchema.safeParse({ ...valid, capture_failed: true }).success).toBe(true);
   });
+
+  // #301 round-4b: capture_error is the ONLY field that says WHY a capture
+  // failed, at both levels. An undeclared field is not "tolerated" by an object
+  // schema — zod STRIPS it — so a consumer parsing a capture_failed document saw
+  // the entry with its diagnosis deleted. The document-level one happened to
+  // survive on the container's .passthrough(); the per-file one did not.
+  it("keeps capture_error at both levels on a failed capture", () => {
+    const result = ConflictContextSchema.safeParse({
+      ...valid,
+      capture_failed: true,
+      capture_error: "bin.dat: index blob e7e9fbfd cannot round-trip through JSON",
+      conflicting_files: [
+        {
+          path: "bin.dat",
+          ours: "",
+          theirs: "",
+          ours_present: true,
+          theirs_present: true,
+          ours_mode: "100644",
+          theirs_mode: "100644",
+          capture_error: "index blob e7e9fbfd cannot round-trip through JSON (binary conflict)",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.capture_error).toBe(
+      "bin.dat: index blob e7e9fbfd cannot round-trip through JSON"
+    );
+    expect(result.data.conflicting_files[0]?.capture_error).toBe(
+      "index blob e7e9fbfd cannot round-trip through JSON (binary conflict)"
+    );
+  });
 });
 
 // #301 round-2 findings 2/4 — the reader-side predicate that decides whether an
@@ -165,6 +198,40 @@ describe("isUnrecordedConflictFile", () => {
         theirs: "",
         ours_mode: "120000",
         theirs_mode: "120000",
+      })
+    ).toBe(true);
+  });
+
+  // #301 round-4b: an empty placeholder added on both sides with different exec
+  // bits stages as `100644 e69de29 2` / `100755 e69de29 3`. Both sides present,
+  // both genuinely empty, and the differing modes ARE the conflict — a faithful
+  // record that the predicate used to call unrecorded.
+  it("does not flag a mode-only conflict, where the differing modes are the conflict", () => {
+    expect(
+      isUnrecordedConflictFile({
+        path: ".gitkeep",
+        ours: "",
+        theirs: "",
+        ours_present: true,
+        theirs_present: true,
+        ours_mode: "100755",
+        theirs_mode: "100644",
+      })
+    ).toBe(false);
+  });
+
+  it("still flags an all-empty blob pair whose modes AGREE", () => {
+    // Content-identical sides with the same mode are never an unmerged path, so
+    // this shape only comes from a failed read.
+    expect(
+      isUnrecordedConflictFile({
+        path: "a.ts",
+        ours: "",
+        theirs: "",
+        ours_present: true,
+        theirs_present: true,
+        ours_mode: "100644",
+        theirs_mode: "100644",
       })
     ).toBe(true);
   });

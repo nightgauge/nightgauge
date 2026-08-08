@@ -144,7 +144,14 @@ blob` exits 128).
 capture_conflict_and_signal() {
   _CCS_REASON="$1"
   # Resolve the canonical repo root (worktree-aware) for the pipeline dir.
-  _CCS_MAIN=$(git worktree list --porcelain 2>/dev/null | awk '/^worktree/{print $2; exit}')
+  # `sed s/^worktree //`, never `awk '{print $2}'`: awk splits on whitespace, so
+  # a repo under `/src/has space/repo` yielded `/src/has` and the whole capture
+  # — context, feedback, and the stale-context cleanup below — landed in a
+  # directory OUTSIDE the repository while reporting success. The reader looks
+  # in the real pipeline dir, finds nothing, and the one capturable moment is
+  # gone (#301; out-of-worktree writes are forbidden besides — see
+  # docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129).
+  _CCS_MAIN=$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | head -1)
   [ -z "$_CCS_MAIN" ] && _CCS_MAIN=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
   mkdir -p "$_CCS_MAIN/.nightgauge/pipeline" 2>/dev/null || true
   _CCS_CTX="$_CCS_MAIN/.nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
@@ -227,10 +234,21 @@ capture_conflict_and_signal() {
       _err="index blob ${_oid:0:8} is $_sz bytes, over the 1048576-byte context cap"
     elif ! git cat-file blob "$_oid" >"$_CCS_TMP/blob" 2>/dev/null; then
       _err="index blob ${_oid:0:8} is unreadable"
-    elif command -v iconv >/dev/null 2>&1 && ! iconv -f UTF-8 -t UTF-8 <"$_CCS_TMP/blob" >/dev/null 2>&1; then
-      # JSON silently replaces every invalid byte with U+FFFD, so binary content
-      # cannot round-trip through this document.
-      _err="index blob ${_oid:0:8} is not valid UTF-8 (binary conflict)"
+    elif [ "$(jq -nj --rawfile t "$_CCS_TMP/blob" '$t|tojson|fromjson' 2>/dev/null | git hash-object -t blob --stdin 2>/dev/null)" != "$_oid" ]; then
+      # Encode the blob as a JSON string, parse it back, and re-hash: if the id
+      # differs from the index's, what feature-dev would read is NOT what git
+      # holds. JSON replaces every invalid byte with U+FFFD, so binary content
+      # cannot round-trip — and a truncated or surrogate-encoded sequence
+      # survives a byte-length check while still decoding to different bytes.
+      #
+      # This check is UNCONDITIONAL and uses only git and jq, the two commands
+      # this whole helper is built from. It was `command -v iconv && ! iconv …`,
+      # which SKIPPED itself wherever iconv is not installed (alpine/musl images
+      # ship none) and shipped a U+FFFD-corrupted capture as a success — the
+      # exact #301 failure class, reintroduced by the guard against it. A guard
+      # that can be absent is not a guard; any failure here leaves _err set and
+      # fails the capture.
+      _err="index blob ${_oid:0:8} cannot round-trip through JSON (binary or invalid UTF-8)"
     fi
     if [ -n "$_err" ]; then
       jq -nc --arg p "$_path" --arg s "$_side" --arg m "$_mode" --arg e "$_err" \
@@ -366,16 +384,21 @@ if [ "$MERGEABLE" = "CONFLICTING" ]; then
     # `rebase --continue` then fails on it. `-z` gives raw path bytes; git
     # sorts by path, so skipping a repeat of the previous path collapses that
     # path's index stages to one entry.
-    CONFLICT_COUNT=0
+    #
+    # Append with `+=`, never `CONFLICT_FILES[$N]=` from N=0: zsh arrays are
+    # 1-indexed and abort the whole loop with "assignment to invalid subscript
+    # range" on index 0, enumerating nothing — and the agent shell is not
+    # guaranteed to be bash (zsh has been the macOS login shell since Catalina).
+    CONFLICT_FILES=()
     CONFLICT_PREV=""
     while IFS= read -r -d '' CONFLICT_REC; do
       CONFLICT_PATH="${CONFLICT_REC#*$'\t'}"
       if [ "$CONFLICT_PATH" != "$CONFLICT_PREV" ]; then
-        CONFLICT_FILES[$CONFLICT_COUNT]="$CONFLICT_PATH"
-        CONFLICT_COUNT=$((CONFLICT_COUNT + 1))
+        CONFLICT_FILES+=("$CONFLICT_PATH")
         CONFLICT_PREV="$CONFLICT_PATH"
       fi
     done < <(git ls-files -u -z 2>/dev/null)
+    CONFLICT_COUNT=${#CONFLICT_FILES[@]}
 
     if [ "$CONFLICT_COUNT" -eq 0 ]; then
       echo "ERROR: Rebase failed but no conflict markers found."
@@ -503,9 +526,18 @@ sides into `conflict-context-{ISSUE}.json` and emits a
 loop re-dispatches feature-dev to resolve the conflict with that context —
 nothing is discarded. The dev re-dispatch is bounded by
 `pipeline.recovery.conflict_recovery.max_dev_redispatch`; once exhausted — or
-when the capture wrote no context, marked itself `capture_failed`, or left an
-entry whose two sides are both empty with nothing explaining why — the recovery
-loop escalates with the specific files/reason instead of looping.
+when the capture wrote no context, marked itself `capture_failed`, named a
+per-path `capture_error`, or left an entry whose two sides are both empty with
+nothing explaining why — the recovery loop escalates with the specific
+files/reason instead of looping.
+
+**A failed capture leaves the reason and nothing else.** This helper writes no
+`conflict-evidence-{N}/` dump (that is the Go `branch-out-of-date` writer's
+behaviour), and at both mid-rebase call sites above the `git rebase --abort` on
+the next line runs regardless of what the helper returned — so a path that could
+not be recorded ends as `capture_failed: true` plus its `capture_error`, with
+the `:2:`/`:3:` stages gone. Anyone triaging one of those reproduces the
+conflict by re-running the rebase; there is no directory to go looking for.
 
 #### Step 6.2: Determine Merge Strategy
 

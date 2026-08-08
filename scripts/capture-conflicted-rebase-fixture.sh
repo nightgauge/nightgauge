@@ -82,6 +82,16 @@
 #                            target path, so it must keep reading normally — the
 #                            control that stops the gitlink fix from being
 #                            written as "anything unusual is metadata-only".
+#               mode-only    — an add/add conflict on an EMPTY placeholder file
+#                            (.gitkeep / __init__.py / py.typed shape) added on
+#                            both sides with DIFFERENT exec bits. git stages it
+#                            as `100644 e69de29 2` / `100755 e69de29 3`: two
+#                            present blob sides, both legitimately empty, and
+#                            the conflict is the MODE. Only git decides that
+#                            identical empty content with differing modes is
+#                            still an unmerged path, and it is the one real
+#                            conflict whose faithful record looks exactly like a
+#                            failed blob read.
 #
 # Prints the path of the working clone on stdout. That clone is left checked out
 # on the feature branch with origin/main already advanced, i.e. positioned
@@ -102,13 +112,13 @@ set -euo pipefail
 dest="${1:-}"
 mode="${2:-conflict}"
 
-modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink"
+modes="conflict|dirty-index|detached|unicode-path|binary|operator-rebase|gitlink|symlink|mode-only"
 if [ -z "$dest" ]; then
   echo "usage: $0 <dest-dir> [$modes]" >&2
   exit 2
 fi
 case "$mode" in
-  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink) ;;
+  conflict | dirty-index | detached | unicode-path | binary | operator-rebase | gitlink | symlink | mode-only) ;;
   *)
     echo "unknown mode: $mode (want $modes)" >&2
     exit 2
@@ -152,6 +162,7 @@ case "$mode" in
   binary) extra="bin.dat" ;;
   gitlink) extra="sub" ;;
   symlink) extra="link" ;;
+  mode-only) extra="n.txt" ;;
 esac
 
 # Three real commit objects for the gitlink to point at, one per side. They are
@@ -183,6 +194,17 @@ write_extra() {
     symlink)
       rm -f "$work/$extra"
       ln -s "target-$1" "$work/$extra"
+      ;;
+    mode-only)
+      # An add/add conflict: the path must NOT exist in the base commit, so the
+      # shared variant writes nothing. Both sides then add the SAME (empty)
+      # content with different exec bits, which is the whole conflict.
+      [ "$1" = "shared" ] && return 0
+      : >"$work/$extra"
+      case "$1" in
+        feature-side) chmod 755 "$work/$extra" ;;
+        main-side) chmod 644 "$work/$extra" ;;
+      esac
       ;;
   esac
 }

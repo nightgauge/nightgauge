@@ -237,13 +237,22 @@ loop exists to provide.
 
 "Representable" is checked **per path**, not in aggregate (#301). One readable
 file must not license a capture whose siblings landed with both sides empty. A
-path fails the check when its index blob is unreadable, is not valid UTF-8
-(`encoding/json` substitutes U+FFFD for every invalid byte, so a binary conflict
-cannot round-trip), exceeds the per-side size cap (1 MiB — a truncated side is
-worse than none, because feature-dev resolves against what the context says), or
-carries a path NAME that is not valid UTF-8. Any failing path fails the whole
-capture; the operator's remedy is the `conflict-evidence-{N}/` dump described
-below.
+path fails the check when its index blob is unreadable, cannot survive a JSON
+round trip (every invalid byte becomes U+FFFD, so a binary conflict comes back
+as something that is not the blob), exceeds the per-side size cap (1 MiB — a
+truncated side is worse than none, because feature-dev resolves against what the
+context says), or carries a path NAME that is not valid UTF-8. Any failing path
+fails the whole capture.
+
+Both writers enforce that rule with a check that **cannot be absent**, because a
+guard gated on an optional tool is not a guard: the Go writer calls
+`utf8.Valid`, and the skill writer encodes the blob to JSON, parses it back and
+re-hashes the result with `git hash-object`, comparing against the index's own
+object id. (It was gated on `command -v iconv` for one round, which silently
+skipped itself on any host without iconv — alpine/musl images ship none — and
+shipped a U+FFFD-corrupted capture as a success. The round trip needs only git
+and jq, the two commands the capture is already built from, and it also catches
+surrogate-encoded sequences that survive a byte-length comparison.)
 
 **A submodule pointer is metadata, not bytes.** `git ls-files -u` reports a
 conflicted gitlink with index mode `160000`, and its per-stage object ids are
@@ -261,6 +270,14 @@ worktree with an unmerged index that nothing in the pipeline reclaims.
 Delete/delete conflicts (index stage 1 only) are likewise captured, as an entry
 with `ours_present` and `theirs_present` both `false`.
 
+**Two empty sides can be the whole truth.** An empty placeholder (`.gitkeep`,
+`__init__.py`, `py.typed`) added on both branches with different exec bits
+stages as `100644 e69de29 2` / `100755 e69de29 3`: both sides present, both
+genuinely empty, and the differing MODES are the conflict. That entry is a
+faithful record, not a failed read, and readers must accept it — the
+discriminator is that the two modes disagree, since content-identical sides
+carrying the same mode are never an unmerged path in the first place.
+
 The index is enumerated with `git ls-files -u -z`, never
 `git diff --name-only --diff-filter=U`: the latter C-quotes non-ASCII paths (a
 conflict in `café.txt` prints as the literal `"caf\303\251.txt"`), and `-z` also
@@ -268,7 +285,9 @@ removes newline ambiguity. `ls-files -u` additionally yields the per-stage blob
 ids, so every blob is read by id and no path has to survive a round-trip through
 a git argument.
 
-The three ways a capture can end are three distinct states:
+The three ways **the Go writer's** capture can end are three distinct states.
+This table describes `branch-out-of-date` only — the skill writer's failure
+mode is different and is stated after it:
 
 | Capture outcome     | Meaning                                                               | Artifacts                     | `rebase --abort`                      | Follow-up     |
 | ------------------- | --------------------------------------------------------------------- | ----------------------------- | ------------------------------------- | ------------- |
@@ -276,11 +295,24 @@ The three ways a capture can end are three distinct states:
 | `no-conflict-state` | enumeration succeeded, zero unmerged paths (dirty index, unborn base) | none                          | yes — the rebase is this run's own    | human triage  |
 | `failed`            | enumeration errored, branch unresolvable, or a path unrepresentable   | `conflict-evidence-{N}/` dump | yes, once the dump succeeded          | human triage  |
 
-**A failed capture preserves the raw index and then aborts.** The `:2:`/`:3:`
+**A failed Go capture preserves the raw index and then aborts.** The `:2:`/`:3:`
 stages are copied out verbatim to `.nightgauge/pipeline/conflict-evidence-{N}/`
 (content-addressed `blobs/<sha>` plus a `manifest.json` naming which stage of
 which path each blob was) before `git rebase --abort` runs. Evidence carries
 `evidence_preserved=true` and `evidence_dir=…`.
+
+**The skill writer does not do this, and there is nothing to triage from after
+it fails.** `capture_conflict_and_signal` writes no `conflict-evidence-{N}/`
+dump — the string never appears in `merge.md` — and each of its call sites runs
+`git rebase --abort` unconditionally on the next line, whatever the helper
+returned. So on the pr-merge path a binary, oversize or unreadable-blob conflict
+ends as a context marked `capture_failed: true` naming the reason in
+`capture_error`, with both sides empty, and its only copy of the `:2:`/`:3:`
+stages destroyed. Do not go looking for an evidence directory after one of
+those: the reason on disk is the whole record, and the conflict itself must be
+reproduced by re-running the rebase. (The alternative — skipping the abort —
+does not preserve anything here either; see the paragraph below on what the
+scheduler does to a live conflicted index.)
 
 Leaving the rebase in progress instead does **not** preserve anything here: the
 scheduler's terminal defer reads the conflicted `UU` paths as uncommitted work
@@ -320,13 +352,24 @@ records.
 
 Readers enforce the same invariant, at the same granularity as the writers.
 `conflict-recovery-loop` escalates on a missing context file, on a
-`capture_failed: true` marker, on one naming zero files, on any ENTRY whose two
-sides are both empty with nothing explaining why, and on one naming no
-resolvable branch. Rejecting only the whole-document shapes was not enough: a
-two-file context with one silently-empty entry passed every check and cost the
-full `max_dev_redispatch` budget. An entry is legitimately empty on both sides
-only when a non-blob mode says its content is a commit id, or the presence flags
-say the index carried no such side.
+`capture_failed: true` marker, on any ENTRY naming a `capture_error`, on one
+naming zero files, on any ENTRY whose two sides are both empty with nothing
+explaining why, and on one naming no resolvable branch. Rejecting only the
+whole-document shapes was not enough: a two-file context with one silently-empty
+entry passed every check and cost the full `max_dev_redispatch` budget. An entry
+is legitimately empty on both sides only when a non-blob mode says its content
+is a commit id, when the two modes disagree (a mode-only conflict), or when the
+presence flags say the index carried no such side.
+
+The reader is exactly as strict as that list and no stricter — a guard that
+rejects a faithful record is the same defect wearing the other sign. The
+mode-only clause was missing for one round, and because a captured conflict
+aborts the rebase before any reader runs, that guard rejected a correct document
+as "never recorded" with the index already gone.
+
+Every field below is declared in `ConflictContextSchema` /
+`ConflictFileSchema`. An undeclared field is not merely undocumented: zod
+**strips** it, so a TypeScript consumer never sees it at all.
 
 | Field                | Type     | Description                                                           |
 | -------------------- | -------- | --------------------------------------------------------------------- |
@@ -337,18 +380,20 @@ say the index carried no such side.
 | `base_ref`           | string   | The base branch the rebase targets (e.g. `main`)                      |
 | `conflict_operation` | string   | `"rebase"` or `"merge"` — which stage→side mapping the writer applied |
 | `capture_failed`     | boolean  | Writer's admission it could not record faithfully (skill writer only) |
+| `capture_error`      | string   | Why, in one line. Present iff `capture_failed` (skill writer only)    |
 | `conflicting_files`  | array    | See the per-entry fields below                                        |
 | `created_at`         | datetime | ISO 8601 timestamp (nullable)                                         |
 
 Per `conflicting_files[]` entry:
 
-| Field                           | Type    | Description                                                                   |
-| ------------------------------- | ------- | ----------------------------------------------------------------------------- |
-| `path`                          | string  | Repo-relative path, raw bytes from `ls-files -z` (never C-quoted)             |
-| `ours` / `theirs`               | string  | The PR branch's side / the base's side. Empty for a gitlink or an absent side |
-| `ours_present` / `…_present`    | boolean | Whether the index carried that stage at all (`false` = deleted on that side)  |
-| `ours_mode` / `theirs_mode`     | string  | Index mode of that stage (`""` when absent). Non-blob ⇒ the entry is metadata |
-| `ours_commit` / `theirs_commit` | string  | Submodule commit id. Present only when the corresponding mode is `160000`     |
+| Field                           | Type    | Description                                                                    |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `path`                          | string  | Repo-relative path, raw bytes from `ls-files -z` (never C-quoted)              |
+| `ours` / `theirs`               | string  | The PR branch's side / the base's side. Empty for a gitlink or an absent side  |
+| `ours_present` / `…_present`    | boolean | Whether the index carried that stage at all (`false` = deleted on that side)   |
+| `ours_mode` / `theirs_mode`     | string  | Index mode of that stage (`""` when absent). Non-blob ⇒ the entry is metadata  |
+| `ours_commit` / `theirs_commit` | string  | Submodule commit id. Present only when the corresponding mode is `160000`      |
+| `capture_error`                 | string  | Why THIS path was not recorded. Present ⇒ refuse the entry (skill writer only) |
 
 ```json
 {

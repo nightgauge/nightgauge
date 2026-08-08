@@ -183,9 +183,13 @@ then reports one of three outcomes, and each gets its own handling:
 
 - **captured** — every conflicting path is representable and the branch
   resolved. A blob side must be readable, valid UTF-8 and under the per-side size
-  cap; a **gitlink** (index mode `160000`) side is representable by definition —
-  its content is a commit id, recorded as `ours_commit`/`theirs_commit` with no
-  object read at all. Writes the context file + signal, aborts the rebase (the
+  cap — `branch-out-of-date` checks each with `utf8.Valid` and a byte count, on
+  every path, unconditionally. A **gitlink** (index mode `160000`) side is
+  representable by definition — its content is a commit id, recorded as
+  `ours_commit`/`theirs_commit` with no object read at all. Two present blob
+  sides that are both EMPTY are also representable when their modes differ: that
+  is a mode-only conflict on an empty placeholder, and the differing modes are
+  the conflict. Writes the context file + signal, aborts the rebase (the
   context carries both sides of every path, so it IS the durable copy), returns
   `stage can resume`. The abort's exit status is checked here and only here: a
   failed abort downgrades to human triage rather than resuming a stage into a
@@ -208,6 +212,18 @@ then reports one of three outcomes, and each gets its own handling:
 The capture precondition is **per path**, not aggregate: one readable file does
 not license a capture whose siblings landed with both sides empty. Any path that
 cannot be represented fails the whole capture.
+
+The three outcomes above are `branch-out-of-date`'s. The **skill writer** in
+`skills/nightgauge-pr-merge/_includes/merge.md`, which runs on the ordinary
+`MERGEABLE=CONFLICTING` route, enforces the same per-path precondition but
+cannot report it the same way: it has already emitted output by the time a blob
+read fails, so instead of writing nothing it writes the document with
+`capture_failed: true`, a document-level `capture_error`, and a per-path
+`capture_error` on each entry it could not record. It writes **no**
+`conflict-evidence-{N}/` dump, and the `git rebase --abort` that follows it is
+unconditional — so on that path a failed capture leaves the reason on disk and
+nothing else. Readers escalate on either shape; see
+[FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301).
 
 **Why the failed case aborts rather than leaving the rebase live.** Leaving a
 conflicted index in place does not preserve it in this system: `git status`

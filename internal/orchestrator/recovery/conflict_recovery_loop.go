@@ -139,13 +139,19 @@ type conflictContextEntry struct {
 	TheirsPresent *bool  `json:"theirs_present"`
 	OursMode      string `json:"ours_mode"`
 	TheirsMode    string `json:"theirs_mode"`
+	// CaptureError is the skill writer's per-path diagnosis of why THIS entry
+	// could not be recorded (the document-level capture_failed says only that
+	// something failed). A reader must refuse such an entry outright — and
+	// separately from unexplainedEmpty, which would call the same entry "never
+	// recorded" and throw away the one field saying what actually went wrong.
+	CaptureError string `json:"capture_error"`
 }
 
 // unexplainedEmpty reports whether BOTH sides of this entry are empty with
 // nothing in the entry accounting for it — the exact shape a writer produces
 // when its blob reads failed and it substituted "" (#301 round-2 finding 4).
 //
-// Three things legitimately produce an empty side, and all three are visible in
+// Four things legitimately produce an empty side, and all four are visible in
 // the document:
 //
 //   - a non-blob mode (160000, a submodule pointer): the side's "content" IS a
@@ -153,6 +159,14 @@ type conflictContextEntry struct {
 //     inline and empty is the correct encoding;
 //   - a side the index does not carry at all (delete/delete, modify/delete),
 //     which the writer states via ours_present/theirs_present = false;
+//   - a MODE-ONLY conflict: an empty placeholder (`.gitkeep`, `__init__.py`,
+//     `py.typed`) added on both sides with different exec bits stages as
+//     `100644 e69de29 2` / `100755 e69de29 3`. Both sides are present, both are
+//     genuinely empty, and the disagreement IS the conflict — the differing
+//     modes are what explains the emptiness (#301 round-4b). Content-identical
+//     sides with the SAME mode are never an unmerged path, so differing modes
+//     are the whole legitimate population here and a same-mode all-empty entry
+//     stays rejected;
 //   - genuinely empty file content on one side, in which case the OTHER side is
 //     non-empty and this predicate is false anyway.
 //
@@ -167,6 +181,9 @@ func (e conflictContextEntry) unexplainedEmpty() bool {
 		return false
 	}
 	if e.TheirsMode != "" && !isBlobMode(e.TheirsMode) {
+		return false
+	}
+	if e.OursMode != "" && e.TheirsMode != "" && e.OursMode != e.TheirsMode {
 		return false
 	}
 	if e.OursPresent != nil && !*e.OursPresent {
@@ -240,11 +257,19 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 
 	files := make([]string, 0, len(cc.ConflictingFiles))
 	var degenerate []string
+	var unrecordable []string
 	for _, f := range cc.ConflictingFiles {
 		if f.Path == "" {
 			continue
 		}
 		files = append(files, f.Path)
+		// A path the writer diagnosed is reported by its diagnosis, not as
+		// "never recorded" — the two escalations carry different information
+		// and only one of them names the cause (#301 round-4b).
+		if f.CaptureError != "" {
+			unrecordable = append(unrecordable, fmt.Sprintf("%s: %s", f.Path, truncate(f.CaptureError, 200)))
+			continue
+		}
 		if f.unexplainedEmpty() {
 			degenerate = append(degenerate, f.Path)
 		}
@@ -258,12 +283,33 @@ func (a *ConflictRecoveryLoop) Execute(ctx context.Context, failure StageFailure
 		return RecoveryResult{
 			Action: a.Name(),
 			Reason: fmt.Sprintf("conflict-context-%d.json is marked capture_failed — the writer could not record the conflict, so there is nothing sound to re-dispatch feature-dev against", failure.IssueNumber),
-			Evidence: append([]string{
+			Evidence: append(append([]string{
 				fmt.Sprintf("pr=%d", failure.PRNumber),
 				fmt.Sprintf("branch=%s", cc.Branch),
 				"capture_failed=true",
 				fmt.Sprintf("context=%s", contextPath),
-			}, prefixed("conflicting_file=", files)...),
+			}, prefixed("capture_error=", unrecordable)...),
+				prefixed("conflicting_file=", files)...),
+			FollowUp: FollowUpHumanTriageRequired,
+		}
+	}
+
+	// A per-entry capture_error without the document-level marker: the writer
+	// diagnosed a path it could not record but did not raise capture_failed.
+	// The skill writer always raises both, so this is the reader's independent
+	// half of the contract — a writer that names the reason must not have that
+	// reason silently discarded (#301 round-4b).
+	if len(unrecordable) > 0 {
+		return RecoveryResult{
+			Action: a.Name(),
+			Reason: fmt.Sprintf("conflict-context-%d.json carries %d of %d entries the writer marked capture_error — those paths were not recorded",
+				failure.IssueNumber, len(unrecordable), len(files)),
+			Evidence: append(append([]string{
+				fmt.Sprintf("pr=%d", failure.PRNumber),
+				fmt.Sprintf("branch=%s", cc.Branch),
+				fmt.Sprintf("context=%s", contextPath),
+			}, prefixed("capture_error=", unrecordable)...),
+				prefixed("conflicting_file=", files)...),
 			FollowUp: FollowUpHumanTriageRequired,
 		}
 	}

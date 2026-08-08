@@ -141,6 +141,14 @@ export const ConflictFileSchema = z.object({
   ours_commit: z.string().optional(),
   /** Submodule commit id on the "theirs" side. Present only when theirs_mode is 160000. */
   theirs_commit: z.string().optional(),
+  /**
+   * Why THIS path could not be recorded (unreadable blob, over the size cap,
+   * content that cannot round-trip through JSON). Set by the shell writer,
+   * which raises the document-level capture_failed marker alongside it. It must
+   * be DECLARED here or zod strips it and the consumer sees a failed entry with
+   * its diagnosis deleted.
+   */
+  capture_error: z.string().optional(),
 });
 export type ConflictFile = z.infer<typeof ConflictFileSchema>;
 
@@ -150,12 +158,24 @@ export type ConflictFile = z.infer<typeof ConflictFileSchema>;
  * substituted "". Consumers must refuse such an entry rather than resolve
  * against it. Mirrors conflictContextEntry.unexplainedEmpty in
  * internal/orchestrator/recovery/conflict_recovery_loop.go.
+ *
+ * A MODE-ONLY conflict is explained and not flagged: an empty placeholder
+ * (`.gitkeep`, `__init__.py`, `py.typed`) added on both sides with different
+ * exec bits stages as `100644 e69de29 2` / `100755 e69de29 3`, so both sides are
+ * present, both are genuinely empty, and the differing modes ARE the conflict.
+ * Content-identical sides with the SAME mode are never an unmerged path, so a
+ * same-mode all-empty entry stays flagged.
+ *
+ * This predicate does NOT look at capture_error, exactly as its Go counterpart
+ * does not: an entry naming one is refused on that ground independently,
+ * whatever this returns. Check both.
  */
 export function isUnrecordedConflictFile(f: ConflictFile): boolean {
   if (f.ours !== "" || f.theirs !== "") return false;
   const nonBlob = (m?: string) =>
     m !== undefined && m !== "" && !(BLOB_MODES as readonly string[]).includes(m);
   if (nonBlob(f.ours_mode) || nonBlob(f.theirs_mode)) return false;
+  if (f.ours_mode && f.theirs_mode && f.ours_mode !== f.theirs_mode) return false;
   if (f.ours_present === false || f.theirs_present === false) return false;
   return true;
 }
@@ -178,6 +198,12 @@ export const ConflictContextSchema = z
      * document at all when it fails.
      */
     capture_failed: z.boolean().optional(),
+    /**
+     * The document-level reason behind capture_failed (the per-path reasons are
+     * on each entry). Declared rather than left to .passthrough() so the field
+     * is typed and cannot be dropped by a future tightening of the container.
+     */
+    capture_error: z.string().optional(),
     conflicting_files: z.array(ConflictFileSchema).min(1),
     created_at: z.string().datetime().nullish(),
   })
