@@ -544,8 +544,8 @@ const STAGE_STATUS_VALUES: Partial<Record<PipelineStage, ProjectStatusValue>> = 
  * Build the synthetic Error used when a stage is forcibly terminated by the
  * idle-stall watchdog. Preserves any upstream kill marker text (e.g.
  * `[rate-limit-quota-exhausted]` from #3386) that arrived on the original
- * skillRunner error so downstream classifiers (bootstrap/services.ts
- * terminalFailureKind regex, Go ClassifyTerminalKind fallback) can still
+ * skillRunner error so downstream classifiers (the extension's signal ladder in
+ * services/terminalKindSignal.ts, Go's ClassifyTerminalKind fallback) can still
  * match. See Issue #3442 — pre-fix this code discarded `result.error` and
  * synthesized a generic message, which broke the global quota cooldown
  * (#3434) by routing every quota-exhausted kill into the GENERIC failure
@@ -13367,9 +13367,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // stderr via inferProcessError). Pre-fix this branch synthesized
             // a generic `[stall-killed] {stage} terminated...` message and
             // discarded `result.error`, which destroyed the
-            // `[rate-limit-quota-exhausted]` marker (#3386) that
-            // bootstrap/services.ts depends on for terminalFailureKind
-            // classification. Without that classification the autonomous
+            // `[rate-limit-quota-exhausted]` marker (#3386) that the
+            // terminal-kind rule table (internal/terminalkind/table.json)
+            // keys on. Without that classification the autonomous
             // scheduler's global quota cooldown (#3434) is bypassed and
             // every quota-exhausted kill increments the lifetime failure
             // cap — exactly the regression #3440 was supposed to close but

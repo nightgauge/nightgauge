@@ -32,3 +32,14 @@ claude-plugins/docs/
 
 # Generated test snapshots — never prettier-formatted
 **/__snapshots__/
+# Generated evidence fixture (#306): scripts/capture-terminal-kind-fixture.sh
+# emits this file, and the Go parity suite diffs corpus rows against it. The
+# script writes no wall-clock field, so re-running it over the same telemetry
+# reproduces the file byte for byte — but only if nothing reformats it in
+# between. Prettier collapses its short arrays, which would make every re-run
+# show a spurious diff.
+internal/terminalkind/testdata/captured-shapes.json
+# Generated from internal/terminalkind/table.json by
+# `make generate-terminal-kind-table` (#306). Reformatting it would make every
+# regeneration show a spurious drift, and the drift check compares bytes.
+internal/terminalkind/testdata/stress-golden.json

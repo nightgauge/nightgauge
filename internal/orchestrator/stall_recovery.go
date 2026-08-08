@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/state"
+	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
 
 // Adaptive stall-recovery (Issue #3005).
@@ -38,18 +39,17 @@ const StallKilledAfterRetryCategory = "stall-killed-after-retry"
 // signals.
 const stallRecoveryRationalePrefix = "synthesized by scheduler on stall-kill"
 
-// HasCostCapKillMarker reports whether the error text matches the substrings
-// emitted by the per-stage cost-cap circuit breaker (Issue #3002). Cost-cap
-// kills are never retried, even when the error also matches stall-kill
-// heuristics. Case-insensitive.
+// HasCostCapKillMarker reports whether the error text carries the markers the
+// per-stage cost-cap circuit breaker emits (Issue #3002). Cost-cap kills are
+// never retried, even when the error also matches stall-kill heuristics.
+//
+// The markers are not written out here: this asks the canonical rule table
+// whether its cost-cap rule fires, so the three spellings live in exactly one
+// place (#306). RuleFires rather than Classify on purpose — the question is
+// "did the cost cap kill this", which stays true even for text a
+// higher-precedence rule claims for the RECORD.
 func HasCostCapKillMarker(errorText string) bool {
-	if errorText == "" {
-		return false
-	}
-	t := strings.ToLower(errorText)
-	return strings.Contains(t, "[cost-cap-exceeded]") ||
-		strings.Contains(t, "cost-cap-exceeded") ||
-		strings.Contains(t, "cost cap exceeded")
+	return terminalkind.RuleFires(terminalkind.RuleCostCapExceeded, errorText)
 }
 
 // CanRewindFromStage reports whether a stall-kill in `stage` can rewind to

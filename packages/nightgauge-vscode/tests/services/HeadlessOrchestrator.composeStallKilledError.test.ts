@@ -4,8 +4,9 @@
 // generic `[stall-killed] {stage} terminated...` Error and discarded the
 // upstream `result.error` from skillRunner. That destroyed the
 // `[rate-limit-quota-exhausted]` kill marker (#3386) before it could reach
-// bootstrap/services.ts:1261's terminalFailureKind regex, which in turn
-// starved PR #3440's Go-side fallback of any usable failureDetail. Net
+// the terminal-kind rule table (internal/terminalkind/table.json, rule
+// `rate-limit-quota-exhausted`), which in turn starved PR #3440's Go-side
+// fallback of any usable failureDetail. Net
 // effect: the global Anthropic-quota cooldown (#3434) was silently bypassed
 // on every quota-exhausted kill, and the lifetime failure cap incremented
 // instead.
@@ -27,8 +28,9 @@ describe("composeStallKilledError", () => {
 
     // Still announces the stall-kill classification for retro/dashboards.
     expect(composed.message).toMatch(/^\[stall-killed\] pr-create terminated:/);
-    // CRITICAL: must carry the rate-limit-quota-exhausted marker through to
-    // bootstrap/services.ts so terminalFailureKind classification matches.
+    // CRITICAL: must carry the rate-limit-quota-exhausted marker through so
+    // the rate-limit-quota-exhausted rule in internal/terminalkind/table.json
+    // still claims it.
     expect(composed.message).toContain("[rate-limit-quota-exhausted]");
     // Resets-at hint must survive so the Go scheduler can extract it for
     // computeQuotaCooldownUntil().

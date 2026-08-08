@@ -16,14 +16,24 @@ if ! git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.gene
   exit 1
 fi
 
-# 2. Guard the vendored platform API types (generated upstream; no local generator)
+# 2. Check the canonical terminal-kind rule table (#306)
+echo "  🪜 Checking terminal-kind table..."
+if ! make check-terminal-kind-table; then
+  echo "  ❌ ERROR: the generated terminal-kind table consumers are out of sync"
+  echo "     Run: make generate-terminal-kind-table"
+  echo "     Then: git add packages/nightgauge-sdk/src/analysis/health/terminalKindTable.generated.ts \\"
+  echo "                  internal/terminalkind/testdata/stress-golden.json"
+  exit 1
+fi
+
+# 3. Guard the vendored platform API types (generated upstream; no local generator)
 echo "  📝 Checking vendored platform API types..."
 if ! git diff --cached --quiet -- api/generated/ts/platform-api.ts; then
   echo "  ⚠️  api/generated/ts/platform-api.ts is generated and vendored —"
   echo "     hand edits will be overwritten by the next vendored update."
 fi
 
-# 3. Check VSCode package contributions
+# 4. Check VSCode package contributions
 echo "  🎨 Checking VSCode package contributions..."
 if ! npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check; then
   echo "  ❌ ERROR: package.json contributions are out of sync"

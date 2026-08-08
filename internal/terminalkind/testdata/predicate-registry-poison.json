@@ -1,0 +1,69 @@
+{
+  "$comment": [
+    "PREDICATE FIELD-SURFACE POISON FIXTURE (#306) — the shared, two-language pin on WHICH model",
+    "registry fields the `@mentions_registry_model` predicate may read.",
+    "",
+    "WHY IT EXISTS. The literal fences bound what the two interpreters may COMPARE an error text",
+    "against. They say nothing about which registry FIELDS a predicate reads, and a widening needs",
+    "no string literal at all: adding `m.Provider` (Go) / `m.provider` (TS) to the predicate makes",
+    "every clause gated on it fire for any text that merely names a vendor — `Anthropic API: this",
+    "model is not available on your current plan` becomes model_unavailable — while every literal",
+    "allowlist stays satisfied, the generated table and the stress golden stay byte-identical, and",
+    "no corpus row can see it, because no corpus row contains a bare provider name.",
+    "",
+    "HOW IT PINS. `models` below is a synthetic registry of exactly one entry. Every field the",
+    "predicate is ALLOWED to read (`reads`) carries a normal-looking value; every other string in",
+    "the entry — at any depth, including array elements — carries a unique sentinel. The two",
+    "suites then assert, from this one file:",
+    "",
+    "  NEGATIVE  no sentinel makes the predicate fire. Reading one more field turns that field's",
+    "            sentinel into a hit, and the assertion is red on both sides at once.",
+    "  POSITIVE  every field named in `reads` DOES make it fire. Dropping a read is red too, so",
+    "            the pin is an exact set rather than an upper bound.",
+    "  SCHEMA    every key path present in the real registry appears here. A new registry field",
+    "            is unpinned until this fixture declares it, and that is red rather than silent.",
+    "",
+    "  Go   internal/terminalkind/predicates_test.go points `mentionsAnyModel` at these models.",
+    "  SDK  packages/nightgauge-sdk/tests/analysis/health/terminalKind.predicateFields.test.ts",
+    "       mocks the registry module with them and drives the real classifier.",
+    "",
+    "The entry must stay decodable as internal/models.ModelDescriptor with unknown fields",
+    "REJECTED, which is what keeps `SCHEMA` honest in the other direction: a key that is not in",
+    "the Go struct fails the fixture load rather than sitting here pinning nothing."
+  ],
+  "predicate": "mentions_registry_model",
+  "reads": ["id", "display_name", "tiers"],
+  "models": [
+    {
+      "id": "zqxid-alpha-model",
+      "provider": "zqxsentinel-provider",
+      "tiers": ["zqxtier"],
+      "display_name": "Zqxdisplay Beta",
+      "concrete_version": "zqxsentinel-concrete-version",
+      "rates": {
+        "input": 1.0,
+        "output": 2.0,
+        "cache_read": 3.0,
+        "cache_creation": 4.0
+      },
+      "supported_efforts": ["zqxsentinel-supported-effort"],
+      "supported_reasoning": ["zqxsentinel-supported-reasoning"],
+      "context_window": 123456,
+      "deprecated": false,
+      "replacement": "zqxsentinel-replacement",
+      "recommended": false,
+      "research_preview": false,
+      "behavior": {
+        "thinking_default": "zqxsentinel-thinking-default",
+        "thinking_disable_max_effort": "zqxsentinel-thinking-disable-max-effort",
+        "effort_default": "zqxsentinel-effort-default",
+        "max_output_tokens": 654321,
+        "propensity": {
+          "verification": "zqxsentinel-verification",
+          "delegation": "zqxsentinel-delegation",
+          "narration": "zqxsentinel-narration"
+        }
+      }
+    }
+  ]
+}

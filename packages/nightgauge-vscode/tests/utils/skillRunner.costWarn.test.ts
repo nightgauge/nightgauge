@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { classifyTerminalKind } from "@nightgauge/sdk";
 
 vi.mock("vscode", () => ({
   workspace: {
@@ -52,26 +53,20 @@ function buildRunwayCeilingMessage(
   );
 }
 
-// Mirrors the Go ClassifyTerminalKind heuristics for local verification.
-const RUNAWAY_CEILING_PATTERNS = [
-  "[runaway-ceiling-exceeded]",
-  "runaway-ceiling-exceeded",
-  "runaway cost ceiling exceeded",
-] as const;
-const COST_CAP_PATTERNS = [
-  "[cost-cap-exceeded]",
-  "cost-cap-exceeded",
-  "cost cap exceeded",
-] as const;
-
+// These used to be a hand-copied pair of pattern lists "mirroring the Go
+// ClassifyTerminalKind heuristics for local verification" — a fifth copy of the
+// ladder, in a test, asserting agreement with a transcription of the thing it
+// was meant to check. They now ask the canonical classifier (#306), so a change
+// to internal/terminalkind/table.json reaches this test the same way it reaches
+// production.
 function classifiesAsRunwayCeiling(errorText: string): boolean {
-  const t = errorText.toLowerCase();
-  return RUNAWAY_CEILING_PATTERNS.some((p) => t.includes(p));
+  // The runaway ceiling is a safety rail rather than a spending decision, so
+  // the table routes it to stall_kill; the cost cap below is budget_exceeded.
+  return classifyTerminalKind(errorText) === "stall_kill";
 }
 
 function classifiesAsLegacyCostCap(errorText: string): boolean {
-  const t = errorText.toLowerCase();
-  return !classifiesAsRunwayCeiling(t) && COST_CAP_PATTERNS.some((p) => t.includes(p));
+  return classifyTerminalKind(errorText) === "budget_exceeded";
 }
 
 // ============================================================================
