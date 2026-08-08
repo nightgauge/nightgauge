@@ -18,7 +18,8 @@ type RunStageParams struct {
 	IssueNumber int    `json:"issueNumber"`
 	// Model is the tier this stage runs on, and it is AUTHORITATIVE (#340).
 	// resolveDispatchModel has already applied the per-stage base routing (the
-	// performance-mode pin, pipeline.stage_models and its env overrides,
+	// performance-mode pin AND its [floor, ceiling] envelope,
+	// pipeline.stage_models and its env overrides,
 	// model_routing.mode, the lightweight stage defaults), post-failure
 	// escalation, sticky model-unavailable downgrades (#42), the
 	// model_routing.minimum_model floor (#366), the pr-create large-diff
@@ -186,17 +187,28 @@ type StageResultParams struct {
 	// stream's last observed message.model when it reported one, otherwise the
 	// concrete model the adapter PROCESS was spawned with — read out of the
 	// adapter's own env after model preflight, not from the extension's
-	// pre-spawn decision. Sent only when it diverges from RunStageParams.Model,
-	// so healthy runs stay terse.
+	// pre-spawn decision. Omitted only when it is byte-identical to
+	// RunStageParams.Model, i.e. when there is nothing to add.
 	//
-	// Three things produce a divergence. The claude CLI silently retries
-	// safety-refused turns on a fallback model (model_refusal_fallback) and
-	// still exits 0 (#91). A non-Claude adapter translates the tier band into a
-	// concrete id — codex "sonnet" → "gpt-5.4", or its own configured default
-	// when no band maps. And a performance-mode / supercharge override replaces
-	// that translation outright. All three are the model that ran, and
-	// therefore the one cost/telemetry/history must name (#340).
-	// See docs/spikes/fable-5-behavior-porting.md §8.3.
+	// VOCABULARY: unlike RunStageParams.Model this is a CONCRETE id, and that
+	// asymmetry is deliberate. Three things make it one. The claude CLI
+	// silently retries safety-refused turns on a fallback model
+	// (model_refusal_fallback) and still exits 0 (#91). A non-Claude adapter
+	// translates the tier band into a provider id — codex "opus" →
+	// "gpt-5.6-sol", or its own configured default when no band maps. And a
+	// performance-mode / supercharge override replaces that translation
+	// outright. All three are the model that ran, and therefore the one
+	// cost/telemetry/history must name.
+	//
+	// Do NOT read the omit-when-equal rule as a divergence flag: for every
+	// non-Claude adapter the launched id and the requested band are different
+	// strings by construction, so "present" means "here is what ran", not
+	// "something went wrong". The band question — did the run serve the tier
+	// the router predicted — is answered separately, by OutcomeActualBand
+	// (internal/orchestrator/outcome_semantics.go), which inverts the adapter
+	// mapping instead of collapsing a multi-band id onto its strongest band.
+	// See docs/OUTCOME_RECORDING.md and
+	// docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string `json:"servedModel,omitempty"`
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event
 	// when one was observed. Attribution + notification only — never used

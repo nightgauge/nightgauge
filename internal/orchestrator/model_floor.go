@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 )
 
 // model_floor.go gives the Go autonomous scheduler parity with the TS
@@ -14,28 +15,19 @@ import (
 // model_routing.minimum_model was invisible on the autonomous path, so a stage
 // floored to a premium tier silently ran (and attributed) a cheaper tier.
 //
-// The tier ordering is not re-declared here: it is derived from
-// downgradeLadder (retry_engine.go), the single Go source of truth for tier
-// strength, via NormalizeModelTier. That keeps this floor and the model-unavailable
-// downgrade ladder from drifting apart.
+// The tier ordering is not re-declared here: it is routing.TierRank, the same
+// ladder the model-unavailable downgrade walks (retry_engine.go's
+// downgradeLadder) and the same one the performance-mode envelopes clamp
+// against. One ladder, so a floor and a clamp cannot disagree about which band
+// is stronger.
 
 // tierRank maps a model reference — a registry tier alias like "opus" or a
 // concrete ID like "claude-opus-4-8" — onto an ordinal where higher is more
 // capable: haiku=0, sonnet=1, opus=2, fable=3. Returns -1 for models unknown
 // to the registry (user-defined local models are never floored). This mirrors
-// the inline tier map in skillRunner.ts's enforceMinimumModel and is the
-// reverse index of downgradeLadder ([fable, opus, sonnet, haiku]).
+// the inline tier map in skillRunner.ts's enforceMinimumModel.
 func tierRank(model string) int {
-	tier := NormalizeModelTier(model) // retry_engine.go — alias or concrete ID → registry band
-	if tier == "" {
-		return -1
-	}
-	for i, t := range downgradeLadder {
-		if t == tier {
-			return len(downgradeLadder) - 1 - i
-		}
-	}
-	return -1
+	return routing.TierRank(model)
 }
 
 // enforceMinimumModel raises selected to minimum when selected is strictly

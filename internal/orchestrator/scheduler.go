@@ -5702,7 +5702,7 @@ func (s *Scheduler) recordOutcome(item types.BoardItem, snap *state.RuntimeState
 		Repo:            item.Repo,
 		PredictedSize:   OutcomePredictedSize(string(item.Size), item.Labels, complexityScore),
 		PredictedModel:  OutcomeModelBand(predictedModel),
-		ActualModel:     OutcomeModelBand(OutcomeServedDevModel(snap)),
+		ActualModel:     OutcomeActualBand(OutcomeServedDevModel(snap), predictedModel),
 		Success:         success,
 		DurationMs:      snap.TotalDuration().Milliseconds(),
 		InputTokens:     snap.InputTokens,
@@ -5896,9 +5896,11 @@ const tierSonnet = "sonnet"
 //
 // This is the ONLY router on both dispatch paths since #340. Everything the
 // TypeScript resolveModel chain used to contribute on the IPC path — the
-// performance-mode pin, pipeline.stage_models and its env overrides,
-// model_routing.mode, the lightweight-stage defaults — is applied by
-// stageBaseModel (dispatch_routing.go) before the first line below.
+// performance-mode pin AND envelope, pipeline.stage_models and its env
+// overrides, model_routing.mode, the lightweight-stage defaults — is applied by
+// stageBaseModel (dispatch_routing.go) before the first line below. The mode's
+// ceiling is applied again after the raising mechanisms, where this function
+// (not stageBaseModel) is the one that knows what they produced.
 //
 // The RETURN VALUE is always a registry band when the registry recognizes it
 // (normalizeDispatchTier, last line). The wire, both executors and every ladder
@@ -5923,7 +5925,8 @@ func (s *Scheduler) resolveDispatchModel(
 	// RecordStageModel drops the empty value so the run record carries no
 	// per-stage attribution, and tokens.CalculateCost("") returns a
 	// truthful-looking $0.
-	model := stageBaseModel(workspaceRoot, stage, predictedModel)
+	mode := routing.ResolvePerformanceMode(workspaceRoot)
+	model, explicitModel := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {
 		model = override
@@ -5937,6 +5940,28 @@ func (s *Scheduler) resolveDispatchModel(
 			log.Printf("#%d: stage %s — model_routing.minimum_model floor %q raised %s → %s",
 				issueNumber, stage, floor, model, raised)
 			model = raised
+		}
+	}
+	// The performance mode's CEILING binds everything the pipeline chose (#340,
+	// #19). Escalation and the minimum_model floor both only RAISE, and TS
+	// re-clamps its own enforceMinimumModel result to the envelope ceiling for
+	// the same reason: a cost-capping mode that any later mechanism can raise
+	// out of caps nothing. So Efficiency tops out at sonnet even after a failed
+	// stage escalates, and an operator forcing a tier through
+	// run.retryWithEscalation gets it within the band they selected.
+	//
+	// Two deliberate exclusions:
+	//   - An explicit per-stage model (the env override, pipeline.stage_models)
+	//     is the operator overriding the MODE for that stage. resolveModel
+	//     returns those unclamped at Step 1; so does this.
+	//   - The floor half of the envelope is not applied here. It would re-raise
+	//     a tier the sticky #42 downgrade just lowered — the ONE thing the
+	//     ordering below exists to prevent.
+	if !explicitModel {
+		if capped := routing.ClampToCeiling(model, routing.Envelope(mode)); capped != model {
+			log.Printf("#%d: stage %s — performance mode %s caps %s → %s",
+				issueNumber, stage, mode, model, capped)
+			model = capped
 		}
 	}
 	// Reroute through any sticky model-unavailable downgrades (#42): once the

@@ -106,10 +106,15 @@ vi.mock("../../src/utils/incrediConfig", async () => {
     getGitHubAuthToken: vi.fn(() => null),
     getGitHubAuthTokens: vi.fn(() => ({})),
     getGitHubUser: vi.fn(() => null),
+    // The REAL CODEX_TIER_MODEL_MAP values (packages/nightgauge-sdk/src/cli/
+    // adapters/codexModelRegistry.ts). They matter literally: `gpt-5.6-sol`
+    // serves BOTH the opus and fable registry bands, which is the input that
+    // made the corpus book every correctly-served codex run as a routing miss
+    // (see OutcomeActualBand, internal/orchestrator/outcome_semantics.go).
     resolveCodexPipelineModel: vi.fn((alias?: string) => {
-      if (alias === "haiku") return "gpt-5.4-mini";
-      if (alias === "sonnet") return "gpt-5.4";
-      if (alias === "opus") return "gpt-5.5";
+      if (alias === "haiku") return "gpt-5.6-luna";
+      if (alias === "sonnet") return "gpt-5.6-terra";
+      if (alias === "opus" || alias === "fable") return "gpt-5.6-sol";
       return alias ?? "";
     }),
     getCodexCliCommand: vi.fn(() => "codex"),
@@ -314,14 +319,32 @@ describe("IPC path: adapter tier translation stays in TS and is reported back (#
     // translation stays here.
     await dispatch(params({ model: "opus" }));
 
-    expect(lastSpawnEnv().NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.5");
+    expect(lastSpawnEnv().NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.6-sol");
   });
 
   it("reports the translated model back so Go attributes the model that ran", async () => {
     const { result, proc } = await dispatch(params({ model: "opus" }));
     finish(proc);
 
-    expect((await result).servedModel).toBe("gpt-5.5");
+    // The value is a CONCRETE id, deliberately — Go prices and attributes the
+    // stage on it. Whether the run served the band the router predicted is
+    // decided on the Go side, where the requested band is known: gpt-5.6-sol
+    // serves [opus, fable], so `OutcomeActualBand(served, "opus")` books opus
+    // (a HIT), not the strongest-band collapse to fable that made every
+    // correctly-served codex run a routing miss. The booking itself is
+    // asserted in TestRecordOutcome_ModelPairIsMeasuredNotCopied
+    // (internal/orchestrator/outcome_corpus_parity_test.go).
+    expect((await result).servedModel).toBe("gpt-5.6-sol");
+  });
+
+  it("reports the weaker Codex model for a sonnet-band dispatch", async () => {
+    // The same pair in the other direction: gpt-5.6-terra serves sonnet only,
+    // so a run dispatched at opus that reported this id books a real MISS.
+    const { result, proc } = await dispatch(params({ model: "sonnet" }));
+    finish(proc);
+
+    expect(lastSpawnEnv().NIGHTGAUGE_CODEX_MODEL).toBe("gpt-5.6-terra");
+    expect((await result).servedModel).toBe("gpt-5.6-terra");
   });
 
   // The adapter translation tables keyed off `modelDecision.source ===
@@ -331,7 +354,7 @@ describe("IPC path: adapter tier translation stays in TS and is reported back (#
   // back to the adapter's configured default model.
   it("still applies the Maximum-mode Codex override when Go resolved the tier", async () => {
     vi.mocked(getPerformanceMode).mockReturnValue("maximum");
-    // Deliberately NOT the tier translation ("opus" → "gpt-5.5"), so the
+    // Deliberately NOT the tier translation ("opus" → "gpt-5.6-sol"), so the
     // assertion can only pass if the operator's override won.
     vi.mocked(getSuperchargeCodexModel).mockReturnValue("gpt-5.4");
 
@@ -349,6 +372,19 @@ describe("IPC path: Maximum-mode adapter mapping survives Go resolution (#340)",
     await dispatch(params({ model: "opus" }));
 
     expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+  });
+
+  it("reports that Gemini model back for the corpus to resolve", async () => {
+    // gemini-2.5-pro is the google provider's [opus, fable] model — the same
+    // multi-band shape as codex's gpt-5.6-sol, and the same reason the corpus
+    // resolves the band against the prediction instead of collapsing.
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    vi.mocked(getPerformanceMode).mockReturnValue("maximum");
+
+    const { result, proc } = await dispatch(params({ model: "opus" }));
+    finish(proc);
+
+    expect((await result).servedModel).toBe("gemini-2.5-pro");
   });
 });
 
@@ -425,10 +461,10 @@ describe("IPC path: servedModel is the model the adapter process was launched wi
   it("reports the Codex supercharge override, not the tier translation", async () => {
     process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
     vi.mocked(getPerformanceMode).mockReturnValue("maximum");
-    // Deliberately NOT the "opus" → "gpt-5.5" tier translation: the codex
+    // Deliberately NOT the "opus" → "gpt-5.6-sol" tier translation: the codex
     // branch computes `heavyCodexOverride ?? modelDecision.model` and never
-    // stamps the result back, so reporting modelDecision.model names gpt-5.5
-    // while gpt-5.4 is what ran.
+    // stamps the result back, so reporting modelDecision.model names
+    // gpt-5.6-sol while gpt-5.4 is what ran.
     vi.mocked(getSuperchargeCodexModel).mockReturnValue("gpt-5.4");
 
     const { result, proc } = await dispatch(params({ model: "opus" }));

@@ -109,7 +109,7 @@ func learningOutcomeFor(
 		// keying one corpus field's presence on two different sources.
 		PredictedSize:   orchestrator.OutcomePredictedSize("", cls.Labels, cls.ComplexityScore),
 		PredictedModel:  orchestrator.OutcomeModelBand(cls.PredictedModel),
-		ActualModel:     servedDevModel(record, snap),
+		ActualModel:     servedDevModel(record, snap, cls.PredictedModel),
 		Success:         success,
 		DurationMs:      record.TotalDuration,
 		InputTokens:     record.Tokens.TotalInput,
@@ -147,6 +147,12 @@ func resolveOutcomeRepo(record state.V2RunRecord, repo string) string {
 // ran or reported no model — an honest unknown the caller logs about, and one
 // every reader excludes from its denominator.
 //
+// `predicted` is the pair's other half, and it is an INPUT because the served
+// value can be an adapter's concrete id whose provider serves several bands
+// (codex gpt-5.6-sol is both opus and fable). Collapsing that to its strongest
+// band books a MISS for a run served exactly as predicted — see
+// orchestrator.OutcomeActualBand.
+//
 // Apples to apples: the prediction half of this pair is the router's
 // pickup_recommendation.dev_model, which is a recommendation FOR feature-dev.
 // This field used to be the served model of whichever stage dominated the run's
@@ -162,11 +168,11 @@ func resolveOutcomeRepo(record state.V2RunRecord, repo string) string {
 // to write, and its per-stage model_selection already carries the #91 CLI
 // refusal-fallback served model); the runtime is the fallback for a snapshot
 // that observed a dev-stage refusal swap the record has not yet absorbed.
-func servedDevModel(record state.V2RunRecord, snap *state.RuntimeState) string {
+func servedDevModel(record state.V2RunRecord, snap *state.RuntimeState, predicted string) string {
 	if m := stageModel(record, string(orchestrator.OutcomeModelStage)); m != "" {
-		return orchestrator.OutcomeModelBand(m)
+		return orchestrator.OutcomeActualBand(m, predicted)
 	}
-	return orchestrator.OutcomeModelBand(orchestrator.OutcomeServedDevModel(snap))
+	return orchestrator.OutcomeActualBand(orchestrator.OutcomeServedDevModel(snap), predicted)
 }
 
 // sortedStageNames returns the record's stage names in a stable order.

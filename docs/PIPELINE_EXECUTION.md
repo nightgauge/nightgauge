@@ -239,7 +239,7 @@ while the CLI kept spawning on the tier that had just failed.
 
 | Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ----------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197)                                                              |
+| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | performance-mode pin **and envelope**, `pipeline.stage_models` + `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`, `model_routing.mode`, lightweight stage defaults, the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197)                                             |
 | **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths agree                                                                                                                                                                                                                                                                                                                                                                                 |
 | **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins, `pipeline.stage_models` + env, `model_routing.mode`, lightweight stage defaults, `model_routing.minimum_model`, pr-create large-diff — plus three the Go resolver has no counterpart for: the adaptive policy override, A/B experiment assignment and `AutoModelSelector` (with mode-envelope clamping). Escalation and sticky downgrades belong to whichever orchestrator drives this path. |
 
@@ -252,16 +252,57 @@ resolving a second answer.
 Everything in the third row that the Go resolver needed in order to be a
 complete router lives in
 [`internal/orchestrator/dispatch_routing.go`](../internal/orchestrator/dispatch_routing.go),
-applied by `stageBaseModel` before escalation and the floors. Those tables are
-deliberate duplicates of named TypeScript counterparts (`MODE_PROFILES`,
-`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`), each
+applied by `stageBaseModel` before escalation and the floors. Its tables are
+deliberate duplicates of named TypeScript counterparts
+(`getStageModel`/`DEFAULT_STAGE_MODELS`, `LIGHTWEIGHT_STAGE_DEFAULTS`), each
 annotated with its pair — threading TS config over the wire would put the
 extension back in the routing business, which is the drift #340 removed.
+
+The performance mode is the exception: it is not duplicated in that file. Both
+Go callers — the router's recommendation at pickup and this per-stage
+resolution — read one table, `routing.modeProfiles`
+([`internal/intelligence/routing/performance_mode.go`](../internal/intelligence/routing/performance_mode.go)),
+which mirrors `MODE_PROFILES`
+(`packages/nightgauge-vscode/src/utils/modeProfiles.ts`) including the part that
+is easy to get wrong: **only `maximum` pins.** Since #19, `efficiency` and
+`frontier` carry empty `stages` maps and express themselves as `[floor,
+ceiling]` envelopes instead.
+
+**The mode envelope on the Go path**, stated because three of its rules are
+decisions rather than translations:
+
+- The **ceiling binds everything the pipeline chose** — the routed tier, the
+  lightweight defaults, post-failure escalation, the `minimum_model` floor and
+  the `run.retryWithEscalation` forced tier. A cost-capping mode that any later
+  mechanism can raise out of caps nothing. `resolveModel` applies the same rule
+  when it re-clamps its own `enforceMinimumModel` result to the ceiling.
+- An **explicit per-stage model is not clamped** (`pipeline.stage_models` and
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`): that is the operator overriding the mode
+  for one stage, and `resolveModel` Step 1 returns it unclamped too. The env
+  override is read ahead of the Maximum pin, on both resolvers, so it wins in
+  every mode.
+- The **envelope floor is never re-applied after the sticky #42 downgrade**, or
+  a Maximum-mode run whose API rejection lowered the tier would be forced
+  straight back onto the rejected one.
+
+One narrowing is Go-only, because the shape of the two paths differs: Go applies
+ONE routed tier (the feature-dev recommendation from `issue-{N}.json`) to every
+stage, where `resolveModel` re-runs `AutoModelSelector` per stage. So the
+`fable` ceiling is offered only to the heavy reasoning stages
+(`feature-planning`, `feature-dev`), mirroring the selector's own
+frontier-reasoning rule; every other stage — `feature-validate` included, which
+`MODE_PROFILES.frontier` documents as capped at Opus — tops out at Opus.
 
 Stated consequence, so it is not silent: three things have **no** Go
 counterpart, and are therefore not consulted on an autonomous run — the
 adaptive-policy override, the A/B experiment assignment, and `AutoModelSelector`
-(Go routes from the issue's complexity score at pickup instead).
+(Go routes from the issue's complexity score at pickup instead; its
+frontier-reasoning escalation is mirrored in `routeLocal`).
+
+The mode × knob matrix both resolvers must agree on is asserted twice, once per
+resolver: `TestDispatchModelModeKnobMatrix`
+(`internal/orchestrator/dispatch_routing_mode_test.go`) and
+`resolveModel.modeKnobAgreement.test.ts`.
 
 The visible routing delta on the IPC path, in the default `automatic` +
 `elevated` configuration:
@@ -287,8 +328,20 @@ neither:
   through as itself.) Codex, Gemini and Copilot need a provider-specific id, and
   only the extension knows which adapter it selected, so the translation happens
   at the last mile. The model the adapter process was actually spawned with is
-  reported back as `servedModel`, so run history attributes the model that ran
-  rather than the tier that was asked for.
+  reported back as `servedModel`, so run history attributes — and prices — the
+  model that ran rather than the tier that was asked for.
+
+  `servedModel` therefore carries a CONCRETE id, deliberately, and the two
+  questions asked about it live in one space each. "Did the process run what the
+  adapter was asked to launch?" is answered in concrete-id space, in the
+  extension. "Did the run serve the band the router predicted?" is answered in
+  band space, in Go, by `OutcomeActualBand`
+  ([`internal/orchestrator/outcome_semantics.go`](../internal/orchestrator/outcome_semantics.go)),
+  which inverts the adapter mapping instead of collapsing a multi-band id onto
+  its strongest band — `gpt-5.6-sol` serves both `opus` and `fable`, so the
+  collapse booked every correctly-served codex run as a routing miss. See
+  [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md).
+
 - **Effort.** Neither dispatch path passes `--effort` from Go, and
   `model_routing.stage_efforts` / `default_effort` are operator config, so the
   stage's effort is resolved in TypeScript by `resolveStageEffort`,

@@ -1285,12 +1285,27 @@ pipeline:
         disable_budget_ceiling: true
 ```
 
-`frontier` is the premium opt-in tier: it routes the reasoning stages to
-**Fable 5** (`claude-fable-5`, ~2× Opus) and keeps mechanical stages on Haiku.
-Automatic routing never selects Fable — `frontier` (or an explicit
-`model_routing.minimum_model: fable` / per-run override) is the only way in.
-Unlike `maximum`, `frontier` leaves the budget ceiling enabled. See
-[PERFORMANCE_MODES.md § When is Fable used over Opus?](PERFORMANCE_MODES.md#when-is-fable-used-over-opus).
+`frontier` is the premium opt-in tier: it widens the routing ceiling to
+**Fable 5** (`claude-fable-5`, ~2× Opus). It **pins nothing** — the router
+reaches Fable only on a heavy reasoning stage (`feature-planning`,
+`feature-dev`) at L/XL complexity, plumbing stays on Haiku, and
+`feature-validate` never exceeds Opus. (#19 removed the earlier
+"Fable pinned on every reasoning stage" behavior: it paid frontier rates for
+trivial work and empirically failed validation in dogfooding.) No other mode can
+route to Fable. Two knobs reach it from any mode because no mode clamps them —
+an explicit `pipeline.stage_models` entry (or its
+`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env override) and a per-run override.
+`model_routing.minimum_model: fable` is a floor, and floors land inside the
+mode envelope, so it reaches Fable only under `frontier`. Unlike
+`maximum`, `frontier` leaves the budget ceiling enabled.
+
+Only `maximum` pins per stage (Opus everywhere, effort `high`). `efficiency`
+(`[haiku, sonnet]`), `elevated` (`[haiku, opus]`) and `frontier`
+(`[haiku, fable]`) are `[floor, ceiling]` **envelopes**: the router picks inside
+the band, and the ceiling also caps post-failure escalation and the
+`model_routing.minimum_model` floor, so a cost-capping mode actually caps. An
+explicit per-stage model (`pipeline.stage_models`, or the env override below) is
+the operator overriding the mode for that stage and is not clamped.
 
 The active mode is normally driven by the status-bar QuickPick (writes
 `.nightgauge/performance-mode.yaml`); `pipeline.performance_mode.default`
@@ -2792,9 +2807,11 @@ use a different model tier to balance cost and capability.
 
 > **Requires `model_routing.mode: manual` or `hybrid`.** In the default
 > `automatic` mode every stage defers to the complexity router and this table is
-> ignored — on **both** dispatch paths. The per-stage environment variables
-> below are the exception: they win in every mode. See
-> [model_routing.mode](#model_routing) and
+> ignored — on **both** dispatch paths. It is also outranked by the `maximum`
+> performance mode, which pins Opus on every stage before this table is read
+> (the envelope modes — `efficiency`, `frontier` — pin nothing and honor it).
+> The per-stage environment variables below are the exception: they win in every
+> mode, ahead of the Maximum pin. See [model_routing.mode](#model_routing) and
 > [PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340).
 
 **3-Tier Model Strategy:**
@@ -3317,8 +3334,11 @@ is a cross-cutting concern placed at the top level (alongside `pipeline`,
 | `automatic` | AutoModelSelector (#730) determines model for every stage (default)                   |
 | `hybrid`    | AutoModelSelector runs, but explicit per-stage config overrides win                   |
 
-In all modes, environment variable overrides
-(`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`) take highest priority.
+In all modes — and in every performance mode, ahead of the `maximum` pin —
+environment variable overrides (`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*`) take
+highest priority. Both resolvers accept only the four registry bands
+(`haiku|sonnet|opus|fable`) there; any other value is ignored and the chain
+continues.
 
 **Complexity Thresholds:**
 

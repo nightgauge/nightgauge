@@ -95,6 +95,7 @@ import {
   getMaxTurns,
   getCostBudget,
   getStageModel,
+  getStageEnvModel,
   getStageOverrideModel,
   getStallThresholds,
   getStallKillMultiplier,
@@ -844,10 +845,12 @@ function getDiffLineCount(workspaceRoot: string): number {
  * Resolve the effective model for a pipeline stage using the full resolution chain.
  *
  * Resolution order:
- * 0. Performance mode override (Issue #3009 — replaces supercharge from #2433).
- *    `efficiency` / `maximum` look up the per-stage profile in MODE_PROFILES
- *    and return a ModelDecision with `source: "performance-mode"`. `elevated`
- *    supplies no overrides and falls through to the existing routing chain.
+ * 0. Performance mode PIN (Issue #3009 → Issue #19). Only `maximum` still pins
+ *    a stage: it looks up MODE_PROFILES and returns a ModelDecision with
+ *    `source: "performance-mode"`. `efficiency` and `frontier` are `[floor,
+ *    ceiling]` ENVELOPES with empty `stages` maps — they clamp the steps below
+ *    instead of preempting them — and `elevated` is the open band. A per-stage
+ *    env override suppresses the pin (#340), so it wins in every mode.
  * 1. getStageModel() — env var > config override > defaults (mode-aware)
  * 1.5. LIGHTWEIGHT_STAGE_DEFAULTS — built-in per-stage defaults (mode-agnostic)
  * 1.6. getStageOverrideModel() — adaptive policy routing override (automatic/hybrid only)
@@ -988,9 +991,15 @@ function modelTierBand(model: string | undefined): ModelTier | undefined {
  * working when the model arrives pre-decided. `resolveModel` returns effort as
  * a by-product of resolving the model, so the path that skips it needs this.
  *
- * Mirrors `resolveModel`'s Step 0 + envelope clamp exactly: a mode that pins
+ * Mirrors `resolveModel`'s Step 0 + envelope clamp for EFFORT: a mode that pins
  * the stage supplies the effort, otherwise the configured/derived effort is
  * clamped into the mode's `[effortFloor, effortCeiling]` band (Issue #19).
+ *
+ * The per-stage MODEL env override does not suppress the pinned effort the way
+ * it suppresses the pinned model (#340): that override names a model, and the
+ * mode still governs how hard the stage thinks. Both paths agree anyway —
+ * Maximum's `effortFloor: "high"` clamps the configured effort to the same
+ * "high" its stage profile pins.
  */
 function resolveStageEffort(
   stage: PipelineStage,
@@ -1044,9 +1053,17 @@ export function resolveModel(
   // The canonical alias (haiku|sonnet|opus|fable) is consumed by Claude verbatim;
   // non-Claude adapters translate it downstream.
   // See docs/PERFORMANCE_MODES.md — Cross-adapter behavior.
+  //
+  // The per-stage env override is read FIRST and suppresses the pin (#340).
+  // Two docs have promised for a long time that it "wins in every mode", and it
+  // did not: a Maximum-mode operator exporting
+  // NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV=haiku got Opus, with no log
+  // line. The most specific, most explicit, most ephemeral signal wins; the
+  // mode still supplies the effort below.
   const performanceMode = getPerformanceMode(workspaceRoot);
   const envelope = getModeEnvelope(performanceMode);
-  if (performanceMode !== "elevated") {
+  const stageEnvModel = getStageEnvModel(stage);
+  if (performanceMode !== "elevated" && !stageEnvModel) {
     const profile = getModeStageProfile(performanceMode, stage);
     if (profile?.model) {
       const routingModeForPerformance = getModelRoutingMode(workspaceRoot);
@@ -1067,10 +1084,10 @@ export function resolveModel(
   const routingMode = getModelRoutingMode(workspaceRoot);
   const stageModel = getStageModel(stage, workspaceRoot);
   if (stageModel !== undefined) {
-    // getStageModel already handles env var priority internally
-    // Determine if it came from env var or config
-    const envKey = `NIGHTGAUGE_PIPELINE_STAGE_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;
-    const source: ModelSource = process.env[envKey] ? "env" : "config";
+    // getStageModel already handles env var priority internally; `stageEnvModel`
+    // is the same read Step 0 used, so the source label and the precedence
+    // decision cannot disagree about whether an env override exists.
+    const source: ModelSource = stageEnvModel ? "env" : "config";
     return { model: stageModel, source, mode: routingMode, effort };
   }
 
@@ -3005,13 +3022,18 @@ export function runStageSkillHeadless(
   // The adapter translation tables below ask this by testing
   // `modelDecision.source === "performance-mode"` — a proxy that held only
   // while `resolveModel` was the sole resolver. On the IPC path the Go
-  // scheduler resolves the tier (source `go-scheduler`), applying the mode pin
-  // itself through `routing.ModePin` in `stageBaseModel`
+  // scheduler resolves the tier (source `go-scheduler`), applying the same pin
+  // itself through `routing.ModeStagePin` in `stageBaseModel`
   // (internal/orchestrator/dispatch_routing.go), so the proxy reads false and a
   // Maximum-mode Codex/Gemini/Copilot run would silently fall back to the
   // adapter's configured default model. The question these tables actually need
   // answered is about the MODE and the TIER, not about which layer spoke — so
   // each site ORs this in.
+  //
+  // It reads MODE_PROFILES rather than the mode NAME, so it answers for the one
+  // mode that pins (`maximum`) and stays false for the envelope modes, whose
+  // `stages` maps are empty — an efficiency/frontier run has no pinned tier to
+  // hand an adapter.
   //
   // The comparison runs on BANDS. The wire value is a `string`, and the pin in
   // MODE_PROFILES is the band `"opus"`; comparing it against a concrete id
@@ -5792,23 +5814,32 @@ export function runStageSkillHeadless(
       // Go-authoritative history record.
       toolCalls: toolCallLog.size > 0 ? toolCallLog.snapshot() : undefined,
       // ── #91 / #340 served-model attribution ────────────────────────────
-      // What actually ran: the CLI stream's model when it reported one,
-      // otherwise `launchedModel` — the concrete model the adapter process was
-      // spawned with, read from its env after preflight, not the extension's
-      // pre-spawn decision. Forwarded only when it diverges from what the
-      // orchestrator REQUESTED, so alias canonicalization ("opus" →
-      // "claude-opus-4-8"), adapter tier translation (codex "sonnet" →
-      // "gpt-5.4") and a perf-mode/supercharge override all flow, while healthy
-      // records stay terse.
+      // This field means ONE thing: the concrete model that RAN. The CLI
+      // stream's model when it reported one, otherwise `launchedModel` — the id
+      // the adapter process was actually spawned with, read from its env after
+      // preflight, not the extension's pre-spawn decision. That is what
+      // `scheduler.go` re-records, prices and attributes the stage on, so alias
+      // canonicalization ("opus" → "claude-opus-5"), adapter tier translation
+      // (codex "opus" → "gpt-5.6-sol") and a perf-mode/supercharge override all
+      // have to reach it.
+      //
+      // The `!== requestedModel` test is NOT a divergence check, and reading it
+      // as one is how the round-1 fixup broke the learning corpus. For every
+      // non-Claude adapter the launched id and the orchestrator's band are
+      // different strings BY CONSTRUCTION, so a comparison across those two
+      // spaces reports "diverged" on every run; here it only suppresses a
+      // redundant echo, when the process ran the exact string it was asked for.
+      // Whether the run served the band the router predicted is a question
+      // answered in ONE place, on the Go side, where the requested band is
+      // known: `OutcomeActualBand` (internal/orchestrator/outcome_semantics.go)
+      // inverts the adapter mapping instead of collapsing a multi-band id onto
+      // its strongest band.
       //
       // #340: the comparison used to be against `modelDecision.model` — a
       // resolution private to the extension, already adapter-translated. On the
       // IPC path that made the correction structurally blind: Go resolves Y, TS
       // resolved X, the CLI served X, TS reported `undefined` because X === X,
-      // and Go went on attributing the stage to Y. `requestedModel` is the tier
-      // the orchestrator actually decided — the same string `scheduler.go`
-      // compares against — which is what lets its `servedModel != model` check
-      // fire at all.
+      // and Go went on attributing the stage to Y.
       servedModel:
         (servedModel ?? launchedModel) !== requestedModel
           ? (servedModel ?? launchedModel)

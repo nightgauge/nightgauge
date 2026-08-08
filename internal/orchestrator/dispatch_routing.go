@@ -27,6 +27,11 @@ import (
 // annotated with it. This is duplication, deliberately: threading TS config
 // through the wire would put the extension back in the routing business, which
 // is the drift #340 removed. Keep the pairs in sync.
+//
+// The performance mode is the one exception: it is NOT copied here. Both
+// callers read routing.modeProfiles (internal/intelligence/routing/
+// performance_mode.go), the Go mirror of MODE_PROFILES — one table for the
+// router's recommendation at pickup and for this file's per-stage resolution.
 
 // defaultStageModels is the `manual` routing mode's built-in table — the
 // answer when the operator asked for explicit routing but named no model for
@@ -81,21 +86,41 @@ func modelRoutingMode(cfg *config.Config) string {
 	return "automatic"
 }
 
-// stageConfiguredModel resolves the operator's explicit per-stage model, or ""
-// when the stage defers to the router. Mirrors `getStageModel`
-// (stageResolver.ts) precedence exactly:
+// validStageModel keeps a per-stage operator value to the four registry bands,
+// mirroring getStageModel's `validModels` guard (stageResolver.ts): anything
+// else — a typo, a concrete provider id — is ignored rather than dispatched.
+// Without the same guard on this side a value one resolver drops would be
+// honored by the other, which is the drift #340 removed.
+func validStageModel(model string) string {
+	switch model {
+	case routing.TierHaiku, routing.TierSonnet, routing.TierOpus, routing.TierFable:
+		return model
+	}
+	return ""
+}
+
+// stageEnvModel returns the NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE} override,
+// or "" when it is unset or not a registry band.
 //
-//  1. NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE} — every mode, highest priority
-//  2. pipeline.stage_models.{stage}          — manual/hybrid only
-//  3. defaultStageModels[stage]              — manual only
-//  4. "" (defer to the router)               — automatic/hybrid
-func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) string {
+// It is separate from stageConfiguredModel because it resolves in a different
+// PLACE: this override wins in every performance mode, ahead of a mode pin,
+// while the rest of the explicit chain sits behind one. See stageBaseModel.
+func stageEnvModel(stage state.PipelineStage) string {
 	envKey := "NIGHTGAUGE_PIPELINE_STAGE_MODEL_" +
 		strings.ToUpper(strings.ReplaceAll(string(stage), "-", "_"))
-	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
-		return v
-	}
+	return validStageModel(strings.TrimSpace(os.Getenv(envKey)))
+}
 
+// stageConfiguredModel resolves the operator's explicit per-stage model from
+// CONFIG, or "" when the stage defers to the router. Mirrors the config half of
+// `getStageModel` (stageResolver.ts) exactly:
+//
+//  1. pipeline.stage_models.{stage} — manual/hybrid only
+//  2. defaultStageModels[stage]     — manual only
+//  3. "" (defer to the router)      — automatic/hybrid
+//
+// The env override is resolved by stageEnvModel, ahead of the mode pin.
+func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) string {
 	cfg, err := config.Load(workspaceRoot)
 	if err != nil {
 		cfg = nil
@@ -106,7 +131,7 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 	}
 
 	if cfg != nil && cfg.Pipeline != nil {
-		if v := strings.TrimSpace(cfg.Pipeline.StageModels[string(stage)]); v != "" {
+		if v := validStageModel(strings.TrimSpace(cfg.Pipeline.StageModels[string(stage)])); v != "" {
 			return v
 		}
 	}
@@ -119,34 +144,54 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 
 // stageBaseModel resolves the tier a stage STARTS from, before escalation, the
 // minimum_model floor, sticky downgrades and the stage-specific haiku
-// exclusions (#340). Mirrors the ordering of `resolveModel` in
-// packages/nightgauge-vscode/src/utils/skillRunner.ts:
+// exclusions (#340). Mirrors `resolveModel`
+// (packages/nightgauge-vscode/src/utils/skillRunner.ts) step for step:
 //
-//	Step 0   performance-mode pin        — Maximum pins Opus; Efficiency and
-//	                                       Frontier pin their per-stage tiers
-//	Step 1   explicit per-stage config   — env var / pipeline.stage_models
+//	Step 0   performance-mode pin        — ONLY `maximum` pins (Opus, every
+//	                                       stage). efficiency/frontier are
+//	                                       ENVELOPES (#19), applied below.
+//	                                       The NIGHTGAUGE_PIPELINE_STAGE_MODEL_*
+//	                                       override is read FIRST, so it wins in
+//	                                       every mode.
+//	Step 1   explicit per-stage config   — pipeline.stage_models, then the
+//	                                       manual-mode table
 //	Step 1.5 lightweight stage defaults  — issue-pickup, pr-create → haiku
 //	Step 2   the run's routed tier       — pickup_recommendation.dev_model
 //	Step 3   defaultDispatchModel        — an unrouted run still dispatches
 //
+// Steps 1.5–3 are clamped into the mode's routed-tier envelope, at the same
+// position `resolveModel` clamps them (clampModelToEnvelope on the
+// lightweight/auto/default branches). Step 1 is NOT clamped, also mirroring
+// resolveModel: an explicit per-stage model is the operator overriding the
+// mode for that stage, not the pipeline choosing within it. `explicit` reports
+// that, so resolveDispatchModel can leave the mode ceiling off it too.
+//
 // The performance mode and the config are read fresh per stage, like the
 // router's own mode lookup: an operator who switches to Maximum mid-run gets it
 // on the next stage rather than at the next pickup.
-func stageBaseModel(workspaceRoot string, stage state.PipelineStage, predictedModel string) string {
-	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	if pin := routing.ModePin(mode, string(stage)); pin != "" {
-		return pin
+func stageBaseModel(
+	workspaceRoot string,
+	mode routing.PerformanceMode,
+	stage state.PipelineStage,
+	predictedModel string,
+) (model string, explicit bool) {
+	if env := stageEnvModel(stage); env != "" {
+		return env, true
+	}
+	if pin := routing.ModeStagePin(mode, string(stage)); pin != "" {
+		return pin, false
 	}
 	if configured := stageConfiguredModel(workspaceRoot, stage); configured != "" {
-		return configured
+		return configured, true
 	}
+	envelope := routing.RoutedTierEnvelope(mode, string(stage))
 	if lightweight, ok := lightweightStageDefaults[stage]; ok {
-		return lightweight
+		return routing.ClampToEnvelope(lightweight, envelope), false
 	}
 	if predictedModel != "" {
-		return predictedModel
+		return routing.ClampToEnvelope(predictedModel, envelope), false
 	}
-	return defaultDispatchModel
+	return routing.ClampToEnvelope(defaultDispatchModel, envelope), false
 }
 
 // normalizeDispatchTier collapses a dispatch model onto the registry BAND
@@ -182,7 +227,9 @@ func normalizeDispatchTier(model string) string {
 // enough once stageBaseModel exists: the lightweight defaults sit ABOVE the
 // prediction, so an operator escalating a stalled pr-create would have watched
 // it re-run on haiku. "Run at least this tier" is a floor, so it is expressed
-// as one.
+// as one — and like every other floor it lands inside the active performance
+// mode's envelope (resolveDispatchModel), so forcing Opus under Efficiency
+// runs sonnet until the operator changes the mode too.
 func raiseStageFloors(floors map[string]string, tier string) map[string]string {
 	if strings.TrimSpace(tier) == "" {
 		return floors

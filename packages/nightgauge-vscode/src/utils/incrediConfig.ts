@@ -43,6 +43,7 @@ export {
   EFFORT_SUPPORTING_MODELS,
   modelSupportsEffort,
   getStageModel,
+  getStageEnvModel,
   getStageOverrideModel,
   getStageModelsMatrix,
   getTypeOverrides,
