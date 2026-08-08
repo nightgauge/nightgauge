@@ -3752,12 +3752,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 		}
 
-		// #91 served-model attribution: the claude CLI can silently retry a
-		// safety-refused turn on a fallback model (model_refusal_fallback)
-		// and still exit 0, so the model that served the stage is not
-		// guaranteed to be the one requested. Cost, exit-record, telemetry,
-		// and history sinks below use servedModel; routing, escalation, and
-		// retry decisions stay on the requested `model`.
+		// #91 served-model attribution: the model that served the stage is not
+		// guaranteed to be the one requested — the claude CLI can silently
+		// retry a safety-refused turn on a fallback model
+		// (model_refusal_fallback) and still exit 0, and a non-Claude adapter
+		// translates the tier band into a concrete id before spawning. Cost,
+		// exit-record, telemetry, and history sinks below use servedModel;
+		// routing, escalation, and retry decisions stay on the requested
+		// `model`.
+		//
+		// The comparison is sound only because `model` is what the executor
+		// was actually asked to run (#340). While the IPC path re-resolved the
+		// model in TypeScript, the executor measured divergence against its own
+		// private resolution — so a Go-resolves-Y / TS-resolves-X /
+		// CLI-serves-X stage reported no servedModel at all and this
+		// correction could never fire.
 		// See docs/spikes/fable-5-behavior-porting.md §8.3.
 		servedModel := model
 		if result != nil && result.ServedModel != "" {

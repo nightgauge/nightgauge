@@ -72,7 +72,14 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		runID = params.Runtime.RunID
 	}
 
-	// Build RunStageParams for TypeScript
+	// Build RunStageParams for TypeScript.
+	//
+	// Model is the authoritative dispatch tier (#340) — resolveDispatchModel
+	// has already applied escalation, sticky downgrades and every floor, and
+	// the TS SkillRunner spawns on it verbatim. params.Prompt is deliberately
+	// NOT forwarded: the extension composes its own prompt on this path (see
+	// RunStageParams), and a field nobody reads cannot be distinguished from
+	// one that broke.
 	ipcParams := RunStageParams{
 		Stage:             string(params.Stage),
 		IssueNumber:       params.IssueNumber,
@@ -85,7 +92,6 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		WorktreeDir:       params.WorktreePath,
 		Repo:              params.Repo,
 		AllowedTools:      params.AllowedTools,
-		Prompt:            params.Prompt,
 		SkillFallbackUsed: params.SkillFallbackUsed,
 		AutonomousMode:    r.AutonomousMode,
 		RunID:             runID,

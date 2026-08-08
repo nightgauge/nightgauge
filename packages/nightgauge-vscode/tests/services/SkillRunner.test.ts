@@ -178,10 +178,13 @@ describe("SkillRunner", () => {
       undefined, // issueMetadata
       undefined, // batchContext
       undefined, // skipToPhase
-      undefined, // modelOverride
+      // #340: params.model is AUTHORITATIVE — the Go scheduler already applied
+      // escalation, sticky downgrades and floors, so it goes through as the
+      // override rather than being re-resolved from local config here.
+      "claude-sonnet-4-20250514", // modelOverride
       undefined, // pauseAutoRouting
       "/mock/worktree", // pinnedWorkspaceRoot
-      undefined, // modelOverrideSource
+      "go-scheduler", // modelOverrideSource
       undefined, // injectedSkillContent
       undefined, // autonomousMode (Issue #2656)
       undefined, // warnThresholdUsd (Go scheduler enforces budget)

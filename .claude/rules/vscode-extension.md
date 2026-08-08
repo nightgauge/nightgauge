@@ -43,6 +43,14 @@ Issue #1901 for the decomposition.
 - **SkillRunner** (`SkillRunner.ts`) — thin executor: spawns Claude CLI, streams
   output, reports exit code and tokens
 
+**Model resolution is Go's on this path (#340).** `RunStageParams.model` is
+authoritative: `SkillRunner` passes it straight through as the `modelOverride`
+and the extension runs no resolution of its own. Do not "helpfully" fall back to
+`resolveModel` when the wire value looks wrong — that is the exact shape of the
+defect #340 removed. See
+[docs/PIPELINE_EXECUTION.md § Who Resolves the Model](../../docs/PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340)
+for what each side still owns.
+
 **When adding pipeline features:**
 
 - Add orchestration logic to Go (`internal/orchestrator/`)

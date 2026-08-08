@@ -40,6 +40,17 @@ import type { IpcClient } from "./IpcClient";
 export interface RunStageParams {
   stage: PipelineStage;
   issueNumber: number;
+  /**
+   * The model this stage runs on — AUTHORITATIVE (#340).
+   *
+   * The Go scheduler's `resolveDispatchModel` already applied everything that
+   * can change the tier: post-failure escalation, sticky model-unavailable
+   * downgrades (#42), the `model_routing.minimum_model` floor (#366), the
+   * pr-create large-diff escalation, the feature-validate haiku gate and the
+   * pr-merge haiku floor (#197). It is passed straight through as the
+   * `modelOverride` so the CLI spawns on it; the extension runs no model
+   * resolution of its own on this path.
+   */
   model: string;
   maxTokens?: number;
   timeout: number; // ms
@@ -49,7 +60,6 @@ export interface RunStageParams {
   worktreeDir: string;
   repo?: string;
   allowedTools?: string[];
-  prompt?: string;
   /** When true, stall handling uses escalation+pause instead of silent kill (Issue #2656) */
   autonomousMode?: boolean;
   /**
@@ -280,10 +290,35 @@ export class SkillRunner {
     const { stage, issueNumber } = params;
     const startTime = Date.now();
 
+    // The wire model is the decision, so an absent one is a broken contract —
+    // not an invitation to resolve a second answer locally (#340). Silently
+    // substituting one is exactly the failure this issue removed: the run
+    // would look healthy while every Go-side escalation, downgrade and floor
+    // was discarded. Fail the stage loudly instead.
+    const authoritativeModel = params.model?.trim() ?? "";
+    if (!authoritativeModel) {
+      const errorText = `[ipc-contract] ${stage}: pipeline.runStage carried no model — the Go scheduler owns model resolution on this path (#340)`;
+      this.logger.error("SkillRunner: refusing to dispatch without an authoritative model", {
+        stage,
+        issueNumber,
+      });
+      return {
+        success: false,
+        exitCode: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        costUsd: 0,
+        durationMs: Date.now() - startTime,
+        errorText,
+      };
+    }
+
     this.logger.info("SkillRunner: starting stage", {
       stage,
       issueNumber,
-      model: params.model,
+      model: authoritativeModel,
       worktreeDir: params.worktreeDir,
     });
 
@@ -486,10 +521,14 @@ export class SkillRunner {
         undefined, // issueMetadata
         undefined, // batchContext
         undefined, // skipToPhase
-        undefined, // modelOverride
+        // #340: the Go-resolved model, applied as the authoritative override.
+        // Passing `undefined` here made runStageSkillHeadless re-resolve from
+        // local config, so escalation/downgrade/floors computed in
+        // resolveDispatchModel never reached the spawned CLI.
+        authoritativeModel, // modelOverride
         undefined, // pauseAutoRouting
         params.worktreeDir, // pinnedWorkspaceRoot
-        undefined, // modelOverrideSource
+        "go-scheduler", // modelOverrideSource
         params.skillContent ?? undefined, // injectedSkillContent — platform-resolved skill body
         params.autonomousMode, // autonomousMode (Issue #2656)
         undefined, // warnThresholdUsd (Go scheduler enforces budget on this path)

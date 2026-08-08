@@ -2567,16 +2567,21 @@ allowed-tools: Read Write Edit Bash
 
       mockProcess.emit("close", 0);
 
+      // #340: `escalatedFrom` is gone. It was written here from a SECOND,
+      // otherwise-unused `resolveModel` call and read by nothing — and running
+      // the local chain on the override path is exactly what let the IPC path
+      // discard the Go-resolved model. The override itself is the assertion.
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
           success: true,
           modelDecision: expect.objectContaining({
             model: "gpt-5.5",
             source: "user-override",
-            escalatedFrom: "gpt-5.4",
           }),
         })
       );
+      const decision = onComplete.mock.calls[0][0].modelDecision as Record<string, unknown>;
+      expect(decision).not.toHaveProperty("escalatedFrom");
     } finally {
       if (previousAdapter === undefined) {
         delete process.env.NIGHTGAUGE_UI_CORE_ADAPTER;

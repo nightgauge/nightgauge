@@ -229,6 +229,71 @@ The automated mode uses `HeadlessOrchestrator` which:
 
 ---
 
+## Who Resolves the Model (Issue #340)
+
+Model resolution has **exactly one owner per dispatch path**. Two independent
+resolvers producing the same decision is the Dual-Path Drift class in
+[FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md), and on the IPC path it was a live
+defect: the escalated tier was computed, logged, and recorded in run history,
+while the CLI kept spawning on the tier that had just failed.
+
+| Dispatch path                                   | Resolver                                 | What it applies                                                                                                                                                                                                 |
+| ----------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Go scheduler → IPC → extension** (autonomous) | `scheduler.resolveDispatchModel` (Go)    | the run's routed tier, post-failure escalation, sticky model-unavailable downgrades (#42), `model_routing.minimum_model` (#366), pr-create large-diff, feature-validate haiku gate, pr-merge haiku floor (#197) |
+| **Go scheduler → ExecutionManager** (auto/CLI)  | `scheduler.resolveDispatchModel` (Go)    | same — this is why both paths now agree                                                                                                                                                                         |
+| **HeadlessOrchestrator** (extension-driven)     | `resolveModel` in `utils/skillRunner.ts` | performance-mode pins, `pipeline.stage_models`, lightweight stage defaults, adaptive policy override, A/B experiment assignment, `AutoModelSelector`, mode-envelope clamping                                    |
+
+On the IPC path the extension **executes** the wire model verbatim: it passes
+`RunStageParams.model` to `runStageSkillHeadless` as the authoritative
+`modelOverride`, which skips the local chain entirely. A `pipeline.runStage`
+event with no model fails the stage with an `[ipc-contract]` error rather than
+resolving a second answer.
+
+Stated consequence, so it is not silent: the TS-only routing adjustments listed
+in the third row live **inside** `resolveModel` and therefore apply only where
+`resolveModel` runs. They are not consulted on the IPC path, and the Go
+scheduler has no equivalent for the adaptive-policy override or the A/B
+experiment assignment — an autonomous run is routed by Go alone.
+
+The visible routing delta on the IPC path, in the default `automatic` +
+`elevated` configuration:
+
+- **`feature-planning` / `feature-dev` / `feature-validate`** now dispatch on
+  the run's complexity-routed tier from `issue-{N}.json`. Previously they got
+  the global default, because the IPC path never passes `issueMetadata` and
+  `AutoModelSelector` therefore never ran.
+- **`issue-pickup` / `pr-create` / `pr-merge`** now dispatch on that same run
+  tier (still subject to the pr-merge sonnet floor and the pr-create large-diff
+  escalation) rather than the built-in lightweight `haiku` default. Go's
+  `predictedModel` is the issue's `pickup_recommendation.dev_model`, applied
+  run-wide, which is what the auto/CLI path has always dispatched — so the two
+  paths agree, at the cost of a more expensive tier on plumbing stages for
+  high-complexity issues. Per-stage base routing in `resolveDispatchModel` is
+  the follow-up worth having; it is a routing-policy change that affects **both**
+  dispatch paths and does not belong in the ownership fix.
+
+Two things the extension still owns on the IPC path, because Go resolves
+neither:
+
+- **Adapter tier translation.** Go speaks the registry band vocabulary its
+  ladders are built on (`haiku|sonnet|opus|fable`). Codex needs a concrete
+  model id, and only the extension knows which adapter it selected, so
+  `resolveCodexPipelineModel` translates the authoritative band at the last
+  mile. The translated id is reported back as `servedModel`, so run history
+  attributes the model that actually ran.
+- **Effort.** Neither dispatch path passes `--effort` from Go, and
+  `model_routing.stage_efforts` / `default_effort` are operator config, so the
+  stage's effort is resolved in TypeScript independently of the model.
+
+Attribution follows the same ownership. Go records the dispatch model up front
+(`runtime.RecordStageModel` at stage start) and re-records on the served model
+the extension reports at completion. The `pipeline.notifyStageTransition`
+up-front attribution (#367) is deliberately **not** wired on the IPC path: that
+handler keys `activeRuntimes` by issue number for HeadlessOrchestrator-initiated
+runs and would mint a second, competing runtime for a Go-scheduled one.
+
+---
+
 ## Per-Stage Executor Dispatch (single-agent vs. fan-out)
 
 Independent of the manual/automated **mode** above, each stage is dispatched to
