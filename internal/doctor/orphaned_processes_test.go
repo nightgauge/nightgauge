@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -34,10 +35,39 @@ func loadCapturedProcessTable(t *testing.T) string {
 			t.Fatalf("the capture no longer covers etime %q; all three ps formats must be present", etime)
 		}
 	}
-	if strings.Contains(raw, os.Getenv("USER")) && os.Getenv("USER") != "operator" {
+	// The capturing account's login, asserted WITHOUT naming it and without
+	// consulting the environment: the redaction rewrites the capturing
+	// machine's home to /Users/operator, so any other /Users/<login> segment
+	// is an un-redacted login — the capturing account's included. Spelling
+	// that login out here would inscribe in a public repository the exact
+	// thing the redaction exists to keep out of it.
+	for _, login := range userPathLogins(raw) {
+		if login != "operator" {
+			t.Fatalf("the capture contains an un-redacted login %q — re-run capture-ps-snapshot.sh", login)
+		}
+	}
+	// …and this machine's login, when there is one. Guarded on non-empty
+	// because strings.Contains(raw, "") is TRUE: with USER unset (CI, most
+	// containers) the unguarded form failed every test in this file.
+	if u := os.Getenv("USER"); u != "" && u != "operator" && strings.Contains(raw, u) {
 		t.Fatal("the capture contains a login name — re-run capture-ps-snapshot.sh")
 	}
 	return raw
+}
+
+// userPathLogins returns every login appearing as a `/Users/<login>` segment.
+func userPathLogins(raw string) []string {
+	var logins []string
+	for _, seg := range strings.Split(raw, "/Users/")[1:] {
+		end := strings.IndexAny(seg, "/ \t\n")
+		if end < 0 {
+			end = len(seg)
+		}
+		if end > 0 {
+			logins = append(logins, seg[:end])
+		}
+	}
+	return logins
 }
 
 // capturedServeRow returns the captured serve daemon's row.
@@ -213,17 +243,184 @@ func TestClassifyProcesses_SidecarOwnedRunIsNotAnOrphan(t *testing.T) {
 	}
 }
 
+// scanClock is the fixed `now` the sidecar-claim tests date their fixtures
+// against. Fixed rather than time.Now() so a stamp written 24h-minus-a-second
+// ago cannot drift across the boundary while the test runs.
+var scanClock = time.Date(2026, 8, 8, 20, 0, 0, 0, time.UTC)
+
+// stamp renders an RFC3339 timestamp `ago` before scanClock.
+func stamp(ago time.Duration) string {
+	return scanClock.Add(-ago).Format(time.RFC3339)
+}
+
 func TestClassifyProcesses_TheIncidentSpecimenIsAnOrphan(t *testing.T) {
-	// The 31-hour `autonomous run --dry-run` nothing reported.
+	// The 31-hour `autonomous run --dry-run` nothing reported — reproduced
+	// through the REAL claim path, because the claim is where the defect was:
+	// the scheduler writes its OWN pid into state.json (autonomous.go), so a
+	// presence test made the specimen vouch for itself and read as owned
+	// forever. Its progress stamp is 31 hours cold.
+	r := newLeakRepo(t)
+	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+		`{"status":"running","pid":7788,"startedAt":%q,"lastScanAt":%q}`, stamp(31*time.Hour), stamp(31*time.Hour)))
 	procs := parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run"))
 
-	scan := classifyProcesses(procs, map[int]bool{}, os.Getpid())
+	claimed := sidecarPIDs(r.dir, scanClock)
+	scan := classifyProcesses(procs, claimed, os.Getpid())
 
+	if claimed[7788] {
+		t.Error("a 31-hour-cold sidecar still claimed its own PID — ownership is presence, not progress")
+	}
 	if len(scan.Orphans) != 1 {
 		t.Fatalf("the specimen was not reported: %+v", scan)
 	}
 	if scan.Orphans[0].PID != 7788 {
 		t.Errorf("wrong PID reported: %+v", scan.Orphans[0])
+	}
+}
+
+func TestSidecarPIDs_AClaimCountsOnlyWhileTheSidecarIsMakingProgress(t *testing.T) {
+	// One rule, three sidecars: a claim is believed only while the file that
+	// makes it shows recent progress. Each case names the timestamp its writer
+	// actually records (orchestrator.AutonomousState.lastScanAt,
+	// orchestrator.CurrentRunSidecar.stage_started_at, runstate.updated_at)
+	// and the start-of-life stamp it falls back to.
+	tests := []struct {
+		name      string
+		path      string
+		body      string
+		wantClaim bool
+	}{
+		{
+			name:      "scheduler scanned minutes ago",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(300*time.Hour), stamp(5*time.Minute)),
+			wantClaim: true,
+		},
+		{
+			name:      "scheduler has not scanned in 31h",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(31*time.Hour), stamp(31*time.Hour)),
+			wantClaim: false,
+		},
+		{
+			// The first write leaves lastScanAt empty — observed live.
+			name:      "no scan yet, started just now",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":""}`, stamp(2*time.Minute)),
+			wantClaim: true,
+		},
+		{
+			name:      "no scan yet, started 31h ago",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":""}`, stamp(31*time.Hour)),
+			wantClaim: false,
+		},
+		{
+			name:      "no timestamps at all",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      `{"pid":4001}`,
+			wantClaim: false,
+		},
+		{
+			name:      "unparsable timestamp",
+			path:      ".nightgauge/autonomous/state.json",
+			body:      `{"pid":4001,"startedAt":"yesterday","lastScanAt":"soon"}`,
+			wantClaim: false,
+		},
+		{
+			name:      "run sidecar entered its stage an hour ago",
+			path:      ".nightgauge/pipeline/current-run.json",
+			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(300*time.Hour), stamp(time.Hour)),
+			wantClaim: true,
+		},
+		{
+			name:      "run sidecar stuck in one stage for 31h",
+			path:      ".nightgauge/pipeline/current-run.json",
+			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(40*time.Hour), stamp(31*time.Hour)),
+			wantClaim: false,
+		},
+		{
+			name:      "run sidecar with no stage stamp yet, just started",
+			path:      ".nightgauge/pipeline/current-run.json",
+			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q}`, stamp(time.Minute)),
+			wantClaim: true,
+		},
+		{
+			name:      "run-state updated minutes ago",
+			path:      ".nightgauge/pipeline/run-state.json",
+			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(300*time.Hour), stamp(9*time.Minute)),
+			wantClaim: true,
+		},
+		{
+			name:      "run-state untouched for 31h",
+			path:      ".nightgauge/pipeline/run-state.json",
+			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(31*time.Hour), stamp(31*time.Hour)),
+			wantClaim: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newLeakRepo(t)
+			r.write(tt.path, tt.body)
+
+			claimed := sidecarPIDs(r.dir, scanClock)
+
+			if got := claimed[4001]; got != tt.wantClaim {
+				t.Errorf("claimed = %v, want %v (%s: %s)", got, tt.wantClaim, tt.path, tt.body)
+			}
+		})
+	}
+}
+
+func TestSidecarPIDs_TheClaimWindowIsWiderThanTheProcessAgeFloor(t *testing.T) {
+	// A scheduler on a long --interval is idle, not leaked: its scan cadence is
+	// operator-configurable and may legally exceed the 1h process-age floor, so
+	// the claim window must not be that floor. It is staleWorktreeAge (24h).
+	if staleSidecarClaim <= staleProcessAge {
+		t.Fatalf("staleSidecarClaim (%v) must exceed staleProcessAge (%v)", staleSidecarClaim, staleProcessAge)
+	}
+	if staleSidecarClaim != staleWorktreeAge {
+		t.Errorf("staleSidecarClaim = %v, want it to mirror staleWorktreeAge (%v)", staleSidecarClaim, staleWorktreeAge)
+	}
+
+	r := newLeakRepo(t)
+	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+		`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(300*time.Hour), stamp(3*time.Hour)))
+
+	if !sidecarPIDs(r.dir, scanClock)[4001] {
+		t.Error("a scheduler that scanned 3h ago was not credited — a long --interval must not read as a leak")
+	}
+}
+
+func TestSidecarPIDs_ClaimsTheWorkspaceRootScheduler(t *testing.T) {
+	// The scheduler writes .nightgauge/autonomous/state.json relative to the
+	// WORKSPACE root, which in a multi-repo workspace is not a repo root at
+	// all — the one directory config.WorkspaceRepoRoots never yields.
+	ws := t.TempDir()
+	ws, err := filepath.EvalSymlinks(ws)
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".vscode"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"), []byte("repositories: []\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".nightgauge", "autonomous"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".nightgauge", "autonomous", "state.json"),
+		[]byte(fmt.Sprintf(`{"pid":4242,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute))), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	repo := filepath.Join(ws, "some-repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if !sidecarPIDs(repo, scanClock)[4242] {
+		t.Error("the workspace-root scheduler sidecar was never read — its process would be reported as an orphan")
 	}
 }
 
@@ -329,12 +526,15 @@ func TestUnverifiableProcessScan_IsNeverHealthy(t *testing.T) {
 
 func TestSidecarPIDs_ReadsEverySidecarThatCarriesAPID(t *testing.T) {
 	r := newLeakRepo(t)
-	r.write(".nightgauge/autonomous/state.json", `{"status":"running","pid":4001,"startedAt":"2026-08-08T00:00:00Z"}`)
-	r.write(".nightgauge/pipeline/current-run.json", `{"issue_number":341,"pid":4002}`)
-	r.write(".nightgauge/pipeline/run-state.json",
-		`{"schema_version":"1.0","issue_number":341,"attempts":[{"run_id":"a","pid":4003},{"run_id":"b","pid":4004}]}`)
+	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+		`{"status":"running","pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute)))
+	r.write(".nightgauge/pipeline/current-run.json", fmt.Sprintf(
+		`{"issue_number":341,"pid":4002,"started_at":%q,"stage_started_at":%q}`, stamp(time.Hour), stamp(time.Minute)))
+	r.write(".nightgauge/pipeline/run-state.json", fmt.Sprintf(
+		`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4003},{"run_id":"b","pid":4004}]}`,
+		stamp(time.Hour), stamp(time.Minute)))
 
-	claimed := sidecarPIDs(r.dir)
+	claimed := sidecarPIDs(r.dir, scanClock)
 
 	for _, pid := range []int{4001, 4002, 4003, 4004} {
 		if !claimed[pid] {
@@ -349,9 +549,10 @@ func TestSidecarPIDs_AnUnreadableSidecarNarrowsNothingAndBreaksNothing(t *testin
 	// never acts. What it must NOT do is lose the sidecars it CAN read.
 	r := newLeakRepo(t)
 	r.write(".nightgauge/pipeline/current-run.json", "{ this is not json")
-	r.write(".nightgauge/autonomous/state.json", `{"status":"running","pid":4001}`)
+	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+		`{"status":"running","pid":4001,"lastScanAt":%q}`, stamp(time.Minute)))
 
-	claimed := sidecarPIDs(r.dir)
+	claimed := sidecarPIDs(r.dir, scanClock)
 
 	if !claimed[4001] {
 		t.Error("a corrupt sidecar suppressed a readable one")
@@ -364,7 +565,7 @@ func TestSidecarPIDs_AnUnreadableSidecarNarrowsNothingAndBreaksNothing(t *testin
 func TestSidecarPIDs_NoSidecarsClaimNothing(t *testing.T) {
 	r := newLeakRepo(t)
 
-	if claimed := sidecarPIDs(r.dir); len(claimed) != 0 {
+	if claimed := sidecarPIDs(r.dir, scanClock); len(claimed) != 0 {
 		t.Errorf("a repo with no sidecars claimed PIDs: %v", claimed)
 	}
 }
@@ -379,6 +580,13 @@ func TestCheckOrphanedProcesses_RunsAgainstTheRealProcessTable(t *testing.T) {
 	if item.Detail == "" && item.Error == "" {
 		t.Fatal("the check reported nothing at all")
 	}
+	// On every platform that HAS `ps`, the scan must actually have been
+	// determined. Without this the suite passes on a permanently-unverifiable
+	// carrier: a `ps` whose columns drift from this parser would ship green,
+	// warning forever in production and failing nothing in CI.
+	if runtime.GOOS != "windows" && strings.Contains(item.Error, "unverifiable") {
+		t.Fatalf("the real process table was not understood on %s — the parser has drifted from this host's ps: %q", runtime.GOOS, item.Error)
+	}
 	if item.OK && warning != "" {
 		t.Errorf("a passing check must not warn: %q", warning)
 	}
@@ -387,6 +595,84 @@ func TestCheckOrphanedProcesses_RunsAgainstTheRealProcessTable(t *testing.T) {
 	}
 	if strings.Contains(item.Error, fmt.Sprintf("%d (", os.Getpid())) {
 		t.Errorf("the check reported itself: %q", item.Error)
+	}
+}
+
+func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T) {
+	// `ps -ax` always lists its own caller. A table that parsed cleanly but
+	// does not contain us did not enumerate this machine — a foreign or
+	// stubbed `ps` this parser happened to agree with — and "0 orphaned" from
+	// it would be #296's defect wearing a determined parse.
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "empty table", raw: "\n"},
+		{name: "rows, but none of them us", raw: derivedRow(t, os.Getpid()+1, "10:00", "serve --workspace /Users/operator/x") + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			item, warning := processTableReport(tt.raw, map[int]bool{})
+
+			if item.OK {
+				t.Fatalf("a table that never listed this process reported healthy: %+v", item)
+			}
+			if !strings.Contains(item.Error, "unverifiable") {
+				t.Errorf("the error does not say the scan could not be trusted: %q", item.Error)
+			}
+			if warning == "" {
+				t.Error("an unverifiable scan must warn")
+			}
+		})
+	}
+}
+
+func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
+	// The other side of the rule: a table that DOES list us is reported on.
+	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
+		derivedRow(t, os.Getpid()+1, "05-00:00:00", "autonomous run --dry-run") + "\n"
+
+	item, _ := processTableReport(raw, map[int]bool{})
+
+	if strings.Contains(item.Error, "unverifiable") {
+		t.Fatalf("a table containing this process was rejected: %q", item.Error)
+	}
+	if item.OK {
+		t.Fatalf("the aged unowned process was not reported: %+v", item)
+	}
+}
+
+func TestSubcommand_FindsTheVerbPastGlobalFlags(t *testing.T) {
+	tests := []struct {
+		command string
+		want    string
+	}{
+		{"/opt/bin/nightgauge serve --workspace /x", "serve"},
+		{"/opt/bin/nightgauge --verbose serve", "serve"},
+		{"/opt/bin/nightgauge autonomous run --dry-run", "autonomous"},
+		{"/opt/bin/nightgauge", ""},
+		{"/opt/bin/nightgauge --help", ""},
+	}
+	for _, tt := range tests {
+		if got := (runningProcess{Command: tt.command}).subcommand(); got != tt.want {
+			t.Errorf("subcommand(%q) = %q, want %q", tt.command, got, tt.want)
+		}
+	}
+}
+
+func TestClassifyProcesses_ServeBehindAGlobalFlagIsStillServe(t *testing.T) {
+	// A serve daemon this reader fails to recognize is reported as an orphan
+	// on every single doctor run — the failure mode that teaches operators to
+	// stop reading the output.
+	procs := parseRows(t, derivedRow(t, 4157, "10-00:00:00", "--verbose serve --workspace /Users/operator/Repositories/nightgauge"))
+
+	scan := classifyProcesses(procs, map[int]bool{}, os.Getpid())
+
+	if len(scan.Orphans) != 0 {
+		t.Fatalf("a serve daemon behind a global flag was reported: %+v", scan.Orphans)
+	}
+	if scan.Serve != 1 {
+		t.Errorf("Serve = %d, want 1", scan.Serve)
 	}
 }
 
