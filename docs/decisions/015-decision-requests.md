@@ -847,6 +847,11 @@ socket as a whole; putting an identity on it is the **#370 identity rework**,
 tracked there rather than here. Reviews of the form "a socket caller can poison
 a bookkeeping verb" describe that pre-existing surface.
 
+> **Amended by [ADR 017](017-runtime-identity-keying.md) (#370).** #370 gives
+> the socket a **run identity**, not **authentication**, and the two halves of
+> this residual separate along exactly that line. See the amendment under
+> "Residual exposure" below.
+
 **What `attention.raise` guarantees inside that model.** Three properties, none
 of which depend on the socket being authenticated:
 
@@ -892,8 +897,37 @@ repos this workspace runs.
 **Residual exposure, stated rather than implied.** A caller willing to spend two
 calls (`running`, then `complete`) can still book a stage and be corroborated
 for its amount. That is the telemetry-forgery surface of
-`notifyStageTransition` itself — present before #305, unchanged by it, and
-closed by giving the socket an identity (#370), not by the raise verb. The
+`notifyStageTransition` itself — present before #305 and unchanged by it, and
+owned by #370, not by the raise verb.
+
+> **Amended by [ADR 017](017-runtime-identity-keying.md) (#370).** The sentence
+> above originally read "closed by giving the socket an identity (#370)". A run
+> identity closes only **half** of this, and the halves are worth naming
+> separately:
+>
+> - **Addressing — closed by #370.** Every `pipeline.*` call must now carry a
+>   `runId` the caller minted itself, validated at the wire boundary, and the
+>   snapshot filename carries it too. A caller can no longer address, mutate,
+>   terminate or delete the state of a run it did not start — which is what made
+>   `notifyStageTransition`'s create-on-miss usable against someone else's run.
+>   The one new destructive-shaped verb, `pipeline.abandonRun`, corroborates
+>   `runId` + `repo` + `issueNumber` against the run it resolves, never creates a
+>   target, and closes a **dispatch** rather than a run, so at worst it emits an
+>   early `pipeline_done` that the run's own completion supersedes.
+> - **Forgery — NOT closed by #370.** A writer that can reach the socket can
+>   still mint an id of its own and drive a wholly fabricated run with two calls
+>   (`running`, then `complete`), then be corroborated for its amount. Nothing
+>   in an identity scheme distinguishes a self-minted real run from a
+>   self-minted fake one. The mitigations remain the ones stated here: exact
+>   repo match, real progression, the closed producer allowlist, and the
+>   workspace repo registry.
+>
+> Closing the forgery half requires **authenticating** the socket, which ADR 017
+> declines explicitly (its residual risk R-2) and files as the named successor
+> at merge. Until then this paragraph, not #370, is the accurate statement of
+> the exposure.
+
+The
 offer's MAGNITUDE is likewise still unbounded: `ProposedCeilingUSD` returns
 `max(enforced, spent) * 1.5` with no cap, so a large corroborated spend yields a
 proportionally large proposal. Clamping the offer against the CONFIGURED
