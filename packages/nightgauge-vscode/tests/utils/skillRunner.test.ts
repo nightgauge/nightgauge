@@ -3171,6 +3171,136 @@ describe("skillRunner - Repo Identity (Issue #1306)", () => {
 });
 
 /**
+ * Tests for the NIGHTGAUGE_RUN_ID child-process export (#370 / ADR-017 step 0).
+ *
+ * `runId` reached this function long before #370, but it stopped at the SDK
+ * TraceRecorder — it never entered the spawn env, so the stage subprocess and
+ * everything it spawns (hooks, nested tools, the Go binary they shell out to)
+ * had no way to name the run they belong to. The Go adapters export the same
+ * variable on their own spawn path; this is the extension-side half of the
+ * same contract, and the two halves must agree on both presence and absence.
+ */
+describe("skillRunner - Run Identity (#370 / ADR-017 step 0)", () => {
+  let mockProcess: ChildProcess;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetCurrentRepository.mockReturnValue(null);
+    mockGetWorkingDirectory.mockReturnValue("/test/workspace");
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(`---
+name: test-skill
+allowed-tools: Read Write Edit Bash
+---
+# Test Skill
+`);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mockGetCurrentRepository.mockReturnValue(null);
+    killAllActiveProcesses();
+  });
+
+  it("exports NIGHTGAUGE_RUN_ID to the child process when a runId is supplied", () => {
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined, // issueMetadata
+      undefined, // _batchContext
+      undefined, // skipToPhase
+      undefined, // modelOverride
+      undefined, // pauseAutoRouting
+      undefined, // pinnedWorkspaceRoot
+      undefined, // modelOverrideSource
+      undefined, // injectedSkillContent
+      undefined, // autonomousMode
+      undefined, // warnThresholdUsd
+      undefined, // targetRepoOverride
+      "01890a5d-ac96-774b-bcce-b302099a8057" // runId
+    );
+
+    const spawnCall = vi.mocked(spawn).mock.calls[0];
+    const envObj = (spawnCall[2] as { env: Record<string, string> }).env;
+    expect(envObj.NIGHTGAUGE_RUN_ID).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
+  });
+
+  it("strips an INHERITED NIGHTGAUGE_RUN_ID when no runId is supplied", () => {
+    // The anti-laundering half of the contract, and the reason absence has to
+    // be produced rather than assumed.
+    //
+    // nightgauge dispatches nightgauge: this extension can be spawning a stage
+    // from a process that is itself inside a run, so `process.env` legitimately
+    // carries the OUTER run's identity. A dispatch with none of its own — a
+    // per-stage manual invocation, autonomous issue-refine — that merely
+    // "adds nothing" still hands the child a run id, and every record the child
+    // writes is booked under a run it has nothing to do with.
+    //
+    // So the ambient variable is INJECTED here, not cleared: clearing it would
+    // test the absence of a problem. The assertion is on the env object the
+    // production code passed to spawn.
+    const inherited = process.env.NIGHTGAUGE_RUN_ID;
+    process.env.NIGHTGAUGE_RUN_ID = "01890a5d-ac96-774b-bcce-b302099a8057";
+    try {
+      runStageSkillHeadless("feature-dev", 42, {});
+
+      const spawnCall = vi.mocked(spawn).mock.calls[0];
+      const envObj = (spawnCall[2] as { env: Record<string, string> }).env;
+      expect(envObj.NIGHTGAUGE_RUN_ID).toBeUndefined();
+      // Absent, not present-and-empty: readers test presence, so an empty
+      // export would be adopted as an identity that names nothing.
+      expect("NIGHTGAUGE_RUN_ID" in envObj).toBe(false);
+    } finally {
+      if (inherited === undefined) {
+        delete process.env.NIGHTGAUGE_RUN_ID;
+      } else {
+        process.env.NIGHTGAUGE_RUN_ID = inherited;
+      }
+    }
+  });
+
+  it("overrides an INHERITED NIGHTGAUGE_RUN_ID with this dispatch's runId", () => {
+    // The other half: when the dispatch does have an identity, its value must
+    // beat the inherited one rather than landing beside it with precedence left
+    // to spread order. Same laundering consequence if it loses.
+    const inherited = process.env.NIGHTGAUGE_RUN_ID;
+    process.env.NIGHTGAUGE_RUN_ID = "01890a5d-ac96-774b-bcce-b302099a8057";
+    try {
+      runStageSkillHeadless(
+        "feature-dev",
+        42,
+        {},
+        undefined, // issueMetadata
+        undefined, // _batchContext
+        undefined, // skipToPhase
+        undefined, // modelOverride
+        undefined, // pauseAutoRouting
+        undefined, // pinnedWorkspaceRoot
+        undefined, // modelOverrideSource
+        undefined, // injectedSkillContent
+        undefined, // autonomousMode
+        undefined, // warnThresholdUsd
+        undefined, // targetRepoOverride
+        "0189aaaa-bbbb-7ccc-8ddd-eeeeffff0000" // runId
+      );
+
+      const spawnCall = vi.mocked(spawn).mock.calls[0];
+      const envObj = (spawnCall[2] as { env: Record<string, string> }).env;
+      expect(envObj.NIGHTGAUGE_RUN_ID).toBe("0189aaaa-bbbb-7ccc-8ddd-eeeeffff0000");
+    } finally {
+      if (inherited === undefined) {
+        delete process.env.NIGHTGAUGE_RUN_ID;
+      } else {
+        process.env.NIGHTGAUGE_RUN_ID = inherited;
+      }
+    }
+  });
+});
+
+/**
  * Tests for pinnedWorkspaceRoot parameter (Issue #1592)
  *
  * Verifies that when a pinned workspace root is provided, it overrides

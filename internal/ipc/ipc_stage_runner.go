@@ -48,6 +48,32 @@ func NewIpcStageRunner(srv *Server, engine *orchestrator.RetryEngine) *IpcStageR
 // RunStage implements orchestrator.StageRunner by sending the stage to TypeScript
 // via IPC and waiting for the result.
 func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.StageRunParams) (*orchestrator.StageRunResult, error) {
+	// The run identity is asserted at the dispatch boundary — before the
+	// pending channel is registered and before pipeline.runStage is emitted
+	// (ADR-017 step 0b). The scheduler mints the id before it can reach a
+	// stage, so this is unreachable by construction; it is here because the
+	// alternative failure mode is silent, both today and after step 4.
+	//
+	// TODAY, an empty id dispatched down the Go-scheduler IPC path costs the
+	// stage its lifecycle trace: `runId` reaches the extension's spawn call,
+	// which hands it to the SDK TraceRecorder; with nothing there the recorder
+	// falls back to `run-state.json` and, when that does not resolve either,
+	// disables itself as a silent no-op (skillRunner.ts:3013-3019). The stage
+	// runs, burns its tokens, and writes no trace.
+	//
+	// ONCE Decision 3's `run_id_required` lands (step 4), the same empty
+	// dispatch would additionally have every notifyPhaseTransition and
+	// notifyStageProgress call for that stage hard-rejected by the server and
+	// swallowed by PipelineBridge's bare `.catch(warn)` — phase markers and live
+	// progress gone with no error anywhere. This assertion pre-empts both.
+	// Failing at t=0 costs nothing: no child process has spawned.
+	if params.RunID == "" {
+		return &orchestrator.StageRunResult{ExitCode: 1}, fmt.Errorf(
+			"run identity missing at stage dispatch (issue #%d, stage %s) — ADR-017 step 0b: a stage may not be dispatched without the run id its progress and phase calls will be booked under",
+			params.IssueNumber, params.Stage,
+		)
+	}
+
 	key := fmt.Sprintf("%d#%s", params.IssueNumber, params.Stage)
 
 	// Create pending result channel
@@ -61,16 +87,6 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		delete(r.pendingResults, key)
 		r.mu.Unlock()
 	}()
-
-	// Thread the run's UUID onto the wire so the TS SkillRunner can open the
-	// SDK TraceRecorder against the same <run_id>.jsonl the Go trace writer
-	// uses (#228). The struct field existed but was never populated here, so
-	// the recorder silently disabled itself (no run_id) and the SDK producer's
-	// phase-transition events were lost on the IPC path.
-	runID := ""
-	if params.Runtime != nil {
-		runID = params.Runtime.RunID
-	}
 
 	// Build RunStageParams for TypeScript.
 	//
@@ -94,7 +110,10 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		AllowedTools:      params.AllowedTools,
 		SkillFallbackUsed: params.SkillFallbackUsed,
 		AutonomousMode:    r.AutonomousMode,
-		RunID:             runID,
+		// The run identity the scheduler minted and stamped on this dispatch
+		// (#228, ADR-017). Read from params.RunID and never re-derived from
+		// params.Runtime: one authority per value, so the two cannot disagree.
+		RunID: params.RunID,
 	}
 
 	// Emit event to TypeScript

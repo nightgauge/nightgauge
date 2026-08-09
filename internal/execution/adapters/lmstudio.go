@@ -87,6 +87,9 @@ func (a *LmStudioAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
+	if opts.RunID != "" {
+		env[RunIDEnvVar] = opts.RunID
+	}
 
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		env["GITHUB_TOKEN"] = token

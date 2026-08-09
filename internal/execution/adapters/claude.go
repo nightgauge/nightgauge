@@ -91,6 +91,9 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
+	if opts.RunID != "" {
+		env[RunIDEnvVar] = opts.RunID
+	}
 
 	// Pass through GITHUB_TOKEN
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {

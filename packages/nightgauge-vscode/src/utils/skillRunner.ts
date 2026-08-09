@@ -4013,46 +4013,69 @@ export function runStageSkillHeadless(
         })
       : null;
 
+  // Composed as a named object rather than inline in the spawn call because the
+  // run-identity reconcile below is a DELETION, and a spread cannot express one
+  // (see #370 / ADR-017).
+  const spawnEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
+    // skill subprocesses discover it under any adapter without a
+    // VSCode-extension-specific glob (Issue #4029). Spread before the other
+    // env maps; none of them set PATH/NIGHTGAUGE_BIN, so this wins over
+    // the inherited process.env PATH.
+    ...resolveBinaryDiscoveryEnv(),
+    ...autoAcceptEnv, // Merge auto-accept config
+    ...ptcEnv, // Merge PTC tool definitions (Issue #1066)
+    ...geminiEnv, // Merge Gemini config env vars (Issue #1056)
+    ...codexEnv, // Merge Codex model config env vars (Issue #1656)
+    ...copilotEnv, // Merge Copilot model + auth env vars (Issue #1946)
+    ...lmStudioEnv, // Merge LM Studio config env vars (Issue #2057)
+    ...perRepoTokenEnv, // Merge per-repo GitHub token (Issue #2487)
+    // Always inject absolute CLAUDE_PLUGIN_ROOT so hook scripts resolve correctly
+    // when the active repo (e.g. acme-platform) has no claude-plugins/.
+    ...(computedPluginRoot ? { CLAUDE_PLUGIN_ROOT: computedPluginRoot } : {}),
+    // Non-Claude adapters: run-stage.sh sets NIGHTGAUGE_ADAPTER and
+    // NIGHTGAUGE_OUTPUT_FORMAT internally. Pass them here too so the
+    // spawn env is consistent before exec replaces the process.
+    ...(adapter !== "claude"
+      ? {
+          NIGHTGAUGE_ADAPTER: adapter,
+          NIGHTGAUGE_OUTPUT_FORMAT: "json",
+        }
+      : {}),
+    // Phase-level retry: pass SKIP_TO_PHASE so the skill can skip
+    // completed phases and resume from the failed one (Issue #1187)
+    ...(skipToPhase ? { SKIP_TO_PHASE: skipToPhase } : {}),
+    // Repo identity assertion: pass expected repo so skills can verify CWD (Issue #1306)
+    ...(targetRepo ? { NIGHTGAUGE_TARGET_REPO: targetRepo } : {}),
+    // Absolute skill directory so agents resolve _includes/_shared without
+    // CWD assumptions or filesystem scans in cross-repo worktrees (#196)
+    ...(skillDir ? { NIGHTGAUGE_SKILL_DIR: skillDir } : {}),
+    // The run identity this stage belongs to (#370 / ADR-017 step 0), at
+    // parity with the Go adapters' NIGHTGAUGE_RUN_ID export. This spread sits
+    // after `...process.env`, so when a runId is present it overrides any
+    // inherited value rather than losing to it. Absent — not empty — for a
+    // per-stage manual invocation, which has no run identity to name and must
+    // not invent one; the delete below makes that absence real.
+    ...(runId ? { NIGHTGAUGE_RUN_ID: runId } : {}),
+  };
+
+  // A dispatch with no run identity must leave the child with NONE, which takes
+  // a deletion, not an omission (ADR-017). The extension spawns stages from a
+  // process that may itself be running inside a nightgauge run — the recursive
+  // dogfood case — so `...process.env` can carry the OUTER run's
+  // NIGHTGAUGE_RUN_ID. Inheriting it books this dispatch's records under a run
+  // it has nothing to do with: identity laundering, the class this ADR closes.
+  // Mirrors composeStageEnv's reconcile on the Go side.
+  if (!runId) {
+    delete spawnEnv.NIGHTGAUGE_RUN_ID;
+  }
+
   const proc = spawn(cmd, args, {
     cwd: workspaceRoot,
     shell: false,
     stdio: ["pipe", "pipe", "pipe"], // Enable stdin pipe
-    env: {
-      ...process.env,
-      // Export the resolved Go binary (NIGHTGAUGE_BIN + PATH prepend) so
-      // skill subprocesses discover it under any adapter without a
-      // VSCode-extension-specific glob (Issue #4029). Spread before the other
-      // env maps; none of them set PATH/NIGHTGAUGE_BIN, so this wins over
-      // the inherited process.env PATH.
-      ...resolveBinaryDiscoveryEnv(),
-      ...autoAcceptEnv, // Merge auto-accept config
-      ...ptcEnv, // Merge PTC tool definitions (Issue #1066)
-      ...geminiEnv, // Merge Gemini config env vars (Issue #1056)
-      ...codexEnv, // Merge Codex model config env vars (Issue #1656)
-      ...copilotEnv, // Merge Copilot model + auth env vars (Issue #1946)
-      ...lmStudioEnv, // Merge LM Studio config env vars (Issue #2057)
-      ...perRepoTokenEnv, // Merge per-repo GitHub token (Issue #2487)
-      // Always inject absolute CLAUDE_PLUGIN_ROOT so hook scripts resolve correctly
-      // when the active repo (e.g. acme-platform) has no claude-plugins/.
-      ...(computedPluginRoot ? { CLAUDE_PLUGIN_ROOT: computedPluginRoot } : {}),
-      // Non-Claude adapters: run-stage.sh sets NIGHTGAUGE_ADAPTER and
-      // NIGHTGAUGE_OUTPUT_FORMAT internally. Pass them here too so the
-      // spawn env is consistent before exec replaces the process.
-      ...(adapter !== "claude"
-        ? {
-            NIGHTGAUGE_ADAPTER: adapter,
-            NIGHTGAUGE_OUTPUT_FORMAT: "json",
-          }
-        : {}),
-      // Phase-level retry: pass SKIP_TO_PHASE so the skill can skip
-      // completed phases and resume from the failed one (Issue #1187)
-      ...(skipToPhase ? { SKIP_TO_PHASE: skipToPhase } : {}),
-      // Repo identity assertion: pass expected repo so skills can verify CWD (Issue #1306)
-      ...(targetRepo ? { NIGHTGAUGE_TARGET_REPO: targetRepo } : {}),
-      // Absolute skill directory so agents resolve _includes/_shared without
-      // CWD assumptions or filesystem scans in cross-repo worktrees (#196)
-      ...(skillDir ? { NIGHTGAUGE_SKILL_DIR: skillDir } : {}),
-    },
+    env: spawnEnv,
   });
 
   if (adapter === "claude") {

@@ -74,6 +74,9 @@ func (a *GeminiAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
 	}
+	if opts.RunID != "" {
+		env[RunIDEnvVar] = opts.RunID
+	}
 
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
 		env["GITHUB_TOKEN"] = token

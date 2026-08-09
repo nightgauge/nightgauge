@@ -90,6 +90,7 @@ func TestRunStage_EscalationReachesTheNextDispatch(t *testing.T) {
 		Repo:        "nightgauge/nightgauge",
 		Model:       "sonnet",
 		Timeout:     30 * time.Second,
+		RunID:       testRunID,
 	}
 	res := runStageWithResult(t, runner, attempt, StageResultParams{
 		Stage:       string(state.StageFeatureDev),
@@ -133,6 +134,7 @@ func TestRunStage_ModelUnavailableDowngradeReachesTheNextDispatch(t *testing.T) 
 		Repo:        "nightgauge/nightgauge",
 		Model:       "sonnet",
 		Timeout:     30 * time.Second,
+		RunID:       testRunID,
 	}
 	res := runStageWithResult(t, runner, attempt, StageResultParams{
 		Stage:       string(state.StageFeatureDev),
@@ -182,6 +184,7 @@ func TestRunStage_WireCarriesNoPrompt(t *testing.T) {
 		IssueNumber: 340,
 		Model:       "sonnet",
 		Timeout:     30 * time.Second,
+		RunID:       testRunID,
 		Prompt:      "PROMPT-THE-EXTENSION-NEVER-READS",
 	}, &buf)
 

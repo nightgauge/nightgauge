@@ -42,6 +42,14 @@ func hostBinaryPath(executable func() (string, error)) string {
 // host-provided value unambiguous (#4029). Returns a new slice; the input is
 // not mutated.
 func upsertEnvVar(env []string, key, value string) []string {
+	return append(removeEnvVar(env, key), key+"="+value)
+}
+
+// removeEnvVar drops every entry for key from env. Used where the correct
+// export is NO export: a variable whose readers test presence cannot be
+// neutralized by setting it empty, and an inherited value is not a default —
+// see composeStageEnv's run-identity reconcile.
+func removeEnvVar(env []string, key string) []string {
 	prefix := key + "="
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
@@ -49,7 +57,7 @@ func upsertEnvVar(env []string, key, value string) []string {
 			out = append(out, kv)
 		}
 	}
-	return append(out, prefix+value)
+	return out
 }
 
 // Manager orchestrates skill execution for pipeline stages.
@@ -187,22 +195,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	// Build command from adapter
-	runOpts := adapters.RunOptions{
-		SkillPath:    opts.SkillPath,
-		WorktreeDir:  worktreeDir,
-		ContextFile:  opts.ContextFile,
-		OutputFile:   opts.OutputFile,
-		IssueNumber:  opts.IssueNumber,
-		Repo:         opts.Repo,
-		Stage:        opts.Stage,
-		Model:        opts.Model,
-		MaxTokens:    opts.MaxTokens,
-		AllowedTools: opts.AllowedTools,
-		Prompt:       opts.Prompt,
-		MaxTurns:     opts.MaxTurns,
-		CostBudget:   opts.CostBudget,
-		TargetRepo:   opts.TargetRepo,
-	}
+	runOpts := buildRunOptions(opts, worktreeDir)
 
 	// Model↔provider validation (#4021): adapters exposing the optional
 	// ValidateModel hook (Codex, Gemini) fail fast on an invalid model BEFORE
@@ -221,34 +214,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	cmd.Dir = worktreeDir
 
 	// Merge environment
-	cmd.Env = os.Environ()
-	// Deterministic Node for the stage subprocess (#3863): a non-interactive
-	// spawn does not inherit the login shell's nvm PATH, so resolve Node from
-	// the host's nvm `default` alias and prepend it. No-op when node is already
-	// on PATH (hosted runners) or unresolvable.
-	cmd.Env, _ = applyNodeResolution(cmd.Env)
-	for k, v := range env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
-	// Export the running binary so skill subprocesses discover it under any
-	// adapter via $NIGHTGAUGE_BIN — the skill's PREFLIGHT cascade honors
-	// this first, then prepends its dir to PATH for bare `nightgauge …`
-	// calls. This removes the need for any VSCode-extension-specific binary
-	// path in skills (Issue #4029). Upserted (not appended) so the host value is
-	// authoritative — no duplicate NIGHTGAUGE_BIN with OS-dependent
-	// precedence if one was inherited. Best-effort: a failure to resolve self
-	// never blocks the spawn (the cascade has PATH/repo fallbacks).
-	if self := hostBinaryPath(os.Executable); self != "" {
-		cmd.Env = upsertEnvVar(cmd.Env, "NIGHTGAUGE_BIN", self)
-	}
-
-	// Export the absolute skill directory so agents resolve _includes/_shared
-	// supporting files without CWD assumptions or whole-filesystem scans in
-	// cross-repo worktrees (#196 — agents previously ran `find / -maxdepth 6`
-	// and read stale copies from ~/.codex/skills).
-	if opts.SkillPath != "" {
-		cmd.Env = upsertEnvVar(cmd.Env, "NIGHTGAUGE_SKILL_DIR", filepath.Dir(opts.SkillPath))
-	}
+	cmd.Env = composeStageEnv(os.Environ(), env, opts.SkillPath, runOpts.RunID)
 
 	// Set up stdin pipe for adapters that receive prompt via stdin
 	var stdinPipe io.WriteCloser
@@ -594,6 +560,99 @@ type StageOptions struct {
 	// PhaseEventFn is called when a phase:start marker is detected in skill stdout.
 	// Arguments: stage name, phase name, index, total.
 	PhaseEventFn func(stage, name string, index, total int)
+}
+
+// buildRunOptions maps the orchestrator-layer StageOptions onto the
+// adapter-layer RunOptions for a stage about to be spawned in worktreeDir.
+//
+// This is the ONE place the two layers meet, extracted from RunStage so the
+// mapping is assertable without spawning a process. Anything StageOptions
+// carries and this function drops is, by construction, invisible to every
+// adapter — which is how the run identity went missing before #370.
+func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions {
+	// The run identity is read straight off the runtime StageOptions already
+	// carries (ADR-017 step 0) — there is deliberately no parallel
+	// StageOptions.RunID scalar to drift from it. A nil Runtime is a real
+	// configuration, not an error: the autonomous issue-refine dispatch has no
+	// run identity, and its stages must export no NIGHTGAUGE_RUN_ID at all.
+	runID := ""
+	if opts.Runtime != nil {
+		runID = opts.Runtime.RunID
+	}
+
+	return adapters.RunOptions{
+		SkillPath:    opts.SkillPath,
+		WorktreeDir:  worktreeDir,
+		ContextFile:  opts.ContextFile,
+		OutputFile:   opts.OutputFile,
+		IssueNumber:  opts.IssueNumber,
+		Repo:         opts.Repo,
+		Stage:        opts.Stage,
+		Model:        opts.Model,
+		MaxTokens:    opts.MaxTokens,
+		AllowedTools: opts.AllowedTools,
+		Prompt:       opts.Prompt,
+		MaxTurns:     opts.MaxTurns,
+		CostBudget:   opts.CostBudget,
+		TargetRepo:   opts.TargetRepo,
+		RunID:        runID,
+	}
+}
+
+// composeStageEnv builds the environment a stage subprocess actually receives:
+// the host environment, plus the adapter's own exports, plus the run-scoped
+// exports the manager owns.
+//
+// Extracted from RunStage for the same reason buildRunOptions was. This env IS
+// the interface between this process and the child; inline in a function whose
+// next statement spawns a process, it was assertable only by spawning one.
+func composeStageEnv(base []string, adapterEnv map[string]string, skillPath, runID string) []string {
+	// Deterministic Node for the stage subprocess (#3863): a non-interactive
+	// spawn does not inherit the login shell's nvm PATH, so resolve Node from
+	// the host's nvm `default` alias and prepend it. No-op when node is already
+	// on PATH (hosted runners) or unresolvable.
+	env, _ := applyNodeResolution(base)
+	for k, v := range adapterEnv {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	// Export the running binary so skill subprocesses discover it under any
+	// adapter via $NIGHTGAUGE_BIN — the skill's PREFLIGHT cascade honors
+	// this first, then prepends its dir to PATH for bare `nightgauge …`
+	// calls. This removes the need for any VSCode-extension-specific binary
+	// path in skills (Issue #4029). Upserted (not appended) so the host value is
+	// authoritative — no duplicate NIGHTGAUGE_BIN with OS-dependent
+	// precedence if one was inherited. Best-effort: a failure to resolve self
+	// never blocks the spawn (the cascade has PATH/repo fallbacks).
+	if self := hostBinaryPath(os.Executable); self != "" {
+		env = upsertEnvVar(env, "NIGHTGAUGE_BIN", self)
+	}
+
+	// Export the absolute skill directory so agents resolve _includes/_shared
+	// supporting files without CWD assumptions or whole-filesystem scans in
+	// cross-repo worktrees (#196 — agents previously ran `find / -maxdepth 6`
+	// and read stale copies from ~/.codex/skills).
+	if skillPath != "" {
+		env = upsertEnvVar(env, "NIGHTGAUGE_SKILL_DIR", filepath.Dir(skillPath))
+	}
+
+	// Run identity, reconciled against the INHERITED environment rather than
+	// merely added to it (ADR-017). nightgauge dispatches nightgauge: a stage
+	// subprocess runs under NIGHTGAUGE_RUN_ID=A, and anything it launches — the
+	// recursive-dogfood case, a manual per-stage invocation, the autonomous
+	// issue-refine CLI dispatch — inherits A. If that inner dispatch has no run
+	// identity of its own, leaving A in place books its records under a run it
+	// has nothing to do with: identity laundering, the exact class this ADR
+	// exists to close. So strip when this dispatch has no identity, and upsert
+	// (never bare-append) when it does, so the value that survives is this
+	// dispatch's and not the host's.
+	if runID != "" {
+		env = upsertEnvVar(env, adapters.RunIDEnvVar, runID)
+	} else {
+		env = removeEnvVar(env, adapters.RunIDEnvVar)
+	}
+
+	return env
 }
 
 // ExecutionInfo is a summary of a running execution (safe for serialization).

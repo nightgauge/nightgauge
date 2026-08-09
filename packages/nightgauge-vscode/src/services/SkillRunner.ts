@@ -65,9 +65,19 @@ export interface RunStageParams {
   /**
    * The run's UUID, threaded from the Go scheduler (#228). Passed to
    * runStageSkillHeadless so the SDK TraceRecorder writes to the run's
-   * <run_id>.jsonl instead of disabling itself when run-state.json lacks one.
+   * <run_id>.jsonl instead of disabling itself when run-state.json lacks one,
+   * and exported to the stage subprocess as NIGHTGAUGE_RUN_ID.
+   *
+   * REQUIRED (ADR-017 step 0b). The Go scheduler mints the id before a stage
+   * can be reached and refuses to dispatch without one, so every event that
+   * reaches PipelineBridge — this type's only construction site — carries a
+   * real value. Nothing here may substitute `""` to satisfy the compiler:
+   * today an empty id silently disables the SDK TraceRecorder once the
+   * `run-state.json` fallback also misses, and once step 4 lands it is
+   * additionally refused by the identity-bearing verbs with the refusal
+   * swallowed — the exact silence ADR-017 exists to remove.
    */
-  runId?: string;
+  runId: string;
 }
 
 /**

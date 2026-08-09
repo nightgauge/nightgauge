@@ -52,8 +52,13 @@ type RunStageParams struct {
 	// under the autonomous scheduler, enabling escalation+pause on stall
 	// instead of silent kill. Issue #2656.
 	AutonomousMode bool `json:"autonomousMode,omitempty"`
-	// RunID is the UUID v7 run ID threaded from runstate for correlation (#3557).
-	RunID string `json:"runId,omitempty"`
+	// RunID is the UUID v7 run identity this stage is dispatched under (#3557,
+	// ADR-017 step 0b). REQUIRED on the wire — no omitempty: the scheduler
+	// refuses to emit this event without one, so an absent `runId` key would
+	// mean the emitter broke, and the consumer must be able to tell that from a
+	// run that legitimately carries an id. Everything the stage reports (phase
+	// transitions, live progress, its result) is booked under this value.
+	RunID string `json:"runId"`
 }
 
 // StageResultParams is the payload for the "pipeline.stageResult" request (TS→Go).

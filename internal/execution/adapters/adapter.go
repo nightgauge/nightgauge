@@ -30,6 +30,12 @@ type SkillRunner interface {
 	Agentic() bool
 }
 
+// RunIDEnvVar is the environment variable every adapter exports the run
+// identity under (ADR-017). Single-sourced so the exporters, the manager's
+// env composition (which strips an inherited value when a dispatch has no
+// identity of its own) and the contract test all name the same key.
+const RunIDEnvVar = "NIGHTGAUGE_RUN_ID"
+
 // RunOptions are the parameters for running a skill stage.
 type RunOptions struct {
 	SkillPath    string // Path to the SKILL.md file
@@ -46,6 +52,22 @@ type RunOptions struct {
 	MaxTurns     int      // Max conversation turns
 	CostBudget   float64  // Max cost in USD
 	TargetRepo   string   // Expected repo for skill verification (owner/repo)
+
+	// RunID is the canonical lowercase UUIDv7 run identity minted at dispatch
+	// (ADR-017). Every adapter exports it to the child process as
+	// RunIDEnvVar so the stage — and everything it spawns — can name the run
+	// it belongs to.
+	//
+	// Empty EXACTLY when the dispatch is not a pipeline run (e.g. the
+	// autonomous issue-refine CLI dispatch, which has no run identity by
+	// construction). In that case the child receives NO run identity at all —
+	// literally, not merely "this layer adds none": Manager.RunStage strips any
+	// NIGHTGAUGE_RUN_ID inherited from the host environment out of the composed
+	// env, so a nightgauge process that is itself running under one cannot
+	// launder its identity onto an identity-less dispatch. It is never exported
+	// as "" either: readers test presence, so an empty export would be adopted
+	// as an identity that names nothing.
+	RunID string
 }
 
 // RunResult captures the output of a skill execution.

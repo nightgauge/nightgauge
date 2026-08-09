@@ -114,6 +114,9 @@ func (a *CopilotAdapter) BuildCommand(opts RunOptions) (string, []string, map[st
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
+	if opts.RunID != "" {
+		env[RunIDEnvVar] = opts.RunID
+	}
 
 	// Pass through all Copilot auth tokens independently.
 	// The TypeScript CopilotCliAdapter checks these in order: GH_TOKEN → GITHUB_TOKEN → COPILOT_GITHUB_TOKEN.

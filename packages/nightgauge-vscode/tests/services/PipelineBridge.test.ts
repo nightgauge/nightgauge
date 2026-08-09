@@ -112,6 +112,9 @@ function makeRunStageParams(overrides: Record<string, unknown> = {}): Record<str
     timeoutMs: 60_000,
     worktreeDir: "/mock/worktree",
     repo: "nightgauge/test",
+    // Required on the wire since ADR-017 step 0b — the Go emitter refuses to
+    // dispatch a stage without one, so no real event omits it.
+    runId: "01890a5d-ac96-774b-bcce-b302099a8057",
     ...overrides,
   };
 }
@@ -857,5 +860,56 @@ describe("PipelineBridge — license status forwarding (Issue #4156)", () => {
     expect(payload?.status).toBe("community");
     expect(payload?.allowed).toBe(true);
     expect(payload?.tier).toBe("community");
+  });
+});
+
+// ─── Run identity mapping (#370 / ADR-017 step 0b) ───────────────────────────
+
+describe("PipelineBridge — run identity mapping (#370 / ADR-017 step 0b)", () => {
+  let ipc: FakeIpcClient;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ipc = makeIpcClient();
+    logger = createLogger();
+  });
+
+  // The bridge is the only construction site of SkillRunner's RunStageParams,
+  // and the id it forwards is the one the Go scheduler minted. If this mapping
+  // drops, the stage subprocess loses NIGHTGAUGE_RUN_ID and the SDK
+  // TraceRecorder silently disables — no error, no failing spawn, just a run
+  // that records nothing. Verbatim forwarding is the whole contract.
+  it("forwards ipcParams.runId onto the SkillRunner params", async () => {
+    const { SkillRunner: MockSkillRunner } = await import("../../src/services/SkillRunner");
+    let seenParams: { runId?: string } | undefined;
+    vi.mocked(MockSkillRunner).mockImplementation(function () {
+      return {
+        runStage: vi.fn(async (p: { runId?: string }) => {
+          seenParams = p;
+          return {
+            success: true,
+            exitCode: 0,
+            inputTokens: 100,
+            outputTokens: 50,
+          };
+        }),
+        abort: vi.fn(),
+        isRunning: false,
+      } as any;
+    });
+
+    new PipelineBridge(ipc as any, logger);
+
+    ipc.emit(
+      "pipeline.runStage",
+      makeRunStageParams({ runId: "01890a5d-ac96-774b-bcce-b302099a8057" })
+    );
+
+    await vi.waitFor(() => {
+      expect(mockIpcCall).toHaveBeenCalledWith("pipeline.stageResult", expect.any(Object));
+    });
+
+    expect(seenParams?.runId).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
   });
 });
