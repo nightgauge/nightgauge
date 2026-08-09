@@ -793,13 +793,14 @@ cause. Worst case, the empty result is read as an affirmative verdict and
 
 **Fixed instances (evidence):**
 
-| Issue | Where          | What silently did nothing                                                                          |
-| ----- | -------------- | -------------------------------------------------------------------------------------------------- |
-| #149  | recovery       | the catch-path branch was dropped, so the recovery never ran                                       |
-| #151  | capture        | shape-blind parse — the runtime shape fell through the singular-only branch                        |
-| #154  | tokenParser    | `tool_use.id` discarded at a parse boundary, so `last_bash_exit` could never populate              |
-| #163  | cleanup        | `loadFeatureBranch(workspaceRoot, …)` resolved `""` on worktree-isolated runs; cleanup hit nothing |
-| #165  | branch cleanup | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"        |
+| Issue | Where                  | What silently did nothing                                                                                                         |
+| ----- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| #149  | recovery               | the catch-path branch was dropped, so the recovery never ran                                                                      |
+| #151  | capture                | shape-blind parse — the runtime shape fell through the singular-only branch                                                       |
+| #154  | tokenParser            | `tool_use.id` discarded at a parse boundary, so `last_bash_exit` could never populate                                             |
+| #163  | cleanup                | `loadFeatureBranch(workspaceRoot, …)` resolved `""` on worktree-isolated runs; cleanup hit nothing                                |
+| #165  | branch cleanup         | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"                                       |
+| #299  | reconcile / V2 history | the same `loadFeatureBranch(workspaceRoot, …)` shape: the branch-PR probe never ran, and history recorded a fabricated `feat/{N}` |
 
 Every one passed its tests. Several sat in code whose own comment asserted it
 was the sole detection channel for the thing it was failing to detect.
@@ -861,7 +862,16 @@ excluded. The confirmed instances are filed as:
   correct for read verbs — it is the _destructive_ consumer that must treat
   "unspecified" as "do not act", per rule 2 above
 - **#299** — two remaining `loadFeatureBranch(workspaceRoot, …)` call sites
-  (non-terminal reconcile, V2 history) still miss worktree-isolated runs
+  (non-terminal reconcile, V2 history) still miss worktree-isolated runs.
+  **Fixed:** both resolve through `resolveFeatureBranch` (runtime → the
+  worktree the stages ran in → the workspace root), which is now the only
+  caller of `loadFeatureBranch`. When no source can name a branch the
+  degradation is loud: the #3873 reconcile logs the skipped PR probe (except
+  at issue-pickup, where no branch can exist yet) and the history writer
+  announces that the record will carry `BuildV2Record`'s synthetic
+  placeholder (#397 tracks removing the fabrication itself). A reconciled
+  stage also finishes the run instead of re-manufacturing the failure at the
+  #2870 output check or the next stage's prerequisite check
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage
   killed before the `result` event books zero tokens
 - **#301** — `captureConflictContextFromIndex` writes an empty capture as
