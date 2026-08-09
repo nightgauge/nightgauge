@@ -383,6 +383,15 @@ type PipelineResumeParams struct {
 type PipelineSetPausedParams struct {
 	IssueNumber int  `json:"issueNumber"`
 	Paused      bool `json:"paused"`
+	// Repo scopes the pause to a single repo's run in a multi-repo workspace
+	// (ADR-017 step 2, Decision 1). Accepted and ignored today; resolution is
+	// still issue-keyed. Appended after IssueNumber/Paused (with omitempty) so
+	// the generated positional signature keeps the existing 2-arg callers
+	// compiling — see docs/decisions/017-runtime-identity-keying.md.
+	Repo string `json:"repo,omitempty"`
+	// RunID is the run identity the server will key on from step 4 (ADR-017
+	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	RunID string `json:"runId,omitempty"`
 }
 
 // PipelineGetStateParams are parameters for pipeline.getState.
@@ -892,6 +901,13 @@ type PipelineNotifyStageTransitionParams struct {
 	// (the source of the dashboard's Adapter Mix donut). Empty maps to
 	// adapter-unknown, never defaulted to claude.
 	Adapter string `json:"adapter,omitempty"`
+	// StagePid is the advisory OS pid of the process executing the stage (ADR-017
+	// §7.2). Advisory, not an identity — omitempty is fine. No producer yet
+	// (step 3); the field simply starts existing on the wire.
+	StagePid int `json:"stagePid,omitempty"`
+	// RunID is the run identity the server will key on from step 4 (ADR-017
+	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	RunID string `json:"runId,omitempty"`
 }
 
 // PipelineNotifyStageProgressParams are parameters for pipeline.notifyStageProgress.
@@ -913,6 +929,9 @@ type PipelineNotifyStageProgressParams struct {
 	CacheReadTokens int     `json:"cacheReadTokens,omitempty"`
 	CostUsd         float64 `json:"costUsd,omitempty"`
 	Model           string  `json:"model,omitempty"`
+	// RunID is the run identity the server will key on from step 4 (ADR-017
+	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	RunID string `json:"runId,omitempty"`
 }
 
 // PipelineNotifyCompleteParams are parameters for pipeline.notifyComplete.
@@ -964,6 +983,9 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
+	// RunID is the run identity the server will key on from step 4 (ADR-017
+	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	RunID string `json:"runId,omitempty"`
 }
 
 // PipelineNotifyPhaseTransitionParams are parameters for pipeline.notifyPhaseTransition.
@@ -975,6 +997,9 @@ type PipelineNotifyPhaseTransitionParams struct {
 	Index       int    `json:"index"`
 	Total       int    `json:"total"`
 	EventType   string `json:"eventType"` // "start" | "complete"
+	// RunID is the run identity the server will key on from step 4 (ADR-017
+	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	RunID string `json:"runId,omitempty"`
 }
 
 // --- Tree update events ---

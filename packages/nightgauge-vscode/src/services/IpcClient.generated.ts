@@ -235,8 +235,8 @@ export class IpcClientGenerated extends IpcClientBase {
     await this.call<void>('pipeline.resume', { executionId });
   }
 
-  async pipelineSetPaused(issueNumber: number, paused: boolean): Promise<void> {
-    await this.call<void>('pipeline.setPaused', { issueNumber, paused });
+  async pipelineSetPaused(issueNumber: number, paused: boolean, repo?: string, runId?: string): Promise<void> {
+    await this.call<void>('pipeline.setPaused', { issueNumber, paused, repo, runId });
   }
 
   async pipelineSetMaxConcurrent(maxConcurrent: number, persist: boolean): Promise<PipelineMaxConcurrentResult> {
