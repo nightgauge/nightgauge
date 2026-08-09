@@ -24,6 +24,7 @@ import {
   type EvalTask,
   type EvalRun,
 } from "../../src/eval/modelEvalSchemas.js";
+import { getModelDescriptor } from "../../src/eval/modelRegistry.js";
 import { MODEL_TIERS } from "../../src/eval/schemas.js";
 
 const TS = "2026-06-30T12:00:00.000Z";
@@ -101,6 +102,30 @@ describe("model-eval schemas — round-trip parse", () => {
       context_window: 128000,
     };
     expect(ModelDescriptorSchema.parse(other)).toEqual(other);
+  });
+
+  it("round-trips an EMPTY effort axis, and REQUIRES the key (#336)", () => {
+    // `[]` is a positive declaration — "this model has no effort axis" (Haiku
+    // has no extended thinking). `.min(1)` used to make it inexpressible,
+    // which forced the fact into a hardcoded band set in the VSCode extension
+    // while the registry declared the opposite.
+    const noAxis = ModelDescriptorSchema.parse({ ...OPUS, supported_efforts: [] });
+    expect(noAxis.supported_efforts).toEqual([]);
+
+    // Omitting the key is REJECTED, not read as "unknown". A descriptor that
+    // exists has been characterized by definition; an omittable key would let
+    // an entry look complete while saying nothing, which is the same silent
+    // rot `.min(1)` produced from the other direction.
+    const { supported_efforts: _omitted, ...withoutField } = OPUS;
+    expect(() => ModelDescriptorSchema.parse(withoutField)).toThrow();
+  });
+
+  it("spells 'unknown effort axis' as descriptor-ABSENCE, not an absent key (#336)", () => {
+    // The third state still exists — it just lives one level up. A local
+    // ollama/lm-studio model or an unregistered id has no descriptor at all,
+    // and that `undefined` is what consumers branch on.
+    expect(getModelDescriptor("qwen3-coder:32b")).toBeUndefined();
+    expect(getModelDescriptor("claude-haiku-4-5-20251001")?.supported_efforts).toEqual([]);
   });
 
   it("parses a valid EvalTask", () => {

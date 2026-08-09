@@ -136,6 +136,8 @@ import {
   getStageModelsMatrix,
   getTypeOverrides,
   modelSupportsEffort,
+  supportedEffortsFor,
+  assertEffortSupported,
   getStageMcpTools,
   getMcpToolsConfig,
   getSuperchargeCodexModel,
@@ -981,10 +983,10 @@ const TIER_BANDS_STRONGEST_FIRST: readonly ModelTier[] = ["fable", "opus", "sonn
  * Collapse a model reference onto its registry tier band (#340).
  *
  * Two lookups in this file are keyed on the band vocabulary and fail SILENTLY
- * against a concrete id: `modelSupportsEffort` (whose EFFORT_SUPPORTING_MODELS
- * is `{sonnet, opus, fable}`, so `--effort` is simply never appended) and the
- * performance-mode pin comparison (whose MODE_PROFILES pin is the string
- * `"opus"`, so a Maximum-mode run falls back to the adapter's default model).
+ * against a concrete id: the effort gate (`--effort` is simply never appended,
+ * because per-stage effort config is band-keyed) and the performance-mode pin
+ * comparison (whose MODE_PROFILES pin is the string `"opus"`, so a
+ * Maximum-mode run falls back to the adapter's default model).
  * Both used to be safe by accident: every caller reached them through
  * `resolveModel`, which only ever returns a band. Once a caller can hand in a
  * pre-decided model — the Go scheduler's wire value, an operator's run override
@@ -3277,14 +3279,21 @@ export function runStageSkillHeadless(
     // and a deliberate pin with no explicit effort omits the flag so the
     // server default applies. Sonnet/Opus values pass through untouched.
     //
-    // Both questions below are asked of the model's registry BAND, not of the
-    // raw string (#340). `EFFORT_SUPPORTING_MODELS` holds `{sonnet, opus,
-    // fable}`, so a concrete id — the Go scheduler's wire value before it
-    // normalized, an operator's `--model claude-sonnet-4-6`, a dated pin —
-    // silently dropped `--effort` altogether, taking `model_routing.stage_efforts`
-    // and Maximum mode's `effort: high` with it. A band that the registry does
-    // not recognize (a local model) falls back to the raw string, which is
-    // still not in the set: local models take no `--effort`, correctly.
+    // The EMISSION question — does this model have an effort axis at all — is
+    // asked of the model's registry BAND, not of the raw string (#340). The
+    // band is what `model_routing.stage_efforts` and Maximum mode's
+    // `effort: high` are keyed on, so a concrete id — the Go scheduler's wire
+    // value before it normalized, an operator's `--model claude-sonnet-4-6`, a
+    // dated pin — used to drop `--effort` altogether, silently. A band the
+    // registry does not recognize (a local model) falls back to the raw
+    // string, which the registry also does not know: local models take no
+    // `--effort`, correctly, because the gate fails closed on an unknown model
+    // (#336).
+    //
+    // The LEVEL question is asked of the DISPATCHED model instead — see the
+    // assert below. Band and model answer differently exactly when a
+    // deprecated sibling of the band leader is pinned, which is the case worth
+    // catching.
     const modelBand = modelTierBand(modelDecision.model) ?? modelDecision.model;
     let effort = modelDecision.effort;
     if (modelBand === "fable") {
@@ -3301,9 +3310,53 @@ export function runStageSkillHeadless(
       effort = conformed.effort;
     }
     const finalEffort = effort;
-    const supportsEffort =
-      adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand as DefaultModel);
+    // `modelSupportsEffort` takes a bare `string`, and what keeps that safe in
+    // production is the `adapter === "claude"` conjunct — this whole branch is
+    // already Claude-only, and the conjunct restates it at the gate. It is NOT
+    // #340's band collapse: nine registry entries carry no `tiers` at all
+    // (the OpenAI/Google/other-provider ids), so `modelTierBand` returns
+    // undefined for them and their raw id reaches the gate unnormalized, where
+    // the registry answers with a real non-empty ladder. Only the adapter
+    // scoping stops that ladder from becoming a `--effort` on a CLI that never
+    // asked for one.
+    const supportsEffort = adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand);
     if (supportsEffort && finalEffort) {
+      // The gate above only says the model HAS an effort axis; this says the
+      // requested level is on it (#75) — and it asks the ladder of the model
+      // that is actually LAUNCHED. `--model` above carries the concrete id,
+      // and a deprecated sibling of the band leader declares a shorter ladder:
+      // `claude-opus-4-8` sits in band `opus`, but `max` arrived with
+      // `claude-opus-5`. Validating the band's ladder read the wrong registry
+      // row and let `--effort max` ship next to `--model claude-opus-4-8`.
+      // The band is the FALLBACK, for the bare-band spelling (`"opus"`), whose
+      // own descriptor lookup already resolves to the leader.
+      const dispatchedEfforts =
+        supportedEffortsFor(modelDecision.model) ?? supportedEffortsFor(modelBand);
+      // Reported through the failure envelope, not thrown. #75's semantics are
+      // unchanged — the stage FAILS, never downgrades, so an operator who
+      // configured `max` never silently receives `xhigh` — but this function
+      // returns a handle and reports failure via callbacks, and
+      // `bootstrap/services.ts` calls it unguarded, so a synchronous throw
+      // would escape the caller's handle-based error handling entirely. Same
+      // shape as the #4021 model preflight further down.
+      try {
+        assertEffortSupported(finalEffort, modelDecision.model, dispatchedEfforts, stage);
+      } catch (effortError) {
+        const detail = effortError instanceof Error ? effortError.message : String(effortError);
+        const error = new Error(
+          `[stage:effort-unsupported] model=${modelDecision.model} effort=${finalEffort} ` +
+            `supported=${dispatchedEfforts?.join(",") || "none"} reason=${detail}`
+        );
+        callbacks?.onStderr?.(`[skillRunner] Effort preflight failed: ${detail}\n`);
+        callbacks?.onError?.(error);
+        callbacks?.onComplete?.({ success: false, exitCode: null, error });
+        return {
+          process: null as unknown as ChildProcess,
+          stage,
+          issueNumber,
+          kill: () => {},
+        };
+      }
       args.push("--effort", finalEffort);
     }
 

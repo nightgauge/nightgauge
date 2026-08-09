@@ -48,10 +48,13 @@ type ModelDescriptor struct {
 	// but are provider-neutral: a provider without a fable-equivalent maps
 	// fable to its strongest model. At most one non-deprecated model per
 	// (provider, band) — enforced by mustLoad.
-	Tiers              []string `json:"tiers,omitempty"`
-	DisplayName        string   `json:"display_name"`
-	ConcreteVersion    string   `json:"concrete_version"`
-	Rates              Rates    `json:"rates"`
+	Tiers           []string `json:"tiers,omitempty"`
+	DisplayName     string   `json:"display_name"`
+	ConcreteVersion string   `json:"concrete_version"`
+	Rates           Rates    `json:"rates"`
+	// SupportedEfforts: an empty slice is a positive declaration ("this model
+	// has no effort axis", e.g. Haiku), not missing data — the canonical schema
+	// requires the field, so unknown is descriptor-absence, never `[]` (#336).
 	SupportedEfforts   []string `json:"supported_efforts"`
 	SupportedReasoning []string `json:"supported_reasoning"`
 	ContextWindow      int      `json:"context_window"`

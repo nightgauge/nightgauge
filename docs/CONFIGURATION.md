@@ -3391,16 +3391,24 @@ When using the Claude adapter, effort is resolved with this precedence:
 6. Omit --effort           default Claude behavior
 ```
 
-> **Model capability guard (Issue #1235):** `--effort` is only passed to Claude
-> Code when the active model supports extended thinking. Sonnet, Opus, and
-> Fable support `--effort`; Haiku does not. When a Haiku stage resolves an
-> effort value it is silently dropped. The supported-model list is defined in
-> `EFFORT_SUPPORTING_MODELS` (`incrediConfig.ts`) and should be updated as new
-> models gain support. Valid levels: `low`, `medium`, `high`, `xhigh`, `max`.
+> **Model capability guard (Issue #1235, #336):** `--effort` is passed to
+> Claude Code only when the model's registry `supported_efforts` is non-empty.
+> This is **registry data, not a code list** — no model names are hardcoded
+> anywhere on the dispatch path, and none are enumerated here. A model that
+> declares `supported_efforts: []` has no effort axis and the flag is dropped
+> (Haiku declares `[]` today); a model with no registry entry at all (local
+> ollama/lm-studio, unregistered ids) gets no `--effort` either — the gate
+> fails closed. Read the current answer from
+> `packages/nightgauge-sdk/src/eval/model-registry.json`; to change it, edit
+> that entry and run `scripts/sync-model-registry.sh`. Valid levels: `low`,
+> `medium`, `high`, `xhigh`, `max`.
 
 > **`max` effort (#75):** `max` is the top of the ladder, introduced with Opus 5. Which levels a given model actually accepts is not hardcoded — the
-> registry's `supported_efforts` is authoritative, so requesting a level a
-> model does not support fails loudly instead of being silently downgraded.
+> registry's `supported_efforts` is authoritative, and it is read for the model
+> the stage actually dispatches, not for that model's band (a deprecated
+> sibling declares a shorter ladder than the band's current leader). Requesting
+> a level the dispatched model does not declare fails the stage loudly, with a
+> `[stage:effort-unsupported]` marker, instead of being silently downgraded.
 > Anthropic's guidance is to start at the default (`high`) and move in either
 > direction on eval evidence; adding `max` changed no stage default. Note that
 > `max_tokens` bounds thinking **and** response text together, so a stage moved

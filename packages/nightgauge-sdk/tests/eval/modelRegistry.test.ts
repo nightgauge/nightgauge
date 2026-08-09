@@ -46,6 +46,35 @@ describe("model registry — integrity", () => {
     expect(getModelDescriptor("claude-sonnet-5")?.deprecated).toBeUndefined();
   });
 
+  it("declares Haiku's empty effort axis rather than inventing levels (#336)", () => {
+    // Haiku has no extended thinking, so it has no effort axis at all. `[]`
+    // says that; the previous ["low","medium","high"] was dead data that the
+    // dispatch path had to contradict with a hardcoded band set.
+    expect(getModelDescriptor("haiku")?.supported_efforts).toEqual([]);
+    // `[]` is the declaration; "unknown" is having no descriptor at all.
+    expect(getModelDescriptor("qwen3-coder:32b")).toBeUndefined();
+  });
+
+  it("every other non-deprecated Anthropic model declares a usable ladder", () => {
+    for (const m of activeModels()) {
+      if (m.provider !== "anthropic" || m.id === "claude-haiku-4-5-20251001") continue;
+      expect(m.supported_efforts.length, `${m.id} declares no effort levels`).toBeGreaterThan(0);
+    }
+  });
+
+  it("every non-deprecated Anthropic model declares a non-empty tier band (#336)", () => {
+    // Keeps the tier-LESS class non-Anthropic by construction. `modelTierBand`
+    // returns undefined for an entry with no `tiers`, so the extension's
+    // `--effort` emission gate sees that model's raw id instead of a band —
+    // safe only because the gate is scoped to `adapter === "claude"`. An
+    // Anthropic entry without tiers would put an id on the Claude path that
+    // the band-keyed lookups cannot answer for.
+    for (const m of activeModels()) {
+      if (m.provider !== "anthropic") continue;
+      expect(m.tiers?.length ?? 0, `${m.id} declares no tier band`).toBeGreaterThan(0);
+    }
+  });
+
   it("includes at least one non-Anthropic provider-neutral model", () => {
     expect(MODEL_REGISTRY.some((m) => m.provider !== "anthropic")).toBe(true);
   });

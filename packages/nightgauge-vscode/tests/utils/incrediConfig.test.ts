@@ -35,7 +35,7 @@ import {
   getStageEffort,
   getModelDefaultEffort,
   modelSupportsEffort,
-  EFFORT_SUPPORTING_MODELS,
+  supportedEffortsFor,
   conformEffortForFable,
   getMcpToolsConfig,
 } from "../../src/utils/incrediConfig";
@@ -543,7 +543,7 @@ describe("DEFAULT_STAGE_EFFORTS (Issue #944)", () => {
 });
 
 // ============================================================================
-// modelSupportsEffort + EFFORT_SUPPORTING_MODELS (Issue #1235)
+// modelSupportsEffort (Issue #1235; registry-backed since #336)
 // ============================================================================
 
 describe("modelSupportsEffort (Issue #1235)", () => {
@@ -563,11 +563,16 @@ describe("modelSupportsEffort (Issue #1235)", () => {
     expect(modelSupportsEffort("fable")).toBe(true);
   });
 
-  it("EFFORT_SUPPORTING_MODELS contains sonnet, opus, and fable but not haiku", () => {
-    expect(EFFORT_SUPPORTING_MODELS.has("sonnet")).toBe(true);
-    expect(EFFORT_SUPPORTING_MODELS.has("opus")).toBe(true);
-    expect(EFFORT_SUPPORTING_MODELS.has("fable")).toBe(true);
-    expect(EFFORT_SUPPORTING_MODELS.has("haiku")).toBe(false);
+  it("returns false for a model the registry does not know — fails closed (#336)", () => {
+    // Replaces the old EFFORT_SUPPORTING_MODELS membership assertion: there is
+    // no hardcoded set to inspect any more, and the gate's answer for an
+    // unregistered/local model is the behavior that actually matters.
+    expect(modelSupportsEffort("qwen3-coder:32b")).toBe(false);
+  });
+
+  it("is decided by the registry's supported_efforts, not a hardcoded set (#336)", () => {
+    expect(supportedEffortsFor("haiku")).toEqual([]);
+    expect(supportedEffortsFor("sonnet")).toContain("high");
   });
 });
 
