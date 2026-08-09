@@ -175,6 +175,10 @@ function createControllableFactory() {
         setRepoOverride: vi.fn(),
         setRunRepoRoot: vi.fn(),
         setUnattended: vi.fn(),
+        // ADR-017 step 3 (#370): the slot resolves its repo through the
+        // orchestrator when the queue item and the workspace manifest cannot
+        // name one, BEFORE beginRun installs the identity.
+        resolveRunRepoSlug: vi.fn().mockResolvedValue("nightgauge/nightgauge"),
         runPipeline: vi.fn().mockReturnValue(promise),
         stop: vi.fn(),
         dispose: vi.fn(),

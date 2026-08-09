@@ -972,10 +972,29 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * queue already stamps for a cross-repo dispatch; for a dispatch into the
    * workspace's own repo it is absent, so fall back to the workspace
    * manifest's entry for the root this slot's worktree manager resolved.
+   *
+   * THE MANIFEST LOOKUP IS NOT A DEPENDABLE FALLBACK ON ITS OWN.
+   * `Repository.github` is a getter over a per-repo config that is null until
+   * somebody has awaited `loadConfig()`, and no startup path guarantees that
+   * before a slot dispatch — so for the COMMON same-repo case its answer
+   * depends on whether an unrelated consumer happened to warm the cache
+   * first. That is a race, not a fallback, and losing it is not cosmetic: with
+   * `repo: ""` the Go server keeps the runtime snapshot off disk entirely
+   * ("with no repo there is no correct home", #307) and ADR-017 Decision 6
+   * keys the issue index on `repo#issue`, so the run persists nothing and is
+   * invisible to the step-5 reconciler. On main this could not happen because
+   * `runPipelineInner` unconditionally resolved the repo through `gh repo
+   * view`; the last resort below restores exactly that resolution, run in the
+   * slot's own worktree, before the identity is installed.
+   *
    * Never invents one — a slot with no resolvable owner/name reports "" and
    * says so, exactly as `raiseAbandonedDispatchCard` already does.
    */
-  private resolveSlotRepoSlug(item: QueueItem, worktreeManager: WorktreeManager): string {
+  private async resolveSlotRepoSlug(
+    item: QueueItem,
+    worktreeManager: WorktreeManager,
+    orchestrator: HeadlessOrchestrator
+  ): Promise<string> {
     if (item.repoName?.includes("/")) return item.repoName;
     const root = worktreeManager.getRepoRoot();
     for (const repository of this.workspaceManager?.getAllRepositories() ?? []) {
@@ -983,6 +1002,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       const gh = repository.github;
       if (gh?.owner && gh.repo) return `${gh.owner}/${gh.repo}`;
     }
+    const resolved = await orchestrator.resolveRunRepoSlug();
+    if (resolved.includes("/")) return resolved;
     this.logger.warn("Dispatch has no resolvable owner/repo — run telemetry will be unattributed", {
       issueNumber: item.issueNumber,
       repoRoot: root,
@@ -1225,11 +1246,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // hands back a fresh service per slot, so the not-ambient refusal cannot
     // fire here — and if it ever does, the dispatch must fail loudly rather
     // than run under whatever identity was already installed.
-    stateService.beginRun(
-      runId,
-      this.resolveSlotRepoSlug(item, slotWorktreeManager),
-      item.issueNumber
-    );
+    //
+    // The repo is resolved FIRST and `beginRun` is adjacent to the resolved
+    // value. The await is safe before this claim precisely because the service
+    // is fresh and privately held: no other producer can reach it, so there is
+    // no claim race to lose (unlike the singleton mint sites, which resolve
+    // before their check for exactly that reason).
+    const slotRepoSlug = await this.resolveSlotRepoSlug(item, slotWorktreeManager, orchestrator);
+    stateService.beginRun(runId, slotRepoSlug, item.issueNumber);
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
     // any IPC pipeline.notifyStageTransition fires for this worktree slot.
     stateService.initEmpty();
