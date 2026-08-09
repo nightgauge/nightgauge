@@ -4671,7 +4671,7 @@ per-issue lifetime cap. Two mechanisms make the outcome exactly-once:
 | Mechanism | What it does |
 | --------- | ------------ |
 | **Per-dispatch generation** | `startSlot` mints one token per dispatch and stamps it on the slot and its reservation. Issue numbers are not identities — the same issue can be force-cleared and re-queued in one extension-host session — so everything that must tell "this run" from "a later run of the same issue" keys off the generation. |
-| **Permanent tombstone** | The deadline records each force-cleared generation in `forceClearedGenerations`, synchronously, before its first `await`. Every terminal boundary in `runSlotPipeline` (outcome dispatch, `catch`, the fenced `finally`) checks it first, so a run that settles an hour later books nothing, releases no re-queued successor's queue mark, and deletes no successor's worktree. There is no release path: a tombstone that can be revoked expires exactly when the wedge is worst. |
+| **Permanent tombstone** | The deadline records each force-cleared run id in `forceClearedRunIds`, synchronously, before its first `await`. Every terminal boundary in `runSlotPipeline` (outcome dispatch, `catch`, the fenced `finally`) checks it first, so a run that settles an hour later books nothing, releases no re-queued successor's queue mark, and deletes no successor's worktree. There is no release path: a tombstone that can be revoked expires exactly when the wedge is worst. |
 | **Synchronous check-and-claim** | At every boundary the tombstone check and the claim of `terminalOutcomeDispatched` are adjacent statements with **no `await` between them**. The extension host is single-threaded, so that pair is atomic — no other task can observe "not tombstoned, not claimed". The force-clear reads the same claim before booking, and stands down when the run took it first. |
 
 **KNOWN EXPOSURE — Go-side late settlement is exactly main's behavior.**
@@ -4708,8 +4708,12 @@ message is load-bearing, and it **unifies** the generation token with the run
 identity rather than adding a second one: `slot.generation` becomes
 `slot.runId`, `forceClearedGenerations` becomes `forceClearedRunIds` with the
 same permanence and no release path, and the three await-free check-and-claim
-boundaries are preserved unchanged. Implementation has not landed; this
-paragraph describes `main`.
+boundaries are preserved unchanged. **Landed for the extension emitter in
+ADR-017 step 3:** the id is a UUIDv7, it is installed on the slot's own
+`PipelineStateService` via `beginRun`, and every `pipeline.*` call the run makes
+now carries it. The SERVER still resolves by issue number and accepts-and-
+ignores the id until the step-4 re-key, so the consequence named below is
+unchanged until then.
 
 One consequence worth naming: because the force-clear makes no pipeline-runtime
 IPC call (`queue.complete` and `autonomous.complete` never touch the runtime
