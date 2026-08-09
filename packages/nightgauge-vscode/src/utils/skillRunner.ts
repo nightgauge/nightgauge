@@ -503,6 +503,24 @@ export interface SkillRunCallbacks {
    * `servedModel` at completion still overrides this up-front value.
    */
   onModelResolved?: (stage: PipelineStage, model: string, adapter: string) => void;
+  /**
+   * Fired SYNCHRONOUSLY, immediately after the stage's child process is
+   * spawned, with its OS pid (ADR-017 §7.2, #370).
+   *
+   * The reconciler's liveness ladder needs a process it can check for a run
+   * that emits no tokens for a whole grace window — a `pr-merge` stage polling
+   * CI is the ordinary case, not an exotic one — otherwise the backend
+   * auto-restarts and a LIVE run is reconciled to
+   * `pipeline_done(success=false)` with a signal-free learning row (F26).
+   * `PID` is already a persisted RuntimeState field, so the value reaches a
+   * fresh process through the snapshot with no registry.
+   *
+   * Synchronous, and consumed synchronously, because the consumer's contract
+   * is that exactly ONE `running` transition per stage attempt carries the
+   * pid: the caller reads the captured value the instant this function
+   * returns the handle.
+   */
+  onStageChildSpawned?: (pid: number) => void;
   /** Called when token usage is detected from stream-json output */
   onTokenUsage?: (usage: ParsedTokenUsage) => void;
   /**
@@ -4077,6 +4095,14 @@ export function runStageSkillHeadless(
     stdio: ["pipe", "pipe", "pipe"], // Enable stdin pipe
     env: spawnEnv,
   });
+
+  // ADR-017 §7.2: surface the stage child's pid to whoever owns this stage's
+  // `running` transition, synchronously and exactly once. This is the ONLY
+  // stage-spawn site — the interactive and Codex TUI spawns below run no
+  // pipeline stage and therefore have no transition to attach a pid to.
+  if (proc.pid) {
+    callbacks?.onStageChildSpawned?.(proc.pid);
+  }
 
   if (adapter === "claude") {
     if (proc.stdin) {

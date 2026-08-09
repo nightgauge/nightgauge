@@ -79,11 +79,14 @@ import {
   loadStageGraphFromManifests,
   runAdapterAuthPreflight,
   createDefaultPreflightRunner,
+  uuidV7,
   type IncrediAdapter,
   type RecoveryAction,
   type RecoveryRequiredPayload,
 } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../utils/resolvers/modelResolver";
+import type { NotifyStageProgressParams } from "./ipcNotifyParams";
+import { handleIpcRejection } from "./ipcRejection";
 import { computeRecoveryRequired } from "../orchestrator/recovery/computeRecoveryRequired";
 import { type ZodSchema, type ZodError } from "zod";
 import {
@@ -1192,12 +1195,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private auditClient: AuditEventClient | null = null;
 
   /**
-   * Stable UUID for correlating all audit events within a single pipeline run.
-   * Generated at the start of runPipeline(), cleared in finally block.
+   * Stable UUID for correlating this orchestrator's AUDIT events with each
+   * other. Generated at the start of runPipeline(), cleared in the finally
+   * block. A `crypto.randomUUID()` v4 — deliberately NOT the run identity.
+   *
+   * IT MUST NEVER TOUCH THE WIRE (ADR-017, #370). It is not a UUIDv7, the Go
+   * side has never seen it, and it is minted per `runPipeline` invocation
+   * rather than per dispatch. The run's identity lives on the state service
+   * (`stateService.getRunId()`) and is the only value any `pipeline.*` call
+   * may carry. The old name — `currentPipelineRunId` — invited exactly the
+   * confusion this rename removes.
    *
    * @see Issue #1582 - Pipeline execution audit trail emission
    */
-  private currentPipelineRunId: string | null = null;
+  private auditCorrelationId: string | null = null;
 
   constructor(
     private stateService: PipelineStateService | null,
@@ -1210,7 +1221,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       logger,
       () => this.getWorkingDirectory(),
       null, // contextLoader set later via setContextLoader()
-      this.skillLoader
+      this.skillLoader,
+      // ADR-017 step 3: the assembler's schema-repair re-invocation is part
+      // of the run that is executing when it fires, so it reads the identity
+      // then rather than capturing one now.
+      () => this.stateService?.getRunId() ?? undefined
     );
     this.eventDispatcher = new OrchestratorEventDispatcher(undefined, logger);
   }
@@ -3785,7 +3800,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         resourceType: "stage",
         resourceId: `${issueNumber}:${stage}`,
         metadata: {
-          pipelineRunId: this.currentPipelineRunId,
+          pipelineRunId: this.auditCorrelationId,
           stage,
           issueNumber,
           model: "none",
@@ -6460,7 +6475,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
         stage,
         success,
-        this.currentPipelineRunId ?? undefined,
+        this.auditCorrelationId ?? undefined,
         new Date(stageStartTime).toISOString(),
         model || undefined,
         // `null` means the subprocess died on a signal, so no exit code ever
@@ -8671,21 +8686,31 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (auditConfig.enabled) {
       this.auditClient = new AuditEventClient(auditConfig);
     }
-    this.currentPipelineRunId = crypto.randomUUID();
+    this.auditCorrelationId = crypto.randomUUID();
     this.blockedTerminalState = null;
     this.prMergedGroundTruth = false;
     this.estimatorSnapshot = null;
 
-    // Pin the run's target repo on the state service so every stage transition
-    // carries the platform's run-creation context ("owner/name"). Without this
-    // the Go IPC layer emits stage events with an empty repo and the live
-    // Pipelines view never materialises the run (the "No pipeline runs yet"
-    // symptom for extension/HeadlessOrchestrator runs). Best-effort: resolving
-    // the repo and seeding telemetry context must never block or fail the run.
-    try {
-      this.stateService?.setRunRepo(await this.resolveRunRepoSlug());
-    } catch (err) {
-      this.logger.warn("Could not set run repo for telemetry — continuing", { err });
+    // RECEIVE OR MINT (ADR-017 Decision 10, #370).
+    //
+    // Manager-driven slots already had `beginRun` called on their own state
+    // service before the orchestrator was handed the run, so the identity is
+    // installed and this must NOT re-begin: minting onto a live identity is
+    // F23, and `beginRun` refuses it. A DIRECT entry point (a command, a
+    // resume, a test harness driving runPipeline) is its own dispatch and has
+    // nobody to receive from, so it mints here.
+    //
+    // Installing the identity is also what pins the run's target repo, which
+    // every stage transition carries as the platform's run-creation context
+    // ("owner/name"). Without it the Go IPC layer emits stage events with an
+    // empty repo and the live Pipelines view never materialises the run.
+    // Best-effort: resolving the repo must never block or fail the run.
+    if (this.stateService && this.stateService.getRunId() === null) {
+      try {
+        this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), issueNumber);
+      } catch (err) {
+        this.logger.warn("Could not install the run identity for telemetry — continuing", { err });
+      }
     }
 
     // Emit pipeline.started now that pipelineRunId is set
@@ -8694,7 +8719,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       resourceType: "pipeline",
       resourceId: `issue-${issueNumber}`,
       metadata: {
-        pipelineRunId: this.currentPipelineRunId,
+        pipelineRunId: this.auditCorrelationId,
         issueNumber,
         timestamp: new Date().toISOString(),
       },
@@ -9597,7 +9622,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             resourceType: "stage",
             resourceId: `${issueNumber}:${stage}`,
             metadata: {
-              pipelineRunId: this.currentPipelineRunId,
+              pipelineRunId: this.auditCorrelationId,
               stage,
               issueNumber,
               timestamp: new Date().toISOString(),
@@ -9694,7 +9719,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 resourceType: "stage",
                 resourceId: `${issueNumber}:${stage}`,
                 metadata: {
-                  pipelineRunId: this.currentPipelineRunId,
+                  pipelineRunId: this.auditCorrelationId,
                   stage,
                   issueNumber,
                   model: "none",
@@ -9833,7 +9858,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           resourceType: "stage",
           resourceId: `${issueNumber}:${stage}`,
           metadata: {
-            pipelineRunId: this.currentPipelineRunId,
+            pipelineRunId: this.auditCorrelationId,
             stage,
             issueNumber,
             timestamp: new Date().toISOString(),
@@ -9903,7 +9928,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               resourceType: "stage",
               resourceId: `${issueNumber}:${stage}`,
               metadata: {
-                pipelineRunId: this.currentPipelineRunId,
+                pipelineRunId: this.auditCorrelationId,
                 stage,
                 issueNumber,
                 executionSource: "llm",
@@ -9993,7 +10018,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             resourceType: "stage",
             resourceId: `${issueNumber}:${stage}`,
             metadata: {
-              pipelineRunId: this.currentPipelineRunId,
+              pipelineRunId: this.auditCorrelationId,
               stage,
               issueNumber,
               error: result.error?.message ?? "Unknown error",
@@ -10028,7 +10053,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           resourceType: "stage",
           resourceId: `${issueNumber}:${stage}`,
           metadata: {
-            pipelineRunId: this.currentPipelineRunId,
+            pipelineRunId: this.auditCorrelationId,
             stage,
             issueNumber,
             executionSource: "llm",
@@ -10041,7 +10066,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           resourceType: "skill",
           resourceId: stage,
           metadata: {
-            pipelineRunId: this.currentPipelineRunId,
+            pipelineRunId: this.auditCorrelationId,
             stage,
             issueNumber,
             model: this.stageModelOverrides.get(stage) ?? "sonnet",
@@ -10071,7 +10096,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                   resourceType: "commit",
                   resourceId: parsed.commit_sha,
                   metadata: {
-                    pipelineRunId: this.currentPipelineRunId,
+                    pipelineRunId: this.auditCorrelationId,
                     issueNumber,
                     stage: "feature-validate",
                     timestamp: new Date().toISOString(),
@@ -10957,7 +10982,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       this.pinnedWorkspaceRoot = undefined; // Clear pinned workspace root (#1592)
 
       // Emit pipeline.completed or pipeline.failed and dispose audit client (Issue #1582)
-      if (this.auditClient && this.currentPipelineRunId) {
+      if (this.auditClient && this.auditCorrelationId) {
         const totalDurationMs = Date.now() - startTime;
         if (failedStage) {
           this.auditClient.enqueue({
@@ -10965,7 +10990,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             resourceType: "pipeline",
             resourceId: `issue-${issueNumber}`,
             metadata: {
-              pipelineRunId: this.currentPipelineRunId,
+              pipelineRunId: this.auditCorrelationId,
               issueNumber,
               totalDurationMs,
               failedStage,
@@ -10978,7 +11003,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             resourceType: "pipeline",
             resourceId: `issue-${issueNumber}`,
             metadata: {
-              pipelineRunId: this.currentPipelineRunId,
+              pipelineRunId: this.auditCorrelationId,
               issueNumber,
               totalDurationMs,
               stagesCompleted: completedStages,
@@ -10992,7 +11017,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
         ]).finally(() => {
           this.auditClient = null;
-          this.currentPipelineRunId = null;
+          this.auditCorrelationId = null;
         });
       }
 
@@ -11589,6 +11614,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       } catch {
         // Ignore - state may not exist yet
       }
+      // A queued start is its own dispatch, so it mints (ADR-017 Decision 10).
+      // `clearPipeline` above released whatever identity the previous run
+      // left installed, so this cannot land on a live one — and if it does,
+      // `beginRun` refuses rather than stamping over a running issue.
+      this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), item.issueNumber);
       await this.stateService.initializePipeline(
         item.issueNumber,
         item.title || `Issue #${item.issueNumber}`,
@@ -11947,6 +11977,47 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     pinnedWorkspaceRoot?: string,
     modelOverrideSource?: import("../utils/skillRunner").ModelSource
   ): Promise<StageRunResult> {
+    // RECEIVE OR MINT, and release only what we minted (ADR-017 Decision 10).
+    //
+    // `runStage` is reached two ways: from `runPipeline`'s stage loop, where
+    // the run's identity is already installed and this is one stage OF that
+    // run; and as a DIRECT single-stage entry point (Retry Stage, retry from
+    // phase, a failed-issue retry), which is its own dispatch with no run
+    // around it. Only the second case mints, and only the second case ends
+    // the run — a stage inside a pipeline must never release the pipeline's
+    // identity when it returns.
+    const mintedHere = this.stateService !== null && this.stateService.getRunId() === null;
+    if (mintedHere && this.stateService) {
+      try {
+        this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), issueNumber);
+      } catch (err) {
+        this.logger.warn("Could not install a run identity for this single-stage run", { err });
+      }
+    }
+    try {
+      return await this.runStageInner(
+        stage,
+        issueNumber,
+        callbacks,
+        skipToPhase,
+        modelOverride,
+        pinnedWorkspaceRoot,
+        modelOverrideSource
+      );
+    } finally {
+      if (mintedHere) this.stateService?.endRun();
+    }
+  }
+
+  private async runStageInner(
+    stage: PipelineStage,
+    issueNumber: number,
+    callbacks?: PipelineCallbacks,
+    skipToPhase?: string,
+    modelOverride?: PipelineModelOverride,
+    pinnedWorkspaceRoot?: string,
+    modelOverrideSource?: import("../utils/skillRunner").ModelSource
+  ): Promise<StageRunResult> {
     // Create event dispatcher for this standalone stage run (Issue #2770 — Part 3)
     this.eventDispatcher = new OrchestratorEventDispatcher(callbacks, this.logger);
 
@@ -12113,10 +12184,32 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
     this.eventDispatcher.onStageStart(stage);
 
-    // Update state service (with forceBackward if user confirmed)
-    if (this.stateService) {
+    /**
+     * Send this stage attempt's ONE `running` transition (ADR-017 §7.2).
+     *
+     * Deferred out of this call site and fired from the spawn instead, so the
+     * transition can carry the child's pid — the reconciler's liveness arm 3
+     * has no other way to tell a stage that is polling CI in silence from one
+     * whose host died (F26). `runStageSkillHeadless` is SYNCHRONOUS and fires
+     * `onStageChildSpawned` before it returns the handle, so by the time we
+     * call this the pid is either known or the spawn failed.
+     *
+     * Idempotent by latch: exactly one `running` transition per attempt, ever.
+     * A second would re-enter Go's BeginStage and reset the stage clock. The
+     * pre-stage ceiling refusal below is the one path that exits before the
+     * spawn, and it calls this itself so a refused stage is still recorded as
+     * having begun before it is recorded as failed.
+     */
+    let runningTransitionSent = false;
+    const markStageRunning = async (stagePid?: number): Promise<void> => {
+      if (runningTransitionSent) return;
+      runningTransitionSent = true;
+      if (!this.stateService) return;
       try {
-        await this.stateService.startStage(stage, { forceBackward: true });
+        await this.stateService.startStage(stage, {
+          forceBackward: true,
+          ...(stagePid ? { stagePid } : {}),
+        });
         // Mark stage as headless execution for token tracking (Issue #498)
         // Headless mode uses stream-json output which enables token parsing
         await this.stateService.setStageExecutionMode(stage, "headless");
@@ -12126,7 +12219,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           err,
         });
       }
-    }
+    };
 
     // Note: isRunning is managed by runPipeline(), not here.
     // Setting it here caused a race condition where isRunning was false
@@ -12443,6 +12536,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           const ceilingError = new Error(
             `${preCheck.message} — refusing to start ${stage} (raise pipeline.token_budget_ceiling.ceiling_usd to continue)`
           );
+          // The one exit that never reaches the spawn. Send the `running`
+          // transition here (no pid — no child was ever created) so Go books
+          // a stage that began and failed, not a `failed` for a stage it
+          // never saw begin. ADR-017 §7.2.
+          await markStageRunning();
           if (this.stateService) {
             try {
               await this.stateService.failStage(stage, ceilingError.message);
@@ -12608,13 +12706,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           // Emit cost.recorded audit event for token usage (Issue #1582)
           // Uses cumulative totals (not deltas) so the platform can compute
           // per-stage cost from consecutive events if needed.
-          if (this.auditClient && this.currentPipelineRunId) {
+          if (this.auditClient && this.auditCorrelationId) {
             this.auditClient.enqueue({
               action: "cost.recorded",
               resourceType: "stage",
               resourceId: stage,
               metadata: {
-                pipelineRunId: this.currentPipelineRunId,
+                pipelineRunId: this.auditCorrelationId,
                 stage,
                 inputTokens: delta.inputTokens,
                 outputTokens: delta.outputTokens,
@@ -13287,10 +13385,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         }
       };
 
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition can carry it
+       * (ADR-017 §7.2). Zero when the spawn never produced one.
+       */
+      let stageChildPid = 0;
+
       const handle = runStageSkillHeadless(
         stage,
         issueNumber,
         {
+          onStageChildSpawned: (pid) => {
+            stageChildPid = pid;
+          },
           onStdout: (data) => {
             markStageOutput();
             // Reset stale timer on any output activity (Issue #1187)
@@ -13350,15 +13458,29 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // transition; this is a live estimate only. Best-effort.
             IpcClient.getInstance()
               .call("pipeline.notifyStageProgress", {
-                repo: this.repoOverride ?? "",
+                // The installed run's repo is the resolveRunRepoSlug-derived
+                // value beginRun pinned, so the no-override case stops
+                // sending "" and the platform can attribute the estimate.
+                repo: this.stateService?.getRunRepo() || this.repoOverride || "",
                 issueNumber,
                 stage,
                 inputTokens: usage.inputTokens,
                 outputTokens: usage.outputTokens,
                 cacheReadTokens: usage.cacheReadTokens,
                 costUsd: usage.costUsd,
-              })
-              .catch((err) => {
+                // Progress is a callback on a run that may not have begun
+                // (ADR-017 Decision 6): send "" rather than throw out of a
+                // callback — the server ignores it and the outbound fallback
+                // covers it.
+                runId: this.stateService?.getRunId() ?? "",
+              } satisfies NotifyStageProgressParams)
+              .catch((err: unknown) => {
+                handleIpcRejection({
+                  method: "pipeline.notifyStageProgress",
+                  stage,
+                  runId: this.stateService?.getRunId() ?? null,
+                  err,
+                });
                 this.logger.warn("Failed to notify stage progress", { stage, err });
               });
           },
@@ -14156,8 +14278,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         stageWarnThresholdUsd > 0 ? stageWarnThresholdUsd : undefined,
         // Issue #3867: pass the per-issue owning repo so the repo-mismatch gate
         // compares against the issue's intended repo, NOT the workspace primary.
-        this.repoOverride
+        this.repoOverride,
+        // ADR-017 step 3: export the installed identity to the stage child as
+        // NIGHTGAUGE_RUN_ID, at parity with the Go scheduler's spawn. Absent
+        // (undefined, not "") when this orchestrator holds no run — the child
+        // must not inherit the OUTER run's id in the dogfood case.
+        this.stateService?.getRunId() ?? undefined
       );
+
+      // ADR-017 §7.2: the ONE `running` transition for this stage attempt,
+      // carrying the pid the synchronous spawn callback just captured. Fired
+      // after the handle returns — see markStageRunning's contract.
+      void markStageRunning(stageChildPid || undefined);
 
       this.currentProcess = handle;
       // Expose handle to phase timeout handler registered before the Promise (Issue #1620)

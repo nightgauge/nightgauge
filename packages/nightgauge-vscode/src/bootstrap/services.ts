@@ -11,7 +11,9 @@ import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { type PipelineStage, parsePhaseMarker } from "@nightgauge/sdk";
+import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
+import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
+import { handleIpcRejection } from "../services/ipcRejection";
 import { Logger } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -3105,6 +3107,24 @@ export async function initializeServices(
   if (incrediRoot) {
     const contextWatcher = new ContextWatcherService(incrediRoot, logger);
 
+    /**
+     * The "owner/repo" the singleton state service's runs belong to.
+     *
+     * Read from the workspace manifest entry for the root this extension host
+     * is driving — the same source `ConcurrentPipelineManager` uses for a
+     * slot with no cross-repo override. Not invented and not a guess: a repo
+     * with no resolvable GitHub identity returns "" and the run is reported
+     * unattributed, exactly as it was before ADR-017 (#370).
+     */
+    const resolveWorkspaceRepoSlug = (): string => {
+      for (const repository of workspaceManager?.getAllRepositories() ?? []) {
+        if (incrediRoot && repository.path !== incrediRoot) continue;
+        const gh = repository.github;
+        if (gh?.owner && gh.repo) return `${gh.owner}/${gh.repo}`;
+      }
+      return "";
+    };
+
     // Helper to run a stage with OutputWindow status updates via headless CLI
     // Uses PipelineStateService as single source of truth (Issue #154)
     const runStageWithOutput = async (
@@ -3124,18 +3144,33 @@ export async function initializeServices(
       // This distinguishes extension-initiated from chat-initiated runs (Issue #81)
       activeExtensionExecutions.add(stage);
 
-      // Update PipelineStateService (single source of truth)
-      // This will trigger onStateChanged which updates UI components
-      if (pipelineStateService) {
+      /**
+       * Send this stage attempt's ONE `running` transition (ADR-017 §7.2).
+       *
+       * Deferred out of this position and fired from the spawn below so the
+       * transition can carry the child's pid — the reconciler's liveness
+       * arm 3 has nothing else to check for a stage that goes quiet (F26).
+       * `runStageSkillHeadless` is synchronous and fires
+       * `onStageChildSpawned` before it returns, so the pid is known by then
+       * or the spawn failed. Latched: a second `running` would re-enter Go's
+       * BeginStage and reset the stage clock.
+       */
+      let runningTransitionSent = false;
+      const markStageRunning = async (stagePid?: number): Promise<void> => {
+        if (runningTransitionSent) return;
+        runningTransitionSent = true;
+        if (!pipelineStateService) return;
         try {
-          await pipelineStateService.startStage(stage);
+          await pipelineStateService.startStage(stage, {
+            ...(stagePid ? { stagePid } : {}),
+          });
         } catch (error) {
           logger.warn("Failed to update pipeline state on stage start", {
             stage,
             error,
           });
         }
-      }
+      };
 
       // Show and configure output window — runStageWithOutput is driven
       // by the ContextWatcher (chat-initiated flow), not a direct user
@@ -3166,8 +3201,18 @@ export async function initializeServices(
         costUsd: 0,
       };
 
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition carries it (ADR-017
+       * §7.2). Zero when the spawn produced none.
+       */
+      let stageChildPid = 0;
+
       // Set up callbacks for streaming output to OutputWindow
       const callbacks: SkillRunCallbacks = {
+        onStageChildSpawned: (pid) => {
+          stageChildPid = pid;
+        },
         onStdout: (data) => {
           // Parse stream-json output for display
           for (const line of data.split("\n")) {
@@ -3240,15 +3285,29 @@ export async function initializeServices(
         onStageProgress: (usage) => {
           IpcClient.getInstance()
             .call("pipeline.notifyStageProgress", {
-              repo: "",
+              // The singleton's installed run pins its own repo (beginRun),
+              // which is the dispatch's real "owner/name". The hardcoded ""
+              // this replaces is why these estimates reached the platform
+              // unattributed (ADR-017 Decision 10).
+              repo: pipelineStateService?.getRunRepo() ?? "",
               issueNumber,
               stage,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadTokens,
               costUsd: usage.costUsd,
-            })
-            .catch((err) => {
+              // A progress callback can fire on a run this service never
+              // began; "" is the honest answer and the server ignores it
+              // (Decision 6's outbound fallback). Never throw from here.
+              runId: pipelineStateService?.getRunId() ?? "",
+            } satisfies NotifyStageProgressParams)
+            .catch((err: unknown) => {
+              handleIpcRejection({
+                method: "pipeline.notifyStageProgress",
+                stage,
+                runId: pipelineStateService?.getRunId() ?? null,
+                err,
+              });
               logger.warn("Failed to notify stage progress", { stage, err });
             });
         },
@@ -3343,7 +3402,30 @@ export async function initializeServices(
       // Run stage via headless Claude Code CLI
       // SKILL.md instructions are passed as prompt
       // Each command starts a NEW conversation (context isolation)
-      const handle = runStageSkillHeadless(stage, issueNumber, callbacks);
+      const handle = runStageSkillHeadless(
+        stage,
+        issueNumber,
+        callbacks,
+        undefined, // issueMetadata
+        undefined, // batchContext
+        undefined, // skipToPhase
+        undefined, // modelOverride
+        undefined, // pauseAutoRouting
+        undefined, // pinnedWorkspaceRoot
+        undefined, // modelOverrideSource
+        undefined, // injectedSkillContent
+        undefined, // autonomousMode
+        undefined, // warnThresholdUsd
+        undefined, // targetRepoOverride
+        // ADR-017 step 3: export the singleton's installed identity to the
+        // stage child as NIGHTGAUGE_RUN_ID. Undefined when no run is
+        // installed — the child must inherit nothing in that case.
+        pipelineStateService?.getRunId() ?? undefined
+      );
+
+      // ADR-017 §7.2: the ONE `running` transition for this attempt, now that
+      // the synchronous spawn callback has captured the pid.
+      void markStageRunning(stageChildPid || undefined);
 
       if (!handle.process) {
         // Error already reported via callbacks
@@ -3648,6 +3730,11 @@ export async function initializeServices(
       // Initialize PipelineStateService for this issue
       if (pipelineStateService) {
         try {
+          // A context-file pickup IS a dispatch, so it mints its own identity
+          // (ADR-017 Decision 10). If the singleton is already speaking for a
+          // live run, `beginRun` refuses and the catch below surfaces it —
+          // that refusal is the point: two runs cannot share one holder.
+          pipelineStateService.beginRun(uuidV7(), resolveWorkspaceRepoSlug(), issueInfo.number);
           await pipelineStateService.initializePipeline(
             issueInfo.number,
             issueInfo.title,

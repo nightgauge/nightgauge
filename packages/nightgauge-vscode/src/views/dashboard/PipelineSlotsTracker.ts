@@ -55,17 +55,33 @@ interface RawGoState {
   totalCostUsd?: number;
   paused?: boolean;
   retryCount?: number;
+  /** Run identity of the snapshot (ADR-017 Decision 6); empty until step 4. */
+  runId?: string;
 }
 
+/**
+ * ADR-017 Decision 6 — THE STEP-4 RE-KEY POINT.
+ *
+ * `runId` is typed on all five inbound envelopes below and recorded onto the
+ * snapshot when present, but this tracker's map stays keyed by ISSUE NUMBER
+ * on purpose. The phase and stage envelopes carry no id until the server
+ * re-keys in step 4, so keying the map on `runId` today would fragment ONE
+ * run across two keys — a `stateChanged`-keyed card and a phase-keyed card
+ * for the same issue — which is worse than the collision it would fix. When
+ * step 4 makes every envelope carry the id, re-key this map here and route
+ * `runId` → slot as Decision 6 specifies.
+ */
 interface RawStateChanged {
   issueNumber: number;
   repo?: string;
+  runId?: string;
   state: RawGoState;
 }
 
 interface RawPhaseEvent {
   issueNumber: number;
   repo?: string;
+  runId?: string;
   stage: string;
   name: string;
   index: number;
@@ -76,6 +92,7 @@ interface RawStageCompleteEvent {
   issueNumber: number;
   stage: string;
   repo?: string;
+  runId?: string;
   error?: string;
   inputTokens?: number;
   outputTokens?: number;
@@ -87,6 +104,7 @@ interface RawStageCompleteEvent {
 interface RawStageStartEvent {
   issueNumber: number;
   stage: string;
+  runId?: string;
 }
 
 export interface SlotRuntimeStageEntry {
@@ -99,6 +117,12 @@ export interface SlotRuntimeStageEntry {
 
 export interface SlotRuntimeSnapshot {
   issueNumber: number;
+  /**
+   * The run this snapshot describes, once an event names one (ADR-017
+   * Decision 6). Recorded but NOT yet used as the map key — see the re-key
+   * note on `RawStateChanged`.
+   */
+  runId?: string;
   title?: string;
   branch?: string;
   repo?: string;
@@ -144,6 +168,7 @@ export class PipelineSlotsTracker implements vscode.Disposable {
         const event = data as RawPhaseEvent;
         if (typeof event?.issueNumber !== "number") return;
         const snap = this.ensureSnapshot(event.issueNumber);
+        if (event.runId) snap.runId = event.runId;
         snap.currentStage = event.stage as PipelineStage;
         snap.currentPhase = {
           name: event.name,
@@ -171,6 +196,7 @@ export class PipelineSlotsTracker implements vscode.Disposable {
         if (typeof event?.issueNumber !== "number") return;
         const snap = this.snapshots.get(event.issueNumber);
         if (!snap) return;
+        if (event.runId) snap.runId = event.runId;
         // Clear the active phase only if it's the one that just completed —
         // a later phase.start may already have landed.
         if (
@@ -188,6 +214,7 @@ export class PipelineSlotsTracker implements vscode.Disposable {
         const event = data as RawStageStartEvent;
         if (typeof event?.issueNumber !== "number") return;
         const snap = this.ensureSnapshot(event.issueNumber);
+        if (event.runId) snap.runId = event.runId;
         const nextStage = event.stage as PipelineStage;
         // Clear any lingering phase from the previous stage so a stale
         // label (e.g. "Knowledge Base Read") doesn't bleed into the new
@@ -222,6 +249,7 @@ export class PipelineSlotsTracker implements vscode.Disposable {
         const event = data as RawStageCompleteEvent;
         if (typeof event?.issueNumber !== "number") return;
         const snap = this.ensureSnapshot(event.issueNumber);
+        if (event.runId) snap.runId = event.runId;
         const stageEntry: SlotRuntimeStageEntry = {
           status: event.error ? "failed" : "complete",
         };
@@ -355,6 +383,12 @@ export class PipelineSlotsTracker implements vscode.Disposable {
   private applyStateChanged(event: RawStateChanged): void {
     const snap = this.ensureSnapshot(event.issueNumber);
     const go = event.state ?? {};
+
+    // Record the run this snapshot is about when either level of the
+    // envelope names one (ADR-017 Decision 6). Recording only; the map stays
+    // issue-keyed until step 4 — see the re-key note on RawStateChanged.
+    const eventRunId = event.runId ?? go.runId;
+    if (eventRunId) snap.runId = eventRunId;
 
     if (go.title) snap.title = go.title;
     if (go.branch) snap.branch = go.branch;

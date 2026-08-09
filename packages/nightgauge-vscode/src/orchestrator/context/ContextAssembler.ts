@@ -242,7 +242,19 @@ export class ContextAssembler {
      */
     private workspaceRootProvider: () => string,
     private contextLoader?: RepositoryContextLoader | null,
-    private skillLoader?: SkillLoader | null
+    private skillLoader?: SkillLoader | null,
+    /**
+     * Returns the run identity the owning orchestrator currently holds, or
+     * undefined when it holds none (ADR-017 step 3, #370).
+     *
+     * Read at usage time, not construction: the assembler outlives any one
+     * run, and a schema-repair re-invocation must export the identity of the
+     * run that is executing NOW — not the one that was installed when the
+     * orchestrator was built. Undefined is a real answer (a manual/no-run
+     * invocation), and the exporter turns it into a DELETED
+     * NIGHTGAUGE_RUN_ID rather than an inherited one.
+     */
+    private runIdProvider?: () => string | undefined
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -621,7 +633,13 @@ export class ContextAssembler {
           undefined, // pauseAutoRouting
           workspaceRoot,
           undefined, // modelOverrideSource
-          repairSkillContent
+          repairSkillContent,
+          undefined, // autonomousMode
+          undefined, // warnThresholdUsd
+          undefined, // targetRepoOverride
+          // ADR-017 step 3: the repair re-invocation belongs to the SAME run
+          // as the stage it is repairing, so it exports that run's identity.
+          this.runIdProvider?.()
         );
 
         // Safety: if the process handle has no process (error during setup),

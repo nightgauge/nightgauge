@@ -535,18 +535,30 @@ export function registerRunStageCommand(
         }
       }
 
-      // Mark stage as running in state service (Issue #246 fix)
-      // This was missing — stages went from 'pending' directly to 'complete'
-      if (pipelineStateService) {
+      /**
+       * Mark stage as running in state service (Issue #246 fix).
+       * This was missing — stages went from 'pending' directly to 'complete'.
+       *
+       * Deferred to the spawn (ADR-017 §7.2) so this attempt's ONE `running`
+       * transition carries the child's pid. Latched: a second would re-enter
+       * Go's BeginStage and reset the stage clock.
+       */
+      let runningTransitionSent = false;
+      const markStageRunning = async (stagePid?: number): Promise<void> => {
+        if (runningTransitionSent) return;
+        runningTransitionSent = true;
+        if (!pipelineStateService) return;
         try {
-          await pipelineStateService.startStage(stage);
+          await pipelineStateService.startStage(stage, {
+            ...(stagePid ? { stagePid } : {}),
+          });
         } catch (error) {
           logger.warn("Failed to update pipeline state on stage start", {
             stage,
             error,
           });
         }
-      }
+      };
 
       // Update OutputWindow with starting status — this command is
       // invoked by an explicit user action (Run Stage), so reveal the
@@ -633,7 +645,16 @@ export function registerRunStageCommand(
       }
 
       // Set up callbacks to stream output to OutputWindow
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition carries it (§7.2).
+       */
+      let stageChildPid = 0;
+
       const callbacks: SkillRunCallbacks = {
+        onStageChildSpawned: (pid) => {
+          stageChildPid = pid;
+        },
         onStdout: (data) => {
           const items = parseStreamOutput(data);
           for (const item of items) {
@@ -852,7 +873,32 @@ export function registerRunStageCommand(
         const handle =
           executionMode === "interactive"
             ? runStageSkillInteractive(stage, issueNumber, callbacks)
-            : runStageSkillHeadless(stage, issueNumber, callbacks);
+            : runStageSkillHeadless(
+                stage,
+                issueNumber,
+                callbacks,
+                undefined, // issueMetadata
+                undefined, // batchContext
+                undefined, // skipToPhase
+                undefined, // modelOverride
+                undefined, // pauseAutoRouting
+                undefined, // pinnedWorkspaceRoot
+                undefined, // modelOverrideSource
+                undefined, // injectedSkillContent
+                undefined, // autonomousMode
+                undefined, // warnThresholdUsd
+                undefined, // targetRepoOverride
+                // ADR-017 step 3: export the identity of the run this command
+                // is driving. Undefined when the service holds none — a
+                // manual single-stage invocation must not invent one, and
+                // must not inherit the outer run's id either.
+                pipelineStateService?.getRunId() ?? undefined
+              );
+
+        // ADR-017 §7.2: this attempt's single `running` transition, carrying
+        // the pid the synchronous spawn callback captured (headless only —
+        // the interactive runner spawns no stage child to name).
+        void markStageRunning(stageChildPid || undefined);
 
         // A failed launch returns an error stub (no child process, no stdin
         // writer) after reporting via callbacks — bail then. The Codex
