@@ -437,14 +437,19 @@
         "    `this.ipc` untouched, so the run's own notifyPipelineComplete still makes its call — which is what",
         "    the DELEGATED entries above depend on. A future dispose() that guarded subsequent calls would",
         "    silently delete the delegated history record and learning outcome without failing any test.",
-        "    ADR-017 step 3 put ONE guard in dispose(): `endRun()`, which releases the identity so a recycled",
-        "    service cannot refuse the issue's next dispatch. It does not guard the CALL — notifyPipelineComplete",
-        "    still reaches Go — but the call now goes out with `runId: \"\"`, because the run it belonged to was",
-        "    released underneath it. Inert today (the server accepts and ignores runId), and the LOUD version of",
-        "    this note is: at step 4 that call is refused `run_id_required`, so a late-settling force-cleared run",
-        "    stops writing the delegated history record and learning outcome. That is not a regression to fix in",
-        "    step 4 — it is why step 6 gives the funnel `pipeline.abandonRun`, which books the dispatch terminal",
-        "    at force-clear time instead of waiting for a wedged run to deliver its own outcome hours later."
+        "    ADR-017 step 3 therefore puts NO guard in dispose() — and deliberately does NOT release the run",
+        "    identity there either. An earlier cut of step 3 did release it, on the theory that a \"recycled\"",
+        "    service would refuse the issue's next dispatch; no such recycling exists (createForWorktree returns",
+        "    a NEW instance per dispatch and the singleton pairs dispose with resetInstance), so the only case",
+        "    it changed was THIS one, and it changed it for the worse: the late notifyPipelineComplete would have",
+        "    gone out with `runId: \"\"` and been refused `run_id_required` at step 4, so a late-settling",
+        "    force-cleared run would have stopped writing the delegated history record and learning outcome —",
+        "    two records silently no longer written, which is the failure class #370 exists to end. A disposed",
+        "    service KEEPS its id, so its own terminal claim stays attributable and a step-4 server that is",
+        "    re-keyed per run books the dead run under its own identity via Decision 5's terminal latch. The",
+        "    release points are notifyPipelineComplete, clearPipeline and the keyed finallys at the dispatch",
+        "    sites that minted — nothing else. Booking the DISPATCH terminal at force-clear time, rather than",
+        "    waiting hours for a wedged run to deliver its own outcome, is still step 6's `pipeline.abandonRun`."
       ],
       "go": {
         "pathSpecific": "By design extension-only: the Go scheduler's terminal defer runs in the same goroutine as its stage loop, so nothing else can declare the run abandoned while that defer is still owed. There is no Go-side force-clear, and therefore no second Go funnel to keep in parity. Go is BYTE-IDENTICAL to main for this change — see the KNOWN EXPOSURE paragraph in `accounting`."
