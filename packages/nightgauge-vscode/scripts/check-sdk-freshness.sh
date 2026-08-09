@@ -13,7 +13,14 @@ if [ ! -f "$DIST_INDEX" ]; then
   exit 1
 fi
 
-STALE=$(find "$SDK_DIR/src" -name "*.ts" -newer "$DIST_INDEX" 2>/dev/null)
+# Data assets count as source: the SDK build copies model-registry.json and
+# failure-taxonomy.yaml into dist/, and a data-only commit (a model's
+# supported_efforts, a taxonomy rule) leaves no newer *.ts behind. Restricting
+# the scan to TypeScript let those commits build against a stale dist and
+# dispatch on the previous registry (#336).
+STALE=$(find "$SDK_DIR/src" \
+  \( -name "*.ts" -o -name "*.json" -o -name "*.yaml" \) \
+  -newer "$DIST_INDEX" 2>/dev/null)
 
 if [ -n "$STALE" ]; then
   echo "ERROR: SDK dist is stale — run \`npm run -w @nightgauge/sdk build\` first" >&2

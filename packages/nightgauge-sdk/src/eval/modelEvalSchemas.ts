@@ -217,25 +217,27 @@ export const ModelDescriptorSchema = z
     /** USD/MTok rates — the basis for all eval cost computation. */
     rates: TokenRatesSchema,
     /**
-     * The effort levels this model accepts. Three states, all distinguishable
-     * and all meaningful (#336):
+     * The effort levels this model accepts. REQUIRED, and emptiable — two
+     * registry states, both positive declarations (#336):
      *
-     * - a **non-empty** array — the model takes an effort parameter, at these
-     *   levels;
+     * - a **non-empty** array — the model takes an effort parameter, at
+     *   exactly these levels;
      * - **`[]`** — the model has NO effort axis. Haiku has no extended
-     *   thinking, so there is no level to request. This is a positive
-     *   declaration, not missing data, and it is what suppresses `--effort` at
-     *   the dispatch boundary;
-     * - **absent** — unknown. Reserved for entries that genuinely have not
-     *   been characterized; every model with no registry entry at all (local
-     *   ollama/lm-studio catalogs, unregistered ids) reads as absent too,
-     *   since there is no descriptor to read the field from.
+     *   thinking, so there is no level to request. This is a declaration, not
+     *   missing data, and it is what suppresses `--effort` at the dispatch
+     *   boundary.
      *
-     * `.min(1)` used to make the middle state inexpressible, which forced the
-     * "haiku has no effort axis" fact into a hardcoded band set in the VSCode
-     * extension while the registry declared the opposite.
+     * There is deliberately no third, in-descriptor "unknown" state.
+     * **Unknown is descriptor-ABSENCE** — `getModelDescriptor` returning
+     * `undefined` for a local ollama/lm-studio model or an unregistered id —
+     * and that is the only spelling of it. An omittable key would let a
+     * registry entry be silently uncharacterized while looking complete, which
+     * is the failure mode this field already had once: `.min(1)` made `[]`
+     * inexpressible, so "haiku has no effort axis" had to live in a hardcoded
+     * band set in the VSCode extension while the registry declared the
+     * opposite.
      */
-    supported_efforts: z.array(EffortLevelSchema).optional(),
+    supported_efforts: z.array(EffortLevelSchema),
     supported_reasoning: z.array(ReasoningLevelSchema).min(1),
     context_window: z.number().int().positive(),
     deprecated: z.boolean().optional(),

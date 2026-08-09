@@ -320,9 +320,12 @@ export const DEFAULT_STAGE_EFFORTS: Partial<Record<PipelineStage, ClaudeEffort>>
  * - a **non-empty** array — the model takes `--effort`, at exactly these levels;
  * - **`[]`** — the model is registered and DECLARES no effort axis. Haiku has
  *   no extended thinking, so there is no level to request;
- * - **`undefined`** — the registry has no entry for this model: an
- *   unregistered id or a user-configured local (ollama/lm-studio) model, whose
- *   catalog is unknowable here by design.
+ * - **`undefined`** — unknown, which is spelled as descriptor-ABSENCE and
+ *   nothing else: the registry has no entry for this model (an unregistered
+ *   id, or a user-configured local ollama/lm-studio model whose catalog is
+ *   unknowable here by design). The registry's own two states are `[]` and a
+ *   ladder — the canonical schema requires `supported_efforts`, so a
+ *   descriptor can never be silently uncharacterized.
  *
  * `[]` and `undefined` are not synonyms. The two consumers below deliberately
  * fail in opposite directions on them, so collapsing the states would silently
@@ -386,8 +389,13 @@ export function modelSupportsEffort(model: string): boolean {
  * entry — local ollama/lm-studio models and unregistered ids) and `[]` (a model
  * that declares no effort axis) skip validation. There is nothing to validate
  * against in either case, and a stage must never be blocked for missing
- * metadata. `[]` is unreachable in practice from the emission site, which has
- * already declined to pass a flag for it.
+ * metadata.
+ *
+ * The caller passes the ladder of the model it is actually DISPATCHING, not of
+ * that model's band — a deprecated sibling declares a shorter ladder than the
+ * band leader, and validating the leader's is how `--effort max` reached
+ * `claude-opus-4-8` (#336). `[]` stays unreachable from the emission site,
+ * which declines to pass a flag for a model with no axis at all.
  */
 export function assertEffortSupported(
   effort: ClaudeEffort,
