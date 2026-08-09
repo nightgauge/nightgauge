@@ -460,6 +460,22 @@ func (rs *RuntimeState) SeedRunContext(repo, title, branch string) string {
 	return rs.Repo
 }
 
+// TargetRepo returns the run's target repo under rs.mu, or "" before a
+// repo-carrying transition has seeded one.
+//
+// It exists because SeedRunContext WRITES Repo under rs.mu (ADR-017 Decision
+// 12: repo is run CONTENT), so every reader outside the constructor path must
+// take the same mutex — the IPC transition handler and the progress handler run
+// in separate goroutines and the race detector proves the unlocked read. A
+// lock-safe single-field read rather than Snapshot(): the progress path calls it
+// at >= 1 per 5s per run, and deep-copying every stage record to read one string
+// is a cost that scales with the run (the same argument FeatureBranch makes).
+func (rs *RuntimeState) TargetRepo() string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Repo
+}
+
 // IsTerminal reports whether the durable terminal marker is latched.
 func (rs *RuntimeState) IsTerminal() bool {
 	rs.mu.Lock()
@@ -1223,6 +1239,18 @@ var ErrRunSealed = errors.New("run is sealed: its terminal snapshot was written 
 //     every caller, including any future one.
 var ErrNoRunIdentity = errors.New("runtime state's run id is not a valid run identity: refusing to persist")
 
+// ErrSealWriteFailed reports that SealAndRemove could not WRITE the
+// terminal-stamped snapshot (claim step 4). It exists so the caller's log can
+// be honest per branch: on this branch the terminal marker never reached disk
+// and the stale snapshot was removed instead, whereas a bare remove failure
+// leaves a file that DOES carry `terminal: true`. Saying "the snapshot is
+// terminal-marked either way" covers only the second case, and the difference
+// is exactly what a reader needs to know about what is left on disk.
+//
+// The seal is latched on both branches: a run that reached its terminal claim
+// never re-opens to further writes, whatever the filesystem did.
+var ErrSealWriteFailed = errors.New("seal and remove: the terminal snapshot could not be written")
+
 // Persist writes the current state atomically to {stateDir}/runtime-{issue}-{runId}.json.
 //
 // It is a Lock/defer-Unlock wrapper over persistLocked so the two forms cannot
@@ -1292,10 +1320,32 @@ func (rs *RuntimeState) SealAndRemove(stateDir string) error {
 	if !runstate.IsIdentity(rs.RunID) {
 		return fmt.Errorf("seal and remove for #%d: %w", rs.IssueNumber, ErrNoRunIdentity)
 	}
-	if err := rs.persistLocked(stateDir); err != nil {
-		return err
+	// An already-sealed runtime writes nothing and removes nothing — the same
+	// refusal every other write path gives. Stated here rather than left to
+	// persistLocked so the write-failure branch below is about genuine write
+	// failures only.
+	if rs.sealed {
+		return ErrRunSealed
 	}
 	target := filepath.Join(stateDir, SnapshotFilename(rs.IssueNumber, rs.RunID))
+	if err := rs.persistLocked(stateDir); err != nil {
+		// THE WRITE-FAILURE BRANCH STILL SEALS AND STILL REMOVES (F27).
+		// Returning here left the run unsealed AND left the stale NON-terminal
+		// snapshot on disk — the one shape adoption happily rehydrates, which
+		// is R-4's richer-record overwrite: a restart adopts the dead run, its
+		// next call produces a record strictly richer by one stage, and the
+		// history layer accepts that as an upgrade over the authoritative one.
+		// The authoritative record was already durably written in claim step 2,
+		// so removing the stale file costs at worst R-4's adopt-empty noise,
+		// which is strictly better than resurrection.
+		rs.sealed = true
+		if rmErr := os.Remove(target); rmErr != nil && !os.IsNotExist(rmErr) {
+			return fmt.Errorf("seal and remove %s: %w (%v) AND the stale non-terminal snapshot could not be removed: %v",
+				filepath.Base(target), ErrSealWriteFailed, err, rmErr)
+		}
+		return fmt.Errorf("seal and remove %s: %w (%v); the stale non-terminal snapshot was REMOVED instead",
+			filepath.Base(target), ErrSealWriteFailed, err)
+	}
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		// The seal is still latched below: a failed remove leaves a snapshot
 		// that carries `terminal: true`, which adoption refuses and the

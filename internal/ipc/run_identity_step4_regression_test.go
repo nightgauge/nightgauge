@@ -319,6 +319,19 @@ func TestRunIdentity_TerminalRemovalUsesSnapshotRepo(t *testing.T) {
 // claim, so the latch does not refuse it. Under a sequence that latched first,
 // every extension-path history record would silently lose execution_path and
 // punt_reason with no test noticing.
+//
+// The end-to-end record assertion ALONE does not discriminate: a replay placed
+// BEFORE the claim and outside the lock — the shape Decision 5 explicitly
+// rejects — produces exactly the same record on the happy path. The two
+// white-box parts below are what tell the shapes apart:
+//
+//   - the claim's OWN returned snapshot already carries the replay AND the
+//     durable latch, so the two are one critical section rather than a mutation
+//     followed by a later re-read;
+//   - a claim that LOSES step 1a's re-check replays NOTHING. That is the
+//     discriminator: with the replay before the claim, the loser would have
+//     mutated the run — a foreign, already-closed run — before discovering it
+//     had no claim to make.
 func TestRunIdentity_ExecutionPathReplayIsInsideTheClaim(t *testing.T) {
 	root := t.TempDir()
 	s := NewServer(nil, WithWorkspaceRoot(root))
@@ -353,6 +366,62 @@ func TestRunIdentity_ExecutionPathReplayIsInsideTheClaim(t *testing.T) {
 	}
 	if stage.PuntReason != "missing-validate-context" {
 		t.Errorf("punt_reason = %q, want missing-validate-context", stage.PuntReason)
+	}
+
+	// --- The claim itself, white-box ---------------------------------------
+	s2 := NewServer(nil, WithWorkspaceRoot(t.TempDir()))
+	runID2 := newTestRunID()
+	mustCall(t, s2, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: runID2,
+	})
+	res, err := s2.resolveRun("pipeline.notifyComplete", verbTerminal, runID2, repo, issue)
+	if err != nil || res.entry == nil {
+		t.Fatalf("resolve for the claim: %v (entry=%v)", err, res.entry)
+	}
+	live := res.entry.rs
+	complete := func(state.PipelineStage) string { return "complete" }
+
+	// A claim that loses step 1a's re-check — the entry was latched in the
+	// unlocked window between resolve and claim, which is precisely the race
+	// the re-check exists for.
+	s2.runtimesMu.Lock()
+	res.entry.terminal = true
+	s2.runtimesMu.Unlock()
+
+	_, _, loserErr := s2.runTerminalClaim("pipeline.notifyComplete", res, runID2, repo, issue,
+		map[string]string{"pr-create": "deterministic"},
+		map[string]string{"pr-create": "loser-should-never-land"}, complete)
+	wantRefusal(t, loserErr, codeRunClosed)
+	if got := live.StageExecutionPath(state.StagePRCreate); got != "" {
+		t.Errorf("a REFUSED claim replayed onto the run: execution_path = %q, want empty — the replay ran outside the claim", got)
+	}
+	if got := live.StagePuntReason(state.StagePRCreate); got != "" {
+		t.Errorf("a REFUSED claim replayed onto the run: punt_reason = %q, want empty", got)
+	}
+	if live.IsTerminal() {
+		t.Error("a refused claim latched the DURABLE half of the terminal latch")
+	}
+
+	// The winner: the snapshot the claim RETURNS already carries the replay and
+	// the latch — one critical section, not a mutation plus a later read.
+	s2.runtimesMu.Lock()
+	res.entry.terminal = false
+	s2.runtimesMu.Unlock()
+
+	_, snap, err := s2.runTerminalClaim("pipeline.notifyComplete", res, runID2, repo, issue,
+		map[string]string{"pr-create": "llm"},
+		map[string]string{"pr-create": "missing-validate-context"}, complete)
+	if err != nil {
+		t.Fatalf("the winning claim was refused: %v", err)
+	}
+	if got := snap.StageExecutionPaths["pr-create"]; got != "llm" {
+		t.Errorf("the CLAIM'S OWN snapshot has execution_path %q, want llm — step 1b did not run inside the claim", got)
+	}
+	if got := snap.StagePuntReasons["pr-create"]; got != "missing-validate-context" {
+		t.Errorf("the CLAIM'S OWN snapshot has punt_reason %q, want missing-validate-context", got)
+	}
+	if !snap.Terminal {
+		t.Error("the claim's snapshot is not terminal — 1c did not run before 1d in the same hold")
 	}
 }
 

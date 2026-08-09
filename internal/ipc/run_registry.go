@@ -370,9 +370,21 @@ func (s *Server) resolveOrAdopt(method string, class verbClass, runID, repo stri
 		s.activeRuntimes = make(map[string]*runEntry)
 	}
 	if e := s.activeRuntimes[runID]; e != nil {
-		if err := s.corroborateLocked(method, class, e, runID, repo, issue); err != nil {
+		// The terminal re-check is NOT redundant with resolveRun's. Claim step
+		// 2 runs unlocked between the latch (step 1c) and the compare-and-delete
+		// (step 3), and this fast path is reachable inside that window by a
+		// run-progress call that passed resolveRun before the latch was stamped.
+		// Serving it there would refresh the lease of a CLOSED run and make it
+		// "current" for its repo#issue in the derived index.
+		if e.terminal {
 			s.runtimesMu.Unlock()
-			return nil, err
+			return nil, s.rejectRun(method, codeRunClosed, runID, issue,
+				"the registry entry is terminal-latched")
+		}
+		detail, refused := corroborateLocked(class, e, repo, issue)
+		if refused {
+			s.runtimesMu.Unlock()
+			return nil, s.rejectRun(method, codeRunNotFound, runID, issue, detail)
 		}
 		e.touchLocked(class)
 		s.runtimesMu.Unlock()
@@ -393,14 +405,25 @@ func (s *Server) resolveOrAdopt(method string, class verbClass, runID, repo stri
 	s.adopting[runID] = f
 	s.runtimesMu.Unlock()
 
-	// The flight is closed from a DEFER, so a load that panics (the handler's
-	// recover would otherwise swallow it) never strands a waiter.
+	// BOTH halves of the flight's teardown are in ONE defer, so a load that
+	// panics (the handler's recover would otherwise swallow it) strands
+	// neither. Leaving the `adopting` delete on the success path was the
+	// asymmetric form: a panic inside the load closed the flight but left the
+	// map entry forever, and every later call for that id then waited on an
+	// already-closed flight and settled as an ordinary MISS — adopt-empty over
+	// a real snapshot, whose next Persist replaces the rich file with a thin
+	// one. Taking runtimesMu inside the defer is safe because the insert below
+	// has already released it, and a double delete would be harmless anyway.
 	func() {
-		defer close(f.done)
+		defer func() {
+			s.runtimesMu.Lock()
+			delete(s.adopting, runID)
+			s.runtimesMu.Unlock()
+			close(f.done)
+		}()
 		f.rs, f.terminalOnDisk, f.err = loadRunSnapshot(s.pipelineStateDir(repo), runID)
 
 		s.runtimesMu.Lock()
-		delete(s.adopting, runID)
 		switch {
 		case f.terminalOnDisk:
 			s.closedRuns.addLocked(runID)
@@ -430,14 +453,32 @@ func (s *Server) settleAdoption(f *adoptFlight, method string, class verbClass, 
 			"its snapshot carries the durable terminal marker")
 	}
 
+	// EVERY EXIT BELOW UNLOCKS BEFORE IT LOGS. `defer s.runtimesMu.Unlock()`
+	// would put rejectRun's rate-limiter and its log.Printf inside the
+	// server-global registry hold, inverting the property the limiter exists
+	// for: logging a refusal must never queue behind the registry. Decide under
+	// the lock, log after it — the shape resolveRun's closedRuns and terminal
+	// arms already use.
 	s.runtimesMu.Lock()
-	defer s.runtimesMu.Unlock()
 	if e := s.activeRuntimes[runID]; e != nil {
 		// The loaded entry, or a peer's empty one.
-		if err := s.corroborateLocked(method, class, e, runID, repo, issue); err != nil {
-			return nil, err
+		//
+		// Terminal-checked for the same reason the fast path is: a claim's
+		// unlocked step-2 window can latch this entry while this call was
+		// waiting on the flight, and serving it would refresh a closed run's
+		// lease.
+		if e.terminal {
+			s.runtimesMu.Unlock()
+			return nil, s.rejectRun(method, codeRunClosed, runID, issue,
+				"the registry entry is terminal-latched")
+		}
+		detail, refused := corroborateLocked(class, e, repo, issue)
+		if refused {
+			s.runtimesMu.Unlock()
+			return nil, s.rejectRun(method, codeRunNotFound, runID, issue, detail)
 		}
 		e.touchLocked(class)
+		s.runtimesMu.Unlock()
 		return e, nil
 	}
 	if class == verbAdministrative {
@@ -447,6 +488,7 @@ func (s *Server) settleAdoption(f *adoptFlight, method string, class verbClass, 
 		// arm that fires for a dispatch which wedged inside `git worktree add`
 		// and never reached Go at all. Adopting an EXISTING snapshot is not
 		// that: the snapshot is the evidence.
+		s.runtimesMu.Unlock()
 		return nil, s.rejectRun(method, codeRunNotFound, runID, issue,
 			"no live entry and no snapshot on disk; an administrative verb never invents a run")
 	}
@@ -454,6 +496,7 @@ func (s *Server) settleAdoption(f *adoptFlight, method string, class verbClass, 
 	e := newRunEntry(state.NewRuntimeState(repo, issue, "", runID), repo, issue)
 	s.activeRuntimes[runID] = e
 	e.touchLocked(class)
+	s.runtimesMu.Unlock()
 	return e, nil
 }
 
@@ -465,19 +508,23 @@ func (s *Server) settleAdoption(f *adoptFlight, method string, class verbClass, 
 // Empty caller values are "not asserted" rather than "asserted empty": the
 // pause wire carries `repo` with omitempty and the operator surfaces do not
 // always name one. Caller holds runtimesMu.
-func (s *Server) corroborateLocked(method string, class verbClass, e *runEntry, runID, repo string, issue int) error {
+//
+// IT DECIDES; IT DOES NOT LOG. The refusal detail is returned so the caller can
+// release runtimesMu and only then call rejectRun — the rate limiter and its
+// log.Printf must never run inside the server-global registry hold. That is
+// also why this is a plain function rather than a *Server method: it has no
+// business reaching anything that logs.
+func corroborateLocked(class verbClass, e *runEntry, repo string, issue int) (detail string, refused bool) {
 	if class != verbAdministrative {
-		return nil
+		return "", false
 	}
 	if issue != 0 && e.issue != 0 && e.issue != issue {
-		return s.rejectRun(method, codeRunNotFound, runID, issue,
-			fmt.Sprintf("run belongs to issue #%d", e.issue))
+		return fmt.Sprintf("run belongs to issue #%d", e.issue), true
 	}
 	if repo != "" && e.repo != "" && e.repo != repo {
-		return s.rejectRun(method, codeRunNotFound, runID, issue,
-			fmt.Sprintf("run belongs to repo %q", e.repo))
+		return fmt.Sprintf("run belongs to repo %q", e.repo), true
 	}
-	return nil
+	return "", false
 }
 
 // --- The six-line server rule (Decision 3 + Decision 11) -------------------
@@ -548,9 +595,10 @@ func (s *Server) resolveRun(method string, class verbClass, runID, repo string, 
 			return runResolution{}, s.rejectRun(method, codeRunClosed, runID, issue,
 				"the registry entry is terminal-latched")
 		}
-		if err := s.corroborateLocked(method, class, e, runID, repo, issue); err != nil {
+		detail, refused := corroborateLocked(class, e, repo, issue)
+		if refused {
 			s.runtimesMu.Unlock()
-			return runResolution{}, err
+			return runResolution{}, s.rejectRun(method, codeRunNotFound, runID, issue, detail)
 		}
 		e.touchLocked(class)
 		s.runtimesMu.Unlock()
@@ -636,6 +684,15 @@ func (s *Server) currentRunForIssueLocked(repo string, issue int) (current *runE
 // snapshot is on disk while its runtime is live must never be reconciled as an
 // orphan, and after the re-key "live" is a property of the ISSUE's entries
 // rather than of one issue-shaped key.
+//
+// IT IS DELIBERATELY LEASE-BLIND until ADR-017 step 5's liveness ladder. Today
+// ANY non-terminal entry pins the issue, including an adopt-empty entry whose
+// lastSeen has not moved in hours: the ladder that weighs the scheduler
+// registry, the lease window and the recorded PID against each other — and the
+// reaping that lets such an entry expire at all — is step 5's scope, and a
+// half-ladder here would be a liveness rule nobody could reason about. Erring
+// toward "live" is the safe direction for a predicate whose false negative
+// terminates a running pipeline.
 func (s *Server) hasLiveRunForIssue(issue int) bool {
 	s.runtimesMu.Lock()
 	defer s.runtimesMu.Unlock()

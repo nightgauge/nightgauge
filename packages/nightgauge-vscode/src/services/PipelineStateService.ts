@@ -498,8 +498,10 @@ export class PipelineStateService implements vscode.Disposable {
   /**
    * Inbound events applied through the issue-number pre-filter because
    * neither side could offer an id to compare (Decision 6's empty-id
-   * fallback). Post-step-4 this arm should go quiet; a counter that keeps
-   * climbing after the flip is the signal that some emitter never got one.
+   * fallback). After the re-key the run-bearing envelopes all carry an id, so
+   * this arm is expected to see only the scheduler's `stage.start` /
+   * `stage.complete` pair; a counter climbing on the run-bearing events is the
+   * signal that some emitter never got one.
    */
   private emptyIdFallbackCount = 0;
   /** Injectable log sink for rejection classification. Defaults to console. */
@@ -831,7 +833,8 @@ export class PipelineStateService implements vscode.Disposable {
 
   /**
    * How many inbound events took Decision 6's empty-id fallback. Read by
-   * tests; a non-zero value after step 4 means an emitter is still id-less.
+   * tests. Non-zero is expected — the scheduler's stage.* pair carries no id —
+   * so assertions target the run-bearing envelopes rather than the total.
    */
   getEmptyIdFallbackCount(): number {
     return this.emptyIdFallbackCount;
@@ -1804,11 +1807,15 @@ export class PipelineStateService implements vscode.Disposable {
    * strict-equality filter can never be the reason a dashboard slot goes dark
    * (C9, fail-open on a UX surface).
    *
-   * `eventRunId` MUST come from the ENVELOPE. The nested `state.runId` is the
-   * server's own runtime id (see {@link GoRuntimeState.runId}) and comparing
-   * against it would drop every real event. The envelope field arrives in
-   * step 4, so every extension-path event legitimately takes the fallback arm
-   * until then — which is exactly what `emptyIdFallbackCount` measures.
+   * `eventRunId` MUST come from the ENVELOPE. Post-re-key the nested
+   * `state.runId` is the same value, but reading it here would re-establish
+   * the habit that dropped every real event while the server minted its own
+   * id (see {@link GoRuntimeState.runId}).
+   *
+   * The run-bearing envelopes are stamped now (ADR-017 step 4), so the strict
+   * arm is the ordinary path and `emptyIdFallbackCount` measures what is
+   * LEFT: the scheduler's `stage.start` / `stage.complete` pair, which carries
+   * no id, and any service constructed before its run installed one.
    */
   private acceptsEvent(eventRunId: string, eventIssueNumber: number): boolean {
     if (this.runId && eventRunId) {
@@ -1840,13 +1847,19 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           repo: string;
           /**
-           * Run identity of the EMITTING RUN (ADR-017 Decision 6). The server
-           * does not stamp it yet — `internal/ipc/server.go` emits
-           * `{repo, issueNumber, state}` — so it is undefined today and the
-           * event takes the empty-id fallback arm. Step 4 adds it.
+           * Run identity of the EMITTING RUN (ADR-017 Decision 6). STAMPED:
+           * every `pipeline.stateChanged` emitter in `internal/ipc/server.go`
+           * — the scheduler's `OnStateChanged`, the transition handler and
+           * `setPaused` — carries the RESOLVED identity, so this event takes
+           * the strict arm of {@link acceptsEvent} whenever this service holds
+           * one too. Still optional on the type because the empty-id fallback
+           * must stay reachable: a filter may never be the reason a dashboard
+           * slot goes dark (C9).
            *
-           * Deliberately NOT defaulted to `state.runId`: that is the server's
-           * own runtime id, a different UUIDv7 from the one installed here.
+           * Deliberately NOT defaulted to `state.runId`: post-re-key the two
+           * agree, but defaulting would re-introduce the "compare against the
+           * nested snapshot" habit that dropped every real event while the
+           * server minted its own id.
            */
           runId?: string;
           // Go RuntimeState has a different shape than PipelineState — see GoRuntimeState above.
@@ -2137,7 +2150,12 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           stage: string;
           repo: string;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). NOT stamped: like
+           * `stage.complete`, the only producer is the Go scheduler's
+           * `OnStageStart` callback and that envelope carries no id, so this
+           * handler takes the empty-id fallback arm.
+           */
           runId?: string;
           title: string;
         };
@@ -2219,7 +2237,11 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           stage: string;
           repo: string;
-          /** Emitting run's identity (ADR-017 Decision 6); empty until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). NOT stamped: the Go
+           * scheduler's `OnStageComplete` emit carries no id. See the note
+           * below the type.
+           */
           runId?: string;
           error: string;
           inputTokens: number;
@@ -2229,9 +2251,12 @@ export class PipelineStateService implements vscode.Disposable {
           costUsd: number;
           model: string;
         };
-        // The stage.* twin of the stateChanged filter. Its envelope offers no
-        // id field today, so this is the empty-id fallback arm by
-        // construction until step 4 stamps one.
+        // The stage.* twin of the stateChanged filter. `stage.complete` has a
+        // single producer — the Go scheduler's `OnStageComplete` callback —
+        // and that envelope still carries no identity, so this is the empty-id
+        // fallback arm by construction. Stamping the scheduler's stage.* pair
+        // is not part of step 4's re-key; the filter is written to accept an
+        // id the day one appears.
         if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
@@ -2339,7 +2364,13 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). NO Go producer emits
+           * `stage.failed` — the name exists only as an audit-trail action —
+           * so this handler is unreachable today and would take the empty-id
+           * fallback if it ever fired. Typed and filtered anyway so a future
+           * producer inherits the routing instead of inventing one.
+           */
           runId?: string;
           error: string;
         };
@@ -2355,7 +2386,13 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). STAMPED by both
+           * producers: the scheduler callback resolves it from the scheduler's
+           * own registry, and `notifyPhaseTransition` echoes the identity the
+           * server RESOLVED. Strict match when this service holds one too;
+           * empty-id fallback otherwise.
+           */
           runId?: string;
           name: string;
           index: number;
@@ -2415,7 +2452,10 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). STAMPED — the
+           * `phase.start` twin; see the note there.
+           */
           runId?: string;
           name: string;
           index: number;
@@ -2453,7 +2493,12 @@ export class PipelineStateService implements vscode.Disposable {
       this.ipc.on("pipeline.complete", (data: unknown) => {
         const d = data as {
           issueNumber: number;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). STAMPED from the
+           * completing run's own snapshot. Scheduler-path only — the
+           * extension path terminates through `notifyComplete`, which emits no
+           * `pipeline.complete` of its own.
+           */
           runId?: string;
           success: boolean;
           totalInputTokens: number;
@@ -2529,7 +2574,10 @@ export class PipelineStateService implements vscode.Disposable {
       this.ipc.on("pipeline.historyRecorded", (data: unknown) => {
         const d = data as {
           issueNumber: number;
-          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          /**
+           * Emitting run's identity (ADR-017 Decision 6). STAMPED — carried to
+           * CORRELATE, never to route; see the DO-NOT-FILTER rule below.
+           */
           runId?: string;
           success: boolean;
         };
@@ -2540,8 +2588,9 @@ export class PipelineStateService implements vscode.Disposable {
         // issue-keyed via `acceptsEvent` or run-keyed via the strict arm —
         // stales the dashboard for every concurrent run that is not this
         // service's own: the "a filter made a UX surface go dark" defect
-        // Decision 6 forbids. When step 4 stamps `runId` on this envelope, do
-        // NOT add identity routing here; a global consumer wants every event.
+        // Decision 6 forbids. The envelope now CARRIES `runId` (step 4) and
+        // that changes nothing here — do NOT add identity routing; a global
+        // consumer wants every event.
         this._onHistoryRecorded.fire(d);
       })
     );

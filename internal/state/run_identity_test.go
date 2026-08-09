@@ -310,6 +310,85 @@ func TestSealAndRemove_IsIdempotentWhenTheReconcilerRemovedTheFileFirst(t *testi
 	}
 }
 
+// TestSealAndRemove_WriteFailureStillSealsAndStillRemoves is the other half of
+// F27, and it is the branch that used to leave the hole wide open.
+//
+// When the terminal-stamped write fails, the file still on disk is the run's
+// STALE NON-TERMINAL snapshot — the one shape adoption happily rehydrates.
+// Returning early left it there AND left the run unsealed, so a restart adopted
+// a dead run, its next call produced a record strictly richer by one stage, and
+// the history layer accepted that as an upgrade over the authoritative record
+// (R-4). The authoritative record was already durably written in claim step 2,
+// so removing the stale file costs at worst R-4's adopt-empty noise.
+//
+// The write is made to fail deterministically by putting a DIRECTORY where
+// AtomicWriteFile wants its temp file: the open fails EISDIR while the target's
+// own removal is still perfectly possible, which is exactly the branch under
+// test.
+func TestSealAndRemove_WriteFailureStillSealsAndStillRemoves(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuntimeState("nightgauge/nightgauge", 370, "item-370", testRunID())
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	target := filepath.Join(dir, SnapshotFilename(370, rs.RunID))
+	if err := os.Mkdir(target+".tmp", 0o755); err != nil {
+		t.Fatalf("seed the temp-path blocker: %v", err)
+	}
+
+	rs.MarkTerminal("complete")
+	err := rs.SealAndRemove(dir)
+	if err == nil {
+		t.Fatal("SealAndRemove reported success while its write failed")
+	}
+	if !errors.Is(err, ErrSealWriteFailed) {
+		t.Errorf("error = %v, want it to wrap ErrSealWriteFailed so the caller can log the branch honestly", err)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Errorf("the STALE NON-TERMINAL snapshot survived a failed seal — a restart rehydrates it (R-4); stat = %v", statErr)
+	}
+	if !rs.IsSealed() {
+		t.Error("a failed write left the run UNSEALED — its next Persist re-creates the snapshot (F27)")
+	}
+	if perr := rs.Persist(dir); !errors.Is(perr, ErrRunSealed) {
+		t.Errorf("Persist after a failed seal = %v, want ErrRunSealed", perr)
+	}
+}
+
+// TestSealAndRemove_WriteAndRemoveBothFailingStillSeals covers the doubly-bad
+// filesystem: a read-only state dir fails the write AND the removal (removing a
+// directory entry needs write permission on the directory). The run must still
+// latch — a run that reached its terminal claim never re-opens to further
+// writes, whatever the filesystem did — and the error must name BOTH failures so
+// the operator knows a non-terminal snapshot is still on disk.
+func TestSealAndRemove_WriteAndRemoveBothFailingStillSeals(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuntimeState("nightgauge/nightgauge", 370, "item-370", testRunID())
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("chmod read-only: %v", err)
+	}
+	// Restore write permission or t.TempDir's cleanup cannot remove the tree.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+
+	rs.MarkTerminal("failed")
+	err := rs.SealAndRemove(dir)
+	if err == nil {
+		t.Fatal("SealAndRemove reported success on a read-only state dir")
+	}
+	if !errors.Is(err, ErrSealWriteFailed) {
+		t.Errorf("error = %v, want it to wrap ErrSealWriteFailed", err)
+	}
+	if !strings.Contains(err.Error(), "could not be removed") {
+		t.Errorf("error = %v, want it to name the removal failure too — the two branches leave different things on disk", err)
+	}
+	if !rs.IsSealed() {
+		t.Error("the seal must latch even when the filesystem refused everything")
+	}
+}
+
 // TestSealAndRemove_TakesThePersistLockedPath is the F36 property: SealAndRemove
 // holds rs.mu for the whole operation and calls the …Locked body, never the
 // exported Persist. Re-entering an exported method from inside its own lock on a

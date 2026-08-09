@@ -281,6 +281,25 @@ func WithAuthService(as *platform.AuthService) ServerOption {
 // after NewServer). See #3348.
 func (s *Server) SetScheduler(sched *orchestrator.Scheduler) {
 	s.scheduler = sched
+	// THE PRODUCTION ATTACH PATH, and therefore the one that must wire
+	// Decision 11's scheduler arm. `nightgauge serve` builds the scheduler
+	// AFTER the server (it needs IpcStageRunner) and reaches the server through
+	// here; WithScheduler has no production caller at all. Wiring the registry
+	// only there left `s.schedulerRuns` nil in every real deployment, so every
+	// scheduler-run phase event fell through to ADOPTION — a phantom registry
+	// entry that holds a lease, is never terminal-claimed, poisons the derived
+	// issue index and swallows the PhaseHistory the scheduler's own runtime
+	// should have received.
+	//
+	// Guarded exactly as WithScheduler is: a nil *Scheduler stored in an
+	// interface field is a NON-nil interface, and every `if s.schedulerRuns !=
+	// nil` guard downstream would then call through a nil receiver. The guard
+	// covers the callback wiring too — `initSchedulerCallbacks` dereferences
+	// its argument on the first line.
+	if sched == nil {
+		return
+	}
+	s.schedulerRuns = sched
 	s.initSchedulerCallbacks(sched)
 }
 
@@ -407,8 +426,15 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"success":     ok,
 		})
 		if snap.LicenseExpiredMidRun {
+			// The last envelope in this callback that described a run without
+			// naming it. Every sibling above carries the identity off the same
+			// snapshot; this one keyed on issueNumber alone, which is ambiguous
+			// the moment two dispatches of one issue overlap (ADR-017 Decision
+			// 6). Envelope completeness only — the TS consumer is a global
+			// warning toast and gains no routing from it.
 			s.Emit("pipeline.licenseExpired", map[string]interface{}{
 				"issueNumber": issue,
+				"runId":       snap.RunID,
 			})
 		}
 		owner, _ := splitOwnerRepo(cbRepo)
@@ -2597,14 +2623,20 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		rt := res.rs
+		// Unlocked by exemption, not by omission: RunID is a CONSTRUCTOR
+		// ARGUMENT with no setter (ADR-017 Decision 1), so no goroutine can
+		// write it while this one reads it. Every MUTABLE field of a resolved
+		// runtime goes through rs.mu — see the repo read below.
 		runID := rt.RunID
 
 		var repo string
 		if res.schedulerOwned {
 			// A read-through call records this run's PROGRESS onto the
 			// scheduler's runtime; it does not re-describe a run the scheduler
-			// owns. Repo is a constructor fact on that path (NewRuntimeState is
-			// its only writer), so reading it needs no lock.
+			// owns. Repo is a constructor fact on THAT path — the scheduler
+			// builds its runtime with the repo already resolved and nothing
+			// re-seeds it, because SeedRunContext is only reached through the
+			// non-scheduler arm below — so this read needs no lock.
 			repo = rt.Repo
 		} else {
 			// Title/branch/repo are run CONTENT, seeded under the run's OWN
@@ -2796,8 +2828,13 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
+		// RunID is a CONSTRUCTOR FACT and immutable — no setter exists — so it
+		// is the one field a resolved runtime may be read off without rs.mu.
+		// Repo is not: SeedRunContext writes it under rs.mu from the transition
+		// handler, which runs in a DIFFERENT GOROUTINE from this one, so the
+		// read goes through the locked accessor (ADR-017 Decision 12).
 		runID := res.rs.RunID
-		repo := res.rs.Repo
+		repo := res.rs.TargetRepo()
 		if repo == "" {
 			repo = p.Repo
 		}
@@ -2840,6 +2877,8 @@ func (s *Server) registerMethods() {
 			return nil, s.rejectRun("pipeline.notifyComplete", codeRunWrongOwner, p.RunID, p.IssueNumber,
 				"terminal resolution produced no claimable registry entry")
 		}
+		// Unlocked by exemption: RunID is immutable after construction. The
+		// claim below takes rs.mu for every field that is not.
 		runID := res.entry.rs.RunID
 
 		// #266 ground-truth reconciliation, evaluated INSIDE the claim against the
@@ -3068,11 +3107,16 @@ func (s *Server) registerMethods() {
 			// exactly what makes their two inputs describe the same runs.
 			//
 			// Idempotency is inherited, not enforced here: learning.Recorder
-			// .Record is a blind append with no dedup. This call sits inside
-			// `if ok` — the runtime is deleted at the end of this handler, so
-			// a repeated notifyComplete finds none and records nothing — and
-			// the scheduler path never calls notifyComplete. Moving this call
-			// outside the `if ok` guard would silently double the corpus.
+			// .Record is a blind append with no dedup. What guarantees at most
+			// one corpus row per run is the TERMINAL LATCH plus closedRuns
+			// (ADR-017 Decision 5): this handler is only reachable through a
+			// claim that won `entry.terminal`, a second notifyComplete for the
+			// same identity is refused run_closed before it can resolve, and the
+			// scheduler path never calls notifyComplete at all. The `if ok`
+			// guard this comment used to name is gone — the missing-runtime
+			// accident it relied on was never the real mechanism, and after the
+			// re-key a second dispatch of the SAME ISSUE is a different run id
+			// with its own record, which is correct rather than a double.
 			switch outcomeVerdict {
 			case outcomeRecord:
 				// Loud by design on EVERY unattributed field. An empty value
@@ -3185,11 +3229,24 @@ func (s *Server) registerMethods() {
 				p.IssueNumber, runID)
 		} else if sealDir := s.pipelineStateDir(snap.Repo); sealDir != "" {
 			if err := rt.SealAndRemove(sealDir); err != nil {
-				// A failed seal leaves a snapshot carrying `terminal: true`, which
-				// adoption refuses and the reconciler removes without emitting — so
-				// this is loud but not fatal.
-				log.Printf("notifyComplete: #%d seal-and-remove for run %s failed (non-fatal; the snapshot is terminal-marked either way): %v",
-					p.IssueNumber, runID, err)
+				// TWO BRANCHES, TWO DIFFERENT THINGS LEFT ON DISK, and the log
+				// must not blur them: the earlier "terminal-marked either way"
+				// line was true only of the remove failure.
+				if errors.Is(err, state.ErrSealWriteFailed) {
+					// The terminal marker never reached disk. The seal is
+					// latched and the stale NON-TERMINAL snapshot was removed
+					// rather than left for a restart to rehydrate, so the worst
+					// remaining case is R-4's adopt-empty noise — not a
+					// resurrected run.
+					log.Printf("notifyComplete: #%d seal for run %s could NOT WRITE the terminal marker; the stale snapshot was removed instead (non-fatal): %v",
+						p.IssueNumber, runID, err)
+				} else {
+					// The file on disk DOES carry `terminal: true`; only its
+					// removal failed. Adoption refuses that snapshot and the
+					// reconciler removes it without emitting.
+					log.Printf("notifyComplete: #%d seal-and-remove for run %s failed AFTER the snapshot was terminal-marked (non-fatal): %v",
+						p.IssueNumber, runID, err)
+				}
 			}
 		} else {
 			log.Printf("notifyComplete: #%d run %s repo %q resolves to no on-disk root — nothing to seal",

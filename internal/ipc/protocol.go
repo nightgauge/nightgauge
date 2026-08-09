@@ -398,13 +398,22 @@ type PipelineSetPausedParams struct {
 	IssueNumber int  `json:"issueNumber"`
 	Paused      bool `json:"paused"`
 	// Repo scopes the pause to a single repo's run in a multi-repo workspace
-	// (ADR-017 step 2, Decision 1). Accepted and ignored today; resolution is
-	// still issue-keyed. Appended after IssueNumber/Paused (with omitempty) so
-	// the generated positional signature keeps the existing 2-arg callers
-	// compiling — see docs/decisions/017-runtime-identity-keying.md.
+	// (ADR-017 Decision 1). It is CORROBORATION, not addressing: the run
+	// identity alone is globally unique, and a repo that disagrees with the
+	// resolved entry's yields run_not_found and mutates nothing (Decision 3).
+	// Empty means "not asserted" rather than "asserted empty". Appended after
+	// IssueNumber/Paused (with omitempty) so the generated positional signature
+	// keeps the existing 2-arg callers compiling — see
+	// docs/decisions/017-runtime-identity-keying.md.
 	Repo string `json:"repo,omitempty"`
-	// RunID is the run identity the server will key on from step 4 (ADR-017
-	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
+	// 1). REQUIRED whenever issueNumber is non-zero: the server refuses an
+	// absent value run_id_required and a non-canonical one run_id_invalid,
+	// before the value is used for anything. This is the ADMINISTRATIVE class
+	// (Decision 3), so it resolves and never invents — an id with neither a
+	// live entry nor a snapshot on disk is run_not_found. The `omitempty` tag
+	// survives only for the operator-wide arm below, where issueNumber is 0 and
+	// the call names no run at all.
 	RunID string `json:"runId,omitempty"`
 }
 
@@ -919,8 +928,13 @@ type PipelineNotifyStageTransitionParams struct {
 	// §7.2). Advisory, not an identity — omitempty is fine. No producer yet
 	// (step 3); the field simply starts existing on the wire.
 	StagePid int `json:"stagePid,omitempty"`
-	// RunID is the run identity the server will key on from step 4 (ADR-017
-	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
+	// 1). REQUIRED: an absent value is refused run_id_required and a
+	// non-canonical one run_id_invalid, checked before the value becomes a map
+	// key or a filename component. RUN-PROGRESS class (Decision 3) — a caller
+	// describing its OWN run, so an unknown id adopts
+	// runtime-{issue}-{runId}.json when one exists. `omitempty` is a wire
+	// economy, not an optionality: the server refuses the empty string.
 	RunID string `json:"runId,omitempty"`
 }
 
@@ -943,8 +957,13 @@ type PipelineNotifyStageProgressParams struct {
 	CacheReadTokens int     `json:"cacheReadTokens,omitempty"`
 	CostUsd         float64 `json:"costUsd,omitempty"`
 	Model           string  `json:"model,omitempty"`
-	// RunID is the run identity the server will key on from step 4 (ADR-017
-	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
+	// 1). REQUIRED: absent is run_id_required, non-canonical is
+	// run_id_invalid. RUN-PROGRESS class (Decision 3), and the one Decision 4
+	// names as the ordinary concurrent adopter — at >= 1 call per 5s it arrives
+	// alongside the next transition for the same unknown id after a server
+	// restart, and the per-id singleflight is what keeps the two from building
+	// two runtimes.
 	RunID string `json:"runId,omitempty"`
 }
 
@@ -997,8 +1016,12 @@ type PipelineNotifyCompleteParams struct {
 	// authoritative history stage record, letting operators read WHY the
 	// expensive LLM path ran from history alone.
 	StagePuntReasons map[string]string `json:"stagePuntReasons,omitempty"`
-	// RunID is the run identity the server will key on from step 4 (ADR-017
-	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
+	// 1). REQUIRED: absent is run_id_required, non-canonical is
+	// run_id_invalid. TERMINAL class (Decision 3) — this is THE CLAIM, so a
+	// run whose claim already ran is refused run_closed and a
+	// scheduler-owned run is refused run_wrong_owner rather than being booked
+	// a second time.
 	RunID string `json:"runId,omitempty"`
 }
 
@@ -1011,8 +1034,11 @@ type PipelineNotifyPhaseTransitionParams struct {
 	Index       int    `json:"index"`
 	Total       int    `json:"total"`
 	EventType   string `json:"eventType"` // "start" | "complete"
-	// RunID is the run identity the server will key on from step 4 (ADR-017
-	// step 2, Decision 1). Accepted and ignored now; no verb refuses it.
+	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
+	// 1). REQUIRED: absent is run_id_required, non-canonical is
+	// run_id_invalid. RUN-PROGRESS class (Decision 3). A scheduler-owned run is
+	// served READ-THROUGH onto the scheduler's own runtime behind an identity
+	// gate, so a foreign run can never write into its PhaseHistory.
 	RunID string `json:"runId,omitempty"`
 }
 
