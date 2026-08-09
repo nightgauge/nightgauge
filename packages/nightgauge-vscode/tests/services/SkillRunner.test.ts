@@ -96,6 +96,9 @@ function createDefaultParams(overrides: Partial<RunStageParams> = {}): RunStageP
     model: "claude-sonnet-4-20250514",
     timeout: 60_000,
     worktreeDir: "/mock/worktree",
+    // Required since ADR-017 step 0b: the Go emitter never dispatches a stage
+    // without a run identity, so no caller of this type has one to omit.
+    runId: "01890a5d-ac96-774b-bcce-b302099a8057",
     ...overrides,
   };
 }
@@ -189,7 +192,7 @@ describe("SkillRunner", () => {
       undefined, // autonomousMode (Issue #2656)
       undefined, // warnThresholdUsd (Go scheduler enforces budget)
       undefined, // targetRepoOverride — params.repo (Issue #3867)
-      undefined // runId — params.runId (#228)
+      "01890a5d-ac96-774b-bcce-b302099a8057" // runId — params.runId (#228)
     );
   });
 

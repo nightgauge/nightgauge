@@ -12,6 +12,12 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
+// testRunID is a canonical lowercase UUIDv7. Every RunStage test that expects
+// a dispatch to succeed must carry one: RunStage refuses to emit without a run
+// identity (ADR-017 step 0b), so an omitted RunID is no longer a benign default
+// but the assertion firing.
+const testRunID = "01890a5d-ac96-774b-bcce-b302099a8057"
+
 // newTestStageRunner creates an IpcStageRunner backed by a minimal Server
 // that writes events to the provided buffer. This mirrors the pattern used
 // in server_test.go and server_protocol_test.go.
@@ -144,6 +150,7 @@ func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 		ContextFile: "/tmp/ctx.json",
 		OutputFile:  "/tmp/out.json",
 		TargetRepo:  "/workspace/repo",
+		RunID:       testRunID,
 	}
 
 	// Run RunStage in a goroutine since it blocks until result is delivered
@@ -258,6 +265,7 @@ func TestRunStage_FailureExitCodeNonZero(t *testing.T) {
 		IssueNumber: 55,
 		Repo:        "nightgauge/nightgauge",
 		Timeout:     10 * time.Second,
+		RunID:       testRunID,
 	}
 
 	resultCh := make(chan struct {
@@ -309,6 +317,7 @@ func TestRunStage_ReturnsErrorOnContextCancelled(t *testing.T) {
 		IssueNumber: 77,
 		Repo:        "nightgauge/nightgauge",
 		Timeout:     10 * time.Second,
+		RunID:       testRunID,
 	}
 
 	resultCh := make(chan struct {
@@ -394,6 +403,7 @@ func TestRunStage_ReturnsErrorOnContextTimeout(t *testing.T) {
 		IssueNumber: 88,
 		Repo:        "nightgauge/nightgauge",
 		Timeout:     10 * time.Second,
+		RunID:       testRunID,
 	}
 
 	result, err := runner.RunStage(ctx, params)
@@ -424,6 +434,7 @@ func TestRunStage_AutonomousMode_ForwardsFlag(t *testing.T) {
 		Repo:        "nightgauge/nightgauge",
 		Model:       "claude-sonnet-4-20250514",
 		Timeout:     10 * time.Second,
+		RunID:       testRunID,
 	}
 
 	emittedParams := runStageAndCapture(t, runner, ctx, cancel, params, &buf)
@@ -438,18 +449,30 @@ func TestRunStage_AutonomousMode_ForwardsFlag(t *testing.T) {
 	}
 }
 
-// TestRunStage_ForwardsRunID verifies that the run's UUID (from the runtime
-// state) is threaded onto the emitted pipeline.runStage payload as "runId"
-// (#228). Without this, the TS SkillRunner opens the SDK TraceRecorder with no
-// run_id and it silently disables, so interactive/IPC runs lose their trace.
+// TestRunStage_ForwardsRunID verifies that the run identity the scheduler
+// populated on StageRunParams is threaded onto the emitted pipeline.runStage
+// payload as "runId" (#228, ADR-017 step 0b). Without this, the TS SkillRunner
+// opens the SDK TraceRecorder with no run_id and it silently disables, so
+// interactive/IPC runs lose their trace.
+//
+// The value is read from params.RunID, not params.Runtime.RunID: the scheduler
+// is the authority that mints the id and stamps it on the dispatch, and the
+// runner must not re-derive it from a second source that could disagree.
 func TestRunStage_ForwardsRunID(t *testing.T) {
 	var buf bytes.Buffer
 	runner := newTestStageRunner(&buf)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Runtime carries a DIFFERENT id than the dispatch on purpose. In
+	// production the two always agree — the scheduler stamps params.RunID from
+	// runtime.RunID — so a test where they agree cannot tell which one the
+	// runner read, and `params.RunID` could be swapped for
+	// `params.Runtime.RunID` with the suite green. Disagreeing here makes the
+	// single-authority property observable: the emitted value must be the
+	// DISPATCH's id.
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 101, "")
-	rt.RunID = "01890a5d-ac96-774b-bcce-b302099a8057"
+	rt.RunID = "0189ffff-dead-7bee-8fff-000000000000"
 
 	params := orchestrator.StageRunParams{
 		Stage:       state.PipelineStage("feature-dev"),
@@ -458,34 +481,71 @@ func TestRunStage_ForwardsRunID(t *testing.T) {
 		Model:       "claude-sonnet-4-20250514",
 		Timeout:     10 * time.Second,
 		Runtime:     rt,
+		RunID:       testRunID,
 	}
 
 	emittedParams := runStageAndCapture(t, runner, ctx, cancel, params, &buf)
-	if emittedParams.RunID != "01890a5d-ac96-774b-bcce-b302099a8057" {
-		t.Errorf("emitted RunID = %q, want the runtime's RunID", emittedParams.RunID)
+	if emittedParams.RunID != testRunID {
+		t.Errorf("emitted RunID = %q, want the dispatch's RunID %q (Runtime carried %q — the runner must "+
+			"not re-derive the id from a second source)", emittedParams.RunID, testRunID, rt.RunID)
 	}
 }
 
-// TestRunStage_NilRuntimeYieldsEmptyRunID guards the nil-Runtime path so the
-// RunID threading never panics and simply emits an empty run id (the recorder
-// then falls back to run-state.json).
-func TestRunStage_NilRuntimeYieldsEmptyRunID(t *testing.T) {
+// TestRunStage_MissingRunIDRefusesDispatchAndDoesNotEmit is the ADR-017 step-0b
+// assertion, and it inverts the pre-#370 TestRunStage_NilRuntimeYieldsEmptyRunID
+// — which codified the exact behaviour that made F16 possible.
+//
+// A dispatch with no run identity used to emit pipeline.runStage with
+// runId="". Today that costs the stage its lifecycle trace: the SDK
+// TraceRecorder gets no id, falls back to run-state.json, and silently disables
+// itself when that does not resolve either (skillRunner.ts:3013-3019). Once
+// Decision 3's `run_id_required` lands (step 4), the same dispatch additionally
+// has its notifyPhaseTransition and notifyStageProgress calls hard-rejected by
+// the server, both rejections swallowed by PipelineBridge's bare `.catch(warn)`
+// — so the Go-scheduler IPC dispatch path loses phase markers and live progress
+// for that stage with no error anywhere, after a full stage's worth of tokens
+// has been spent.
+//
+// The fix is to fail at the dispatch boundary instead: loudly, at t=0, before
+// a child process spawns and before a single token is spent. The two halves
+// asserted here are therefore inseparable — an error that still emitted would
+// spawn the doomed stage anyway.
+func TestRunStage_MissingRunIDRefusesDispatchAndDoesNotEmit(t *testing.T) {
 	var buf bytes.Buffer
 	runner := newTestStageRunner(&buf)
 
-	ctx, cancel := context.WithCancel(context.Background())
 	params := orchestrator.StageRunParams{
 		Stage:       state.PipelineStage("feature-dev"),
 		IssueNumber: 101,
 		Repo:        "nightgauge/nightgauge",
 		Model:       "claude-sonnet-4-20250514",
 		Timeout:     10 * time.Second,
-		// Runtime intentionally nil
+		// RunID and Runtime intentionally absent — a programming error, not a
+		// supported configuration.
 	}
 
-	emittedParams := runStageAndCapture(t, runner, ctx, cancel, params, &buf)
-	if emittedParams.RunID != "" {
-		t.Errorf("emitted RunID = %q, want empty for nil Runtime", emittedParams.RunID)
+	result, err := runner.RunStage(context.Background(), params)
+	if err == nil {
+		t.Fatal("expected an error dispatching a stage with no run identity, got nil")
+	}
+	if !strings.Contains(err.Error(), "run identity") {
+		t.Errorf("error = %q, should name the missing invariant (run identity)", err.Error())
+	}
+	if result == nil || result.ExitCode == 0 {
+		t.Errorf("expected a non-zero exit result, got %+v", result)
+	}
+
+	// Nothing may reach TypeScript: no stage spawns, no tokens are spent.
+	if out := buf.String(); strings.Contains(out, "pipeline.runStage") {
+		t.Errorf("pipeline.runStage was emitted despite the missing run identity: %s", out)
+	}
+
+	// The refusal happens before any bookkeeping, so nothing is left behind.
+	runner.mu.Lock()
+	_, exists := runner.pendingResults["101#feature-dev"]
+	runner.mu.Unlock()
+	if exists {
+		t.Error("a pending result channel was registered for a refused dispatch")
 	}
 }
 
@@ -643,6 +703,7 @@ func TestRunStage_ForwardsServedModelAttribution(t *testing.T) {
 		Repo:        "nightgauge/nightgauge",
 		Model:       "claude-fable-5",
 		Timeout:     30 * time.Second,
+		RunID:       testRunID,
 	}
 
 	resultCh := make(chan struct {

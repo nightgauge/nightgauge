@@ -174,6 +174,9 @@ function params(overrides: Partial<RunStageParams> = {}): RunStageParams {
     model: "opus",
     timeout: 60_000,
     worktreeDir: "/test/workspace",
+    // Required since ADR-017 step 0b: the Go emitter never dispatches a stage
+    // without a run identity, so no caller of this type has one to omit.
+    runId: "01890a5d-ac96-774b-bcce-b302099a8057",
     ...overrides,
   };
 }

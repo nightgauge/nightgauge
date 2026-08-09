@@ -58,8 +58,13 @@ interface IpcRunStageParams {
   skillFallbackUsed?: boolean;
   /** When true, stall handling uses escalation+pause instead of silent kill (Issue #2656) */
   autonomousMode?: boolean;
-  /** UUID v7 run ID threaded from runstate for correlation (#3557) */
-  runId?: string;
+  /**
+   * The UUID v7 run identity this stage is dispatched under (#3557, ADR-017
+   * step 0b). REQUIRED: the Go emitter asserts a non-empty id at the dispatch
+   * boundary and refuses to emit without one, so there is no valid
+   * pipeline.runStage event that omits it.
+   */
+  runId: string;
 }
 
 /**
@@ -278,6 +283,15 @@ export class PipelineBridge {
           .call("pipeline.notifyPhaseTransition", {
             repo: ipcParams.repo ?? "",
             issueNumber: ipcParams.issueNumber,
+            // The run this phase belongs to (ADR-017 Decision 3, per-verb flip
+            // gate). The value source ships here in step 0b — non-empty by the
+            // dispatch assertion in IpcStageRunner.RunStage — while the server
+            // still ignores it: `pipeline.notifyPhaseTransition` unmarshals into
+            // a param struct that gains the field in step 2, and encoding/json
+            // discards unknown keys. Sending it now means step 4's flip to
+            // `run_id_required` finds a producer already populating it, rather
+            // than flipping onto a wire leg that has never carried an id.
+            runId: ipcParams.runId,
             stage,
             name,
             index,
@@ -353,6 +367,9 @@ export class PipelineBridge {
           .call("pipeline.notifyStageProgress", {
             repo: ipcParams.repo ?? "",
             issueNumber: ipcParams.issueNumber,
+            // Same as notifyPhaseTransition above: the value source ships in
+            // step 0b, the server-side param field in step 2 (ADR-017).
+            runId: ipcParams.runId,
             stage,
             inputTokens: usage.inputTokens,
             outputTokens: usage.outputTokens,

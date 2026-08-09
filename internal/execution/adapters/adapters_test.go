@@ -980,3 +980,70 @@ func TestGeminiBuildCommandTranslatesModel(t *testing.T) {
 		}
 	}
 }
+
+// TestRunIDEnvVar_AllAdapters is the ADR-017 step-0 exporter contract: EVERY
+// adapter's BuildCommand exports NIGHTGAUGE_RUN_ID when RunOptions.RunID is
+// set, and exports nothing at all when it is empty.
+//
+// Both halves matter. A missing export means the child process (and the SDK
+// TraceRecorder / hooks inside it) has no way to name the run it belongs to,
+// which is the whole point of the variable. An export of "" is worse than
+// absent: downstream readers test presence, so an empty value would be adopted
+// as a run identity that names nothing — exactly the F16 shape ADR-017 exists
+// to close. Empty is a real configuration (a non-pipeline dispatch such as
+// autonomous issue-refine has no run identity), not a defect to paper over.
+//
+// Asserted against the production BuildCommand return — never a hand-built map
+// — and the table is DRIVEN BY THE REGISTRY rather than hand-listed, so a ninth
+// adapter cannot dodge the contract by simply not being added here. A
+// hand-written list makes "every adapter" a claim about the list; deriving it
+// from NewRegistry() makes it a claim about the product, and the count
+// assertion below fails the moment the two diverge.
+//
+// The env key is spelled literally on purpose. Asserting against RunIDEnvVar
+// would pass if the constant itself were renamed, and the variable name IS the
+// wire contract — the readers are child processes, not this package.
+func TestRunIDEnvVar_AllAdapters(t *testing.T) {
+	const runID = "01890a5d-ac96-774b-bcce-b302099a8057"
+
+	registry := NewRegistry()
+	names := registry.Names()
+	if len(names) != 8 {
+		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 8 — "+
+			"if an adapter was added, confirm it exports NIGHTGAUGE_RUN_ID and update this count",
+			len(names), names)
+	}
+
+	base := RunOptions{
+		SkillPath:   "/skills/feature-dev/SKILL.md",
+		WorktreeDir: "/tmp/worktree",
+		IssueNumber: 370,
+		Repo:        "nightgauge/nightgauge",
+		Stage:       "feature-dev",
+		Prompt:      "implement",
+	}
+
+	for _, name := range names {
+		adapter, err := registry.Get(name)
+		if err != nil {
+			t.Fatalf("registry.Get(%q): %v", name, err)
+		}
+
+		t.Run(name+"/present", func(t *testing.T) {
+			opts := base
+			opts.RunID = runID
+			_, _, env := adapter.BuildCommand(opts)
+			if env["NIGHTGAUGE_RUN_ID"] != runID {
+				t.Errorf("%s: NIGHTGAUGE_RUN_ID = %q, want %q", adapter.Name(), env["NIGHTGAUGE_RUN_ID"], runID)
+			}
+		})
+
+		t.Run(name+"/absent", func(t *testing.T) {
+			opts := base // RunID deliberately empty — non-pipeline dispatch
+			_, _, env := adapter.BuildCommand(opts)
+			if v, ok := env["NIGHTGAUGE_RUN_ID"]; ok {
+				t.Errorf("%s: NIGHTGAUGE_RUN_ID present as %q with an empty RunID; it must not be exported at all", adapter.Name(), v)
+			}
+		})
+	}
+}

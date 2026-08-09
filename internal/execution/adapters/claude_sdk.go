@@ -94,6 +94,9 @@ func (a *ClaudeSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
+	if opts.RunID != "" {
+		env[RunIDEnvVar] = opts.RunID
+	}
 
 	// Pass through ANTHROPIC_API_KEY for SDK mode
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {

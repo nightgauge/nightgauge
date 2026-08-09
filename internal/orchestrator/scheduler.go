@@ -67,18 +67,29 @@ type telemetryService interface {
 
 // StageRunParams is the cross-mode stage execution request.
 type StageRunParams struct {
-	Stage             state.PipelineStage
-	IssueNumber       int
-	Repo              string
-	Model             string
-	MaxTokens         int
-	Timeout           time.Duration
-	SkillPath         string
-	ContextFile       string
-	OutputFile        string
-	TargetRepo        string
-	WorktreePath      string // Absolute path for Claude CLI working directory (IPC mode only)
-	Runtime           *state.RuntimeState
+	Stage        state.PipelineStage
+	IssueNumber  int
+	Repo         string
+	Model        string
+	MaxTokens    int
+	Timeout      time.Duration
+	SkillPath    string
+	ContextFile  string
+	OutputFile   string
+	TargetRepo   string
+	WorktreePath string // Absolute path for Claude CLI working directory (IPC mode only)
+	// Runtime is NON-OPTIONAL for production dispatches (ADR-017 step 0b).
+	// runPipeline constructs the runtime before it can reach a stage, so a nil
+	// Runtime here is a programming error, not a supported configuration —
+	// only tests construct it nil.
+	Runtime *state.RuntimeState
+	// RunID is the run identity this stage is dispatched under, populated from
+	// Runtime.RunID at the single production construction site. Non-optional
+	// for pipeline dispatches: IpcStageRunner.RunStage refuses to emit without
+	// it rather than sending an empty id the server's identity-bearing verbs
+	// would then hard-reject, silently, one swallowed `.catch` at a time
+	// (ADR-017 Decision 10).
+	RunID             string
 	AllowedTools      []string
 	Prompt            string
 	PhaseEventFn      func(stage, name string, index, total int)
@@ -2700,6 +2711,14 @@ func maxFloat64(a, b float64) float64 {
 	return b
 }
 
+// newRunID is runstate.NewRunID behind a package var so the run-identity
+// preflight's failure path is reachable from a test. NewRunID fails only on a
+// clock fault or a CSPRNG read error, neither of which a test can provoke — and
+// the whole point of that preflight is WHERE it fails from (below the terminal
+// defer, so the run is still booked), which is exactly the kind of claim that
+// rots silently if nothing exercises it. Production never reassigns this.
+var newRunID = runstate.NewRunID
+
 // runPipeline executes the full 6-stage pipeline for a board item.
 //
 // The loop integrates retry, budget, and RALPH engines:
@@ -2749,6 +2768,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// Load run_id for telemetry correlation (#3557). Prefer the RemoteRunID
 	// from the platform command payload (for remote-triggered runs); fall back
 	// to the locally-generated UUID v7 from runstate.
+	//
+	// runIDMintErr carries a mint failure forward to the run-identity preflight
+	// below the terminal defer (ADR-017 step 0b) — see the mint block.
+	var runIDMintErr error
 	{
 		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
 		if remoteRunID != "" {
@@ -2764,8 +2787,26 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// is still traced AND joined — exit records, telemetry, and the V3
 		// record all read runtime.RunID, so stamping it threads one key
 		// through every store.
+		//
+		// A mint failure is fatal for the run (ADR-017 step 0b) — but it is NOT
+		// aborted here. This point is ABOVE the terminal defer, so a bare return
+		// would exit outside the funnel every other pre-dispatch fatal exits
+		// through: the autonomous scheduler's Running entry would never be
+		// cleared (leaking a MaxConcurrent slot and pinning the issue), the
+		// board would stay In Progress, and there would be no pipeline_done, no
+		// history record, no outcome. So record the error, leave RunID empty,
+		// and let the run-identity preflight below the terminal defer — beside
+		// the license and identity preflights — refuse the run and book the
+		// failure. Nothing between here and there reads RunID in a way that
+		// misbehaves on empty: trace.NewWriter returns a nil (no-op) writer for
+		// an empty id, and registerRuntime keys on the issue number.
 		if runtime.RunID == "" {
-			if id, idErr := runstate.NewRunID(); idErr == nil {
+			id, idErr := newRunID()
+			if idErr != nil {
+				runIDMintErr = idErr
+				log.Printf("#%d: cannot mint a run identity: %v — the run will be refused at preflight (ADR-017)",
+					item.Number, idErr)
+			} else {
 				runtime.RunID = id
 			}
 		}
@@ -3151,6 +3192,24 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if err := s.stateSvc.StartPipeline(ctx, item.ID, state.StageIssuePickup); err != nil {
 			log.Printf("#%d: board sync unavailable, continuing: %v", item.Number, err)
 		}
+	}
+
+	// Run-identity preflight (ADR-017 step 0b): refuse a run that has no
+	// identity. Every store this run would write — exit records, telemetry, the
+	// V3 record — is keyed by run_id, and every stage would dispatch without
+	// one. The mint above records its failure instead of returning, because a
+	// return there sits above the terminal defer; refusing here books the
+	// failure exactly as a license or identity block is booked. First of the
+	// three preflights because it is the only one that costs nothing to check.
+	if runtime.RunID == "" {
+		reason := "run identity preflight: no run_id resolved for this run"
+		if runIDMintErr != nil {
+			reason = fmt.Sprintf("run identity preflight: cannot mint a run_id: %v", runIDMintErr)
+		}
+		log.Printf("#%d: %s", item.Number, reason)
+		runtime.SetStageError("pipeline-start", reason)
+		s.emitStateChanged(item.Repo, item.Number, runtime)
+		return // Pipeline blocked by run-identity check
 	}
 
 	// License preflight check (before any stage)
@@ -3639,6 +3698,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			TargetRepo:   item.Repo,
 			WorktreePath: workspaceRoot, // Working directory for Claude CLI (IPC mode)
 			Runtime:      runtime,
+			// The run identity this dispatch is booked under (ADR-017 step 0b).
+			// Guaranteed non-empty: the run-identity preflight above refuses the
+			// run rather than letting it reach a stage without one, so the
+			// dispatch-boundary assertion in IpcStageRunner.RunStage is a
+			// backstop, not a live branch.
+			RunID: runtime.RunID,
 			// Every stage the scheduler dispatches runs non-interactively, so
 			// strip the tools that cannot work there (#79 moved this out of the
 			// composer, which serves interactive callers too).

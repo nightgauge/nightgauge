@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 func TestHostBinaryPath(t *testing.T) {
@@ -234,4 +235,120 @@ func TestRunStage_NonAgenticAdapter_RejectedBeforeSpawn(t *testing.T) {
 			t.Errorf("expected error to contain %q, got: %v", want, err)
 		}
 	}
+}
+
+// TestBuildRunOptions_ThreadsRunIDFromRuntime covers the one place where the
+// run identity crosses from the orchestrator layer into the adapter layer
+// (ADR-017 step 0). StageOptions already carries the whole RuntimeState, so the
+// mapping reads Runtime.RunID directly rather than duplicating a scalar — one
+// source of truth per layer. Before #370 the mapping dropped the runtime
+// entirely and every spawned stage ran with no way to name its run.
+func TestBuildRunOptions_ThreadsRunIDFromRuntime(t *testing.T) {
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "")
+	rt.RunID = "01890a5d-ac96-774b-bcce-b302099a8057"
+
+	got := buildRunOptions(StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 370,
+		Stage:       "feature-dev",
+		Runtime:     rt,
+	}, "/tmp/worktree")
+
+	if got.RunID != rt.RunID {
+		t.Errorf("RunID = %q, want %q", got.RunID, rt.RunID)
+	}
+}
+
+// TestBuildRunOptions_NilRuntimeYieldsEmptyRunID is the refineViaCLI shape
+// (autonomous.go's issue-refine dispatch): a legitimate non-pipeline execution
+// that carries no run identity at all. It must map to an empty RunID — no
+// panic, and no invented id — so the adapters export no NIGHTGAUGE_RUN_ID.
+func TestBuildRunOptions_NilRuntimeYieldsEmptyRunID(t *testing.T) {
+	got := buildRunOptions(StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 370,
+		Stage:       "issue-refine",
+		// Runtime intentionally nil
+	}, "/tmp/worktree")
+
+	if got.RunID != "" {
+		t.Errorf("RunID = %q, want empty for a nil Runtime", got.RunID)
+	}
+}
+
+// lookupEnv finds key in a composed environment slice, honoring the
+// last-entry-wins rule os/exec applies (Cmd.environ dedups keeping the last
+// occurrence). Returns the effective value and whether the key is present at
+// all — the distinction the whole run-identity contract turns on.
+func lookupEnv(env []string, key string) (string, bool) {
+	prefix := key + "="
+	value, found := "", false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, prefix) {
+			value, found = strings.TrimPrefix(kv, prefix), true
+		}
+	}
+	return value, found
+}
+
+// TestComposeStageEnv_RunIdentityIsReconciledNotInherited pins the ADR-017
+// anti-laundering rule at the only place it is observable: the environment the
+// CHILD receives.
+//
+// nightgauge dispatches nightgauge, so a host environment already carrying
+// NIGHTGAUGE_RUN_ID is not hypothetical — a stage subprocess is itself running
+// under one, and anything it launches inherits it. An identity-less dispatch
+// (autonomous issue-refine; a manual per-stage invocation) that merely "adds
+// no run id" would therefore still hand the child a run id: the OUTER run's.
+// Every record the child then writes is booked under a run it has nothing to
+// do with. Absence has to be produced, not assumed.
+//
+// The counterpart case pins the other half: when the dispatch DOES have an
+// identity, its value must beat the inherited one rather than landing beside it
+// with precedence left to chance.
+func TestComposeStageEnv_RunIdentityIsReconciledNotInherited(t *testing.T) {
+	const outer = "01890a5d-ac96-774b-bcce-b302099a8057"
+	const inner = "0189aaaa-bbbb-7ccc-8ddd-eeeeffff0000"
+
+	// A host env that is itself inside a run — the recursive-dogfood shape.
+	inherited := []string{"PATH=/usr/bin", adapters.RunIDEnvVar + "=" + outer}
+
+	t.Run("identity-less dispatch strips the inherited id", func(t *testing.T) {
+		env := composeStageEnv(inherited, map[string]string{"NIGHTGAUGE_STAGE": "issue-refine"}, "", "")
+
+		if v, ok := lookupEnv(env, adapters.RunIDEnvVar); ok {
+			t.Errorf("%s present as %q; a dispatch with no identity must leave the child with none — "+
+				"inheriting %q would book its records under the outer run", adapters.RunIDEnvVar, v, outer)
+		}
+		// The strip is surgical: unrelated inherited entries survive. PATH is
+		// asserted by containment, not equality — applyNodeResolution prepends
+		// the host's nvm bin dir when there is one (#3863), which is host state.
+		if v, ok := lookupEnv(env, "PATH"); !ok || !strings.Contains(v, "/usr/bin") {
+			t.Errorf("PATH = %q (present=%v), want the inherited entry preserved", v, ok)
+		}
+		if v, ok := lookupEnv(env, "NIGHTGAUGE_STAGE"); !ok || v != "issue-refine" {
+			t.Errorf("NIGHTGAUGE_STAGE = %q (present=%v), want the adapter's export", v, ok)
+		}
+	})
+
+	t.Run("identified dispatch overrides the inherited id", func(t *testing.T) {
+		adapterEnv := map[string]string{adapters.RunIDEnvVar: inner}
+		env := composeStageEnv(inherited, adapterEnv, "", inner)
+
+		if v, ok := lookupEnv(env, adapters.RunIDEnvVar); !ok || v != inner {
+			t.Errorf("%s = %q (present=%v), want this dispatch's id %q, not the inherited %q",
+				adapters.RunIDEnvVar, v, ok, inner, outer)
+		}
+		// Belt and braces: no stale entry lingers for a later reader that scans
+		// forward instead of taking the last match.
+		count := 0
+		for _, kv := range env {
+			if strings.HasPrefix(kv, adapters.RunIDEnvVar+"=") {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("%s appears %d times in the composed env, want exactly 1", adapters.RunIDEnvVar, count)
+		}
+	})
 }
