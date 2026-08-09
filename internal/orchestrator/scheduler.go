@@ -2065,60 +2065,33 @@ func (s *Scheduler) loadQueue() {
 }
 
 // sweepMergedWorktrees reclaims pipeline-created worktrees whose branch is
-// already fully represented on the default branch. Mirrors
-// (*AutonomousScheduler).sweepMergedWorktrees (autonomous_worktree_sweep.go)
-// for the non-autonomous Go entry point (a plain `nightgauge run` / scheduler
-// invocation outside the autonomous loop), which otherwise has no
-// startup/reconcile sweep at all (#106). Runs once at scheduler startup,
-// alongside reconcileOrphanedComposeProjects. Best-effort: a per-repo failure
-// is logged and the worktrees stay for the next reconcile.
+// already fully represented on the default branch, for the non-autonomous Go
+// entry point (a plain `nightgauge run` / scheduler invocation outside the
+// autonomous loop), which otherwise has no startup/reconcile sweep at all
+// (#106). Runs once at scheduler startup, alongside
+// reconcileOrphanedComposeProjects.
+//
+// The decision logic lives in runMergedWorktreeSweep, shared with
+// (*AutonomousScheduler).sweepMergedWorktrees (#403); this receiver only
+// supplies the queue-derived in-flight set and log prefix. Read that
+// function's doc before changing what is protected here — this copy used to
+// union activeWorktreeIssues() into the protected set, which protected every
+// candidate by construction and made the sweep a no-op.
 func (s *Scheduler) sweepMergedWorktrees() {
-	roots := s.repoScanRoots()
-	if len(roots) == 0 {
-		// Mirrors the autonomous copy of this guard (#302). Same reasoning as
-		// the undetermined-worktree-set skip below, and the same volume: this
-		// pass is the only thing that notices leaked worktrees, so a silent
-		// skip is indistinguishable from a clean sweep.
-		log.Printf("worktree-reconcile: WARN no repo scan roots resolved — skipping the merged-worktree sweep; leaked worktrees stay undetected until the root lookup is fixed")
-		return
-	}
-
+	// Queued work is off-limits regardless of how merged its branch looks: an
+	// item still in the queue may have stages left to execute in that
+	// directory.
 	s.mu.Lock()
-	active := make(map[int]bool, len(s.queue))
+	inFlight := make(map[int]bool, len(s.queue))
 	for _, item := range s.queue {
-		active[item.IssueNumber] = true
+		inFlight[item.IssueNumber] = true
 	}
 	s.mu.Unlock()
-	// The worktree scan WIDENS the protected set beyond the queue, so an
-	// undetermined answer is not a smaller protection — it is an unknown one,
-	// and the sweep removes directories. Skip rather than reclaim on a set we
-	// could not read (#296).
-	worktreeIssues, determined := s.activeWorktreeIssues()
-	if !determined {
-		log.Printf("worktree-reconcile: WARN active-worktree set is undetermined — skipping the merged-worktree sweep")
-		return
-	}
-	for issue := range worktreeIssues {
-		active[issue] = true
-	}
 
-	for _, root := range roots {
-		res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
-			RepoRoot:     root,
-			ActiveIssues: active,
-		})
-		if err != nil {
-			log.Printf("worktree-reconcile: sweep %s: %v", root, err)
-			continue
-		}
-		for _, wt := range res.Reclaimed {
-			log.Printf("worktree-reconcile: reclaimed %s (branch %s, issue #%d — content already on %s)",
-				wt.Path, wt.Branch, wt.IssueNumber, res.BaseRef)
-		}
-		if len(res.Errors) > 0 {
-			log.Printf("worktree-reconcile: %s: %d removal failure(s): %v", root, len(res.Errors), res.Errors)
-		}
-	}
+	// s.mu is released before the scan: activeWorktreeIssues shells out to git
+	// and must never run under the queue lock.
+	_, determined := s.activeWorktreeIssues()
+	runMergedWorktreeSweep(s.repoScanRoots(), inFlight, determined, "worktree-reconcile")
 }
 
 // reconcileOrphanedComposeProjects tears down per-issue docker compose

@@ -162,3 +162,84 @@ func TestSchedulerSweepMergedWorktrees_ZeroRootsIsLoud(t *testing.T) {
 		t.Errorf("skip log does not match the sibling skip's idiom; got %q", out)
 	}
 }
+
+// unreadableRoot returns a directory that is not a git repository and cannot
+// reach one by walking up, so `git worktree list` there fails and
+// execution.ActiveWorktreeIssues reports UNDETERMINED. The ceiling is its own
+// private parent, so repos built by mergedWorktreeRepo (a different TempDir)
+// keep working normally.
+func unreadableRoot(t *testing.T) string {
+	t.Helper()
+	box := t.TempDir()
+	dir := filepath.Join(box, "not-a-repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", box)
+	return dir
+}
+
+// TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep is the #403 guard
+// on the path that actually runs in production. The autonomous sweep REMOVES
+// DIRECTORIES; an active-worktree set it could not read means it cannot trust
+// its own candidate enumeration either (one unreadable sibling root hides
+// whatever that root held). Skip loudly — never reclaim on an answer that was
+// never obtained (#296).
+func TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep(t *testing.T) {
+	root, wt := mergedWorktreeRepo(t, 403) // reclaimable: content already on main
+	notARepo := unreadableRoot(t)
+
+	as := &AutonomousScheduler{
+		scheduler: &Scheduler{
+			workspaceRoot:     root,
+			repoRootsResolver: func() []string { return []string{notARepo} },
+		},
+		state: &AutonomousState{},
+	}
+
+	out := captureLog(t, func() { as.sweepMergedWorktrees() })
+
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("worktree %s was reclaimed on an undetermined active set: %v", wt, err)
+	}
+	if !strings.Contains(out, "autonomous: worktree sweep: WARN") {
+		t.Errorf("the skip is not loud on the autonomous path; got %q", out)
+	}
+	if !strings.Contains(out, "active-worktree set is undetermined") {
+		t.Errorf("skip log does not name the cause; got %q", out)
+	}
+}
+
+// TestSchedulerSweepMergedWorktrees_ReclaimsUnqueuedWorktree pins the OTHER
+// half of #403: the Scheduler copy used to union activeWorktreeIssues() into
+// its protected set, and that scan walks the same roots with the same lister
+// and the same issue-number parser as the sweep's own candidate enumeration —
+// so every candidate protected itself and the sweep could never reclaim
+// anything. A merged worktree for an issue nobody has queued must go.
+func TestSchedulerSweepMergedWorktrees_ReclaimsUnqueuedWorktree(t *testing.T) {
+	root, wt := mergedWorktreeRepo(t, 704)
+
+	s := &Scheduler{workspaceRoot: root}
+	s.sweepMergedWorktrees()
+
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("merged worktree %s survived the scheduler sweep (err=%v) — the sweep is a no-op again", wt, err)
+	}
+}
+
+// TestSchedulerSweepMergedWorktrees_ProtectsQueuedIssues is the counterweight
+// to the test above: dropping the self-protecting union must not drop the
+// protection that matters. A queued issue's worktree survives even though its
+// branch content is already on the default branch — the run may still have
+// stages to execute in that directory.
+func TestSchedulerSweepMergedWorktrees_ProtectsQueuedIssues(t *testing.T) {
+	root, wt := mergedWorktreeRepo(t, 705)
+
+	s := &Scheduler{workspaceRoot: root}
+	s.queue = []QueueItem{{Repo: "acme/app", IssueNumber: 705, Status: "processing"}}
+	s.sweepMergedWorktrees()
+
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("a queued run's worktree must survive the sweep: %v", err)
+	}
+}
