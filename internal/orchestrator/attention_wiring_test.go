@@ -633,6 +633,77 @@ func TestReconcileTerminalFailureCardsRetractsOnceResumed(t *testing.T) {
 	}
 }
 
+// TestReconcileTerminalFailureCardsNilStateRetractsNothing pins the third of
+// the three states the reconcile must distinguish (#302, per the #166 rule).
+//
+// The function's own header states invariant 1 — "I could not look" is never
+// "nothing is wrong" — and the List error path honors it. The nil-state path
+// did not: `as.state != nil && ...` folds an unreadable state into
+// `stillHalted == false`, which is the *legitimately not halted* branch, and
+// that branch retracts every open terminal-failure card. The halt is still in
+// force; the operator's inbox just goes quiet.
+func TestReconcileTerminalFailureCardsNilStateRetractsNothing(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.state.Status = "running"
+	as.Pause("haltQueueOnSlotFailure: issue #47 failed at feature-validate", "haltQueueOnSlotFailure")
+	as.RaiseTerminalFailure("octocat/acme", 47, "feature-validate", "gate_failure", 3.0)
+
+	if reqs := openRequests(t, as); len(reqs) != 1 {
+		t.Fatalf("setup: got %d requests, want 1", len(reqs))
+	}
+
+	// The state is unreadable — not "resumed". Nothing about the halt changed.
+	as.mu.Lock()
+	as.state = nil
+	as.mu.Unlock()
+
+	out := captureLog(t, func() { as.reconcileTerminalFailureCards() })
+
+	var survived bool
+	for _, r := range openRequests(t, as) {
+		if r.Producer == producerTerminalFailure {
+			survived = true
+		}
+	}
+	if !survived {
+		t.Error("nil autonomous state retracted the terminal-failure card — 'I could not look' was treated as 'nothing is wrong'")
+	}
+	if !strings.Contains(out, "autonomous state unavailable") {
+		t.Errorf("the skip is silent — nothing names why the reconcile declined to act; got %q", out)
+	}
+	// Same volume as the sibling fail-open skips (the zero-roots worktree sweep
+	// logs `worktree-reconcile: WARN ...`): an unreadable autonomous state that
+	// suppresses a whole producer's reconciliation is a warning, not a debug
+	// line, and an operator grepping WARN must find it.
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("a fail-open that suppresses reconciliation is a warning, not a debug line; got %q", out)
+	}
+}
+
+// TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted keeps the
+// middle state honest: a *readable* state that is not paused for
+// haltQueueOnSlotFailure must still retract, or the #302 fix would turn the
+// fail-open into a card that never clears.
+func TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted(t *testing.T) {
+	as := newAttentionProducerScheduler(t)
+	as.state.Status = "running"
+	as.Pause("haltQueueOnSlotFailure: issue #48 failed at feature-dev", "haltQueueOnSlotFailure")
+	as.RaiseTerminalFailure("octocat/acme", 48, "feature-dev", "validation_error", 1.0)
+
+	as.mu.Lock()
+	as.state.Status = "running"
+	as.state.PauseTriggeredBy = ""
+	as.mu.Unlock()
+
+	as.reconcileTerminalFailureCards()
+
+	for _, r := range openRequests(t, as) {
+		if r.Producer == producerTerminalFailure {
+			t.Errorf("card survived a readable, un-halted state: %+v", r)
+		}
+	}
+}
+
 // --- Producer (unnumbered): unverified-deliverable streak (#177) -------------
 
 func TestUnverifiedDeliverableStreakFirstOccurrenceRaisesFYIStreakOne(t *testing.T) {

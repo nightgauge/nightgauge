@@ -1516,6 +1516,24 @@ export interface RecentBashEntry {
 }
 
 /**
+ * A {@link RecentBashEntry} plus the bookkeeping the ring keeps about it.
+ *
+ * Deliberately NOT part of {@link RecentBashEntry}: `indexed` is diagnostic
+ * state about the stream, not part of the exit record's wire shape, and
+ * `snapshot()` rebuilds each entry field-by-field so it can never leak into
+ * the persisted `recent_bash` array.
+ */
+interface RingEntry extends RecentBashEntry {
+  /**
+   * True when this tool_use arrived with a string id and was written to
+   * `byId` — i.e. a later tool_result *could* find it. False means the entry
+   * is unreachable by construction: no result will ever bind to it, whatever
+   * the CLI sends. (#302)
+   */
+  indexed: boolean;
+}
+
+/**
  * Bounded ring of the most recent Bash commands observed in a stage's stream.
  *
  * Stage subprocesses run with `--no-session-persistence`, so no transcript
@@ -1531,13 +1549,35 @@ export interface RecentBashEntry {
  * {@link extractBashCommand} was extracted in #147.
  */
 export class RecentBashRing {
-  private readonly entries: RecentBashEntry[] = [];
+  private readonly entries: RingEntry[] = [];
   /**
    * tool_use id → its entry, for correlating the tool_result that arrives in a
    * later *user* message. Holds only ids still present in the ring; evicted
    * entries are deleted so the map stays bounded alongside it.
    */
-  private readonly byId = new Map<string, RecentBashEntry>();
+  private readonly byId = new Map<string, RingEntry>();
+
+  /**
+   * How many tool_results actually JOINED a retained entry over the life of
+   * the stage. A lifetime tally, not a property of the current window — an
+   * eviction never decrements it, because the question it answers is "did
+   * correlation ever work here?", not "how many of the ten retained commands
+   * have exits right now".
+   *
+   * Supporting data for the #302 report, NOT its predicate: correlation is a
+   * race (a stage killed mid-command leaves a perfectly well-formed entry
+   * unbound) and a lifetime tally cannot describe the ten entries the record
+   * actually carries. {@link retainedIndexedCount} decides; this explains.
+   */
+  private correlated = 0;
+
+  /**
+   * Every Bash command observed over the life of the stage, including the ones
+   * since evicted. `size` reports the window; this reports the workload, and
+   * the two are different numbers the moment a stage runs more than ten
+   * commands — so the warning must not conflate them.
+   */
+  private captured = 0;
 
   /**
    * Record a Bash tool_use. No-op for every other tool and for a Bash call
@@ -1554,8 +1594,13 @@ export class RecentBashRing {
     if (cmd === undefined) return;
     if (toolUseId !== undefined && this.byId.has(toolUseId)) return;
 
-    const entry: RecentBashEntry = { cmd };
+    // `indexed` is decided here and never revised: it records whether this
+    // entry was ever *reachable* by a tool_result, which is a property of the
+    // stream shape, not of whether the result happened to arrive before the
+    // stage died. (#302)
+    const entry: RingEntry = { cmd, indexed: toolUseId !== undefined };
     this.entries.push(entry);
+    this.captured++;
     if (toolUseId !== undefined) this.byId.set(toolUseId, entry);
 
     while (this.entries.length > RECENT_BASH_MAX_ENTRIES) {
@@ -1582,6 +1627,11 @@ export class RecentBashRing {
   observeToolResult(toolUseId: string, isError: boolean): void {
     const entry = this.byId.get(toolUseId);
     if (!entry) return;
+    // Count the JOIN, not the report. The CLI can deliver the same result
+    // through more than one envelope shape, and a repeat delivery is not a
+    // second correlated exit — counting it would let one chatty result mask
+    // a stage where nothing else correlated at all.
+    if (entry.exit === undefined) this.correlated++;
     entry.exit = isError ? 1 : 0;
   }
 
@@ -1601,6 +1651,116 @@ export class RecentBashRing {
   get size(): number {
     return this.entries.length;
   }
+
+  /** See {@link captured} — the lifetime workload, not the retained window. */
+  get capturedTotal(): number {
+    return this.captured;
+  }
+
+  /** See {@link correlated}; reported as supporting data by the #302 arm. */
+  get correlatedExits(): number {
+    return this.correlated;
+  }
+
+  /**
+   * How many of the CURRENTLY RETAINED entries were indexed — i.e. how many of
+   * the commands the exit record will actually carry could ever have had an
+   * exit code bound to them.
+   *
+   * Zero here, with a non-empty ring, is the #302 shape: every command in the
+   * record is unreachable by construction, so `exit` is absent from all of
+   * them and `omitempty` makes the record read as healthy and terse. It is a
+   * property of the window on purpose — a stage that correlated once early and
+   * then drifted for fifty id-less commands evicts its one good entry, and
+   * that is precisely the record nothing else notices.
+   */
+  get retainedIndexedCount(): number {
+    let n = 0;
+    for (const e of this.entries) if (e.indexed) n++;
+    return n;
+  }
+}
+
+/**
+ * The stage's forensic-capture self-check, as a string or nothing (#147/#302).
+ *
+ * Lives out here for the same reason {@link extractBashCommand} and
+ * {@link RecentBashRing} do: the check itself runs inside
+ * `runStageSkillHeadless`, which spawns a subprocess and cannot be exercised
+ * cheaply, so the condition would otherwise be untestable — and an untestable
+ * detector is how #147 stayed silent through 2,533 records.
+ *
+ * Two arms, one class of defect. In both, the stream parser and the CLI's
+ * event shape have diverged and the exit record under-reports while looking
+ * healthy and terse, because both `last_bash_command` and `last_bash_exit` are
+ * `omitempty`:
+ *
+ * 1. Tool events parsed, no Bash command captured. The original #147 gap.
+ * 2. Bash commands retained, and NONE of them indexed — every `tool_use` still
+ *    in the record arrived without a string id, so no `tool_result` could ever
+ *    have found them. `size > 0` suppressed arm 1, `recent_bash` is populated,
+ *    and every entry's exit code is missing by construction: the stage reads
+ *    as "ran ten commands, none of which are known to have failed" (#302).
+ *
+ * Arm 2 asks about *indexed-ness of the retained window*, not about lifetime
+ * correlation, because those two answer different questions and only the first
+ * one describes the record being written:
+ *
+ * - a stage killed while its first-and-only command — well-formed id and all —
+ *   was still running has zero correlated exits and is perfectly healthy;
+ *   blaming the parser there is a confident wrong diagnosis;
+ * - a stage that correlated once early and then drifted for fifty id-less
+ *   commands has a non-zero lifetime tally, evicts its one good entry, and
+ *   ships exactly the "healthy and terse" record this check exists to catch.
+ */
+export function describeForensicCaptureGap(args: {
+  stage: string;
+  parsedToolEventCount: number;
+  /** Commands still in the ring — the ones the exit record will carry. */
+  retainedCommands: number;
+  /** How many of those were indexed and could have bound an exit code. */
+  retainedIndexedCommands: number;
+  /** Lifetime commands observed, including evicted ones. Reported only. */
+  capturedTotal: number;
+  /** Lifetime tool_results that joined an entry. Reported only. */
+  correlatedExits: number;
+}): string | undefined {
+  const {
+    stage,
+    parsedToolEventCount,
+    retainedCommands,
+    retainedIndexedCommands,
+    capturedTotal,
+    correlatedExits,
+  } = args;
+  // No tool events parsed at all is a different (and already-reported)
+  // condition — a stage that genuinely did nothing, not a capture gap.
+  if (parsedToolEventCount <= 0) return undefined;
+
+  if (retainedCommands === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) but captured no Bash command, so last_bash_command will be absent ` +
+      `from the exit record and a retro cannot answer "what was it doing when it ` +
+      `died?". The stream parser and the CLI's event shape have likely diverged. ` +
+      `(Issue #147)\n`
+    );
+  }
+  // One indexed entry is enough to say the shapes still agree: whether its
+  // result arrived is a race with the kill, not a capture defect.
+  if (retainedIndexedCommands === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) and captured ${capturedTotal} Bash command(s) ` +
+      `(${correlatedExits} exit(s) correlated over the stage), but NONE of the ` +
+      `${retainedCommands} command(s) retained in the exit record carried a usable ` +
+      `tool_use id — no tool_result could bind to any of them, so every retained ` +
+      `exit code is absent and a retro cannot answer "did the last thing it ran ` +
+      `fail?". The stage's tool_use ids and the parser have likely diverged. ` +
+      `(Issue #302)\n`
+    );
+  }
+  return undefined;
 }
 
 /** How many tool calls the per-stage all-tools log retains (Issue #144). */
@@ -5843,17 +6003,21 @@ export function runStageSkillHeadless(
     // rather than a defect — so the gap survived unnoticed until a failure
     // needed it and it was not there.
     //
-    // A stage that parsed tool events but captured no Bash command means the
-    // stream shape and the parser have diverged. Say so on stderr, which is
-    // itself captured into `stderr_tail`, so the record carries evidence of
+    // A stage that parsed tool events but captured no Bash command — or whose
+    // retained commands all arrived without a usable tool_use id, so no exit
+    // code could ever bind to the record it is about to write (#302) — means
+    // the stream shape and the parser have diverged. Say so on stderr, which
+    // is itself captured into `stderr_tail`, so the record carries evidence of
     // its own incompleteness instead of quietly under-reporting.
-    if (recentBashRing.size === 0 && parsedToolEventCount > 0) {
-      const gapWarning =
-        `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
-        `event(s) but captured no Bash command, so last_bash_command will be absent ` +
-        `from the exit record and a retro cannot answer "what was it doing when it ` +
-        `died?". The stream parser and the CLI's event shape have likely diverged. ` +
-        `(Issue #147)\n`;
+    const gapWarning = describeForensicCaptureGap({
+      stage,
+      parsedToolEventCount,
+      retainedCommands: recentBashRing.size,
+      retainedIndexedCommands: recentBashRing.retainedIndexedCount,
+      capturedTotal: recentBashRing.capturedTotal,
+      correlatedExits: recentBashRing.correlatedExits,
+    });
+    if (gapWarning) {
       callbacks?.onStderr?.(gapWarning);
       // `exitStderrTail` is fed ONLY by the subprocess's own stderr stream, so
       // an onStderr callback does not reach it — the callback notifies the

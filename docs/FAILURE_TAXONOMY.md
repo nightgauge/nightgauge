@@ -793,14 +793,15 @@ cause. Worst case, the empty result is read as an affirmative verdict and
 
 **Fixed instances (evidence):**
 
-| Issue | Where                  | What silently did nothing                                                                                                         |
-| ----- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| #149  | recovery               | the catch-path branch was dropped, so the recovery never ran                                                                      |
-| #151  | capture                | shape-blind parse — the runtime shape fell through the singular-only branch                                                       |
-| #154  | tokenParser            | `tool_use.id` discarded at a parse boundary, so `last_bash_exit` could never populate                                             |
-| #163  | cleanup                | `loadFeatureBranch(workspaceRoot, …)` resolved `""` on worktree-isolated runs; cleanup hit nothing                                |
-| #165  | branch cleanup         | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"                                       |
-| #299  | reconcile / V2 history | the same `loadFeatureBranch(workspaceRoot, …)` shape: the branch-PR probe never ran, and history recorded a fabricated `feat/{N}` |
+| Issue | Where                  | What silently did nothing                                                                                                              |
+| ----- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| #149  | recovery               | the catch-path branch was dropped, so the recovery never ran                                                                           |
+| #151  | capture                | shape-blind parse — the runtime shape fell through the singular-only branch                                                            |
+| #154  | tokenParser            | `tool_use.id` discarded at a parse boundary, so `last_bash_exit` could never populate                                                  |
+| #163  | cleanup                | `loadFeatureBranch(workspaceRoot, …)` resolved `""` on worktree-isolated runs; cleanup hit nothing                                     |
+| #165  | branch cleanup         | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"                                            |
+| #299  | reconcile / V2 history | the same `loadFeatureBranch(workspaceRoot, …)` shape: the branch-PR probe never ran, and history recorded a fabricated `feat/{N}`      |
+| #302  | four guards            | id-less stages passed the forensic self-check; zero-root sweeps, nil-state retraction, and all three terminal-funnel skips were silent |
 
 Every one passed its tests. Several sat in code whose own comment asserted it
 was the sole detection channel for the thing it was failing to detect.
@@ -883,7 +884,19 @@ excluded. The confirmed instances are filed as:
   [FEEDBACK_LOOPS.md](FEEDBACK_LOOPS.md#write-invariant--the-files-existence-is-the-claim-301)
 - **#302** — batch of four small guards (bash-ring correlation self-check,
   zero-root worktree sweep, nil-state card retraction, unlogged
-  `autonomousComplete` skip)
+  `autonomousComplete` skip).
+  **Fixed:** the forensic self-check gained a second arm that fires when no
+  retained bash entry carried a usable `tool_use` id (retained-window
+  indexed-ness — deliberately not lifetime correlation, which misdiagnoses a
+  stage killed mid-command and goes blind to partial id-drift); zero resolved
+  scan roots WARN at both `sweepMergedWorktrees` copies; nil autonomous state
+  is a logged fail-open that retracts nothing (per rule 2, "could not look" ≠
+  "nothing wrong" — the reachable production analogue is #405); and all THREE
+  terminal-funnel call sites (completed/failed/deferred) resolve their target
+  through one total helper that warns with a per-site consequence instead of
+  silently skipping — review found the unfixed success-path copy silently
+  leaked the concurrency slot, a worse outcome than the failure path the
+  issue named. #402 tracks the same hole in `ToolCallLog`
 
 ### Dual-Path Drift (Issue #257)
 

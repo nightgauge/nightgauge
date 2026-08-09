@@ -2075,6 +2075,11 @@ func (s *Scheduler) loadQueue() {
 func (s *Scheduler) sweepMergedWorktrees() {
 	roots := s.repoScanRoots()
 	if len(roots) == 0 {
+		// Mirrors the autonomous copy of this guard (#302). Same reasoning as
+		// the undetermined-worktree-set skip below, and the same volume: this
+		// pass is the only thing that notices leaked worktrees, so a silent
+		// skip is indistinguishable from a clean sweep.
+		log.Printf("worktree-reconcile: WARN no repo scan roots resolved — skipping the merged-worktree sweep; leaked worktrees stay undetected until the root lookup is fixed")
 		return
 	}
 

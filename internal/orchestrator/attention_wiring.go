@@ -671,17 +671,27 @@ func (as *AutonomousScheduler) RaiseTerminalFailure(repo string, issue int, stag
 // standing-producer auto-resolve contract (docs/ATTENTION_PRODUCERS.md)
 // without needing AutonomousState to carry the raise-time fields again.
 //
-// Fail-open: a list error leaves existing cards untouched rather than
-// retracting them — invariant 1, "I could not look" is never "nothing is
-// wrong".
+// Fail-open: a list error — or an autonomous state we cannot read at all —
+// leaves existing cards untouched rather than retracting them; invariant 1,
+// "I could not look" is never "nothing is wrong". Only a state we DID read,
+// and which is genuinely no longer halted for this reason, retracts.
 func (as *AutonomousScheduler) reconcileTerminalFailureCards() {
 	if as == nil || as.attention == nil {
 		return
 	}
+	// Three states, not two (#302). Folding an unreadable state into
+	// "not halted" hands it to the retraction branch, which clears every open
+	// card while the halt is still in force — invariant 1 violated by the one
+	// path that never looked.
 	as.mu.Lock()
-	stillHalted := as.state != nil && as.state.Status == "paused" && as.state.PauseTriggeredBy == "haltQueueOnSlotFailure"
+	readable := as.state != nil
+	stillHalted := readable && as.state.Status == "paused" && as.state.PauseTriggeredBy == "haltQueueOnSlotFailure"
 	as.mu.Unlock()
 
+	if !readable {
+		log.Printf("attention: WARN %q reconcile skipped (fail-open): autonomous state unavailable — retracting nothing", producerTerminalFailure)
+		return
+	}
 	if !stillHalted {
 		as.autoResolveAttention(producerTerminalFailure, nil)
 		return
