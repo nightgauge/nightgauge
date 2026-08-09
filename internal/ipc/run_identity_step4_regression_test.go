@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -403,6 +404,65 @@ func TestRunIdentity_InFlightPersistCannotResurrect(t *testing.T) {
 	wantRefusal(t, callRunVerb(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: runID,
 	}), codeRunClosed)
+
+	// --- The same claim with a Persist genuinely HELD MID-FLIGHT across it. -
+	//
+	// The sequential leg above proves the post-seal refusal; this one proves
+	// there is NO INTERLEAVING that leaves a resurrected file. A writer spins on
+	// the run's own Persist while the terminal claim runs, so its calls land
+	// before the latch (non-terminal, then removed by the seal), between the
+	// latch and the seal (terminal:true, then removed), or after the seal
+	// (ErrRunSealed, nothing written). Only an implementation that let the write
+	// escape rs.mu — marshal under the lock, write outside it — can drop a stale
+	// non-terminal byte slice after the removal (F27).
+	raceRoot := t.TempDir()
+	rs := NewServer(nil, WithWorkspaceRoot(raceRoot))
+	raceDir := filepath.Join(raceRoot, ".nightgauge", "pipeline")
+	raceID := newTestRunID()
+
+	mustCall(t, rs, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: raceID,
+	})
+	rs.runtimesMu.Lock()
+	inflight := rs.activeRuntimes[raceID].rs
+	rs.runtimesMu.Unlock()
+
+	stop := make(chan struct{})
+	var writer sync.WaitGroup
+	writer.Add(1)
+	go func() {
+		defer writer.Done()
+		// Bounded as well as signalled: a wedged claim must fail this test on
+		// its own assertions rather than spin a core forever.
+		for i := 0; i < 100000; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_ = inflight.Persist(raceDir)
+		}
+	}()
+
+	mustCall(t, rs, "pipeline.notifyComplete", PipelineNotifyCompleteParams{
+		Repo: repo, IssueNumber: issue, Success: true, TotalDurationMs: 1000, RunID: raceID,
+	})
+	close(stop)
+	writer.Wait()
+
+	raced, err := state.FindPersistedStatesForIssue(raceDir, issue)
+	if err != nil {
+		t.Fatalf("FindPersistedStatesForIssue: %v", err)
+	}
+	for _, snap := range raced {
+		if !snap.Terminal {
+			t.Errorf("a NON-TERMINAL snapshot for run %s survived a claim raced by its own Persist — the resurrection R-4 depends on (F27)",
+				snap.RunID)
+		}
+	}
+	if err := inflight.Persist(raceDir); !errors.Is(err, state.ErrRunSealed) {
+		t.Errorf("post-seal Persist error = %v, want ErrRunSealed", err)
+	}
 }
 
 // TestRunIdentity_ClosedRunIsRefusedOnEveryRunProgressMethod: table-driven over
@@ -512,6 +572,80 @@ func TestRunIdentity_ClosedRunsEvictionFallsBackToTheDurableMarker(t *testing.T)
 	wantRefusal(t, callRunVerb(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: runID,
 	}), codeRunClosed)
+
+	// --- The other row of the table: evicted AND the snapshot is gone. ------
+	//
+	// This is the only case eviction can actually degrade, and Decision 4 says
+	// so explicitly: with no ring entry and no durable marker the late duplicate
+	// ADOPTS EMPTY and is served. That cannot produce a wrong record or a
+	// reopened run, because the skeleton it builds is dropped by the history
+	// layer's richer-upgrade-only rule (and its learning row by the corpus
+	// dedup) — it costs one spurious pipeline_done and nothing else.
+	// A fresh root so the history assertions below see this run's records only:
+	// the history directory is the dedup coordinator's key.
+	lateRoot := t.TempDir()
+	late := NewServer(nil, WithWorkspaceRoot(lateRoot))
+	lateDir := filepath.Join(lateRoot, ".nightgauge", "pipeline")
+	gone := newTestRunID()
+
+	mustCall(t, late, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: gone,
+	})
+	mustCall(t, late, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete", RunID: gone,
+		InputTokens: 100, OutputTokens: 20, CostUsd: 0.5,
+	})
+	mustCall(t, late, "pipeline.notifyComplete", PipelineNotifyCompleteParams{
+		Repo: repo, IssueNumber: issue, Success: true, TotalDurationMs: 1, RunID: gone,
+		StagesRun: []string{"feature-dev"},
+	})
+	authoritative := readHistoryRecords(t, lateRoot)
+	if len(authoritative) != 1 || len(authoritative[0].Stages) == 0 {
+		t.Fatalf("precondition: the real run must have written exactly one NON-EMPTY record; got %d", len(authoritative))
+	}
+	if _, err := os.Stat(filepath.Join(lateDir, state.SnapshotFilename(issue, gone))); !os.IsNotExist(err) {
+		t.Fatalf("precondition: the seal must have removed the snapshot; stat = %v", err)
+	}
+
+	late.runtimesMu.Lock()
+	for i := 0; i < closedRunsCap+1; i++ {
+		late.closedRuns.addLocked(fmt.Sprintf("0191%04x-0000-7000-8000-%012d", i&0xffff, i))
+	}
+	stillRinged := late.closedRuns.hasLocked(gone)
+	late.runtimesMu.Unlock()
+	if stillRinged {
+		t.Fatal("precondition: the ring must have evicted the id at its cap")
+	}
+
+	// Served, not refused — there is nothing left to refuse it with.
+	mustCall(t, late, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: gone,
+	})
+	mustCall(t, late, "pipeline.notifyComplete", PipelineNotifyCompleteParams{
+		Repo: repo, IssueNumber: issue, Success: true, TotalDurationMs: 1, RunID: gone,
+	})
+
+	// …and the damage is bounded to that: the authoritative record still stands
+	// alone, un-buried by the late duplicate's skeleton.
+	after := readHistoryRecords(t, lateRoot)
+	if len(after) != 1 {
+		t.Errorf("history holds %d records for one run id, want 1 — the late duplicate's skeleton was not dropped by the richer-upgrade rule", len(after))
+	}
+	if len(after) == 1 && len(after[0].Stages) != len(authoritative[0].Stages) {
+		t.Errorf("the authoritative record was replaced by a leaner one: stages %d, want %d",
+			len(after[0].Stages), len(authoritative[0].Stages))
+	}
+	// The late duplicate leaves no live entry and no resurrected snapshot: its
+	// own claim sealed the empty runtime it adopted.
+	late.runtimesMu.Lock()
+	leftovers := len(late.activeRuntimes)
+	late.runtimesMu.Unlock()
+	if leftovers != 0 {
+		t.Errorf("the late duplicate left %d registry entr(ies) behind", leftovers)
+	}
+	if found, ferr := state.FindPersistedStatesForIssue(lateDir, issue); ferr != nil || len(found) != 0 {
+		t.Errorf("the late duplicate resurrected %d snapshot(s) (err=%v)", len(found), ferr)
+	}
 }
 
 // --- Decision 6: the derived issue index -----------------------------------
@@ -954,6 +1088,153 @@ func TestRunIdentity_ConcurrentAdoptionYieldsOneRuntime(t *testing.T) {
 	found, err := state.FindPersistedStatesForIssue(stateDir, issue)
 	if err != nil || len(found) != 1 {
 		t.Fatalf("one identity must leave one snapshot; found %d / %v", len(found), err)
+	}
+}
+
+// TestRunIdentity_AdministrativeResolutionInstallsAnEntryWithoutVouching covers
+// F33 and the F9 pin it must not re-create. Run under -race.
+//
+// An administrative verb (setPaused today; pipeline.abandonRun joins in ADR-017
+// step 6) for an id with a SNAPSHOT and no entry installs exactly ONE entry
+// through the same singleflight run-progress adoption uses — because adopting a
+// snapshot already on disk is not "inventing a run": the snapshot IS the
+// evidence. What it must NOT do is vouch for the run. Its lease stays at the
+// ZERO time, so an administrative touch can never make a run the operator has
+// given up on look alive.
+//
+// F33 is the interleaving underneath: the administrative caller and the run
+// itself must share ONE *RuntimeState. A detached read-modify-write — load the
+// snapshot, stamp it, write it back — races the run's own Persist and silently
+// drops whichever side wrote first. Sharing the live object makes rs.mu
+// serialise the two.
+func TestRunIdentity_AdministrativeResolutionInstallsAnEntryWithoutVouching(t *testing.T) {
+	const (
+		repo  = "acme/platform"
+		issue = 3333
+	)
+
+	// --- The resolution itself: one entry, installed, not vouched for. -----
+	root := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(root))
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	runID := newTestRunID()
+
+	seeded := state.NewRuntimeState(repo, issue, "", runID)
+	seeded.BeginStage(state.StageFeatureDev)
+	if err := seeded.Persist(stateDir); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	mustCall(t, s, "pipeline.setPaused", PipelineSetPausedParams{
+		IssueNumber: issue, Repo: repo, Paused: true, RunID: runID,
+	})
+
+	s.runtimesMu.Lock()
+	entry := s.activeRuntimes[runID]
+	installed := len(s.activeRuntimes)
+	flights := len(s.adopting)
+	s.runtimesMu.Unlock()
+	if entry == nil {
+		t.Fatal("the administrative resolution installed NO entry — the pause had nothing to serialise against (F33)")
+	}
+	if installed != 1 {
+		t.Errorf("administrative adoption installed %d entr(ies) for one identity", installed)
+	}
+	if flights != 0 {
+		t.Errorf("%d adoption flight(s) were left behind", flights)
+	}
+	if !entry.lastSeen.IsZero() {
+		t.Errorf("lastSeen = %v, want the ZERO time: an administrative verb may install a run's state and may never make it look alive (the F9 pin)",
+			entry.lastSeen)
+	}
+	if entry.rs.Stage != state.StageFeatureDev {
+		t.Errorf("the adopted runtime lost the snapshot's history: Stage = %q", entry.rs.Stage)
+	}
+	// The zero lease is the fact the #44 reconciler's lease arm consumes to
+	// answer "this run is NOT vouched for" — its skipRun leg lands with ADR-017
+	// step 5's liveness ladder, which is out of step 4's scope. What step 4 owes
+	// that ladder is exactly this: an administratively-installed entry that
+	// carries no lease stamp to mistake for liveness.
+
+	// --- F33 under concurrency: one runtime, and no stage is lost. ---------
+	raceRoot := t.TempDir()
+	rs := NewServer(nil, WithWorkspaceRoot(raceRoot))
+	raceDir := filepath.Join(raceRoot, ".nightgauge", "pipeline")
+	raceID := newTestRunID()
+
+	raceSeed := state.NewRuntimeState(repo, issue, "", raceID)
+	if err := raceSeed.Persist(raceDir); err != nil {
+		t.Fatalf("seed race snapshot: %v", err)
+	}
+
+	const (
+		stages  = 12
+		pausers = 8
+	)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	// The run books stages from ONE goroutine, so running→complete stays a
+	// coherent pair; the administrative callers race it from eight others.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < stages; i++ {
+			stage := fmt.Sprintf("stage-%02d", i)
+			if err := callRunVerb(t, rs, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+				Repo: repo, IssueNumber: issue, Stage: stage, Status: "running", RunID: raceID,
+			}); err != nil {
+				t.Errorf("running transition %s was refused: %v", stage, err)
+				return
+			}
+			if err := callRunVerb(t, rs, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+				Repo: repo, IssueNumber: issue, Stage: stage, Status: "complete", RunID: raceID,
+			}); err != nil {
+				t.Errorf("complete transition %s was refused: %v", stage, err)
+				return
+			}
+		}
+	}()
+	for i := 0; i < pausers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if err := callRunVerb(t, rs, "pipeline.setPaused", PipelineSetPausedParams{
+				IssueNumber: issue, Repo: repo, Paused: i%2 == 0, RunID: raceID,
+			}); err != nil {
+				t.Errorf("concurrent setPaused was refused: %v", err)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	rs.runtimesMu.Lock()
+	raceEntry := rs.activeRuntimes[raceID]
+	raceEntries := len(rs.activeRuntimes)
+	raceFlights := len(rs.adopting)
+	rs.runtimesMu.Unlock()
+	if raceEntries != 1 || raceEntry == nil {
+		t.Fatalf("an administrative verb racing its run produced %d registry entr(ies) for one identity", raceEntries)
+	}
+	if raceFlights != 0 {
+		t.Errorf("%d adoption flight(s) were stranded", raceFlights)
+	}
+	snap := raceEntry.rs.Snapshot()
+	if len(snap.CompletedStages) != stages {
+		t.Errorf("CompletedStages = %d, want %d — a stage the run booked was lost to a concurrent administrative write (F33)",
+			len(snap.CompletedStages), stages)
+	}
+	// One identity, one file: a detached administrative copy would have
+	// persisted its own view of the run under the same name.
+	found, err := state.FindPersistedStatesForIssue(raceDir, issue)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("one identity must leave one snapshot; found %d / %v", len(found), err)
+	}
+	if found[0].RunID != raceID {
+		t.Errorf("snapshot RunID = %q, want %q", found[0].RunID, raceID)
 	}
 }
 
