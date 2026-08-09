@@ -659,7 +659,10 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 // readPipelineState reads the persisted pipeline state for an issue.
 func (wo *WaveOrchestrator) readPipelineState(issueNumber int) (bool, *state.RuntimeState) {
 	stateDir := filepath.Join(wo.scheduler.execMgr.WorkspaceRoot(), ".nightgauge", "pipeline")
-	runtime, err := state.LoadPersistedState(stateDir, issueNumber)
+	// Issue-addressed: the wave orchestrator asks "did sub-issue #N succeed?",
+	// which is a question about the run it just drove. Standard pick — prefer
+	// non-terminal, then newest StartedAt (ADR-017 Decision 8).
+	runtime, err := state.PickPersistedStateForIssue(stateDir, issueNumber)
 	if err != nil {
 		return false, nil
 	}

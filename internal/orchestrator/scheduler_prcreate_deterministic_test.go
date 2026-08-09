@@ -41,7 +41,7 @@ func TestScheduler_PRCreate_DeterministicSkipsLLM(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -79,7 +79,7 @@ func TestScheduler_PRCreate_PuntInvokesLLM(t *testing.T) {
 	}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -115,7 +115,7 @@ func TestScheduler_PRCreate_RateLimitedDefersNoLLM(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -142,7 +142,7 @@ func TestScheduler_PRCreate_NonRateLimitPuntStillInvokesLLM(t *testing.T) {
 	}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -202,7 +202,7 @@ func TestScheduler_PRCreate_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 	det := &fakePRCreateRunner{err: errors.New("unexpected gh failure")}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -221,7 +221,7 @@ func TestScheduler_PRCreate_RecordsExecutionPath_Deterministic(t *testing.T) {
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated, PRNumber: 1, PRURL: "u"}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -237,7 +237,7 @@ func TestScheduler_PRCreate_RecordsExecutionPath_LLM(t *testing.T) {
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoChanges}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -257,7 +257,7 @@ func TestScheduler_PRCreate_DeterministicPath_CostZero(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -288,7 +288,7 @@ func TestScheduler_PRCreate_NonPRCreateStage_NoOp(t *testing.T) {
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathCreated}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StageFeatureDev)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -309,7 +309,7 @@ func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	// no WithPRCreateRunner — prCreateRunner is nil
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -336,7 +336,7 @@ func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
 	s.WithPRCreateRunner(det)
 
 	const worktree = "/tmp/repo/.worktrees/issue-42"
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.SetProcess(0, worktree) // populates runtime.WorktreeDir, as a real run does
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
@@ -357,7 +357,7 @@ func TestScheduler_PRCreate_NoWorktreeUsesWorkspaceRoot(t *testing.T) {
 	det := &fakePRCreateRunner{result: pmstages.PRCreateResult{Path: pmstages.CreatePathPunt, Reason: pmstages.ReasonNoChanges}}
 	s.WithPRCreateRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id") // WorktreeDir == ""
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID()) // WorktreeDir == ""
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -376,7 +376,7 @@ func TestScheduler_PRMerge_ReadsContextFromWorktree(t *testing.T) {
 	s.WithPRMergeRunner(det)
 
 	const worktree = "/tmp/repo/.worktrees/issue-42"
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.SetProcess(0, worktree)
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
@@ -395,7 +395,7 @@ func TestScheduler_PRCreate_OrthogonalToPRMerge(t *testing.T) {
 	s.WithPRCreateRunner(prCreate)
 	s.WithPRMergeRunner(prMerge)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 

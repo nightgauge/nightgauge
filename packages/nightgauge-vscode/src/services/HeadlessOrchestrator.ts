@@ -100,6 +100,7 @@ import {
 import type { PipelineStateService, PipelineOutcomeType } from "./PipelineStateService";
 import type { RepositoryContextLoader, ContextFileType } from "./RepositoryContextLoader";
 import type { Logger } from "../utils/logger";
+import { resolveRuntimeSnapshotPath } from "../utils/runtimeSnapshotResolver";
 import type { IssueQueueService } from "./IssueQueueService";
 import type { ProjectBoardService } from "./ProjectBoardService";
 import type { RoutingDecision } from "../utils/routingDecision";
@@ -6924,15 +6925,43 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * Resolve the on-disk runtime snapshot for an issue, or null when the issue
+   * has none (ADR-017 Decision 8, #370).
+   *
+   * The scan, the pick and the instant-based ordering live in
+   * `utils/runtimeSnapshotResolver` so they can be pinned by a red bar — the
+   * failure mode here is a silent `{}` that every caller converts into a legacy
+   * heuristic, which no orchestrator-level test can see. This method only binds
+   * the pipeline dir and the mixed-version warning to it.
+   */
+  private resolveRuntimeSnapshotPath(workspaceRoot: string, issueNumber: number): string | null {
+    const pipelineDir = path.join(workspaceRoot, ".nightgauge", "pipeline");
+    return resolveRuntimeSnapshotPath(pipelineDir, issueNumber, (legacyFile) => {
+      this.logger.warn(
+        "Runtime snapshot is still on the pre-ADR-017 name — gate results for this run are unreadable until the backend restarts",
+        { issueNumber, legacyFile, pipelineDir }
+      );
+    });
+  }
+
+  /**
    * Read the persisted stageGateResults map for a run, keyed by stage name.
    *
    * The Go scheduler (in-process) and `nightgauge gate verify --record` (this
    * TS path, Issue #210) both persist through
-   * `internal/state.RuntimeState.Persist`, which writes
-   * `{workspace}/.nightgauge/pipeline/runtime-{issueNumber}.json`. Returns an
+   * `internal/state.RuntimeState.Persist`, which since ADR-017 (#370) writes
+   * `{workspace}/.nightgauge/pipeline/runtime-{issue}-{runId}.json`. Returns an
    * empty map when the file is missing or the field is absent — callers fall
    * through to their own legacy heuristics in that case. Exposed as a method
    * so subclasses / tests can override the read path.
+   *
+   * ISSUE-ADDRESSED, SO IT RESOLVES THE FILE BY SCANNING (ADR-017 Decision 8).
+   * The run identity cannot be composed from an issue number — concurrent
+   * dispatches of one issue coexist — so this mirrors the Go-side standard
+   * pick: prefer a non-terminal snapshot, then the newest `startedAt`.
+   * Composing the old bare-issue name instead would `existsSync` false on
+   * every call and return `{}` forever, and because every caller silently
+   * falls back to a legacy heuristic, the degradation would be invisible.
    */
   private readStageGateResultsMapForRun(
     issueNumber: number
@@ -6942,8 +6971,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   > {
     try {
       const cwd = this.pinnedWorkspaceRoot ?? this.getWorkingDirectory();
-      const statePath = path.join(cwd, ".nightgauge", "pipeline", `runtime-${issueNumber}.json`);
-      if (!fs.existsSync(statePath)) return {};
+      const statePath = this.resolveRuntimeSnapshotPath(cwd, issueNumber);
+      if (!statePath) return {};
       const stateBlob = JSON.parse(fs.readFileSync(statePath, "utf-8"));
       const map = stateBlob?.stageGateResults;
       if (!map || typeof map !== "object") return {};

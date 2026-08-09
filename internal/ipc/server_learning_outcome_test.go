@@ -421,7 +421,7 @@ func TestServedDevModel_RefusalFallbackIsScopedToTheDevStage(t *testing.T) {
 	rec := loadCapturedRunRecord(t, "run-record.json")
 	rec.Stages = map[string]state.V2StageDetail{} // force the runtime fallback path
 
-	snap := state.NewRuntimeState("acme/widget", 1, "item")
+	snap := state.NewRuntimeState("acme/widget", 1, "item", newTestRunID())
 	snap.RecordStageModel(state.StagePRMerge, "claude-haiku-4-5-20251001")
 	snap.RecordModelRefusalFallback(state.StagePRMerge, "claude-sonnet-5", "claude-haiku-4-5-20251001", "safety")
 	if got := servedDevModel(rec, snap.Snapshot(), "sonnet"); got != "" {

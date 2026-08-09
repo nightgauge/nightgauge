@@ -30,7 +30,59 @@ export interface RuntimeStubFields {
 
 /** Verdict for a single runtime file. */
 export type RuntimeStubVerdict =
-  { action: "keep" } | { action: "delete"; reason: "empty-identity" | "repo-mismatch" };
+  | { action: "keep"; reason?: string }
+  | { action: "delete"; reason: "empty-identity" | "repo-mismatch" };
+
+/**
+ * The pre-ADR-017 snapshot name — `runtime-{issue}.json`. THE ONLY NAME THE
+ * SWEEP MAY DELETE.
+ */
+export const LEGACY_RUNTIME_FILE = /^runtime-(\d+)\.json$/;
+
+/**
+ * Every snapshot name the activation scan READS: the legacy one plus ADR-017's
+ * `runtime-{issue}-{runId}.json` (#370). Reading and prompting are
+ * non-destructive, so this is deliberately wider than the sweep's pattern.
+ * Issue number is capture 1 in both, so callers parse it the same way.
+ */
+export const ANY_RUNTIME_FILE =
+  /^runtime-(\d+)(?:-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\.json$/;
+
+/**
+ * Decide what the activation sweep may do with a file, BY NAME FIRST.
+ *
+ * This is the gate that stands between {@link classifyRuntimeStub} and an
+ * `fs.unlink`, and it is a separate exported function for one reason: the
+ * obvious future cleanup is to collapse the two regexes above back into one,
+ * at which point classifyRuntimeStub would run over run-identity-keyed
+ * snapshots and a LIVE run whose mid-dispatch body still has `repo: ""` or
+ * `stage: ""` would be classified `empty-identity` and DELETED at extension
+ * activation — the crash snapshot destroyed, the run unreconcilable, and the
+ * whole vitest suite green because nothing reached the branch. Now something
+ * does.
+ *
+ * Rules:
+ *  - A NEW-SCHEME name is always kept, whatever its body says. Narrowing the
+ *    sweep to the new scheme properly is ADR-017 step 8's job.
+ *  - A LEGACY name gets the classifier's verdict.
+ *  - Anything else is kept (the caller should not have offered it).
+ *
+ * @param fileName The snapshot's basename.
+ * @param classify Applied only for legacy names — normally a closure over
+ *   {@link classifyRuntimeStub} bound to the parsed body and containing repo.
+ */
+export function runtimeSweepVerdict(
+  fileName: string,
+  classify: () => RuntimeStubVerdict
+): RuntimeStubVerdict {
+  if (LEGACY_RUNTIME_FILE.test(fileName)) {
+    return classify();
+  }
+  return {
+    action: "keep",
+    reason: "new-scheme snapshot — sweep is legacy-only (ADR-017 step 8)",
+  };
+}
 
 /**
  * Case-insensitive repo-slug match, tolerant of `owner/repo` vs short-name form

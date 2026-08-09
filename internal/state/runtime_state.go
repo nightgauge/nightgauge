@@ -2,7 +2,9 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // LicenseSnapshot records the license validation result captured at pipeline start.
@@ -41,7 +44,35 @@ type RuntimeState struct {
 	// doing without leaving the dashboard. Empty when no issue body was resolved.
 	Body   string `json:"body,omitempty"`
 	Branch string `json:"branch,omitempty"`
-	RunID  string `json:"runId,omitempty"` // UUID v7 from runstate, threaded into all PipelineEvent emissions (#3557)
+	// RunID is the run identity (canonical lowercase UUIDv7, runstate.NewRunID).
+	// IMMUTABLE AFTER CONSTRUCTION — set only by NewRuntimeState, never by a
+	// setter (ADR-017 Decision 1). An immutable field written once before the
+	// value is shared with any goroutine needs no lock, which is what dissolves
+	// the two-locks-one-comparator hazard (F20).
+	//
+	// The tag carries NO omitempty (ADR-017 step 1): a new-scheme file always
+	// carries the key, so a legacy file (key absent) stays distinguishable from
+	// a corrupt one (key present but empty).
+	RunID string `json:"runId"`
+
+	// Terminal / TerminalAt / TerminalOutcome are the DURABLE half of the
+	// terminal latch (ADR-017 Decision 5). The registry's runEntry.terminal is
+	// admission control for new resolutions and dies with the process; these
+	// travel with the object, are marshalled into every byte the run writes,
+	// and are what a fresh process, the gate CLI and the reconciler read.
+	// Written under rs.mu by markTerminalLocked (claim step 1c) — never cleared.
+	Terminal        bool       `json:"terminal,omitempty"`
+	TerminalAt      *time.Time `json:"terminalAt,omitempty"`
+	TerminalOutcome string     `json:"terminalOutcome,omitempty"`
+
+	// Abandoned / AbandonedAt record that the force-clear funnel gave up on the
+	// DISPATCH (ADR-017 7.1). The run itself may still be alive and streaming,
+	// which is why abandonment is not terminality and why there is deliberately
+	// no ClearAbandoned: no transition, phase or progress call resets it.
+	// Written under rs.mu by markAbandonedLocked.
+	Abandoned       bool       `json:"abandoned,omitempty"`
+	AbandonedAt     *time.Time `json:"abandonedAt,omitempty"`
+	AbandonedReason string     `json:"abandonedReason,omitempty"`
 
 	// Current stage
 	Stage      PipelineStage `json:"stage"`
@@ -71,7 +102,7 @@ type RuntimeState struct {
 	PhaseHistory []PhaseRecord     `json:"phaseHistory"`
 	StageErrors  map[string]string `json:"stageErrors"` // stage → error message
 
-	// Pause state (persisted to runtime-{N}.json for reload recovery)
+	// Pause state (persisted to runtime-{issue}-{runId}.json for reload recovery)
 	Paused bool `json:"paused,omitempty"`
 
 	// Orchestration tracking (populated by Go scheduler engines)
@@ -196,6 +227,16 @@ type RuntimeState struct {
 	// (#3001, #144) — data recorded independently of CompletedStages so it
 	// survives the stage never completing normally.
 	TerminatingStageTokens map[string]StageResult `json:"terminatingStageTokens,omitempty"`
+
+	// sealed is the IN-MEMORY half of the terminal latch (ADR-017 Decision 5,
+	// claim step 4). Set by SealAndRemove once the terminal-stamped snapshot has
+	// been written and removed; from then on every Persist returns ErrRunSealed
+	// WITHOUT writing, so a transition's in-flight Persist can never re-create
+	// the snapshot the claim just deleted (F27). Never serialised — the durable
+	// equivalent is the Terminal field the seal just wrote. Read by
+	// persistLocked only, inside its own rs.mu critical section, so the check
+	// and the write cannot be separated by a scheduler.
+	sealed bool
 }
 
 // StageOutputBufferLineLimit caps each captured tail at this many lines
@@ -240,14 +281,122 @@ type StageResult struct {
 }
 
 // NewRuntimeState creates a new runtime state for a pipeline execution.
-func NewRuntimeState(repo string, issueNumber int, itemID string) *RuntimeState {
+//
+// runID is the run identity (ADR-017 Decision 1). It is a CONSTRUCTOR
+// ARGUMENT, not a settable field: RunID is immutable after construction and
+// there is no setter. The constructor stores whatever it is given and does NOT
+// validate — the refusal lives in Persist, which will not write a state it
+// cannot name. That split is deliberate: identity-less construction stays legal
+// for the two sites that genuinely have no identity to offer (both of which are
+// unpersistable by design, and both of which ADR-017 step 4 deletes), while
+// nothing identity-less can ever reach disk.
+func NewRuntimeState(repo string, issueNumber int, itemID, runID string) *RuntimeState {
 	return &RuntimeState{
 		Repo:        repo,
 		IssueNumber: issueNumber,
 		ItemID:      itemID,
+		RunID:       runID,
 		StartedAt:   time.Now(),
 		StageErrors: make(map[string]string),
 	}
+}
+
+// MarkTerminal latches the durable half of the terminal latch (ADR-017
+// Decision 5, claim step 1c): the run has reached its terminal event and will
+// accept no further mutations. outcome is the terminal outcome string recorded
+// alongside the marker; it is advisory and may be empty.
+//
+// The latch is one-way. There is no ClearTerminal, and Persist keeps writing
+// until SealAndRemove sets the in-memory `sealed` flag — a Persist that lands
+// between MarkTerminal and the seal marshals `terminal: true`, so even the
+// snapshot it writes is one that adoption refuses and the reconciler removes
+// without emitting. A resurrection that cannot rehydrate is not a resurrection.
+func (rs *RuntimeState) MarkTerminal(outcome string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.markTerminalLocked(outcome)
+}
+
+// markTerminalLocked is MarkTerminal's body for callers that already hold rs.mu
+// — the claim sequence's step 1c calls this form, because sync.Mutex is not
+// reentrant (C16, F36).
+func (rs *RuntimeState) markTerminalLocked(outcome string) {
+	if rs.Terminal {
+		return
+	}
+	now := time.Now().UTC()
+	rs.Terminal = true
+	rs.TerminalAt = &now
+	rs.TerminalOutcome = outcome
+}
+
+// MarkAbandoned stamps the durable abandonment marker (ADR-017 7.1): the
+// force-clear funnel gave up on this DISPATCH. The run may still be alive and
+// streaming, so this is emphatically not terminality — the reconciler needs
+// TWO independent conditions (abandoned AND outside the liveness window) before
+// it removes such a snapshot, and a fresh abandoned run keeps its crash
+// snapshot (the F4 correction).
+//
+// There is no ClearAbandoned by design: no transition, phase or progress call
+// resets the flag, so a live abandoned run's next Persist cannot erase it.
+func (rs *RuntimeState) MarkAbandoned(at time.Time, reason string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.markAbandonedLocked(at, reason)
+}
+
+// markAbandonedLocked is MarkAbandoned's body for callers already holding rs.mu.
+func (rs *RuntimeState) markAbandonedLocked(at time.Time, reason string) {
+	if rs.Abandoned {
+		return
+	}
+	stamp := at.UTC()
+	rs.Abandoned = true
+	rs.AbandonedAt = &stamp
+	rs.AbandonedReason = reason
+}
+
+// SetStageChild records the PID of the stage's child process (ADR-017 7.2).
+//
+// NO PRODUCTION CALLER YET — this is the state-layer half, landed in step 1
+// with the rest of the lock-discipline work; the wiring is ADR-017 step 7.2.
+// Everything below is the CONTRACT IT WILL BE WIRED TO, not shipped behaviour:
+// do not build on `PID` from the extension path until that step lands, because
+// nothing writes it there today.
+//
+// Deliberately NOT SetProcess, which also writes WorktreeDir and belongs to the
+// scheduler path: this is the extension path's one-field setter, which WILL be
+// fed by notifyStageTransition's stagePid. A stage's terminal transition will
+// send 0, so a finished child cannot vouch for the run and the PID-reuse window
+// is bounded by one stage rather than by the whole run.
+//
+// The value will reach disk through the transition handler's existing Persist —
+// no new persist site is introduced, which is what makes the liveness ladder's
+// arm 3 cheap.
+func (rs *RuntimeState) SetStageChild(pid int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.setStageChildLocked(pid)
+}
+
+// setStageChildLocked is SetStageChild's body for callers already holding rs.mu.
+func (rs *RuntimeState) setStageChildLocked(pid int) {
+	rs.PID = pid
+}
+
+// IsTerminal reports whether the durable terminal marker is latched.
+func (rs *RuntimeState) IsTerminal() bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Terminal
+}
+
+// IsSealed reports whether SealAndRemove has run on this object. In-memory
+// only — a fresh process that loads the same snapshot sees Terminal, not this.
+func (rs *RuntimeState) IsSealed() bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.sealed
 }
 
 // BeginStage marks the start of a new pipeline stage.
@@ -719,11 +868,20 @@ func (rs *RuntimeState) AppendEscalation(rec EscalationRecord) {
 // omitempty contract on the wire — callers always pass "deterministic" or
 // "llm" explicitly.
 func (rs *RuntimeState) RecordExecutionPath(stage PipelineStage, path string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.recordExecutionPathLocked(stage, path)
+}
+
+// recordExecutionPathLocked is RecordExecutionPath's body for callers that
+// already hold rs.mu — the terminal claim replays the dispatcher's
+// StageExecutionPaths payload (#309) inside its critical section, as claim
+// step 1b, because those are the last mutations the run will ever accept
+// (ADR-017 Decision 5; C16 — sync.Mutex is not reentrant).
+func (rs *RuntimeState) recordExecutionPathLocked(stage PipelineStage, path string) {
 	if path == "" {
 		return
 	}
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	if rs.StageExecutionPaths == nil {
 		rs.StageExecutionPaths = make(map[string]string)
 	}
@@ -747,11 +905,18 @@ func (rs *RuntimeState) StageExecutionPath(stage PipelineStage) string {
 // path ran and WHY the deterministic one was skipped. Empty reasons are ignored
 // to preserve the omitempty contract — callers pass the runner's reason code.
 func (rs *RuntimeState) RecordStagePuntReason(stage PipelineStage, reason string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.recordStagePuntReasonLocked(stage, reason)
+}
+
+// recordStagePuntReasonLocked is RecordStagePuntReason's body for callers that
+// already hold rs.mu — claim step 1b's twin to recordExecutionPathLocked
+// (ADR-017 Decision 5, C16).
+func (rs *RuntimeState) recordStagePuntReasonLocked(stage PipelineStage, reason string) {
 	if reason == "" {
 		return
 	}
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	if rs.StagePuntReasons == nil {
 		rs.StagePuntReasons = make(map[string]string)
 	}
@@ -785,20 +950,65 @@ func (rs *RuntimeState) AppendStageGateResult(stage PipelineStage, result StageG
 // AppendStageGateResultToDisk persists a stage post-condition gate result for
 // a run driven from outside the in-process scheduler (Issue #210) — the
 // `nightgauge gate verify --record` CLI seam the TypeScript
-// HeadlessOrchestrator uses. It loads the existing persisted runtime state
-// for (stateDir, issueNumber) when present (falling back to a fresh
-// RuntimeState so a gate call before any stage has persisted still records),
-// appends the result via the same AppendStageGateResult used by the
-// in-process scheduler loop (internal/orchestrator/scheduler.go), and writes
-// it back atomically via Persist. This keeps a single append code path
-// regardless of which orchestration side calls it.
+// HeadlessOrchestrator uses. It is the one writer of a run's snapshot that
+// lives in a DIFFERENT OS PROCESS, so the IPC server's in-memory terminal latch
+// cannot cover it; ADR-017 Decision 5 closes that cross-process half with three
+// rules, all implemented here.
+//
+//  1. LOAD-OR-SKIP. The create-on-miss fallback is deleted. It used to fall back
+//     to a fresh RuntimeState and Persist it, which resurrects a snapshot the
+//     terminal claim had just removed — from a process with no registry and no
+//     closedRuns — producing a second, contradictory pipeline_done at the next
+//     server start (F22). With no snapshot for the issue the gate's VERDICT
+//     STILL RUNS AND IS RETURNED; only the --record write is skipped, loudly.
+//     A skipped gate record is an annoyance; a gate record written into a
+//     resurrected or guessed file is corruption.
+//  2. IT REFUSES A TERMINAL SNAPSHOT. The durable `terminal` marker is exactly
+//     the cross-process latch the in-memory one cannot be.
+//  3. IT WRITES THROUGH PersistExisting, NOT Persist, so the read-modify-write
+//     cannot re-create a file removed between the load and the write. The
+//     residual is a narrow rename race, named in the ADR as R-1.
+//
+// ADDRESSING IS STILL BY ISSUE, and that is a known interim. The resolution is
+// PickPersistedStateForIssue — the standard pick: newest non-terminal, then
+// newest overall. Under ADR-017 Decision 8's per-run filenames a re-run issue
+// ACCUMULATES snapshots (nothing marks them terminal until step 4), so
+// "more than one candidate" is the steady state for any issue dispatched twice,
+// not the rare concurrency it looked like when one shared file was overwritten.
+// Refusing on it would disable the record for every re-run issue permanently.
+//
+// Newest-non-terminal is the RIGHT answer here rather than a guess, because of
+// who calls this: the gate CLI is spawned BY the run that produced the verdict,
+// so that run's snapshot is the newest non-terminal one and any older
+// non-terminal snapshot is an orphan of a prior dispatch. The one residual
+// mis-attribution is two TRULY CONCURRENT dispatches of a single issue — the
+// zombie case — where the newest is not necessarily the caller. That is closed
+// by exact addressing (`--run-id`, defaulting to NIGHTGAUGE_RUN_ID from the
+// stage environment) in ADR-017 step 7; it is not closed here.
+//
+// Zero candidates remains a loud SKIP: with no snapshot for the issue the
+// gate's VERDICT STILL RUNS AND IS RETURNED, only the --record write is
+// dropped.
 func AppendStageGateResultToDisk(stateDir string, issueNumber int, stage PipelineStage, result StageGateResult) error {
-	rs, err := LoadPersistedState(stateDir, issueNumber)
+	rs, err := PickPersistedStateForIssue(stateDir, issueNumber)
 	if err != nil {
-		rs = NewRuntimeState("", issueNumber, "")
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf(
+				"gate record skipped for #%d (verdict still returned, record NOT written): no run snapshot in %s — the run never persisted, or its snapshot was already sealed away",
+				issueNumber, stateDir)
+		}
+		return fmt.Errorf("gate record skipped for #%d (verdict still returned): scan %s: %w", issueNumber, stateDir, err)
+	}
+	if rs.Terminal {
+		return fmt.Errorf(
+			"gate record skipped for #%d (verdict still returned, record NOT written): the only snapshot (run %s) is TERMINAL — a gate result cannot be recorded onto a run that already reached its terminal event",
+			issueNumber, rs.RunID)
 	}
 	rs.AppendStageGateResult(stage, result)
-	return rs.Persist(stateDir)
+	if err := rs.PersistExisting(stateDir); err != nil {
+		return fmt.Errorf("gate record skipped for #%d (verdict still returned): %w", issueNumber, err)
+	}
+	return nil
 }
 
 // AppendStageAnomaly records an anomaly observed during stage execution
@@ -911,16 +1121,139 @@ func truncateOutputTail(raw string) string {
 	return raw
 }
 
-// Persist writes the current state atomically to disk.
-// The file is written to {stateDir}/runtime-{issueNumber}.json.
+// ErrRunSealed is returned by every write path on a runtime whose terminal
+// snapshot has already been written and removed by SealAndRemove (ADR-017
+// Decision 5, claim step 4). It is the in-memory half of the terminal latch:
+// the transition, phase and progress handlers gain no guard of their own, they
+// simply call Persist and get this back.
+var ErrRunSealed = errors.New("run is sealed: its terminal snapshot was written and removed")
+
+// ErrNoRunIdentity is returned when a write is attempted on a RuntimeState
+// whose RunID is not a canonical run identity (ADR-017 Decision 1). Two shapes
+// reach it, and the second is why the predicate is IsIdentity rather than
+// `!= ""`:
 //
-// Uses the atomic+fsync write contract from internal/runstate so that a
-// reader observes either the prior version or the new version, never partial
-// JSON — even on power loss between rename and the next disk flush.
+//   - EMPTY — the common case. Such a state has no correct filename and no
+//     correct owner; writing `runtime-42-.json` would recreate the
+//     shared-namespace collision the run identity exists to kill. This is the
+//     same call #307 made when it refused to persist a repo-less runtime.
+//   - PRESENT BUT NOT AN IDENTITY — the dangerous case. The RunID is
+//     interpolated into the snapshot filename, so a value carrying `/` or `..`
+//     is an arbitrary-path write on Persist and an arbitrary-path DELETE on
+//     SealAndRemove; and a merely non-canonical value (a UUIDv4, a ULID) writes
+//     a file that snapshotFilePattern cannot match, so it is invisible to every
+//     discovery path — a silent phantom run. THIS IS THE ONE SINK: every write
+//     goes through persistLocked, so validating here closes both halves for
+//     every caller, including any future one.
+var ErrNoRunIdentity = errors.New("runtime state's run id is not a valid run identity: refusing to persist")
+
+// Persist writes the current state atomically to {stateDir}/runtime-{issue}-{runId}.json.
+//
+// It is a Lock/defer-Unlock wrapper over persistLocked so the two forms cannot
+// drift (ADR-017 Decision 5's lock-discipline table, C16). rs.mu is held across
+// the MARSHAL AND THE WRITE, not just the snapshot: a marshal-under-lock
+// followed by an unlocked write lets a stale byte slice land after a removal
+// (F27), and it also lets two concurrent Persist calls on one runtime collide
+// on AtomicWriteFile's single temp path. Holding the run's own mutex across its
+// own file write serialises writers within the process, at a cost of a few
+// milliseconds of contention on a mutex whose only other holders are that same
+// run's mutations.
+//
+// Uses the atomic+fsync write contract so that a reader observes either the
+// prior version or the new version, never partial JSON — even on power loss
+// between rename and the next disk flush.
 func (rs *RuntimeState) Persist(stateDir string) error {
 	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.persistLocked(stateDir)
+}
+
+// PersistExisting is Persist restricted to updating a snapshot that is ALREADY
+// on disk: if the target file is absent it fails instead of creating it
+// (ADR-017 Decision 5). This is what the cross-process gate seam writes
+// through, so a read-modify-write cannot re-create a file that a terminal claim
+// removed between the load and the write.
+func (rs *RuntimeState) PersistExisting(stateDir string) error {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.sealed {
+		return ErrRunSealed
+	}
+	// Validated BEFORE the identity becomes a path component, not merely
+	// non-empty: this method composes a filename and stats it.
+	if !runstate.IsIdentity(rs.RunID) {
+		return ErrNoRunIdentity
+	}
+	target := filepath.Join(stateDir, SnapshotFilename(rs.IssueNumber, rs.RunID))
+	if _, err := os.Stat(target); err != nil {
+		return fmt.Errorf("persist existing %s: %w", filepath.Base(target), err)
+	}
+	return rs.persistLocked(stateDir)
+}
+
+// SealAndRemove is claim step 4 of ADR-017 Decision 5, performed as ONE
+// operation under rs.mu and holding NO registry lock: write the
+// terminal-stamped snapshot, os.Remove that same path, then latch `sealed` so
+// every later Persist returns ErrRunSealed without writing.
+//
+// THE PATH IS THE IDENTITY. Because the filename carries the run id, this
+// cannot take a successor's file even in principle — the strongest available
+// form of an identity-checked destructive write, and the direct fix for the
+// bare-issue delete that let a zombie destroy a live run's crash snapshot.
+//
+// Write-then-remove is idempotent if the reconciler removed the file first: the
+// write re-creates it as terminal and the remove takes it away again, net
+// nothing. It calls persistLocked, NEVER Persist — re-entering the exported
+// method from inside its own lock is F36 (sync.Mutex is not reentrant, C16).
+func (rs *RuntimeState) SealAndRemove(stateDir string) error {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	// The REMOVE half validated explicitly, ahead of the write. persistLocked
+	// refuses the same predicate a line later, so this is belt-and-braces — but
+	// this method is the only one that calls os.Remove on a composed path, and
+	// an identity that is not an identity is an arbitrary-path DELETE. The
+	// refusal must not depend on the ordering of the two statements below.
+	if !runstate.IsIdentity(rs.RunID) {
+		return fmt.Errorf("seal and remove for #%d: %w", rs.IssueNumber, ErrNoRunIdentity)
+	}
+	if err := rs.persistLocked(stateDir); err != nil {
+		return err
+	}
+	target := filepath.Join(stateDir, SnapshotFilename(rs.IssueNumber, rs.RunID))
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		// The seal is still latched below: a failed remove leaves a snapshot
+		// that carries `terminal: true`, which adoption refuses and the
+		// reconciler removes without emitting. Re-opening the run to further
+		// writes would be strictly worse.
+		rs.sealed = true
+		return fmt.Errorf("seal and remove %s: %w", filepath.Base(target), err)
+	}
+	rs.sealed = true
+	return nil
+}
+
+// persistLocked is Persist's body for callers that already hold rs.mu —
+// SealAndRemove is the one in-tree caller (ADR-017 Decision 5, C16).
+//
+// It enforces both refusals inside the caller's critical section, so neither
+// check can be separated from the write by a scheduler:
+//   - a SEALED runtime writes nothing and returns ErrRunSealed;
+//   - a runtime whose RunID is not a canonical identity writes nothing and
+//     returns ErrNoRunIdentity. THE PREDICATE IS runstate.IsIdentity, NOT
+//     `!= ""`: rs.RunID is interpolated into the target path two statements
+//     later, so an unvalidated value is an arbitrary-path write. This is the
+//     single sink the one composer lives behind — Persist, PersistExisting and
+//     SealAndRemove all land here — which is what makes validating at this one
+//     line sufficient for the whole state layer.
+func (rs *RuntimeState) persistLocked(stateDir string) error {
+	if rs.sealed {
+		return ErrRunSealed
+	}
+	if !runstate.IsIdentity(rs.RunID) {
+		return fmt.Errorf("persist runtime for #%d: %q: %w", rs.IssueNumber, rs.RunID, ErrNoRunIdentity)
+	}
+
 	snap := rs.snapshotLocked()
-	rs.mu.Unlock()
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
@@ -931,7 +1264,7 @@ func (rs *RuntimeState) Persist(stateDir string) error {
 		return fmt.Errorf("marshal state: %w", err)
 	}
 
-	target := filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", snap.IssueNumber))
+	target := filepath.Join(stateDir, SnapshotFilename(snap.IssueNumber, snap.RunID))
 	return AtomicWriteFile(target, data, 0644)
 }
 
@@ -971,20 +1304,6 @@ func AtomicWriteFile(target string, data []byte, perm os.FileMode) error {
 		_ = dir.Close()
 	}
 	return nil
-}
-
-// LoadPersistedState reads a persisted runtime state from disk.
-func LoadPersistedState(stateDir string, issueNumber int) (*RuntimeState, error) {
-	path := filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", issueNumber))
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var rs RuntimeState
-	if err := json.Unmarshal(data, &rs); err != nil {
-		return nil, fmt.Errorf("unmarshal state: %w", err)
-	}
-	return &rs, nil
 }
 
 // TotalDuration returns the elapsed time since pipeline start.
@@ -1031,6 +1350,22 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		PrUrl:                    rs.PrUrl,
 		MergedCommitSha:          rs.MergedCommitSha,
 		MergedAt:                 rs.MergedAt,
+		// The two durable latch halves travel with every copy and therefore
+		// with every byte persistLocked writes (ADR-017 Decision 5/12): the
+		// snapshot IS what a fresh process, the gate CLI and the reconciler
+		// read to learn that this run is over.
+		Terminal:        rs.Terminal,
+		TerminalOutcome: rs.TerminalOutcome,
+		Abandoned:       rs.Abandoned,
+		AbandonedReason: rs.AbandonedReason,
+	}
+	if rs.TerminalAt != nil {
+		at := *rs.TerminalAt
+		snap.TerminalAt = &at
+	}
+	if rs.AbandonedAt != nil {
+		at := *rs.AbandonedAt
+		snap.AbandonedAt = &at
 	}
 	if rs.License != nil {
 		licenseCopy := *rs.License

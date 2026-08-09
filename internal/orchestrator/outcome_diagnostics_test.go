@@ -86,7 +86,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 	root := t.TempDir()
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
-	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
+	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "gemini-2.0-flash")
 	snap.RecordStageModel(state.StageFeatureDev, "gemini-2.0-flash")
@@ -109,7 +109,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
 	root := t.TempDir()
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
-	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
+	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5")
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-5")
@@ -132,7 +132,7 @@ func TestRecordOutcomeStillReportsGenuineAbsence(t *testing.T) {
 	root := t.TempDir()
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
-	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
+	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 
 	out := captureLog(t, func() {
 		s.recordOutcome(item, snap, false, 5, "", root)

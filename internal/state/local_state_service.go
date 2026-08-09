@@ -9,7 +9,7 @@ import (
 // LocalStateService reads pipeline state from local disk files.
 // It implements executor.StateServiceIface (structurally — no import of executor package).
 // GetState(key) accepts an issue number as a decimal string and reads
-// runtime-{N}.json from the configured state directory.
+// runtime-{issue}-{runId}.json from the configured state directory.
 type LocalStateService struct {
 	stateDir string
 }
@@ -29,7 +29,11 @@ func (s *LocalStateService) GetState(key string) interface{} {
 		return nil
 	}
 
-	rs, err := LoadPersistedState(s.stateDir, issueNumber)
+	// Issue-addressed by contract (the key IS an issue number), so it takes the
+	// standard pick: prefer a non-terminal snapshot, then the newest StartedAt
+	// (ADR-017 Decision 8). Concurrent dispatches of one issue coexist now, and
+	// "what is #N doing?" is a question about the live one.
+	rs, err := PickPersistedStateForIssue(s.stateDir, issueNumber)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil

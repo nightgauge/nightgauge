@@ -21,7 +21,7 @@ func (m *mockLicenseChecker) CheckLicense(_ context.Context, _ int) (*LicenseChe
 
 func TestPreflightLicense_NilChecker_ReturnsCommunity(t *testing.T) {
 	s := &Scheduler{}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, tier := s.preflightLicense(context.Background(), item, runtime)
@@ -39,7 +39,7 @@ func TestPreflightLicense_ProTier_ReturnsTier(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: true, Tier: "pro"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, tier := s.preflightLicense(context.Background(), item, runtime)
@@ -57,7 +57,7 @@ func TestPreflightLicense_Blocked_ReturnsEmptyTier(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: false, Reason: "expired"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, tier := s.preflightLicense(context.Background(), item, runtime)
@@ -75,7 +75,7 @@ func TestPreflightLicense_Error_DegradesToCommunity(t *testing.T) {
 			err: fmt.Errorf("network timeout"),
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, tier := s.preflightLicense(context.Background(), item, runtime)
@@ -91,7 +91,7 @@ func TestPreflightLicense_Error_DegradesToCommunity(t *testing.T) {
 
 func TestRevalidateLicense_NilChecker_StillAllowed(t *testing.T) {
 	s := &Scheduler{}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, status := s.revalidateLicense(context.Background(), item, runtime)
@@ -112,7 +112,7 @@ func TestRevalidateLicense_ConfirmedRevoked_Halts(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: false, Status: "revoked", Reason: "license revoked"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, status := s.revalidateLicense(context.Background(), item, runtime)
@@ -131,7 +131,7 @@ func TestRevalidateLicense_ConfirmedSuspended_Halts(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: false, Status: "suspended"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, status := s.revalidateLicense(context.Background(), item, runtime)
@@ -153,7 +153,7 @@ func TestRevalidateLicense_UnreachableFailOpen_StillAllowed(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: true, Tier: "community"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, _ := s.revalidateLicense(context.Background(), item, runtime)
@@ -174,7 +174,7 @@ func TestRevalidateLicense_Blocked_NonRevokedStatus_StillAllowed(t *testing.T) {
 			result: &LicenseCheckResult{Allowed: false, Status: "expired", Reason: "expired"},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, _ := s.revalidateLicense(context.Background(), item, runtime)
@@ -192,7 +192,7 @@ func TestRevalidateLicense_Error_TreatedAsTransient(t *testing.T) {
 			err: fmt.Errorf("checker internal error"),
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, _ := s.revalidateLicense(context.Background(), item, runtime)
@@ -215,7 +215,7 @@ func TestRevalidateLicense_Allowed_RefreshesSnapshot(t *testing.T) {
 			},
 		},
 	}
-	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1")
+	runtime := state.NewRuntimeState("nightgauge/test", 1, "id-1", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/test"}
 
 	allowed, status := s.revalidateLicense(context.Background(), item, runtime)

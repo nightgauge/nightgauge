@@ -200,7 +200,9 @@ func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
 	s.runPipeline(context.Background(), item)
 
 	// Recovery attempt must have been recorded on the pr-merge stage.
-	rs, err := state.LoadPersistedState(filepath.Join(root, ".nightgauge", "pipeline"), item.Number)
+	// The run mints its own identity, so the snapshot is DISCOVERED by issue
+	// rather than composed by name (ADR-017 Decision 8).
+	rs, err := state.PickPersistedStateForIssue(filepath.Join(root, ".nightgauge", "pipeline"), item.Number)
 	if err != nil {
 		t.Fatalf("load persisted state: %v", err)
 	}

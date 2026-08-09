@@ -14,8 +14,17 @@ import (
 // result onto the run record for the TypeScript HeadlessOrchestrator path,
 // which never runs in-process alongside the Go scheduler and so cannot call
 // RuntimeState.AppendStageGateResult directly.
+//
+// The run's snapshot is seeded through the PRODUCTION writer (Persist), never
+// hand-authored JSON: the seam is load-or-skip now (ADR-017 Decision 5), so a
+// fixture that does not exist the way Persist makes it exist would be testing
+// nothing that runs.
 func TestAppendStageGateResultToDisk(t *testing.T) {
 	stateDir := t.TempDir()
+	seed := NewRuntimeState("nightgauge/nightgauge", 210, "item-210", testRunID())
+	if err := seed.Persist(stateDir); err != nil {
+		t.Fatalf("seed Persist: %v", err)
+	}
 
 	if err := AppendStageGateResultToDisk(stateDir, 210, StageFeatureDev, StageGateResult{
 		GateName: "feature-dev",
@@ -26,7 +35,7 @@ func TestAppendStageGateResultToDisk(t *testing.T) {
 		t.Fatalf("AppendStageGateResultToDisk (first write): %v", err)
 	}
 
-	rs, err := LoadPersistedState(stateDir, 210)
+	rs, err := LoadPersistedState(stateDir, seed.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}
@@ -47,7 +56,7 @@ func TestAppendStageGateResultToDisk(t *testing.T) {
 		t.Fatalf("AppendStageGateResultToDisk (second write): %v", err)
 	}
 
-	rs2, err := LoadPersistedState(stateDir, 210)
+	rs2, err := LoadPersistedState(stateDir, seed.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState (after second write): %v", err)
 	}
@@ -67,7 +76,7 @@ func TestAppendStageGateResultToDisk(t *testing.T) {
 // TestRuntimeState_AppendStageGateResult verifies the per-stage append/read
 // path used by the orchestrator scheduler (Issue #3266).
 func TestRuntimeState_AppendStageGateResult(t *testing.T) {
-	rs := NewRuntimeState("o/r", 42, "item-1")
+	rs := NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.AppendStageGateResult(StageIssuePickup, StageGateResult{
 		GateName: "issue-pickup",
 		Passed:   true,
@@ -100,7 +109,7 @@ func TestRuntimeState_AppendStageGateResult(t *testing.T) {
 // TestRuntimeState_Snapshot_DeepCopiesGateResults verifies that snapshots
 // (used by the V2 writer) cannot mutate the live state.
 func TestRuntimeState_Snapshot_DeepCopiesGateResults(t *testing.T) {
-	rs := NewRuntimeState("o/r", 42, "item-1")
+	rs := NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.AppendStageGateResult(StageIssuePickup, StageGateResult{
 		GateName: "issue-pickup",
 		Passed:   true,
@@ -121,7 +130,7 @@ func TestRuntimeState_Snapshot_DeepCopiesGateResults(t *testing.T) {
 // writer projects RuntimeState.StageGateResults onto V2StageDetail.GateResults
 // for matching stages.
 func TestBuildV2Record_PopulatesGateResultsPerStage(t *testing.T) {
-	rs := NewRuntimeState("o/r", 42, "item-1")
+	rs := NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.StartedAt = time.Now()
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")

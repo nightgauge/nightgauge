@@ -320,7 +320,7 @@ type Scheduler struct {
 	clientResolver func(ctx context.Context, owner, repo string) (*gh.Client, error)
 
 	// repoPathResolver, when set, maps an "owner/repo" slug to that repo's
-	// filesystem root. A run's on-disk state — trace, runtime-{N}.json,
+	// filesystem root. A run's on-disk state — trace, runtime-{issue}-{runId}.json,
 	// stage-context, exit-records, worktrees — must all root at the run's
 	// TARGET repo in a multi-repo workspace, not the scheduler's single launch
 	// root, or the state is split across two repos (#229; mirrors the IPC
@@ -802,7 +802,7 @@ func (s *Scheduler) WithClientResolver(fn func(ctx context.Context, owner, repo 
 }
 
 // WithRepoPathResolver injects a resolver mapping an "owner/repo" slug to that
-// repo's filesystem root so a run's trace, runtime-{N}.json, stage-context,
+// repo's filesystem root so a run's trace, runtime-{issue}-{runId}.json, stage-context,
 // exit-records, and worktrees all root at the run's TARGET repo — not the
 // scheduler's launch root — in a multi-repo workspace (#229). The resolver is
 // also forwarded to the execution manager so worktree resolution stays
@@ -830,7 +830,7 @@ func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 }
 
 // runRoot resolves the filesystem root a run's on-disk state belongs in — the
-// run's target repo in a multi-repo workspace so trace, runtime-{N}.json,
+// run's target repo in a multi-repo workspace so trace, runtime-{issue}-{runId}.json,
 // stage-context, and exit-records never split across repos (mirrors
 // Server.pipelineStateDir, #215). Falls back to the execution manager's
 // workspace root when no resolver is set or the repo is unregistered, keeping
@@ -2751,35 +2751,61 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		s.mu.Unlock()
 	}()
 
-	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID)
-	runtime.Title = item.Title
-	// Capture the issue body at pickup (#183) so the run record + telemetry can
-	// show the issue context (title, labels, body) on the dashboard run-detail
-	// page without leaving the dashboard. Title/labels are already on the board
-	// item; the body is fetched here (best-effort — a fetch failure leaves it
-	// empty and the run proceeds). Bounded to a sensible excerpt at capture.
-	runtime.Body = s.captureIssueBody(ctx, item)
-	// Root this run's on-disk state (trace, runtime-{N}.json, stage-context,
-	// exit-records, worktrees) at the run's TARGET repo, not the scheduler's
-	// launch root, so multi-repo state is never split (#229). Falls back to the
-	// execution manager's workspace root in single-repo / CLI / auto mode.
+	// Root this run's on-disk state (trace, runtime-{issue}-{runId}.json,
+	// stage-context, exit-records, worktrees) at the run's TARGET repo, not the
+	// scheduler's launch root, so multi-repo state is never split (#229). Falls
+	// back to the execution manager's workspace root in single-repo / CLI /
+	// auto mode. Resolved BEFORE the runtime exists because the run_id
+	// resolution below reads run-state.json underneath it, and RunID is now a
+	// constructor argument (ADR-017 Decision 1 — immutable, no setter).
 	workspaceRoot := s.runRoot(item.Repo)
 
-	// Load run_id for telemetry correlation (#3557). Prefer the RemoteRunID
+	// Resolve run_id for telemetry correlation (#3557). Prefer the RemoteRunID
 	// from the platform command payload (for remote-triggered runs); fall back
-	// to the locally-generated UUID v7 from runstate.
+	// to run-state.json; then mint locally.
+	//
+	// This block RUNS BEFORE THE CONSTRUCTOR (ADR-017 step 1): the identity is a
+	// constructor fact, so it cannot be stamped on afterwards.
+	//
+	// EVERY BORROWED VALUE IS VALIDATED BEFORE IT IS ACCEPTED (ADR-017
+	// Decision 1). `remoteRunId` arrives on the local IPC socket, which ADR-015
+	// documents as UNAUTHENTICATED, and run-state.json is a file on disk; under
+	// step 1 the identity is interpolated into the snapshot FILENAME, so an
+	// unvalidated value is an arbitrary-path write (`../`) and a merely
+	// non-canonical one (a UUIDv4, a `run_01H…` ULID) writes a file the
+	// discovery regex cannot match — invisible to orphan reconciliation, the
+	// gate seam, getState, the wave orchestrator and the extension's gate map,
+	// silently. A present-but-invalid value is therefore IGNORED and the run
+	// mints its own identity LOUDLY, which is strictly better than a run whose
+	// every snapshot is a phantom. The consequence is named: a platform id that
+	// is not a canonical UUIDv7 loses platform correlation until ADR-017
+	// Decision 2 threads `remoteRunId` as its own correlation attribute rather
+	// than as the identity. (The state layer refuses the same predicate at the
+	// persist sink, so this guard is the loud half, not the only half.)
 	//
 	// runIDMintErr carries a mint failure forward to the run-identity preflight
-	// below the terminal defer (ADR-017 step 0b) — see the mint block.
+	// below the terminal defer (ADR-017 step 0b) — see below.
+	var runID string
 	var runIDMintErr error
 	{
 		remoteRunID := s.queueItemRemoteRunID(item.Repo, item.Number)
 		if remoteRunID != "" {
-			runtime.RunID = remoteRunID
-		} else {
+			if runstate.IsIdentity(remoteRunID) {
+				runID = remoteRunID
+			} else {
+				log.Printf("#%d: ignoring non-identity run id %q from remote — minting locally (ADR-017 Decision 1)",
+					item.Number, remoteRunID)
+			}
+		}
+		if runID == "" {
 			baseDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 			if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
-				runtime.RunID = rs.RunID
+				if runstate.IsIdentity(rs.RunID) {
+					runID = rs.RunID
+				} else {
+					log.Printf("#%d: ignoring non-identity run id %q from run-state.json — minting locally (ADR-017 Decision 1)",
+						item.Number, rs.RunID)
+				}
 			}
 		}
 		// Lifecycle trace fallback (#179 / ADR 013): when neither a remote id
@@ -2794,23 +2820,34 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// through: the autonomous scheduler's Running entry would never be
 		// cleared (leaking a MaxConcurrent slot and pinning the issue), the
 		// board would stay In Progress, and there would be no pipeline_done, no
-		// history record, no outcome. So record the error, leave RunID empty,
-		// and let the run-identity preflight below the terminal defer — beside
-		// the license and identity preflights — refuse the run and book the
-		// failure. Nothing between here and there reads RunID in a way that
-		// misbehaves on empty: trace.NewWriter returns a nil (no-op) writer for
-		// an empty id, and registerRuntime keys on the issue number.
-		if runtime.RunID == "" {
+		// history record, no outcome. So record the error, construct with an
+		// empty identity, and let the run-identity preflight below the terminal
+		// defer — beside the license and identity preflights — refuse the run
+		// and book the failure. Nothing between here and there reads RunID in a
+		// way that misbehaves on empty: trace.NewWriter returns a nil (no-op)
+		// writer for an empty id, registerRuntime keys on the issue number, and
+		// Persist REFUSES an identity-less runtime outright (ADR-017 Decision 1)
+		// rather than writing a nameless file.
+		if runID == "" {
 			id, idErr := newRunID()
 			if idErr != nil {
 				runIDMintErr = idErr
 				log.Printf("#%d: cannot mint a run identity: %v — the run will be refused at preflight (ADR-017)",
 					item.Number, idErr)
 			} else {
-				runtime.RunID = id
+				runID = id
 			}
 		}
 	}
+
+	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
+	runtime.Title = item.Title
+	// Capture the issue body at pickup (#183) so the run record + telemetry can
+	// show the issue context (title, labels, body) on the dashboard run-detail
+	// page without leaving the dashboard. Title/labels are already on the board
+	// item; the body is fetched here (best-effort — a fetch failure leaves it
+	// empty and the run proceeds). Bounded to a sensible excerpt at capture.
+	runtime.Body = s.captureIssueBody(ctx, item)
 
 	// Per-run lifecycle decision trace writer (#179 / ADR 013). Nil-safe and
 	// fail-open: emit calls below never block or fail the pipeline.
@@ -3194,15 +3231,27 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		}
 	}
 
-	// Run-identity preflight (ADR-017 step 0b): refuse a run that has no
-	// identity. Every store this run would write — exit records, telemetry, the
-	// V3 record — is keyed by run_id, and every stage would dispatch without
-	// one. The mint above records its failure instead of returning, because a
-	// return there sits above the terminal defer; refusing here books the
-	// failure exactly as a license or identity block is booked. First of the
-	// three preflights because it is the only one that costs nothing to check.
-	if runtime.RunID == "" {
+	// Run-identity preflight (ADR-017 step 0b): refuse a run whose identity is
+	// not a canonical run identity. Every store this run would write — exit
+	// records, telemetry, the V3 record — is keyed by run_id, and every stage
+	// would dispatch without one. The mint above records its failure instead of
+	// returning, because a return there sits above the terminal defer; refusing
+	// here books the failure exactly as a license or identity block is booked.
+	// First of the three preflights because it is the only one that costs
+	// nothing to check.
+	//
+	// THE PREDICATE IS runstate.IsIdentity, NOT `== ""` (ADR-017 Decision 1).
+	// The resolution above already ignores a non-identity from either borrowed
+	// source, so this branch should be unreachable for a present-but-invalid
+	// id — which is exactly why it must exist: if any future path ever seeds
+	// one, the run fails LOUDLY here, through the terminal funnel (booked,
+	// board reset, concurrency slot released) instead of running to completion
+	// while every single Persist is silently refused at the state sink.
+	if !runstate.IsIdentity(runtime.RunID) {
 		reason := "run identity preflight: no run_id resolved for this run"
+		if runtime.RunID != "" {
+			reason = fmt.Sprintf("run identity preflight: run_id %q is not a canonical run identity", runtime.RunID)
+		}
 		if runIDMintErr != nil {
 			reason = fmt.Sprintf("run identity preflight: cannot mint a run_id: %v", runIDMintErr)
 		}
@@ -3579,12 +3628,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if sidecarErr := writeCurrentRunSidecar(workspaceRoot, CurrentRunSidecar{
 			IssueNumber: item.Number,
 			Repo:        item.Repo,
-			ItemID:      item.ID,
-			Title:       item.Title,
-			StartedAt:   runtime.StartedAt,
-			Stage:       string(stage),
-			StageStart:  time.Now().UTC(),
-			PID:         os.Getpid(),
+			// The identity the extension's CLI-run reconciler needs to compose
+			// runtime-{issue}-{runId}.json (ADR-017 Decision 8).
+			RunID:      runtime.RunID,
+			ItemID:     item.ID,
+			Title:      item.Title,
+			StartedAt:  runtime.StartedAt,
+			Stage:      string(stage),
+			StageStart: time.Now().UTC(),
+			PID:        os.Getpid(),
 		}); sidecarErr != nil {
 			log.Printf("#%d: failed to write current-run sidecar: %v", item.Number, sidecarErr)
 		}
@@ -4613,7 +4665,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 						DurationMs:     result.DurationMs,
 					})
 					// Persist the recovery attempt immediately so the
-					// runtime-{N}.json snapshot reflects it before the
+					// runtime-{issue}-{runId}.json snapshot reflects it before the
 					// next iteration runs; the success block's persist
 					// is skipped on the failure→recovery path.
 					if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
@@ -5324,7 +5376,7 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 }
 
 // issueBodyCaptureMax bounds the issue body captured at pickup (#183) to a
-// sensible excerpt so runtime-{N}.json / the JSONL history stay lean and the
+// sensible excerpt so runtime-{issue}-{runId}.json / the JSONL history stay lean and the
 // telemetry wire's issueBody .max(8192) is never exceeded. The platform enforces
 // the same ceiling; capping here keeps the on-disk state small too.
 const issueBodyCaptureMax = 8192

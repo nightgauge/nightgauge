@@ -14,7 +14,7 @@ import (
 // history record. See docs/spikes/fable-5-behavior-porting.md §8.3.
 
 func TestRecordModelRefusalFallback(t *testing.T) {
-	rs := NewRuntimeState("o/r", 91, "item-1")
+	rs := NewRuntimeState("o/r", 91, "item-1", testRunID())
 
 	if got := rs.LastRefusalServedModel(); got != "" {
 		t.Errorf("empty state: LastRefusalServedModel = %q, want empty", got)
@@ -48,7 +48,7 @@ func TestRecordModelRefusalFallback(t *testing.T) {
 }
 
 func TestSnapshotCopiesModelRefusalFallbacks(t *testing.T) {
-	rs := NewRuntimeState("o/r", 91, "item-1")
+	rs := NewRuntimeState("o/r", 91, "item-1", testRunID())
 	rs.RecordModelRefusalFallback(StageFeatureDev, "claude-fable-5", "claude-opus-4-8", "reasoning_extraction")
 
 	snap := rs.Snapshot()
@@ -68,7 +68,7 @@ func TestSnapshotCopiesModelRefusalFallbacks(t *testing.T) {
 // the SERVED model with source "cli-refusal-fallback" so consumers can flag
 // the substitution without diffing against the predicted model.
 func TestBuildV2Record_RefusalFallbackModelSelection(t *testing.T) {
-	rs := NewRuntimeState("o/r", 91, "item-1")
+	rs := NewRuntimeState("o/r", 91, "item-1", testRunID())
 	rs.StartedAt = time.Now()
 	rs.BeginStage(StageFeatureDev)
 	// Dispatch-time record (requested), then the post-run re-record with the
@@ -98,7 +98,7 @@ func TestBuildV2Record_RefusalFallbackModelSelection(t *testing.T) {
 // A stage without a refusal fallback keeps the plain scheduler source — the
 // #91 marker must never leak onto unaffected stages.
 func TestBuildV2Record_RefusalFallbackDoesNotLeakAcrossStages(t *testing.T) {
-	rs := NewRuntimeState("o/r", 91, "item-1")
+	rs := NewRuntimeState("o/r", 91, "item-1", testRunID())
 	rs.StartedAt = time.Now()
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageModel(StageIssuePickup, "claude-sonnet-4-6")

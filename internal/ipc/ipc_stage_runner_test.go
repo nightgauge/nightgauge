@@ -471,8 +471,7 @@ func TestRunStage_ForwardsRunID(t *testing.T) {
 	// `params.Runtime.RunID` with the suite green. Disagreeing here makes the
 	// single-authority property observable: the emitted value must be the
 	// DISPATCH's id.
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 101, "")
-	rt.RunID = "0189ffff-dead-7bee-8fff-000000000000"
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 101, "", "0189ffff-dead-7bee-8fff-000000000000")
 
 	params := orchestrator.StageRunParams{
 		Stage:       state.PipelineStage("feature-dev"),

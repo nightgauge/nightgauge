@@ -162,7 +162,7 @@ func (s *Server) registerStageNotifyMethod() {
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
 		if !ok {
-			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "")
+			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "", newTestRunID())
 			s.activeRuntimes[runtimeKey] = rt
 		}
 		s.runtimesMu.Unlock()
@@ -212,7 +212,7 @@ func (s *Server) registerGetStateMethod() {
 		s.runtimesMu.Unlock()
 		if s.workspaceRoot != "" {
 			stateDir := s.workspaceRoot + "/.nightgauge/pipeline"
-			persisted, err := state.LoadPersistedState(stateDir, p.IssueNumber)
+			persisted, err := state.PickPersistedStateForIssue(stateDir, p.IssueNumber)
 			if err == nil {
 				return persisted, nil
 			}
@@ -312,8 +312,7 @@ func TestNotifyStageProgressHandler_DoesNotMutateCompletedStages(t *testing.T) {
 	}
 	s.registerMethods()
 
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 99, "item-1")
-	rt.RunID = "run-uuid"
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 99, "item-1", newTestRunID())
 	rt.BeginStage(state.StageFeatureDev)
 	rt.CompleteStageWithCost(0, 100, 50, 10, 0.02)
 	before := len(rt.CompletedStages)
@@ -338,7 +337,7 @@ func TestGetStateFallback(t *testing.T) {
 	tmpDir := t.TempDir()
 	stateDir := tmpDir + "/.nightgauge/pipeline"
 
-	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", newTestRunID())
 	rs.BeginStage("feature-dev")
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 	if err := rs.Persist(stateDir); err != nil {
@@ -385,7 +384,7 @@ func TestGetStateActiveRuntime(t *testing.T) {
 	s.registerGetStateMethod()
 
 	// Insert an active runtime (keyed by issueNumber)
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 42, "item-42")
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 42, "item-42", newTestRunID())
 	rt.BeginStage("issue-pickup")
 	s.runtimesMu.Lock()
 	s.activeRuntimes["42"] = rt

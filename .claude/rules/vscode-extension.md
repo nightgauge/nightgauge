@@ -13,7 +13,14 @@ binary changes while autonomous mode is running (operator rule, 2026-07-18):
 
 1. **Stop the autonomous scheduler first** so no new issues are dispatched.
 2. **Let in-flight runs drain to completion** (watch `.nightgauge/pipeline/`
-   runtime files; the run is over when its runtime-\<issue\>.json is removed).
+   runtime files). Each run has its own snapshot,
+   `runtime-\<issue\>-\<runId\>.json`, so a re-run of the same issue does not
+   overwrite its predecessor and the issue number alone no longer identifies a
+   run (ADR-017, #370). Removal of a run's own file still means that run is
+   over — but a leftover snapshot is NOT proof a run is live: nothing removes
+   the scheduler's snapshot until ADR-017 step 4 lands, so treat the sidecar
+   `current-run.json` (which carries the live `run_id` and pid) as the
+   authority on what is actually running.
 3. Then rebuild + install (`packages/nightgauge-vscode/scripts/dev-install.sh`)
    and reload the window.
 

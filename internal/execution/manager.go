@@ -100,7 +100,7 @@ func (m *Manager) WorkspaceRoot() string {
 // SetRepoPathResolver installs a resolver mapping an "owner/repo" slug to that
 // repo's filesystem root. In a multi-repo workspace the scheduler wires this
 // from the IPC ClientResolver so worktrees land in the run's target repo, kept
-// consistent with the run's on-disk state (trace, runtime-{N}.json). A nil
+// consistent with the run's on-disk state (trace, runtime-{issue}-{runId}.json). A nil
 // resolver or an unregistered repo falls back to workspaceRoot, so single-repo
 // / CLI / auto behavior is byte-identical (#229).
 func (m *Manager) SetRepoPathResolver(fn func(repo string) string) {

@@ -16,7 +16,7 @@ func TestHistoryWriteAndRead(t *testing.T) {
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 
@@ -48,7 +48,7 @@ func TestHistoryMultipleEntries(t *testing.T) {
 	hw := NewHistoryWriter(dir)
 
 	for i := 0; i < 5; i++ {
-		rs := NewRuntimeState("nightgauge/nightgauge", 1300+i, "item")
+		rs := NewRuntimeState("nightgauge/nightgauge", 1300+i, "item", testRunID())
 		if err := hw.Write(rs, true, ""); err != nil {
 			t.Fatalf("Write %d: %v", i, err)
 		}
@@ -86,7 +86,7 @@ func TestWriteV2_ProducesValidRecord(t *testing.T) {
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 2001, "item-v2")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2001, "item-v2", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 2000}, "")
 	rs.BeginStage(StageFeaturePlanning)
@@ -152,7 +152,7 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 2002, "item-fail")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2002, "item-fail", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	rs.BeginStage(StageFeatureDev)
@@ -200,7 +200,7 @@ func TestWriteV2_UpdatesIndex(t *testing.T) {
 	hw := NewHistoryWriter(dir)
 
 	for i := 0; i < 3; i++ {
-		rs := NewRuntimeState("nightgauge/nightgauge", 3000+i, "item")
+		rs := NewRuntimeState("nightgauge/nightgauge", 3000+i, "item", testRunID())
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 		input := V2RunInput{Title: "Index test", Branch: "feat/test"}
@@ -233,7 +233,7 @@ func TestWriteV2_SkippedStages(t *testing.T) {
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 4000, "item-skip")
+	rs := NewRuntimeState("nightgauge/nightgauge", 4000, "item-skip", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	rs.SkippedStages = []string{string(StageFeaturePlanning)}
@@ -283,7 +283,7 @@ func TestBuildV2Record_InterimPartialPipeline(t *testing.T) {
 	now := time.Now()
 
 	// Only issue-pickup and feature-planning have completed (pipeline interrupted).
-	rs := NewRuntimeState("nightgauge/nightgauge", 2617, "item-interim")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2617, "item-interim", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStageWithCost(0, 10000, 5000, 2000, 0.05)
 	rs.BeginStage(StageFeaturePlanning)
@@ -334,7 +334,7 @@ func TestBuildV2Record_InterimPartialPipeline(t *testing.T) {
 func TestBuildV2Record_OutcomeTypePropagates(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
-	rs := NewRuntimeState("nightgauge/nightgauge", 234, "item-blocked")
+	rs := NewRuntimeState("nightgauge/nightgauge", 234, "item-blocked", testRunID())
 
 	blocked := hw.BuildV2Record(rs, false, "required-check-config-mismatch:Sentry Smoke", V2RunInput{OutcomeType: "blocked"}, now)
 	if blocked.OutcomeType != "blocked" {
@@ -352,7 +352,7 @@ func TestBuildV2Record_OutcomeTypePropagates(t *testing.T) {
 func TestBuildV2Record_IssueBody(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
-	rs := NewRuntimeState("nightgauge/nightgauge", 183, "item-body")
+	rs := NewRuntimeState("nightgauge/nightgauge", 183, "item-body", testRunID())
 
 	// Ordinary body flows through verbatim.
 	rec := hw.BuildV2Record(rs, true, "", V2RunInput{Body: "## Problem\nNeeds context."}, now)
@@ -380,8 +380,9 @@ func TestBuildV2Record_IssueBody(t *testing.T) {
 func TestBuildV2Record_ToolCallsSurviveIntoRecord(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
-	rs := NewRuntimeState("nightgauge/nightgauge", 144, "item-toolcalls")
-	rs.RunID = "01966b4c-0000-7000-a000-000000000144"
+	// A pinned canonical identity rather than testRunID(): the record assertions
+	// below name it. It is the CONSTRUCTOR argument — RunID has no setter.
+	rs := NewRuntimeState("nightgauge/nightgauge", 144, "item-toolcalls", "01966b4c-0000-7000-a000-000000000144")
 
 	toolCalls := []diagnostics.ToolCallRecord{
 		{Tool: "Read", Target: "internal/state/history.go", Stage: "feature-dev", Timestamp: "2026-07-29T00:00:00Z"},
@@ -414,7 +415,7 @@ func TestBuildV2Record_ZeroStagesNoTokens(t *testing.T) {
 	input := V2RunInput{Title: "empty", Branch: "feat/test", BaseBranch: "main"}
 	now := time.Now()
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 9999, "item-empty")
+	rs := NewRuntimeState("nightgauge/nightgauge", 9999, "item-empty", testRunID())
 	// No stages completed.
 	record := hw.BuildV2Record(rs, false, "preflight failed", input, now)
 
@@ -433,7 +434,7 @@ func TestBuildV2Record_TotalCacheReadPopulated(t *testing.T) {
 	input := V2RunInput{Title: "cache read test", Branch: "feat/test", BaseBranch: "main"}
 	now := time.Now()
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 2617, "item-cache")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2617, "item-cache", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStageWithCost(0, 5000, 2000, 1500, 0.03) // 1500 cache read tokens
 	rs.BeginStage(StageFeaturePlanning)
@@ -457,7 +458,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 	t.Run("typical: input + cache_read", func(t *testing.T) {
 		// 100 input + 50 cacheRead → sr.InputTokens=150, sr.CacheRead=50
 		// rate = 50/150 ≈ 0.333
-		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-1")
+		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-1", testRunID())
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStageWithCost(0, 100, 200, 50, 0.01)
 
@@ -483,7 +484,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 	})
 
 	t.Run("zero denominator: no tokens", func(t *testing.T) {
-		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-2")
+		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-2", testRunID())
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStageWithCost(0, 0, 0, 0, 0.0)
 
@@ -499,7 +500,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 
 	t.Run("full cache hit: only cache_read, no fresh input", func(t *testing.T) {
 		// 0 input + 50 cacheRead → rate = 50/50 = 1.0
-		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-3")
+		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-3", testRunID())
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStageWithCost(0, 0, 200, 50, 0.01)
 
@@ -518,7 +519,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 
 	t.Run("zero cache: only fresh input", func(t *testing.T) {
 		// 100 input + 0 cacheRead → rate = 0/100 = 0.0
-		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-4")
+		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-4", testRunID())
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStageWithCost(0, 100, 200, 0, 0.01)
 
@@ -536,7 +537,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 	})
 
 	t.Run("multiple stages compute independently", func(t *testing.T) {
-		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-5")
+		rs := NewRuntimeState("nightgauge/nightgauge", 2459, "item-5", testRunID())
 
 		rs.BeginStage(StageIssuePickup)
 		rs.CompleteStageWithCost(0, 100, 50, 50, 0.01) // ~33% hit (50 cache_read / 150 combined input)
@@ -575,7 +576,7 @@ func TestBuildV2Record_CacheHitRate(t *testing.T) {
 //   - one with no mode recorded — the omitempty tag MUST keep the field absent
 //     so old readers see the same on-the-wire shape they did before #3215.
 func TestWriteV2_PerStagePerformanceMode(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3215, "item-mode")
+	rs := NewRuntimeState("nightgauge/nightgauge", 3215, "item-mode", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "efficiency")
@@ -634,7 +635,7 @@ func TestWriteV2_PerStagePerformanceMode(t *testing.T) {
 // modes — keeps the on-the-wire shape clean when ResolvePerformanceMode
 // fails to read a value.
 func TestRecordStageMode_IgnoresEmpty(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3215, "item-empty")
+	rs := NewRuntimeState("nightgauge/nightgauge", 3215, "item-empty", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "")
 	if got := rs.StageMode(StageIssuePickup); got != "" {
@@ -653,7 +654,7 @@ func TestRecordStageMode_IgnoresEmpty(t *testing.T) {
 //   - one stage with no recorded adapter — falls back to V2RunInput.DefaultAdapter
 //   - one stage with no recorded adapter and no default — omitempty drops the key
 func TestWriteV2_PerStageAdapter(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3224, "item-adapter")
+	rs := NewRuntimeState("nightgauge/nightgauge", 3224, "item-adapter", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageAdapter(StageIssuePickup, "claude")
@@ -713,7 +714,7 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 	// Back-compat: when neither recorded nor default adapter is supplied, the
 	// adapter key MUST be absent on the wire so existing dashboards keep
 	// treating absence as adapter-unknown.
-	rsNoAdapter := NewRuntimeState("nightgauge/nightgauge", 3224, "item-no-adapter")
+	rsNoAdapter := NewRuntimeState("nightgauge/nightgauge", 3224, "item-no-adapter", testRunID())
 	rsNoAdapter.BeginStage(StageIssuePickup)
 	rsNoAdapter.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 
@@ -747,7 +748,7 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 // adapter strings — preserves the omitempty guarantee when the resolver
 // fails to produce a value.
 func TestRecordStageAdapter_IgnoresEmpty(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3224, "item-empty-adapter")
+	rs := NewRuntimeState("nightgauge/nightgauge", 3224, "item-empty-adapter", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageAdapter(StageIssuePickup, "")
 	if got := rs.StageAdapter(StageIssuePickup); got != "" {
@@ -762,7 +763,7 @@ func TestRecordStageAdapter_IgnoresEmpty(t *testing.T) {
 // run-level performance_mode from per-stage modes, and that updateIndex writes
 // it to index.json (Issue #3218 fix).
 func TestRunLevelPerformanceMode(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3218, "item-mode-fix")
+	rs := NewRuntimeState("nightgauge/nightgauge", 3218, "item-mode-fix", testRunID())
 
 	// Two elevated stages, one with no mode.
 	rs.BeginStage(StageIssuePickup)
@@ -819,7 +820,7 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 func TestBuildV2Record_TerminatingStageTokensSurvive(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
-	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-terminating")
+	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-terminating", testRunID())
 
 	// Simulate a normally-completed first stage.
 	rs.BeginStage(StageIssuePickup)
@@ -876,7 +877,7 @@ func TestBuildV2Record_TerminatingStageTokensSurvive(t *testing.T) {
 func TestBuildV2Record_BacktrackedStageAccumulates(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
-	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-backtrack")
+	rs := NewRuntimeState("nightgauge/nightgauge", 146, "item-backtrack", testRunID())
 
 	// feature-dev runs, feature-validate rejects the work, and the backtrack
 	// engine rewinds to feature-dev — which then runs a second time.

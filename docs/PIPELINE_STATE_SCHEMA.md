@@ -83,18 +83,18 @@ the only destructive transition.
 
 ## Schema catalog
 
-| Filename                 | Schema (Zod)                   | Schema (Go)               | Owning stage / writer                     |
-| ------------------------ | ------------------------------ | ------------------------- | ----------------------------------------- |
-| `run-state.json`         | `RunStateSchema` (1.0)         | `runstate.RunState` (1.0) | `RunStateManager` (TS + Go)               |
-| `issue-<N>.json`         | `IssueContextSchema`           | (read by Go scheduler)    | `/nightgauge-issue-pickup`                |
-| `planning-<N>.json`      | `PlanningContextSchema`        | —                         | `/nightgauge-feature-planning`            |
-| `dev-<N>.json`           | `DevContextSchema`             | —                         | `/nightgauge-feature-dev`                 |
-| `validate-<N>.json`      | `ValidateContextSchema`        | —                         | `/nightgauge-feature-validate`            |
-| `pr-<N>.json`            | `PRContextSchema`              | —                         | `/nightgauge-pr-create`                   |
-| `feedback-<N>.json`      | `FeedbackContextSchema`        | —                         | `/nightgauge-feature-validate` (signals)  |
-| `epic-context-<E>.json`  | `EpicContextSchema`            | —                         | wave orchestrator                         |
-| `runtime-<N>.json`       | (Go only) `state.RuntimeState` | `state.RuntimeState`      | Go scheduler                              |
-| `workflow-<runId>.jsonl` | `JournalRecord` (append-only)  | —                         | `WorkflowExecutor` (orchestration engine) |
+| Filename                   | Schema (Zod)                   | Schema (Go)               | Owning stage / writer                     |
+| -------------------------- | ------------------------------ | ------------------------- | ----------------------------------------- |
+| `run-state.json`           | `RunStateSchema` (1.0)         | `runstate.RunState` (1.0) | `RunStateManager` (TS + Go)               |
+| `issue-<N>.json`           | `IssueContextSchema`           | (read by Go scheduler)    | `/nightgauge-issue-pickup`                |
+| `planning-<N>.json`        | `PlanningContextSchema`        | —                         | `/nightgauge-feature-planning`            |
+| `dev-<N>.json`             | `DevContextSchema`             | —                         | `/nightgauge-feature-dev`                 |
+| `validate-<N>.json`        | `ValidateContextSchema`        | —                         | `/nightgauge-feature-validate`            |
+| `pr-<N>.json`              | `PRContextSchema`              | —                         | `/nightgauge-pr-create`                   |
+| `feedback-<N>.json`        | `FeedbackContextSchema`        | —                         | `/nightgauge-feature-validate` (signals)  |
+| `epic-context-<E>.json`    | `EpicContextSchema`            | —                         | wave orchestrator                         |
+| `runtime-<N>-<runId>.json` | (Go only) `state.RuntimeState` | `state.RuntimeState`      | Go scheduler                              |
+| `workflow-<runId>.jsonl`   | `JournalRecord` (append-only)  | —                         | `WorkflowExecutor` (orchestration engine) |
 
 ### Workflow journal (`workflow-<runId>.jsonl`)
 

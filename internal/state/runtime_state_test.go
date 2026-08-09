@@ -2,6 +2,8 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,7 +14,7 @@ import (
 )
 
 func TestNewRuntimeState(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	if rs.Repo != "nightgauge/nightgauge" {
 		t.Errorf("Repo = %q", rs.Repo)
 	}
@@ -25,7 +27,7 @@ func TestNewRuntimeState(t *testing.T) {
 }
 
 func TestStageLifecycle(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	if rs.Stage != StageIssuePickup {
@@ -48,7 +50,7 @@ func TestStageLifecycle(t *testing.T) {
 }
 
 func TestSkipStage(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.SkipStage(StageFeatureValidate)
 
 	if len(rs.SkippedStages) != 1 {
@@ -60,7 +62,7 @@ func TestSkipStage(t *testing.T) {
 }
 
 func TestIsComplete(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 
 	if rs.IsComplete() {
 		t.Error("should not be complete initially")
@@ -80,7 +82,7 @@ func TestIsComplete(t *testing.T) {
 }
 
 func TestSnapshot(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.BeginStage(StageFeatureDev)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 
@@ -100,7 +102,7 @@ func TestSnapshot(t *testing.T) {
 }
 
 func TestCompleteStageAccumulatesCost(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1845, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1845, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001")
@@ -143,7 +145,7 @@ func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
 	}
 	const model = "claude-haiku-4-5-20251001"
 
-	rs := NewRuntimeState("nightgauge/nightgauge", 358, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 358, "item-1", testRunID())
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, counts, model)
 
@@ -170,7 +172,7 @@ func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
 // entry and must not double-count tokens/cost. Guards against the duplicate
 // pipeline-start entry observed in a dogfood run.
 func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
@@ -188,7 +190,7 @@ func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
 // A legitimate retry re-runs BeginStage (advancing StageStart), so its
 // completion is a distinct occurrence and still appends.
 func TestCompleteStageRetryStillAppends(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
@@ -204,7 +206,7 @@ func TestCompleteStageRetryStillAppends(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
@@ -222,7 +224,7 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 func TestBeginPhase(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "validate-environment", 0, 14)
 
 	if len(rs.PhaseHistory) != 1 {
@@ -253,7 +255,7 @@ func TestBeginPhase(t *testing.T) {
 // single emission (tool_use command echo, tool_result stdout, text
 // narration). Consecutive identical sightings must collapse to one record.
 func TestBeginPhase_DedupesRepeatedMarkerSighting(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
@@ -266,7 +268,7 @@ func TestBeginPhase_DedupesRepeatedMarkerSighting(t *testing.T) {
 // A clean single pass through a stage — every marker sighted twice (echo +
 // tool_result) — must yield exactly one record per phase.
 func TestBeginPhase_SinglePassYieldsOneRecordPerPhase(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 	phases := []string{"validate-environment", "feedback-context-check", "ac-reconcile", "complete-stage"}
 	for i, name := range phases {
 		rs.BeginPhase(StageFeatureValidate, name, i, len(phases))
@@ -286,7 +288,7 @@ func TestBeginPhase_SinglePassYieldsOneRecordPerPhase(t *testing.T) {
 // A legitimate re-run of a phase after an intermediate phase must append —
 // only CONSECUTIVE duplicates are collapsed.
 func TestBeginPhase_AllowsReRunAfterIntermediatePhase(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.BeginPhase(StageFeatureDev, "testing", 4, 14)
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
@@ -299,7 +301,7 @@ func TestBeginPhase_AllowsReRunAfterIntermediatePhase(t *testing.T) {
 // A re-emission after the previous record completed is a real re-run, not an
 // echo — it must append.
 func TestBeginPhase_AllowsReRunAfterComplete(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.CompletePhase(StageFeatureDev, "implementation")
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
@@ -312,7 +314,7 @@ func TestBeginPhase_AllowsReRunAfterComplete(t *testing.T) {
 // A re-emission outside the dedupe window is a real re-run even if the prior
 // record never completed (e.g. a stalled phase retried much later).
 func TestBeginPhase_AllowsReRunOutsideDedupeWindow(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.PhaseHistory[0].StartedAt = time.Now().Add(-phaseStartDedupeWindow - time.Second)
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
@@ -323,7 +325,7 @@ func TestBeginPhase_AllowsReRunOutsideDedupeWindow(t *testing.T) {
 }
 
 func TestCompletePhase(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.CompletePhase(StageFeatureDev, "implementation")
 
@@ -340,7 +342,7 @@ func TestCompletePhase(t *testing.T) {
 }
 
 func TestCompletePhaseNoMatch(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	// Complete a different name — should not change the existing phase.
 	rs.CompletePhase(StageFeatureDev, "quality-review")
@@ -351,7 +353,7 @@ func TestCompletePhaseNoMatch(t *testing.T) {
 }
 
 func TestSetStageError(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.SetStageError(StageFeatureDev, "exit code 1")
 
 	msg, ok := rs.StageErrors[string(StageFeatureDev)]
@@ -365,7 +367,7 @@ func TestSetStageError(t *testing.T) {
 
 func TestPersistAndLoad(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginStage(StageFeatureDev)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
@@ -375,14 +377,15 @@ func TestPersistAndLoad(t *testing.T) {
 		t.Fatalf("Persist: %v", err)
 	}
 
-	// Verify file exists
-	path := filepath.Join(dir, "runtime-1899.json")
+	// Verify file exists — under the run-identity-keyed name (ADR-017 D8),
+	// composed by the same helper Persist used.
+	path := filepath.Join(dir, SnapshotFilename(1899, rs.RunID))
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("state file missing: %v", err)
 	}
 
-	// Load and verify
-	loaded, err := LoadPersistedState(dir, 1899)
+	// Load and verify — addressed by run identity, not by issue.
+	loaded, err := LoadPersistedState(dir, rs.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}
@@ -408,14 +411,14 @@ func TestPersistAndLoad(t *testing.T) {
 
 func TestRuntimeState_SetPaused_PersistsAndLoads(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1", testRunID())
 	rs.SetPaused(true)
 
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
 
-	loaded, err := LoadPersistedState(dir, 2008)
+	loaded, err := LoadPersistedState(dir, rs.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}
@@ -425,7 +428,7 @@ func TestRuntimeState_SetPaused_PersistsAndLoads(t *testing.T) {
 }
 
 func TestRuntimeState_SetPaused_Snapshot(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1", testRunID())
 	rs.SetPaused(true)
 
 	snap := rs.Snapshot()
@@ -436,7 +439,7 @@ func TestRuntimeState_SetPaused_Snapshot(t *testing.T) {
 
 func TestRuntimeState_ResumeClears(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 2008, "item-1", testRunID())
 	rs.SetPaused(true)
 	rs.SetPaused(false)
 
@@ -444,7 +447,7 @@ func TestRuntimeState_ResumeClears(t *testing.T) {
 		t.Fatalf("Persist: %v", err)
 	}
 
-	loaded, err := LoadPersistedState(dir, 2008)
+	loaded, err := LoadPersistedState(dir, rs.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}
@@ -455,20 +458,23 @@ func TestRuntimeState_ResumeClears(t *testing.T) {
 
 func TestLoadPersistedStateMissing(t *testing.T) {
 	dir := t.TempDir()
-	_, err := LoadPersistedState(dir, 9999)
+	_, err := LoadPersistedState(dir, testRunID())
 	if err == nil {
 		t.Error("expected error for missing file")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("missing snapshot must report fs.ErrNotExist so callers can tell it from a parse error; got %v", err)
 	}
 }
 
 func TestPersistAtomicity(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42")
+	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42", testRunID())
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
 	// No .tmp file should remain
-	tmpPath := filepath.Join(dir, "runtime-42.json.tmp")
+	tmpPath := filepath.Join(dir, SnapshotFilename(42, rs.RunID)+".tmp")
 	if _, err := os.Stat(tmpPath); err == nil {
 		t.Error(".tmp file should not exist after successful persist")
 	}
@@ -476,12 +482,12 @@ func TestPersistAtomicity(t *testing.T) {
 
 func TestPersistJSON(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 100, "item-100")
+	rs := NewRuntimeState("nightgauge/nightgauge", 100, "item-100", testRunID())
 	rs.BeginPhase(StageIssuePickup, "read-issue", 0, 5)
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "runtime-100.json"))
+	data, err := os.ReadFile(filepath.Join(dir, SnapshotFilename(100, rs.RunID)))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -498,7 +504,7 @@ func TestPersistJSON(t *testing.T) {
 }
 
 func TestSnapshotIncludesPhaseAndErrors(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.SetStageError(StageFeaturePlanning, "timeout")
 
@@ -524,7 +530,7 @@ func TestSnapshotIncludesPhaseAndErrors(t *testing.T) {
 }
 
 func TestSnapshotIncludesTitleBranchPrUrl(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42")
+	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42", testRunID())
 	rs.Title = "Add Discord notifications"
 	rs.SetBranch("feat/42-discord-notifications")
 	rs.SetPrUrl("https://github.com/nightgauge/nightgauge/pull/42")
@@ -542,7 +548,7 @@ func TestSnapshotIncludesTitleBranchPrUrl(t *testing.T) {
 }
 
 func TestSnapshotIncludesGateResults(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42")
+	rs := NewRuntimeState("nightgauge/nightgauge", 42, "item-42", testRunID())
 	rs.SetGateResults([]GateResult{
 		{GateName: "build", Result: "pass", Timestamp: "2026-03-20T10:00:00Z"},
 		{GateName: "tests", Result: "catch", ErrorSummary: "2 tests failed", Timestamp: "2026-03-20T10:01:00Z"},
@@ -568,13 +574,13 @@ func TestSnapshotIncludesGateResults(t *testing.T) {
 
 func TestTitleBranchInJSON(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 100, "item-100")
+	rs := NewRuntimeState("nightgauge/nightgauge", 100, "item-100", testRunID())
 	rs.Title = "Fix login bug"
 	rs.SetBranch("fix/100-login-bug")
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "runtime-100.json"))
+	data, err := os.ReadFile(filepath.Join(dir, SnapshotFilename(100, rs.RunID)))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -591,8 +597,7 @@ func TestTitleBranchInJSON(t *testing.T) {
 }
 
 func TestRuntimeState_RunID_SetAndSnapshot(t *testing.T) {
-	rs := NewRuntimeState("nightgauge/nightgauge", 3557, "item-abc")
-	rs.RunID = "01966b4c-0000-7000-a000-000000000042"
+	rs := NewRuntimeState("nightgauge/nightgauge", 3557, "item-abc", "01966b4c-0000-7000-a000-000000000042")
 
 	snap := rs.Snapshot()
 	if snap.RunID != rs.RunID {
@@ -602,14 +607,13 @@ func TestRuntimeState_RunID_SetAndSnapshot(t *testing.T) {
 
 func TestRuntimeState_RunID_Persisted(t *testing.T) {
 	dir := t.TempDir()
-	rs := NewRuntimeState("nightgauge/nightgauge", 3557, "item-abc")
-	rs.RunID = "01966b4c-0000-7000-a000-000000000042"
+	rs := NewRuntimeState("nightgauge/nightgauge", 3557, "item-abc", "01966b4c-0000-7000-a000-000000000042")
 
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}
 
-	loaded, err := LoadPersistedState(dir, 3557)
+	loaded, err := LoadPersistedState(dir, rs.RunID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}

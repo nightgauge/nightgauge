@@ -30,6 +30,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -188,7 +189,7 @@ func (s *Server) handleAttentionRaise(_ context.Context, raw json.RawMessage) (i
 // unknown repo, so it cannot answer this — the registry must be asked directly.
 //
 // NOT A NEW CONSTRAINT on the paths that raise. The same registry already
-// decides where a run's runtime-{N}.json is written (`pipelineStateDir` →
+// decides where a run's runtime-{issue}-{runId}.json is written (`pipelineStateDir` →
 // `repoRoot`), and #307 records the fallback as cross-contamination: an
 // unregistered repo's run state lands in the daemon's launch root. Every repo
 // a run can legitimately be dispatched for is registered at daemon start by
@@ -266,11 +267,29 @@ func (s *Server) recordedRunSpendUSD(repo string, issue int) (float64, bool) {
 	if stateDir == "" {
 		return 0, false
 	}
-	persisted, err := state.LoadPersistedState(stateDir, issue)
-	if err != nil || persisted == nil {
+	// Issue-addressed via the STANDARD PICK (ADR-017 Decision 8): newest
+	// non-terminal, then newest overall.
+	//
+	// Refusing on >1 candidate was the earlier shape, and under per-run
+	// filenames it is wrong: a re-run issue accumulates snapshots (nothing sets
+	// the durable terminal marker until ADR-017 step 4), so the refusal would
+	// fire permanently for every issue dispatched more than once and the card
+	// would silently drop its raiseCeiling option forever. The raise is being
+	// computed FOR the run currently in flight, whose snapshot is the newest
+	// non-terminal one; an older non-terminal snapshot is an orphan of a prior
+	// dispatch. The residual — two truly concurrent dispatches of one issue —
+	// is closed by threading the raise's own run identity in ADR-017 step 7.
+	rs, err := state.PickPersistedStateForIssue(stateDir, issue)
+	if err != nil {
 		return 0, false
 	}
-	return corroboratedRunSpendUSD(persisted, repo)
+	if rs.Terminal {
+		// Every candidate was terminal: the run this raise belongs to has
+		// already ended, so its spend is history's to report, not the card's.
+		log.Printf("attention: #%d has only TERMINAL run snapshots in %s — spend corroboration skipped (#305)", issue, stateDir)
+		return 0, false
+	}
+	return corroboratedRunSpendUSD(rs, repo)
 }
 
 // corroboratedRunSpendUSD applies the two rules above to one run record and
@@ -327,7 +346,7 @@ func (s *Server) buildRaise(p AttentionRaiseParams) (attention.DecisionRequest, 
 		// its resolve could read and write two different budget-override.json
 		// files — the remedy inert again, in the way #305 exists to close.
 		// `repoRoot` is the same per-repo registry that already decides where a
-		// run's runtime-{N}.json lives (#215/#307), and `ExecuteVerb`'s
+		// run's runtime-{issue}-{runId}.json lives (#215/#307), and `ExecuteVerb`'s
 		// `budget.raiseCeiling` arm now writes through it too, so read and write
 		// agree per repo and stop moving with the operator's cursor.
 		facts := derivedFacts{enforcedCeilingUSD: orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(p.Repo))}

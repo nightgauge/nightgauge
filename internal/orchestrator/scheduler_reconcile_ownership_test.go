@@ -383,7 +383,7 @@ func TestHasReachedPRCreate(t *testing.T) {
 		t.Errorf("a nil runtime cannot have reached pr-create")
 	}
 
-	rs := state.NewRuntimeState("nightgauge/nightgauge", 398, "item-398")
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 398, "item-398", testRunID())
 	rs.BeginStage(state.StageFeatureDev)
 	rs.CompleteStageWithCost(0, 10, 10, 0, 0)
 	if hasReachedPRCreate(rs) {

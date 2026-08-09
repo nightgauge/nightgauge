@@ -620,6 +620,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	stageStart := startedAt.Add(5 * time.Second)
 	if err := writeCurrentRunSidecar(tmpDir, CurrentRunSidecar{
+		RunID:       testRunID(),
 		IssueNumber: 999,
 		Repo:        "nightgauge/nightgauge",
 		Title:       "Fix terminal failure preservation",
@@ -728,6 +729,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
 	tmpDir := t.TempDir()
 	if err := writeCurrentRunSidecar(tmpDir, CurrentRunSidecar{
+		RunID:       testRunID(),
 		IssueNumber: 1,
 		StartedAt:   time.Now().UTC().Add(24 * time.Hour), // future
 		Stage:       "feature-dev",
