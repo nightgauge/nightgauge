@@ -236,33 +236,135 @@ func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
 // conjunct in reconcileTerminalFailureCards was folded into it: the fleet-idle
 // suppression and the standing terminal-failure cards are two consequences of
 // one fact, and keeping two copies is what let a single state rewrite break
-// both. The rows below are unchanged — the behavior is the same predicate,
-// now with one home.
+// both. The fixup then moved it off Status entirely and onto the halt LATCH —
+// the rows below are the same behavior expressed against the fact that
+// actually survives an exit path.
 func TestHaltedOnSlotFailure(t *testing.T) {
+	slotHalt := &MachineHaltRecord{Tag: haltTagSlotFailure, Status: "paused"}
 	cases := []struct {
-		name        string
-		status      string
-		triggeredBy string
-		want        bool
+		name            string
+		state           *AutonomousState
+		wantSlotFailure bool
+		wantHalted      bool
 	}{
-		{"paused for haltQueueOnSlotFailure", "paused", "haltQueueOnSlotFailure", true},
-		{"paused by user", "paused", "user", false},
-		{"paused by safety rail", "paused", "safety:rate-limit", false},
-		{"paused with empty triggeredBy", "paused", "", false},
-		{"running with stale haltQueueOnSlotFailure tag", "running", "haltQueueOnSlotFailure", false},
-		{"safety_tripped, not paused", "safety_tripped", "haltQueueOnSlotFailure", false},
-		// The two machine triggers that are NOT in machineRaisedHalts: both
-		// land on safety_tripped, which loadState already preserves, so
-		// promoting them here would change nothing except make the predicate
-		// lie about what it matches.
-		{"cascade trip is not a slot-failure halt", "paused", CascadePauseReason, false},
-		{"rail-check trip is not a slot-failure halt", "paused", "safety:rail-check", false},
+		{
+			"latched slot-failure halt",
+			&AutonomousState{Status: "paused", PauseTriggeredBy: haltTagSlotFailure, MachineHalt: slotHalt},
+			true, true,
+		},
+		{
+			// The whole point of the latch: complete() overwrote Status on the
+			// way out, and the halt is still in force.
+			"latched slot-failure halt after a shutdown rewrote Status",
+			&AutonomousState{Status: "cancelled", MachineHalt: slotHalt},
+			true, true,
+		},
+		{
+			// Provenance is not authority. A tag with no latch is a leftover,
+			// not a halt — the latch is the single writer of this fact.
+			"paused with the tag but no latch",
+			&AutonomousState{Status: "paused", PauseTriggeredBy: haltTagSlotFailure},
+			false, false,
+		},
+		{"operator pause", &AutonomousState{Status: "paused", PauseTriggeredBy: "user"}, false, false},
+		{"paused with empty triggeredBy", &AutonomousState{Status: "paused"}, false, false},
+		{
+			// Both safety triggers latch (so a shutdown cannot launder them)
+			// but neither is a slot-failure halt: a safety-tripped fleet with
+			// an empty queue still gets the honest "nothing to do" card.
+			"cascade trip is halted but not a slot-failure halt",
+			&AutonomousState{Status: "safety_tripped", MachineHalt: &MachineHaltRecord{Tag: CascadePauseReason, Status: "safety_tripped"}},
+			false, true,
+		},
+		{
+			"rail-check trip is halted but not a slot-failure halt",
+			&AutonomousState{Status: "safety_tripped", MachineHalt: &MachineHaltRecord{Tag: "safety:rail-check", Status: "safety_tripped"}},
+			false, true,
+		},
+		{"nil state", nil, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := haltedOnSlotFailure(tc.status, tc.triggeredBy); got != tc.want {
-				t.Errorf("haltedOnSlotFailure(%q, %q) = %v, want %v", tc.status, tc.triggeredBy, got, tc.want)
+			if got := haltedOnSlotFailure(tc.state); got != tc.wantSlotFailure {
+				t.Errorf("haltedOnSlotFailure() = %v, want %v", got, tc.wantSlotFailure)
+			}
+			if got := machineHalted(tc.state); got != tc.wantHalted {
+				t.Errorf("machineHalted() = %v, want %v", got, tc.wantHalted)
 			}
 		})
+	}
+}
+
+// TestPauseLatchesOnlyMachineRaisedHalts pins the write side of the latch:
+// Pause() latches the machine's own halt and nothing else. An operator's
+// pause must stay a plain pause — Start resumes it exactly as it always has,
+// and no restart resurrects it.
+func TestPauseLatchesOnlyMachineRaisedHalts(t *testing.T) {
+	cases := []struct {
+		name      string
+		trigger   string
+		wantLatch bool
+	}{
+		{"machine halt latches", haltTagSlotFailure, true},
+		{"operator pause does not latch", "user", false},
+		{"untagged pause does not latch", "", false},
+		// Self-clearing breakers: the extension detects their recovery and
+		// auto-resumes (utils/autonomousAutoResume.ts). Latching them would
+		// park a transient outage behind a human who was never needed.
+		{"rate-limit breaker does not latch", "rate-limit-circuit-breaker", false},
+		{"network-outage breaker does not latch", "network-outage-circuit-breaker", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			as := &AutonomousScheduler{
+				state:    &AutonomousState{Status: "running"},
+				rescanCh: make(chan struct{}, 1),
+			}
+			as.Pause("reason", tc.trigger)
+			if as.state.Status != "paused" {
+				t.Fatalf("status = %q, want paused", as.state.Status)
+			}
+			if got := machineHalted(as.state); got != tc.wantLatch {
+				t.Errorf("machineHalted() = %v, want %v (trigger %q)", got, tc.wantLatch, tc.trigger)
+			}
+			if tc.wantLatch {
+				if as.state.MachineHalt.Tag != tc.trigger {
+					t.Errorf("latch tag = %q, want %q", as.state.MachineHalt.Tag, tc.trigger)
+				}
+				if as.state.MachineHalt.Status != "paused" {
+					t.Errorf("latch status = %q, want paused", as.state.MachineHalt.Status)
+				}
+			}
+		})
+	}
+}
+
+// TestResumeIsTheOnlyLatchClearer: the latch and its provenance are released
+// together, by Resume, from any status a shutdown might have left behind.
+func TestResumeIsTheOnlyLatchClearer(t *testing.T) {
+	as := &AutonomousScheduler{
+		state: &AutonomousState{
+			// Stop() ran after the halt: the exit status is "stopped", the
+			// halt is still in force. Resume must still act.
+			Status:           "stopped",
+			PauseReason:      "haltQueueOnSlotFailure: #405 failed at feature-validate",
+			PauseTriggeredBy: haltTagSlotFailure,
+			PausedAt:         "2026-08-09T00:00:00Z",
+			MachineHalt:      &MachineHaltRecord{Tag: haltTagSlotFailure, Status: "paused"},
+		},
+		rescanCh: make(chan struct{}, 1),
+	}
+
+	as.Resume()
+
+	if as.state.Status != "running" {
+		t.Errorf("status = %q, want running — Resume on a latched halt must act whatever exit status is on the state", as.state.Status)
+	}
+	if as.state.MachineHalt != nil {
+		t.Error("latch survived Resume — Resume is the one clearer")
+	}
+	if as.state.PauseReason != "" || as.state.PauseTriggeredBy != "" || as.state.PausedAt != "" {
+		t.Errorf("provenance survived Resume: reason=%q trigger=%q at=%q — the latch and its provenance clear together",
+			as.state.PauseReason, as.state.PauseTriggeredBy, as.state.PausedAt)
 	}
 }

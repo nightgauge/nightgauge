@@ -170,9 +170,18 @@ export function describeAttentionOption(
         ? "Marks the issue complete and closes it."
         : "Marks the issue complete.";
     case "autonomous.clearIssueFailures":
-      return str("then") === "autonomous.rescan"
-        ? "Clears the failure cooldown and triggers a rescan."
-        : "Clears the failure cooldown for this issue.";
+      switch (str("then")) {
+        // The fleet-halt card's Retry: clearing the cooldown is only half of
+        // it — the fleet is PAUSED, and a retry that does not resume dispatches
+        // nothing (#405). Say both, because answering this card is what lifts
+        // the halt.
+        case "autonomous.resume":
+          return "Clears the failure cooldown and resumes the halted fleet.";
+        case "autonomous.rescan":
+          return "Clears the failure cooldown and triggers a rescan.";
+        default:
+          return "Clears the failure cooldown for this issue.";
+      }
     case "budget.raiseCeiling": {
       const ceiling = num("ceilingUsd");
       return ceiling !== undefined
@@ -181,7 +190,9 @@ export function describeAttentionOption(
     }
     case "run.retryWithEscalation": {
       const tier = str("tier") ?? "a stronger model";
-      return `Retries with the model escalated to ${tier}.`;
+      return str("then") === "autonomous.resume"
+        ? `Retries with the model escalated to ${tier}, and resumes the halted fleet.`
+        : `Retries with the model escalated to ${tier}.`;
     }
     case "issue.close":
       return "Closes the issue.";

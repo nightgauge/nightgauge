@@ -1971,3 +1971,55 @@ describe("parseFutureCooldown (#3446)", () => {
     expect(parseFutureCooldown("not-a-date")).toBeNull();
   });
 });
+
+// Issue #405 — the queue drain is a dispatch path. `onAutonomousStart` exists
+// to flush queue items that survived a reload (#3532), and it feeds pipeline
+// slots. On a halted start it must NOT run: a fleet halted on a terminal
+// failure is precisely the fleet that dispatches nothing until a human answers
+// its card, and draining would route around the halt through the queue side
+// door. Same minimal "follow the returned status" treatment the badge got.
+describe("autonomousRun queue drain follows the returned status (#405)", () => {
+  let mockLogger: Logger;
+  let mockStatusBar: StatusBarManager;
+  let mockIpc: any;
+  let drain: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disposeAutonomousOutputChannel();
+    mockLogger = createMockLogger();
+    mockStatusBar = createMockStatusBar();
+    drain = vi.fn(() => Promise.resolve());
+
+    mockIpc = {
+      on: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeStatus: vi.fn(() => ({ dispose: vi.fn() })),
+      autonomousStart: vi.fn(() => Promise.resolve(createMockStatus())),
+      autonomousStatus: vi.fn(() => Promise.resolve(createMockStatus({ status: "stopped" }))),
+    };
+    (IpcClient.getInstance as any).mockReturnValue(mockIpc);
+
+    registerAutonomousCommands(mockLogger, mockStatusBar, null, null, drain);
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Start" as any);
+  });
+
+  it("drains the queue on a normal start", async () => {
+    await getHandlerById("nightgauge.autonomousRun")();
+    expect(drain).toHaveBeenCalled();
+  });
+
+  it("does NOT drain the queue when Start comes up halted", async () => {
+    mockIpc.autonomousStart.mockResolvedValue(
+      createMockStatus({
+        status: "paused",
+        pauseReason: "haltQueueOnSlotFailure: issue #405 failed at feature-validate",
+        pauseTriggeredBy: "haltQueueOnSlotFailure",
+        running: [],
+      })
+    );
+
+    await getHandlerById("nightgauge.autonomousRun")();
+
+    expect(drain).not.toHaveBeenCalled();
+  });
+});

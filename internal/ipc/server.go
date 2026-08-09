@@ -3937,15 +3937,10 @@ func (s *Server) registerMethods() {
 		if allowlist := s.resolveAutonomousAllowlist(p.WorkspaceRepos); len(allowlist) > 0 {
 			s.autonomousScheduler.FilterRepos(allowlist)
 		}
-		if s.autonomousScheduler.IsRunning() {
-			s.autonomousScheduler.Resume()
-		} else {
-			s.autonomousScheduler.Resume()
-			go func() {
-				if err := s.autonomousScheduler.Run(ctx); err != nil {
-					log.Printf("autonomous scheduler exited: %v", err)
-				}
-			}()
+		// One resume primitive, shared with the Action Center card options
+		// that resume (#405) — see resumeAndEnsureRunning.
+		if err := s.resumeAndEnsureRunning(ctx); err != nil {
+			return nil, err
 		}
 		// Brief delay to let the scheduler start and update its status,
 		// matching autonomous.start's behavior.

@@ -726,6 +726,15 @@ export interface AutonomousStatusResult {
   pauseTriggeredBy?: string;
   /** ISO-8601 timestamp the pause/safety-trip transition was recorded. */
   pausedAt?: string;
+  /**
+   * The machine-halt latch (Issue #405): present iff the SCHEDULER halted the
+   * fleet and is waiting for a human. Unlike `status` — which every exit path
+   * overwrites on the way out — this is the durable fact, so `machineHalt`
+   * rather than `status === "paused"` is what distinguishes "halted, awaiting
+   * triage" from an operator's own pause. `status` here is the status the
+   * latch restores ("paused" or "safety_tripped").
+   */
+  machineHalt?: { tag: string; status: string };
   startedAt: string;
   lastScanAt: string;
   running: { repo: string; number: number; title: string; startedAt: string }[];

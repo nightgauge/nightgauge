@@ -1391,7 +1391,13 @@ export function registerAutonomousCommands(
 
         // Drain any queue items that survived the reload — they won't get an
         // onItemAdded event since they weren't newly added (#3532).
-        if (onAutonomousStart) {
+        //
+        // Not on a halted start (#405): the drain feeds pipeline slots, and a
+        // halted fleet is precisely the fleet that must dispatch nothing until
+        // a human answers its card. Draining anyway would route around the
+        // halt through the queue side door — the queued items stay queued and
+        // drain on the next real Resume.
+        if (onAutonomousStart && !startedHalted) {
           void onAutonomousStart();
         }
 

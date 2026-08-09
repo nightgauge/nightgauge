@@ -31,6 +31,9 @@ nightgauge autonomous status
 # Check status (machine-readable)
 nightgauge autonomous status --json
 
+# Clear a halt / pause and resume dispatching
+nightgauge autonomous resume
+
 # Stop the scheduler
 nightgauge autonomous stop
 ```
@@ -390,24 +393,63 @@ The scheduler writes its full state to
   the running scheduler picks it up on the next cycle
 
 On restart, `running` and `paused` states are loaded as `stopped` (requiring
-explicit `autonomous run` to restart). Terminal states (`complete`,
-`budget_exhausted`, `safety_tripped`) are preserved as-is. This reconcile is
-**persisted to disk immediately** when it happens, not deferred to the next
-scan cycle — a process that crashes again before completing its first cycle
-must not leave `state.json` claiming `"status": "running"` indefinitely
-(Issue #274).
+explicit `autonomous run` to restart). Two things survive that downgrade:
+terminal states (`complete`, `budget_exhausted`, `safety_tripped`), which are
+preserved as-is, and a **latched machine halt**, which is restored to the
+status it belongs to. This reconcile is **persisted to disk immediately** when
+it happens, not deferred to the next scan cycle — a process that crashes again
+before completing its first cycle must not leave `state.json` claiming
+`"status": "running"` indefinitely (Issue #274).
+
+#### The machine-halt latch (Issue #405)
+
+When the scheduler halts the fleet _on its own_ — a terminal stage failure
+(`haltQueueOnSlotFailure`), a safety-rail trip, a cascading-failure trip — it
+raises a blocking card and waits for a person. That fact is recorded as its own
+persisted field, `machineHalt: { tag, status }`, **not** inferred from
+`status`:
+
+```json
+"status": "paused",
+"pauseTriggeredBy": "haltQueueOnSlotFailure",
+"machineHalt": { "tag": "haltQueueOnSlotFailure", "status": "paused" }
+```
+
+It has to be a separate field because every exit path overwrites `status`:
+`SIGTERM` (a VS Code reload, a `serve` shutdown) persists `cancelled`, `Stop()`
+persists `stopped`. A status-keyed halt therefore evaporated on any ordinary
+end of a session, and the standing card retracted on the next cycle with
+nobody having triaged anything. On load, `machineHalt.status` is restored over
+whatever the exit wrote; `Run()` does the same, so the loop comes up
+alive-but-halted and dispatches nothing.
+
+**Operator rule — Start is not Resume.** `autonomous run`, the Start button,
+and the IPC `autonomous.start` method all bring the backend **up** and come
+back **halted** when a latch is in force (the returned status says so, and the
+CLI prints the halt reason). Only a resume clears it:
+
+- the **Resume** action in VS Code,
+- the **Retry** / **Retry with escalation** options on the card,
+- `nightgauge autonomous resume` (IPC to a running daemon; otherwise it clears
+  the latch in the state file and leaves `status: stopped`).
+
+A halted fleet also skips the startup Backlog→Ready promotion scan — promotion
+is a board write announcing dispatchable work, and a halted fleet dispatches
+nothing.
 
 Two additional fields support detecting a stalled scheduler:
 
 - **`pid`** — the OS process ID of the scheduler that last wrote the file
   while `status` was `"running"`. Set at the start of every `Run()`.
-- **`restartedFromRunning`** — `true` when the running/paused→stopped
-  reconcile above fired for the load that produced the current `stopped`
-  state; `false` for a clean, deliberate stop. This is what makes "we
-  recovered from an ungraceful exit" distinguishable from "an operator or the
-  scheduler itself stopped it" — both look identical as bare `"status":
-"stopped"` otherwise. `Run()` clears it back to `false` on the next
-  explicit start.
+- **`restartedFromRunning`** — `true` when the load-time reconcile fired, i.e.
+  the state file still said `running`/`paused` and so nobody called
+  `Stop()`/`complete()`; `false` for a clean, deliberate stop. This is what
+  makes "we recovered from an ungraceful exit" distinguishable from "an
+  operator or the scheduler itself stopped it" — both look identical as bare
+  `"status": "stopped"` otherwise. `Run()` clears it back to `false` on the
+  next explicit start. It is independent of the halt latch: _how_ the process
+  died and _why_ the fleet is halted are different facts, so a graceful
+  shutdown of a halted fleet leaves this `false` and the halt still in force.
 
 `nightgauge autonomous status` uses `pid` to detect a **stalled** scheduler:
 if the on-disk status is `running` or `paused` but the recorded `pid` is
@@ -664,6 +706,8 @@ ADR-bearing first ticket as a normal blocker for the rest of the epic.
 | `autonomous run --json`             | Output final status as JSON            |
 | `autonomous status`                 | Show current state (human-readable)    |
 | `autonomous status --json`          | Machine-readable output                |
+| `autonomous resume`                 | Clear a halt/pause and resume (#405)   |
+| `autonomous resume --json`          | Machine-readable resume result         |
 | `autonomous stop`                   | Signal the scheduler to stop           |
 | `autonomous stuck-epics`            | List epics detected as stalled (#4073) |
 | `autonomous stuck-epics --json`     | Machine-readable stalled-epic list     |
