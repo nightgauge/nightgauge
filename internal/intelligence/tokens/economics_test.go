@@ -154,7 +154,10 @@ func TestCalculateCost_NonAnthropicRegistryRates(t *testing.T) {
 	if got := CalculateCost("gemini-2.5-flash", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 2.80 {
 		t.Errorf("CalculateCost(gemini-2.5-flash, 1M, 1M) = %f, want 2.80", got)
 	}
-	if got := CalculateCost("gpt-5.5", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 11.25 {
-		t.Errorf("CalculateCost(gpt-5.5, 1M, 1M) = %f, want 11.25", got)
+	// gpt-5.5 is $5.00 in / $30.00 out per 1M (live-verified 2026-08-09; see
+	// packages/nightgauge-vscode/tests/utils/registryRatesLiveVerified.test.ts,
+	// which pins every non-Anthropic rate to its cited vendor figure).
+	if got := CalculateCost("gpt-5.5", TokenCounts{Input: 1_000_000, Output: 1_000_000}); got != 35.0 {
+		t.Errorf("CalculateCost(gpt-5.5, 1M, 1M) = %f, want 35.00", got)
 	}
 }

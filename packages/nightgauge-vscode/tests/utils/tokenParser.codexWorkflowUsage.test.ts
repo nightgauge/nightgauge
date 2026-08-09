@@ -78,13 +78,16 @@ describe("codex stage token capture (real SDK-CLI transcript)", () => {
     const booked = resolveStageBookedUsage(accumulator, estimator);
     expect(booked?.estimated).toBe(false);
     // Codex reports no native cost, so the budget enforcer only sees non-zero
-    // spend if the rate card resolves: 5950 in @ $2.50/Mtok + 5 out @ $15/Mtok.
+    // spend if the rate card resolves: 5950 in @ $2.00/Mtok + 5 out @ $12/Mtok
+    // + 7296 cache reads @ $0.20/Mtok = $0.0134192, rounded to 6 decimals.
+    // The cache-read term is #392's point: before it, this transcript's 7296
+    // cached tokens — more than the non-cached input — contributed nothing.
     expect(booked?.usage).toEqual({
       inputTokens: 5950,
       outputTokens: 5,
       cacheReadTokens: 7296,
       cacheCreationTokens: 0,
-      costUsd: 0.01495,
+      costUsd: 0.013419,
       costSource: "computed",
     });
   });

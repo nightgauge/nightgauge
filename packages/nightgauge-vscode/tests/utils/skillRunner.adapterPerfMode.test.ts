@@ -109,8 +109,16 @@ vi.mock("../../src/utils/incrediConfig", async () => {
     getTypeOverrides: vi.fn(() => undefined),
     // Performance-mode getters — the focus of these tests
     getPerformanceMode: vi.fn(() => "elevated"),
-    // Adapter-specific config getters (fallback path)
-    getGeminiModel: vi.fn(() => "gemini-2.0-flash"),
+    // Adapter-specific config getters (fallback path).
+    //
+    // The configured fallback must be a NON-DEPRECATED registry id: the gemini
+    // adapter is a closed model set derived from the registry's live
+    // `provider: "google"` entries, so a deprecated id (gemini-2.0-flash, which
+    // Google shut down 2026-06-01) fails preflight and the stage never spawns.
+    // It must also DIFFER from the id a tier alias would translate to
+    // (haiku/sonnet → gemini-2.5-flash), or the "no translation happened"
+    // assertions below would pass whether or not translation occurred.
+    getGeminiModel: vi.fn(() => "gemini-2.5-pro"),
     getGeminiAuthMethod: vi.fn(() => "api-key"),
     getCopilotModel: vi.fn(() => "configured-copilot-model"),
     getLmStudioModel: vi.fn(() => "local-llama-3.1"),
@@ -212,7 +220,7 @@ beforeEach(() => {
   // Reset getter defaults each test
   vi.mocked(getPerformanceMode).mockReturnValue("elevated");
   vi.mocked(getStageModel).mockReturnValue(undefined);
-  vi.mocked(getGeminiModel).mockReturnValue("gemini-2.0-flash");
+  vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
   vi.mocked(getCopilotModel).mockReturnValue("configured-copilot-model");
 });
 
@@ -236,11 +244,11 @@ describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
   // translated tier. Only Maximum (still pinned) stamps a translated id.
   it("efficiency (envelope) falls through to getGeminiModel — no pin translation", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("efficiency");
-    vi.mocked(getGeminiModel).mockReturnValue("gemini-2.0-flash");
+    vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.0-flash");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
   });
 
   it("maximum maps feature-dev → gemini-2.5-pro via NIGHTGAUGE_GEMINI_MODEL", () => {
@@ -265,12 +273,12 @@ describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
     // adapter dispatch must NOT translate it via the perf-mode table.
     vi.mocked(getPerformanceMode).mockReturnValue("elevated");
     vi.mocked(getStageModel).mockReturnValue("haiku");
-    vi.mocked(getGeminiModel).mockReturnValue("gemini-2.0-flash");
+    vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
     // The configured fallback is used; the alias "haiku" is not leaked.
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.0-flash");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
   });
 
   it("repeated dispatches quiesce operator diagnostics before Vitest teardown", () => {

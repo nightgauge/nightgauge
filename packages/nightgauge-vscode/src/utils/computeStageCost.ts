@@ -46,7 +46,7 @@
  * @see Issue #3228 — Unified `computeStageCost` across all adapters
  */
 
-import { computeCostUsd, isKnownModel } from "@nightgauge/sdk";
+import { computeCostUsd, getModelDescriptor, isKnownModel } from "@nightgauge/sdk";
 import type { ExecutionAdapter } from "../config/schema";
 
 /**
@@ -142,6 +142,41 @@ function computeFromRegistry(
 }
 
 /**
+ * True when the computed number is a KNOWN FLOOR rather than an independent
+ * estimate, which makes a native-vs-computed drift comparison meaningless.
+ *
+ * The stage supplied cache-write tokens with no TTL split (everything in the
+ * 5m slot per the #358 floor convention, because #390 has not plumbed the real
+ * split yet) AND the model prices the two write tiers differently. On such a
+ * model the computed number is guaranteed to sit below native by up to 37.5%
+ * of the write pool — captured Claude traffic is 1h-heavy — so the >5% warn
+ * would fire on essentially every real Claude stage and point triage at
+ * `model-registry.json`, which is correct. A warn that fires every time is a
+ * warn nobody reads.
+ *
+ * The condition is deliberately written against the ABSENCE of a 1h count, so
+ * the warn re-arms itself the moment #390 supplies the split — there is no
+ * flag to remember to remove.
+ *
+ * Only called from the branch where `computeFromRegistry` already returned a
+ * value, so `model` is an exact registry id (`isKnownModel` gated) and this
+ * lookup cannot land on `getModelDescriptor`'s tier-band fallback.
+ */
+function isUnsplitCacheWriteFloor(model: string, tokens: StageCostTokens): boolean {
+  const writes5m = tokens.cache_creation_5m ?? 0;
+  const writes1h = tokens.cache_creation_1h ?? 0;
+  // No writes to mis-tier, or the caller already knows the split.
+  if (writes5m <= 0 || writes1h > 0) return false;
+  const rates = getModelDescriptor(model)?.rates;
+  const rate5m = rates?.cache_creation_5m;
+  const rate1h = rates?.cache_creation_1h;
+  // A provider with one write tier (OpenAI) has no floor to fall to: an
+  // unsplit count is the whole truth there, so drift on it is real drift.
+  if (rate5m === undefined || rate1h === undefined) return false;
+  return rate1h !== rate5m;
+}
+
+/**
  * Resolve the USD cost for a single stage.
  *
  * @param adapter Execution adapter that ran the stage.
@@ -150,7 +185,10 @@ function computeFromRegistry(
  * @param native  Optional vendor-emitted cost (Claude today). When `> 0`,
  *                always wins — vendor billing is the source of truth. When
  *                both are present and differ by more than 5%, a single
- *                `console.warn` is emitted as a non-gating drift signal.
+ *                `console.warn` is emitted as a non-gating drift signal —
+ *                unless the computed side is the #358 unsplit cache-write
+ *                floor, where the gap is expected and the line is emitted at
+ *                `console.debug` instead (see {@link isUnsplitCacheWriteFloor}).
  */
 export function computeStageCost(
   adapter: ExecutionAdapter,
@@ -163,12 +201,24 @@ export function computeStageCost(
     if (computed !== null && computed > 0) {
       const deltaPct = Math.abs(native - computed) / native;
       if (deltaPct > DRIFT_WARN_THRESHOLD) {
-        console.warn(
-          `[computeStageCost] Pricing drift for ${adapter}/${model}: ` +
-            `native=$${native.toFixed(6)}, computed=$${computed.toFixed(6)}, ` +
-            `delta=${(deltaPct * 100).toFixed(1)}%. ` +
-            `Native wins; review model-registry.json.`
-        );
+        if (isUnsplitCacheWriteFloor(model, tokens)) {
+          // Expected under-read, not drift: downgraded so the number is still
+          // observable but never presents as a registry defect.
+          console.debug(
+            `[computeStageCost] Computed cost for ${adapter}/${model} is the #358 unsplit ` +
+              `cache-write floor (all writes booked at the 5m rate), so it reads ` +
+              `${(deltaPct * 100).toFixed(1)}% below native=$${native.toFixed(6)} ` +
+              `(computed=$${computed.toFixed(6)}). Not a rate-card drift — the drift warn ` +
+              `re-arms once #390 plumbs the per-TTL split.`
+          );
+        } else {
+          console.warn(
+            `[computeStageCost] Pricing drift for ${adapter}/${model}: ` +
+              `native=$${native.toFixed(6)}, computed=$${computed.toFixed(6)}, ` +
+              `delta=${(deltaPct * 100).toFixed(1)}%. ` +
+              `Native wins; review model-registry.json.`
+          );
+        }
       }
     }
     return { cost_usd: native, source: "native" };

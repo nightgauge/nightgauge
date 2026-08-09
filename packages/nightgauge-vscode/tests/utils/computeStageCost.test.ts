@@ -68,9 +68,12 @@ describe("computeStageCost", () => {
 
     it("returns native and warns once when computed disagrees by more than 5%", () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const computed = computeStageCost("claude", "claude-sonnet-5", sampleTokens).cost_usd;
+      // No cache-write tokens at all, so the comparison is apples-to-apples and
+      // the floor-convention suppression below cannot swallow this warn.
+      const tokens: StageCostTokens = { input: 100_000, output: 50_000, cache_read: 20_000 };
+      const computed = computeStageCost("claude", "claude-sonnet-5", tokens).cost_usd;
       const native = computed * 1.5;
-      const result = computeStageCost("claude", "claude-sonnet-5", sampleTokens, native);
+      const result = computeStageCost("claude", "claude-sonnet-5", tokens, native);
       expect(result).toEqual({ cost_usd: native, source: "native" });
       expect(warn).toHaveBeenCalledTimes(1);
       const msg = String(warn.mock.calls[0][0]);
@@ -81,6 +84,94 @@ describe("computeStageCost", () => {
       expect(msg).toContain("delta=");
       // The remediation must point at the surviving authority, not the deleted table.
       expect(msg).toContain("model-registry.json");
+    });
+  });
+
+  describe("the drift warn must not cry wolf on the #358 floor convention", () => {
+    // Every real Claude stage today books its UNSPLIT cache-write count into
+    // the 5m slot (the documented #358 floor). On 1h-heavy traffic — which is
+    // what the captured transcripts show — that floor under-reads the write
+    // pool by up to 37.5%, so a naive native-vs-computed comparison fires the
+    // >5% warn on essentially every stage. The registry is not wrong there;
+    // the INPUT is a known-low floor, and a warn that fires every time trains
+    // the operator to ignore the one that matters. So the warn only fires when
+    // the comparison is apples-to-apples.
+    //
+    // This suppression is self-revoking: it is conditioned on the 1h count
+    // being absent, so the moment #390 plumbs the real split the warn re-arms
+    // with no code change here.
+    const heavyWrites = 400_000;
+
+    it("does NOT warn when cache writes are unsplit and the model has a distinct 1h rate", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+      const unsplit: StageCostTokens = {
+        input: 100_000,
+        output: 50_000,
+        cache_read: 20_000,
+        cache_creation_5m: heavyWrites,
+      };
+      // Premise: the model prices the two write tiers differently, so booking
+      // 1h writes as 5m genuinely produces a low computed number.
+      const d = getModelDescriptor("claude-sonnet-5")!;
+      expect(d.rates.cache_creation_1h).toBeDefined();
+      expect(d.rates.cache_creation_1h).not.toBe(d.rates.cache_creation_5m);
+
+      const computed = computeStageCost("claude", "claude-sonnet-5", unsplit).cost_usd;
+      // The vendor billed the writes at the 1h rate; the floor booked them at 5m.
+      const native = computeStageCost("claude", "claude-sonnet-5", {
+        input: unsplit.input,
+        output: unsplit.output,
+        cache_read: unsplit.cache_read,
+        cache_creation_1h: heavyWrites,
+      }).cost_usd;
+      expect(Math.abs(native - computed) / native).toBeGreaterThan(0.05);
+
+      const result = computeStageCost("claude", "claude-sonnet-5", unsplit, native);
+      expect(result).toEqual({ cost_usd: native, source: "native" });
+      expect(warn).not.toHaveBeenCalled();
+      // Downgraded, not discarded: the signal survives at debug level and names
+      // the convention responsible so triage is not sent to the registry.
+      expect(debug).toHaveBeenCalledTimes(1);
+      const msg = String(debug.mock.calls[0][0]);
+      expect(msg).toContain("#358");
+      expect(msg).toContain("floor");
+      expect(msg).toContain("#390");
+    });
+
+    it("DOES warn on the same drift once the split is known", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const split: StageCostTokens = {
+        input: 100_000,
+        output: 50_000,
+        cache_read: 20_000,
+        cache_creation_5m: heavyWrites / 2,
+        cache_creation_1h: heavyWrites / 2,
+      };
+      const computed = computeStageCost("claude", "claude-sonnet-5", split).cost_usd;
+      const native = computed * 1.5;
+      const result = computeStageCost("claude", "claude-sonnet-5", split, native);
+      expect(result).toEqual({ cost_usd: native, source: "native" });
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("Pricing drift");
+    });
+
+    it("DOES warn on unsplit writes when the model has no distinct 1h rate", () => {
+      // OpenAI publishes one cache-write tier, so an unsplit count is not a
+      // floor there — it is the whole truth, and a >5% gap is real drift.
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const d = getModelDescriptor("gpt-5.6-sol")!;
+      expect(d.rates.cache_creation_1h).toBeUndefined();
+      const unsplit: StageCostTokens = {
+        input: 100_000,
+        output: 50_000,
+        cache_read: 20_000,
+        cache_creation_5m: heavyWrites,
+      };
+      const computed = computeStageCost("codex", "gpt-5.6-sol", unsplit).cost_usd;
+      computeStageCost("codex", "gpt-5.6-sol", unsplit, computed * 1.5);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain("Pricing drift");
     });
   });
 
@@ -160,9 +251,14 @@ describe("computeStageCost", () => {
       ["gemini", "gemini-2.5-flash"],
       ["gemini", "gemini-2.0-flash"],
       ["gemini-sdk", "gemini-2.5-pro"],
+      ["codex", "gpt-5.6-sol"],
+      ["codex", "gpt-5.6-terra"],
+      ["codex", "gpt-5.6-luna"],
+      ["codex", "gpt-5.5"],
+      ["codex", "gpt-5.4"],
+      ["codex", "gpt-5.4-mini"],
       ["codex", "gpt-5.2"],
       ["codex", "gpt-5.3-codex"],
-      ["codex", "gpt-5.1-codex-mini"],
     ] as const)("%s/%s charges for cache reads", (adapter, model) => {
       const noCache = computeStageCost(adapter, model, { input: 100_000, output: 50_000 });
       const withCache = computeStageCost(adapter, model, {
@@ -178,11 +274,12 @@ describe("computeStageCost", () => {
       );
     });
 
-    it("charges NO cache-write fee on OpenAI entries — the omission is the published price", () => {
-      // OpenAI discounts cached input and bills no separate cache-write fee, so
-      // `cache_creation_*` is deliberately absent from every openai entry.
-      // Inventing a write rate there would invent a charge the vendor does not
-      // make. This pins the absence as intentional rather than a pending gap.
+    it("charges NO cache-write fee on pre-5.6 OpenAI entries — the omission is the published price", () => {
+      // Before the GPT-5.6 family OpenAI discounts cached input and bills no
+      // separate cache-write fee (the sheet prints '-'), so `cache_creation_*`
+      // is deliberately absent on those entries. Inventing a write rate there
+      // would invent a charge the vendor does not make. This pins the absence
+      // as intentional rather than a pending gap.
       const d = getModelDescriptor("gpt-5.2")!;
       expect(d.rates.cache_creation_5m).toBeUndefined();
       expect(d.rates.cache_creation_1h).toBeUndefined();
@@ -197,15 +294,38 @@ describe("computeStageCost", () => {
       expect(withWrite.cost_usd).toBe(noWrite.cost_usd);
     });
 
-    it("still prices cache reads at $0 where no rate has been transcribed yet", () => {
-      // HONEST GAP, pinned so it cannot be mistaken for correctness: the
-      // registry entries below carry no `cache_read` because nobody has
-      // transcribed their published cached-input row. Per the $schema_note
-      // that absence means UNRECORDED, not unbilled — OpenAI does bill cached
-      // input on these. Their cache reads therefore contribute $0 and the
-      // stage under-reports. Deriving the rate from a same-sticker sibling is
-      // exactly what #392 forbids; the fix is to transcribe the vendor's row.
-      const unrecorded = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"];
+    it("DOES charge a 5m cache-write fee on the GPT-5.6 family, and never a 1h one", () => {
+      // "For GPT-5.6 models and later model families, cache writes cost 1.25x
+      // the uncached input token rate" — the vendor's own sentence. The 1h slot
+      // stays unpriced because OpenAI publishes a single write tier: a 1h count
+      // reaching this path must contribute nothing rather than be charged at an
+      // Anthropic-shaped guess.
+      for (const model of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) {
+        const d = getModelDescriptor(model)!;
+        expect(d.rates.cache_creation_5m).toBeCloseTo(d.rates.input * 1.25, 12);
+        expect(d.rates.cache_creation_1h).toBeUndefined();
+
+        const base = { input: 100_000, output: 50_000 };
+        const noWrite = computeStageCost("codex", model, base);
+        const with5m = computeStageCost("codex", model, { ...base, cache_creation_5m: 1_000_000 });
+        expect(with5m.cost_usd - noWrite.cost_usd).toBeCloseTo(d.rates.cache_creation_5m!, 6);
+
+        const with1h = computeStageCost("codex", model, { ...base, cache_creation_1h: 1_000_000 });
+        expect(with1h.cost_usd).toBe(noWrite.cost_usd);
+      }
+    });
+
+    it("still prices cache reads at $0 where the vendor publishes no row", () => {
+      // HONEST GAP, pinned so it cannot be mistaken for correctness. Both
+      // entries below carry no `cache_read` because the live sheet has no row
+      // for them: gpt-5.1-codex-mini's row has been retired, and
+      // gpt-5.3-codex-spark is a research preview that has never been listed
+      // (its $0 input/output is a placeholder, not a price — pinned here so the
+      // deleted extension table's old proxy rate cannot silently read as a
+      // regression). Per the $schema_note that absence means UNRECORDED, not
+      // unbilled. Copying a same-sticker sibling's rate is exactly what #392
+      // forbids; the fix is a published row to transcribe.
+      const unrecorded = ["gpt-5.1-codex-mini", "gpt-5.3-codex-spark"];
       for (const model of unrecorded) {
         expect(getModelDescriptor(model)!.rates.cache_read).toBeUndefined();
         const noCache = computeStageCost("codex", model, { input: 100_000, output: 50_000 });
@@ -225,9 +345,9 @@ describe("computeStageCost", () => {
   describe("computed cost path", () => {
     it("computes Codex (gpt-5.5) input/output without cache fields", () => {
       const tokens: StageCostTokens = { input: 200_000, output: 100_000 };
-      // 200k at $1.25/Mtok = $0.25; 100k at $10/Mtok = $1.00. Total $1.25.
+      // 200k at $5/Mtok = $1.00; 100k at $30/Mtok = $3.00. Total $4.00.
       const result = computeStageCost("codex", "gpt-5.5", tokens);
-      expect(result).toEqual({ cost_usd: 1.25, source: "computed" });
+      expect(result).toEqual({ cost_usd: 4.0, source: "computed" });
     });
 
     it("treats native=0 as 'no native cost' and falls through to computed", () => {
@@ -320,10 +440,16 @@ describe("computeStageCost", () => {
 
   describe("rounding precision", () => {
     it("rounds computed cost to 6 decimals (matches Claude precision)", () => {
-      // 1 * $1.25 + 1 * $10 = $11.25 / 1_000_000 = 0.00001125 → 0.000011
-      const result = computeStageCost("codex", "gpt-5.5", { input: 1, output: 1 });
-      expect(result.source).toBe("computed");
-      expect(result.cost_usd).toBe(0.000011);
+      // 1 * $5 + 1 * $30 = $35 / 1_000_000 = 0.000035 — exact at 6 decimals, so
+      // pair it with a value that genuinely needs rounding.
+      expect(computeStageCost("codex", "gpt-5.5", { input: 1, output: 1 })).toEqual({
+        cost_usd: 0.000035,
+        source: "computed",
+      });
+      // 1 * $0.2 + 1 * $1.2 = $1.40 / 1_000_000 = 0.0000014 → 0.000001
+      const rounded = computeStageCost("codex", "gpt-5.6-luna", { input: 1, output: 1 });
+      expect(rounded.source).toBe("computed");
+      expect(rounded.cost_usd).toBe(0.000001);
     });
   });
 });

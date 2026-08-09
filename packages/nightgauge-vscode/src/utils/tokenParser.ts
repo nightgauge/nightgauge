@@ -660,6 +660,17 @@ export class TokenAccumulator {
    * from the requested one (the CLI's refusal fallback), so the computed
    * cost fallback prices the model that produced the tokens. No-op impact
    * on the native-cost path, which stays authoritative.
+   *
+   * ORDERING (verified for #392, since pricing is exact-id-only): every
+   * `skillRunner` stream site calls `observeServedModel(parsed)` — which calls
+   * this — BEFORE the matching `add(parsed.usage)` / `getTotal()` pair, so a
+   * wire-reported id is always in place before any cost is read from it. The
+   * one construction that does NOT start from a concrete id is the resume path
+   * (`new TokenAccumulator("claude", defaultModel ?? "sonnet")`): a bare tier
+   * is not a registry id, so until the stream names a model the computed
+   * fallback reads `'unknown'`/$0. That path is Claude-only and Claude always
+   * emits a native `total_cost_usd`, which wins outright — so the gap is
+   * inert today rather than a mispriced stage. Left as-is deliberately.
    */
   setModel(model: string): void {
     if (model) {
