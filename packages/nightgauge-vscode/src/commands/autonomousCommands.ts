@@ -1372,22 +1372,45 @@ export function registerAutonomousCommands(
 
         const result = await ipc.autonomousStart(intersectWithEnabledRepos(workspaceRepos));
 
+        // Issue #405 — Start no longer implies "running". A machine-raised
+        // halt (haltQueueOnSlotFailure) now survives a backend restart, and
+        // the start handler deliberately declines to resume it, so the daemon
+        // can legitimately come up paused. Rendering an unconditional
+        // "running" would show a Pause button where the operator needs Resume
+        // and flip the activity gate on for a fleet that dispatches nothing —
+        // so both the badge and the context keys follow the returned status.
+        const startedHalted = result.status === "paused" || result.status === "safety_tripped";
+
         // Update status bar
-        statusBar.showAutonomousRunning(result.running.length, result.remaining);
+        if (startedHalted) {
+          statusBar.showAutonomousPaused();
+        } else {
+          statusBar.showAutonomousRunning(result.running.length, result.remaining);
+        }
         startAutonomousStallWatchdog(logger);
 
         // Drain any queue items that survived the reload — they won't get an
         // onItemAdded event since they weren't newly added (#3532).
-        if (onAutonomousStart) {
+        //
+        // Not on a halted start (#405): the drain feeds pipeline slots, and a
+        // halted fleet is precisely the fleet that must dispatch nothing until
+        // a human answers its card. Draining anyway would route around the
+        // halt through the queue side door — the queued items stay queued and
+        // drain on the next real Resume.
+        if (onAutonomousStart && !startedHalted) {
           void onAutonomousStart();
         }
 
         // Set context for UI visibility — drives Run/Pause/Resume/Stop button visibility.
-        setAutonomousContextKeys("running");
+        setAutonomousContextKeys(result.status);
 
         // Log to output channel
         const channel = getOutputChannel();
-        const action = currentStatus?.status === "safety_tripped" ? "resumed" : "started";
+        const action = startedHalted
+          ? "started — fleet still halted, Resume to clear"
+          : currentStatus?.status === "safety_tripped"
+            ? "resumed"
+            : "started";
         channel.appendLine(`[${new Date().toISOString()}] Autonomous mode ${action}`);
         channel.appendLine(formatStatus(result));
         channel.show(true);

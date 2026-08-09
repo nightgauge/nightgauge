@@ -681,19 +681,21 @@ func TestReconcileTerminalFailureCardsNilStateRetractsNothing(t *testing.T) {
 }
 
 // TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted keeps the
-// middle state honest: a *readable* state that is not paused for
-// haltQueueOnSlotFailure must still retract, or the #302 fix would turn the
-// fail-open into a card that never clears.
+// middle state honest: a *readable* state that is no longer halted must still
+// retract, or the #302 fix would turn the fail-open into a card that never
+// clears.
+//
+// The un-halt goes through Resume(), the production clearer. Since #405 that
+// is the only thing that un-halts a fleet: hand-wiping Status and
+// PauseTriggeredBy leaves the latch — and therefore the card — standing, which
+// is exactly the property the latch exists to give.
 func TestReconcileTerminalFailureCardsRetractsWhenGenuinelyNotHalted(t *testing.T) {
 	as := newAttentionProducerScheduler(t)
 	as.state.Status = "running"
 	as.Pause("haltQueueOnSlotFailure: issue #48 failed at feature-dev", "haltQueueOnSlotFailure")
 	as.RaiseTerminalFailure("octocat/acme", 48, "feature-dev", "validation_error", 1.0)
 
-	as.mu.Lock()
-	as.state.Status = "running"
-	as.state.PauseTriggeredBy = ""
-	as.mu.Unlock()
+	as.Resume()
 
 	as.reconcileTerminalFailureCards()
 

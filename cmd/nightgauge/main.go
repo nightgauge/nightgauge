@@ -8910,6 +8910,7 @@ func autonomousCmd() *cobra.Command {
 	}
 	cmd.AddCommand(autonomousRunCmd())
 	cmd.AddCommand(autonomousStatusCmd())
+	cmd.AddCommand(autonomousResumeCmd())
 	cmd.AddCommand(autonomousStopCmd())
 	cmd.AddCommand(autonomousStuckEpicsCmd())
 	return cmd
@@ -9158,6 +9159,19 @@ func autonomousRunCmd() *cobra.Command {
 				fmt.Printf("  - %s/%s (project %d)\n", rc.Owner, rc.Name, rc.Project)
 			}
 
+			// #405 — a latched machine halt survives restarts, and `run` is
+			// not triage: the loop comes up alive but dispatches nothing. Say
+			// so on STDOUT. The log line alone is not enough — the operator
+			// staring at "scheduler starting" would otherwise watch a fleet
+			// that never picks anything up and read it as a hang.
+			if snap := autoSched.Status(); snap.MachineHalt != nil {
+				fmt.Printf("\nHALTED (%s) — no work will be dispatched until this is resolved.\n", snap.MachineHalt.Tag)
+				if snap.PauseReason != "" {
+					fmt.Printf("  Reason: %s\n", snap.PauseReason)
+				}
+				fmt.Printf("  Clear it with `nightgauge autonomous resume`, or answer the Action Center card (`nightgauge attention list`).\n\n")
+			}
+
 			ctx := context.Background()
 			err = autoSched.Run(ctx)
 
@@ -9252,6 +9266,19 @@ func autonomousStatusCmd() *cobra.Command {
 				fmt.Printf("Autonomous Mode: Stalled (pid %d is not running)\n", state.PID)
 			} else {
 				fmt.Printf("Autonomous Mode: %s\n", statusDisplay)
+			}
+
+			// #405 — the halt is a latch, not a status, precisely because
+			// every exit path overwrites `status` on the way out. Reading the
+			// file raw (as this command does) can therefore show "cancelled"
+			// for a fleet that is still halted and waiting on a human, so the
+			// latch gets its own line.
+			if state.MachineHalt != nil {
+				fmt.Printf("HALTED: %s — no dispatch until an explicit resume (`nightgauge autonomous resume`)\n",
+					state.MachineHalt.Tag)
+				if state.PauseReason != "" {
+					fmt.Printf("  Reason: %s\n", state.PauseReason)
+				}
 			}
 
 			if state.StartedAt != "" {
@@ -9378,6 +9405,65 @@ func formatElapsedSince(isoTimestamp string) string {
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
 	return fmt.Sprintf("%dh", hours)
+}
+
+// autonomousResumeCmd is the CLI half of the one action that clears a
+// machine-raised halt (#405). It has to exist: the fleet now stays halted
+// across restarts and Start deliberately declines to clear it, and the
+// Discord safety-pause notification has been telling operators to run
+// `nightgauge autonomous resume` (DiscordService.notifySafetyPause) since
+// before there was a command by that name.
+//
+// Two paths, one meaning, mirroring `attention resolve` (#263): with a
+// co-located daemon the resume goes through IPC so the LIVE scheduler resumes
+// and its dispatch loop comes up; without one it clears the latch in the
+// state file through the same clearing primitive, leaving status "stopped"
+// for the next `autonomous run`.
+func autonomousResumeCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:          "resume",
+		Short:        "Clear a halt or pause and resume the autonomous scheduler",
+		Long:         "Resumes a scheduler that is paused, safety-tripped, or halted on a terminal stage failure. This is the ONE action that clears a machine-raised halt — `autonomous run` / the Start button bring the backend up and leave the halt in force.",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			workdir, _ := os.Getwd()
+			out := cmd.OutOrStdout()
+			ctx := context.Background()
+
+			// Live daemon: resume the scheduler that is actually running.
+			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+				defer client.Close()
+				var status orchestrator.AutonomousState
+				if err := client.Call(ctx, "autonomous.resume", map[string]any{}, &status); err != nil {
+					return err
+				}
+				if outputJSON {
+					return printJSON(status)
+				}
+				fmt.Fprintf(out, "Resumed the running scheduler (status=%s).\n", status.Status)
+				return nil
+			}
+
+			// No daemon — clear the latch in the state file.
+			cleared, err := orchestrator.ClearMachineHalt(workdir)
+			if err != nil {
+				return err
+			}
+			if outputJSON {
+				return printJSON(map[string]any{"daemon": false, "cleared": cleared})
+			}
+			if cleared == nil {
+				fmt.Fprintln(out, "No machine-raised halt to clear, and no scheduler is running.")
+				return nil
+			}
+			fmt.Fprintf(out, "Cleared the machine-raised halt (%s). No scheduler is running — start one with `nightgauge autonomous run`.\n", cleared.Tag)
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output the result as JSON")
+	return cmd
 }
 
 func autonomousStopCmd() *cobra.Command {

@@ -318,6 +318,21 @@ type AutonomousState struct {
 	PauseTriggeredBy string `json:"pauseTriggeredBy,omitempty"`
 	PausedAt         string `json:"pausedAt,omitempty"`
 
+	// MachineHalt is the latch: a halt the SCHEDULER raised, which only an
+	// explicit human Resume may clear (#405). Its presence — not the current
+	// Status — is the authoritative answer to "is the fleet halted awaiting
+	// triage?".
+	//
+	// Status cannot carry that fact, because every exit path overwrites it:
+	// complete() writes its exit reason unconditionally, so a SIGTERM
+	// (VS Code reload, `serve` shutdown) persists "cancelled" over a halted
+	// fleet and Stop() persists "stopped". Both look, on the next load, like
+	// an ordinary end of session — the halt evaporated and the standing
+	// blocking_fleet card retracted on the first cycle with nobody having
+	// triaged anything. A separate field survives those writes by
+	// construction, and loadState/Run restore Status from it.
+	MachineHalt *MachineHaltRecord `json:"machineHalt,omitempty"`
+
 	// PID is the OS process ID of the scheduler that last wrote this state
 	// while Status was "running". Set in Run() alongside StartedAt. Lets any
 	// reader — in-process or a separate `autonomous status` CLI invocation —
@@ -325,12 +340,18 @@ type AutonomousState struct {
 	// trusting a possibly-stale on-disk "running" status (Issue #274).
 	PID int `json:"pid,omitempty"`
 
-	// RestartedFromRunning is true when loadState() reconciled a persisted
-	// "running"/"paused" status to "stopped" because the process exited
-	// without a clean Stop()/complete() call. Run() clears it back to false.
-	// Distinguishes "we recovered from an ungraceful exit" (true) from "an
-	// operator or the scheduler itself stopped it deliberately" (false).
-	// Issue #274.
+	// RestartedFromRunning is true when loadState() found a persisted
+	// "running"/"paused" status, i.e. the process exited without a clean
+	// Stop()/complete() call. Run() clears it back to false. Distinguishes
+	// "we recovered from an ungraceful exit" (true) from "an operator or the
+	// scheduler itself stopped it deliberately" (false). Issue #274.
+	//
+	// Independent of MachineHalt (#405): HOW the process died and WHY the
+	// fleet was halted are two different facts. An ungraceful exit still sets
+	// this flag while the latch keeps the halt; a graceful shutdown of a
+	// halted fleet leaves it false and the latch still holds. Only the
+	// ungraceful-exit rule (persisted status running/paused) sets it — the
+	// latch's own status restore never does.
 	RestartedFromRunning bool `json:"restartedFromRunning,omitempty"`
 
 	// QuotaCooldownUntil is the ISO-8601 wall-clock time until which the
@@ -373,6 +394,24 @@ type AutonomousState struct {
 	// (#4073). Re-computed each idle cycle; surfaced via `autonomous stuck-epics`
 	// and the IPC snapshot. Empty when nothing is stalled.
 	StuckEpics []StuckEpic `json:"stuckEpics,omitempty"`
+}
+
+// MachineHaltRecord is the persisted machine-halt latch (#405). It is written
+// exactly where a machine halt is raised and cleared in exactly one place —
+// clearMachineHaltLocked, reached only from Resume() (the operator's explicit
+// action, including the card options that invoke it) and from the offline
+// `nightgauge autonomous resume` primitive.
+//
+//   - Tag is the raising trigger, the same vocabulary as PauseTriggeredBy
+//     ("haltQueueOnSlotFailure", "safety:rail-check", CascadePauseReason). The
+//     card producers key off it, so the halt survives even a wipe of the
+//     provenance fields.
+//   - Status is the status the halt belongs to ("paused" for the slot-failure
+//     halt, "safety_tripped" for the safety rails), restored by loadState and
+//     by Run() over whatever exit status a shutdown wrote.
+type MachineHaltRecord struct {
+	Tag    string `json:"tag"`
+	Status string `json:"status"`
 }
 
 // AutonomousStatusChange is the payload fired by onStatusChange whenever
@@ -1083,15 +1122,34 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	}
 	as.running = true
 	as.stopRequested = false
-	as.state.Status = "running"
+	// #405 — starting the loop is not triage. A latched machine halt stays in
+	// force: the loop comes up alive-but-halted, exactly as the halt left it,
+	// and runCycle's `Status != "running"` early return keeps the fleet
+	// dormant until a human Resume()s. Forcing "running" here and wiping the
+	// provenance is what made the standing terminal-failure cards read
+	// "nothing is wrong" one cycle later, and brought back the misleading
+	// fleet-idle card #148 suppresses. Every other state starts clean: a
+	// fresh Run is not a paused state.
+	//
+	// The latch also RESTORES the status it belongs to, so a Start after a
+	// Stop or a SIGTERM ("stopped"/"cancelled" on disk) reports the halt
+	// instead of an exit status the fleet is no longer in.
+	if halt := as.state.MachineHalt; halt != nil {
+		as.state.Status = halt.Status
+		log.Printf("autonomous: starting into a latched machine halt (%s, status=%s) — no dispatch until an explicit Resume: %s",
+			halt.Tag, halt.Status, as.state.PauseReason)
+	} else {
+		as.state.Status = "running"
+		as.state.PauseReason = ""
+		as.state.PauseTriggeredBy = ""
+		as.state.PausedAt = ""
+	}
 	as.state.StartedAt = time.Now().UTC().Format(time.RFC3339)
 	as.state.PID = os.Getpid()
-	// Clear stale pause provenance — a fresh Run is not a paused state.
-	as.state.PauseReason = ""
-	as.state.PauseTriggeredBy = ""
-	as.state.PausedAt = ""
 	// A fresh, explicit Run starts clean — any prior restart-reconcile no
-	// longer applies (Issue #274).
+	// longer applies (Issue #274). Unconditional: the flag records that the
+	// PROCESS died ungracefully, and a Run beginning is what retires it,
+	// independent of whether the fleet is dispatching or halted.
 	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
 	as.mu.Unlock()
@@ -1766,7 +1824,7 @@ func (as *AutonomousScheduler) Pause(reason, triggeredBy string) {
 		// #3444: skip haltQueueOnSlotFailure pause when a fresh quota
 		// cooldown is in effect — the cooldown is sufficient to prevent
 		// further dispatch and is the auto-recovery path.
-		if triggeredBy == "haltQueueOnSlotFailure" && as.state.QuotaCooldownUntil != "" {
+		if triggeredBy == haltTagSlotFailure && as.state.QuotaCooldownUntil != "" {
 			if until, err := time.Parse(time.RFC3339, as.state.QuotaCooldownUntil); err == nil && time.Now().UTC().Before(until) {
 				log.Printf("autonomous: declining haltQueueOnSlotFailure pause — quota cooldown active until %s (%s)",
 					as.state.QuotaCooldownUntil, reason)
@@ -1777,6 +1835,12 @@ func (as *AutonomousScheduler) Pause(reason, triggeredBy string) {
 		as.state.PauseReason = reason
 		as.state.PauseTriggeredBy = triggeredBy
 		as.state.PausedAt = time.Now().UTC().Format(time.RFC3339)
+		// #405 — a machine-raised pause is a halt: latch it so no exit path
+		// can launder it. An operator's own pause is not latched; Start
+		// resumes it exactly as it always has.
+		if machineRaisedHalts[triggeredBy] {
+			as.latchMachineHaltLocked("paused", triggeredBy)
+		}
 		as.persistStateLocked()
 		as.fireStatusChangeLocked()
 	}
@@ -1787,15 +1851,19 @@ func (as *AutonomousScheduler) Pause(reason, triggeredBy string) {
 // reset so the scheduler can dispatch new items immediately.
 // Per-issue backoff and failure counts are also cleared so that all issues
 // are eligible for immediate retry on user-initiated resume.
+//
+// Resume is also the ONLY clearer of the machine-halt latch (#405), so it
+// acts whenever one is in force regardless of the current Status: an exit
+// path may have written "cancelled"/"stopped" over a halted fleet, and the
+// operator answering the card must still release it.
 func (as *AutonomousScheduler) Resume() {
 	as.mu.Lock()
 	defer as.mu.Unlock()
-	if as.state.Status == "paused" || as.state.Status == "safety_tripped" {
+	if as.state.Status == "paused" || as.state.Status == "safety_tripped" || machineHalted(as.state) {
 		as.state.Status = "running"
-		// Clear pause provenance so a future Pause records a fresh reason.
-		as.state.PauseReason = ""
-		as.state.PauseTriggeredBy = ""
-		as.state.PausedAt = ""
+		// Clear the halt latch and the pause provenance together — one
+		// clearer, so nothing can read as half-halted afterwards.
+		clearMachineHaltLocked(as.state)
 		// Reset safety rails so the circuit breaker doesn't immediately re-trip
 		// when the user explicitly chooses to resume after a safety trip.
 		if as.safetyRails != nil {
@@ -1822,6 +1890,83 @@ func (as *AutonomousScheduler) Resume() {
 		default:
 		}
 	}
+}
+
+// ResumeUnlessMachineHalted is the resume step of the Start action (the IPC
+// `autonomous.start` handler). It Resume()s everything Start has always
+// resumed, EXCEPT a latched machine halt, which it leaves in force —
+// returning false so the caller can say so.
+//
+// Start and Resume were the same button for a halt (#405): after a crash,
+// loadState's paused->stopped downgrade left Start as the only reachable path,
+// and Start called Resume() unconditionally. An operator restarting a wedged
+// backend and clicking Start therefore cleared a human gate they never
+// answered — the blocking_fleet card that named the terminal failure retracted
+// on the first cycle. Splitting them makes Resume the one explicit action that
+// clears a halt (which is also what the card's own Retry/Park options invoke),
+// and leaves Start meaning only "bring the scheduler process back up".
+//
+// It keys on the latch, not Status, so it holds for every halt shape: a
+// slot-failure pause, a safety-rail trip, and any of them after a shutdown
+// rewrote Status on the way out.
+//
+// Returns true when the scheduler was resumed (or when there was nothing to
+// resume — Resume() is a no-op on stopped/complete, exactly as before).
+func (as *AutonomousScheduler) ResumeUnlessMachineHalted() bool {
+	as.mu.Lock()
+	halted := machineHalted(as.state)
+	tag, reason := "", as.state.PauseReason
+	if halted {
+		tag = as.state.MachineHalt.Tag
+	}
+	as.mu.Unlock()
+	if halted {
+		log.Printf("autonomous: start declined to resume a machine-raised halt (%s) — resolve the card or Resume explicitly: %s", tag, reason)
+		return false
+	}
+	as.Resume()
+	return true
+}
+
+// ClearMachineHalt releases a latched machine halt in a workspace with no
+// live scheduler — the offline half of `nightgauge autonomous resume`, used
+// when no daemon is reachable to take an IPC autonomous.resume.
+//
+// It goes through clearMachineHaltLocked, the same single clearer Resume()
+// uses, so the offline path cannot drift into a second definition of "the
+// halt is released". Status lands on "stopped" rather than "running": no
+// process is dispatching, and claiming otherwise is exactly the stale-status
+// lie #274's PID liveness check exists to catch. The next `autonomous run` /
+// daemon start comes up clean.
+//
+// Returns the record that was cleared, or nil when nothing was latched.
+func ClearMachineHalt(workspaceRoot string) (*MachineHaltRecord, error) {
+	if workspaceRoot == "" {
+		return nil, fmt.Errorf("workspace root is required")
+	}
+	p := filepath.Join(workspaceRoot, autonomousStateFile)
+	data, err := os.ReadFile(p)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read state: %w", err)
+	}
+	var st AutonomousState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, fmt.Errorf("parse state: %w", err)
+	}
+	if !machineHalted(&st) {
+		return nil, nil
+	}
+	cleared := *st.MachineHalt
+	clearMachineHaltLocked(&st)
+	st.Status = "stopped"
+	// Reuse the scheduler's own atomic writer rather than re-implementing
+	// temp+rename here; `as` is local and never published.
+	as := &AutonomousScheduler{workspaceRoot: workspaceRoot, state: &st}
+	as.persistStateLocked()
+	return &cleared, nil
 }
 
 // ClearQuotaCooldown unconditionally removes the global Anthropic-quota
@@ -2389,6 +2534,10 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				as.state.PauseReason = reason
 				as.state.PauseTriggeredBy = "safety:rail-check"
 				as.state.PausedAt = time.Now().UTC().Format(time.RFC3339)
+				// #405 — a safety trip is a machine-raised halt: latch it, or
+				// the next graceful shutdown writes "cancelled" over
+				// safety_tripped and the trip is gone on restart.
+				as.latchMachineHaltLocked("safety_tripped", "safety:rail-check")
 				as.fireStatusChangeLocked()
 				as.mu.Unlock()
 				as.persistState()
@@ -2424,7 +2573,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	as.mu.Unlock()
 
 	as.mu.Lock()
-	haltedForTerminalFailure := shouldSuppressFleetIdle(as.state.Status, as.state.PauseTriggeredBy)
+	haltedForTerminalFailure := haltedOnSlotFailure(as.state)
 	as.mu.Unlock()
 
 	if remaining == 0 && runningCount == 0 {
@@ -2471,16 +2620,92 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	}
 }
 
-// shouldSuppressFleetIdle reports whether the "Fleet idle — N promotable"
-// card should be suppressed in favor of the terminal-failure card (#148). A
-// halted queue and an empty queue both satisfy remaining==0 && running==0,
-// but "N promotable, go add work" is false while the scheduler paused itself
-// on purpose — so the guard must be specific to the haltQueueOnSlotFailure
-// pause, never every pause (a user-requested pause, a safety-rail trip, etc.
-// still get the honest "nothing to do" fleet-idle card if the queue happens
-// to also be empty).
-func shouldSuppressFleetIdle(status, pauseTriggeredBy string) bool {
-	return status == "paused" && pauseTriggeredBy == "haltQueueOnSlotFailure"
+// haltTagSlotFailure is the PauseTriggeredBy tag the fleet-wide halt on a
+// terminal stage failure carries. The extension's haltQueueOnSlotFailure
+// handler sends it over IPC (autonomous.pause) and the two card producers
+// key off it.
+const haltTagSlotFailure = "haltQueueOnSlotFailure"
+
+// machineRaisedHalts is the set of PauseTriggeredBy tags that make a Pause()
+// a HALT: a pause a human must clear, raised by the scheduler rather than
+// requested by a person. Pause() latches one (MachineHalt) so no exit path
+// can launder it (#405).
+//
+// Exactly one member, because it is the only machine trigger that arrives
+// through Pause(). The two safety-rail triggers ("safety:rail-check",
+// CascadePauseReason) write Status="safety_tripped" inline at their trip
+// sites and latch there — same latch, same clearer, different status.
+//
+// Deliberately EXCLUDED, and the reason the set is a named allowlist rather
+// than "anything not tagged user": the two self-clearing breaker tags the
+// extension pauses with — "rate-limit-circuit-breaker" and
+// "network-outage-circuit-breaker" (see
+// packages/nightgauge-vscode/src/utils/autonomousAutoResume.ts). Those pauses
+// are machine-raised too, but the machine also detects their recovery and
+// auto-resumes; latching them would turn a transient outage into a pause that
+// waits for a human who was never needed.
+//
+// Membership is load-bearing in five places: the halt survives a restart
+// (loadState), Run() re-enters its loop with it in force, the Start button
+// declines to clear it, the standing terminal-failure cards stay raised, and
+// the "Fleet idle" card stays suppressed. Adding a tag here is a deliberate
+// act, not bookkeeping.
+var machineRaisedHalts = map[string]bool{
+	haltTagSlotFailure: true,
+}
+
+// machineHalted reports whether a machine-raised halt is latched — the single
+// authoritative "this fleet is waiting on a human" predicate (#405). It reads
+// the latch, never Status, because every exit path overwrites Status:
+// complete() persists "cancelled" on SIGTERM and "stopped" on Stop(), so a
+// status-keyed predicate answered "not halted" after any graceful shutdown of
+// a halted fleet.
+func machineHalted(st *AutonomousState) bool {
+	return st != nil && st.MachineHalt != nil
+}
+
+// haltedOnSlotFailure reports whether the latched halt is the one the
+// scheduler raised on itself after a terminal stage failure — one fact, one
+// definition, two hard requirements on it:
+//
+//   - It gates the "Fleet idle — N promotable" card (#148). A halted queue and
+//     an empty queue both satisfy remaining==0 && running==0, but "N
+//     promotable, go add work" is false while the scheduler paused itself on
+//     purpose. A human-requested pause or a safety trip still gets the honest
+//     "nothing to do" card when the queue also happens to be empty — hence the
+//     tag check rather than bare machineHalted().
+//   - It gates whether the standing terminal-failure cards stay raised
+//     (attention_wiring.go). The two used to be separate copies of the same
+//     conjunct, so a change to one silently diverged from the other — #405 hit
+//     exactly that: the restart laundering retracted the cards AND resurrected
+//     the idle card, one defect showing up twice.
+func haltedOnSlotFailure(st *AutonomousState) bool {
+	return machineHalted(st) && st.MachineHalt.Tag == haltTagSlotFailure
+}
+
+// latchMachineHaltLocked records a machine-raised halt. Caller must hold
+// as.mu and must have already written the matching Status. Idempotent
+// per (status, tag): re-raising the same halt rewrites the same record.
+func (as *AutonomousScheduler) latchMachineHaltLocked(status, tag string) {
+	if as.state == nil {
+		return
+	}
+	as.state.MachineHalt = &MachineHaltRecord{Tag: tag, Status: status}
+}
+
+// clearMachineHaltLocked is the ONE place a machine halt is released: the
+// latch and the pause provenance go together, so no caller can clear half of
+// it and leave a fleet that reads halted to one predicate and clear to
+// another. Reached from Resume() and from ClearMachineHalt (the offline CLI
+// path). Caller must hold as.mu, or own st exclusively.
+func clearMachineHaltLocked(st *AutonomousState) {
+	if st == nil {
+		return
+	}
+	st.MachineHalt = nil
+	st.PauseReason = ""
+	st.PauseTriggeredBy = ""
+	st.PausedAt = ""
 }
 
 // CandidateItem is a prioritized item ready for dispatch.
@@ -4072,6 +4297,10 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.PauseReason = cascadeTripReason
 				as.state.PauseTriggeredBy = CascadePauseReason
 				as.state.PausedAt = time.Now().UTC().Format(time.RFC3339)
+				// #405 — latch it like every other machine-raised halt, so a
+				// shutdown between the trip and the operator's triage cannot
+				// write the cascade pause away.
+				as.latchMachineHaltLocked("safety_tripped", CascadePauseReason)
 				// Fire status-change immediately so the IPC server emits
 				// autonomous.statusChanged with the cascade pause reason —
 				// the Discord notifier subscribes there.
@@ -4356,7 +4585,29 @@ func (as *AutonomousScheduler) recoverOrphanedRunning(ctx context.Context) {
 
 	// Always reconcile Backlog -> Ready at startup, whether or not there was
 	// anything to recover — a clean start is the common case (#288).
+	//
+	// Except on a halted fleet (#405). Promotion is a WRITE to every repo's
+	// board that says "this is dispatchable now", and a halted fleet
+	// dispatches nothing: the operator would come back to a board reshuffled
+	// by a process that was supposed to be waiting for their decision. Orphan
+	// recovery above still runs — resetting items the dead session left stuck
+	// "In progress" is cleanup of the halt's own wreckage, not new work.
+	if halted, tag := as.machineHaltSnapshot(); halted {
+		log.Printf("autonomous: skipping startup Backlog->Ready promotion — fleet is halted (%s) and promoting would move board items for a fleet that dispatches nothing", tag)
+		return
+	}
 	as.promoteUnblockedOnStartup(ctx)
+}
+
+// machineHaltSnapshot reports the latch state under as.mu, for callers that
+// only need "halted, and which tag" without holding the lock themselves.
+func (as *AutonomousScheduler) machineHaltSnapshot() (bool, string) {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	if !machineHalted(as.state) {
+		return false, ""
+	}
+	return true, as.state.MachineHalt.Tag
 }
 
 // recoverOrphanedRunningItems performs the actual orphan-recovery board moves
@@ -5215,11 +5466,33 @@ func (as *AutonomousScheduler) loadState() {
 	}
 	// Only restore non-terminal states as "stopped" (need explicit restart).
 	// Terminal states (complete, budget_exhausted, safety_tripped) are preserved as-is.
-	reconciledFromRunning := false
+	//
+	// RestartedFromRunning records HOW the process died — a persisted
+	// running/paused status means nobody called Stop()/complete() (#274). It
+	// is deliberately independent of the halt latch below.
+	reconciledOnLoad := false
 	if loaded.Status == "running" || loaded.Status == "paused" {
 		loaded.Status = "stopped"
 		loaded.RestartedFromRunning = true
-		reconciledFromRunning = true
+		reconciledOnLoad = true
+	}
+	// #405 — the machine-halt latch outranks whatever status reached disk.
+	// The halt is a human-must-triage state exactly like safety_tripped: the
+	// scheduler stopped the whole fleet and raised a blocking_fleet card
+	// asking a person to decide. Nothing about a process ending resolves
+	// that, so no exit status may answer the card on the operator's behalf —
+	// and every exit path writes one, which is why the fact cannot live in
+	// Status. complete() persists "cancelled" on SIGTERM (VS Code reload,
+	// `serve` shutdown) and "stopped" on Stop(); a hard crash leaves the raw
+	// "paused" that the downgrade above then rewrites. All three used to come
+	// back as an ordinary ended session, with Start the only way forward and
+	// Start the path that erased the provenance the standing-card predicate
+	// reads.
+	if halt := loaded.MachineHalt; halt != nil && loaded.Status != halt.Status {
+		log.Printf("autonomous: restoring latched machine halt across restart (tag=%s, status=%s, exit status was %q): %s",
+			halt.Tag, halt.Status, loaded.Status, loaded.PauseReason)
+		loaded.Status = halt.Status
+		reconciledOnLoad = true
 	}
 	// Preserve stale Running items on load so RecoverOrphanedRunning can
 	// observe them and reset each board item to "Ready". Previously loadState
@@ -5247,14 +5520,15 @@ func (as *AutonomousScheduler) loadState() {
 	as.state = &loaded
 	log.Printf("autonomous: loaded state from disk (status=%s, completed=%d, failed=%d)",
 		loaded.Status, len(loaded.Completed), len(loaded.Failed))
-	// Flush the running/paused->stopped reconcile immediately rather than
-	// leaving it in memory only — otherwise a process that crashes again
-	// before the next scan cycle leaves state.json claiming "running"
-	// forever (Issue #274). loadState runs single-threaded during
-	// construction, before `as` is exposed to other goroutines, so no
-	// additional locking is needed here (consistent with the unguarded
-	// as.state assignment above).
-	if reconciledFromRunning {
+	// Flush the load-time reconcile immediately rather than leaving it in
+	// memory only — otherwise a process that crashes again before the next
+	// scan cycle leaves state.json claiming "running" forever (Issue #274).
+	// This covers the preserved-halt branch too: it still writes
+	// RestartedFromRunning, and a second crash must not lose it. loadState
+	// runs single-threaded during construction, before `as` is exposed to
+	// other goroutines, so no additional locking is needed here (consistent
+	// with the unguarded as.state assignment above).
+	if reconciledOnLoad {
 		as.persistStateLocked()
 	}
 }

@@ -685,7 +685,12 @@ func (as *AutonomousScheduler) reconcileTerminalFailureCards() {
 	// path that never looked.
 	as.mu.Lock()
 	readable := as.state != nil
-	stillHalted := readable && as.state.Status == "paused" && as.state.PauseTriggeredBy == "haltQueueOnSlotFailure"
+	// One definition of "the fleet is halted on a slot failure", shared with
+	// the fleet-idle suppression guard in runCycle (#405) — two copies of the
+	// same conjunct is how one state rewrite silently broke both producers at
+	// once. It reads the halt LATCH, so no exit-path status rewrite can make
+	// the cards retract themselves.
+	stillHalted := readable && haltedOnSlotFailure(as.state)
 	as.mu.Unlock()
 
 	if !readable {

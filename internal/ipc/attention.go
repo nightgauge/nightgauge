@@ -183,11 +183,12 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		return nil
 
 	case attention.VerbAutonomousResume:
-		if s.autonomousScheduler == nil {
-			return fmt.Errorf("autonomous scheduler not configured")
-		}
-		s.autonomousScheduler.Resume()
-		return nil
+		// Through the shared helper, not a bare Resume(): after a backend
+		// restart the fleet comes up latched with no goroutine alive (#405),
+		// and the #3303 dead state — status flips to "running", nothing
+		// dispatches — is reachable from this card the moment a halt survives
+		// a boot. Resuming and ensuring the loop is up is one action.
+		return s.resumeAndEnsureRunning(ctx)
 
 	case attention.VerbAutonomousRescan:
 		if s.autonomousScheduler == nil {
@@ -217,10 +218,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 			k = key
 		}
 		s.autonomousScheduler.ClearIssueFailures(k)
-		if argString(opt.Args, "then") == "autonomous.rescan" {
-			s.autonomousScheduler.TriggerRescan()
-		}
-		return nil
+		return s.applyThenAction(ctx, argString(opt.Args, "then"))
 
 	case attention.VerbQueueAdd:
 		if s.scheduler == nil {
@@ -243,8 +241,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if err := orchestrator.WriteBudgetCeilingOverride(s.repoRoot(repo), ceiling, actor, "action-center: budget.raiseCeiling"); err != nil {
 			return err
 		}
-		s.redispatchAfterOverride(key, repo, issue)
-		return nil
+		return s.redispatchAfterOverride(ctx, key, repo, issue, argString(opt.Args, "then"))
 
 	case attention.VerbRunRetryWithEscalation:
 		tier := argString(opt.Args, "tier")
@@ -254,8 +251,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if err := orchestrator.WriteEscalationOverride(s.workspaceRoot, issue, tier, actor); err != nil {
 			return err
 		}
-		s.redispatchAfterOverride(key, repo, issue)
-		return nil
+		return s.redispatchAfterOverride(ctx, key, repo, issue, argString(opt.Args, "then"))
 
 	case attention.VerbIssueClose:
 		return s.closeIssueBestEffort(ctx, owner, name, issue)
@@ -284,19 +280,97 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 	}
 }
 
-// redispatchAfterOverride clears the issue failure cooldown, requeues, and wakes
-// the scheduler — the common tail of budget.raiseCeiling and
+// Follow-on actions a card option may declare in Args["then"] — the second
+// half of a retry-shaped verb, executed after its primary effect lands.
+// (autonomous.complete carries its own `then: issue.close`, handled inline in
+// that arm because it needs the request's owner/repo/number.)
+const (
+	thenAutonomousRescan = "autonomous.rescan"
+	thenAutonomousResume = "autonomous.resume"
+)
+
+// applyThenAction executes the follow-on action named by an option's "then"
+// argument. Empty means "nothing further".
+//
+// An UNRECOGNIZED value is an error, never a silent success (#405). The Retry
+// option on the fleet-halt card shipped `then: autonomous.resume` against an
+// arm that honored only `autonomous.rescan`: the value fell through a bare
+// string compare, the verb returned nil, the store had already CAS-resolved
+// the request — so the card vanished, the fleet stayed halted, and the one
+// surface that could re-raise it was gone. A card option that cannot be
+// carried out must fail loudly enough to be audited.
+func (s *Server) applyThenAction(ctx context.Context, then string) error {
+	switch then {
+	case "":
+		return nil
+	case thenAutonomousRescan:
+		if s.autonomousScheduler == nil {
+			return fmt.Errorf("autonomous scheduler not configured")
+		}
+		s.autonomousScheduler.TriggerRescan()
+		return nil
+	case thenAutonomousResume:
+		return s.resumeAndEnsureRunning(ctx)
+	default:
+		log.Printf("attention: WARN unknown \"then\" action %q — the option's follow-on step was NOT executed", then)
+		return fmt.Errorf("attention: unknown \"then\" action %q", then)
+	}
+}
+
+// resumeAndEnsureRunning is the one resume primitive behind every operator
+// surface that means "go again": the IPC autonomous.resume method, the
+// autonomous.resume verb, and any card option whose `then` is a resume.
+//
+// Resume() alone is not enough. After a backend restart the persisted state
+// comes back halted (a safety trip, or since #405 a latched machine halt) with
+// no goroutine alive; flipping the status to "running" without starting Run()
+// leaves the silent "running but never dispatching" dead state #3303 fixed for
+// the IPC method — and the fixup made that state reachable from the card path
+// too, because a halt now survives a boot. One helper, so the next surface
+// added cannot get half of it.
+//
+// ctx is the server-lifetime context (IPC handlers and ExecuteVerb both
+// receive it), so the spawned loop dies with the daemon and not with the
+// request that started it.
+func (s *Server) resumeAndEnsureRunning(ctx context.Context) error {
+	if s.autonomousScheduler == nil {
+		return fmt.Errorf("autonomous scheduler not configured")
+	}
+	s.autonomousScheduler.Resume()
+	if !s.autonomousScheduler.IsRunning() {
+		go func() {
+			if err := s.autonomousScheduler.Run(ctx); err != nil {
+				log.Printf("autonomous scheduler exited: %v", err)
+			}
+		}()
+	}
+	return nil
+}
+
+// redispatchAfterOverride clears the issue failure cooldown, requeues, and
+// wakes the scheduler — the common tail of budget.raiseCeiling and
 // run.retryWithEscalation so the override actually takes effect on a retry.
-func (s *Server) redispatchAfterOverride(key, repo string, issue int) {
+//
+// `then` carries the option's follow-on action; a rescan is the historical
+// default when the option declares none. "Retry with escalation" on the
+// fleet-halt card declares `autonomous.resume`, and it must actually resume:
+// a rescan on a halted fleet re-runs a cycle that returns at its
+// `Status != "running"` guard, so the retry the operator asked for never
+// dispatches (#405).
+func (s *Server) redispatchAfterOverride(ctx context.Context, key, repo string, issue int, then string) error {
 	if s.autonomousScheduler != nil {
 		s.autonomousScheduler.ClearIssueFailures(key)
 	}
 	if s.scheduler != nil {
 		s.scheduler.QueueAddItem(orchestrator.QueueItem{Repo: repo, IssueNumber: issue})
 	}
-	if s.autonomousScheduler != nil {
-		s.autonomousScheduler.TriggerRescan()
+	if s.autonomousScheduler == nil {
+		return nil
 	}
+	if then == "" {
+		then = thenAutonomousRescan
+	}
+	return s.applyThenAction(ctx, then)
 }
 
 // closeIssueBestEffort closes a GitHub issue via the resolved per-repo client.
@@ -367,8 +441,7 @@ func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name
 
 	log.Printf("attention: architecture approval granted for %s#%d (label %q) — clearing cooldown and requeuing",
 		repo, issue, label)
-	s.redispatchAfterOverride(key, repo, issue)
-	return nil
+	return s.redispatchAfterOverride(ctx, key, repo, issue, "")
 }
 
 // --- small arg helpers (opt.Args round-trips through JSON: numbers are float64) ---
