@@ -113,3 +113,52 @@ func TestSweepMergedWorktrees_NoSchedulerIsNoOp(t *testing.T) {
 	as := &AutonomousScheduler{state: &AutonomousState{}}
 	as.sweepMergedWorktrees() // must not panic
 }
+
+// TestSweepMergedWorktrees_ZeroRootsIsLoud pins the #302 guard. Zero resolved
+// scan roots is not a benign "nothing to do": even a single-repo workspace
+// resolves its primary root, so an empty set means the root lookup itself
+// failed. This IS the leak-detection pass (#110) — returning bare leaves
+// worktree accumulation invisible for as long as the misconfiguration lasts,
+// and the sweep looks like it ran clean every cycle.
+func TestSweepMergedWorktrees_ZeroRootsIsLoud(t *testing.T) {
+	// No workspace root and no roots resolver → repoScanRoots() is empty.
+	as := &AutonomousScheduler{
+		scheduler: &Scheduler{},
+		state:     &AutonomousState{},
+	}
+
+	out := captureLog(t, func() { as.sweepMergedWorktrees() })
+
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("zero resolved scan roots skipped the sweep in total silence — the leak detector cannot report its own absence")
+	}
+	if !strings.Contains(out, "no repo scan roots resolved") {
+		t.Errorf("skip log does not name the cause; got %q", out)
+	}
+	if !strings.Contains(out, "WARN") {
+		t.Errorf("a failed root lookup is a warning, not a debug line; got %q", out)
+	}
+}
+
+// TestSchedulerSweepMergedWorktrees_ZeroRootsIsLoud is the mirror of the test
+// above for (*Scheduler).sweepMergedWorktrees — the non-autonomous entry point
+// carries an identical copy of the guard, and the same copy of the silence.
+// The two live side by side deliberately: a fix applied to one and not the
+// other reproduces the defect on the path nobody looked at.
+func TestSchedulerSweepMergedWorktrees_ZeroRootsIsLoud(t *testing.T) {
+	s := &Scheduler{}
+
+	out := captureLog(t, func() { s.sweepMergedWorktrees() })
+
+	if strings.TrimSpace(out) == "" {
+		t.Fatal("zero resolved scan roots skipped the sweep in total silence — the leak detector cannot report its own absence")
+	}
+	if !strings.Contains(out, "no repo scan roots resolved") {
+		t.Errorf("skip log does not name the cause; got %q", out)
+	}
+	// The same function already logs its undetermined-worktree-set skip as
+	// `worktree-reconcile: WARN ...`; the zero-roots skip must not be quieter.
+	if !strings.Contains(out, "worktree-reconcile: WARN") {
+		t.Errorf("skip log does not match the sibling skip's idiom; got %q", out)
+	}
+}

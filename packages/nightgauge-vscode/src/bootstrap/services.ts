@@ -333,6 +333,45 @@ export function resolveAgentRunnerRoot(
   return incrediRootValue ?? workspaceManagerValue?.getAllRepositories()[0]?.path ?? null;
 }
 
+/** The subset of {@link Logger} {@link resolveTerminalFunnelTarget} needs. */
+export interface TerminalFunnelLogger {
+  warn(message: string, data?: object): void;
+}
+
+/**
+ * Split a failed slot's `repoSlug` into the owner/repo the autonomous terminal
+ * funnel is keyed on, or report that the funnel cannot run.
+ *
+ * Everything downstream of this split is fleet-level safety machinery:
+ * the conflict-restart check, the terminal-kind signal, and above all
+ * `IpcClient.autonomousComplete(false, …)`, which is what feeds the cascade
+ * circuit breaker, increments the lifetime failure cap, and reverts the board.
+ * A run that cannot name its repo is exactly the run the breaker should hear
+ * about — and pre-#302 an absent or unsplittable slug skipped all of it with
+ * no log at all, so a fleet could fail indefinitely without ever tripping.
+ *
+ * Visibility only: there is deliberately no fallback to a default repo here.
+ * Guessing which repo a failure belongs to would mis-attribute the breaker's
+ * window and the failure cap, which is a worse failure than a loud skip.
+ */
+export function resolveTerminalFunnelTarget(
+  repoSlug: string | undefined,
+  issueNumber: number,
+  log: TerminalFunnelLogger
+): { owner: string; repo: string } | undefined {
+  const [owner, repo] = (repoSlug ?? "").split("/");
+  if (owner && repo) {
+    return { owner, repo };
+  }
+  log.warn(
+    "Slot failed with an unusable repoSlug — skipping the autonomous terminal funnel " +
+      "(cascade breaker, lifetime failure cap, board revert). This failure is invisible " +
+      "to fleet safety.",
+    { issueNumber, repoSlug: repoSlug ?? "<undefined>" }
+  );
+  return undefined;
+}
+
 /**
  * Read GitHub labels for an issue from its issue context JSON file.
  * Returns undefined (graceful fallback) when the file is absent or malformed.
@@ -1607,8 +1646,9 @@ export async function initializeServices(
         // Check for a conflict-restart signal so Go can skip the circuit
         // breaker — concurrent-branch collisions are infrastructure failures,
         // not code failures, and self-heal once we create a fresh branch.
-        const [failOwner, failRepo] = (repoSlug ?? "").split("/");
-        if (failOwner && failRepo) {
+        const funnelTarget = resolveTerminalFunnelTarget(repoSlug, issueNumber, logger);
+        if (funnelTarget) {
+          const { owner: failOwner, repo: failRepo } = funnelTarget;
           const signalPath = incrediRoot
             ? path.join(
                 incrediRoot,

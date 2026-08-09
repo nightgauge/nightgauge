@@ -1540,6 +1540,22 @@ export class RecentBashRing {
   private readonly byId = new Map<string, RecentBashEntry>();
 
   /**
+   * How many tool_results actually JOINED a retained entry over the life of
+   * the stage. A lifetime tally, not a property of the current window — an
+   * eviction never decrements it, because the question it answers is "did
+   * correlation ever work here?", not "how many of the ten retained commands
+   * have exits right now".
+   *
+   * `size > 0 && correlatedExits === 0` is the total-correlation-failure
+   * shape: commands captured, not one exit code bound to any of them. That
+   * happens when every tool_use in the stage arrives id-less — `byId` stays
+   * empty, every `observeToolResult` no-ops, and the record looks healthy and
+   * terse because `exit` is `omitempty`. Exactly the #147 symptom, one level
+   * up (#302).
+   */
+  private correlated = 0;
+
+  /**
    * Record a Bash tool_use. No-op for every other tool and for a Bash call
    * carrying no string command.
    *
@@ -1582,6 +1598,11 @@ export class RecentBashRing {
   observeToolResult(toolUseId: string, isError: boolean): void {
     const entry = this.byId.get(toolUseId);
     if (!entry) return;
+    // Count the JOIN, not the report. The CLI can deliver the same result
+    // through more than one envelope shape, and a repeat delivery is not a
+    // second correlated exit — counting it would let one chatty result mask
+    // a stage where nothing else correlated at all.
+    if (entry.exit === undefined) this.correlated++;
     entry.exit = isError ? 1 : 0;
   }
 
@@ -1601,6 +1622,68 @@ export class RecentBashRing {
   get size(): number {
     return this.entries.length;
   }
+
+  /** See {@link correlated}; 0 alongside a non-zero size drives the #302 arm. */
+  get correlatedExits(): number {
+    return this.correlated;
+  }
+}
+
+/**
+ * The stage's forensic-capture self-check, as a string or nothing (#147/#302).
+ *
+ * Lives out here for the same reason {@link extractBashCommand} and
+ * {@link RecentBashRing} do: the check itself runs inside
+ * `runStageSkillHeadless`, which spawns a subprocess and cannot be exercised
+ * cheaply, so the condition would otherwise be untestable — and an untestable
+ * detector is how #147 stayed silent through 2,533 records.
+ *
+ * Two arms, one class of defect. In both, the stream parser and the CLI's
+ * event shape have diverged and the exit record under-reports while looking
+ * healthy and terse, because both `last_bash_command` and `last_bash_exit` are
+ * `omitempty`:
+ *
+ * 1. Tool events parsed, no Bash command captured. The original #147 gap.
+ * 2. Bash commands captured, not one exit correlated. Every `tool_use` in the
+ *    stage arrived without a string id, so nothing was ever indexed for the
+ *    later `tool_result` to find. `size > 0` suppressed arm 1, `recent_bash`
+ *    populated, and every entry silently lost its exit code — the stage reads
+ *    as "ran ten commands, none of which are known to have failed" (#302).
+ */
+export function describeForensicCaptureGap(args: {
+  stage: string;
+  parsedToolEventCount: number;
+  capturedCommands: number;
+  correlatedExits: number;
+}): string | undefined {
+  const { stage, parsedToolEventCount, capturedCommands, correlatedExits } = args;
+  // No tool events parsed at all is a different (and already-reported)
+  // condition — a stage that genuinely did nothing, not a capture gap.
+  if (parsedToolEventCount <= 0) return undefined;
+
+  if (capturedCommands === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) but captured no Bash command, so last_bash_command will be absent ` +
+      `from the exit record and a retro cannot answer "what was it doing when it ` +
+      `died?". The stream parser and the CLI's event shape have likely diverged. ` +
+      `(Issue #147)\n`
+    );
+  }
+  // Partial correlation is normal — a stage killed mid-command leaves its last
+  // result unbound. TOTAL failure is not: it means no tool_use in the whole
+  // stage carried an id to bind to.
+  if (correlatedExits === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) and captured ${capturedCommands} Bash command(s), but ZERO of them ` +
+      `correlated to a tool_result — every exit code is absent from the exit ` +
+      `record, so last_bash_exit is undefined and a retro cannot answer "did the ` +
+      `last thing it ran fail?". The stage's tool_use ids and the parser have ` +
+      `likely diverged. (Issue #302)\n`
+    );
+  }
+  return undefined;
 }
 
 /** How many tool calls the per-stage all-tools log retains (Issue #144). */
@@ -5843,17 +5926,18 @@ export function runStageSkillHeadless(
     // rather than a defect — so the gap survived unnoticed until a failure
     // needed it and it was not there.
     //
-    // A stage that parsed tool events but captured no Bash command means the
-    // stream shape and the parser have diverged. Say so on stderr, which is
-    // itself captured into `stderr_tail`, so the record carries evidence of
+    // A stage that parsed tool events but captured no Bash command — or
+    // captured commands and correlated no exit to any of them (#302) — means
+    // the stream shape and the parser have diverged. Say so on stderr, which
+    // is itself captured into `stderr_tail`, so the record carries evidence of
     // its own incompleteness instead of quietly under-reporting.
-    if (recentBashRing.size === 0 && parsedToolEventCount > 0) {
-      const gapWarning =
-        `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
-        `event(s) but captured no Bash command, so last_bash_command will be absent ` +
-        `from the exit record and a retro cannot answer "what was it doing when it ` +
-        `died?". The stream parser and the CLI's event shape have likely diverged. ` +
-        `(Issue #147)\n`;
+    const gapWarning = describeForensicCaptureGap({
+      stage,
+      parsedToolEventCount,
+      capturedCommands: recentBashRing.size,
+      correlatedExits: recentBashRing.correlatedExits,
+    });
+    if (gapWarning) {
       callbacks?.onStderr?.(gapWarning);
       // `exitStderrTail` is fed ONLY by the subprocess's own stderr stream, so
       // an onStderr callback does not reach it — the callback notifies the

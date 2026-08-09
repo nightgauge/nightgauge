@@ -4,6 +4,7 @@ import {
   LAST_BASH_COMMAND_MAX_CHARS,
   RECENT_BASH_MAX_ENTRIES,
   RecentBashRing,
+  describeForensicCaptureGap,
   extractBashCommand,
 } from "../../src/utils/skillRunner";
 
@@ -190,5 +191,151 @@ describe("RecentBashRing — the last N Bash commands", () => {
     const snap = ring.snapshot();
     snap[0]!.cmd = "mutated";
     expect(ring.snapshot()[0]?.cmd).toBe("go test ./...");
+  });
+});
+
+/**
+ * The ring records entries unconditionally but indexes them for correlation
+ * only when the stream supplied a string tool_use id — `tokenParser` drops
+ * non-string ids by design. A stage in which EVERY tool_use arrives id-less
+ * therefore reports `size > 0` (so the #147 gap warning is suppressed) while
+ * `byId` stays empty, every `observeToolResult` no-ops, and every exit code is
+ * dropped by `omitempty`. The record reads "ran ten commands, none of which
+ * are known to have failed" — the #147 symptom one level up.
+ *
+ * Correlation has to be countable before it can be checked. (#302)
+ */
+describe("RecentBashRing — correlated exits are counted, not assumed (#302)", () => {
+  const use = (ring: RecentBashRing, command: string, id?: string) =>
+    ring.observeToolUse("Bash", { command }, id);
+
+  it("reports ZERO correlated exits for a stage whose tool_uses were all id-less", () => {
+    const ring = new RecentBashRing();
+    use(ring, "npm run -w nightgauge-vscode vitest run");
+    use(ring, "go test ./...");
+    // The results still arrive — they just have nothing to bind to.
+    ring.observeToolResult("toolu_01", true);
+    ring.observeToolResult("toolu_02", false);
+
+    // Commands captured (so `size` cannot report the gap) …
+    expect(ring.size).toBe(2);
+    // … and not one exit bound to any of them.
+    expect(ring.correlatedExits).toBe(0);
+    expect(ring.snapshot().every((e) => e.exit === undefined)).toBe(true);
+  });
+
+  it("counts each result that joins its command", () => {
+    const ring = new RecentBashRing();
+    use(ring, "go build ./...", "t1");
+    use(ring, "go test ./...", "t2");
+    ring.observeToolResult("t1", false);
+    expect(ring.correlatedExits).toBe(1);
+    ring.observeToolResult("t2", true);
+    expect(ring.correlatedExits).toBe(2);
+  });
+
+  it("does not count a result for a command it never retained", () => {
+    const ring = new RecentBashRing();
+    use(ring, "go build ./...", "t1");
+    ring.observeToolResult("t-unknown", true);
+
+    expect(ring.correlatedExits).toBe(0);
+  });
+
+  it("counts the join once when the same result is delivered twice", () => {
+    // A repeat delivery is not a second correlated exit; counting it would let
+    // one chatty result mask a stage where nothing else correlated at all.
+    const ring = new RecentBashRing();
+    use(ring, "gh pr checks", "t1");
+    ring.observeToolResult("t1", false);
+    ring.observeToolResult("t1", false);
+
+    expect(ring.correlatedExits).toBe(1);
+  });
+
+  it("keeps the tally across eviction — it answers 'did correlation ever work'", () => {
+    const ring = new RecentBashRing();
+    use(ring, "first", "t0");
+    ring.observeToolResult("t0", false);
+    for (let i = 1; i <= RECENT_BASH_MAX_ENTRIES; i++) use(ring, `cmd-${i}`, `t${i}`);
+
+    // `first` is long gone from the window, but correlation demonstrably worked
+    // in this stage, so the total-failure arm must not fire.
+    expect(ring.size).toBe(RECENT_BASH_MAX_ENTRIES);
+    expect(ring.correlatedExits).toBe(1);
+  });
+});
+
+/**
+ * The self-check itself. It runs inside `runStageSkillHeadless`, which spawns a
+ * subprocess and cannot be exercised cheaply — the same constraint that put
+ * `extractBashCommand` and `RecentBashRing` out here in #147/#156. An
+ * untestable detector is how the original gap survived 2,533 records.
+ */
+describe("describeForensicCaptureGap — the stage's self-check (#147/#302)", () => {
+  const use = (ring: RecentBashRing, command: string, id?: string) =>
+    ring.observeToolUse("Bash", { command }, id);
+
+  const check = (ring: RecentBashRing, parsedToolEventCount: number) =>
+    describeForensicCaptureGap({
+      stage: "feature-validate",
+      parsedToolEventCount,
+      capturedCommands: ring.size,
+      correlatedExits: ring.correlatedExits,
+    });
+
+  it("says nothing when the stage parsed no tool events at all", () => {
+    // A stage that genuinely ran nothing is a different (already-reported)
+    // condition, not a capture gap.
+    expect(check(new RecentBashRing(), 0)).toBeUndefined();
+  });
+
+  it("warns when tool events were parsed but no Bash command was captured (#147)", () => {
+    const warning = check(new RecentBashRing(), 214);
+
+    expect(warning).toBeDefined();
+    expect(warning).toContain("[forensic-capture-gap]");
+    expect(warning).toContain("feature-validate");
+    expect(warning).toContain("214");
+    expect(warning).toContain("(Issue #147)");
+  });
+
+  it("warns when commands were captured but ZERO exits correlated (#302)", () => {
+    // The all-id-less stage: `size > 0` suppresses the #147 arm, so without a
+    // second arm this stage reports nothing and its exit record — populated
+    // `recent_bash`, every exit absent — reads as healthy and terse.
+    const ring = new RecentBashRing();
+    use(ring, "npm run -w nightgauge-vscode vitest run");
+    use(ring, "go test ./...");
+    ring.observeToolResult("toolu_01", true);
+
+    const warning = check(ring, 214);
+
+    expect(warning).toBeDefined();
+    expect(warning).toContain("[forensic-capture-gap]");
+    expect(warning).toContain("feature-validate");
+    // Names both counts — "2 commands, 0 correlated" is the whole diagnosis.
+    expect(warning).toContain("2");
+    expect(warning).toContain("214");
+    expect(warning).toContain("(Issue #302)");
+  });
+
+  it("says nothing once at least one exit correlated", () => {
+    // Partial correlation is normal: the stage can be killed with a command
+    // still in flight. Only TOTAL failure indicates a shape divergence.
+    const ring = new RecentBashRing();
+    use(ring, "go build ./...", "t1");
+    ring.observeToolResult("t1", false);
+    use(ring, "go test ./...", "t2"); // still running at exit
+
+    expect(check(ring, 87)).toBeUndefined();
+  });
+
+  it("says nothing on a fully healthy stage", () => {
+    const ring = new RecentBashRing();
+    use(ring, "go build ./...", "t1");
+    ring.observeToolResult("t1", false);
+
+    expect(check(ring, 12)).toBeUndefined();
   });
 });
