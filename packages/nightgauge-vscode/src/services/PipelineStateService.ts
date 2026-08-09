@@ -15,6 +15,14 @@
 
 import * as vscode from "vscode";
 import { IpcClient } from "./IpcClient";
+import {
+  isRunIdentity,
+  type NotifyCompleteParams,
+  type NotifyPhaseTransitionParams,
+  type NotifyStageTransitionParams,
+  type SetPausedParams,
+} from "./ipcNotifyParams";
+import { handleIpcRejection, type RejectionLogger } from "./ipcRejection";
 
 // ---------------------------------------------------------------------------
 // Stage label mapping for display
@@ -436,6 +444,14 @@ export interface GoRuntimeState {
     error_summary?: string;
   }>;
   prUrl?: string;
+  /**
+   * Run identity the snapshot belongs to (ADR-017 Decision 6, #370).
+   *
+   * The wire always carries `state.runId`; it is EMPTY for extension-path runs
+   * until the server re-keys in step 4, which is why the inbound filter falls
+   * back to the issue-number pre-filter rather than dropping the event.
+   */
+  runId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,12 +466,33 @@ export class PipelineStateService implements vscode.Disposable {
   private _lastState: PipelineState | null = null;
   private disposables: vscode.Disposable[] = [];
   /**
-   * Target repo ("owner/name") for the active run, set by the orchestrator at
-   * run start via {@link setRunRepo}. Included in every stage transition so the
-   * Go IPC layer can emit the platform's run-creation context (which
-   * materialises the live `pipeline_runs` row). Empty until a run starts.
+   * Target repo ("owner/name") for the active run, installed by
+   * {@link beginRun}. Included in every stage transition so the Go IPC layer
+   * can emit the platform's run-creation context (which materialises the live
+   * `pipeline_runs` row). Empty until a run begins.
    */
   private runRepo = "";
+  /**
+   * THE ONE identity this service speaks for — ADR-017 Decision 10, #370.
+   *
+   * Installed by {@link beginRun}, released by {@link endRun}, and read by
+   * every run-bearing call this class makes. `null` means "no run is
+   * installed here", which is a refusal state for anything run-bearing, NOT a
+   * cue to mint one: **identity is not ambient**. A producer that stamps an
+   * identity onto a holder that already has a live one is F23 — the last
+   * minter wins, the first run's remaining transitions are booked under the
+   * second run's identity, and the first goes silent forever.
+   */
+  private runId: string | null = null;
+  /**
+   * Inbound events applied through the issue-number pre-filter because
+   * neither side could offer an id to compare (Decision 6's empty-id
+   * fallback). Post-step-4 this arm should go quiet; a counter that keeps
+   * climbing after the flip is the signal that some emitter never got one.
+   */
+  private emptyIdFallbackCount = 0;
+  /** Injectable log sink for rejection classification. Defaults to console. */
+  private rejectionLogger: RejectionLogger | undefined;
 
   // Event emitters for UI subscribers
   private readonly _onStateChanged = new vscode.EventEmitter<PipelineState | null>();
@@ -564,6 +601,12 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   dispose(): void {
+    // Release the identity before tearing down (ADR-017 Decision 10). Both
+    // `cleanupSlot` teardown sites reach dispose(), so this is what stops a
+    // disposed slot service from still claiming to hold a live run — a
+    // recycled service that answered `getRunId()` would refuse the next
+    // `beginRun` for an issue nobody is running.
+    this.endRun();
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -690,20 +733,104 @@ export class PipelineStateService implements vscode.Disposable {
   // -------------------------------------------------------------------------
 
   /**
-   * Set the target repo ("owner/name") for the active run. Called by the
-   * orchestrator at run start so every subsequent stage transition carries the
-   * repo the platform needs to materialise a live run row. Idempotent.
+   * Install THE identity this service speaks for (ADR-017 Decision 10, #370).
+   *
+   * Explicit, never a side effect of `initializePipeline`, because "every
+   * producer mints at its own dispatch point" is not structural on its own:
+   * `retryFailedIssue`, `bootstrap/services.ts` and the `HeadlessOrchestrator`
+   * direct entry points all drive the SAME singleton, so the identity would
+   * live in one mutable slot that the last minter wins. `retryFailedIssue`
+   * already falls straight through to `initializePipeline` when the operator
+   * retries the issue that is still executing (#870 guards only ACROSS
+   * issues) — that is F23, and the refusal below is the fix.
+   *
+   * @throws when `runId` is not a canonical UUIDv7 identity.
+   * @throws when a live identity is already installed. Mutates NOTHING in
+   *   that case: the running run keeps its identity, its repo and its issue,
+   *   and the operator gets a message naming what is already running.
    */
-  setRunRepo(repo: string): void {
+  beginRun(runId: string, repo: string, issueNumber: number): void {
+    if (!isRunIdentity(runId)) {
+      throw new Error(
+        `Refusing to begin a run with a malformed identity: ${JSON.stringify(runId)}. ` +
+          `Expected a lowercase UUIDv7 (see internal/runstate/identity.go).`
+      );
+    }
+    if (this.runId !== null) {
+      // The SAME guard #870 already applies across issues, now applied within
+      // one — the case it always should have covered.
+      throw new Error(
+        `Issue #${this.issueNumber ?? issueNumber} is already running ` +
+          `(run ${this.runId.slice(0, 8)}…). Stop or clear it before retrying.`
+      );
+    }
+    this.runId = runId;
     this.runRepo = repo ?? "";
+    this.issueNumber = issueNumber;
   }
 
+  /**
+   * Release the installed identity (ADR-017 Decision 10).
+   *
+   * Fired by `notifyPipelineComplete` (after its terminal claim), by
+   * `clearPipeline`, and by `dispose`. Idempotent: releasing when nothing is
+   * installed is a no-op, because the three firing sites overlap by design
+   * (a completed run is also cleared, and a cleared slot is also disposed).
+   */
+  endRun(): void {
+    this.runId = null;
+    this.runRepo = "";
+  }
+
+  /** The identity this service speaks for, or `null` when no run is installed. */
+  getRunId(): string | null {
+    return this.runId;
+  }
+
+  /** The installed run's target repo ("owner/name"), or "" when none. */
+  getRunRepo(): string {
+    return this.runRepo;
+  }
+
+  /**
+   * How many inbound events took Decision 6's empty-id fallback. Read by
+   * tests; a non-zero value after step 4 means an emitter is still id-less.
+   */
+  getEmptyIdFallbackCount(): number {
+    return this.emptyIdFallbackCount;
+  }
+
+  /** Inject a log sink for IPC-rejection classification (tests). */
+  setRejectionLogger(logger: RejectionLogger | undefined): void {
+    this.rejectionLogger = logger;
+  }
+
+  /**
+   * @throws when no identity is installed — `initializePipeline` is
+   *   run-bearing (it emits the run's `initialized` transition), and a
+   *   run-bearing call on a holder with no identity is not a valid target.
+   *   It deliberately stopped being the implicit mint (Decision 10).
+   * @throws when the installed identity is for a different issue.
+   */
   async initializePipeline(
     issueNumber: number,
     title: string,
     branch: string,
     baseBranch?: string
   ): Promise<void> {
+    const runId = this.runId;
+    if (runId === null) {
+      throw new Error(
+        `initializePipeline(#${issueNumber}) called with no run identity installed. ` +
+          `Call beginRun(runId, repo, issueNumber) at the dispatch point first (ADR-017).`
+      );
+    }
+    if (this.issueNumber !== null && this.issueNumber !== issueNumber) {
+      throw new Error(
+        `Run ${runId.slice(0, 8)}… is installed for issue #${this.issueNumber}, ` +
+          `refusing to initialize it as #${issueNumber}.`
+      );
+    }
     this.issueNumber = issueNumber;
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
@@ -714,8 +841,16 @@ export class PipelineStateService implements vscode.Disposable {
         title,
         branch,
         baseBranch: baseBranch ?? "",
+        runId,
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage: "init",
+        runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       // IPC not connected — create local state as fallback
       this._lastState = {
         issue_number: issueNumber,
@@ -731,15 +866,35 @@ export class PipelineStateService implements vscode.Disposable {
     }
   }
 
-  async startStage(stage: string, _options?: { forceBackward?: boolean }): Promise<void> {
+  /**
+   * @param options.stagePid Advisory pid of the child executing this stage
+   *   (ADR-017 §7.2). Supplied by the caller that owns the spawn, so exactly
+   *   ONE `running` transition per stage attempt carries it. Omitted from the
+   *   wire when absent — a `0` would claim "no child" about a stage that has
+   *   one, which is the reconciler's arm-3 answer inverted.
+   */
+  async startStage(
+    stage: string,
+    _options?: { forceBackward?: boolean; stagePid?: number }
+  ): Promise<void> {
+    const stagePid = _options?.stagePid;
     try {
       await this.ipc.call("pipeline.notifyStageTransition", {
         repo: this.runRepo,
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "running",
+        ...(stagePid ? { stagePid } : {}),
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       if (this._lastState) {
         this._lastState.stages[stage] = {
           status: "running",
@@ -784,8 +939,20 @@ export class PipelineStateService implements vscode.Disposable {
         costUsd: usage?.cost_usd ?? 0,
         ...(attribution?.model ? { model: attribution.model } : {}),
         ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
+        // A finished child must not vouch for the run (ADR-017 §7.2): the
+        // terminal transition zeroes the pid so the PID-reuse window is
+        // bounded by one stage rather than by the whole run.
+        stagePid: 0,
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       if (this._lastState) {
         this._lastState.stages[stage] = {
           ...this._lastState.stages[stage],
@@ -819,8 +986,18 @@ export class PipelineStateService implements vscode.Disposable {
         error,
         ...(attribution?.model ? { model: attribution.model } : {}),
         ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
+        // Terminal transition — see completeStage (ADR-017 §7.2).
+        stagePid: 0,
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       if (this._lastState) {
         this._lastState.stages[stage] = {
           ...this._lastState.stages[stage],
@@ -865,10 +1042,21 @@ export class PipelineStateService implements vscode.Disposable {
         status: "model-resolved",
         ...(attribution.model ? { model: attribution.model } : {}),
         ...(attribution.adapter ? { adapter: attribution.adapter } : {}),
-      });
-    } catch {
+        // No stagePid: the model is resolved BEFORE the child is spawned, so
+        // there is no pid to name and `0` would be a lie about a stage that
+        // is about to have one (ADR-017 §7.2 — omitted, not zeroed).
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
       // Telemetry only — no local-state fallback. The model is re-asserted on
       // the stage's terminal transition (complete/failed) regardless.
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
+      });
     }
   }
 
@@ -879,8 +1067,17 @@ export class PipelineStateService implements vscode.Disposable {
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "skipped",
+        // No stagePid — a skipped stage spawns no child (ADR-017 §7.2).
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       if (this._lastState) {
         this._lastState.stages[stage] = {
           ...this._lastState.stages[stage],
@@ -898,8 +1095,17 @@ export class PipelineStateService implements vscode.Disposable {
         issueNumber: this.issueNumber ?? 0,
         stage,
         status: "deferred",
+        // No stagePid — a deferred stage spawns no child (ADR-017 §7.2).
+        runId: this.runId ?? "",
+      } satisfies NotifyStageTransitionParams);
+    } catch (err) {
+      handleIpcRejection({
+        method: "pipeline.notifyStageTransition",
+        stage,
+        runId: this.runId,
+        err,
+        logger: this.rejectionLogger,
       });
-    } catch {
       if (this._lastState) {
         this._lastState.stages[stage] = {
           ...this._lastState.stages[stage],
@@ -953,6 +1159,7 @@ export class PipelineStateService implements vscode.Disposable {
      */
     stagePuntReasons?: Record<string, string>;
   }): Promise<void> {
+    const runId = this.runId;
     try {
       await this.ipc.call("pipeline.notifyComplete", {
         repo: this.runRepo,
@@ -964,10 +1171,24 @@ export class PipelineStateService implements vscode.Disposable {
         deferred: result.deferred ?? false,
         stageExecutionPaths: result.stageExecutionPaths ?? {},
         stagePuntReasons: result.stagePuntReasons ?? {},
-      });
-    } catch {
+        runId: runId ?? "",
+      } satisfies NotifyCompleteParams);
+    } catch (err) {
       // IPC not connected — telemetry is best-effort; the run's outcome is
       // still recorded locally in history JSONL and uploaded separately.
+      handleIpcRejection({
+        method: "pipeline.notifyComplete",
+        runId,
+        err,
+        logger: this.rejectionLogger,
+      });
+    } finally {
+      // The terminal claim has been made (or refused). Either way this run is
+      // over on this side, so the identity is released — a service still
+      // holding a completed run's id would refuse the next `beginRun` for the
+      // same issue (ADR-017 Decision 10). Released AFTER the send, never
+      // before: the send is the only place the identity is still needed.
+      this.endRun();
     }
   }
 
@@ -988,25 +1209,31 @@ export class PipelineStateService implements vscode.Disposable {
 
   async clearPipeline(): Promise<void> {
     this._lastState = null;
+    // Clearing the pipeline ends the run this service was speaking for
+    // (ADR-017 Decision 10) — otherwise the next dispatch of the same issue
+    // hits the not-ambient refusal against a run nobody is executing.
+    this.endRun();
     this._onStateChanged.fire(null);
   }
 
+  /**
+   * Persist the pause to Go.
+   *
+   * REFUSES WITH NO IDENTITY INSTALLED. `setPaused` is three defects in one
+   * call today (ADR-017 Decision 10 / F9): it mints a runtime with no repo and
+   * no RunID, so the next real dispatch adopts an identity-less stub; it can
+   * write a snapshot read at T over a LIVE SUCCESSOR's runtime, rolling back
+   * every stage booked in between; and the unattributed entry pins the issue
+   * against #44 forever. Requiring `runId` + `repo` + `issueNumber` kills all
+   * three, and an emitter that cannot name the run it is pausing has nothing
+   * safe to send — so it sends nothing and says so.
+   */
   async pausePipeline(): Promise<void> {
     if (this._lastState) {
       this._lastState.paused = true;
       this._onStateChanged.fire(this._lastState);
     }
-    // Persist pause state to disk via Go IPC (best-effort)
-    if (this.issueNumber !== null) {
-      try {
-        await this.ipc.call("pipeline.setPaused", {
-          issueNumber: this.issueNumber,
-          paused: true,
-        });
-      } catch {
-        // Non-critical: in-memory flag still set; UI still updates
-      }
-    }
+    await this.sendPaused(true);
   }
 
   async resumePipeline(): Promise<void> {
@@ -1014,16 +1241,34 @@ export class PipelineStateService implements vscode.Disposable {
       this._lastState.paused = false;
       this._onStateChanged.fire(this._lastState);
     }
-    // Clear persisted pause state via Go IPC (best-effort)
-    if (this.issueNumber !== null) {
-      try {
-        await this.ipc.call("pipeline.setPaused", {
-          issueNumber: this.issueNumber,
-          paused: false,
-        });
-      } catch {
-        // Non-critical: in-memory flag still cleared; UI still updates
-      }
+    await this.sendPaused(false);
+  }
+
+  private async sendPaused(paused: boolean): Promise<void> {
+    const runId = this.runId;
+    if (runId === null || this.issueNumber === null) {
+      (this.rejectionLogger ?? console).warn(
+        `pipeline.setPaused skipped — no run identity installed (ADR-017 Decision 10). ` +
+          `The in-memory pause flag is set; nothing was written to Go.`,
+        { issueNumber: this.issueNumber, paused }
+      );
+      return;
+    }
+    try {
+      await this.ipc.call("pipeline.setPaused", {
+        issueNumber: this.issueNumber,
+        paused,
+        repo: this.runRepo,
+        runId,
+      } satisfies SetPausedParams);
+    } catch (err) {
+      // Non-critical: in-memory flag still set; UI still updates
+      handleIpcRejection({
+        method: "pipeline.setPaused",
+        runId,
+        err,
+        logger: this.rejectionLogger,
+      });
     }
   }
 
@@ -1081,9 +1326,17 @@ export class PipelineStateService implements vscode.Disposable {
         index,
         total,
         eventType: "start",
-      })
-      .catch(() => {
+        runId: this.runId ?? "",
+      } satisfies NotifyPhaseTransitionParams)
+      .catch((err: unknown) => {
         // IPC failure is non-fatal — local state is already updated
+        handleIpcRejection({
+          method: "pipeline.notifyPhaseTransition",
+          stage,
+          runId: this.runId,
+          err,
+          logger: this.rejectionLogger,
+        });
       });
   }
 
@@ -1125,9 +1378,17 @@ export class PipelineStateService implements vscode.Disposable {
         index: phaseIndex,
         total,
         eventType: "complete",
-      })
-      .catch(() => {
+        runId: this.runId ?? "",
+      } satisfies NotifyPhaseTransitionParams)
+      .catch((err: unknown) => {
         // IPC failure is non-fatal — local state is already updated
+        handleIpcRejection({
+          method: "pipeline.notifyPhaseTransition",
+          stage,
+          runId: this.runId,
+          err,
+          logger: this.rejectionLogger,
+        });
       });
   }
 
@@ -1386,16 +1647,56 @@ export class PipelineStateService implements vscode.Disposable {
   // Event subscription from Go binary
   // -------------------------------------------------------------------------
 
+  /**
+   * Decide whether an inbound event belongs to THIS service (ADR-017
+   * Decision 6, F19).
+   *
+   * When both sides have an id, strict equality decides — that is what stops a
+   * dead run's late event from repainting its live successor's state, which
+   * the issue-number pre-filter cannot tell apart. When either side has none,
+   * fall back to today's issue-number pre-filter and COUNT it: an event with
+   * no id must never be dropped, because a strict-equality filter can never be
+   * the reason a dashboard slot goes dark (C9, fail-open on a UX surface).
+   *
+   * The fallback arm is live for every extension-path event until step 4 makes
+   * the server carry the id it is already being sent.
+   */
+  private acceptsEvent(eventRunId: string, eventIssueNumber: number): boolean {
+    if (this.runId && eventRunId) {
+      return eventRunId === this.runId;
+    }
+    if (this.issueNumber !== null && eventIssueNumber !== this.issueNumber) {
+      return false;
+    }
+    this.emptyIdFallbackCount += 1;
+    console.debug(
+      `[PipelineStateService] event applied via issue-number fallback (no run id on one side)`,
+      {
+        issueNumber: eventIssueNumber,
+        myRunId: this.runId,
+        eventRunId: eventRunId || null,
+        fallbackCount: this.emptyIdFallbackCount,
+      }
+    );
+    return true;
+  }
+
   private subscribeToEvents(): void {
     this.disposables.push(
       this.ipc.on("pipeline.stateChanged", (data: unknown) => {
         const d = data as {
           issueNumber: number;
           repo: string;
+          /**
+           * Run identity of the emitting run (ADR-017 Decision 6). Present on
+           * the envelope and/or nested on the snapshot; empty for
+           * extension-path runs until the step-4 re-key.
+           */
+          runId?: string;
           // Go RuntimeState has a different shape than PipelineState — see GoRuntimeState above.
           state: GoRuntimeState;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? d.state?.runId ?? "", d.issueNumber)) {
           return;
         }
 
@@ -1760,6 +2061,8 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           stage: string;
           repo: string;
+          /** Emitting run's identity (ADR-017 Decision 6); empty until step 4. */
+          runId?: string;
           error: string;
           inputTokens: number;
           outputTokens: number;
@@ -1768,7 +2071,10 @@ export class PipelineStateService implements vscode.Disposable {
           costUsd: number;
           model: string;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        // The stage.* twin of the stateChanged filter. Its envelope offers no
+        // id field today, so this is the empty-id fallback arm by
+        // construction until step 4 stamps one.
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
         if (this._lastState && this._lastState.issue_number === d.issueNumber) {
