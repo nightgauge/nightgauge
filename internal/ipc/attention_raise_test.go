@@ -38,15 +38,21 @@ import (
 // `BeginStage`) then `complete` — so every test below exercises notify → raise
 // and a corroboration rule that a forged single call could satisfy would fail
 // here.
-func recordRunSpend(t *testing.T, s *Server, repo string, issue int, costUSD float64) {
+//
+// It MINTS THE RUN IDENTITY and returns it (ADR-017 step 4): the registry keys
+// on the run, not the issue, so a test that wants to drop the live entry has to
+// name the run it seeded.
+func recordRunSpend(t *testing.T, s *Server, repo string, issue int, costUSD float64) string {
 	t.Helper()
+	runID := newTestRunID()
 	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
-		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running",
+		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
 	})
 	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete",
-		CostUsd: costUSD,
+		CostUsd: costUSD, RunID: runID,
 	})
+	return runID
 }
 
 // notifyStageTransition invokes the registered IPC method, so tests reach the
@@ -815,14 +821,14 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 		spend = 40.0
 	)
 	s := newAttentionTestServer(t)
-	recordRunSpend(t, s, repo, issue, spend)
+	runID := recordRunSpend(t, s, repo, issue, spend)
 	if got, err := state.FindPersistedStatesForIssue(s.pipelineStateDir(repo), issue); err != nil || len(got) != 1 {
 		t.Fatalf("notify did not persist exactly one runtime snapshot: %d / %v", len(got), err)
 	}
 	// Drop the live entry: without this the first arm answers and the persisted
 	// arm is never reached, so the test would pass while proving nothing.
 	s.runtimesMu.Lock()
-	delete(s.activeRuntimes, fmt.Sprintf("%d", issue))
+	delete(s.activeRuntimes, runID)
 	s.runtimesMu.Unlock()
 
 	mustRaise(t, s, AttentionRaiseParams{
@@ -862,24 +868,24 @@ func TestBudgetCeilingSpendUsesTheNewestLiveRunOfAReRunIssue(t *testing.T) {
 	)
 	s := newAttentionTestServer(t)
 	stateDir := s.pipelineStateDir(repo)
-	key := fmt.Sprintf("%d", issue)
 
 	// Dispatch 1 — the orphan. Backdated so the ordering is deterministic
 	// rather than dependent on clock resolution between two handler calls.
-	recordRunSpend(t, s, repo, issue, oldSpend)
+	firstRun := recordRunSpend(t, s, repo, issue, oldSpend)
 	s.runtimesMu.Lock()
-	first := s.activeRuntimes[key]
-	delete(s.activeRuntimes, key) // the backend restart that orphans it
+	first := s.activeRuntimes[firstRun].rs
+	delete(s.activeRuntimes, firstRun) // the backend restart that orphans it
 	s.runtimesMu.Unlock()
 	first.StartedAt = time.Now().Add(-2 * time.Hour)
 	if err := first.Persist(stateDir); err != nil {
 		t.Fatalf("re-persist the orphaned run: %v", err)
 	}
 
-	// Dispatch 2 — the live run, minted fresh because the registry is empty.
-	recordRunSpend(t, s, repo, issue, liveSpend)
+	// Dispatch 2 — the live run, under its OWN identity: two dispatches of one
+	// issue are two runs and two entries (ADR-017 step 4).
+	secondRun := recordRunSpend(t, s, repo, issue, liveSpend)
 	s.runtimesMu.Lock()
-	delete(s.activeRuntimes, key) // force the PERSISTED arm to answer
+	delete(s.activeRuntimes, secondRun) // force the PERSISTED arm to answer
 	s.runtimesMu.Unlock()
 
 	if got, err := state.FindPersistedStatesForIssue(stateDir, issue); err != nil || len(got) != 2 {
@@ -1126,18 +1132,22 @@ func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
 	s := newAttentionTestServer(t)
 	before := orchestrator.PipelineBudgetCeilingUSD(s.repoRoot(repo))
 
-	// STEP 1 — mint a run out of nothing, with a forged cost, in one call.
+	// STEP 1 — adopt a run out of nothing, with a forged cost, in one call.
+	// Post-#370 the caller has to NAME the run (the server no longer mints one
+	// on its behalf), which is the only thing that changed about this chain:
+	// the bookkeeping verb is as writable as it ever was.
+	forgedRun := newTestRunID()
 	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "complete",
-		CostUsd: 1_000_000,
+		CostUsd: 1_000_000, RunID: forgedRun,
 	})
 	// The runtime EXISTS and carries the forged total — the bookkeeping verb is
 	// as writable as it ever was (ADR-015 §N: pre-existing, #370's to close).
 	// What changed is that it no longer corroborates anything.
 	s.runtimesMu.Lock()
-	minted, ok := s.activeRuntimes[fmt.Sprintf("%d", issue)]
+	minted, ok := s.activeRuntimes[forgedRun]
 	s.runtimesMu.Unlock()
-	if !ok || minted.Snapshot().TotalCostUSD != 1_000_000 {
+	if !ok || minted.rs.Snapshot().TotalCostUSD != 1_000_000 {
 		t.Fatal("precondition: one notify call should still mint a runtime with the forged total — " +
 			"if it no longer does, this test is no longer exercising the round-3 chain")
 	}
@@ -1184,12 +1194,13 @@ func TestOneCallMintedRunCannotCorroborateARaise(t *testing.T) {
 func TestUnattributedRuntimeCorroboratesNothing(t *testing.T) {
 	const issue = 99
 	s := newAttentionTestServer(t)
+	unattributed := newTestRunID()
 	// A full, well-formed run — except that no transition ever names a repo.
 	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
-		IssueNumber: issue, Stage: "feature-dev", Status: "running",
+		IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: unattributed,
 	})
 	notifyStageTransition(t, s, PipelineNotifyStageTransitionParams{
-		IssueNumber: issue, Stage: "feature-dev", Status: "complete", CostUsd: 500_000,
+		IssueNumber: issue, Stage: "feature-dev", Status: "complete", CostUsd: 500_000, RunID: unattributed,
 	})
 
 	for _, repo := range []string{"octocat/acme", "o/r"} {
@@ -1302,7 +1313,7 @@ func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
 		spend = 80.0
 	)
 	s := newAttentionTestServer(t)
-	recordRunSpend(t, s, repo, issue, spend)
+	seededRun := recordRunSpend(t, s, repo, issue, spend)
 	first := mustRaise(t, s, AttentionRaiseParams{
 		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-1",
 	})
@@ -1314,7 +1325,7 @@ func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
 	// The run's record disappears (a restart, a re-key, a hostile delete) and
 	// the same condition is reported again.
 	s.runtimesMu.Lock()
-	delete(s.activeRuntimes, fmt.Sprintf("%d", issue))
+	delete(s.activeRuntimes, seededRun)
 	s.runtimesMu.Unlock()
 	persisted, err := state.FindPersistedStatesForIssue(s.pipelineStateDir(repo), issue)
 	if err != nil || len(persisted) != 1 {

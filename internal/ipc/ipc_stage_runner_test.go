@@ -25,7 +25,7 @@ func newTestStageRunner(buf *bytes.Buffer) *IpcStageRunner {
 	srv := &Server{
 		writer:         buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	return NewIpcStageRunner(srv, nil) // nil engine: escalation evaluation skipped in existing tests
 }
@@ -609,7 +609,7 @@ func TestRegisterStageResultHandler_RoutesResultToRunner(t *testing.T) {
 	srv := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	runner := NewIpcStageRunner(srv, nil)
 	RegisterStageResultHandler(srv, runner)
@@ -650,7 +650,7 @@ func TestRegisterStageResultHandler_ErrorsWhenNoPending(t *testing.T) {
 	srv := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	runner := NewIpcStageRunner(srv, nil)
 	RegisterStageResultHandler(srv, runner)
@@ -672,7 +672,7 @@ func TestRegisterStageResultHandler_ErrorsOnInvalidJSON(t *testing.T) {
 	srv := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	runner := NewIpcStageRunner(srv, nil)
 	RegisterStageResultHandler(srv, runner)

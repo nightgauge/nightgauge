@@ -254,12 +254,14 @@ func (s *Server) isConfiguredRepo(repo string) bool {
 // the identical predicate, because the persisted file is written from the same
 // runtime.
 func (s *Server) recordedRunSpendUSD(repo string, issue int) (float64, bool) {
-	runtimeKey := fmt.Sprintf("%d", issue)
-	s.runtimesMu.Lock()
-	rt, ok := s.activeRuntimes[runtimeKey]
-	s.runtimesMu.Unlock()
-	if ok {
-		if spend, corroborated := corroboratedRunSpendUSD(rt.Snapshot(), repo); corroborated {
+	// The registry is keyed by run identity now (ADR-017 step 4), so the
+	// live-runtime arm goes through the DERIVED ISSUE INDEX: the
+	// non-abandoned, non-terminal entry for repo#issue with the newest lease.
+	// That is strictly better than the old bare-issue key it replaces — a
+	// zombie of the same issue can no longer be the runtime this raise is
+	// corroborated against, because the live successor holds the newer lease.
+	if current, _ := s.currentRunForIssue(repo, issue); current != nil {
+		if spend, corroborated := corroboratedRunSpendUSD(current.rs.Snapshot(), repo); corroborated {
 			return spend, true
 		}
 	}

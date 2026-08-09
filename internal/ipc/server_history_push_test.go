@@ -65,10 +65,10 @@ func TestNotifyComplete_PushesPipelineRunToPlatform(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":777,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":777,"stage":"feature-dev","status":"running","runId":"01900309-0000-7000-8000-000000000777"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":777,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":777,"success":true,"totalDurationMs":1000,"runId":"01900309-0000-7000-8000-000000000777"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 

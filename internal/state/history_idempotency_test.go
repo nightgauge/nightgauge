@@ -470,3 +470,51 @@ func TestHistory_RunIsWrittenOnlyToItsOwnRepo(t *testing.T) {
 			linesB[0].Repo, linesB[0].IssueNumber)
 	}
 }
+
+// TestHistory_TwoRunsOfOneIssueProduceTwoRecords covers ADR-017 F6 and F7,
+// INCLUDING two dispatches starting within one UTC second.
+//
+// The identity — not the issue number, and not `started_at` — is what makes two
+// runs two records. Before the re-key both dispatches of one issue shared a
+// runtime, so the second overwrote the first's accumulators and history saw one
+// run; and any scheme that fell back to `(issue, started_at)` as the
+// discriminator collapses two dispatches that begin inside the same second,
+// which is exactly what a force-clear-then-requeue produces.
+func TestHistory_TwoRunsOfOneIssueProduceTwoRecords(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+
+	const issue = 370
+	// Byte-identical started_at: the two dispatches began within one UTC second.
+	sameSecond := fixedNow.Format(time.RFC3339)
+	first := makeRunRec(testRunID(), issue, sameSecond, "feature-dev")
+	second := makeRunRec(testRunID(), issue, sameSecond, "feature-dev")
+	if first.RunID == second.RunID {
+		t.Fatal("fixture error: the two dispatches must carry distinct identities")
+	}
+
+	if err := hw.WriteV2Record(first, fixedNow); err != nil {
+		t.Fatalf("write first record: %v", err)
+	}
+	if err := hw.WriteV2Record(second, fixedNow); err != nil {
+		t.Fatalf("write second record: %v", err)
+	}
+
+	lines := rawDailyLines(t, dir)
+	if len(lines) != 2 {
+		t.Fatalf("two runs of one issue produced %d record(s), want 2", len(lines))
+	}
+	seen := map[string]bool{}
+	for _, rec := range lines {
+		if rec.IssueNumber != issue {
+			t.Errorf("record issue = %d, want %d", rec.IssueNumber, issue)
+		}
+		if seen[rec.RunID] {
+			t.Errorf("run %s was recorded twice", rec.RunID)
+		}
+		seen[rec.RunID] = true
+	}
+	if !seen[first.RunID] || !seen[second.RunID] {
+		t.Errorf("history lost a run: got %v, want %s and %s", seen, first.RunID, second.RunID)
+	}
+}

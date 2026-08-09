@@ -204,7 +204,7 @@ func TestNotifyStageTransition_PersistsSnapshotAndNotifyCompleteRemovesIt(t *tes
 	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"issue-pickup","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"issue-pickup","status":"running","runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
 
@@ -218,7 +218,7 @@ func TestNotifyStageTransition_PersistsSnapshotAndNotifyCompleteRemovesIt(t *tes
 	snapshotPath := filepath.Join(stateDir, state.SnapshotFilename(205, rt.RunID))
 
 	complete := s.methods["pipeline.notifyComplete"]
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"success":true,"totalDurationMs":1000,"runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 	if _, err := os.Stat(snapshotPath); !os.IsNotExist(err) {
@@ -237,10 +237,10 @@ func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
 	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"running","runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"complete","inputTokens":1000,"outputTokens":500,"cacheReadTokens":200,"costUsd":5.03}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"complete","inputTokens":1000,"outputTokens":500,"cacheReadTokens":200,"costUsd":5.03,"runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
@@ -283,10 +283,10 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"running","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"complete","inputTokens":800,"outputTokens":300,"model":"sonnet"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"complete","inputTokens":800,"outputTokens":300,"model":"sonnet","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
@@ -306,29 +306,58 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 	}
 }
 
-// A failed stage transition is terminal for the run — its snapshot must not
-// linger to be mis-reconciled as an orphan on next activation.
-func TestNotifyStageTransition_FailedRemovesSnapshot(t *testing.T) {
+// TestNotifyStageTransition_FailedKeepsTheSnapshotForTheTerminalClaim pins the
+// INVERSE of what this test asserted before ADR-017 step 4, deliberately.
+//
+// The `failed` transition used to remove the run's snapshot. That removal is
+// DELETED (Decision 5), for two independent reasons:
+//
+//   - it was a second, redundant terminal path — notifyComplete fires
+//     immediately after with Success=false — and it is what let a zombie destroy
+//     a LIVE run's crash snapshot (F3);
+//   - it was wrong on its own terms: if the host dies between the `failed`
+//     transition and notifyComplete, the run never reached a terminal event and
+//     DESERVES reconciliation, which the removal prevented.
+//
+// A canonical snapshot now leaves the directory through exactly three doors —
+// the terminal claim's SealAndRemove, the reconciler, and the pause-restore
+// claim rename — and a failed stage transition is none of them.
+func TestNotifyStageTransition_FailedKeepsTheSnapshotForTheTerminalClaim(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
 	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	runID := newTestRunID()
 
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"stage":"feature-dev","status":"running","runId":"`+runID+`"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	// The failed-transition remove is composed from the run's own identity, so
-	// this test asserts against the file that identity names.
-	snapshotPath := filepath.Join(stateDir, state.SnapshotFilename(206, onlySnapshotForIssue(t, stateDir, 206).RunID))
+	snapshotPath := filepath.Join(stateDir, state.SnapshotFilename(206, runID))
 	if _, err := os.Stat(snapshotPath); err != nil {
 		t.Fatalf("snapshot must exist mid-run: %v", err)
 	}
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"stage":"feature-dev","status":"failed","error":"boom"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"stage":"feature-dev","status":"failed","error":"boom","runId":"`+runID+`"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
+	persisted, err := state.LoadPersistedState(stateDir, runID)
+	if err != nil {
+		t.Fatalf("a failed transition must PERSIST, not remove: %v", err)
+	}
+	if persisted.Terminal {
+		t.Error("a failed stage transition is not the terminal claim; the durable marker must still be unset")
+	}
+	if persisted.StageErrors["feature-dev"] != "boom" {
+		t.Errorf("the crash snapshot lost the failing stage's error: %+v", persisted.StageErrors)
+	}
+
+	// The terminal claim is the door: it seals the snapshot and removes it.
+	if _, err := s.methods["pipeline.notifyComplete"](t.Context(),
+		[]byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"success":false,"totalDurationMs":2000,"runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
 	if _, err := os.Stat(snapshotPath); !os.IsNotExist(err) {
-		t.Fatalf("snapshot must be removed on failed transition, stat err = %v", err)
+		t.Fatalf("the terminal claim must remove the snapshot, stat err = %v", err)
 	}
 }
 
@@ -346,7 +375,7 @@ func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
 	launchDir := filepath.Join(launchRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"issue-pickup","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"issue-pickup","status":"running","runId":"019000f4-0000-7000-8000-000000000244"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
 	rt := onlySnapshotForIssue(t, targetDir, 244)
@@ -356,7 +385,7 @@ func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
 	}
 
 	complete := s.methods["pipeline.notifyComplete"]
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"success":true,"totalDurationMs":1000,"runId":"019000f4-0000-7000-8000-000000000244"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
@@ -375,7 +404,7 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	// Seed the runtime's repo via a stage transition, then drop the snapshot
 	// so the only writer left to observe is setPaused itself.
 	transition := s.methods["pipeline.notifyStageTransition"]
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":245,"stage":"issue-pickup","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":245,"stage":"issue-pickup","status":"running","runId":"019000f5-0000-7000-8000-000000000245"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
 	targetDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
@@ -385,7 +414,7 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	}
 
 	setPaused := s.methods["pipeline.setPaused"]
-	if _, err := setPaused(t.Context(), []byte(`{"issueNumber":245,"paused":true}`)); err != nil {
+	if _, err := setPaused(t.Context(), []byte(`{"issueNumber":245,"paused":true,"runId":"019000f5-0000-7000-8000-000000000245"}`)); err != nil {
 		t.Fatalf("setPaused: %v", err)
 	}
 	rt := onlySnapshotForIssue(t, targetDir, 245)
@@ -414,12 +443,17 @@ func TestGetState_FallbackReadsFromTargetRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getState: %v", err)
 	}
-	loaded, ok := result.(*state.RuntimeState)
+	// The response embeds the snapshot and adds the resolved identity
+	// (ADR-017 Decision 6) — a superset of what it carried before the re-key.
+	loaded, ok := result.(*PipelineGetStateResult)
 	if !ok || loaded == nil {
 		t.Fatalf("getState must return the persisted runtime, got %T", result)
 	}
 	if loaded.RunID != runID {
 		t.Errorf("RunID = %q, want %q", loaded.RunID, runID)
+	}
+	if loaded.RuntimeState == nil || loaded.RuntimeState.RunID != runID {
+		t.Errorf("the embedded snapshot must be the run that answered")
 	}
 }
 

@@ -41,12 +41,26 @@ const (
 	ErrMethodNotFound = -32601
 	ErrInvalidParams  = -32602
 	ErrInternal       = -32603
+	// ErrRunIdentity is the JSON-RPC code for every ADR-017 run-identity
+	// refusal (run_id_required, run_id_invalid, run_closed, run_not_found,
+	// run_wrong_owner). The machine-readable string code leads the message;
+	// this numeric code lets a client separate "the server refused this run
+	// message" from an ordinary internal error without parsing prose.
+	ErrRunIdentity = -32010
 )
 
 // ProtocolVersion is the current IPC protocol version.
 // Bump when the IPC contract changes incompatibly.
 // Must match IPC_PROTOCOL_VERSION in IpcClient.generated.ts.
-const ProtocolVersion = 1
+//
+// 2 (ADR-017 step 4, #370): the six pipeline.* run verbs now REQUIRE `runId`
+// and the server keys its runtime registry on it. An older extension sends
+// none, so every one of its run messages would be refused `run_id_required` —
+// a live run with zero records, zero learning outcomes and zero telemetry
+// behind a healthy-looking UI. The TypeScript client therefore HARD-FAILS on a
+// version mismatch (disconnect + blocking modal) rather than warning and
+// continuing; lockstep is the correct behaviour here, not a regrettable one.
+const ProtocolVersion = 2
 
 // Board method params
 

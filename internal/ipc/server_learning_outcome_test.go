@@ -143,13 +143,13 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","adapter":"claude"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","adapter":"claude","runId":"01900130-0000-7000-8000-000000000304"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","adapter":"claude","inputTokens":1200,"outputTokens":340,"costUsd":0.42}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","adapter":"claude","inputTokens":1200,"outputTokens":340,"costUsd":0.42,"runId":"01900130-0000-7000-8000-000000000304"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":304,"success":true,"totalDurationMs":1000,"runId":"01900130-0000-7000-8000-000000000304"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -323,13 +323,13 @@ func TestNotifyComplete_RecordsOutcomeInTargetRepoNotActiveRepo(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"running","model":"claude-sonnet-5"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","runId":"01900be4-0000-7000-8000-000000003044"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","inputTokens":10,"outputTokens":20,"costUsd":0.5}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","inputTokens":10,"outputTokens":20,"costUsd":0.5,"runId":"01900be4-0000-7000-8000-000000003044"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"success":true,"totalDurationMs":900}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"acme/widget","issueNumber":3044,"success":true,"totalDurationMs":900,"runId":"01900be4-0000-7000-8000-000000003044"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -381,18 +381,18 @@ func TestNotifyComplete_AttributesModelToTheStageThePredictionIsAbout(t *testing
 	// or resolved-then-killed) — so the run measures NOTHING about the model the
 	// prediction was for.
 	for _, msg := range []string{
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"running"}`,
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"complete","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"running","model":"claude-opus-5"}`,
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"complete","model":"claude-opus-5","inputTokens":5000,"outputTokens":9000,"costUsd":6.00}`,
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"running","model":"claude-haiku-4-5-20251001"}`,
-		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"complete","model":"claude-haiku-4-5-20251001","inputTokens":20,"outputTokens":30,"costUsd":0.01}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"running","runId":"01900be5-0000-7000-8000-000000003045"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-dev","status":"complete","inputTokens":10,"outputTokens":10,"costUsd":0.001,"runId":"01900be5-0000-7000-8000-000000003045"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"running","model":"claude-opus-5","runId":"01900be5-0000-7000-8000-000000003045"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"feature-validate","status":"complete","model":"claude-opus-5","inputTokens":5000,"outputTokens":9000,"costUsd":6.00,"runId":"01900be5-0000-7000-8000-000000003045"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"running","model":"claude-haiku-4-5-20251001","runId":"01900be5-0000-7000-8000-000000003045"}`,
+		`{"repo":"nightgauge/acmeapp","issueNumber":3045,"stage":"pr-merge","status":"complete","model":"claude-haiku-4-5-20251001","inputTokens":20,"outputTokens":30,"costUsd":0.01,"runId":"01900be5-0000-7000-8000-000000003045"}`,
 	} {
 		if _, err := transition(t.Context(), []byte(msg)); err != nil {
 			t.Fatalf("notifyStageTransition: %v\nmsg=%s", err, msg)
 		}
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3045,"success":true,"totalDurationMs":5000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3045,"success":true,"totalDurationMs":5000,"runId":"01900be5-0000-7000-8000-000000003045"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -446,13 +446,13 @@ func TestNotifyComplete_WritesLearningOutcomeForFailure(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","adapter":"claude"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","adapter":"claude","runId":"01900be1-0000-7000-8000-000000003041"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"stage":"feature-dev","status":"failed","model":"claude-sonnet-5","adapter":"claude","inputTokens":900,"outputTokens":100,"costUsd":0.31,"error":"tests failed: 3 assertions"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"stage":"feature-dev","status":"failed","model":"claude-sonnet-5","adapter":"claude","inputTokens":900,"outputTokens":100,"costUsd":0.31,"error":"tests failed: 3 assertions","runId":"01900be1-0000-7000-8000-000000003041"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"success":false,"totalDurationMs":2000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3041,"success":false,"totalDurationMs":2000,"runId":"01900be1-0000-7000-8000-000000003041"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -499,10 +499,10 @@ func TestNotifyComplete_SkipsOutcomeForDeferral(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3042,"stage":"issue-pickup","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3042,"stage":"issue-pickup","status":"running","runId":"01900be2-0000-7000-8000-000000003042"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3042,"success":false,"deferred":true,"totalDurationMs":50}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3042,"success":false,"deferred":true,"totalDurationMs":50,"runId":"01900be2-0000-7000-8000-000000003042"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -527,13 +527,13 @@ func TestNotifyComplete_SkipsOutcomeForNetworkUnavailable(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"stage":"feature-dev","status":"running","model":"claude-sonnet-5"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","runId":"01900be3-0000-7000-8000-000000003043"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"stage":"feature-dev","status":"failed","error":"network unavailable: extended GitHub connectivity loss"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"stage":"feature-dev","status":"failed","error":"network unavailable: extended GitHub connectivity loss","runId":"01900be3-0000-7000-8000-000000003043"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"success":false,"totalDurationMs":2000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3043,"success":false,"totalDurationMs":2000,"runId":"01900be3-0000-7000-8000-000000003043"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -903,14 +903,14 @@ func TestNotifyComplete_DiagnosesAnUnregisteredServedModel(t *testing.T) {
 
 	out := captureLog(t, func() {
 		for _, msg := range []string{
-			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
-			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini","runId":"01900d49-0000-7000-8000-000000003401"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3401,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001,"runId":"01900d49-0000-7000-8000-000000003401"}`,
 		} {
 			if _, err := transition(t.Context(), []byte(msg)); err != nil {
 				t.Fatalf("notifyStageTransition: %v\nmsg=%s", err, msg)
 			}
 		}
-		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3401,"success":true,"totalDurationMs":1000}`)); err != nil {
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3401,"success":true,"totalDurationMs":1000,"runId":"01900d49-0000-7000-8000-000000003401"}`)); err != nil {
 			t.Fatalf("notifyComplete: %v", err)
 		}
 	})
@@ -943,14 +943,14 @@ func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
 
 	out := captureLog(t, func() {
 		for _, msg := range []string{
-			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini"}`,
-			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"running","model":"gemini-2.0-flash","adapter":"gemini","runId":"01900d4a-0000-7000-8000-000000003402"}`,
+			`{"repo":"nightgauge/acmeapp","issueNumber":3402,"stage":"feature-dev","status":"complete","model":"gemini-2.0-flash","adapter":"gemini","inputTokens":10,"outputTokens":10,"costUsd":0.001,"runId":"01900d4a-0000-7000-8000-000000003402"}`,
 		} {
 			if _, err := transition(t.Context(), []byte(msg)); err != nil {
 				t.Fatalf("notifyStageTransition: %v", err)
 			}
 		}
-		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3402,"success":true,"totalDurationMs":1000}`)); err != nil {
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":3402,"success":true,"totalDurationMs":1000,"runId":"01900d4a-0000-7000-8000-000000003402"}`)); err != nil {
 			t.Fatalf("notifyComplete: %v", err)
 		}
 	})

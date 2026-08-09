@@ -20,7 +20,7 @@ func newTransitionTestServer(t *testing.T) (*Server, Handler) {
 	s := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	s.registerMethods()
 	handler := s.methods["pipeline.notifyStageTransition"]
@@ -38,15 +38,17 @@ func TestNotifyStageTransition_ModelResolved_NoBeginStage(t *testing.T) {
 	s, handler := newTransitionTestServer(t)
 	ctx := context.Background()
 
-	mr := json.RawMessage(`{"repo":"","issueNumber":700,"stage":"feature-dev","status":"model-resolved","model":"claude-fable-5","adapter":"claude"}`)
+	runID := newTestRunID()
+	mr := json.RawMessage(`{"repo":"","issueNumber":700,"stage":"feature-dev","status":"model-resolved","model":"claude-fable-5","adapter":"claude","runId":"` + runID + `"}`)
 	if _, err := handler(ctx, mr); err != nil {
 		t.Fatalf("model-resolved handler error: %v", err)
 	}
 
-	rt := s.activeRuntimes["700"]
-	if rt == nil {
-		t.Fatal("runtime should have been created by the model-resolved transition")
+	entry := s.activeRuntimes[runID]
+	if entry == nil {
+		t.Fatal("the model-resolved transition should have adopted a runtime under its own run identity")
 	}
+	rt := entry.rs
 	if got := rt.StageModel(state.StageFeatureDev); got != "claude-fable-5" {
 		t.Errorf("StageModel after model-resolved = %q, want claude-fable-5", got)
 	}
@@ -55,7 +57,7 @@ func TestNotifyStageTransition_ModelResolved_NoBeginStage(t *testing.T) {
 	}
 
 	// The subsequent "running" transition DOES start the clock.
-	run := json.RawMessage(`{"repo":"","issueNumber":700,"stage":"feature-dev","status":"running"}`)
+	run := json.RawMessage(`{"repo":"","issueNumber":700,"stage":"feature-dev","status":"running","runId":"` + runID + `"}`)
 	if _, err := handler(ctx, run); err != nil {
 		t.Fatalf("running handler error: %v", err)
 	}
@@ -72,10 +74,11 @@ func TestNotifyStageTransition_ModelResolved_LatestWins(t *testing.T) {
 	s, handler := newTransitionTestServer(t)
 	ctx := context.Background()
 
+	runID := newTestRunID()
 	seq := []string{
-		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"model-resolved","model":"claude-fable-5","adapter":"claude"}`,
-		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"running","model":"claude-fable-5","adapter":"claude"}`,
-		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"complete","model":"claude-opus-4-8","adapter":"claude"}`,
+		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"model-resolved","model":"claude-fable-5","adapter":"claude","runId":"` + runID + `"}`,
+		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"running","model":"claude-fable-5","adapter":"claude","runId":"` + runID + `"}`,
+		`{"repo":"","issueNumber":701,"stage":"feature-dev","status":"complete","model":"claude-opus-4-8","adapter":"claude","runId":"` + runID + `"}`,
 	}
 	for i, raw := range seq {
 		if _, err := handler(ctx, json.RawMessage(raw)); err != nil {
@@ -83,7 +86,7 @@ func TestNotifyStageTransition_ModelResolved_LatestWins(t *testing.T) {
 		}
 	}
 
-	rt := s.activeRuntimes["701"]
+	rt := s.activeRuntimes[runID].rs
 	if got := rt.StageModel(state.StageFeatureDev); got != "claude-opus-4-8" {
 		t.Errorf("StageModel after complete = %q, want claude-opus-4-8 (latest-wins)", got)
 	}

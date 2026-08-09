@@ -937,24 +937,92 @@ func (s *Scheduler) getActiveRuntime(issueNumber int) *state.RuntimeState {
 	return s.activeRuntimes[issueNumber]
 }
 
-// RecordPhaseStart records a phase:start transition on the scheduler's
-// runtime for the given issue. Safe no-op when no runtime is registered
-// (e.g., HeadlessOrchestrator path — that path uses ipc.Server.activeRuntimes
-// instead). Mirrors the BeginPhase call made by the auto/CLI-mode
-// phaseEventFn at the top of runPipeline's stage loop, so PhaseHistory is
-// populated regardless of which StageRunner executes the stage.
-func (s *Scheduler) RecordPhaseStart(issueNumber int, stage, name string, index, total int) {
-	if rt := s.getActiveRuntime(issueNumber); rt != nil {
-		rt.BeginPhase(state.PipelineStage(stage), name, index, total)
+// LookupRunByID returns the scheduler-owned runtime carrying runID, or nil.
+// The scheduler's registry stays keyed by issue number (ADR-017 C11; re-keying
+// it is follow-up R-5), so this is a scan — the map holds at most the
+// concurrency limit's worth of entries.
+//
+// It is the step-3 arm of ADR-017 Decision 11's resolution order: a run-progress
+// call carrying a live scheduler run's id is SERVED from this runtime and never
+// adopted into the IPC registry, and a terminal or administrative call carrying
+// one is refused `run_wrong_owner`. Takes activeRuntimesMu and must never be
+// called while the IPC server holds its own runtimesMu — the two registry locks
+// are never held together (Decision 5's lock-discipline table).
+func (s *Scheduler) LookupRunByID(runID string) *state.RuntimeState {
+	if runID == "" {
+		return nil
 	}
+	s.activeRuntimesMu.Lock()
+	defer s.activeRuntimesMu.Unlock()
+	for _, rt := range s.activeRuntimes {
+		if rt != nil && rt.RunID == runID {
+			return rt
+		}
+	}
+	return nil
 }
 
-// RecordPhaseComplete records a phase:complete transition on the scheduler's
-// runtime for the given issue. Safe no-op when no runtime is registered.
-func (s *Scheduler) RecordPhaseComplete(issueNumber int, stage, name string) {
-	if rt := s.getActiveRuntime(issueNumber); rt != nil {
-		rt.CompletePhase(state.PipelineStage(stage), name)
+// IsRunLive reports whether runID names a run this scheduler is currently
+// executing. Feeds the reconciler's skip predicate (ADR-017 7.2) — a live
+// scheduler run's snapshot must never be reconciled as an orphan.
+func (s *Scheduler) IsRunLive(runID string) bool {
+	return s.LookupRunByID(runID) != nil
+}
+
+// RecordPhaseStartForRun records a phase:start transition on the scheduler's
+// runtime for the given issue — and ONLY when that runtime's RunID equals
+// runID (ADR-017 Decision 11).
+//
+// This is an identity guard at the write site rather than a re-key, and it is
+// sound here for a reason the IPC registry cannot claim: the scheduler registry
+// has a single writer per issue by construction (registerRuntime /
+// unregisterRuntime bracket runPipeline in one goroutine), so the only
+// cross-run hazard is a write arriving from OUTSIDE over IPC — which is exactly
+// what this rejects. A mismatch is logged loudly rather than swallowed: on
+// today's tree it means an extension-path run and a scheduler-path run share an
+// issue number, which is the F10 shape.
+//
+// Safe no-op when no runtime is registered (the HeadlessOrchestrator path keys
+// its runtimes in the IPC server's own registry instead).
+func (s *Scheduler) RecordPhaseStartForRun(runID string, issueNumber int, stage, name string, index, total int) {
+	rt := s.getActiveRuntime(issueNumber)
+	if rt == nil {
+		return
 	}
+	if rt.RunID != runID {
+		log.Printf("scheduler: phase start for #%d names run %q but the registered runtime is run %q — refusing to record onto another run's PhaseHistory (ADR-017 Decision 11)",
+			issueNumber, runID, rt.RunID)
+		return
+	}
+	rt.BeginPhase(state.PipelineStage(stage), name, index, total)
+}
+
+// RecordPhaseCompleteForRun is RecordPhaseStartForRun's complete arm, carrying
+// the identical identity gate — an ungated complete arm would let a foreign run
+// close phases on a scheduler run's PhaseHistory, which is the same defect one
+// event type over.
+func (s *Scheduler) RecordPhaseCompleteForRun(runID string, issueNumber int, stage, name string) {
+	rt := s.getActiveRuntime(issueNumber)
+	if rt == nil {
+		return
+	}
+	if rt.RunID != runID {
+		log.Printf("scheduler: phase complete for #%d names run %q but the registered runtime is run %q — refusing to record onto another run's PhaseHistory (ADR-017 Decision 11)",
+			issueNumber, runID, rt.RunID)
+		return
+	}
+	rt.CompletePhase(state.PipelineStage(stage), name)
+}
+
+// RunIDForIssue returns the identity of the scheduler-owned run for an issue,
+// or "" when the scheduler is not running that issue. It is how the IPC
+// server's scheduler-sourced emitters stamp a real `runId` on their envelopes
+// (ADR-017 Decision 6) instead of fabricating one.
+func (s *Scheduler) RunIDForIssue(issueNumber int) string {
+	if rt := s.getActiveRuntime(issueNumber); rt != nil {
+		return rt.RunID
+	}
+	return ""
 }
 
 // CancelAllForNetworkOutage cancels every actively-running stage context with

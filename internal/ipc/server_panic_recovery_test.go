@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
-	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // newTestServer creates a minimal Server wired to a bytes.Buffer for output.
@@ -18,7 +17,7 @@ func newTestServer(buf *bytes.Buffer) *Server {
 		writer:         buf,
 		methods:        make(map[string]Handler),
 		userClients:    make(map[string]*gh.Client),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	s.resolver = NewClientResolver(nil, false)
 	return s

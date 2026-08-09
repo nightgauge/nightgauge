@@ -112,7 +112,7 @@ func TestBoardListParamsUnmarshal(t *testing.T) {
 }
 
 func TestNotifyStageTransitionParams(t *testing.T) {
-	raw := `{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","status":"running"}`
+	raw := `{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","status":"running","runId":"0190076b-0000-7000-8000-000000001899"}`
 	var p PipelineNotifyStageTransitionParams
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -132,7 +132,7 @@ func TestNotifyStageTransitionParams(t *testing.T) {
 }
 
 func TestNotifyPhaseTransitionParams(t *testing.T) {
-	raw := `{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","name":"implementation","index":3,"total":14,"eventType":"start"}`
+	raw := `{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","name":"implementation","index":3,"total":14,"eventType":"start","runId":"0190076b-0000-7000-8000-000000001899"}`
 	var p PipelineNotifyPhaseTransitionParams
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -158,13 +158,17 @@ func (s *Server) registerStageNotifyMethod() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
+		// Keyed by RUN IDENTITY, mirroring the production handler after the
+		// ADR-017 step-4 re-key. The stub still adopts-on-miss because that is
+		// what production does for a run-progress verb — what it does NOT do is
+		// mint an identity of its own.
 		s.runtimesMu.Lock()
-		rt, ok := s.activeRuntimes[runtimeKey]
+		entry, ok := s.activeRuntimes[p.RunID]
 		if !ok {
-			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "", newTestRunID())
-			s.activeRuntimes[runtimeKey] = rt
+			entry = newRunEntry(state.NewRuntimeState(p.Repo, p.IssueNumber, "", p.RunID), p.Repo, p.IssueNumber)
+			s.activeRuntimes[p.RunID] = entry
 		}
+		rt := entry.rs
 		s.runtimesMu.Unlock()
 
 		stage := state.PipelineStage(p.Stage)
@@ -202,14 +206,9 @@ func (s *Server) registerGetStateMethod() {
 				return st, nil
 			}
 		}
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		if rt, ok := s.activeRuntimes[runtimeKey]; ok {
-			snap := rt.Snapshot()
-			s.runtimesMu.Unlock()
-			return snap, nil
+		if current, _ := s.currentRunForIssue("", p.IssueNumber); current != nil {
+			return current.rs.Snapshot(), nil
 		}
-		s.runtimesMu.Unlock()
 		if s.workspaceRoot != "" {
 			stateDir := s.workspaceRoot + "/.nightgauge/pipeline"
 			persisted, err := state.PickPersistedStateForIssue(stateDir, p.IssueNumber)
@@ -227,13 +226,13 @@ func TestNotifyStageTransitionHandler(t *testing.T) {
 	s := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	// Register only the methods we need
 	s.registerStageNotifyMethod()
 
 	// Call the handler
-	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","status":"running"}`)
+	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":1899,"stage":"feature-dev","status":"running","runId":"0190076b-0000-7000-8000-000000001899"}`)
 	result, err := s.methods["pipeline.notifyStageTransition"](context.Background(), params)
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -245,11 +244,12 @@ func TestNotifyStageTransitionHandler(t *testing.T) {
 
 	// Verify runtime was created (keyed by issueNumber)
 	s.runtimesMu.Lock()
-	rt, exists := s.activeRuntimes["1899"]
+	entry, exists := s.activeRuntimes["0190076b-0000-7000-8000-000000001899"]
 	s.runtimesMu.Unlock()
 	if !exists {
-		t.Fatal("activeRuntimes should contain the new runtime")
+		t.Fatal("activeRuntimes should contain the new runtime, keyed by its run identity")
 	}
+	rt := entry.rs
 	if rt.Stage != "feature-dev" {
 		t.Errorf("Stage = %q, want feature-dev", rt.Stage)
 	}
@@ -269,14 +269,16 @@ func TestNotifyStageTransitionHandler(t *testing.T) {
 }
 
 // TestNotifyStageProgressHandler_NoRuntimeIsBestEffort verifies #233's live
-// progress handler is best-effort and in-flight only: with no active runtime
-// for the issue it returns ok and does NOT create one (unlike
-// notifyStageTransition, which materialises a run row). analyticsSvc is nil so
+// progress handler is best-effort. Since ADR-017 step 4 it is RUN-PROGRESS
+// class like every other run message, so an unknown identity ADOPTS (exactly
+// once, through the per-id singleflight) rather than being dropped — this is
+// the caller Decision 4 names as the ordinary concurrent adopter. What it still
+// does NOT do is mutate CompletedStages. analyticsSvc is nil so
 // emitStageProgressTelemetry is a no-op.
 func TestNotifyStageProgressHandler_NoRuntimeIsBestEffort(t *testing.T) {
 	s := &Server{
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	s.registerMethods()
 
@@ -285,7 +287,7 @@ func TestNotifyStageProgressHandler_NoRuntimeIsBestEffort(t *testing.T) {
 		t.Fatal("pipeline.notifyStageProgress must be registered")
 	}
 
-	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":4242,"stage":"feature-dev","inputTokens":1500,"outputTokens":800,"cacheReadTokens":200,"costUsd":0.42}`)
+	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":4242,"stage":"feature-dev","inputTokens":1500,"outputTokens":800,"cacheReadTokens":200,"costUsd":0.42,"runId":"01901092-0000-7000-8000-000000004242"}`)
 	result, err := handler(context.Background(), params)
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -295,10 +297,14 @@ func TestNotifyStageProgressHandler_NoRuntimeIsBestEffort(t *testing.T) {
 	}
 
 	s.runtimesMu.Lock()
-	_, exists := s.activeRuntimes["4242"]
+	adopted, exists := s.activeRuntimes["01901092-0000-7000-8000-000000004242"]
+	n := len(s.activeRuntimes)
 	s.runtimesMu.Unlock()
-	if exists {
-		t.Error("notifyStageProgress must NOT create a runtime when absent (progress is in-flight only)")
+	if !exists || n != 1 {
+		t.Fatalf("notifyStageProgress must adopt the caller's identity exactly once; %d entr(ies), present=%v", n, exists)
+	}
+	if len(adopted.rs.CompletedStages) != 0 {
+		t.Error("progress is in-flight only: it must never write CompletedStages")
 	}
 }
 
@@ -308,18 +314,18 @@ func TestNotifyStageProgressHandler_NoRuntimeIsBestEffort(t *testing.T) {
 func TestNotifyStageProgressHandler_DoesNotMutateCompletedStages(t *testing.T) {
 	s := &Server{
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	s.registerMethods()
 
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 99, "item-1", newTestRunID())
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 99, "item-1", "01900063-0000-7000-8000-000000000099")
 	rt.BeginStage(state.StageFeatureDev)
 	rt.CompleteStageWithCost(0, 100, 50, 10, 0.02)
 	before := len(rt.CompletedStages)
 	beforeIn := rt.InputTokens
-	s.activeRuntimes["99"] = rt
+	s.activeRuntimes["01900063-0000-7000-8000-000000000099"] = newRunEntry(rt, "nightgauge/nightgauge", 99)
 
-	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":99,"stage":"feature-dev","inputTokens":9000,"outputTokens":400,"cacheReadTokens":100,"costUsd":0.3}`)
+	params := json.RawMessage(`{"repo":"nightgauge/nightgauge","issueNumber":99,"stage":"feature-dev","inputTokens":9000,"outputTokens":400,"cacheReadTokens":100,"costUsd":0.3,"runId":"01900063-0000-7000-8000-000000000099"}`)
 	if _, err := s.methods["pipeline.notifyStageProgress"](context.Background(), params); err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
@@ -348,7 +354,7 @@ func TestGetStateFallback(t *testing.T) {
 	s := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 		workspaceRoot:  tmpDir,
 	}
 	s.registerGetStateMethod()
@@ -379,15 +385,16 @@ func TestGetStateActiveRuntime(t *testing.T) {
 	s := &Server{
 		writer:         &buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	s.registerGetStateMethod()
 
-	// Insert an active runtime (keyed by issueNumber)
+	// Insert an active runtime — keyed by RUN IDENTITY, found by the derived
+	// issue index (ADR-017 step 4, Decision 6).
 	rt := state.NewRuntimeState("nightgauge/nightgauge", 42, "item-42", newTestRunID())
 	rt.BeginStage("issue-pickup")
 	s.runtimesMu.Lock()
-	s.activeRuntimes["42"] = rt
+	s.activeRuntimes[rt.RunID] = newRunEntry(rt, "nightgauge/nightgauge", 42)
 	s.runtimesMu.Unlock()
 
 	params := json.RawMessage(`{"owner":"nightgauge","repo":"nightgauge","issueNumber":42}`)

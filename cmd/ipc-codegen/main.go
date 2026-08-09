@@ -24,14 +24,35 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 	"unicode"
 )
 
-// ProtocolVersion is embedded in the generated TypeScript file header.
-// Bump this when the IPC contract changes incompatibly.
-const ProtocolVersion = 1
+// protocolVersionPattern extracts the ONE source of truth for the IPC protocol
+// version — `const ProtocolVersion` in internal/ipc/protocol.go — so the
+// generated TypeScript constant cannot drift from the Go one.
+//
+// This used to be a second `const ProtocolVersion = 1` right here, which meant
+// bumping the wire contract required editing two files that nothing compared:
+// the drift check would have passed while the binary announced one version and
+// the client expected another — precisely the silent skew ADR-017's hard-fail
+// exists to make impossible.
+var protocolVersionPattern = regexp.MustCompile(`(?m)^const ProtocolVersion = (\d+)$`)
+
+// parseProtocolVersion reads the version from protocol.go.
+func parseProtocolVersion(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	m := protocolVersionPattern.FindSubmatch(data)
+	if m == nil {
+		return 0, fmt.Errorf("no `const ProtocolVersion = N` in %s", path)
+	}
+	return strconv.Atoi(string(m[1]))
+}
 
 // MethodDef represents a parsed //ipc:method annotation.
 type MethodDef struct {
@@ -85,8 +106,14 @@ func main() {
 		}
 	}
 
+	// 3b. The protocol version comes from protocol.go, never from a copy here.
+	protocolVersion, err := parseProtocolVersion(*protocolPath)
+	if err != nil {
+		log.Fatalf("parse protocol version: %v", err)
+	}
+
 	// 4. Generate TypeScript
-	output, err := generateTypeScript(methods)
+	output, err := generateTypeScript(methods, protocolVersion)
 	if err != nil {
 		log.Fatalf("generate TypeScript: %v", err)
 	}
@@ -417,7 +444,7 @@ func groupMethodsByCategory(methods []MethodDef) map[string][]MethodDef {
 	return groups
 }
 
-func generateTypeScript(methods []MethodDef) ([]byte, error) {
+func generateTypeScript(methods []MethodDef, protocolVersion int) ([]byte, error) {
 	imports := collectImportTypes(methods)
 	groups := groupMethodsByCategory(methods)
 
@@ -453,7 +480,7 @@ func generateTypeScript(methods []MethodDef) ([]byte, error) {
 		Categories      []string
 		Groups          map[string][]MethodDef
 	}{
-		ProtocolVersion: ProtocolVersion,
+		ProtocolVersion: protocolVersion,
 		Imports:         imports,
 		Categories:      categories,
 		Groups:          groups,

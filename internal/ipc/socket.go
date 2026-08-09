@@ -126,7 +126,7 @@ func (s *Server) handleRequestOnWriter(ctx context.Context, req Request, w write
 
 	result, err := handler(ctx, req.Params)
 	if err != nil {
-		s.sendErrorOnWriter(w, req.ID, ErrInternal, err.Error())
+		s.sendErrorOnWriter(w, req.ID, rpcCodeFor(err), err.Error())
 		return
 	}
 

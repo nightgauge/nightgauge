@@ -34,7 +34,7 @@ func newRunIdentityTestServer(t *testing.T) (*Server, string) {
 	s := &Server{
 		writer:         &bytes.Buffer{},
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 		workspaceRoot:  workspaceRoot,
 	}
 	s.registerMethods()
