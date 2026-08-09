@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,6 +241,38 @@ func TestScheduler_NonTerminalReconcile_WorktreeIsolatedRun_ReachesPRCheck(t *te
 	if head != branch {
 		t.Errorf("gh pr list --head = %q, want the run's real branch %q", head, branch)
 	}
+
+	// The probe reaching the forge is the mechanism, not the outcome. What #299
+	// claims is that the run stops being recorded — and paged on — as a failure,
+	// so assert the durable artifact every consumer reads: the history record.
+	// (DataAggregator.ts counts outcome=="failed"; DashboardState.ts branches on
+	// it.) Resolving the branch is not enough on its own: the pre-flight death
+	// wrote no planning context, so the #2870 output-context check re-manufactures
+	// the very failure the reconcile just cleared.
+	rec := findHistoryRecord(t, f.root, issueNumber)
+	if rec.Outcome != "complete" {
+		t.Errorf("run recorded outcome=%q terminal_failure_kind=%q, want outcome=%q — the reconcile cleared the stage "+
+			"failure but the run was still written as a failure, so the false-failure signal #299 exists to remove is "+
+			"still emitted (#299 site 1)", rec.Outcome, rec.TerminalFailureKind, "complete")
+	}
+	if rec.TerminalFailureKind == TerminalKindValidationError {
+		t.Errorf("run recorded terminal_failure_kind=%q — the #2870 output-context check ran on the stage whose failure "+
+			"was just reconciled and re-manufactured it (#299 site 1)", rec.TerminalFailureKind)
+	}
+}
+
+// findHistoryRecord returns today's history record for an issue, failing the
+// test when no record was written for it.
+func findHistoryRecord(t *testing.T, workspaceRoot string, issueNumber int) state.V2RunRecord {
+	t.Helper()
+	records := readDailyJSONLRecords(t, workspaceRoot)
+	for i := range records {
+		if records[i].IssueNumber == issueNumber {
+			return records[i]
+		}
+	}
+	t.Fatalf("no history record written for #%d (got %d records)", issueNumber, len(records))
+	return state.V2RunRecord{}
 }
 
 // TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip pins the
@@ -278,11 +311,50 @@ func TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip(t *testin
 		t.Errorf("the branch-PR probe must not run without a branch — gh calls: %v", probes.calls)
 	}
 
-	if !strings.Contains(out, "no feature branch could be determined") {
-		t.Errorf("an unresolvable branch skipped the PR-landed reconcile check SILENTLY; log was:\n%s", out)
+	// Assert the composed line, not its fragments: every scheduler log line is
+	// `#<issue>: `-prefixed, so a bare `#298` check passes on any output at all
+	// and pins nothing.
+	const wantSkipLog = "#298: non-terminal stage feature-planning failed but no feature branch could be " +
+		"determined from any source — skipping the PR-landed reconcile check"
+	if !strings.Contains(out, wantSkipLog) {
+		t.Errorf("an unresolvable branch skipped the PR-landed reconcile check SILENTLY (or the line no longer\n"+
+			"names the issue and stage it applies to).\nwant substring: %q\nlog was:\n%s", wantSkipLog, out)
 	}
-	if !strings.Contains(out, "#298") {
-		t.Errorf("the skip log must name the issue it applies to; log was:\n%s", out)
+}
+
+// TestScheduler_NonTerminalReconcile_IssuePickupFailure_NoSkipLog pins the
+// exemption: issue-pickup is the stage that CREATES the branch (SetBranch fires
+// immediately after it), so on a failed pickup no branch can exist by
+// construction. Logging there would fire the line on every failed pickup and
+// train readers to ignore it; it must mean "a branch should exist but nothing
+// could name it".
+func TestScheduler_NonTerminalReconcile_IssuePickupFailure_NoSkipLog(t *testing.T) {
+	const (
+		issueNumber = 297
+		repo        = "nightgauge/nightgauge"
+		branch      = "fix/297-pickup"
+	)
+	f := newWorktreeRunFixture(t, issueNumber, branch)
+
+	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
+			return []byte(`{"state":"OPEN"}`), nil
+		}
+		return []byte(`[]`), nil
+	})
+
+	runner := newWorktreeIsolatedRunner(t, f.worktree, repo, branch, state.StageIssuePickup)
+	s := newWorktreeRunScheduler(f.root, runner)
+
+	item := types.BoardItem{Number: issueNumber, Repo: repo, ID: "item-297"}
+	out := captureLog(t, func() {
+		s.runPipeline(context.Background(), item)
+	})
+
+	// Match on the invariant part of the line rather than its current wording,
+	// so a reworded message cannot make this assertion pass vacuously.
+	if strings.Contains(out, "skipping the PR-landed reconcile check") {
+		t.Errorf("the skip log fired on a failed issue-pickup, where no branch can exist yet; log was:\n%s", out)
 	}
 }
 
@@ -296,15 +368,7 @@ func recordHistoryForWorktreeRun(t *testing.T, workspaceRoot string, snap *state
 	t.Helper()
 	s := &Scheduler{}
 	s.recordV2History(item, snap, true, workspaceRoot, 3, "standard", "", nil, nil)
-
-	records := readDailyJSONLRecords(t, workspaceRoot)
-	for i := range records {
-		if records[i].IssueNumber == item.Number {
-			return records[i]
-		}
-	}
-	t.Fatalf("no history record written for #%d (got %d records)", item.Number, len(records))
-	return state.V2RunRecord{}
+	return findHistoryRecord(t, workspaceRoot, item.Number)
 }
 
 // TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch is the
@@ -389,7 +453,36 @@ func TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent(t *testing.
 	// workspace-root context.
 	snap := state.NewRuntimeState(repo, 301, "item-301")
 
-	rec := recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 301, Repo: repo, Title: "t"})
+	var rec state.V2RunRecord
+	out := captureLog(t, func() {
+		rec = recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 301, Repo: repo, Title: "t"})
+	})
+
+	// Because the placeholder is indistinguishable from a real branch on disk,
+	// the fabrication must at least be announced in the run's log — otherwise
+	// the record carries a value nothing in the system can identify as fake.
+	const wantFabricationLog = "#301: no feature branch could be determined from any source — the history " +
+		"record will carry BuildV2Record's synthetic placeholder, not a real branch (#299)"
+	if !strings.Contains(out, wantFabricationLog) {
+		t.Errorf("the history record fabricated a branch SILENTLY.\nwant substring: %q\nlog was:\n%s",
+			wantFabricationLog, out)
+	}
+
+	// The `branch` json tag must stay exactly that — no omitempty. The
+	// constraint test below catches the fabrication+omitempty COMBINATION, but
+	// if the fabrication is ever removed (it should be — see #299's follow-up)
+	// an omitempty added at the same time would silently drop the key for the
+	// two TS readers named above: DashboardState.importParsedRunRecord's
+	// truthiness guard and executionHistory.ts's `branch: z.string()`.
+	branchField, ok := reflect.TypeOf(state.V2RunRecord{}).FieldByName("Branch")
+	if !ok {
+		t.Fatalf("V2RunRecord has no Branch field — the readers named above key off `branch`")
+	}
+	if got := branchField.Tag.Get("json"); got != "branch" {
+		t.Errorf("V2RunRecord.Branch json tag = %q, want exactly %q (internal/state/history.go): any "+
+			"omitempty here drops the key, and both TS readers reject a record without it", got, "branch")
+	}
+
 	if rec.Branch != "feat/301" {
 		t.Errorf("unresolved branch recorded as %q, want the synthetic placeholder %q "+
 			"(BuildV2Record must keep the field non-empty for the readers named above)", rec.Branch, "feat/301")

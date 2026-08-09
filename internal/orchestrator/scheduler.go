@@ -4064,6 +4064,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// record is success:true. Guarded on !isTerminalStage so the two blocks are
 		// mutually exclusive and the terminal path (#3835 WS1) is untouched. Fails
 		// closed: any query error returns false → the failure is preserved.
+		//
+		// reconciledNonTerminal records that THIS stage's failure was cleared by
+		// the reconcile below (#299). Two things key off it, both at the end of
+		// this iteration: the #2870 output-context check is skipped for the
+		// reconciled stage, and the run then finishes rather than advancing.
+		// Scoped to one loop iteration on purpose: it must never leak to the
+		// next stage.
+		reconciledNonTerminal := false
 		if (err != nil || exitCode != 0) && !isTerminalStage(stage) {
 			// Resolve worktree-first (#299). The bare workspace-root lookup this
 			// used to do answers "" on every worktree-isolated run, because
@@ -4072,16 +4080,22 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// the check, so a stage that died AFTER its PR merged was recorded
 			// success:false and paged.
 			branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number)
-			if branch == "" {
-				// Nothing — not the live runtime, not the worktree the stages
-				// ran in, not the workspace root — could name the branch, so
-				// only the issue-closed half of the check can run. Pre-#299
-				// that degradation was silent, which is precisely why the
-				// worktree blindness survived: a check that cannot name its
-				// subject must say so rather than quietly answering "no".
+			// issue-pickup is exempt: it is the stage that CREATES the branch
+			// (SetBranch fires immediately after it, in the post-stage metadata
+			// switch), so on a failed pickup no branch can exist by construction
+			// and the line would fire on every one of them. The log must mean "a
+			// branch should exist but nothing could name it" (#299).
+			if branch == "" && stage != state.StageIssuePickup {
+				// Nothing could name the branch, so only the issue-closed half of
+				// the check can run. Pre-#299 that degradation was silent, which
+				// is precisely why the worktree blindness survived: a check that
+				// cannot name its subject must say so rather than quietly
+				// answering "no". Deliberately does NOT claim which sources were
+				// consulted — a runtime that died before the execution manager
+				// stamped its worktree never had one to consult.
 				log.Printf("#%d: non-terminal stage %s failed but no feature branch could be determined "+
-					"(runtime, worktree and workspace-root issue context all name none) — skipping the "+
-					"PR-landed reconcile check; only the issue-closed check runs (#299)",
+					"from any source — skipping the PR-landed reconcile check; only the issue-closed "+
+					"check runs (#299)",
 					item.Number, stage)
 			}
 			// Bound the (up to two) sequential gh calls so a slow / rate-limited
@@ -4096,6 +4110,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					item.Number, stage, exitCode, err)
 				err = nil
 				exitCode = 0
+				reconciledNonTerminal = true
 				if s.telemetrySvc != nil && s.telemetryEnabled {
 					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 						RunID:         runtime.RunID,
@@ -4764,7 +4779,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// missing file as a stage failure so the actual offender is named
 		// (vs blaming the next stage's prerequisite check), telemetry sees
 		// the failure, and model escalation gets a chance to recover.
-		if outputErr := validateStageOutput(stage, stageWorkspace(runtime, workspaceRoot), item.Number); outputErr != nil {
+		//
+		// Skipped for a stage whose failure the #3873 reconcile just cleared
+		// (#299). That reconcile's premise is that the work ALREADY landed on
+		// the forge, so there is no output left for this stage to have written —
+		// the exit code is 0 only because the failure was reconciled away, not
+		// because a skill ran and produced anything. Validating it here finds
+		// the missing context and re-manufactures the very failure the reconcile
+		// removed, terminating the run validation_error: the false-failure
+		// signal survives with a different label. Deliberately scoped to that
+		// one stage; every other stage in the run still gets the #2870 check.
+		if outputErr := validateStageOutput(stage, stageWorkspace(runtime, workspaceRoot), item.Number); outputErr != nil && !reconciledNonTerminal {
 			runtime.SetStageError(stage, outputErr.Error())
 			s.emitStateChanged(item.Repo, item.Number, runtime)
 			log.Printf("#%d: %v", item.Number, outputErr)
@@ -4914,6 +4939,24 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if s.verifyPRMergeForStage(ctx, item, runtime, "") {
 				return // Pipeline failed — board revert + outcome=failed via deferred path
 			}
+		}
+
+		// #299: a stage whose failure the #3873 reconcile cleared ends the run
+		// here, and falling through to the completion block below is what makes
+		// the written record a success. The reconcile's premise is that the
+		// work ALREADY landed on the forge (PR merged or in review, or the issue
+		// closed), so there is nothing left for the remaining stages to produce.
+		// Continuing instead re-manufactures the failure that was just cleared:
+		// the pre-flight death wrote no output context, so the NEXT stage's
+		// prerequisite check fails on exactly that missing file and the run is
+		// recorded failed anyway — a different terminal kind carrying the same
+		// false-failure signal. Clearing err/exitCode without stopping only
+		// moves where the phantom failure surfaces.
+		if reconciledNonTerminal {
+			log.Printf("#%d: stage %s was reconciled against the forge (#3873) — the issue's work has already "+
+				"landed, so the run finishes here instead of re-running the remaining stages (#299)",
+				item.Number, stage)
+			break
 		}
 
 		stageIdx++
@@ -5539,12 +5582,12 @@ func branchForkPreflightApplies(stage state.PipelineStage) bool {
 // gap was invisible until the fork it caused was diagnosed two attempts later.
 //
 // #299 finished the conversion: this is now the ONLY caller of
-// loadFeatureBranch. Two sites still read the bare workspace root — the #3873
-// non-terminal reconcile (which then skipped the branch-PR probe and paged on
-// an issue whose PR had merged) and recordV2History (which persisted no branch
-// on every worktree-isolated run). Call this, never loadFeatureBranch directly:
-// the bare lookup is correct only for in-place runs, and nothing at a call site
-// distinguishes the two.
+// loadFeatureBranch. Until #299, two sites read the bare workspace root — the
+// #3873 non-terminal reconcile (which then skipped the branch-PR probe and
+// paged on an issue whose PR had merged) and recordV2History (which persisted
+// no branch on every worktree-isolated run). Call this, never loadFeatureBranch
+// directly: the bare lookup is correct only for in-place runs, and nothing at a
+// call site distinguishes the two.
 func resolveFeatureBranch(runtime *state.RuntimeState, workspaceRoot string, issueNumber int) string {
 	if runtime != nil {
 		if b := runtime.FeatureBranch(); b != "" {
@@ -5825,6 +5868,15 @@ func (s *Scheduler) recordV2History(
 	// worktree-isolated run, and BuildV2Record then substituted a synthetic
 	// `feat/{N}` — a value no reader can tell apart from a real branch.
 	branch := resolveFeatureBranch(snap, workspaceRoot, item.Number)
+	if branch == "" {
+		// BuildV2Record refuses to write an empty branch (the TS readers drop
+		// such records outright) and substitutes `feat/{N}`. That placeholder is
+		// indistinguishable from a real branch to every consumer, so the
+		// fabrication has to be announced here — the only place that still knows
+		// nothing resolved (#299).
+		log.Printf("#%d: no feature branch could be determined from any source — the history record "+
+			"will carry BuildV2Record's synthetic placeholder, not a real branch (#299)", item.Number)
+	}
 
 	issueType := state.ExtractTypeFromLabels(item.Labels)
 
