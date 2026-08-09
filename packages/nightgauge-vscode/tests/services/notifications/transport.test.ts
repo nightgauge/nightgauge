@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  BUDGET_FIELD_MIN_RATIO,
+  COST_ACCURACY_BAND_HIGH,
+  COST_ACCURACY_BAND_LOW,
   DEBOUNCE_MS,
   DebouncedPatcher,
   FETCH_RETRY_DELAYS,
@@ -7,11 +10,14 @@ import {
   FINAL_PATCH_RETRY_DELAYS,
   formatBudgetFieldValue,
   formatCost,
+  formatCostAccuracyValue,
   formatDuration,
   hexColor,
+  reconcileRunTotalUsd,
   redactSecrets,
   retryWithBackoff,
   shortModel,
+  shouldRenderBudgetField,
   truncate,
 } from "../../../src/services/notifications/transport";
 
@@ -50,41 +56,149 @@ describe("formatDuration", () => {
 });
 
 describe("formatCost", () => {
-  it("renders three-decimal USD", () => {
-    expect(formatCost(0)).toBe("$0.000");
+  // #333 decision E: there is exactly ONE formatCost, and it is the tiered
+  // implementation that used to live (duplicated) in utils/tokenParser.ts.
+  // A flat 3-decimal render either lies about sub-cent costs ($0.000) or
+  // reads as a non-currency for real dollars ($75.000).
+  it("renders sub-cent costs to four decimals so a real cost is never shown as free", () => {
+    expect(formatCost(0)).toBe("$0.0000");
+    expect(formatCost(0.0001)).toBe("$0.0001");
+    expect(formatCost(0.00456)).toBe("$0.0046");
+    expect(formatCost(0.0099)).toBe("$0.0099");
+  });
+
+  it("renders sub-dollar costs to three decimals", () => {
+    expect(formatCost(0.01)).toBe("$0.010");
     expect(formatCost(0.123)).toBe("$0.123");
-    expect(formatCost(1.5)).toBe("$1.500");
+    expect(formatCost(0.999)).toBe("$0.999");
+  });
+
+  it("renders dollar-and-up costs as two-decimal currency", () => {
+    expect(formatCost(1.0)).toBe("$1.00");
+    expect(formatCost(1.5)).toBe("$1.50");
+    expect(formatCost(75.0)).toBe("$75.00");
+    expect(formatCost(1234.56)).toBe("$1234.56");
   });
 });
 
 describe("formatBudgetFieldValue", () => {
-  it("renders actual/ceiling/pct with no estimate segment when none was recorded", () => {
-    expect(formatBudgetFieldValue(28.259, 75.0)).toBe("$28.259 / $75.000 (38%)");
+  // #333 decision G: the pre-run estimate no longer hides inside the budget
+  // field — it is its own "Cost Accuracy" field. The budget field is now the
+  // ratio and nothing else.
+  it("renders actual/ceiling/pct only", () => {
+    expect(formatBudgetFieldValue(28.259, 75.0)).toBe("$28.26 / $75.00 (38%)");
   });
 
-  it("renders actual/ceiling/pct with no estimate segment when estimate is 0", () => {
-    expect(formatBudgetFieldValue(28.259, 75.0, 0)).toBe("$28.259 / $75.000 (38%)");
+  it("renders 0% when nothing has been spent", () => {
+    expect(formatBudgetFieldValue(0, 75.0)).toBe("$0.0000 / $75.00 (0%)");
   });
 
-  it("labels the pre-flight estimate as 'Pre-run est.' (not bare 'Est:') and shows its accuracy vs actual (#267)", () => {
-    // Regression for #267: Discord/Mattermost completion embeds used to show
-    // a bare "Est: $2.703" right next to the actual cost, reading as a second
-    // (wrong) actual figure. It must be unambiguously labeled as a pre-run
-    // prediction and show how far off it was.
-    const result = formatBudgetFieldValue(28.259, 75.0, 2.703);
-    expect(result).toBe("$28.259 / $75.000 (38%)  ·  Pre-run est. $2.703 (actual: 10.5x)");
+  it("carries no pre-run estimate segment (#333 decision G)", () => {
+    const result = formatBudgetFieldValue(28.259, 75.0);
+    expect(result).not.toContain("Pre-run est.");
     expect(result).not.toContain("Est: $");
   });
+});
 
-  it("shows an under-1x ratio when the actual cost came in below the estimate", () => {
-    const result = formatBudgetFieldValue(3.0, 75.0, 10.0);
-    expect(result).toBe("$3.000 / $75.000 (4%)  ·  Pre-run est. $10.000 (actual: 0.3x)");
+describe("shouldRenderBudgetField (#333 decision F)", () => {
+  it("suppresses the field when spend is below half the ceiling — it says nothing", () => {
+    expect(shouldRenderBudgetField(1.518, 75.0, "productive")).toBe(false);
+    expect(shouldRenderBudgetField(28.259, 75.0, "productive")).toBe(false);
   });
 
-  it("omits the accuracy ratio (but keeps the pre-run label) when actual cost is 0", () => {
-    expect(formatBudgetFieldValue(0, 75.0, 2.703)).toBe(
-      "$0.000 / $75.000 (0%)  ·  Pre-run est. $2.703"
+  it("renders the field once spend reaches half the ceiling", () => {
+    expect(shouldRenderBudgetField(37.5, 75.0, "productive")).toBe(true);
+    expect(shouldRenderBudgetField(74.0, 75.0, "productive")).toBe(true);
+    expect(BUDGET_FIELD_MIN_RATIO).toBe(0.5);
+  });
+
+  it("always renders the field for budget-related outcomes, whatever the ratio", () => {
+    expect(shouldRenderBudgetField(1.0, 75.0, "budget-ceiling")).toBe(true);
+    expect(shouldRenderBudgetField(1.0, 75.0, "shipped-but-overbudget")).toBe(true);
+  });
+
+  it("never renders the field without a positive ceiling", () => {
+    expect(shouldRenderBudgetField(10, 0, "budget-ceiling")).toBe(false);
+  });
+});
+
+describe("formatCostAccuracyValue (#333 decision G)", () => {
+  it("reads 'on estimate' inside the neutral band", () => {
+    expect(COST_ACCURACY_BAND_LOW).toBe(0.8);
+    expect(COST_ACCURACY_BAND_HIGH).toBe(1.25);
+    expect(formatCostAccuracyValue(4.5, 4.458)).toBe(
+      "Est. $4.46 → Actual $4.50  ·  ≈ on estimate (1.0x)"
     );
+    expect(formatCostAccuracyValue(8.0, 10.0)).toContain("≈ on estimate (0.8x)");
+    expect(formatCostAccuracyValue(12.5, 10.0)).toContain("≈ on estimate (1.3x)");
+  });
+
+  it("renders the ratio prominently when the run blew past the estimate", () => {
+    expect(formatCostAccuracyValue(14.837, 4.458)).toBe(
+      "Est. $4.46 → Actual $14.84  ·  **3.3x over**"
+    );
+  });
+
+  it("renders the ratio prominently when the run came in far under the estimate", () => {
+    expect(formatCostAccuracyValue(1.518, 4.458)).toBe(
+      "Est. $4.46 → Actual $1.52  ·  **0.3x under**"
+    );
+  });
+
+  it("omits the ratio when nothing was spent — a 0x ratio is not a signal", () => {
+    expect(formatCostAccuracyValue(0, 4.458)).toBe("Est. $4.46 → Actual $0.0000");
+  });
+});
+
+describe("reconcileRunTotalUsd (#333 decision A / AC1)", () => {
+  it("returns the reported total when there is no per-stage data to cross-check", () => {
+    expect(reconcileRunTotalUsd(1.518, undefined)).toBe(1.518);
+    expect(reconcileRunTotalUsd(1.518, {})).toBe(1.518);
+  });
+
+  it("returns the reported total when it is at least as large as every stage", () => {
+    const logger = makeLogger();
+    const total = reconcileRunTotalUsd(
+      14.837,
+      {
+        "feature-planning": { cost_usd: 1.518 },
+        "feature-dev": { cost_usd: 13.319 },
+      },
+      logger
+    );
+    expect(total).toBe(14.837);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("renders the per-stage SUM and warns when the reported total is below a single stage", () => {
+    // The #289 shape: the embed claimed $1.518 total while Feature Dev alone
+    // cost $13.319. Never silently assert a total the stages contradict, and
+    // never silently correct it either.
+    const logger = makeLogger();
+    const total = reconcileRunTotalUsd(
+      1.518,
+      {
+        "feature-planning": { cost_usd: 1.518 },
+        "feature-dev": { cost_usd: 13.319 },
+      },
+      logger
+    );
+    expect(total).toBeCloseTo(14.837, 6);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [message, meta] = logger.warn.mock.calls[0] as [string, Record<string, number>];
+    expect(message).toContain("run total");
+    expect(meta.reportedTotalUsd).toBe(1.518);
+    expect(meta.maxStageCostUsd).toBe(13.319);
+    expect(meta.perStageSumUsd).toBeCloseTo(14.837, 6);
+  });
+
+  it("tolerates stages with no recorded cost", () => {
+    expect(
+      reconcileRunTotalUsd(2.0, {
+        "issue-pickup": {},
+        "feature-planning": { cost_usd: 1.0 },
+      })
+    ).toBe(2.0);
   });
 });
 

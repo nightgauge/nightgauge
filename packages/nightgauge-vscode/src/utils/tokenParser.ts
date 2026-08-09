@@ -17,6 +17,9 @@
 import type { ExecutionAdapter } from "../config/schema";
 import type { TokenUsageUpdate } from "../services/PipelineStateService";
 import { computeStageCost } from "./computeStageCost";
+// One USD formatter for the whole extension (#333 decision E) — the tiered
+// implementation that used to be duplicated here now lives in transport.ts.
+import { formatCost } from "../services/notifications/transport";
 
 /**
  * Parsed token usage from a single result message
@@ -971,22 +974,6 @@ export function formatTokenCount(tokens: number): string {
     return `${(tokens / 1000).toFixed(1)}K`;
   }
   return `${(tokens / 1000).toFixed(0)}K`;
-}
-
-/**
- * Format cost for display (e.g., "$0.0023" or "$1.50")
- *
- * @param costUsd - Cost in USD
- * @returns Human-readable cost
- */
-export function formatCost(costUsd: number): string {
-  if (costUsd < 0.01) {
-    return `$${costUsd.toFixed(4)}`;
-  }
-  if (costUsd < 1) {
-    return `$${costUsd.toFixed(3)}`;
-  }
-  return `$${costUsd.toFixed(2)}`;
 }
 
 /**

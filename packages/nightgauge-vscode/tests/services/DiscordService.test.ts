@@ -61,6 +61,38 @@ describe("outcomeDisplay", () => {
     });
   });
 
+  describe("cross-check against the stage list (#333 decision B / AC3)", () => {
+    it('never renders "Complete ✓" when a stage failed — labels the failure and warns', () => {
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+      const result = outcomeDisplay("productive", { failedStageCount: 1, logger });
+      expect(result.label).toBe("Complete — 1 stage failed ⚠️");
+      expect(result.color).toBe(COLOR_WARNING);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const [message, meta] = logger.warn.mock.calls[0] as [string, Record<string, unknown>];
+      expect(message).toContain("outcome");
+      expect(meta).toMatchObject({ outcomeType: "productive", failedStageCount: 1 });
+    });
+
+    it("pluralises the failed-stage count", () => {
+      expect(outcomeDisplay("verify-and-close", { failedStageCount: 3 }).label).toBe(
+        "Complete — 3 stages failed ⚠️"
+      );
+    });
+
+    it("leaves the success label alone when no stage failed", () => {
+      const result = outcomeDisplay("productive", { failedStageCount: 0 });
+      expect(result.label).toBe("Complete ✓");
+      expect(result.color).toBe(COLOR_COMPLETE);
+    });
+
+    it("leaves non-success outcomes alone", () => {
+      expect(outcomeDisplay("budget-ceiling", { failedStageCount: 2 }).label).toBe(
+        "Budget Ceiling"
+      );
+      expect(outcomeDisplay(undefined, { failedStageCount: 2 }).label).toBe("Running…");
+    });
+  });
+
   describe("unknown future outcome types → red fallback", () => {
     it("unrecognised string falls back to Failed ✗", () => {
       const result = outcomeDisplay("some-future-outcome-type");
@@ -429,12 +461,17 @@ describe("DiscordService retry and flush", () => {
       // Title carries the Frontier badge (was blank because frontier → "Elevated")
       expect(embed.title).toContain("🚀");
 
-      // Mode field shows Frontier + the envelope ceiling
+      // #333 decision I — mode is stated exactly ONCE, as the title badge.
+      // The old "⚙️ Mode" field is now "⚙️ Limits" and carries only what the
+      // badge cannot: the envelope ceiling (and route, when non-standard).
+      const limitsField = embed.fields.find((f: any) => f.name === "⚙️ Limits");
+      expect(limitsField).toBeDefined();
+      expect(limitsField.value).toContain("up to Fable");
+      expect(limitsField.value).not.toContain("Frontier");
+      expect(embed.fields.find((f: any) => f.name === "⚙️ Mode")).toBeUndefined();
 
-      const modeField = embed.fields.find((f: any) => f.name === "⚙️ Mode");
-      expect(modeField).toBeDefined();
-      expect(modeField.value).toContain("🚀 Frontier");
-      expect(modeField.value).toContain("up to Fable");
+      // …and the description's context line no longer repeats it either.
+      expect(embed.description).not.toContain("Frontier");
 
       // Dedicated usage-limit fallback field surfaces the Fable → Opus downgrade
 
@@ -445,36 +482,163 @@ describe("DiscordService retry and flush", () => {
     });
   });
 
-  describe("embed enrichment: Budget field pre-flight estimate labeling (#267)", () => {
-    it("labels the pre-flight estimate 'Pre-run est.' with an accuracy ratio, not a bare 'Est:'", async () => {
-      await simulateIssuePickup(42);
+  // Renders the final embed for `finalState` and returns it.
+  async function renderFinalEmbed(finalState: unknown): Promise<any> {
+    fetchMock.mockResolvedValueOnce({ ok: true });
+    stateChangedHandler!(finalState as any);
+    await vi.advanceTimersByTimeAsync(0);
+    const patchCall = fetchMock.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/messages/msg-42")
+    );
+    expect(patchCall).toBeDefined();
+    return JSON.parse((patchCall![1] as { body: string }).body).embeds[0];
+  }
 
-      fetchMock.mockResolvedValueOnce({ ok: true });
-      const finalState = {
+  describe("embed enrichment: cost accuracy + budget signal (#333 decisions F/G)", () => {
+    it("promotes estimate-vs-actual to its own 📊 Cost Accuracy field", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
         ...makeState(42, "productive"),
         tokens: { estimated_cost_usd: 28.259 },
-        pipeline_meta: {
-          budget_ceiling_usd: 75.0,
-          budget_estimate_usd: 2.703,
-        },
-      };
+        pipeline_meta: { budget_ceiling_usd: 75.0, budget_estimate_usd: 2.703 },
+      });
 
-      stateChangedHandler!(finalState as any);
-      await vi.advanceTimersByTimeAsync(0);
+      const accuracyField = embed.fields.find((f: any) => f.name === "📊 Cost Accuracy");
+      expect(accuracyField).toBeDefined();
+      expect(accuracyField.value).toBe("Est. $2.70 → Actual $28.26  ·  **10.5x over**");
+      // #267's regression still holds: the estimate can never read as an actual.
+      expect(accuracyField.value).not.toContain("Est: $2.703");
+    });
 
-      const patchCall = fetchMock.mock.calls.find(
-        (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/messages/msg-42")
-      );
-      expect(patchCall).toBeDefined();
-      const body = JSON.parse((patchCall![1] as { body: string }).body);
-      const embed = body.embeds[0];
+    it("suppresses the 💰 Budget field below half the ceiling — it is permanent noise", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "productive"),
+        tokens: { estimated_cost_usd: 28.259 },
+        pipeline_meta: { budget_ceiling_usd: 75.0, budget_estimate_usd: 2.703 },
+      });
+      expect(embed.fields.find((f: any) => f.name === "💰 Budget")).toBeUndefined();
+    });
 
+    it("renders the 💰 Budget field once spend crosses half the ceiling", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "productive"),
+        tokens: { estimated_cost_usd: 60.0 },
+        pipeline_meta: { budget_ceiling_usd: 75.0 },
+      });
       const budgetField = embed.fields.find((f: any) => f.name === "💰 Budget");
       expect(budgetField).toBeDefined();
-      expect(budgetField.value).toBe(
-        "$28.259 / $75.000 (38%)  ·  Pre-run est. $2.703 (actual: 10.5x)"
+      expect(budgetField.value).toBe("$60.00 / $75.00 (80%)");
+    });
+
+    it("renders the 💰 Budget field for a budget-ceiling outcome at any ratio", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "budget-ceiling"),
+        tokens: { estimated_cost_usd: 2.0 },
+        pipeline_meta: { budget_ceiling_usd: 75.0 },
+      });
+      expect(embed.fields.find((f: any) => f.name === "💰 Budget")).toBeDefined();
+    });
+
+    it("omits 📊 Cost Accuracy when no pre-run estimate was recorded", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "productive"),
+        tokens: { estimated_cost_usd: 1.0 },
+        pipeline_meta: { budget_ceiling_usd: 75.0 },
+      });
+      expect(embed.fields.find((f: any) => f.name === "📊 Cost Accuracy")).toBeUndefined();
+    });
+  });
+
+  describe("embed honesty: run total cross-checked against the stages (#333 decision A / AC1)", () => {
+    // The #289 shape: the reported total ($1.518) was *less* than a single
+    // stage's cost ($13.319). Render the per-stage sum and say so in the log.
+    const contradictoryState = {
+      ...makeState(42, "productive"),
+      tokens: {
+        estimated_cost_usd: 1.518,
+        per_stage: {
+          "feature-planning": { cost_usd: 1.518 },
+          "feature-dev": { cost_usd: 13.319 },
+        },
+      },
+      pipeline_meta: { budget_ceiling_usd: 75.0, budget_estimate_usd: 4.458 },
+    };
+
+    it("renders the per-stage sum in the footer, never a total a stage contradicts", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed(contradictoryState);
+      expect(embed.footer.text).toContain("$14.84");
+      expect(embed.footer.text).not.toContain("$1.52");
+    });
+
+    it("logs a warning naming both the reported total and the stage that exceeds it", async () => {
+      await simulateIssuePickup(42);
+      await renderFinalEmbed(contradictoryState);
+      const warned = logger.warn.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("run total")
       );
-      expect(budgetField.value).not.toContain("Est: $2.703");
+      expect(warned).toBeDefined();
+      expect(warned![1]).toMatchObject({ reportedTotalUsd: 1.518, maxStageCostUsd: 13.319 });
+    });
+
+    it("feeds the reconciled total to the Cost Accuracy field", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed(contradictoryState);
+      const accuracyField = embed.fields.find((f: any) => f.name === "📊 Cost Accuracy");
+      expect(accuracyField.value).toBe("Est. $4.46 → Actual $14.84  ·  **3.3x over**");
+    });
+  });
+
+  describe("embed honesty: error details lead with the failure (#333 decision H)", () => {
+    it("leads with stage name + the first sentence of the error, then the full details", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "failed"),
+        stages: {
+          "issue-pickup": { status: "complete" },
+          "feature-dev": {
+            status: "failed",
+            error:
+              "write containment: 10 files changed outside the worktree. " +
+              "Work preserved: .nightgauge/containment/feature-dev-289/nightgauge.patch. " +
+              "Containment policy exists because a stage may only write inside its own worktree.",
+          },
+        },
+      });
+
+      const errorField = embed.fields.find((f: any) => f.name === "🔍 Error Details");
+      expect(errorField).toBeDefined();
+      const [lead] = errorField.value.split("\n");
+      expect(lead).toBe(
+        "**Feature Dev** — write containment: 10 files changed outside the worktree."
+      );
+      expect(errorField.value).toContain("Work preserved:");
+    });
+
+    it("never leads with a stack frame — prefers the extracted message", async () => {
+      await simulateIssuePickup(42);
+      const embed = await renderFinalEmbed({
+        ...makeState(42, "failed"),
+        stages: {
+          "issue-pickup": { status: "complete" },
+          "feature-validate": {
+            status: "failed",
+            error:
+              "    at Object.<anonymous> (/repo/src/thing.ts:12:5)\n" +
+              "    at Module._compile (node:internal/modules/cjs/loader:1105:14)\n" +
+              "TypeError: cannot read properties of undefined",
+          },
+        },
+      });
+
+      const errorField = embed.fields.find((f: any) => f.name === "🔍 Error Details");
+      const [lead] = errorField.value.split("\n");
+      expect(lead).toBe("**Feature Validate** — TypeError: cannot read properties of undefined");
+      expect(lead).not.toContain("    at ");
     });
   });
 });

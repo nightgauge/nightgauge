@@ -39,11 +39,15 @@ import {
   FINAL_PATCH_RETRY_DELAYS,
   formatBudgetFieldValue,
   formatCost,
+  formatCostAccuracyValue,
   formatDuration,
+  reconcileRunTotalUsd,
   redactSecrets,
   retryWithBackoff,
   shortModel,
+  shouldRenderBudgetField,
   truncate,
+  type WarnLogger,
 } from "./notifications/transport";
 
 // Re-export so existing imports (tests/services/DiscordService.test.ts) still resolve.
@@ -237,6 +241,45 @@ const MAX_ERROR_EXTRACT_LENGTH = 1500;
 /** Truncate a single JSON line for fallback display when extraction fails. */
 const MAX_JSON_FALLBACK_LENGTH = 500;
 
+/** Maximum length of the one-line error lead that opens the Error Details field. */
+const MAX_ERROR_LEAD_LENGTH = 120;
+
+/** A stack-frame line ("    at Foo (file:1:2)", "File \"x.py\", line 3"). */
+const STACK_FRAME_RE = /^\s*(?:at\s|File\s+"|Traceback\b|\.{3}\s|\^+\s*$)/;
+
+/**
+ * Build the one-line lead that opens the "Error Details" field
+ * (#333 decision H).
+ *
+ * The field used to open with whatever the raw dump started with — on #289
+ * that was ten file paths followed by a two-sentence policy essay, pushing
+ * the actionable part (the preserved patch path) below the fold. The lead is
+ * the stage name plus the first *sentence* of the first real error message,
+ * capped at {@link MAX_ERROR_LEAD_LENGTH}; the full details still follow.
+ *
+ * Stack frames are never the lead — a frame says where, not what. The first
+ * non-frame line wins, which is also why the caller passes the already
+ * extracted message rather than the raw envelope.
+ *
+ * Exported for unit testing.
+ */
+export function buildErrorLead(stageLabel: string, extracted: string): string | null {
+  const lines = extracted
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const message = lines.find((l) => !STACK_FRAME_RE.test(l));
+  if (!message) return null;
+
+  // First sentence, when the message actually has one — ". " (or a trailing
+  // ".") is the boundary; a bare "." inside a path must not split it.
+  const sentenceEnd = message.search(/[.!?](?:\s|$)/);
+  const firstSentence =
+    sentenceEnd >= 0 ? message.slice(0, sentenceEnd + 1).trim() : message.trim();
+
+  return `**${stageLabel}** — ${truncate(firstSentence, MAX_ERROR_LEAD_LENGTH)}`;
+}
+
 /**
  * Extract human-readable content from a stream-JSON envelope that came out of
  * the Claude Agent SDK / CLI (`--output-format stream-json`).
@@ -398,7 +441,29 @@ export function formatErrorForDiscord(raw: string | undefined | null): string {
 }
 
 /**
- * Maps a PipelineOutcomeType to the Discord embed color and status label.
+ * Cross-check context for {@link outcomeDisplay} (#333 decision B / AC3).
+ *
+ * `failedStageCount` is derived by the caller from `state.stages` so both
+ * notifiers (Discord embed, Mattermost attachment) inherit one implementation
+ * of the honesty check rather than each re-deriving it.
+ */
+export interface OutcomeDisplayContext {
+  /** How many stages are in `failed` status in the run's own stage list. */
+  failedStageCount?: number;
+  logger?: WarnLogger;
+}
+
+/**
+ * Count the run's failed stages — the ground truth `outcomeDisplay` is
+ * cross-checked against. Shared by both notifiers. Exported for unit testing.
+ */
+export function countFailedStages(state: PipelineStateSnapshot): number {
+  return Object.values(state.stages ?? {}).filter((s) => s?.status === "failed").length;
+}
+
+/**
+ * Maps a PipelineOutcomeType to the Discord embed color and status label,
+ * cross-checked against the run's own stage list.
  * Exported for unit testing.
  *
  * Outcome taxonomy:
@@ -410,15 +475,36 @@ export function formatErrorForDiscord(raw: string | undefined | null): string {
  *   cancelled           — manually stopped              → Cancelled       (grey)
  *   undefined           — still running                 → Running…        (blurple)
  *   <unknown>           — fallback for future types     → Failed ✗        (red)
+ *
+ * A success outcome is never rendered as an unqualified success while the
+ * run's own stage list contains a failure: the #289 message read
+ * "— Complete ✓" above a stage list with one ❌ and three ⏳. The embed must
+ * never assert a state its own detail contradicts, so a Complete outcome with
+ * ≥1 failed stage renders the qualified label in warning yellow and logs.
  */
-export function outcomeDisplay(outcomeType: string | undefined): {
+export function outcomeDisplay(
+  outcomeType: string | undefined,
+  ctx: OutcomeDisplayContext = {}
+): {
   color: number;
   label: string;
 } {
   switch (outcomeType) {
     case "productive":
-    case "verify-and-close":
+    case "verify-and-close": {
+      const failed = ctx.failedStageCount ?? 0;
+      if (failed > 0) {
+        ctx.logger?.warn(
+          "Notifier: success outcome contradicted by the run's own stage list — rendering the contradiction",
+          { outcomeType, failedStageCount: failed }
+        );
+        return {
+          color: COLOR_WARNING,
+          label: `Complete — ${failed} stage${failed > 1 ? "s" : ""} failed ⚠️`,
+        };
+      }
       return { color: COLOR_COMPLETE, label: "Complete ✓" };
+    }
     case "already-resolved":
       return { color: COLOR_COMPLETE, label: "Already Resolved" };
     case "budget-ceiling":
@@ -970,17 +1056,23 @@ export class DiscordService implements Notifier, vscode.Disposable {
 
   private buildEmbed(run: ActiveRun, state: PipelineStateSnapshot): DiscordEmbed {
     const elapsedMs = Date.now() - run.startTime;
-    const { color, label: statusLabel } = outcomeDisplay(state.outcome_type);
+    const { color, label: statusLabel } = outcomeDisplay(state.outcome_type, {
+      failedStageCount: countFailedStages(state),
+      logger: this.logger,
+    });
     const { icon: modeIcon } = modeDisplay(state.pipeline_meta);
     const modeBadge = modeIcon ? ` ${modeIcon}` : "";
+    // Resolved once per render so the invariant warning is logged once, not
+    // once per consumer of the total.
+    const runTotalUsd = this.resolveRunTotalUsd(run, state);
 
     return {
       title: `🔨 Pipeline #${run.issueNumber}${modeBadge} — ${statusLabel}`,
       url: run.prUrl,
       description: truncate(this.buildDescription(run, state), MAX_DESCRIPTION_LENGTH),
       color,
-      fields: this.buildFields(run, state).slice(0, MAX_FIELDS),
-      footer: { text: this.buildFooter(run, elapsedMs) },
+      fields: this.buildFields(run, state, runTotalUsd).slice(0, MAX_FIELDS),
+      footer: { text: this.buildFooter(runTotalUsd, elapsedMs) },
       timestamp: new Date().toISOString(),
     };
   }
@@ -999,7 +1091,10 @@ export class DiscordService implements Notifier, vscode.Disposable {
       baseBranch && baseBranch !== "main" ? `${branchDisplay} → \`${baseBranch}\`` : branchDisplay;
     const header = `${titleText}\n\`${run.repoName}\` · ${branchLine}`;
 
-    // Context line: complexity, file count, epic progress, routing, mode
+    // Context line: complexity, file count, epic progress, routing.
+    // The performance mode is deliberately absent — it is the title badge and
+    // nothing else (#333 decision I); it used to be stated three times in one
+    // message (badge, this line, and the mode field).
     const contextParts: string[] = [];
     if (meta?.complexity) contextParts.push(`**${meta.complexity}**`);
     if (meta?.file_count) contextParts.push(`${meta.file_count} files`);
@@ -1010,11 +1105,6 @@ export class DiscordService implements Notifier, vscode.Disposable {
     }
     if (meta?.route && meta.route !== "standard") {
       contextParts.push(`${meta.route} route`);
-    }
-    const { label: modeLabel, icon: modeContextIcon, modelSuffix } = modeDisplay(meta);
-    if (modeLabel !== "Elevated") {
-      const prefix = modeContextIcon ? `${modeContextIcon} ` : "";
-      contextParts.push(`${prefix}**${modeLabel}**${modelSuffix}`);
     }
     if (meta?.skip_stages && meta.skip_stages.length > 0) {
       const skipped = meta.skip_stages.map((s) => STAGE_LABEL[s] ?? s).join(", ");
@@ -1067,7 +1157,11 @@ export class DiscordService implements Notifier, vscode.Disposable {
     return `${header}${contextLine}\n\n${stageLines.join("\n")}`;
   }
 
-  private buildFields(run: ActiveRun, state: PipelineStateSnapshot): DiscordField[] {
+  private buildFields(
+    run: ActiveRun,
+    state: PipelineStateSnapshot,
+    runTotalUsd: number = this.resolveRunTotalUsd(run, state)
+  ): DiscordField[] {
     const fields: DiscordField[] = [];
     const isTerminal = !!state.outcome_type;
 
@@ -1105,28 +1199,28 @@ export class DiscordService implements Notifier, vscode.Disposable {
       });
     }
 
-    // Mode field — surface performance mode + envelope ceiling + routing in
-    // real-time so users can see which configuration is driving the run
-    // (high-cost runs, Fable-capable Frontier, fast-track skips, etc.)
+    // Limits field — the mode's *consequences*, not its name (#333 decision I).
+    // The mode itself is the title badge; this field carries only what a badge
+    // cannot: the routing envelope's model ceiling and a non-standard route.
     const liveMeta = state.pipeline_meta;
     const {
       label: liveModeLabel,
-      icon: liveModeIcon,
       modelSuffix: liveSuffix,
       ceiling: liveCeiling,
     } = modeDisplay(liveMeta);
-    let modeValue = `${liveModeIcon ? liveModeIcon + " " : ""}${liveModeLabel}${liveSuffix}`;
-    // Show the routing envelope's model ceiling ("up to Fable/Opus/Sonnet") so
-    // the mode reads as a capability, not just a name. Maximum pins Opus and
-    // already names it in the suffix, so suppress the hint there.
-    if (liveModeLabel !== "Maximum") modeValue += `  ·  up to ${liveCeiling}`;
-    const modeParts: string[] = [modeValue];
+    // Maximum pins a model rather than declaring an envelope, so it names the
+    // pinned model instead of a "up to …" ceiling.
+    const limitParts: string[] = [
+      liveModeLabel === "Maximum"
+        ? `pinned${liveSuffix || ` ${liveCeiling}`}`
+        : `up to ${liveCeiling}`,
+    ];
     if (liveMeta?.route && liveMeta.route !== "standard") {
-      modeParts.push(`route: ${liveMeta.route}`);
+      limitParts.push(`route: ${liveMeta.route}`);
     }
     fields.push({
-      name: "⚙️ Mode",
-      value: modeParts.join("  ·  "),
+      name: "⚙️ Limits",
+      value: limitParts.join("  ·  "),
       inline: true,
     });
 
@@ -1159,19 +1253,26 @@ export class DiscordService implements Notifier, vscode.Disposable {
       ([, s]) => s?.status === "failed"
     );
     if (failedStages.length > 0) {
-      const errorLines = failedStages.map(([name, s]) => {
-        const label = STAGE_LABEL[name] ?? name;
-        // Raw errors often contain stream-JSON envelopes from the Claude Agent
-        // SDK (tool_result, assistant text, task_notification).  Run them
-        // through formatErrorForDiscord so the user sees the actual error
-        // message instead of a JSON blob.
-        const extracted = formatErrorForDiscord(s?.error);
-        const err = extracted ? `: ${extracted}` : "";
-        return `❌ **${label}**${err}`;
-      });
+      // Raw errors often contain stream-JSON envelopes from the Claude Agent
+      // SDK (tool_result, assistant text, task_notification).  Run them
+      // through formatErrorForDiscord so the user sees the actual error
+      // message instead of a JSON blob.
+      const extractedByStage = failedStages.map(
+        ([name, s]) => [STAGE_LABEL[name] ?? name, formatErrorForDiscord(s?.error)] as const
+      );
+      // Lead with one readable line naming the stage and what went wrong, so
+      // the actionable part is above the fold even when the dump is long
+      // (#333 decision H).
+      const lead = extractedByStage
+        .map(([label, extracted]) => (extracted ? buildErrorLead(label, extracted) : null))
+        .find((l): l is string => l != null);
+      const errorLines = extractedByStage.map(
+        ([label, extracted]) => `❌ **${label}**${extracted ? `: ${extracted}` : ""}`
+      );
+      const body = lead ? [lead, "", ...errorLines] : errorLines;
       fields.push({
         name: "🔍 Error Details",
-        value: truncate(errorLines.join("\n"), MAX_FIELD_VALUE_LENGTH),
+        value: truncate(body.join("\n"), MAX_FIELD_VALUE_LENGTH),
       });
     }
 
@@ -1199,7 +1300,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
     if (state.outcome_type === "budget-ceiling") {
       fields.push({
         name: "💰 Budget Ceiling",
-        value: `Spent ${formatCost(run.costUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
+        value: `Spent ${formatCost(runTotalUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
       });
     }
 
@@ -1216,18 +1317,26 @@ export class DiscordService implements Notifier, vscode.Disposable {
       });
     }
 
-    // Budget usage (for successful and failed runs). See formatBudgetFieldValue
-    // (transport.ts) for why the pre-flight estimate is labeled "Pre-run est."
-    // with an accuracy ratio rather than a bare "Est:" figure (#267).
+    // Budget usage — only when it says something (#333 decision F). A ceiling
+    // ratio below the warn threshold is a top-level field that reports
+    // "nothing is wrong" on every run; see shouldRenderBudgetField.
     const meta = state.pipeline_meta;
-    if (meta?.budget_ceiling_usd && meta.budget_ceiling_usd > 0) {
+    const ceilingUsd = meta?.budget_ceiling_usd ?? 0;
+    if (shouldRenderBudgetField(runTotalUsd, ceilingUsd, state.outcome_type)) {
       fields.push({
         name: "💰 Budget",
-        value: formatBudgetFieldValue(
-          run.costUsd,
-          meta.budget_ceiling_usd,
-          meta.budget_estimate_usd
-        ),
+        value: formatBudgetFieldValue(runTotalUsd, ceilingUsd),
+        inline: true,
+      });
+    }
+
+    // Cost accuracy — predicted vs actual, the strongest single pipeline-health
+    // signal in the message. Its own field, not a suffix (#333 decision G).
+    const estimateUsd = meta?.budget_estimate_usd;
+    if (estimateUsd != null && estimateUsd > 0) {
+      fields.push({
+        name: "📊 Cost Accuracy",
+        value: formatCostAccuracyValue(runTotalUsd, estimateUsd),
         inline: true,
       });
     }
@@ -1254,12 +1363,22 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const cacheRead = state.tokens?.total_cache_read ?? 0;
     const totalInput = state.tokens?.total_input ?? 0;
     if (cacheRead > 0 && totalInput > 0) {
-      const hitPct = ((cacheRead / totalInput) * 100).toFixed(0);
-      fields.push({
-        name: "📦 Cache",
-        value: `${hitPct}% hit rate`,
-        inline: true,
-      });
+      const hitPct = (cacheRead / totalInput) * 100;
+      if (hitPct > 100) {
+        // A rate above 100% means the operands are wrong, not that caching is
+        // miraculous. Clamping to 100% would render a lie that hides the bad
+        // input; suppress the field and name both numbers (#333 decision C).
+        this.logger.warn(
+          "DiscordService: impossible cache hit rate — suppressing the Cache field",
+          { cacheRead, totalInput, hitPct }
+        );
+      } else {
+        fields.push({
+          name: "📦 Cache",
+          value: `${hitPct.toFixed(0)}% hit rate`,
+          inline: true,
+        });
+      }
     }
 
     // PR number (explicit — complement to the embed URL link)
@@ -1297,8 +1416,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
     return fields;
   }
 
-  private buildFooter(run: ActiveRun, elapsedMs: number): string {
-    const cost = run.costUsd > 0 ? `💰 ${formatCost(run.costUsd)}  ` : "";
+  /**
+   * The run total this embed is allowed to assert (#333 decision A / AC1) —
+   * `run.costUsd` unless the run's own per-stage costs contradict it.
+   */
+  private resolveRunTotalUsd(run: ActiveRun, state: PipelineStateSnapshot): number {
+    return reconcileRunTotalUsd(run.costUsd, state.tokens?.per_stage, this.logger);
+  }
+
+  private buildFooter(runTotalUsd: number, elapsedMs: number): string {
+    const cost = runTotalUsd > 0 ? `💰 ${formatCost(runTotalUsd)}  ` : "";
     return `${cost}⏱ ${formatDuration(elapsedMs)}`;
   }
 

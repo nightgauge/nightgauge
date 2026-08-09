@@ -28,6 +28,8 @@ import { ConfigBridge } from "../ConfigBridge";
 import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import {
+  buildErrorLead,
+  countFailedStages,
   formatErrorForDiscord,
   outcomeDisplay,
   determineAction,
@@ -43,11 +45,14 @@ import {
   FINAL_PATCH_RETRY_DELAYS,
   formatBudgetFieldValue,
   formatCost,
+  formatCostAccuracyValue,
   formatDuration,
   hexColor,
+  reconcileRunTotalUsd,
   redactSecrets,
   retryWithBackoff,
   shortModel,
+  shouldRenderBudgetField,
   truncate,
 } from "./transport";
 
@@ -682,13 +687,18 @@ export class MattermostService implements Notifier, vscode.Disposable {
 
   buildAttachment(run: ActiveRun, state: PipelineStateSnapshot): MattermostAttachment {
     const elapsedMs = Date.now() - run.startTime;
-    const { color: colorInt, label: statusLabel } = outcomeDisplay(state.outcome_type);
+    const { color: colorInt, label: statusLabel } = outcomeDisplay(state.outcome_type, {
+      failedStageCount: countFailedStages(state),
+      logger: this.logger,
+    });
     const { icon: modeIcon } = modeDisplay(state.pipeline_meta);
     const modeBadge = modeIcon ? ` ${modeIcon}` : "";
+    // Resolved once per render — see DiscordService.buildEmbed (#333 AC1).
+    const runTotalUsd = this.resolveRunTotalUsd(run, state);
 
     const description = truncate(this.buildDescription(run, state), MAX_DESCRIPTION_LENGTH);
-    const fields = this.buildFields(run, state).slice(0, MAX_FIELDS);
-    const footer = this.buildFooter(run, elapsedMs);
+    const fields = this.buildFields(run, state, runTotalUsd).slice(0, MAX_FIELDS);
+    const footer = this.buildFooter(runTotalUsd, elapsedMs);
 
     return {
       fallback: redactSecrets(`Pipeline #${run.issueNumber}: ${statusLabel}`),
@@ -724,11 +734,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
       contextParts.push(`Epic #${meta.epic_number} (${pos}/${total})`);
     }
     if (meta?.route && meta.route !== "standard") contextParts.push(`${meta.route} route`);
-    const { label: modeLabel, icon: modeContextIcon, modelSuffix } = modeDisplay(meta);
-    if (modeLabel !== "Elevated") {
-      const prefix = modeContextIcon ? `${modeContextIcon} ` : "";
-      contextParts.push(`${prefix}**${modeLabel}**${modelSuffix}`);
-    }
+    // Mode is the title badge and nothing else (#333 decision I).
     if (meta?.skip_stages && meta.skip_stages.length > 0) {
       const skipped = meta.skip_stages.map((s) => STAGE_LABEL[s] ?? s).join(", ");
       contextParts.push(`Skipped: ${skipped}`);
@@ -765,7 +771,11 @@ export class MattermostService implements Notifier, vscode.Disposable {
     return redactSecrets(`${header}${contextLine}\n\n${stageLines.join("\n")}`);
   }
 
-  private buildFields(run: ActiveRun, state: PipelineStateSnapshot): MattermostField[] {
+  private buildFields(
+    run: ActiveRun,
+    state: PipelineStateSnapshot,
+    runTotalUsd: number = this.resolveRunTotalUsd(run, state)
+  ): MattermostField[] {
     const fields: MattermostField[] = [];
     const isTerminal = !!state.outcome_type;
 
@@ -800,24 +810,24 @@ export class MattermostService implements Notifier, vscode.Disposable {
       });
     }
 
+    // Limits, not Mode — the mode's name is the title badge (#333 decision I).
     const liveMeta = state.pipeline_meta;
     const {
       label: liveModeLabel,
-      icon: liveModeIcon,
       modelSuffix: liveSuffix,
       ceiling: liveCeiling,
     } = modeDisplay(liveMeta);
-    let modeValue = `${liveModeIcon ? liveModeIcon + " " : ""}${liveModeLabel}${liveSuffix}`;
-    // Show the routing envelope's model ceiling ("up to Fable/Opus/Sonnet").
-    // Maximum pins Opus and names it in the suffix, so suppress the hint there.
-    if (liveModeLabel !== "Maximum") modeValue += `  ·  up to ${liveCeiling}`;
-    const modeParts: string[] = [modeValue];
+    const limitParts: string[] = [
+      liveModeLabel === "Maximum"
+        ? `pinned${liveSuffix || ` ${liveCeiling}`}`
+        : `up to ${liveCeiling}`,
+    ];
     if (liveMeta?.route && liveMeta.route !== "standard") {
-      modeParts.push(`route: ${liveMeta.route}`);
+      limitParts.push(`route: ${liveMeta.route}`);
     }
     fields.push({
-      title: "Mode",
-      value: modeParts.join("  ·  "),
+      title: "Limits",
+      value: limitParts.join("  ·  "),
       short: true,
     });
 
@@ -844,15 +854,20 @@ export class MattermostService implements Notifier, vscode.Disposable {
       ([, s]) => s?.status === "failed"
     );
     if (failedStages.length > 0) {
-      const errorLines = failedStages.map(([name, s]) => {
-        const label = STAGE_LABEL[name] ?? name;
-        const extracted = formatErrorForDiscord(s?.error);
-        const err = extracted ? `: ${extracted}` : "";
-        return `❌ **${label}**${err}`;
-      });
+      // Lead with the stage and what went wrong (#333 decision H) — Discord parity.
+      const extractedByStage = failedStages.map(
+        ([name, s]) => [STAGE_LABEL[name] ?? name, formatErrorForDiscord(s?.error)] as const
+      );
+      const lead = extractedByStage
+        .map(([label, extracted]) => (extracted ? buildErrorLead(label, extracted) : null))
+        .find((l): l is string => l != null);
+      const errorLines = extractedByStage.map(
+        ([label, extracted]) => `❌ **${label}**${extracted ? `: ${extracted}` : ""}`
+      );
+      const body = lead ? [lead, "", ...errorLines] : errorLines;
       fields.push({
         title: "Error Details",
-        value: truncate(redactSecrets(errorLines.join("\n")), MAX_FIELD_VALUE_LENGTH),
+        value: truncate(redactSecrets(body.join("\n")), MAX_FIELD_VALUE_LENGTH),
         short: false,
       });
     }
@@ -879,7 +894,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
     if (state.outcome_type === "budget-ceiling") {
       fields.push({
         title: "Budget Ceiling",
-        value: `Spent ${formatCost(run.costUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
+        value: `Spent ${formatCost(runTotalUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
         short: false,
       });
     }
@@ -897,18 +912,23 @@ export class MattermostService implements Notifier, vscode.Disposable {
       });
     }
 
-    // See formatBudgetFieldValue (transport.ts) for why the pre-flight estimate
-    // is labeled "Pre-run est." with an accuracy ratio rather than a bare
-    // "Est:" figure (#267).
+    // Budget only when it says something; estimate-vs-actual gets its own
+    // field (#333 decisions F/G) — Discord parity, see DiscordService.
     const meta = state.pipeline_meta;
-    if (meta?.budget_ceiling_usd && meta.budget_ceiling_usd > 0) {
+    const ceilingUsd = meta?.budget_ceiling_usd ?? 0;
+    if (shouldRenderBudgetField(runTotalUsd, ceilingUsd, state.outcome_type)) {
       fields.push({
         title: "Budget",
-        value: formatBudgetFieldValue(
-          run.costUsd,
-          meta.budget_ceiling_usd,
-          meta.budget_estimate_usd
-        ),
+        value: formatBudgetFieldValue(runTotalUsd, ceilingUsd),
+        short: true,
+      });
+    }
+
+    const estimateUsd = meta?.budget_estimate_usd;
+    if (estimateUsd != null && estimateUsd > 0) {
+      fields.push({
+        title: "📊 Cost Accuracy",
+        value: formatCostAccuracyValue(runTotalUsd, estimateUsd),
         short: true,
       });
     }
@@ -924,12 +944,24 @@ export class MattermostService implements Notifier, vscode.Disposable {
       });
     }
 
+    // `total_input` is COMBINED (raw input + cache reads) by the Go scheduler
+    // convention, so it already IS the "billed-as-input without caching"
+    // denominator. Mattermost used to re-add cache_read, double-counting it and
+    // pinning the display near 50% on every cache-dominated run — the #262
+    // defect Discord already fixed; AC11 brings this path to parity.
     const cacheRead = state.tokens?.total_cache_read ?? 0;
     const totalInput = state.tokens?.total_input ?? 0;
-    const totalTokens = cacheRead + totalInput;
-    if (cacheRead > 0 && totalTokens > 0) {
-      const hitPct = ((cacheRead / totalTokens) * 100).toFixed(0);
-      fields.push({ title: "Cache", value: `${hitPct}% hit rate`, short: true });
+    if (cacheRead > 0 && totalInput > 0) {
+      const hitPct = (cacheRead / totalInput) * 100;
+      if (hitPct > 100) {
+        // Suppress, never clamp — see DiscordService (#333 decision C).
+        this.logger.warn(
+          "MattermostService: impossible cache hit rate — suppressing the Cache field",
+          { cacheRead, totalInput, hitPct }
+        );
+      } else {
+        fields.push({ title: "Cache", value: `${hitPct.toFixed(0)}% hit rate`, short: true });
+      }
     }
 
     if (meta?.pr_number) {
@@ -960,8 +992,16 @@ export class MattermostService implements Notifier, vscode.Disposable {
     return fields;
   }
 
-  private buildFooter(run: ActiveRun, elapsedMs: number): string {
-    const cost = run.costUsd > 0 ? `💰 ${formatCost(run.costUsd)}  ` : "";
+  /**
+   * The run total this attachment is allowed to assert (#333 AC1) —
+   * `run.costUsd` unless the run's own per-stage costs contradict it.
+   */
+  private resolveRunTotalUsd(run: ActiveRun, state: PipelineStateSnapshot): number {
+    return reconcileRunTotalUsd(run.costUsd, state.tokens?.per_stage, this.logger);
+  }
+
+  private buildFooter(runTotalUsd: number, elapsedMs: number): string {
+    const cost = runTotalUsd > 0 ? `💰 ${formatCost(runTotalUsd)}  ` : "";
     return `${cost}⏱ ${formatDuration(elapsedMs)}`;
   }
 

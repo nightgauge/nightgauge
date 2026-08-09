@@ -11,11 +11,16 @@
  * rendered rate exceeds 100%.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { DiscordService } from "../../src/services/DiscordService";
 
-function buildFieldsFor(totalInput: number, totalCacheRead: number) {
-  const service = new DiscordService({} as never, {} as never, {} as never);
+function makeLogger() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+}
+
+function buildFieldsWithLogger(totalInput: number, totalCacheRead: number) {
+  const logger = makeLogger();
+  const service = new DiscordService({} as never, {} as never, logger as never);
 
   const run = {
     issueNumber: 1,
@@ -45,11 +50,17 @@ function buildFieldsFor(totalInput: number, totalCacheRead: number) {
 
   // buildFields is private — invoked directly to test the field-rendering
   // logic without wiring up the full webhook/state-service plumbing.
-  return (
+  const fields = (
     service as unknown as {
       buildFields: (r: unknown, s: unknown) => Array<{ name: string; value: string }>;
     }
   ).buildFields(run, state);
+
+  return { fields, logger };
+}
+
+function buildFieldsFor(totalInput: number, totalCacheRead: number) {
+  return buildFieldsWithLogger(totalInput, totalCacheRead).fields;
 }
 
 describe("DiscordService — cache hit rate rendering (#193)", () => {
@@ -78,5 +89,28 @@ describe("DiscordService — cache hit rate rendering (#193)", () => {
     const cacheField = fields.find((f) => f.name === "📦 Cache");
     const pct = Number(cacheField!.value.match(/^(\d+)% hit rate$/)![1]);
     expect(pct).toBe(100);
+  });
+
+  // #333 decision C / AC4 — a rate above 100% means the *inputs* are wrong.
+  // Clamping to 100% would render a lie; suppress the field and say why.
+  describe("impossible hit rate (>100%) — suppress and warn, never clamp", () => {
+    it("suppresses the 📦 Cache field entirely", () => {
+      const { fields } = buildFieldsWithLogger(1000, 160610);
+      expect(fields.find((f) => f.name === "📦 Cache")).toBeUndefined();
+    });
+
+    it("logs a warning naming both operands", () => {
+      const { logger } = buildFieldsWithLogger(1000, 160610);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      const [message, meta] = logger.warn.mock.calls[0] as [string, Record<string, number>];
+      expect(message).toContain("cache hit rate");
+      expect(meta).toMatchObject({ cacheRead: 160610, totalInput: 1000 });
+    });
+
+    it("never renders a clamped 100%", () => {
+      const { fields } = buildFieldsWithLogger(1000, 160610);
+      expect(fields.some((f) => f.value.includes("100% hit rate"))).toBe(false);
+      expect(fields.some((f) => f.value.includes("16061% hit rate"))).toBe(false);
+    });
   });
 });
