@@ -4065,7 +4065,25 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// mutually exclusive and the terminal path (#3835 WS1) is untouched. Fails
 		// closed: any query error returns false → the failure is preserved.
 		if (err != nil || exitCode != 0) && !isTerminalStage(stage) {
-			branch := loadFeatureBranch(workspaceRoot, item.Number)
+			// Resolve worktree-first (#299). The bare workspace-root lookup this
+			// used to do answers "" on every worktree-isolated run, because
+			// issue-{N}.json is written INSIDE the worktree — and with an empty
+			// branch reconcileIssueResolved silently drops the branch-PR half of
+			// the check, so a stage that died AFTER its PR merged was recorded
+			// success:false and paged.
+			branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number)
+			if branch == "" {
+				// Nothing — not the live runtime, not the worktree the stages
+				// ran in, not the workspace root — could name the branch, so
+				// only the issue-closed half of the check can run. Pre-#299
+				// that degradation was silent, which is precisely why the
+				// worktree blindness survived: a check that cannot name its
+				// subject must say so rather than quietly answering "no".
+				log.Printf("#%d: non-terminal stage %s failed but no feature branch could be determined "+
+					"(runtime, worktree and workspace-root issue context all name none) — skipping the "+
+					"PR-landed reconcile check; only the issue-closed check runs (#299)",
+					item.Number, stage)
+			}
 			// Bound the (up to two) sequential gh calls so a slow / rate-limited
 			// GitHub never blocks the stage loop indefinitely. 15s matches the TS
 			// notifier's execFile timeout and the gate's gh budget. On timeout the
@@ -5519,6 +5537,14 @@ func branchForkPreflightApplies(stage state.PipelineStage) bool {
 // stage's pushed commit survived to fork the branch on the next attempt. A
 // cleanup that cannot name its branch does nothing and says nothing, so the
 // gap was invisible until the fork it caused was diagnosed two attempts later.
+//
+// #299 finished the conversion: this is now the ONLY caller of
+// loadFeatureBranch. Two sites still read the bare workspace root — the #3873
+// non-terminal reconcile (which then skipped the branch-PR probe and paged on
+// an issue whose PR had merged) and recordV2History (which persisted no branch
+// on every worktree-isolated run). Call this, never loadFeatureBranch directly:
+// the bare lookup is correct only for in-place runs, and nothing at a call site
+// distinguishes the two.
 func resolveFeatureBranch(runtime *state.RuntimeState, workspaceRoot string, issueNumber int) string {
 	if runtime != nil {
 		if b := runtime.FeatureBranch(); b != "" {
@@ -5793,7 +5819,12 @@ func (s *Scheduler) recordV2History(
 	prediction *state.OutcomePrediction,
 ) {
 	hw := state.NewHistoryWriter(workspaceRoot)
-	branch := loadFeatureBranch(workspaceRoot, item.Number)
+	// Resolve worktree-first (#299): snap carries the run's WorktreeDir, so this
+	// consults the live runtime and the worktree the stages ran in before the
+	// workspace root. The bare root lookup answered "" for every
+	// worktree-isolated run, and BuildV2Record then substituted a synthetic
+	// `feat/{N}` — a value no reader can tell apart from a real branch.
+	branch := resolveFeatureBranch(snap, workspaceRoot, item.Number)
 
 	issueType := state.ExtractTypeFromLabels(item.Labels)
 
