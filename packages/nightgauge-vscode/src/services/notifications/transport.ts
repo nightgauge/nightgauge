@@ -11,6 +11,9 @@
  */
 
 import type { Logger } from "../../utils/logger";
+// The single USD formatter (#333 decision E). It lives in utils/ so the token
+// parser can share it without a utils → services import.
+import { formatCost } from "../../utils/formatCost";
 
 // ─── Shared retry & debounce constants ──────────────────────────────────────
 
@@ -33,22 +36,6 @@ export function formatDuration(ms: number): string {
   const m = Math.floor(ms / 60_000);
   const s = Math.round((ms % 60_000) / 1000);
   return `${m}m ${s}s`;
-}
-
-/**
- * The one USD formatter (#333 decision E).
- *
- * Precision is tiered by magnitude so a sub-cent cost is never rendered as
- * free and a real dollar figure still reads as currency: 4 decimals under a
- * cent, 3 under a dollar, 2 from a dollar up. This used to exist twice — a
- * flat 3-decimal version here and this tiered one in `utils/tokenParser.ts`,
- * so the same run rendered `$1.518` in an embed and `$1.52` in the tree view.
- * There is now exactly one implementation and every caller imports it.
- */
-export function formatCost(usd: number): string {
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
 }
 
 /**
@@ -135,6 +122,13 @@ export interface WarnLogger {
  * contradicts: when the reported figure is below the largest single stage,
  * render the per-stage **sum** and log both numbers. Never silently assert
  * the contradiction, and never silently correct it either.
+ *
+ * The invariant is deliberately max-based, not sum-based: a total below its
+ * largest component is impossible, whereas a total merely below the *sum* is
+ * routine float and rounding noise, and a sum-strict check would fire on
+ * every healthy run. A quietly-undercounted total that still clears the max
+ * is therefore out of scope here (AC1) — the fix for that lives upstream in
+ * whoever books the stage costs, not in the renderer.
  *
  * @returns The total to render — the reported one unless the stages disprove it.
  */

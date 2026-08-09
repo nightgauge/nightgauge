@@ -153,7 +153,8 @@ describe("MattermostService.format — attachment for outcome types", () => {
     const att = service.buildAttachment(makeRun({ costUsd: 28.259 }) as never, state as never);
     const fields = att.fields as Array<{ title: string; value: string }>;
 
-    const accuracyField = fields.find((f) => f.title === "📊 Cost Accuracy");
+    // Plain title — Mattermost's other field titles carry no emoji.
+    const accuracyField = fields.find((f) => f.title === "Cost Accuracy");
     expect(accuracyField).toBeDefined();
     expect(accuracyField!.value).toBe("Est. $2.70 → Actual $28.26  ·  **10.5x over**");
     expect(accuracyField!.value).not.toContain("Est: $2.703");
@@ -186,7 +187,7 @@ describe("MattermostService.format — attachment for outcome types", () => {
     expect(att.color).toBe("#fee75c");
   });
 
-  it("states the mode exactly once — badge only, Limits field carries the ceiling (#333 decision I)", () => {
+  it("states the mode exactly once — in the Limits value, with the ceiling (#333 decision I)", () => {
     const state = makeState(42, "productive", {
       pipeline_meta: { performance_mode: "frontier" },
     });
@@ -198,9 +199,33 @@ describe("MattermostService.format — attachment for outcome types", () => {
     expect(fields.find((f) => f.title === "Mode")).toBeUndefined();
     const limits = fields.find((f) => f.title === "Limits");
     expect(limits).toBeDefined();
-    expect(limits!.value).toContain("up to Fable");
-    expect(limits!.value).not.toContain("Frontier");
+    expect(limits!.value).toBe("Frontier  ·  up to Fable");
   });
+
+  // The badge is an icon and Elevated (the default) has none, so "exactly
+  // once" has to be checked for every mode, not just the ones with an icon.
+  const MODES: ReadonlyArray<readonly [string | undefined, string]> = [
+    ["efficiency", "Efficiency"],
+    ["elevated", "Elevated"],
+    ["maximum", "Maximum"],
+    ["frontier", "Frontier"],
+    [undefined, "Elevated"],
+  ];
+
+  for (const [mode, label] of MODES) {
+    it(`${mode ?? "(unset)"} → "${label}" appears exactly once in the attachment`, () => {
+      const state = makeState(42, "productive", {
+        pipeline_meta: mode ? { performance_mode: mode } : {},
+      });
+      const att = service.buildAttachment(makeRun() as never, state as never);
+      expect(JSON.stringify(att).split(label).length - 1).toBe(1);
+
+      const limits = (att.fields as Array<{ title: string; value: string }>).find(
+        (f) => f.title === "Limits"
+      );
+      expect(limits!.value.startsWith(label)).toBe(true);
+    });
+  }
 });
 
 // ─── Cache hit rate parity with Discord (AC11 / #333 decision D) ────────────

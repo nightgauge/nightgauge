@@ -28,9 +28,8 @@ import { ConfigBridge } from "../ConfigBridge";
 import { Logger } from "../../utils/logger";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import {
-  buildErrorLead,
+  buildErrorDetailsBody,
   countFailedStages,
-  formatErrorForDiscord,
   outcomeDisplay,
   determineAction,
   modeDisplay,
@@ -44,7 +43,6 @@ import {
   FINAL_PATCH_MAX_RETRIES,
   FINAL_PATCH_RETRY_DELAYS,
   formatBudgetFieldValue,
-  formatCost,
   formatCostAccuracyValue,
   formatDuration,
   hexColor,
@@ -55,6 +53,7 @@ import {
   shouldRenderBudgetField,
   truncate,
 } from "./transport";
+import { formatCost } from "../../utils/formatCost";
 
 // ─── Mattermost attachment limits ───────────────────────────────────────────
 
@@ -810,7 +809,9 @@ export class MattermostService implements Notifier, vscode.Disposable {
       });
     }
 
-    // Limits, not Mode — the mode's name is the title badge (#333 decision I).
+    // Limits — the mode's name plus its consequences, stated exactly once
+    // (#333 decision I). Discord parity: the value leads with the mode label
+    // because the title badge is an icon, and Elevated has none.
     const liveMeta = state.pipeline_meta;
     const {
       label: liveModeLabel,
@@ -818,6 +819,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
       ceiling: liveCeiling,
     } = modeDisplay(liveMeta);
     const limitParts: string[] = [
+      liveModeLabel,
       liveModeLabel === "Maximum"
         ? `pinned${liveSuffix || ` ${liveCeiling}`}`
         : `up to ${liveCeiling}`,
@@ -854,20 +856,17 @@ export class MattermostService implements Notifier, vscode.Disposable {
       ([, s]) => s?.status === "failed"
     );
     if (failedStages.length > 0) {
-      // Lead with the stage and what went wrong (#333 decision H) — Discord parity.
-      const extractedByStage = failedStages.map(
-        ([name, s]) => [STAGE_LABEL[name] ?? name, formatErrorForDiscord(s?.error)] as const
-      );
-      const lead = extractedByStage
-        .map(([label, extracted]) => (extracted ? buildErrorLead(label, extracted) : null))
-        .find((l): l is string => l != null);
-      const errorLines = extractedByStage.map(
-        ([label, extracted]) => `❌ **${label}**${extracted ? `: ${extracted}` : ""}`
-      );
-      const body = lead ? [lead, "", ...errorLines] : errorLines;
+      // One shared renderer with Discord (#333 decision H / AC9) — the lead,
+      // the collapsed path list, and the trimmed policy prose are the same on
+      // both surfaces because they come from the same function.
       fields.push({
         title: "Error Details",
-        value: truncate(redactSecrets(body.join("\n")), MAX_FIELD_VALUE_LENGTH),
+        value: truncate(
+          redactSecrets(
+            buildErrorDetailsBody(failedStages.map(([name, s]) => [name, s?.error] as const))
+          ),
+          MAX_FIELD_VALUE_LENGTH
+        ),
         short: false,
       });
     }
@@ -927,7 +926,9 @@ export class MattermostService implements Notifier, vscode.Disposable {
     const estimateUsd = meta?.budget_estimate_usd;
     if (estimateUsd != null && estimateUsd > 0) {
       fields.push({
-        title: "📊 Cost Accuracy",
+        // Plain title — every other Mattermost field title here is plain, and
+        // one emoji among them reads as an error rather than an accent.
+        title: "Cost Accuracy",
         value: formatCostAccuracyValue(runTotalUsd, estimateUsd),
         short: true,
       });

@@ -1799,9 +1799,8 @@ describe("formatTokenCount", () => {
   });
 });
 
-// `formatCost` moved to services/notifications/transport.ts (#333 decision E —
-// one implementation, not two). Its tier tests live in
-// tests/services/notifications/transport.test.ts.
+// `formatCost` moved to src/utils/formatCost.ts (#333 decision E — one
+// implementation, not two). Its tier tests live in tests/utils/formatCost.test.ts.
 
 /**
  * Regression tests for multi-callback cost inflation bug (Issue #1336)

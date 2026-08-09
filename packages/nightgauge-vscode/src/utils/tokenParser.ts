@@ -18,8 +18,8 @@ import type { ExecutionAdapter } from "../config/schema";
 import type { TokenUsageUpdate } from "../services/PipelineStateService";
 import { computeStageCost } from "./computeStageCost";
 // One USD formatter for the whole extension (#333 decision E) — the tiered
-// implementation that used to be duplicated here now lives in transport.ts.
-import { formatCost } from "../services/notifications/transport";
+// implementation that used to be duplicated here now lives in utils/formatCost.
+import { formatCost } from "./formatCost";
 
 /**
  * Parsed token usage from a single result message

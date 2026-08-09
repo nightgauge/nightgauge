@@ -8,7 +8,7 @@ exports[`MattermostService.format — snapshot parity > attachment snapshot matc
     {
       "short": true,
       "title": "Limits",
-      "value": "up to Opus",
+      "value": "Elevated  ·  up to Opus",
     },
   ],
   "text": "**Test issue**
@@ -33,7 +33,7 @@ exports[`MattermostService.format — snapshot parity > attachment snapshot matc
     {
       "short": true,
       "title": "Limits",
-      "value": "up to Opus",
+      "value": "Elevated  ·  up to Opus",
     },
   ],
   "text": "**Test issue**
