@@ -34,11 +34,16 @@ var tsIdentitySourcePath = filepath.Join(
 // prettier reflows that assignment whenever the line length changes. The body
 // group accepts any run of non-slash, non-newline characters plus backslash
 // escapes, so the first UNescaped `/` closes the literal exactly as the
-// TypeScript lexer would close it.
+// TypeScript lexer would close it. The `(?m)^` anchor requires the declaration
+// at column 0 — a module-scope `export const` always is — so a `//`- or
+// ` * `-prefixed COPY of the declaration in a comment can never satisfy the
+// pin: a "moved to another module, left the old line commented out" refactor
+// must land in the zero-match failure below, not silently pass against the
+// comment while the real pattern drifts elsewhere.
 //
 // Captures: 1 = the regex body (between the slashes), 2 = the flag letters.
 var tsIdentityLiteralRegexp = regexp.MustCompile(
-	`export const RUN_IDENTITY_PATTERN\s*=\s*/((?:[^/\\\n]|\\.)*)/([a-zA-Z]*)`)
+	`(?m)^export const RUN_IDENTITY_PATTERN\s*=\s*/((?:[^/\\\n]|\\.)*)/([a-zA-Z]*)`)
 
 // realignHint is appended to every failure: the fixer needs to know that the
 // two sites are peers and that the deadline for drift is step 4.
@@ -83,9 +88,11 @@ func TestIdentityPatternPinnedToTypeScriptTwin(t *testing.T) {
 		t.Fatalf("no `export const RUN_IDENTITY_PATTERN = /…/` regex literal found in %s.\n"+
 			"The const was renamed, deleted, or rewritten in a form this pin cannot read "+
 			"(e.g. `new RegExp(\"…\")` — a string form re-introduces escaping questions the "+
-			"literal form does not have, so keep the literal). A missing definition is a "+
-			"FAILURE, never a skip: a pin that stops checking hides exactly the drift it "+
-			"exists to catch. %s",
+			"literal form does not have, so keep the literal). The literal must be a "+
+			"top-level declaration in THIS file — a commented-out copy or a re-export from "+
+			"another module does not count; if the definition moved, move this pin's path "+
+			"and extractor with it. A missing definition is a FAILURE, never a skip: a pin "+
+			"that stops checking hides exactly the drift it exists to catch. %s",
 			tsIdentitySourcePath, realignHint)
 	default:
 		t.Fatalf("found %d `export const RUN_IDENTITY_PATTERN = /…/` literals in %s; "+
