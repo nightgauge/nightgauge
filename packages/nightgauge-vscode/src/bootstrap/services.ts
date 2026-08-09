@@ -339,38 +339,77 @@ export interface TerminalFunnelLogger {
 }
 
 /**
- * Split a failed slot's `repoSlug` into the owner/repo the autonomous terminal
- * funnel is keyed on, or report that the funnel cannot run.
+ * Split a terminating slot's `repoSlug` into the owner/repo the autonomous
+ * terminal funnel is keyed on, or report that the funnel cannot run.
  *
- * Everything downstream of this split is fleet-level safety machinery:
- * the conflict-restart check, the terminal-kind signal, and above all
- * `IpcClient.autonomousComplete(false, …)`, which is what feeds the cascade
- * circuit breaker, increments the lifetime failure cap, and reverts the board.
- * A run that cannot name its repo is exactly the run the breaker should hear
- * about — and pre-#302 an absent or unsplittable slug skipped all of it with
- * no log at all, so a fleet could fail indefinitely without ever tripping.
+ * Everything downstream of this split is fleet-level machinery, and which part
+ * is lost depends on which terminal callback is asking — so the caller passes
+ * the `consequence` and the warn names it. All three terminal callbacks
+ * (completed, failed, deferred) funnel through here:
+ *
+ * - **completed** — `autonomousComplete(true, …)` is what tells the Go
+ *   scheduler the run is over. Skip it and `NotifyComplete` →
+ *   `onPipelineComplete` never runs, the run is never removed from
+ *   `state.Running`, and its concurrency slot is held forever: the fleet stops
+ *   dispatching, silently.
+ * - **failed** — `autonomousComplete(false, …)` feeds the cascade circuit
+ *   breaker, increments the lifetime failure cap, and reverts the board. A run
+ *   that cannot name its repo is exactly the run the breaker should hear
+ *   about; pre-#302 the skip was silent, so a fleet could fail indefinitely
+ *   without ever tripping.
+ * - **deferred** — the `blocked_dependency` signal is what returns the board
+ *   to Ready and arms the blocker-close requeue.
+ *
+ * Total by construction: `repoSlug` crosses a JSON/IPC boundary, so a
+ * non-string can arrive despite the declared type. Throwing inside a slot
+ * handler would be strictly worse than the silent skip this function exists to
+ * replace, so a non-string is reported the same way an unsplittable slug is.
  *
  * Visibility only: there is deliberately no fallback to a default repo here.
- * Guessing which repo a failure belongs to would mis-attribute the breaker's
- * window and the failure cap, which is a worse failure than a loud skip.
+ * Guessing which repo a run belongs to would mis-attribute the breaker's
+ * window, the failure cap, and the board write — worse than a loud skip.
  */
 export function resolveTerminalFunnelTarget(
   repoSlug: string | undefined,
   issueNumber: number,
+  consequence: string,
   log: TerminalFunnelLogger
 ): { owner: string; repo: string } | undefined {
-  const [owner, repo] = (repoSlug ?? "").split("/");
+  const refuse = (rendered: string): undefined => {
+    log.warn(
+      "Slot reached a terminal state with an unusable repoSlug — skipping the autonomous " +
+        `terminal funnel: ${consequence}. This run is invisible to fleet safety.`,
+      { issueNumber, repoSlug: rendered }
+    );
+    return undefined;
+  };
+
+  if (typeof repoSlug !== "string") {
+    return refuse(repoSlug === undefined ? "<undefined>" : String(repoSlug));
+  }
+  const [owner, repo] = repoSlug.split("/");
   if (owner && repo) {
     return { owner, repo };
   }
-  log.warn(
-    "Slot failed with an unusable repoSlug — skipping the autonomous terminal funnel " +
-      "(cascade breaker, lifetime failure cap, board revert). This failure is invisible " +
-      "to fleet safety.",
-    { issueNumber, repoSlug: repoSlug ?? "<undefined>" }
-  );
-  return undefined;
+  return refuse(repoSlug);
 }
+
+/**
+ * What is lost when {@link resolveTerminalFunnelTarget} cannot name the repo,
+ * per terminal callback. Kept beside the function so the three strings are
+ * readable together and no call site invents its own wording.
+ */
+export const TERMINAL_FUNNEL_CONSEQUENCE = {
+  completed:
+    "the Go scheduler is never told this run completed, so its concurrency slot is " +
+    "never freed and the fleet stops dispatching",
+  failed:
+    "the cascade breaker, the lifetime failure cap, and the board revert never hear " +
+    "about this failure",
+  deferred:
+    "the deferral is never signalled — the board is not returned to Ready and the " +
+    "blocker-close requeue will not fire",
+} as const;
 
 /**
  * Read GitHub labels for an issue from its issue context JSON file.
@@ -1579,10 +1618,21 @@ export async function initializeServices(
         // Notify Go autonomous scheduler that this run completed, so it
         // frees the slot and can dispatch the next candidate. Safe to call
         // even for non-autonomous runs — the Go side ignores unknown issues.
-        const [slotOwner, slotRepo] = (repoSlug ?? "").split("/");
-        if (slotOwner && slotRepo) {
+        //
+        // #302: the skip here is the worst of the three. On the SUCCESS path a
+        // missing autonomousComplete means NotifyComplete → onPipelineComplete
+        // never runs, the run is never removed from state.Running, and the
+        // concurrency slot is held forever — the fleet stops dispatching with
+        // nothing anywhere saying why.
+        const completedTarget = resolveTerminalFunnelTarget(
+          repoSlug,
+          issueNumber,
+          TERMINAL_FUNNEL_CONSEQUENCE.completed,
+          logger
+        );
+        if (completedTarget) {
           IpcClient.getInstance()
-            .autonomousComplete(slotOwner, slotRepo, issueNumber, true)
+            .autonomousComplete(completedTarget.owner, completedTarget.repo, issueNumber, true)
             .catch(() => {
               // Non-critical — autonomous scheduler may not be running
             });
@@ -1646,7 +1696,12 @@ export async function initializeServices(
         // Check for a conflict-restart signal so Go can skip the circuit
         // breaker — concurrent-branch collisions are infrastructure failures,
         // not code failures, and self-heal once we create a fresh branch.
-        const funnelTarget = resolveTerminalFunnelTarget(repoSlug, issueNumber, logger);
+        const funnelTarget = resolveTerminalFunnelTarget(
+          repoSlug,
+          issueNumber,
+          TERMINAL_FUNNEL_CONSEQUENCE.failed,
+          logger
+        );
         if (funnelTarget) {
           const { owner: failOwner, repo: failRepo } = funnelTarget;
           const signalPath = incrediRoot
@@ -1748,12 +1803,17 @@ export async function initializeServices(
         // blocker-close requeue re-dispatches once the blocker closes. The
         // `[blocked-dependency]` marker in the detail is defense-in-depth for
         // the Go ClassifyTerminalKind fallback.
-        const [defOwner, defRepo] = (repoSlug ?? "").split("/");
-        if (defOwner && defRepo) {
+        const deferredTarget = resolveTerminalFunnelTarget(
+          repoSlug,
+          issueNumber,
+          TERMINAL_FUNNEL_CONSEQUENCE.deferred,
+          logger
+        );
+        if (deferredTarget) {
           IpcClient.getInstance()
             .autonomousComplete(
-              defOwner,
-              defRepo,
+              deferredTarget.owner,
+              deferredTarget.repo,
               issueNumber,
               false,
               false,

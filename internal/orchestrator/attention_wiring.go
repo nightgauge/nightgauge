@@ -689,7 +689,7 @@ func (as *AutonomousScheduler) reconcileTerminalFailureCards() {
 	as.mu.Unlock()
 
 	if !readable {
-		log.Printf("attention: %q reconcile skipped (fail-open): autonomous state unavailable — retracting nothing", producerTerminalFailure)
+		log.Printf("attention: WARN %q reconcile skipped (fail-open): autonomous state unavailable — retracting nothing", producerTerminalFailure)
 		return
 	}
 	if !stillHalted {
