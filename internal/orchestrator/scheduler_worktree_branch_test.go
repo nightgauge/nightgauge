@@ -214,7 +214,7 @@ func TestScheduler_NonTerminalReconcile_WorktreeIsolatedRun_ReachesPRCheck(t *te
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"MERGED"}]`), nil
+		return prListPayload(pr("MERGED", testForeignPRTip, 7)), nil
 	})
 
 	runner := newWorktreeIsolatedRunner(t, f.worktree, repo, branch, state.StageFeaturePlanning)
@@ -296,7 +296,7 @@ func TestScheduler_NonTerminalReconcile_UnresolvableBranch_LogsTheSkip(t *testin
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"MERGED"}]`), nil
+		return prListPayload(pr("MERGED", testForeignPRTip, 7)), nil
 	})
 
 	runner := newWorktreeIsolatedRunner(t, f.worktree, repo, "", state.StageFeaturePlanning)
@@ -340,7 +340,7 @@ func TestScheduler_NonTerminalReconcile_IssuePickupFailure_NoSkipLog(t *testing.
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[]`), nil
+		return prListPayload(), nil
 	})
 
 	runner := newWorktreeIsolatedRunner(t, f.worktree, repo, branch, state.StageIssuePickup)

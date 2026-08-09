@@ -3283,6 +3283,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	conflictExhaustionReason := ""
 	conflictExhaustionStage := state.PipelineStage("")
 
+	// Records WHICH #3873 non-terminal reconcile arm (if any) ended this run, so
+	// the completion block below can pick the run's terminal board status per-arm
+	// (#398). Hoisted OUT of the loop for exactly that reason: the per-iteration
+	// reconciledNonTerminal flag dies with the iteration that breaks the loop,
+	// and the completion block runs after it. reconcileNone — the zero value —
+	// is every normal completion.
+	reconciledArm := reconcileNone
+
 	stageIdx := 0
 	for stageIdx < len(stages) {
 		stage := stages[stageIdx]
@@ -4037,7 +4045,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// reconciled stage, and the run then finishes rather than advancing.
 		// Scoped to one loop iteration on purpose: it must never leak to the
 		// next stage.
+		//
+		// reconciledArm carries the same fact PAST the loop (the completion block
+		// needs it, #398), so it is declared above the loop — and cleared here,
+		// each iteration, so it can only ever describe how the run ENDED. Today a
+		// fired arm always breaks the loop in the same iteration, so the clear is
+		// a no-op; it exists so a future `continue` inserted between the reconcile
+		// and the break cannot leave a stale Done on a run that went on to finish
+		// normally.
 		reconciledNonTerminal := false
+		reconciledArm = reconcileNone
 		if (err != nil || exitCode != 0) && !isTerminalStage(stage) {
 			// Resolve worktree-first (#299). The bare workspace-root lookup this
 			// used to do answers "" on every worktree-isolated run, because
@@ -4046,6 +4063,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// the check, so a stage that died AFTER its PR merged was recorded
 			// success:false and paged.
 			branch := resolveFeatureBranch(runtime, workspaceRoot, item.Number)
+			// The run's own branch tip, read from the checkout the stages actually
+			// executed in. It is what lets the PR probe tell THIS run's open PR
+			// from a prior run's (#398): only the latter is evidence that the work
+			// already progressed past dev. An unreadable tip resolves to "" and
+			// the probe fails closed on it (unknowable ownership blocks the
+			// reconcile), so no error handling is needed here.
+			localTip := localBranchTip(stageWorkspace(runtime, workspaceRoot), branch)
 			// issue-pickup is exempt: it is the stage that CREATES the branch
 			// (SetBranch fires immediately after it, in the post-stage metadata
 			// switch), so on a failed pickup no branch can exist by construction
@@ -4069,22 +4093,29 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// notifier's execFile timeout and the gate's gh budget. On timeout the
 			// helper's exec errors → fails closed (failure preserved).
 			reconCtx, cancelRecon := context.WithTimeout(ctx, 15*time.Second)
-			reconciled := reconcileIssueResolved(reconCtx, item, branch)
+			arm := reconcileIssueResolved(reconCtx, item, branch, localTip)
 			cancelRecon()
-			if reconciled {
-				log.Printf("#%d: non-terminal stage %s reported failure (exit=%d, err=%v) but issue is resolved on forge (closed / branch PR landed) — reconciling to success (#3873)",
-					item.Number, stage, exitCode, err)
+			if arm.reconciled() {
+				// Name the evidence, not the category. The pre-#398 line said
+				// "closed / branch PR landed" for every arm, so a reconcile driven
+				// by an open PR read in the log exactly like one driven by a merge.
+				log.Printf("#%d: non-terminal stage %s reported failure (exit=%d, err=%v) but %s — reconciling to success (#3873)",
+					item.Number, stage, exitCode, err, arm.evidence())
 				err = nil
 				exitCode = 0
 				reconciledNonTerminal = true
+				reconciledArm = arm
 				if s.telemetrySvc != nil && s.telemetryEnabled {
 					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
-						RunID:         runtime.RunID,
-						IssueNumber:   item.Number,
-						EventType:     "pipeline.failure_reconciled",
-						Stage:         string(stage),
-						Timestamp:     time.Now(),
-						Metadata:      map[string]interface{}{"reason": "non-terminal stage; issue resolved on forge"},
+						RunID:       runtime.RunID,
+						IssueNumber: item.Number,
+						EventType:   "pipeline.failure_reconciled",
+						Stage:       string(stage),
+						Timestamp:   time.Now(),
+						Metadata: map[string]interface{}{
+							"reason": "non-terminal stage; issue resolved on forge",
+							"arm":    arm.String(),
+						},
 						SchemaVersion: "1",
 					})
 				}
@@ -4937,9 +4968,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	}
 	log.Printf("#%d:   %-20s TOTAL  $%.4f", item.Number, "─────────────────", snap.TotalCostUSD)
 
-	// Pipeline complete — update board
+	// Pipeline complete — update board. The terminal status is per-arm (#398):
+	// a run the #3873 reconcile ended because the work already shipped (issue
+	// CLOSED, or the branch's PR MERGED) is Done, because there is nothing left
+	// to review. A reconcile backed only by a stale foreign OPEN PR, and every
+	// normal completion, stays In Review — the pipeline's long-standing terminal
+	// status for a run that leaves an open PR behind.
+	//
+	// Logged unconditionally, before the nil check: the board write is optional
+	// (headless / test runs have no board service) but the status the run
+	// resolved is the decision, and it must be visible either way.
+	completionStatus := completionBoardStatus(reconciledArm)
+	log.Printf("#%d: pipeline complete — board status %s (%s)",
+		item.Number, completionStatus, reconciledArm.completionReason())
 	if s.stateSvc != nil {
-		_ = s.stateSvc.CompletePipeline(ctx, item.ID, state.StatusInReview)
+		_ = s.stateSvc.CompletePipeline(ctx, item.ID, completionStatus)
 	}
 
 	// Mark pipeline as successful before defer fires.

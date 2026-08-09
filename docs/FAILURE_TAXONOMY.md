@@ -873,6 +873,30 @@ excluded. The confirmed instances are filed as:
   placeholder (#397 tracks removing the fabrication itself). A reconciled
   stage also finishes the run instead of re-manufacturing the failure at the
   #2870 output check or the next stage's prerequisite check
+- **#398** — the non-terminal reconcile's OPEN-PR arm treated _any_ open PR as
+  proof the failure was a phantom. #299 armed that probe on every
+  worktree-isolated run, which made the post-#4072 rewind shape reachable:
+  conflict recovery rewinds pr-merge → feature-dev, **this run's own** PR is
+  open, and a genuine feature-dev failure reconciles to a recorded success on
+  the one path where the run demonstrably has unfinished work — and since #299
+  the reconciled run ends there, so nothing downstream re-catches it.
+  **Fixed:** the PR probe requests `headRefOid` and the branch tip is resolved
+  locally (`git -C <stage workspace> rev-parse refs/heads/<branch>`), so an
+  open PR can be attributed. A two-pass scan decides it: (1) any **MERGED** PR
+  reconciles unconditionally — list order must not let an open PR veto a merge;
+  (2) otherwise an **own-run OPEN** PR (head SHA equals the local tip) blocks
+  the reconcile, even when a foreign open PR is also listed; (3) otherwise a
+  **foreign OPEN** PR still reconciles — #3873's stale-prior-run case,
+  preserved, since the issue stays visibly open-with-a-PR for an operator while
+  a false page erodes trust in every page. Unknowable ownership (no head SHA,
+  or no resolvable local tip) counts as own-run: this arm's mistake direction is
+  laundering a real failure into a success, so per rule 2 above it must not act
+  on a comparison it could not make. The reconcile now reports **which** arm
+  fired instead of a bare bool, so the log names the actual evidence (the old
+  line said "closed / branch PR landed" for every arm) and the run's terminal
+  board status is per-arm: issue-CLOSED or PR-MERGED → **Done** (the work
+  shipped), stale foreign OPEN PR → **In Review** (in review, not merged), and
+  every non-reconciled completion keeps its long-standing **In Review**
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage
   killed before the `result` event books zero tokens
 - **#301** — `captureConflictContextFromIndex` writes an empty capture as

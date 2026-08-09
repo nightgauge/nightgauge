@@ -10,6 +10,47 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
+// Two head SHAs the ownership test (#398) turns on: the tip of the branch the
+// run under test is executing on, and the head of a PR some OTHER run opened.
+// Full 40-char OIDs because that is what `gh pr list --json headRefOid` returns
+// — a truncated fixture would let a prefix-matching implementation pass.
+const (
+	testRunBranchTip = "9a1f0c7d5b3e2148a6c0d9f4b7e28135ca604d92"
+	testForeignPRTip = "1b2c3d4e5f60718293a4b5c6d7e8f90112233445"
+)
+
+// prListPayload renders a `gh pr list --json state,headRefOid,number` response.
+// Tests build fixtures through it so the probe's JSON shape lives in exactly one
+// place: when the field set changes again, one edit updates every fixture rather
+// than leaving some silently stripped down to the old shape.
+func prListPayload(prs ...struct {
+	state string
+	head  string
+	num   int
+}) []byte {
+	out := "["
+	for i, pr := range prs {
+		if i > 0 {
+			out += ","
+		}
+		out += fmt.Sprintf(`{"number":%d,"state":%q,"headRefOid":%q}`, pr.num, pr.state, pr.head)
+	}
+	return []byte(out + "]")
+}
+
+// pr is the fixture constructor for prListPayload.
+func pr(state, head string, num int) struct {
+	state string
+	head  string
+	num   int
+} {
+	return struct {
+		state string
+		head  string
+		num   int
+	}{state: state, head: head, num: num}
+}
+
 // stubReconcileGh swaps the package-level reconcileExecGh for the duration of a
 // test and restores it on cleanup. The handler receives the gh argv so a test
 // can branch on `issue view` vs `pr list`.
@@ -47,11 +88,11 @@ func TestReconcileIssueResolved_IssueClosed(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"CLOSED"}`), nil
 		}
-		return []byte(`[]`), nil
+		return prListPayload(), nil
 	})
 
-	if !reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("issue CLOSED must reconcile to resolved")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got != reconcileIssueClosed {
+		t.Fatalf("issue CLOSED must reconcile via the issue-closed arm; got %v", got)
 	}
 }
 
@@ -62,28 +103,33 @@ func TestReconcileIssueResolved_PrMerged(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		// pr list
-		return []byte(`[{"state":"MERGED"}]`), nil
+		return prListPayload(pr("MERGED", testRunBranchTip, 7)), nil
 	})
 
-	if !reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("branch PR MERGED must reconcile to resolved")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got != reconcilePrMerged {
+		t.Fatalf("branch PR MERGED must reconcile via the pr-merged arm; got %v", got)
 	}
 }
 
-// TestReconcileIssueResolved_PrOpen: an OPEN PR for the branch (issue still
-// open) also reconciles — the work has progressed past dev into review, so a
-// non-terminal stage's phantom failure should not page.
-func TestReconcileIssueResolved_PrOpen(t *testing.T) {
+// TestReconcileIssueResolved_ForeignPrOpen: an OPEN PR for the branch that
+// belongs to some OTHER run (its head is not this run's branch tip) still
+// reconciles — the work has progressed past dev into review, so a non-terminal
+// stage's phantom failure should not page.
+//
+// This is #3873's original case (knowledge ADR-002), preserved verbatim by #398:
+// the regression that motivated #3873 paged on an issue whose PR was
+// OPEN+MERGEABLE, and that shape is exactly a foreign OPEN PR. #398 narrowed the
+// arm to foreign PRs only; it did not remove it.
+func TestReconcileIssueResolved_ForeignPrOpen(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"OPEN"}]`), nil
+		return prListPayload(pr("OPEN", testForeignPRTip, 12)), nil
 	})
 
-	if !reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("branch PR OPEN must reconcile to resolved")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got != reconcilePrOpenStale {
+		t.Fatalf("a stale OPEN PR from a prior run must still reconcile (#3873 preserved); got %v", got)
 	}
 }
 
@@ -94,11 +140,11 @@ func TestReconcileIssueResolved_GenuinelyOpen(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[]`), nil
+		return prListPayload(), nil
 	})
 
-	if reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("genuinely-open issue with no PR must NOT reconcile")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got.reconciled() {
+		t.Fatalf("genuinely-open issue with no PR must NOT reconcile; got %v", got)
 	}
 }
 
@@ -109,23 +155,24 @@ func TestReconcileIssueResolved_PrClosedNotMerged(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"CLOSED"}]`), nil
+		return prListPayload(pr("CLOSED", testForeignPRTip, 9)), nil
 	})
 
-	if reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("abandoned (CLOSED, not MERGED) PR must NOT reconcile")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got.reconciled() {
+		t.Fatalf("abandoned (CLOSED, not MERGED) PR must NOT reconcile; got %v", got)
 	}
 }
 
-// TestReconcileIssueResolved_ForgeError_FailsClosed: any gh error returns false
-// (fail-closed) so an uncertain check never masks a genuine failure.
+// TestReconcileIssueResolved_ForgeError_FailsClosed: any gh error returns
+// reconcileNone (fail-closed) so an uncertain check never masks a genuine
+// failure.
 func TestReconcileIssueResolved_ForgeError_FailsClosed(t *testing.T) {
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
 		return nil, errors.New("gh: API rate limit exceeded")
 	})
 
-	if reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("forge query error must fail closed (return false)")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got.reconciled() {
+		t.Fatalf("forge query error must fail closed; got %v", got)
 	}
 }
 
@@ -136,13 +183,13 @@ func TestReconcileIssueResolved_UnparseableJSON_FailsClosed(t *testing.T) {
 		return []byte(`not json`), nil
 	})
 
-	if reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x") {
-		t.Fatalf("unparseable gh output must fail closed (return false)")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "feat/40-x", testRunBranchTip); got.reconciled() {
+		t.Fatalf("unparseable gh output must fail closed; got %v", got)
 	}
 }
 
 // TestReconcileIssueResolved_MalformedRepo_FailsClosed: a repo slug that fails
-// the well-formed guard never shells out and returns false.
+// the well-formed guard never shells out and returns reconcileNone.
 func TestReconcileIssueResolved_MalformedRepo_FailsClosed(t *testing.T) {
 	called := false
 	stubReconcileGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -151,8 +198,8 @@ func TestReconcileIssueResolved_MalformedRepo_FailsClosed(t *testing.T) {
 	})
 
 	item := types.BoardItem{Number: 40, Repo: "not-a-valid-repo;rm -rf"}
-	if reconcileIssueResolved(context.Background(), item, "feat/40-x") {
-		t.Fatalf("malformed repo must fail closed")
+	if got := reconcileIssueResolved(context.Background(), item, "feat/40-x", testRunBranchTip); got.reconciled() {
+		t.Fatalf("malformed repo must fail closed; got %v", got)
 	}
 	if called {
 		t.Fatalf("malformed repo must short-circuit before any gh call")
@@ -170,11 +217,11 @@ func TestReconcileIssueResolved_EmptyBranch_OnlyIssueCheck(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"MERGED"}]`), nil
+		return prListPayload(pr("MERGED", testRunBranchTip, 7)), nil
 	})
 
-	if reconcileIssueResolved(context.Background(), acmeappItem(40), "") {
-		t.Fatalf("empty branch + open issue must not reconcile via PR probe")
+	if got := reconcileIssueResolved(context.Background(), acmeappItem(40), "", testRunBranchTip); got.reconciled() {
+		t.Fatalf("empty branch + open issue must not reconcile via PR probe; got %v", got)
 	}
 	if prListCalled {
 		t.Fatalf("empty branch must skip the pr list probe")
@@ -188,9 +235,9 @@ func TestReconcileIssueResolved_EmptyBranch_OnlyIssueCheck(t *testing.T) {
 // the integration contract is pinned without the full runPipeline plumbing. If
 // that scheduler predicate changes, mirror it here. Returns the post-reconcile
 // (err, exitCode).
-func reconcileNonTerminalForTest(stage state.PipelineStage, item types.BoardItem, branch string, err error, exitCode int) (error, int) {
+func reconcileNonTerminalForTest(stage state.PipelineStage, item types.BoardItem, branch, localTip string, err error, exitCode int) (error, int) {
 	if (err != nil || exitCode != 0) && !isTerminalStage(stage) {
-		if reconcileIssueResolved(context.Background(), item, branch) {
+		if reconcileIssueResolved(context.Background(), item, branch, localTip).reconciled() {
 			return nil, 0
 		}
 	}
@@ -204,11 +251,11 @@ func TestScheduler_NonTerminalFailure_IssueClosed_Reconciled(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"CLOSED"}`), nil
 		}
-		return []byte(`[]`), nil
+		return prListPayload(), nil
 	})
 
 	err, exitCode := reconcileNonTerminalForTest(
-		state.StageFeatureValidate, acmeappItem(40), "feat/40-x",
+		state.StageFeatureValidate, acmeappItem(40), "feat/40-x", testRunBranchTip,
 		errors.New("schema validation failed"), 1)
 
 	if err != nil || exitCode != 0 {
@@ -223,12 +270,12 @@ func TestScheduler_NonTerminalFailure_PrMerged_Reconciled(t *testing.T) {
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[{"state":"MERGED"}]`), nil
+		return prListPayload(pr("MERGED", testRunBranchTip, 7)), nil
 	})
 
 	// Pre-flight death: non-zero exit, no stage error text (empty err).
 	err, exitCode := reconcileNonTerminalForTest(
-		state.StageFeatureDev, acmeappItem(40), "feat/40-x", nil, 1)
+		state.StageFeatureDev, acmeappItem(40), "feat/40-x", testRunBranchTip, nil, 1)
 
 	if err != nil || exitCode != 0 {
 		t.Errorf("pre-flight death on a merged-PR issue must reconcile; err=%v exit=%d", err, exitCode)
@@ -243,12 +290,12 @@ func TestScheduler_NonTerminalFailure_GenuinelyOpen_NotReconciled(t *testing.T) 
 		if ghArgsContain(args, "issue") && ghArgsContain(args, "view") {
 			return []byte(`{"state":"OPEN"}`), nil
 		}
-		return []byte(`[]`), nil
+		return prListPayload(), nil
 	})
 
 	stageErr := errors.New("subagent crashed")
 	err, exitCode := reconcileNonTerminalForTest(
-		state.StageFeatureDev, acmeappItem(40), "feat/40-x", stageErr, 1)
+		state.StageFeatureDev, acmeappItem(40), "feat/40-x", testRunBranchTip, stageErr, 1)
 
 	if err == nil || exitCode == 0 {
 		t.Errorf("genuine non-terminal failure must NOT be reconciled; err=%v exit=%d", err, exitCode)
@@ -266,7 +313,7 @@ func TestScheduler_NonTerminalFailure_TerminalStageUnaffected(t *testing.T) {
 
 	stageErr := fmt.Errorf("pr-create failed")
 	err, exitCode := reconcileNonTerminalForTest(
-		state.StagePRCreate, acmeappItem(40), "feat/40-x", stageErr, 1)
+		state.StagePRCreate, acmeappItem(40), "feat/40-x", testRunBranchTip, stageErr, 1)
 
 	if err == nil || exitCode == 0 {
 		t.Errorf("terminal stage must not be reconciled by the non-terminal block; err=%v exit=%d", err, exitCode)
