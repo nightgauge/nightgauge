@@ -76,14 +76,19 @@ function emit(event: string, data: unknown): void {
 }
 
 /**
- * A `pipeline.stateChanged` envelope in the shape the Go server emits: the
- * run's snapshot nested under `state`, with the identity available at the
- * envelope level, the snapshot level, or neither.
+ * A `pipeline.stateChanged` envelope in the shape the Go server emits.
+ *
+ * REAL SHAPE (#166). `internal/ipc/server.go` emits
+ * `{repo, issueNumber, state: snap}` — NO envelope-level `runId` — and
+ * `internal/state/runtime_state.go` tags `RunID` with no `omitempty`, so
+ * `state.runId` is ALWAYS present and, for an extension-path run, is an id
+ * the SERVER minted for itself. `serverRunId` models that; `runId` models the
+ * envelope field step 4 adds.
  */
 function stateChanged(opts: {
   issueNumber: number;
   runId?: string;
-  nestedRunId?: string;
+  serverRunId?: string;
   stage: string;
 }): unknown {
   return {
@@ -94,7 +99,8 @@ function stateChanged(opts: {
       issueNumber: opts.issueNumber,
       stage: opts.stage,
       stageStart: new Date().toISOString(),
-      ...(opts.nestedRunId ? { runId: opts.nestedRunId } : {}),
+      // Always present on the wire, exactly as Go marshals it.
+      runId: opts.serverRunId ?? "",
     },
   };
 }
@@ -138,23 +144,45 @@ describe("PipelineStateService — stateChanged routes by run identity", () => {
     expect(svc.getEmptyIdFallbackCount()).toBe(0);
   });
 
-  it("honours a nested state.runId when the envelope carries none", async () => {
+  it("APPLIES the REAL server shape — no envelope id, a FOREIGN state.runId", async () => {
+    // The regression this exists to make impossible. `state.runId` is the
+    // server's own minted runtime id, not this run's identity, and comparing
+    // against it took the strict arm and DROPPED every authoritative
+    // `pipeline.stateChanged` for the whole run: `_lastState` never got
+    // written (the happy path builds it only from this echo), so the tree,
+    // the dashboard, the summary panel, `isPipelineComplete` and
+    // retryFailedIssue's #870 guard all saw nothing.
     const svc = await makeService(370);
-    const live = await mint();
-    const dead = await mint();
-    svc.beginRun(live, "nightgauge/nightgauge", 370);
+    const mine = await mint();
+    const serversOwn = await mint(); // a DIFFERENT canonical UUIDv7
+    expect(serversOwn).not.toBe(mine);
+    svc.beginRun(mine, "nightgauge/nightgauge", 370);
 
     emit(
       "pipeline.stateChanged",
-      stateChanged({ issueNumber: 370, nestedRunId: dead, stage: "issue-pickup" })
+      stateChanged({ issueNumber: 370, serverRunId: serversOwn, stage: "feature-dev" })
     );
-    expect((await svc.getState())?.stages["issue-pickup"]).toBeUndefined();
 
-    emit(
-      "pipeline.stateChanged",
-      stateChanged({ issueNumber: 370, nestedRunId: live, stage: "feature-dev" })
-    );
+    // Applied through the issue pre-filter, and COUNTED as an empty-id
+    // fallback — that counter is how step 4 will know the emitters are done.
     expect((await svc.getState())?.stages["feature-dev"]?.status).toBe("running");
+    expect(svc.getEmptyIdFallbackCount()).toBe(1);
+  });
+
+  it("drops a matching runId whose issueNumber disagrees (conjunctive strict arm)", async () => {
+    // The strict arm must not lose the issue pre-filter the old code applied
+    // unconditionally: the local IPC socket is unauthenticated (ADR-015) and
+    // the id is written in cleartext to `runtime-{issue}-{runId}.json`.
+    const svc = await makeService(370);
+    const mine = await mint();
+    svc.beginRun(mine, "nightgauge/nightgauge", 370);
+
+    emit(
+      "pipeline.stateChanged",
+      stateChanged({ issueNumber: 999, runId: mine, stage: "pr-merge" })
+    );
+
+    expect(await svc.getState()).toBeNull();
     expect(svc.getEmptyIdFallbackCount()).toBe(0);
   });
 

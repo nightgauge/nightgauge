@@ -55,7 +55,16 @@ interface RawGoState {
   totalCostUsd?: number;
   paused?: boolean;
   retryCount?: number;
-  /** Run identity of the snapshot (ADR-017 Decision 6); empty until step 4. */
+  /**
+   * THE SERVER'S OWN RUNTIME ID, NOT THE EMITTING RUN'S (ADR-017, #370).
+   *
+   * `internal/state/runtime_state.go` tags `RunID` with no `omitempty`, and
+   * for an extension-path run `internal/ipc/server.go` MINTS IT ITSELF (step 2
+   * accepts and ignores the id the extension sends). So this field is always
+   * populated and always a DIFFERENT UUIDv7 from the one the dispatch
+   * installed — non-comparable to it, and not this run's identity, until
+   * step 4 re-keys the runtime registry.
+   */
   runId?: string;
 }
 
@@ -63,13 +72,15 @@ interface RawGoState {
  * ADR-017 Decision 6 — THE STEP-4 RE-KEY POINT.
  *
  * `runId` is typed on all five inbound envelopes below and recorded onto the
- * snapshot when present, but this tracker's map stays keyed by ISSUE NUMBER
- * on purpose. The phase and stage envelopes carry no id until the server
- * re-keys in step 4, so keying the map on `runId` today would fragment ONE
- * run across two keys — a `stateChanged`-keyed card and a phase-keyed card
- * for the same issue — which is worse than the collision it would fix. When
- * step 4 makes every envelope carry the id, re-key this map here and route
- * `runId` → slot as Decision 6 specifies.
+ * snapshot when the ENVELOPE names one, but this tracker's map stays keyed by
+ * ISSUE NUMBER on purpose. NO envelope carries an id today — the server emits
+ * `{repo, issueNumber, state}` and stamps the field in step 4 — so keying the
+ * map on `runId` now would fragment ONE run across two keys, or key it on
+ * nothing at all. The nested `state.runId` is deliberately NOT used as a
+ * substitute: it is the server's own runtime id (see `RawGoState.runId`), a
+ * different identity from the emitter's. When step 4 makes every envelope
+ * carry the id, re-key this map here and route `runId` → slot as Decision 6
+ * specifies.
  */
 interface RawStateChanged {
   issueNumber: number;
@@ -118,9 +129,10 @@ export interface SlotRuntimeStageEntry {
 export interface SlotRuntimeSnapshot {
   issueNumber: number;
   /**
-   * The run this snapshot describes, once an event names one (ADR-017
-   * Decision 6). Recorded but NOT yet used as the map key — see the re-key
-   * note on `RawStateChanged`.
+   * The run this snapshot describes, once an ENVELOPE names one (ADR-017
+   * Decision 6). Empty until step 4 stamps the envelopes; never filled from
+   * the nested `state.runId`, which belongs to the server. Recorded but NOT
+   * yet used as the map key — see the re-key note on `RawStateChanged`.
    */
   runId?: string;
   title?: string;
@@ -384,11 +396,12 @@ export class PipelineSlotsTracker implements vscode.Disposable {
     const snap = this.ensureSnapshot(event.issueNumber);
     const go = event.state ?? {};
 
-    // Record the run this snapshot is about when either level of the
-    // envelope names one (ADR-017 Decision 6). Recording only; the map stays
-    // issue-keyed until step 4 — see the re-key note on RawStateChanged.
-    const eventRunId = event.runId ?? go.runId;
-    if (eventRunId) snap.runId = eventRunId;
+    // Record the run this snapshot is about, from the ENVELOPE only (ADR-017
+    // Decision 6). `go.runId` is deliberately not a fallback: it is the
+    // SERVER's minted runtime id, so recording it would display a foreign
+    // identity as this run's. Empty until step 4 stamps the envelope — THE
+    // STEP-4 RE-KEY POINT. Recording only; the map stays issue-keyed.
+    if (event.runId) snap.runId = event.runId;
 
     if (go.title) snap.title = go.title;
     if (go.branch) snap.branch = go.branch;

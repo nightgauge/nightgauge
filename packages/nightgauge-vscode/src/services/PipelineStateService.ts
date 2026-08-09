@@ -445,11 +445,20 @@ export interface GoRuntimeState {
   }>;
   prUrl?: string;
   /**
-   * Run identity the snapshot belongs to (ADR-017 Decision 6, #370).
+   * THE SERVER'S OWN RUNTIME ID — NOT THIS RUN'S IDENTITY (ADR-017, #370).
    *
-   * The wire always carries `state.runId`; it is EMPTY for extension-path runs
-   * until the server re-keys in step 4, which is why the inbound filter falls
-   * back to the issue-number pre-filter rather than dropping the event.
+   * `internal/state/runtime_state.go` tags `RunID` with no `omitempty`, so the
+   * field is always present on the wire, and for an extension-path run the
+   * server MINTED IT ITSELF (`internal/ipc/server.go`: step 2 accepts and
+   * ignores the id the extension sends, then calls `runstate.NewRunID()`).
+   * It is therefore a different UUIDv7 from the one `beginRun` installed here
+   * and is NON-COMPARABLE to it until step 4 re-keys the runtime registry on
+   * the extension's identity.
+   *
+   * Never feed this into {@link acceptsEvent}: a strict-equality comparison
+   * against it drops every authoritative `pipeline.stateChanged` for every run
+   * that holds an identity, which is precisely the "a filter made a UX surface
+   * go dark" failure Decision 6 forbids. Display and diagnostics only.
    */
   runId?: string;
 }
@@ -601,12 +610,22 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   dispose(): void {
-    // Release the identity before tearing down (ADR-017 Decision 10). Both
-    // `cleanupSlot` teardown sites reach dispose(), so this is what stops a
-    // disposed slot service from still claiming to hold a live run — a
-    // recycled service that answered `getRunId()` would refuse the next
-    // `beginRun` for an issue nobody is running.
-    this.endRun();
+    // DELIBERATELY DOES NOT RELEASE THE IDENTITY (ADR-017 Decision 10).
+    //
+    // The release points are `notifyPipelineComplete`, `clearPipeline` and the
+    // keyed `finally`s at the dispatch sites that minted — nothing else. An
+    // earlier cut released here to stop a "recycled" service from refusing the
+    // next `beginRun`, but no such recycling exists: `createForWorktree`
+    // returns a NEW instance per dispatch and the singleton's teardown pairs
+    // with `resetInstance()`. The only case the release actually changed was
+    // the force-clear-then-late-settle one, where it did harm: `cleanupSlot`
+    // disposes a slot service while its run may still be in flight, and that
+    // run's own late `notifyPipelineComplete` is the sole writer of its
+    // history record and learning outcome. Released underneath it, the call
+    // would go out unattributed and step 4 would refuse it `run_id_required` —
+    // two records that silently stop being written. A disposed service keeps
+    // its id so its own terminal claim is still attributable; step 6's
+    // `pipeline.abandonRun` is what books the force-clear itself.
     for (const d of this.disposables) {
       d.dispose();
     }
@@ -770,14 +789,30 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   /**
-   * Release the installed identity (ADR-017 Decision 10).
+   * Release the identity `runId` names — COMPARE-AND-CLEAR (ADR-017
+   * Decision 10).
    *
-   * Fired by `notifyPipelineComplete` (after its terminal claim), by
-   * `clearPipeline`, and by `dispose`. Idempotent: releasing when nothing is
-   * installed is a no-op, because the three firing sites overlap by design
-   * (a completed run is also cleared, and a cleared slot is also disposed).
+   * Keyed on purpose, with no un-keyed overload. Every release is a claim
+   * that a SPECIFIC run is over, and the releaser almost always crosses an
+   * await before it fires: `notifyPipelineComplete` awaits its terminal IPC
+   * round trip, a command awaits the stage it dispatched. In that window the
+   * singleton can already be speaking for a SUCCESSOR — `startNextQueuedIssue`
+   * clears and re-begins in one tick — and an un-keyed release would null the
+   * successor's identity, after which it emits `runId: ""` for the rest of its
+   * life. Comparing first makes a stale release a no-op, the same discipline
+   * `stillOwnsIssue` and the force-clear tombstone already keep (#307/C10).
+   *
+   * Releasing an id that is not installed is a logged no-op, never a throw:
+   * the release sites overlap by design (a completed run is also cleared).
    */
-  endRun(): void {
+  endRun(runId: string): void {
+    if (this.runId !== runId) {
+      (this.rejectionLogger ?? console).debug(
+        `[PipelineStateService] endRun ignored — a different run holds the identity`,
+        { released: runId, installed: this.runId }
+      );
+      return;
+    }
     this.runId = null;
     this.runRepo = "";
   }
@@ -1188,7 +1223,12 @@ export class PipelineStateService implements vscode.Disposable {
       // holding a completed run's id would refuse the next `beginRun` for the
       // same issue (ADR-017 Decision 10). Released AFTER the send, never
       // before: the send is the only place the identity is still needed.
-      this.endRun();
+      //
+      // KEYED on the id captured BEFORE the await. `firePipelineComplete`
+      // calls this fire-and-forget, so the IPC round trip above can outlive
+      // the successor's `clearPipeline()` + `beginRun()`; an un-keyed release
+      // here would null the SUCCESSOR's identity.
+      if (runId !== null) this.endRun(runId);
     }
   }
 
@@ -1211,8 +1251,12 @@ export class PipelineStateService implements vscode.Disposable {
     this._lastState = null;
     // Clearing the pipeline ends the run this service was speaking for
     // (ADR-017 Decision 10) — otherwise the next dispatch of the same issue
-    // hits the not-ambient refusal against a run nobody is executing.
-    this.endRun();
+    // hits the not-ambient refusal against a run nobody is executing. Reads
+    // the installed id and releases THAT one: the keyed release has no
+    // un-keyed overload, and there is no await between the read and the
+    // release, so it cannot target a successor.
+    const installed = this.runId;
+    if (installed !== null) this.endRun(installed);
     this._onStateChanged.fire(null);
   }
 
@@ -1228,23 +1272,36 @@ export class PipelineStateService implements vscode.Disposable {
    * three, and an emitter that cannot name the run it is pausing has nothing
    * safe to send — so it sends nothing and says so.
    */
-  async pausePipeline(): Promise<void> {
+  /**
+   * @returns `true` when the pause reached Go and will survive a reload;
+   *   `false` when it is in-memory only. Callers MUST NOT report an
+   *   unqualified success on `false` — see {@link sendPaused}.
+   */
+  async pausePipeline(): Promise<boolean> {
     if (this._lastState) {
       this._lastState.paused = true;
       this._onStateChanged.fire(this._lastState);
     }
-    await this.sendPaused(true);
+    return this.sendPaused(true);
   }
 
-  async resumePipeline(): Promise<void> {
+  /** @returns `true` when the resume was persisted to Go. @see pausePipeline */
+  async resumePipeline(): Promise<boolean> {
     if (this._lastState) {
       this._lastState.paused = false;
       this._onStateChanged.fire(this._lastState);
     }
-    await this.sendPaused(false);
+    return this.sendPaused(false);
   }
 
-  private async sendPaused(paused: boolean): Promise<void> {
+  /**
+   * @returns whether the pause state was PERSISTED to Go. `false` means the
+   *   in-memory flag moved and nothing else did — the run is paused for this
+   *   session and the pause is lost on reload. The command layer says so out
+   *   loud rather than claiming an unqualified success, because #239's whole
+   *   point is cross-session recovery.
+   */
+  private async sendPaused(paused: boolean): Promise<boolean> {
     const runId = this.runId;
     if (runId === null || this.issueNumber === null) {
       (this.rejectionLogger ?? console).warn(
@@ -1252,7 +1309,7 @@ export class PipelineStateService implements vscode.Disposable {
           `The in-memory pause flag is set; nothing was written to Go.`,
         { issueNumber: this.issueNumber, paused }
       );
-      return;
+      return false;
     }
     try {
       await this.ipc.call("pipeline.setPaused", {
@@ -1261,6 +1318,7 @@ export class PipelineStateService implements vscode.Disposable {
         repo: this.runRepo,
         runId,
       } satisfies SetPausedParams);
+      return true;
     } catch (err) {
       // Non-critical: in-memory flag still set; UI still updates
       handleIpcRejection({
@@ -1269,6 +1327,7 @@ export class PipelineStateService implements vscode.Disposable {
         err,
         logger: this.rejectionLogger,
       });
+      return false;
     }
   }
 
@@ -1653,17 +1712,30 @@ export class PipelineStateService implements vscode.Disposable {
    *
    * When both sides have an id, strict equality decides — that is what stops a
    * dead run's late event from repainting its live successor's state, which
-   * the issue-number pre-filter cannot tell apart. When either side has none,
-   * fall back to today's issue-number pre-filter and COUNT it: an event with
-   * no id must never be dropped, because a strict-equality filter can never be
-   * the reason a dashboard slot goes dark (C9, fail-open on a UX surface).
+   * the issue-number pre-filter cannot tell apart. The strict arm is
+   * CONJUNCTIVE: the issue number must still agree, because the local IPC
+   * socket is unauthenticated (ADR-015) and the id is written in cleartext to
+   * `runtime-{issue}-{runId}.json` — two independent facts agreeing costs
+   * nothing on the happy path and never loses the pre-filter the old code
+   * applied unconditionally.
    *
-   * The fallback arm is live for every extension-path event until step 4 makes
-   * the server carry the id it is already being sent.
+   * When either side has none, fall back to today's issue-number pre-filter
+   * and COUNT it: an event with no id must never be dropped, because a
+   * strict-equality filter can never be the reason a dashboard slot goes dark
+   * (C9, fail-open on a UX surface).
+   *
+   * `eventRunId` MUST come from the ENVELOPE. The nested `state.runId` is the
+   * server's own runtime id (see {@link GoRuntimeState.runId}) and comparing
+   * against it would drop every real event. The envelope field arrives in
+   * step 4, so every extension-path event legitimately takes the fallback arm
+   * until then — which is exactly what `emptyIdFallbackCount` measures.
    */
   private acceptsEvent(eventRunId: string, eventIssueNumber: number): boolean {
     if (this.runId && eventRunId) {
-      return eventRunId === this.runId;
+      return (
+        eventRunId === this.runId &&
+        (this.issueNumber === null || eventIssueNumber === this.issueNumber)
+      );
     }
     if (this.issueNumber !== null && eventIssueNumber !== this.issueNumber) {
       return false;
@@ -1688,15 +1760,19 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           repo: string;
           /**
-           * Run identity of the emitting run (ADR-017 Decision 6). Present on
-           * the envelope and/or nested on the snapshot; empty for
-           * extension-path runs until the step-4 re-key.
+           * Run identity of the EMITTING RUN (ADR-017 Decision 6). The server
+           * does not stamp it yet — `internal/ipc/server.go` emits
+           * `{repo, issueNumber, state}` — so it is undefined today and the
+           * event takes the empty-id fallback arm. Step 4 adds it.
+           *
+           * Deliberately NOT defaulted to `state.runId`: that is the server's
+           * own runtime id, a different UUIDv7 from the one installed here.
            */
           runId?: string;
           // Go RuntimeState has a different shape than PipelineState — see GoRuntimeState above.
           state: GoRuntimeState;
         };
-        if (!this.acceptsEvent(d.runId ?? d.state?.runId ?? "", d.issueNumber)) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
 
@@ -1981,9 +2057,11 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: number;
           stage: string;
           repo: string;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
           title: string;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
         if (!this._lastState || this._lastState.issue_number !== d.issueNumber) {
@@ -2181,9 +2259,11 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
           error: string;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
         this._onStageError.fire(d);
@@ -2195,6 +2275,8 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
           name: string;
           index: number;
           total: number;
@@ -2202,9 +2284,9 @@ export class PipelineStateService implements vscode.Disposable {
         console.log(
           `[PipelineStateService] phase.start EVENT: stage=${d.stage} phase=${d.name} issueNumber=${d.issueNumber} myIssue=${this.issueNumber} hasState=${!!this._lastState} hasStage=${!!this._lastState?.stages[d.stage]}`
         );
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           console.log(
-            `[PipelineStateService] phase.start FILTERED OUT: myIssue=${this.issueNumber} eventIssue=${d.issueNumber}`
+            `[PipelineStateService] phase.start FILTERED OUT: myIssue=${this.issueNumber} eventIssue=${d.issueNumber} myRunId=${this.runId} eventRunId=${d.runId ?? ""}`
           );
           return;
         }
@@ -2253,11 +2335,13 @@ export class PipelineStateService implements vscode.Disposable {
         const d = data as {
           issueNumber: number;
           stage: string;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
           name: string;
           index: number;
           total: number;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
         if (this._lastState) {
@@ -2289,6 +2373,8 @@ export class PipelineStateService implements vscode.Disposable {
       this.ipc.on("pipeline.complete", (data: unknown) => {
         const d = data as {
           issueNumber: number;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
           success: boolean;
           totalInputTokens: number;
           totalOutputTokens: number;
@@ -2300,7 +2386,7 @@ export class PipelineStateService implements vscode.Disposable {
             costUsd: number;
           }>;
         };
-        if (this.issueNumber !== null && d.issueNumber !== this.issueNumber) {
+        if (!this.acceptsEvent(d.runId ?? "", d.issueNumber)) {
           return;
         }
         if (!this._lastState || this._lastState.issue_number !== d.issueNumber) {
@@ -2361,7 +2447,24 @@ export class PipelineStateService implements vscode.Disposable {
 
     this.disposables.push(
       this.ipc.on("pipeline.historyRecorded", (data: unknown) => {
-        const d = data as { issueNumber: number; success: boolean };
+        const d = data as {
+          issueNumber: number;
+          /** Emitting run's identity (ADR-017 Decision 6); absent until step 4. */
+          runId?: string;
+          success: boolean;
+        };
+        // The one inbound envelope that gets the STRICT ARM ONLY, not the full
+        // `acceptsEvent`. This handler had NO issue pre-filter before ADR-017,
+        // because it is a GLOBAL dashboard refresh trigger (`Dashboard.ts`
+        // re-reads all metrics on it, not this issue's). Routing it through
+        // `acceptsEvent` would give it an issue filter it never had and make
+        // the dashboard go stale for every concurrent-slot run — the same
+        // "a filter made a UX surface go dark" defect Decision 6 forbids. So
+        // it drops only when BOTH sides name a run and the names disagree,
+        // which is unreachable until step 4 stamps the envelope.
+        if (this.runId && d.runId && d.runId !== this.runId) {
+          return;
+        }
         this._onHistoryRecorded.fire(d);
       })
     );
