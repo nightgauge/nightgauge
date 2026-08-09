@@ -1020,8 +1020,12 @@ export function getCostCapModeMultiplier(
  *   `effectiveCap = baseCap × modelScale × modeMultiplier × providerScale`
  *
  * Seed values are the ratio of (adapter's typical-cost-per-stage) /
- * (Claude's typical-cost-per-stage) derived from the C1 pricing tables
- * (`providerPricing.ts`). `claude=1.0` keeps the PR #3209 calibrated
+ * (Claude's typical-cost-per-stage) derived from the C1 pricing tables that
+ * used to live in `providerPricing.ts` — deleted in #391, with the registry
+ * (`packages/nightgauge-sdk/src/eval/model-registry.json`) now the only
+ * pricing authority. These constants are a frozen calibration snapshot, NOT a
+ * live read of the registry: they are ratios, not rates, and re-deriving them
+ * would move the cost caps. `claude=1.0` keeps the PR #3209 calibrated
  * defaults bit-for-bit unchanged for default Claude users — the
  * regression-anchor invariant for AC #5 of Issue #3229.
  *
@@ -1037,7 +1041,8 @@ export function getCostCapModeMultiplier(
  * @see Issue #3229 — Provider-relative cost-cap defaults + override path
  * @see Issue #3217 — Mode multiplier (composes alongside)
  * @see Issue #3180 — Model scale (composes alongside)
- * @see providerPricing.ts — seed-ratio derivation source
+ * @see Issue #391 — `providerPricing.ts` (the original seed-ratio derivation
+ *      source) deleted; the model registry is the single pricing authority
  */
 export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<ExecutionAdapter, number> = {
   claude: 1.0,
