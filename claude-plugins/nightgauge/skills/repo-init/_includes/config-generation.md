@@ -40,7 +40,7 @@ automatically). Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 8
+# nightgauge-gitignore-version: 7
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -80,12 +80,6 @@ logs/*
 
 # ─── Autonomous scheduler state ─────────────────────────────────────
 /autonomous/
-
-# ─── Serve daemon PID sidecar (#388) ────────────────────────────────
-# The running IPC daemon's pid, start time, and heartbeat. Per-machine
-# runtime state with a pid in it — meaningless on any other machine, and
-# rewritten every 15 minutes while the daemon lives.
-/serve.json
 
 # ─── Skill usage telemetry (local, per-machine) ─────────────────────
 /skills/

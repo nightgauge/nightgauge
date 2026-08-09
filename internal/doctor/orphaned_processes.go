@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	workspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // Leaked processes — nightgauge processes still running that no live sidecar
@@ -232,9 +233,17 @@ func sidecarRoots(startDir string) []string {
 }
 
 // sidecarPIDs collects every PID claimed by a sidecar that has made recent
-// progress, across every sidecar root: the autonomous scheduler's state.json,
-// the in-flight run's current-run.json, the serve daemon's serve.json, and
-// each attempt in run-state.json.
+// progress: the autonomous scheduler's state.json, the in-flight run's
+// current-run.json and each attempt in run-state.json, across every sidecar
+// root — plus every serve daemon on this MACHINE, from the claim directory
+// eachServeClaim reads.
+//
+// The two halves have deliberately different reach, and the process table is
+// why. `ps -axo` enumerates the whole box, so a claim store scoped to the
+// invoking workspace can only narrow the processes that happen to belong to
+// it; a serve daemon serving any other workspace would be reported as an
+// orphan on every run (#388). Run and scheduler sidecars have no such problem
+// — they name processes working inside the workspace that holds them.
 //
 // A claim counts only when the sidecar's own progress timestamp is within
 // staleSidecarClaim of now — see that constant for why presence alone cannot
@@ -281,21 +290,6 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 			claimPID(claimed, currentRun.PID)
 		}
 
-		// runstate.ServeSidecar: the daemon rewrites last_heartbeat_at every
-		// 15 minutes, so it is serve's proof of life. Read by the SAME
-		// progress doctrine as its peers and given no rule of its own — a
-		// serve-specific exemption here would be the argv exception #388
-		// retired, wearing a filename.
-		var serve struct {
-			PID             int    `json:"pid"`
-			StartedAt       string `json:"started_at"`
-			LastHeartbeatAt string `json:"last_heartbeat_at"`
-		}
-		if readJSONFile(filepath.Join(root, ".nightgauge", "serve.json"), &serve) &&
-			progressIsFresh(now, serve.LastHeartbeatAt, serve.StartedAt) {
-			claimPID(claimed, serve.PID)
-		}
-
 		// runstate.RunState: updated_at moves on every lifecycle transition.
 		var runState struct {
 			CreatedAt string `json:"created_at"`
@@ -313,7 +307,81 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 			}
 		}
 	}
+
+	// runstate.ServeSidecar: the daemon rewrites last_heartbeat_at every 15
+	// minutes for as long as it is still attached to the host that started it,
+	// so that stamp is serve's proof of life. Read by the SAME progress
+	// doctrine as its peers and given no rule of its own — a serve-specific
+	// exemption here would be the argv exception #388 retired, wearing a
+	// filename.
+	eachServeClaim(func(sc serveClaimRecord) {
+		if progressIsFresh(now, sc.LastHeartbeatAt, sc.StartedAt) {
+			claimPID(claimed, sc.PID)
+		}
+	})
 	return claimed
+}
+
+// serveClaimRecord is one serve daemon's claim as this reader sees it.
+//
+// A minimal local struct on purpose, like every other sidecar shape in this
+// file: doctor is a READER of records other packages own, and importing their
+// types would make their schemas answerable to `doctor`. Only the directory is
+// borrowed from runstate, because a path two packages spell independently is a
+// path that eventually disagrees.
+type serveClaimRecord struct {
+	PID             int    `json:"pid"`
+	StartedAt       string `json:"started_at"`
+	LastHeartbeatAt string `json:"last_heartbeat_at"`
+	WorkspaceRoot   string `json:"workspace_root"`
+}
+
+// eachServeClaim visits every serve claim on this machine (#388).
+//
+// Unconditional, and keyed to nothing about the invoking workspace: see
+// sidecarPIDs for why a machine-wide process scan needs a machine-wide claim
+// store. A missing directory (no daemon has ever run here) and a malformed
+// file are both simply skipped — the same direction every unreadable sidecar
+// fails in this file, toward UNOWNED and therefore toward REPORTING.
+func eachServeClaim(visit func(serveClaimRecord)) {
+	dir, err := runstate.ServeSidecarDir()
+	if err != nil {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		var sc serveClaimRecord
+		if readJSONFile(filepath.Join(dir, e.Name()), &sc) {
+			visit(sc)
+		}
+	}
+}
+
+// staleServeClaims maps the PID of every serve claim that has STOPPED making
+// progress to the workspace root that claim named.
+//
+// This is the shape #388 exists to surface: a daemon that outlived its host
+// stops refreshing (runstate.serveClaim.tick) and its record goes cold, so when
+// a still-running process matches one of these PIDs, this is what tells the
+// operator WHICH workspace's daemon they are looking at — the claim's file name
+// is a hash and carries nothing. Evidence, never ownership: a recycled PID
+// would be attributed to the wrong process, the same accepted edge as every
+// other claim here, which is why it only ever decorates a line the report was
+// already going to print.
+func staleServeClaims(now time.Time) map[int]string {
+	stale := map[int]string{}
+	eachServeClaim(func(sc serveClaimRecord) {
+		if sc.PID > 0 && sc.WorkspaceRoot != "" && !progressIsFresh(now, sc.LastHeartbeatAt, sc.StartedAt) {
+			stale[sc.PID] = sc.WorkspaceRoot
+		}
+	})
+	return stale
 }
 
 // progressIsFresh reports whether the first populated stamp (RFC3339, most
@@ -409,14 +477,14 @@ func checkOrphanedProcesses(startDir string, now time.Time) (CheckItem, string) 
 	if err != nil {
 		return unverifiableProcessScan(err)
 	}
-	return processTableReport(raw, sidecarPIDs(startDir, now))
+	return processTableReport(raw, sidecarPIDs(startDir, now), staleServeClaims(now))
 }
 
 // processTableReport parses a raw `ps` table and reports on it, or explains why
 // it could not. Split from checkOrphanedProcesses so every route out of a real
 // table — parsed, unparsable, implausible — is reachable from a test without
 // spawning a process.
-func processTableReport(raw string, claimed map[int]bool) (CheckItem, string) {
+func processTableReport(raw string, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
 	procs, determined := parseProcessTable(raw)
 	if !determined {
 		return unverifiableProcessScan(fmt.Errorf("`ps` output could not be parsed"))
@@ -431,7 +499,7 @@ func processTableReport(raw string, claimed map[int]bool) (CheckItem, string) {
 			"the parsed table has %d row(s) and does not include this process (pid %d), so it did not enumerate this machine",
 			len(procs), os.Getpid()))
 	}
-	return orphanedProcessReport(procs, claimed)
+	return orphanedProcessReport(procs, claimed, staleServe)
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -455,7 +523,12 @@ func unverifiableProcessScan(cause error) (CheckItem, string) {
 // orphanedProcessReport turns a parsed table and the sidecar-claimed PID set
 // into the check entry. Split from checkOrphanedProcesses so the reporting
 // rules are testable against the captured process table.
-func orphanedProcessReport(procs []runningProcess, claimed map[int]bool) (CheckItem, string) {
+//
+// staleServe attributes a reported PID to the workspace whose serve claim went
+// cold on it (see staleServeClaims). It only ever adds a clause to a line that
+// was already going to be printed — an orphan is an orphan whether or not this
+// map knows anything about it.
+func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
 	scan := classifyProcesses(procs, claimed, os.Getpid())
 	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
 		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
@@ -469,7 +542,11 @@ func orphanedProcessReport(procs []runningProcess, claimed map[int]bool) (CheckI
 			parts = append(parts, fmt.Sprintf("… and %d more", len(scan.Orphans)-maxLeaksReported))
 			break
 		}
-		parts = append(parts, fmt.Sprintf("%d (%dh): %s", p.PID, int(p.Age.Hours()), p.Command))
+		part := fmt.Sprintf("%d (%dh): %s", p.PID, int(p.Age.Hours()), p.Command)
+		if ws := staleServe[p.PID]; ws != "" {
+			part += fmt.Sprintf(" [its serve claim for %s stopped making progress]", ws)
+		}
+		parts = append(parts, part)
 	}
 	msg := "orphaned nightgauge processes: " + strings.Join(parts, "; ") +
 		" — no live sidecar claims these PIDs; verify and terminate manually"

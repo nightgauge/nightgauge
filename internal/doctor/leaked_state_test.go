@@ -23,6 +23,7 @@ type leakRepo struct {
 
 func newLeakRepo(t *testing.T) *leakRepo {
 	t.Helper()
+	isolateMachineState(t)
 	base := t.TempDir()
 	// Resolve symlinks up front: on macOS t.TempDir() hands back a /var path
 	// that is really /private/var, and git reports the resolved form.

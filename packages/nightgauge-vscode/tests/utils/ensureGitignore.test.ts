@@ -63,10 +63,6 @@ describe("ensureGitignore", () => {
       "/containment/",
       "/health/",
       "/autonomous/",
-      // #388: the serve daemon's pid + heartbeat sidecar. Rewritten every 15
-      // minutes while the extension host is up, so leaving it out puts a file
-      // that changes four times an hour into every user's `git status`.
-      "/serve.json",
     ]) {
       expect(generated).toContain(rule);
     }

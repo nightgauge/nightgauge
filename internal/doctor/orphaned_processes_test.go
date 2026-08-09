@@ -302,6 +302,54 @@ func TestSidecarPIDs_AServeSidecarLeftByADeadDaemonClaimsNothingThatRuns(t *test
 	}
 }
 
+func TestSidecarPIDs_ClaimsAServeDaemonServingAnyWorkspaceOnThisMachine(t *testing.T) {
+	// The location defect the #388 review found. `ps -axo` enumerates the WHOLE
+	// machine, but the sidecar walk only ever visits the INVOKING workspace's
+	// roots — so a serve daemon belonging to any other workspace on the box (or
+	// the primary one, when doctor is run from a sibling repo whose upward walk
+	// never reaches the workspace marker) was a live claim doctor could not
+	// see, and got reported as an orphan on every run past the 1h floor. The
+	// claim store is machine-global for exactly this reason, and this reader
+	// must load it whatever directory doctor was started in.
+	r := newLeakRepo(t)
+	elsewhere := filepath.Join(t.TempDir(), "some-other-workspace")
+	writeServeSidecar(t, elsewhere, 4156, 300*time.Hour, 5*time.Minute)
+
+	claimed := sidecarPIDs(r.dir, scanClock)
+
+	if !claimed[4156] {
+		t.Fatalf("a heartbeating serve daemon for %s was not claimed by a doctor run in %s — it would be reported as an orphan on every run", elsewhere, r.dir)
+	}
+}
+
+func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
+	// The claim's file name is a hash, so workspace_root is the only thing that
+	// can tell an operator WHICH daemon went cold — and a cold serve claim on a
+	// process that is still running is the exact specimen #388 exists to
+	// surface. A claim still making progress is not stale and must not be
+	// attributed to anything.
+	r := newLeakRepo(t)
+	cold := filepath.Join(t.TempDir(), "abandoned-workspace")
+	warm := filepath.Join(t.TempDir(), "healthy-workspace")
+	writeServeSidecar(t, cold, 4156, 300*time.Hour, 31*time.Hour)
+	writeServeSidecar(t, warm, 4157, 300*time.Hour, 5*time.Minute)
+
+	stale := staleServeClaims(scanClock)
+
+	if got := stale[4156]; got != cold {
+		t.Errorf("the cold claim was attributed to %q, want %q", got, cold)
+	}
+	if _, ok := stale[4157]; ok {
+		t.Errorf("a heartbeating daemon was reported as a stale claim: %v", stale)
+	}
+	// …and it reaches the operator, which is the only place attribution counts.
+	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace "+cold))
+	_, warning := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale)
+	if !strings.Contains(warning, cold) {
+		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", warning)
+	}
+}
+
 func TestClassifyProcesses_SidecarOwnedRunIsNotAnOrphan(t *testing.T) {
 	procs := parseRows(t, derivedRow(t, 5150, "02-07:00:00", "pipeline run --issue 341"))
 
@@ -325,11 +373,29 @@ func stamp(ago time.Duration) string {
 	return scanClock.Add(-ago).Format(time.RFC3339)
 }
 
+// isolateMachineState points the per-user machine-global state root
+// (os.UserHomeDir → $HOME, the same seam internal/ipc and the binary-resolution
+// suite use) at a temp dir.
+//
+// Mandatory for every test that reads claims: since #388 the serve daemons'
+// claims live in <home>/.nightgauge/serve/, so without this a developer's own
+// running daemon would leak into the fixtures — and, worse, a test that plants
+// a claim would write into the real directory and could delete a live one.
+func isolateMachineState(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+}
+
 // writeServeSidecar plants a serve daemon's marker (#388) through the
 // PRODUCTION writer rather than a JSON literal. Every other fixture in this
 // file is a captured or derived artifact for the same reason: a hand-authored
 // sidecar proves only that this file agrees with itself, and the shape the
 // daemon actually writes is precisely what the reader below has to survive.
+//
+// root is the WORKSPACE the daemon serves; the file itself lands in the
+// machine-global claim directory under the isolated HOME, keyed by a hash of
+// that path — which is the whole point of the relocation, so tests must not
+// look for it beside the workspace.
 func writeServeSidecar(t *testing.T, root string, pid int, startedAgo, heartbeatAgo time.Duration) {
 	t.Helper()
 	if err := runstate.WriteServeSidecar(root, runstate.ServeSidecar{
@@ -484,6 +550,7 @@ func TestSidecarPIDs_ClaimsTheWorkspaceRootScheduler(t *testing.T) {
 	// The scheduler writes .nightgauge/autonomous/state.json relative to the
 	// WORKSPACE root, which in a multi-repo workspace is not a repo root at
 	// all — the one directory config.WorkspaceRepoRoots never yields.
+	isolateMachineState(t)
 	ws := t.TempDir()
 	ws, err := filepath.EvalSymlinks(ws)
 	if err != nil {
@@ -542,7 +609,7 @@ func TestOrphanedProcessReport_CapsTheEnumeratedList(t *testing.T) {
 		rows = append(rows, derivedRow(t, 9000+i, "05-00:00:00", "pipeline run --issue 341"))
 	}
 
-	item, warning := orphanedProcessReport(parseRows(t, rows...), map[int]bool{})
+	item, warning := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil)
 
 	if item.OK {
 		t.Fatalf("orphans reported as healthy: %+v", item)
@@ -564,7 +631,7 @@ func TestOrphanedProcessReport_CapsTheEnumeratedList(t *testing.T) {
 func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
 	item, _ := orphanedProcessReport(
 		parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run")),
-		map[int]bool{})
+		map[int]bool{}, nil)
 
 	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "verify and terminate manually"} {
 		if !strings.Contains(item.Error, want) {
@@ -585,7 +652,7 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 		t.Fatal("the captured table did not parse")
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true})
+	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil)
 
 	if !item.OK {
 		t.Fatalf("the captured (clean) machine must pass: %+v", item)
@@ -708,7 +775,7 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item, warning := processTableReport(tt.raw, map[int]bool{})
+			item, warning := processTableReport(tt.raw, map[int]bool{}, nil)
 
 			if item.OK {
 				t.Fatalf("a table that never listed this process reported healthy: %+v", item)
@@ -728,7 +795,7 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
 		derivedRow(t, os.Getpid()+1, "05-00:00:00", "autonomous run --dry-run") + "\n"
 
-	item, _ := processTableReport(raw, map[int]bool{})
+	item, _ := processTableReport(raw, map[int]bool{}, nil)
 
 	if strings.Contains(item.Error, "unverifiable") {
 		t.Fatalf("a table containing this process was rejected: %q", item.Error)

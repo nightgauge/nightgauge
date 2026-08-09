@@ -17,7 +17,7 @@ import { loadWorkspaceConfig } from "./workspaceDetection";
  * Bump this when adding new patterns so the extension knows to update
  * existing .gitignore files that were written with an older version.
  */
-const GITIGNORE_VERSION = 8;
+const GITIGNORE_VERSION = 7;
 const VERSION_MARKER = `# nightgauge-gitignore-version: ${GITIGNORE_VERSION}`;
 
 /**
@@ -73,12 +73,6 @@ logs/*
 
 # ─── Autonomous scheduler state ─────────────────────────────────────
 /autonomous/
-
-# ─── Serve daemon PID sidecar (#388) ────────────────────────────────
-# The running IPC daemon's pid, start time, and heartbeat. Per-machine
-# runtime state with a pid in it — meaningless on any other machine, and
-# rewritten every 15 minutes while the daemon lives.
-/serve.json
 
 # ─── Skill usage telemetry (local, per-machine) ─────────────────────
 /skills/
