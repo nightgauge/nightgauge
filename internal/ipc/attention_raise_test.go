@@ -16,9 +16,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // recordRunSpend seeds the DAEMON's own record of what a run has spent — the
@@ -801,7 +803,7 @@ func TestBudgetCeilingSpendComesFromTheRunsOwnRepo(t *testing.T) {
 }
 
 // TestBudgetCeilingSpendFallsBackToThePersistedRuntime — the daemon's own
-// persisted runtime-{N}.json is an equally valid corroboration source, and it
+// persisted runtime-{issue}-{runId}.json is an equally valid corroboration source, and it
 // is subject to the SAME two rules as the live one (exact repo, real stage
 // progression). The file is produced here by the normal flow — the notify
 // handler persists on every repo-carrying transition — and the live entry is
@@ -814,8 +816,8 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 	)
 	s := newAttentionTestServer(t)
 	recordRunSpend(t, s, repo, issue, spend)
-	if _, err := os.Stat(filepath.Join(s.pipelineStateDir(repo), fmt.Sprintf("runtime-%d.json", issue))); err != nil {
-		t.Fatalf("notify did not persist the runtime snapshot: %v", err)
+	if got, err := state.FindPersistedStatesForIssue(s.pipelineStateDir(repo), issue); err != nil || len(got) != 1 {
+		t.Fatalf("notify did not persist exactly one runtime snapshot: %d / %v", len(got), err)
 	}
 	// Drop the live entry: without this the first arm answers and the persisted
 	// arm is never reached, so the test would pass while proving nothing.
@@ -838,6 +840,62 @@ func TestBudgetCeilingSpendFallsBackToThePersistedRuntime(t *testing.T) {
 	}
 	if gotCeiling, _ := raise.Args["ceilingUsd"].(float64); gotCeiling != wantCeiling {
 		t.Errorf("raiseCeiling arg = %v, want %v", raise.Args["ceilingUsd"], wantCeiling)
+	}
+}
+
+// TestBudgetCeilingSpendUsesTheNewestLiveRunOfAReRunIssue pins the #305 half of
+// the same correction the gate seam got.
+//
+// The corroboration used to REFUSE whenever an issue had more than one
+// non-terminal snapshot. Under per-run filenames that is the steady state for
+// any RE-RUN issue — nothing sets the durable terminal marker before ADR-017
+// step 4, so a second dispatch simply leaves the first snapshot behind — and the
+// refusal would silently drop the budget card's raiseCeiling option forever.
+// The raise is computed for the run currently in flight, whose snapshot is the
+// newest non-terminal one; the older one is an orphan of the prior dispatch.
+func TestBudgetCeilingSpendUsesTheNewestLiveRunOfAReRunIssue(t *testing.T) {
+	const (
+		repo      = "octocat/acme"
+		issue     = 22
+		oldSpend  = 11.0
+		liveSpend = 40.0
+	)
+	s := newAttentionTestServer(t)
+	stateDir := s.pipelineStateDir(repo)
+	key := fmt.Sprintf("%d", issue)
+
+	// Dispatch 1 — the orphan. Backdated so the ordering is deterministic
+	// rather than dependent on clock resolution between two handler calls.
+	recordRunSpend(t, s, repo, issue, oldSpend)
+	s.runtimesMu.Lock()
+	first := s.activeRuntimes[key]
+	delete(s.activeRuntimes, key) // the backend restart that orphans it
+	s.runtimesMu.Unlock()
+	first.StartedAt = time.Now().Add(-2 * time.Hour)
+	if err := first.Persist(stateDir); err != nil {
+		t.Fatalf("re-persist the orphaned run: %v", err)
+	}
+
+	// Dispatch 2 — the live run, minted fresh because the registry is empty.
+	recordRunSpend(t, s, repo, issue, liveSpend)
+	s.runtimesMu.Lock()
+	delete(s.activeRuntimes, key) // force the PERSISTED arm to answer
+	s.runtimesMu.Unlock()
+
+	if got, err := state.FindPersistedStatesForIssue(stateDir, issue); err != nil || len(got) != 2 {
+		t.Fatalf("the re-run population needs two live snapshots; got %d / %v", len(got), err)
+	}
+
+	mustRaise(t, s, AttentionRaiseParams{
+		Producer: ProducerBudgetCeiling, Repo: repo, Issue: issue, RunID: "run-2",
+	})
+	card := onlyOpenRequest(t, s)
+	if card.Context.CostSoFarUSD != liveSpend {
+		t.Errorf("cost_so_far_usd = %v, want the NEWEST live run's %v (an accumulated orphan must not disable corroboration)",
+			card.Context.CostSoFarUSD, liveSpend)
+	}
+	if card.FindOption("raise") == nil {
+		t.Fatalf("a re-run issue lost its raiseCeiling option: %+v", card.Options)
 	}
 }
 
@@ -1258,7 +1316,12 @@ func TestUncorroboratedRaiseCannotStripARemedyFromAnOpenCard(t *testing.T) {
 	s.runtimesMu.Lock()
 	delete(s.activeRuntimes, fmt.Sprintf("%d", issue))
 	s.runtimesMu.Unlock()
-	if err := os.Remove(filepath.Join(s.pipelineStateDir(repo), fmt.Sprintf("runtime-%d.json", issue))); err != nil {
+	persisted, err := state.FindPersistedStatesForIssue(s.pipelineStateDir(repo), issue)
+	if err != nil || len(persisted) != 1 {
+		t.Fatalf("precondition: exactly one persisted runtime, got %d / %v", len(persisted), err)
+	}
+	if err := os.Remove(filepath.Join(s.pipelineStateDir(repo),
+		state.SnapshotFilename(issue, persisted[0].RunID))); err != nil {
 		t.Fatalf("remove persisted runtime: %v", err)
 	}
 	second := mustRaise(t, s, AttentionRaiseParams{

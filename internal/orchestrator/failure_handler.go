@@ -465,14 +465,25 @@ func OutcomeTypeForTerminalFailure(errorText string) string {
 //
 // @see Issue #3001 ADR-003
 type CurrentRunSidecar struct {
-	IssueNumber int       `json:"issue_number"`
-	Repo        string    `json:"repo"`
-	ItemID      string    `json:"item_id,omitempty"`
-	Title       string    `json:"title,omitempty"`
-	StartedAt   time.Time `json:"started_at"`
-	Stage       string    `json:"stage"`
-	StageStart  time.Time `json:"stage_started_at"`
-	PID         int       `json:"pid,omitempty"`
+	IssueNumber int    `json:"issue_number"`
+	Repo        string `json:"repo"`
+	// RunID is the run identity of the in-flight run (ADR-017 Decision 8).
+	// NO omitempty — this binary always writes it, so a reader that finds the
+	// key absent is looking at a sidecar from before ADR-017 and can say so.
+	//
+	// It exists because the sidecar is the TypeScript side's INDEX into a run:
+	// CliPipelineReconciliationService reads it and then composes the snapshot
+	// filename, which under the new `runtime-{issue}-{runId}.json` layout it
+	// cannot do from the issue number alone. Carrying the identity here is also
+	// what lets the `pid` liveness check corroborate a SPECIFIC RUN rather than
+	// an issue.
+	RunID      string    `json:"run_id"`
+	ItemID     string    `json:"item_id,omitempty"`
+	Title      string    `json:"title,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	Stage      string    `json:"stage"`
+	StageStart time.Time `json:"stage_started_at"`
+	PID        int       `json:"pid,omitempty"`
 }
 
 // writeCurrentRunSidecar persists the in-flight run state atomically. Best

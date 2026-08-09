@@ -1,7 +1,6 @@
 package ipc
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,18 +13,22 @@ import (
 var reconcileNow = time.Date(2026, 7, 12, 12, 0, 0, 0, time.UTC)
 
 // writeRuntimeSnapshot persists a RuntimeState fixture the same way the
-// notifyStageTransition handler does, returning the file path.
+// notifyStageTransition handler does, returning the file path — composed
+// through the one composer, so the fixture's name is the name production
+// writes (ADR-017 Decision 8).
 func writeRuntimeSnapshot(t *testing.T, stateDir string, rt *state.RuntimeState) string {
 	t.Helper()
 	if err := rt.Persist(stateDir); err != nil {
 		t.Fatalf("persist fixture: %v", err)
 	}
-	return filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", rt.IssueNumber))
+	return filepath.Join(stateDir, state.SnapshotFilename(rt.IssueNumber, rt.RunID))
 }
 
+// newInterruptedRuntime builds a mid-run runtime under a REAL run identity —
+// the identity is a constructor argument now, and a placeholder string would
+// produce a filename the discovery regex rejects.
 func newInterruptedRuntime(issueNumber int, runID string) *state.RuntimeState {
-	rt := state.NewRuntimeState("nightgauge/acmeapp", issueNumber, "")
-	rt.RunID = runID
+	rt := state.NewRuntimeState("nightgauge/acmeapp", issueNumber, "", runID)
 	rt.BeginStage(state.StageIssuePickup)
 	rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
 	rt.BeginStage(state.StageFeatureDev)
@@ -34,7 +37,8 @@ func newInterruptedRuntime(issueNumber int, runID string) *state.RuntimeState {
 
 func TestCollectOrphanedRuns_BuildsTerminalEventForInterruptedRun(t *testing.T) {
 	stateDir := t.TempDir()
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(205, "orphan-run-uuid"))
+	runID := newTestRunID()
+	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(205, runID))
 
 	orphans := collectOrphanedRuns(stateDir, nil, reconcileNow)
 
@@ -45,8 +49,8 @@ func TestCollectOrphanedRuns_BuildsTerminalEventForInterruptedRun(t *testing.T) 
 	if ev.EventType != "pipeline_done" {
 		t.Errorf("EventType = %q, want pipeline_done", ev.EventType)
 	}
-	if ev.RunID != "orphan-run-uuid" {
-		t.Errorf("RunID = %q, want orphan-run-uuid", ev.RunID)
+	if ev.RunID != runID {
+		t.Errorf("RunID = %q, want %q", ev.RunID, runID)
 	}
 	if ev.IssueNumber != 205 {
 		t.Errorf("IssueNumber = %d, want 205", ev.IssueNumber)
@@ -64,27 +68,59 @@ func TestCollectOrphanedRuns_BuildsTerminalEventForInterruptedRun(t *testing.T) 
 func TestCollectOrphanedRuns_SkipsPausedAndRunIDLessSnapshots(t *testing.T) {
 	stateDir := t.TempDir()
 
-	paused := newInterruptedRuntime(101, "paused-run-uuid")
+	paused := newInterruptedRuntime(101, newTestRunID())
 	paused.SetPaused(true)
 	writeRuntimeSnapshot(t, stateDir, paused)
 
-	noRunID := state.NewRuntimeState("nightgauge/acmeapp", 102, "")
-	writeRuntimeSnapshot(t, stateDir, noRunID)
+	// The name/body-mismatch case is a CORRUPTION GUARD, not a discovery
+	// filter: Persist refuses an identity-less runtime outright and composes
+	// the filename from the same fields it marshals (ADR-017 Decision 1/8), so
+	// the only way such a file exists is if something wrote a body that
+	// disagrees with its own name. HAND-AUTHORED for exactly that reason.
+	//
+	// BOTH shapes are here, and the second is the one that pins the guard. An
+	// EMPTY body runId is refused downstream by buildPipelineDoneEvent whether
+	// the guard exists or not — a fixture using only that shape lets the guard
+	// be deleted with this test green, which is what the earlier version of
+	// this test did. A body carrying a DIFFERENT VALID identity is the shape
+	// that escapes: it builds a perfectly well-formed pipeline_done and reports
+	// the WRONG run terminal to the platform. Deleting the guard must turn this
+	// test red, and it does.
+	empty := filepath.Join(stateDir, state.SnapshotFilename(102, newTestRunID()))
+	if err := os.WriteFile(empty, []byte(`{"issueNumber":102,"repo":"nightgauge/acmeapp","runId":"","completedStages":[],"skippedStages":[],"phaseHistory":[],"stageErrors":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	otherIdentity := newTestRunID()
+	mismatched := filepath.Join(stateDir, state.SnapshotFilename(103, newTestRunID()))
+	if err := os.WriteFile(mismatched, []byte(`{"issueNumber":103,"repo":"nightgauge/acmeapp","runId":"`+otherIdentity+
+		`","stage":"feature-dev","completedStages":[{"stage":"issue-pickup","durationMs":1000}],"skippedStages":[],"phaseHistory":[],"stageErrors":{}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	orphans := collectOrphanedRuns(stateDir, nil, reconcileNow)
 
 	if len(orphans) != 0 {
-		t.Fatalf("got %d orphans, want 0 (paused + runID-less must be skipped)", len(orphans))
+		ids := make([]string, 0, len(orphans))
+		for _, o := range orphans {
+			ids = append(ids, o.Event.RunID)
+		}
+		t.Fatalf("got %d orphans %v, want 0 — paused, content-runID-less, and name/body-mismatched files must all be skipped", len(orphans), ids)
 	}
 }
 
 func TestCollectOrphanedRuns_SkipsLiveRuntimesAndIgnoresJunk(t *testing.T) {
 	stateDir := t.TempDir()
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(201, "live-run-uuid"))
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(202, "dead-run-uuid"))
+	deadID := newTestRunID()
+	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(201, newTestRunID()))
+	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(202, deadID))
 
-	// Junk that must not trip the scanner: malformed runtime file, unrelated file.
-	if err := os.WriteFile(filepath.Join(stateDir, "runtime-999.json"), []byte("{not json"), 0644); err != nil {
+	// Junk that must not trip the scanner: a malformed new-scheme file, a
+	// LEGACY-named file (which the new discovery regex must not match at all),
+	// and an unrelated file. All hand-authored — production cannot emit them.
+	if err := os.WriteFile(filepath.Join(stateDir, state.SnapshotFilename(999, newTestRunID())), []byte("{not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "runtime-998.json"), []byte(`{"issueNumber":998,"runId":"legacy"}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(stateDir, "run-state.json"), []byte(`{"state":"running"}`), 0644); err != nil {
@@ -97,8 +133,8 @@ func TestCollectOrphanedRuns_SkipsLiveRuntimesAndIgnoresJunk(t *testing.T) {
 	if len(orphans) != 1 {
 		t.Fatalf("got %d orphans, want 1", len(orphans))
 	}
-	if orphans[0].Event.RunID != "dead-run-uuid" {
-		t.Errorf("RunID = %q, want dead-run-uuid", orphans[0].Event.RunID)
+	if orphans[0].Event.RunID != deadID {
+		t.Errorf("RunID = %q, want %q", orphans[0].Event.RunID, deadID)
 	}
 }
 
@@ -111,7 +147,7 @@ func TestCollectOrphanedRuns_MissingDirIsNoop(t *testing.T) {
 
 func TestReconcileOrphanedRuns_GuardsWithoutAnalyticsOrRoot(t *testing.T) {
 	stateDir := t.TempDir()
-	file := writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(303, "guarded-run-uuid"))
+	file := writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(303, newTestRunID()))
 
 	// No analytics service: reconcile must not delete evidence it cannot emit.
 	s := NewServer(nil, WithWorkspaceRoot(filepath.Dir(filepath.Dir(stateDir))))
@@ -139,7 +175,7 @@ func TestOrphanReconcile_CrashReopenFlowIsIdempotent(t *testing.T) {
 	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	// Session 1 "crashes" after persisting mid-run state.
-	rt := newInterruptedRuntime(205, "crashed-run-uuid")
+	rt := newInterruptedRuntime(205, newTestRunID())
 	if err := rt.Persist(stateDir); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
@@ -165,24 +201,21 @@ func TestOrphanReconcile_CrashReopenFlowIsIdempotent(t *testing.T) {
 func TestNotifyStageTransition_PersistsSnapshotAndNotifyCompleteRemovesIt(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	snapshotPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "runtime-205.json")
+	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"issue-pickup","status":"running"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
 
-	data, err := os.ReadFile(snapshotPath)
-	if err != nil {
-		t.Fatalf("snapshot must exist after a stage transition: %v", err)
-	}
-	rt, err := state.LoadPersistedState(filepath.Dir(snapshotPath), 205)
-	if err != nil {
-		t.Fatalf("snapshot must parse: %v (raw: %s)", err, data)
-	}
+	// The server-side interim mint survives until ADR-017 step 4, and it now
+	// produces a canonical UUIDv7 — so the snapshot must be DISCOVERABLE by the
+	// new scheme, which a v4 id would fail.
+	rt := onlySnapshotForIssue(t, stateDir, 205)
 	if rt.RunID == "" {
 		t.Fatal("persisted snapshot must carry the run's platform UUID")
 	}
+	snapshotPath := filepath.Join(stateDir, state.SnapshotFilename(205, rt.RunID))
 
 	complete := s.methods["pipeline.notifyComplete"]
 	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"success":true,"totalDurationMs":1000}`)); err != nil {
@@ -211,10 +244,7 @@ func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
-	rt, err := state.LoadPersistedState(stateDir, 205)
-	if err != nil {
-		t.Fatalf("load persisted state: %v", err)
-	}
+	rt := onlySnapshotForIssue(t, stateDir, 205)
 	if len(rt.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1", len(rt.CompletedStages))
 	}
@@ -260,10 +290,7 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
-	rt, err := state.LoadPersistedState(stateDir, 207)
-	if err != nil {
-		t.Fatalf("load persisted state: %v", err)
-	}
+	rt := onlySnapshotForIssue(t, stateDir, 207)
 	if len(rt.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1", len(rt.CompletedStages))
 	}
@@ -284,12 +311,15 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 func TestNotifyStageTransition_FailedRemovesSnapshot(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	snapshotPath := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "runtime-206.json")
+	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":206,"stage":"feature-dev","status":"running"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
+	// The failed-transition remove is composed from the run's own identity, so
+	// this test asserts against the file that identity names.
+	snapshotPath := filepath.Join(stateDir, state.SnapshotFilename(206, onlySnapshotForIssue(t, stateDir, 206).RunID))
 	if _, err := os.Stat(snapshotPath); err != nil {
 		t.Fatalf("snapshot must exist mid-run: %v", err)
 	}
@@ -312,18 +342,17 @@ func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
-	targetPath := filepath.Join(targetRoot, ".nightgauge", "pipeline", "runtime-244.json")
-	launchPath := filepath.Join(launchRoot, ".nightgauge", "pipeline", "runtime-244.json")
+	targetDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
+	launchDir := filepath.Join(launchRoot, ".nightgauge", "pipeline")
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"issue-pickup","status":"running"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
-	if _, err := os.Stat(targetPath); err != nil {
-		t.Fatalf("snapshot must land in the run's target repo: %v", err)
-	}
-	if _, err := os.Stat(launchPath); !os.IsNotExist(err) {
-		t.Fatalf("no snapshot may leak into the launch root, stat err = %v", err)
+	rt := onlySnapshotForIssue(t, targetDir, 244)
+	targetPath := filepath.Join(targetDir, state.SnapshotFilename(244, rt.RunID))
+	if got, _ := state.FindPersistedStatesForIssue(launchDir, 244); len(got) != 0 {
+		t.Fatalf("no snapshot may leak into the launch root, found %d", len(got))
 	}
 
 	complete := s.methods["pipeline.notifyComplete"]
@@ -349,8 +378,9 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":245,"stage":"issue-pickup","status":"running"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
-	targetPath := filepath.Join(targetRoot, ".nightgauge", "pipeline", "runtime-245.json")
-	if err := os.Remove(targetPath); err != nil {
+	targetDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
+	seeded := onlySnapshotForIssue(t, targetDir, 245)
+	if err := os.Remove(filepath.Join(targetDir, state.SnapshotFilename(245, seeded.RunID))); err != nil {
 		t.Fatalf("remove seeded snapshot: %v", err)
 	}
 
@@ -358,15 +388,12 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	if _, err := setPaused(t.Context(), []byte(`{"issueNumber":245,"paused":true}`)); err != nil {
 		t.Fatalf("setPaused: %v", err)
 	}
-	rt, err := state.LoadPersistedState(filepath.Dir(targetPath), 245)
-	if err != nil {
-		t.Fatalf("paused snapshot must be in the target repo: %v", err)
-	}
+	rt := onlySnapshotForIssue(t, targetDir, 245)
 	if !rt.Paused {
 		t.Fatal("persisted snapshot must record paused=true")
 	}
-	if _, err := os.Stat(filepath.Join(launchRoot, ".nightgauge", "pipeline", "runtime-245.json")); !os.IsNotExist(err) {
-		t.Fatalf("no paused snapshot may leak into the launch root, stat err = %v", err)
+	if got, _ := state.FindPersistedStatesForIssue(filepath.Join(launchRoot, ".nightgauge", "pipeline"), 245); len(got) != 0 {
+		t.Fatalf("no paused snapshot may leak into the launch root, found %d", len(got))
 	}
 }
 
@@ -378,7 +405,8 @@ func TestGetState_FallbackReadsFromTargetRepo(t *testing.T) {
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
-	rt := newInterruptedRuntime(246, "persisted-run-uuid")
+	runID := newTestRunID()
+	rt := newInterruptedRuntime(246, runID)
 	writeRuntimeSnapshot(t, filepath.Join(targetRoot, ".nightgauge", "pipeline"), rt)
 
 	getState := s.methods["pipeline.getState"]
@@ -390,8 +418,8 @@ func TestGetState_FallbackReadsFromTargetRepo(t *testing.T) {
 	if !ok || loaded == nil {
 		t.Fatalf("getState must return the persisted runtime, got %T", result)
 	}
-	if loaded.RunID != "persisted-run-uuid" {
-		t.Errorf("RunID = %q, want persisted-run-uuid", loaded.RunID)
+	if loaded.RunID != runID {
+		t.Errorf("RunID = %q, want %q", loaded.RunID, runID)
 	}
 }
 
@@ -415,4 +443,22 @@ func TestPipelineStateScanRoots_CoversRegisteredReposDeduped(t *testing.T) {
 	if !seen[launchRoot] || !seen[siblingRoot] {
 		t.Errorf("roots %v must contain launch root and sibling root", roots)
 	}
+}
+
+// onlySnapshotForIssue resolves the single snapshot an issue has in stateDir.
+// Handler tests can no longer compose the filename: the run identity is minted
+// inside the handler, so the file is DISCOVERED through the same
+// FindPersistedStatesForIssue every production reader uses. It failing on zero
+// or many candidates is the point — it also pins that the handler wrote exactly
+// one file, under a name the new discovery regex matches.
+func onlySnapshotForIssue(t *testing.T, stateDir string, issueNumber int) *state.RuntimeState {
+	t.Helper()
+	found, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
+	if err != nil {
+		t.Fatalf("FindPersistedStatesForIssue(%d): %v", issueNumber, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("#%d has %d snapshots in %s, want exactly 1", issueNumber, len(found), stateDir)
+	}
+	return found[0]
 }

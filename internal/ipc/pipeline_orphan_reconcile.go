@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -20,17 +19,22 @@ import (
 // pipeline_done only via pipeline.notifyComplete. When the extension host
 // dies mid-run (window closed, crash, sleep), that terminal event never
 // fires and the platform's pipeline_runs row stays 'running' forever — the
-// "phantom in-flight run" symptom. The persisted runtime-{N}.json snapshot
+// "phantom in-flight run" symptom. The persisted snapshot
 // carries the run's RunID across the crash; this reconciler scans those
 // leftovers at server start (extension activation) and emits the missing
 // pipeline_done so the platform row leaves 'running' immediately instead of
 // waiting for the platform-side stale-run reaper.
 //
-// Paused runs are intentionally skipped: their runtime-{N}.json powers the
+// Paused runs are intentionally skipped: their snapshot powers the
 // pause-restore prompt (#2008) and the user may still resume them. A resumed
 // run gets a fresh RunID, so reconciliation never conflicts with a live run.
-
-var runtimeFilePattern = regexp.MustCompile(`^runtime-(\d+)\.json$`)
+//
+// Discovery is now `runtime-{issue}-{runId}.json` (ADR-017 Decision 8), parsed
+// by state.ParseSnapshotFilename — the same expression the composer and the IPC
+// wire validation are built from, so no id shape can pass validation and fail
+// discovery. That mismatch is what would have stranded dashboard-triggered runs
+// outside this scan while the TypeScript stub sweep deleted their live crash
+// snapshots.
 
 // orphanedRun pairs a leftover runtime snapshot's terminal event with the
 // file that proves it, so the caller can emit then delete.
@@ -39,11 +43,12 @@ type orphanedRun struct {
 	Event    platform.PipelineEvent
 }
 
-// collectOrphanedRuns scans stateDir for persisted runtime-{N}.json snapshots
-// left behind by interrupted runs and builds the terminal pipeline_done event
-// for each. Skipped: paused snapshots (resumable — see package comment),
-// snapshots without a RunID (predate persistence or never reached a stage),
-// unparseable files, and issues for which skipIssue reports a live runtime.
+// collectOrphanedRuns scans stateDir for persisted
+// runtime-{issue}-{runId}.json snapshots left behind by interrupted runs and
+// builds the terminal pipeline_done event for each. Skipped: paused snapshots
+// (resumable — see package comment), snapshots whose CONTENT carries no RunID
+// (corruption — the name promised one), unparseable files, and issues for which
+// skipIssue reports a live runtime.
 func collectOrphanedRuns(stateDir string, skipIssue func(int) bool, now time.Time) []orphanedRun {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
@@ -55,22 +60,34 @@ func collectOrphanedRuns(stateDir string, skipIssue func(int) bool, now time.Tim
 		if entry.IsDir() {
 			continue
 		}
-		m := runtimeFilePattern.FindStringSubmatch(entry.Name())
-		if m == nil {
-			continue
-		}
-		issueNumber, err := strconv.Atoi(m[1])
-		if err != nil {
+		issueNumber, runID, ok := state.ParseSnapshotFilename(entry.Name())
+		if !ok {
 			continue
 		}
 		if skipIssue != nil && skipIssue(issueNumber) {
 			continue
 		}
-		rt, err := state.LoadPersistedState(stateDir, issueNumber)
+		// Load by the runId the FILENAME carried, not by issue: concurrent
+		// dispatches of one issue coexist, so the issue number is an index and
+		// only the identity is an address (ADR-017 Decision 8).
+		rt, err := state.LoadPersistedState(stateDir, runID)
 		if err != nil || rt == nil {
 			continue
 		}
-		if rt.RunID == "" || rt.Paused {
+		// The name promised an identity; this checks the CONTENT delivered THE
+		// SAME ONE. It is a corruption guard, not the discovery filter it used
+		// to be — a file whose body disagrees with its name is not something to
+		// emit a terminal event from.
+		//
+		// The predicate is EQUALITY, not `!= ""`. Every in-tree writer composes
+		// the filename from the same fields it marshals, so name and body always
+		// agree; but `!= ""` only catches the empty body, which
+		// buildPipelineDoneEvent below refuses anyway — the guard was a no-op
+		// and could be deleted with every reconcile test green. Equality catches
+		// the case that actually escapes: a body carrying a DIFFERENT valid
+		// identity, which builds a perfectly well-formed pipeline_done and
+		// reports the wrong run terminal to the platform.
+		if rt.RunID != runID || rt.Paused {
 			continue
 		}
 

@@ -392,7 +392,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 		}
 		writeIssueContextInWorktree(t, worktree, 299, repo, branch)
 
-		snap := state.NewRuntimeState(repo, 299, "item-299")
+		snap := state.NewRuntimeState(repo, 299, "item-299", testRunID())
 		snap.SetProcess(0, worktree)
 		snap.SetBranch(branch)
 
@@ -413,7 +413,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 
 		// No SetBranch: an adopted / rehydrated run whose runtime never learned
 		// the branch still has it on disk, in the worktree the stages ran in.
-		snap := state.NewRuntimeState(repo, 300, "item-300")
+		snap := state.NewRuntimeState(repo, 300, "item-300", testRunID())
 		snap.SetProcess(0, worktree)
 
 		rec := recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 300, Repo: repo, Title: "t"})
@@ -451,7 +451,7 @@ func TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent(t *testing.
 
 	// Nothing anywhere names a branch: no runtime branch, no worktree, no
 	// workspace-root context.
-	snap := state.NewRuntimeState(repo, 301, "item-301")
+	snap := state.NewRuntimeState(repo, 301, "item-301", testRunID())
 
 	var rec state.V2RunRecord
 	out := captureLog(t, func() {

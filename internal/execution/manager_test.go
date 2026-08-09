@@ -244,8 +244,7 @@ func TestRunStage_NonAgenticAdapter_RejectedBeforeSpawn(t *testing.T) {
 // source of truth per layer. Before #370 the mapping dropped the runtime
 // entirely and every spawned stage ran with no way to name its run.
 func TestBuildRunOptions_ThreadsRunIDFromRuntime(t *testing.T) {
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "")
-	rt.RunID = "01890a5d-ac96-774b-bcce-b302099a8057"
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "", "01890a5d-ac96-774b-bcce-b302099a8057")
 
 	got := buildRunOptions(StageOptions{
 		Repo:        "nightgauge/nightgauge",

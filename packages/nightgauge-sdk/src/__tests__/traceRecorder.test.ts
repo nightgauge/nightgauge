@@ -90,6 +90,15 @@ describe("TraceRecorder", () => {
     // run-state.json; the Go notify handler instead persists the platform-facing
     // RunID to runtime-{issue}.json. The recorder must resolve it from there so
     // the trace shares the platform's run_id.
+    //
+    // THIS TEST IS GREEN OVER A PATH THAT IS DEAD IN PRODUCTION as of ADR-017
+    // step 1 (#370): the fixture writes the legacy filename and the recorder
+    // reads the legacy filename, so they agree with each other and with nothing
+    // else — the Go side now writes runtime-{issue}-{runId}.json. Step 7
+    // replaces the whole tier with a read of NIGHTGAUGE_RUN_ID (exported by
+    // every stage env builder since step 0) and this test goes with it. Do NOT
+    // "fix" it by teaching the recorder the new filename: guessing a snapshot
+    // name from an issue number is the cross-process read Decision 8 deletes.
     await fs.mkdir(pipelineDir, { recursive: true });
     await fs.writeFile(
       path.join(pipelineDir, "runtime-244.json"),

@@ -87,7 +87,11 @@ import { classifyTerminalKindForSignal } from "../services/terminalKindSignal";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
 import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
-import { classifyRuntimeStub } from "../utils/runtimeStubSweep";
+import {
+  ANY_RUNTIME_FILE,
+  classifyRuntimeStub,
+  runtimeSweepVerdict,
+} from "../utils/runtimeStubSweep";
 import {
   isRepoInitialized,
   refreshRepoInitializedContext,
@@ -1246,7 +1250,14 @@ export async function initializeServices(
     (async () => {
       try {
         const files = await fs.readdir(pipelineDir).catch(() => [] as string[]);
-        const runtimeFiles = files.filter((f) => /^runtime-\d+\.json$/.test(f));
+        // TWO name patterns, deliberately, and they are NOT interchangeable
+        // (ADR-017 #370 step 1): the sweep may only DELETE legacy names, while
+        // the pause-restore prompt READS both. Both patterns and the gating
+        // between them live in utils/runtimeStubSweep, where
+        // `runtimeSweepVerdict` is unit-tested — this branch guards an
+        // `fs.unlink`, and an inline regex here could be widened back to one
+        // with the whole suite green.
+        const runtimeFiles = files.filter((f) => ANY_RUNTIME_FILE.test(f));
         for (const file of runtimeFiles) {
           const filePath = path.join(pipelineDir, file);
           try {
@@ -1257,7 +1268,11 @@ export async function initializeServices(
               repo?: string | null;
               stage?: string | null;
             };
-            const verdict = classifyRuntimeStub(runtime, containingRepoSlug);
+            // The sweep fails SAFE on the new scheme: a run-identity-keyed
+            // snapshot is never classified and never deleted here.
+            const verdict = runtimeSweepVerdict(file, () =>
+              classifyRuntimeStub(runtime, containingRepoSlug)
+            );
             if (verdict.action === "delete") {
               logger.warn("Sweeping stale/cross-contaminated runtime stub (#307)", {
                 file,
@@ -1283,6 +1298,28 @@ export async function initializeServices(
                 "Cancel"
               );
               if (action === "Resume") {
+                // CONSUME THE SNAPSHOT THIS PROMPT WAS BUILT FROM.
+                //
+                // Resume does not continue the paused run — it starts a NEW one
+                // (`runPipeline` below), under a new identity and, since
+                // ADR-017 step 1, under its own filename. The paused snapshot is
+                // therefore dead the moment the operator accepts, and nothing
+                // else removes it: before step 1 the new run's Persist
+                // overwrote the shared `runtime-{issue}.json` and the prompt
+                // stopped by accident. Without this unlink the prompt re-fires
+                // on EVERY activation, each acceptance launching another full
+                // pipeline run of the same issue and leaving another snapshot
+                // behind, which then feeds the issue-addressed readers more
+                // candidates. Best-effort by design — a failed unlink must not
+                // stop the resume the operator just asked for. (Step 8's
+                // consume-on-claim rename replaces this with a claim protocol.)
+                await fs.unlink(filePath).catch((err) => {
+                  logger.warn("Could not remove the paused snapshot after Resume", {
+                    file,
+                    issueNumber: runtime.issueNumber,
+                    err,
+                  });
+                });
                 if (pipelineStateService) {
                   await pipelineStateService.resumePipeline();
                 }
@@ -1909,47 +1946,58 @@ export async function initializeServices(
       }
       cliRoots = roots;
     };
-    const cliReconciler = new CliPipelineReconciliationService(() => cliRoots, {
-      onDiscovered: (run) => {
-        // An IPC-managed slot with the same issue is already authoritative.
-        if (treeProvider.getConcurrentSlot(run.snapshot.issueNumber)) return;
-        const stateService = PipelineStateService.createForWorktree(
-          run.root,
-          run.snapshot.issueNumber
-        );
-        stateService.applyRuntimeSnapshot(run.snapshot);
-        cliStateServices.set(run.key, {
-          issueNumber: run.snapshot.issueNumber,
-          service: stateService,
-        });
-        treeProvider.addConcurrentSlot(
-          nextCliSlotIndex++,
-          run.snapshot.issueNumber,
-          run.snapshot.title || `Issue #${run.snapshot.issueNumber}`,
-          stateService
-        );
-        logger.info("Discovered direct CLI pipeline", {
-          repo: run.snapshot.repo,
-          issueNumber: run.snapshot.issueNumber,
-          runId: run.snapshot.runId,
-        });
+    const cliReconciler = new CliPipelineReconciliationService(
+      () => cliRoots,
+      {
+        onDiscovered: (run) => {
+          // An IPC-managed slot with the same issue is already authoritative.
+          if (treeProvider.getConcurrentSlot(run.snapshot.issueNumber)) return;
+          const stateService = PipelineStateService.createForWorktree(
+            run.root,
+            run.snapshot.issueNumber
+          );
+          stateService.applyRuntimeSnapshot(run.snapshot);
+          cliStateServices.set(run.key, {
+            issueNumber: run.snapshot.issueNumber,
+            service: stateService,
+          });
+          treeProvider.addConcurrentSlot(
+            nextCliSlotIndex++,
+            run.snapshot.issueNumber,
+            run.snapshot.title || `Issue #${run.snapshot.issueNumber}`,
+            stateService
+          );
+          logger.info("Discovered direct CLI pipeline", {
+            repo: run.snapshot.repo,
+            issueNumber: run.snapshot.issueNumber,
+            runId: run.snapshot.runId,
+          });
+        },
+        onUpdated: (run) => {
+          cliStateServices.get(run.key)?.service.applyRuntimeSnapshot(run.snapshot);
+        },
+        onSettled: (run) => {
+          const tracked = cliStateServices.get(run.key);
+          if (!tracked) return;
+          treeProvider.removeConcurrentSlotIfOwned(tracked.issueNumber, tracked.service);
+          tracked.service.dispose();
+          cliStateServices.delete(run.key);
+          logger.info("Direct CLI pipeline settled", {
+            repo: run.snapshot.repo,
+            issueNumber: run.snapshot.issueNumber,
+            runId: run.snapshot.runId,
+          });
+        },
       },
-      onUpdated: (run) => {
-        cliStateServices.get(run.key)?.service.applyRuntimeSnapshot(run.snapshot);
-      },
-      onSettled: (run) => {
-        const tracked = cliStateServices.get(run.key);
-        if (!tracked) return;
-        treeProvider.removeConcurrentSlotIfOwned(tracked.issueNumber, tracked.service);
-        tracked.service.dispose();
-        cliStateServices.delete(run.key);
-        logger.info("Direct CLI pipeline settled", {
-          repo: run.snapshot.repo,
-          issueNumber: run.snapshot.issueNumber,
-          runId: run.snapshot.runId,
-        });
-      },
-    });
+      {
+        onLegacySnapshotName: (info) => {
+          logger.warn(
+            "CLI run is invisible: its snapshot is still on the pre-ADR-017 name. Restart `nightgauge serve` (or the CLI) on the current binary.",
+            info
+          );
+        },
+      }
+    );
     const disposeCliWorkspaceListener = workspaceManager?.onWorkspaceChanged(() => {
       void refreshCliRoots().then(() => cliReconciler.scan());
     });

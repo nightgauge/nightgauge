@@ -16,7 +16,7 @@ import (
 // archaeology #288 required.
 func TestBuildV2RecordPopulatesExecutionPathAndPuntReason(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
-	rs := NewRuntimeState("nightgauge/nightgauge", 297, "item-297")
+	rs := NewRuntimeState("nightgauge/nightgauge", 297, "item-297", testRunID())
 
 	// pr-create ran deterministically (no punt reason).
 	rs.BeginStage(StagePRCreate)

@@ -162,7 +162,7 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 
 	// Build a minimal runtime state snapshot
-	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id")
+	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-4-6")
 	snap.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
@@ -214,7 +214,7 @@ func TestOutcomeRecording(t *testing.T) {
 	}
 
 	// Record a failed outcome
-	snap2 := state.NewRuntimeState(item.Repo, item.Number, "item-id-2")
+	snap2 := state.NewRuntimeState(item.Repo, item.Number, "item-id-2", testRunID())
 	snap2.BeginStage(state.StageFeatureValidate)
 	snapshot2 := snap2.Snapshot()
 	s.recordOutcome(item, snapshot2, false, 2, "claude-haiku-4-5-20251001", tmpDir)
@@ -320,7 +320,7 @@ func TestEmitStateChangedCallback(t *testing.T) {
 		receivedIssue = issue
 	})
 
-	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	s.emitStateChanged("nightgauge/nightgauge", 1899, rs)
 
 	if !called {
@@ -333,7 +333,7 @@ func TestEmitStateChangedCallback(t *testing.T) {
 
 func TestEmitStateChangedNilCallback(t *testing.T) {
 	s := &Scheduler{}
-	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1")
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	// Should not panic when callback is nil
 	s.emitStateChanged("nightgauge/nightgauge", 1899, rs)
 }
@@ -355,7 +355,7 @@ func TestOnPhaseDetectedCallback(t *testing.T) {
 
 func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 	s := &Scheduler{}
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1")
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
 	s.registerRuntime(3486, rt)
 	defer s.unregisterRuntime(3486)
 
@@ -378,7 +378,7 @@ func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 
 func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
 	s := &Scheduler{}
-	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1")
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 3486, "item-1", testRunID())
 	s.registerRuntime(3486, rt)
 	defer s.unregisterRuntime(3486)
 
@@ -403,7 +403,7 @@ func TestRecordPhaseStart_NoRuntimeIsNoOp(t *testing.T) {
 func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
 	s := &Scheduler{}
 	// Invalid issue number — should not register.
-	s.registerRuntime(0, state.NewRuntimeState("r", 0, "x"))
+	s.registerRuntime(0, state.NewRuntimeState("r", 0, "x", testRunID()))
 	if s.getActiveRuntime(0) != nil {
 		t.Error("issueNumber=0 should not be registered")
 	}
@@ -416,8 +416,8 @@ func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
 
 func TestActiveRuntimes_IsolatedPerIssue(t *testing.T) {
 	s := &Scheduler{}
-	rtA := state.NewRuntimeState("nightgauge/nightgauge", 100, "a")
-	rtB := state.NewRuntimeState("nightgauge/nightgauge", 200, "b")
+	rtA := state.NewRuntimeState("nightgauge/nightgauge", 100, "a", testRunID())
+	rtB := state.NewRuntimeState("nightgauge/nightgauge", 200, "b", testRunID())
 	s.registerRuntime(100, rtA)
 	s.registerRuntime(200, rtB)
 	defer s.unregisterRuntime(100)
@@ -2192,7 +2192,7 @@ func TestVerifyPRMergeForStage_NotMergedFailsClosed(t *testing.T) {
 	// budget-killed "shipped" pr-merge skipped verification (#4070 review).
 	srv := prBlockerServer(t, "OPEN", "CONFLICTING", "DIRTY", "REVIEW_REQUIRED")
 	defer srv.Close()
-	rs := state.NewRuntimeState("acme/platform", 4070, "item-1")
+	rs := state.NewRuntimeState("acme/platform", 4070, "item-1", testRunID())
 	rs.SetPrUrl(testPRURL)
 	s := &Scheduler{client: gh.NewClientWithURL("test-token", srv.URL)}
 	item := types.BoardItem{Number: 4070, Repo: "acme/platform"}

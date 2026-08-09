@@ -21,6 +21,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -515,11 +517,17 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		}
 	}
 
-	// Assert: runtime state file exists
-	runtimePath := filepath.Join(workDir, ".nightgauge", "pipeline",
-		fmt.Sprintf("runtime-%d.json", issueNumber))
-	if _, err := os.Stat(runtimePath); os.IsNotExist(err) {
-		t.Errorf("expected runtime state file at %s", runtimePath)
+	// Assert: the run left exactly one runtime snapshot, under the
+	// identity-keyed name the scheduler's own Persist composes (ADR-017 D8).
+	stateDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
+	if err != nil {
+		t.Fatalf("FindPersistedStatesForIssue: %v", err)
+	}
+	if len(snapshots) != 1 {
+		t.Errorf("expected exactly one runtime snapshot for #%d in %s, found %d", issueNumber, stateDir, len(snapshots))
+	} else if snapshots[0].RunID == "" {
+		t.Errorf("runtime snapshot carries no run identity")
 	}
 }
 

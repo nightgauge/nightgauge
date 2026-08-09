@@ -282,6 +282,16 @@ export class TraceRecorder {
    * persists to `runtime-{issue}.json`. Fail-open: any error (missing file,
    * malformed JSON, no runId) yields null so the recorder falls through to its
    * disabled no-op rather than throwing. (#228)
+   *
+   * DEAD AS OF ADR-017 STEP 1 (#370), KNOWINGLY, AND REPLACED IN STEP 7. The Go
+   * side now writes `runtime-{issue}-{runId}.json`, so this read ENOENTs and
+   * this tier resolves nothing — which on the interactive path means the SDK
+   * trace has no run id until step 7 swaps this whole method for a read of
+   * NIGHTGAUGE_RUN_ID (already exported by every stage env builder since step
+   * 0). It is left in place rather than half-migrated because guessing a
+   * filename from an issue number is precisely the cross-process file read
+   * ADR-017 Decision 8 deletes: it was already wrong after any adoption or
+   * steal (F15), and the fix is the threaded identity, not a new composition.
    */
   private async readRuntimeRunId(issue: number): Promise<string | null> {
     try {

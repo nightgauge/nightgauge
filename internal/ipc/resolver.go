@@ -85,7 +85,7 @@ func (r *ClientResolver) RegisterRepo(owner, repo, path string) {
 
 // RepoPath returns the registered filesystem path for "owner/repo", or ""
 // when the repo was never registered. Used to scope a run's on-disk state
-// (runtime-{N}.json) to the run's target repo instead of the IPC server's
+// (runtime-{issue}-{runId}.json) to the run's target repo instead of the IPC server's
 // launch root (#215).
 func (r *ClientResolver) RepoPath(ownerRepo string) string {
 	r.registryMu.RLock()

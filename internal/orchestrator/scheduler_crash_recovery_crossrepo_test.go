@@ -46,6 +46,7 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 	// The crashed run targeted the non-launch repo, so its sidecar lives under
 	// targetRoot — exactly where runRoot(item.Repo) would have written it.
 	if err := writeCurrentRunSidecar(targetRoot, CurrentRunSidecar{
+		RunID:       testRunID(),
 		IssueNumber: 777,
 		Repo:        "acme/platform",
 		Title:       "Cross-repo run that crashed",
@@ -119,6 +120,7 @@ func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(launchRoot, CurrentRunSidecar{
+		RunID:       testRunID(),
 		IssueNumber: 555,
 		Repo:        "nightgauge/nightgauge",
 		StartedAt:   startedAt,
@@ -158,6 +160,7 @@ func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(strayRoot, CurrentRunSidecar{
+		RunID:       testRunID(),
 		IssueNumber: 42,
 		Repo:        "acme/platform",
 		StartedAt:   startedAt,

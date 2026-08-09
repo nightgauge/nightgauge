@@ -176,7 +176,7 @@ func TestScheduler_PRMerge_DeterministicSkipsLLM(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -215,7 +215,7 @@ func TestScheduler_PRMerge_PuntInvokesLLM(t *testing.T) {
 	}}
 	s.WithPRMergeRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -256,7 +256,7 @@ func TestScheduler_PRMerge_RateLimitedDefersNoLLM(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -286,7 +286,7 @@ func TestScheduler_PRMerge_DeterministicErrorFallsThroughToLLM(t *testing.T) {
 	det := &fakePRMergeRunner{err: errors.New("unexpected gh failure")}
 	s.WithPRMergeRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -319,7 +319,7 @@ func TestScheduler_PRMerge_DeterministicPath_CostZero(t *testing.T) {
 	llm := newFakeStageRunner()
 	s.WithStageRunner(llm)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -353,7 +353,7 @@ func TestScheduler_PRMerge_NonPRMergeStage_NoOp(t *testing.T) {
 	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{Path: pmstages.PathMerged}}
 	s.WithPRMergeRunner(det)
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StageFeatureDev)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -374,7 +374,7 @@ func TestScheduler_PRMerge_NilRunner_NoOp(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	// no WithPRMergeRunner — prMergeRunner is nil
 
-	rs := state.NewRuntimeState("owner/repo", 42, "item-id")
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 

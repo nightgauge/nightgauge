@@ -16,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -37,6 +36,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -259,7 +259,7 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 	RegisterLicenseResultHandler(s, s.licenseChecker)
 	sched.WithStageRunner(s.ipcRunner)
 	sched.WithLicenseChecker(s.licenseChecker)
-	// Root each run's on-disk state (trace, runtime-{N}.json, stage-context,
+	// Root each run's on-disk state (trace, runtime-{issue}-{runId}.json, stage-context,
 	// exit-records, worktrees) at the run's target repo, reusing the same
 	// ClientResolver registry that pipelineStateDir/RegisterRepo populate at
 	// startup. Unregistered/empty repos fall back to workspaceRoot inside the
@@ -623,7 +623,7 @@ func (s *Server) repoRoot(repo string) string {
 }
 
 // pipelineStateDir resolves the .nightgauge/pipeline directory a run's
-// runtime-{N}.json belongs in, scoped to the run's target repo via repoRoot.
+// runtime-{issue}-{runId}.json belongs in, scoped to the run's target repo via repoRoot.
 // Returns "" when no root resolves (e.g. an unconfigured server).
 func (s *Server) pipelineStateDir(repo string) string {
 	root := s.repoRoot(repo)
@@ -2355,7 +2355,34 @@ func (s *Server) registerMethods() {
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
 		if !ok {
-			rt = state.NewRuntimeState("", p.IssueNumber, "")
+			// Deleted outright in ADR-017 step 4, when `runId` + `repo` +
+			// `issueNumber` become required and creation here is forbidden
+			// altogether (F9). Until then it exists so the in-memory paused
+			// flag has somewhere to live.
+			//
+			// IT MINTS AN IDENTITY, symmetric with notifyStageTransition's
+			// interim mint below and for the same reason. setPaused has no
+			// identity to offer — the caller sends only an issue number — but
+			// this entry is installed under the ISSUE key, so the run that
+			// arrives next ADOPTS it: notifyStageTransition mints only in its
+			// own `!ok` branch, so an identity-less stub here made every later
+			// Persist for that run return ErrNoRunIdentity, and the whole run
+			// wrote ZERO snapshots behind a "non-fatal" log line — no crash
+			// snapshot, no gate records, no pause-restore. (On main the shared
+			// runtime-{issue}.json had no identity gate, so the same sequence
+			// persisted normally; this is a regression the per-run filename
+			// introduced, not a pre-existing gap.) A minted stub costs nothing
+			// and is at least persistable and discoverable in the interim.
+			//
+			// The #307 repo gate below still keeps THIS write off disk: with no
+			// repo there is no correct home, so the first repo-carrying
+			// transition is what actually persists it.
+			runID, mintErr := runstate.NewRunID()
+			if mintErr != nil {
+				log.Printf("setPaused: #%d cannot mint a run identity: %v — this run's snapshots will be refused (ADR-017 Decision 1)",
+					p.IssueNumber, mintErr)
+			}
+			rt = state.NewRuntimeState("", p.IssueNumber, "", runID)
 			s.activeRuntimes[runtimeKey] = rt
 		}
 		s.runtimesMu.Unlock()
@@ -2444,7 +2471,10 @@ func (s *Server) registerMethods() {
 			repoSlug = p.Owner + "/" + p.Repo
 		}
 		if stateDir := s.pipelineStateDir(repoSlug); stateDir != "" {
-			persisted, err := state.LoadPersistedState(stateDir, p.IssueNumber)
+			// Issue-addressed fallback tier: getState answers "what is #N
+			// doing?", so it takes the standard pick — prefer a non-terminal
+			// snapshot, then newest StartedAt (ADR-017 Decision 8).
+			persisted, err := state.PickPersistedStateForIssue(stateDir, p.IssueNumber)
 			if err == nil {
 				return persisted, nil
 			}
@@ -2464,14 +2494,65 @@ func (s *Server) registerMethods() {
 
 		s.runtimesMu.Lock()
 		rt, ok := s.activeRuntimes[runtimeKey]
+		// IDENTITY REPAIR IS REPLACEMENT. An entry already under this issue key
+		// whose RunID is not a canonical identity cannot be fixed in place —
+		// RunID is a constructor fact with no setter — so it is REBUILT with a
+		// freshly minted one, carrying over what an administrative stub can
+		// legitimately hold. Without this, a stub installed by another handler
+		// is ADOPTED by the run: every Persist for the rest of that run returns
+		// ErrNoRunIdentity behind a "non-fatal" log line and the run writes zero
+		// snapshots. setPaused's stub now mints its own identity, so this branch
+		// is the defence for any OTHER path that ever installs one (and for the
+		// mint-failure runtime constructed a few lines below, whose next
+		// transition retries the mint here).
+		var carried *state.RuntimeState
+		if ok && !runstate.IsIdentity(rt.RunID) {
+			log.Printf("notifyStageTransition: #%d had a registry entry with no valid run identity (%q) — replacing it with a freshly minted one (ADR-017 Decision 1)",
+				p.IssueNumber, rt.RunID)
+			carried = rt.Snapshot()
+			ok = false
+		}
 		if !ok {
-			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "")
-			// Generate a stable run UUID for the extension/HeadlessOrchestrator
-			// path (the Go-scheduler path threads RunID from runstate instead).
-			// This is the runId the platform requires to materialise a live
-			// pipeline_runs row from stage_started (#1047). Keyed by issue, so it
-			// stays stable across every stage of the run.
-			rt.RunID = uuid.NewString()
+			// INTERIM SERVER-SIDE MINT — ADR-017 Decision 1 deletes it, but in
+			// STEP 4, not here. The extension population does not acquire its
+			// own identity until step 3 (beginRun on PipelineStateService), so
+			// deleting the mint now would make every extension-path runtime
+			// identity-less, Persist would refuse all of them, and every
+			// extension run between these two merges would write zero
+			// snapshots behind a healthy-looking UI — F16 reached inside the
+			// migration that exists to prevent it.
+			//
+			// What DOES change now is the shape: runstate.NewRunID() is the
+			// canonical lowercase UUIDv7 the whole ADR keys on, replacing a v4
+			// that the identity regex, the snapshot filename and the wire
+			// validation would all reject. Both minters now agree by
+			// construction with the Go scheduler's.
+			//
+			// A mint failure keeps the old behaviour's shape rather than
+			// dropping the transition: construct with an empty identity and let
+			// Persist's refusal (Decision 1) and the #307 repo gate keep it off
+			// disk, so the run still updates in-memory state and still emits
+			// stateChanged.
+			runID, mintErr := runstate.NewRunID()
+			if mintErr != nil {
+				log.Printf("notifyStageTransition: #%d cannot mint a run identity: %v — this run's snapshots will be refused (ADR-017 Decision 1)",
+					p.IssueNumber, mintErr)
+			}
+			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "", runID)
+			if carried != nil {
+				// The scalar state a stub can hold. Stage accumulators are not
+				// carried: the only entry that can reach here holding any is a
+				// mint-failure runtime (crypto/rand failed), which persisted
+				// nothing on the old identity either, so nothing on disk
+				// disagrees with the replacement.
+				rt.Paused = carried.Paused
+				rt.Title = carried.Title
+				rt.Branch = carried.Branch
+				rt.ItemID = carried.ItemID
+				if rt.Repo == "" {
+					rt.Repo = carried.Repo
+				}
+			}
 			s.activeRuntimes[runtimeKey] = rt
 		}
 		// Propagate title/branch from the transition params so that stateChanged
@@ -2575,7 +2656,7 @@ func (s *Server) registerMethods() {
 			// with no history entry. Cleanup still happens in notifyComplete, and
 			// the next "initialized" for the same issue replaces the runtime —
 			// mirroring the deferred cleanup the "complete" case already relies on.
-			// The on-disk runtime-{N}.json IS still removed below (terminal snapshot).
+			// The on-disk runtime-{issue}-{runId}.json IS still removed below (terminal snapshot).
 		case "skipped":
 			rt.SkipStage(stage)
 		case "deferred":
@@ -2599,7 +2680,17 @@ func (s *Server) registerMethods() {
 		if repo != "" {
 			if stateDir := s.pipelineStateDir(repo); stateDir != "" {
 				if p.Status == "failed" {
-					_ = os.Remove(filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", p.IssueNumber)))
+					// Composed through the one composer, never by hand: the
+					// filename now carries the run identity, so this remove can
+					// only ever take THIS run's snapshot (ADR-017 Decision 8).
+					// A hand-written `runtime-{issue}.json` here would miss the
+					// file entirely and leave every completed extension run's
+					// snapshot for the reconciler to double-terminal.
+					// (Deleting this removal outright — it is a second,
+					// redundant terminal path, F3 — is ADR-017 step 4's job,
+					// with the terminal claim that replaces it.)
+					// RunID is immutable after construction, so it needs no lock.
+					_ = os.Remove(filepath.Join(stateDir, state.SnapshotFilename(p.IssueNumber, rt.RunID)))
 				} else if err := rt.Persist(stateDir); err != nil {
 					log.Printf("notifyStageTransition: persist runtime snapshot failed (non-fatal): %v", err)
 				}
@@ -2975,8 +3066,30 @@ func (s *Server) registerMethods() {
 		// The run reached its terminal event — remove the crash-recovery
 		// snapshot so orphan reconciliation (#44) never re-terminates it.
 		// Resolved per-repo: the snapshot lives in the run's target repo (#215).
-		if stateDir := s.pipelineStateDir(p.Repo); stateDir != "" {
-			_ = os.Remove(filepath.Join(stateDir, fmt.Sprintf("runtime-%d.json", p.IssueNumber)))
+		//
+		// THE PATH IS THE IDENTITY (ADR-017 Decision 8): composed from this
+		// run's own runId, so the remove cannot take a successor's file even in
+		// principle — the bare-issue delete this replaces could and did (F3).
+		// An unresolvable identity therefore removes NOTHING rather than
+		// guessing at a filename — but it says so, because a snapshot that
+		// outlives its own notifyComplete is the input to two known defects: it
+		// stays non-terminal forever (nothing sets the durable marker before
+		// ADR-017 step 4), so it is a permanent extra candidate for the
+		// issue-addressed readers, and the next server start reconciles it into
+		// a contradictory Success:false pipeline_done for a run that succeeded.
+		// Resolution-by-scan is NOT the fix — with two snapshots for the issue
+		// it would remove the wrong run's file. Step 4's claim resolves it by
+		// construction. (Replacing this whole tail with the claim sequence's
+		// SealAndRemove is ADR-017 step 4.)
+		if runID != "" {
+			if stateDir := s.pipelineStateDir(p.Repo); stateDir != "" {
+				_ = os.Remove(filepath.Join(stateDir, state.SnapshotFilename(p.IssueNumber, runID)))
+			}
+		} else {
+			log.Printf(
+				"notifyComplete: #%d has no resolvable run identity (no registry entry — typically a backend restart under a surviving extension host) — its crash-recovery snapshot is NOT removed and will read as a live orphan until ADR-017 step 4",
+				p.IssueNumber,
+			)
 		}
 
 		return map[string]string{"status": "ok"}, nil

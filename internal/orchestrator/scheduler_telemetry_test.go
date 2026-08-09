@@ -429,7 +429,7 @@ func TestQueuePriorityFromLabels(t *testing.T) {
 // TestCacheHitRateInV2Record verifies that per-stage cache_hit_rate is correctly
 // populated when recording V2 history via the history writer (Issue #2459).
 func TestCacheHitRateInV2Record(t *testing.T) {
-	rs := state.NewRuntimeState("nightgauge/nightgauge", 2459, "item-test")
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 2459, "item-test", testRunID())
 
 	rs.BeginStage(state.StageIssuePickup)
 	// 100 actual input + 50 cache_read → InputTokens=150, CacheRead=50

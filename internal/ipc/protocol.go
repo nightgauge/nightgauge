@@ -868,7 +868,7 @@ type PipelineNotifyStageTransitionParams struct {
 	// Per-stage usage for "complete" transitions, populated by the extension
 	// from its accumulated stage usage (PipelineStateService.tokens.per_stage).
 	// Previously the notify path completed stages with hardcoded zeros (#227),
-	// so runtime-{N}.json and platform telemetry reported 0 in / 0 out / $0.
+	// so runtime-{issue}-{runId}.json and platform telemetry reported 0 in / 0 out / $0.
 	// InputTokens excludes cache reads (CacheReadTokens is a separate field);
 	// CompleteStageWithCost combines them, matching the scheduler path.
 	InputTokens     int     `json:"inputTokens,omitempty"`

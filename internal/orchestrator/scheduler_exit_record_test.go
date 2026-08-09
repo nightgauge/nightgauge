@@ -55,8 +55,8 @@ func readExitRecords(t *testing.T, rootDir string) []diagnostics.StageExitRecord
 func TestWriteStageExitRecord_Success(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id")
-	runtime.RunID = "run-3605-success"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", runID)
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
 	result := &StageRunResult{
 		ExitCode:        0,
@@ -90,8 +90,8 @@ func TestWriteStageExitRecord_Success(t *testing.T) {
 	if got.Repo != "nightgauge/nightgauge" {
 		t.Errorf("Repo = %q", got.Repo)
 	}
-	if got.RunID != "run-3605-success" {
-		t.Errorf("RunID = %q, want run-3605-success", got.RunID)
+	if got.RunID != runID {
+		t.Errorf("RunID = %q, want the constructor's identity %q", got.RunID, runID)
 	}
 	if got.Tokens.Input != 1000 || got.Tokens.Output != 200 || got.Tokens.CacheRead != 5000 {
 		t.Errorf("Tokens = %+v", got.Tokens)
@@ -115,8 +115,8 @@ func TestWriteStageExitRecord_Success(t *testing.T) {
 func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id")
-	runtime.RunID = "run-3605-stallkill"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", runID)
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
 	result := &StageRunResult{ExitCode: 137}
 
@@ -150,8 +150,8 @@ func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3591, "item-id")
-	runtime.RunID = "run-3591-mystery"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3591, "item-id", runID)
 	item := types.BoardItem{Number: 3591, Repo: "nightgauge/nightgauge"}
 
 	lastBashExit := 1
@@ -223,8 +223,8 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 161, "item-id")
-	runtime.RunID = "run-161-ceiling"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 161, "item-id", runID)
 	item := types.BoardItem{Number: 161, Repo: "nightgauge/nightgauge"}
 
 	const wantValue = "2400000ms (stall warn threshold 300s (source: static) × NX_RUNAWAY_KILL_MULTIPLE=8)"
@@ -272,8 +272,8 @@ func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
 func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id")
-	runtime.RunID = "run-156-recent-bash"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id", runID)
 	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
 
 	failed, ok := 1, 0
@@ -331,7 +331,7 @@ func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id", testRunID())
 	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
 
 	var oversized []diagnostics.RecentBashEntry
@@ -365,7 +365,7 @@ func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
 func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", testRunID())
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
 
 	// result with no TS-side diagnostics populated (mirrors pre-#3605 TS).
@@ -400,8 +400,8 @@ func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
 func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id")
-	runtime.RunID = "run-3863-noop"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", runID)
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
 
 	// Mirror the scheduler: the gate result is appended to the runtime before
@@ -444,8 +444,8 @@ func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
 func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 74, "item-id")
-	runtime.RunID = "run-74-premature"
+	runID := testRunID()
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 74, "item-id", runID)
 	item := types.BoardItem{Number: 74, Repo: "nightgauge/nightgauge"}
 
 	runtime.AppendStageGateResult(state.StageFeaturePlanning, state.StageGateResult{
@@ -482,7 +482,7 @@ func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
 func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
 
 	// First a no_op, then a reconcile that passed — latest must win.
@@ -516,7 +516,7 @@ func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 func TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
 
 	s.writeStageExitRecord(item, state.StageFeatureDev, runtime,
@@ -539,7 +539,7 @@ func TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty(t *testing.T) {
 // from accidentally scribbling into CWD.
 func TestWriteStageExitRecord_EmptyWorkspaceRootIsNoop(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	runtime := state.NewRuntimeState("repo", 1, "id")
+	runtime := state.NewRuntimeState("repo", 1, "id", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "repo"}
 	// Should not panic, should not error, should not write.
 	s.writeStageExitRecord(item, state.StageFeatureDev, runtime,
@@ -610,7 +610,7 @@ func TestRateLimitRemainingAtExit_NoClientReturnsSentinel(t *testing.T) {
 func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
 	root := t.TempDir()
 	s := newSchedulerForDeterministicTest()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1, "id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1, "id", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/nightgauge"}
 
 	s.writeStageExitRecord(item, state.StageIssuePickup, runtime,
@@ -677,7 +677,7 @@ func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
 	}
 	gitInRoot("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 701, "feature-dev"))
 
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 692, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 692, "item-id", testRunID())
 	item := types.BoardItem{Number: 692, Repo: "nightgauge/nightgauge"}
 	s.writeStageExitRecord(item, state.StageFeatureValidate, runtime,
 		&StageRunResult{ExitCode: 137, Signal: "SIGKILL"},
@@ -710,7 +710,7 @@ func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
 func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	root := t.TempDir()
-	runtime := state.NewRuntimeState("nightgauge/nightgauge", 693, "item-id")
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 693, "item-id", testRunID())
 	item := types.BoardItem{Number: 693, Repo: "nightgauge/nightgauge"}
 
 	s.writeStageExitRecord(item, state.StageFeatureDev, runtime, &StageRunResult{},

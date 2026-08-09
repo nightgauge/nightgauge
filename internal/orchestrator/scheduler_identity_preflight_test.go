@@ -50,7 +50,7 @@ func TestPreflightIdentity_RejectsNoPushIdentity(t *testing.T) {
 	s := newPreflightScheduler(checker)
 
 	item := types.BoardItem{Repo: "Acme-Community/acmesvc-tracker", Number: 143, ID: "I_143"}
-	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID)
+	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID, testRunID())
 
 	ok, reason := s.preflightIdentity(context.Background(), item, rt)
 	if ok {
@@ -82,7 +82,7 @@ func TestPreflightIdentity_SkippedWhenUnconfigured(t *testing.T) {
 	s := newPreflightScheduler(nil) // no checker → gate disabled
 
 	item := types.BoardItem{Repo: "nightgauge/nightgauge", Number: 1, ID: "I_1"}
-	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID)
+	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID, testRunID())
 
 	ok, reason := s.preflightIdentity(context.Background(), item, rt)
 	if !ok {
@@ -100,7 +100,7 @@ func TestPreflightIdentity_AllowsWhenIdentityHasPush(t *testing.T) {
 	s := newPreflightScheduler(checker)
 
 	item := types.BoardItem{Repo: "Acme-Community/acmesvc-tracker", Number: 144, ID: "I_144"}
-	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID)
+	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID, testRunID())
 
 	ok, _ := s.preflightIdentity(context.Background(), item, rt)
 	if !ok {
@@ -122,7 +122,7 @@ func TestPreflightIdentity_SkipsUnqualifiedRepo(t *testing.T) {
 	s := newPreflightScheduler(checker)
 
 	item := types.BoardItem{Repo: "nightgauge", Number: 2, ID: "I_2"} // no owner/
-	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID)
+	rt := state.NewRuntimeState(item.Repo, item.Number, item.ID, testRunID())
 
 	ok, _ := s.preflightIdentity(context.Background(), item, rt)
 	if !ok {

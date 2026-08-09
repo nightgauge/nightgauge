@@ -35,7 +35,7 @@ func TestComputeAttemptsUntilSuccess(t *testing.T) {
 
 func TestBuildV2RecordPopulatesAttempts(t *testing.T) {
 	hw := NewHistoryWriter(t.TempDir())
-	rs := NewRuntimeState("nightgauge/nightgauge", 4172, "item-attempts")
+	rs := NewRuntimeState("nightgauge/nightgauge", 4172, "item-attempts", testRunID())
 	rs.BeginStage(StageFeatureDev)
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 6000}, "")
 
