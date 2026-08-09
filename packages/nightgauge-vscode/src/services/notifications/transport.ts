@@ -11,6 +11,9 @@
  */
 
 import type { Logger } from "../../utils/logger";
+// The single USD formatter (#333 decision E). It lives in utils/ so the token
+// parser can share it without a utils → services import.
+import { formatCost } from "../../utils/formatCost";
 
 // ─── Shared retry & debounce constants ──────────────────────────────────────
 
@@ -35,41 +38,120 @@ export function formatDuration(ms: number): string {
   return `${m}m ${s}s`;
 }
 
-export function formatCost(usd: number): string {
-  return `$${usd.toFixed(3)}`;
-}
-
 /**
- * Render the completion-embed "Budget" field: actual spend vs the ceiling,
- * plus — when a pre-flight estimate exists — that estimate labeled
- * unambiguously as a *pre-run* prediction, together with how far off it
- * landed vs the real cost.
+ * Render the completion-embed "Budget" field: actual spend vs the ceiling.
  *
- * The pre-flight estimate (`HeadlessOrchestrator` `preFlightResult.estimatedCost`)
- * is computed once before a single token is spent and never updated again.
- * Rendered as a bare "Est: $2.703" on a completion embed sitting right next
- * to the real cost ("$28.259"), it read as a second "actual" figure to
- * operators — when it can be an order of magnitude off. Labeling it
- * "Pre-run est." and appending the actual/estimate ratio makes clear it is a
- * before-the-run prediction and surfaces how (in)accurate it was (#267).
+ * The pre-flight estimate no longer lives here — it is its own "Cost Accuracy"
+ * field (`formatCostAccuracyValue`), because estimate-vs-actual is the single
+ * strongest pipeline-health signal in the message and was buried as a suffix
+ * inside the noisiest field (#333 decision G, extending #267).
  *
  * @param costUsd - Actual cost incurred so far (0 for a not-yet-terminal run).
  * @param ceilingUsd - Budget ceiling in USD. Must be > 0 (callers gate on this
- *   before invoking).
- * @param estimateUsd - Pre-flight estimated cost in USD, if one was recorded.
+ *   via `shouldRenderBudgetField`).
  */
-export function formatBudgetFieldValue(
+export function formatBudgetFieldValue(costUsd: number, ceilingUsd: number): string {
+  const pct = costUsd > 0 ? ((costUsd / ceilingUsd) * 100).toFixed(0) : "0";
+  return `${formatCost(costUsd)} / ${formatCost(ceilingUsd)} (${pct}%)`;
+}
+
+/** Spend/ceiling ratio at or above which the budget field carries information. */
+export const BUDGET_FIELD_MIN_RATIO = 0.5;
+
+/** Outcome types for which the budget field is always relevant. */
+const BUDGET_OUTCOME_TYPES: ReadonlySet<string> = new Set([
+  "budget-ceiling",
+  "shipped-but-overbudget",
+]);
+
+/**
+ * Should the notifier render the budget field at all? (#333 decision F)
+ *
+ * `$1.52 / $75.00 (2%)` occupied a top-level field on every single run to say
+ * "nothing is wrong" — permanent noise that pushed the actionable fields below
+ * the fold. It earns its place only when spend has reached half the ceiling,
+ * or when the run's outcome is about the budget.
+ */
+export function shouldRenderBudgetField(
   costUsd: number,
   ceilingUsd: number,
-  estimateUsd?: number
-): string {
-  const pct = costUsd > 0 ? ((costUsd / ceilingUsd) * 100).toFixed(0) : "0";
-  let estimateNote = "";
-  if (estimateUsd != null && estimateUsd > 0) {
-    const accuracy = costUsd > 0 ? ` (actual: ${(costUsd / estimateUsd).toFixed(1)}x)` : "";
-    estimateNote = `  ·  Pre-run est. ${formatCost(estimateUsd)}${accuracy}`;
+  outcomeType: string | undefined
+): boolean {
+  if (!(ceilingUsd > 0)) return false;
+  if (outcomeType != null && BUDGET_OUTCOME_TYPES.has(outcomeType)) return true;
+  return costUsd / ceilingUsd >= BUDGET_FIELD_MIN_RATIO;
+}
+
+/** Lower bound of the "on estimate" neutral band (actual/estimate ratio). */
+export const COST_ACCURACY_BAND_LOW = 0.8;
+/** Upper bound of the "on estimate" neutral band (actual/estimate ratio). */
+export const COST_ACCURACY_BAND_HIGH = 1.25;
+
+/**
+ * Render the standalone "Cost Accuracy" field: what the run was predicted to
+ * cost vs what it actually cost (#333 decision G).
+ *
+ * Inside the neutral band the field reads "≈ on estimate" so it is not a
+ * permanent alarm; outside it, the ratio is the loudest thing in the field
+ * because a 3x miss is the signal an operator most needs from the message.
+ */
+export function formatCostAccuracyValue(actualUsd: number, estimateUsd: number): string {
+  const head = `Est. ${formatCost(estimateUsd)} → Actual ${formatCost(actualUsd)}`;
+  if (actualUsd <= 0 || estimateUsd <= 0) return head;
+  const ratio = actualUsd / estimateUsd;
+  const rendered = `${ratio.toFixed(1)}x`;
+  if (ratio >= COST_ACCURACY_BAND_LOW && ratio <= COST_ACCURACY_BAND_HIGH) {
+    return `${head}  ·  ≈ on estimate (${rendered})`;
   }
-  return `${formatCost(costUsd)} / ${formatCost(ceilingUsd)} (${pct}%)${estimateNote}`;
+  return `${head}  ·  **${rendered} ${ratio > 1 ? "over" : "under"}**`;
+}
+
+/** Minimal logging surface the pure render helpers need. */
+export interface WarnLogger {
+  warn(message: string, meta?: Record<string, unknown>): void;
+}
+
+/**
+ * Cross-check the reported run total against the per-stage costs before the
+ * embed asserts it (#333 decision A / AC1).
+ *
+ * The #289 message claimed a `$1.518` run total while its own Feature Dev
+ * line read `$13.319` — a total smaller than one of its components. The root
+ * cause was fixed upstream (#309 books failing stages into the run total),
+ * but the render layer must never restate a total its own stage list
+ * contradicts: when the reported figure is below the largest single stage,
+ * render the per-stage **sum** and log both numbers. Never silently assert
+ * the contradiction, and never silently correct it either.
+ *
+ * The invariant is deliberately max-based, not sum-based: a total below its
+ * largest component is impossible, whereas a total merely below the *sum* is
+ * routine float and rounding noise, and a sum-strict check would fire on
+ * every healthy run. A quietly-undercounted total that still clears the max
+ * is therefore out of scope here (AC1) — the fix for that lives upstream in
+ * whoever books the stage costs, not in the renderer.
+ *
+ * @returns The total to render — the reported one unless the stages disprove it.
+ */
+export function reconcileRunTotalUsd(
+  reportedUsd: number,
+  perStage: Record<string, { cost_usd?: number } | undefined> | undefined,
+  logger?: WarnLogger
+): number {
+  if (!perStage) return reportedUsd;
+  const costs = Object.values(perStage)
+    .map((s) => s?.cost_usd)
+    .filter((c): c is number => typeof c === "number" && c > 0);
+  if (costs.length === 0) return reportedUsd;
+
+  const maxStageCostUsd = Math.max(...costs);
+  if (reportedUsd >= maxStageCostUsd) return reportedUsd;
+
+  const perStageSumUsd = costs.reduce((sum, c) => sum + c, 0);
+  logger?.warn(
+    "Notifier: reported run total is below a single stage's cost — rendering the per-stage sum",
+    { reportedTotalUsd: reportedUsd, maxStageCostUsd, perStageSumUsd }
+  );
+  return perStageSumUsd;
 }
 
 /** Truncate a string to maxLen, appending "…" if truncated. */

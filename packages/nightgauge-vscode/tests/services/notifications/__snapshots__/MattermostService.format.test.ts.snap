@@ -7,7 +7,7 @@ exports[`MattermostService.format — snapshot parity > attachment snapshot matc
   "fields": [
     {
       "short": true,
-      "title": "Mode",
+      "title": "Limits",
       "value": "Elevated  ·  up to Opus",
     },
   ],
@@ -32,7 +32,7 @@ exports[`MattermostService.format — snapshot parity > attachment snapshot matc
   "fields": [
     {
       "short": true,
-      "title": "Mode",
+      "title": "Limits",
       "value": "Elevated  ·  up to Opus",
     },
   ],

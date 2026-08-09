@@ -18,7 +18,6 @@ import {
   parseStreamJsonOutput,
   extractTokenUsage,
   formatTokenCount,
-  formatCost,
   formatTokenUsageDisplay,
   calculateRateLimitWait,
   isHardRateLimit,
@@ -1800,49 +1799,8 @@ describe("formatTokenCount", () => {
   });
 });
 
-describe("formatCost", () => {
-  describe("cost < $0.01", () => {
-    it("should format with 4 decimals", () => {
-      expect(formatCost(0)).toBe("$0.0000");
-      expect(formatCost(0.0001)).toBe("$0.0001");
-      expect(formatCost(0.0099)).toBe("$0.0099");
-      expect(formatCost(0.00456)).toBe("$0.0046");
-    });
-  });
-
-  describe("cost $0.01-$0.99", () => {
-    it("should format with 3 decimals", () => {
-      expect(formatCost(0.01)).toBe("$0.010");
-      expect(formatCost(0.05)).toBe("$0.050");
-      expect(formatCost(0.123)).toBe("$0.123");
-      expect(formatCost(0.999)).toBe("$0.999");
-    });
-  });
-
-  describe("cost >= $1.00", () => {
-    it("should format with 2 decimals", () => {
-      expect(formatCost(1.0)).toBe("$1.00");
-      expect(formatCost(1.5)).toBe("$1.50");
-      expect(formatCost(10.0)).toBe("$10.00");
-      expect(formatCost(99.99)).toBe("$99.99");
-      expect(formatCost(1234.56)).toBe("$1234.56");
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle zero", () => {
-      expect(formatCost(0)).toBe("$0.0000");
-    });
-
-    it("should handle exactly 0.01", () => {
-      expect(formatCost(0.01)).toBe("$0.010");
-    });
-
-    it("should handle exactly 1.00", () => {
-      expect(formatCost(1.0)).toBe("$1.00");
-    });
-  });
-});
+// `formatCost` moved to src/utils/formatCost.ts (#333 decision E — one
+// implementation, not two). Its tier tests live in tests/utils/formatCost.test.ts.
 
 /**
  * Regression tests for multi-callback cost inflation bug (Issue #1336)

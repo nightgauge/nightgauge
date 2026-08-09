@@ -38,13 +38,17 @@ import {
   FINAL_PATCH_MAX_RETRIES,
   FINAL_PATCH_RETRY_DELAYS,
   formatBudgetFieldValue,
-  formatCost,
+  formatCostAccuracyValue,
   formatDuration,
+  reconcileRunTotalUsd,
   redactSecrets,
   retryWithBackoff,
   shortModel,
+  shouldRenderBudgetField,
   truncate,
+  type WarnLogger,
 } from "./notifications/transport";
+import { formatCost } from "../utils/formatCost";
 
 // Re-export so existing imports (tests/services/DiscordService.test.ts) still resolve.
 export { redactSecrets };
@@ -237,6 +241,198 @@ const MAX_ERROR_EXTRACT_LENGTH = 1500;
 /** Truncate a single JSON line for fallback display when extraction fails. */
 const MAX_JSON_FALLBACK_LENGTH = 500;
 
+/** Maximum length of the one-line error lead that opens the Error Details field. */
+const MAX_ERROR_LEAD_LENGTH = 120;
+
+/** A stack-frame line ("    at Foo (file:1:2)", "File \"x.py\", line 3"). */
+const STACK_FRAME_RE = /^\s*(?:at\s|File\s+"|Traceback\b|\.{3}\s|\^+\s*$)/;
+
+/** A leading producer marker: "[stage:worktree-containment] ", "[gate] ". */
+const MARKER_PREFIX_RE = /^\[[A-Za-z0-9:_.-]+\]\s*/;
+
+/** A line that is only a location: "src/a/b.ts", "reference-data/x.json". */
+const BARE_PATH_RE = /^\S+$/;
+
+/** "byme-toolbox (/abs/path) — 10 path(s):" — a header for a list, not a reason. */
+const PATH_COUNT_HEADER_RE = /\bpath\(s\):\s*$/;
+
+/** The `preserved: <patch>` line — the one actionable thing in a containment dump. */
+const PRESERVED_RE = /^preserved:\s*\S/i;
+
+/** Consecutive path-only lines beyond this many collapse to a count (AC9). */
+const MAX_LISTED_PATHS = 3;
+
+/** Prose longer than this is cut to its first sentence when it has one (AC9). */
+const MAX_PROSE_LINE_LENGTH = 200;
+
+/** Is this line only a file path — a location rather than an explanation? */
+function isPathLine(line: string): boolean {
+  return BARE_PATH_RE.test(line) && (line.includes("/") || /\.[A-Za-z0-9]+$/.test(line));
+}
+
+/** Does this line carry an explanation, rather than a location or a frame? */
+function isProseLine(line: string): boolean {
+  return !isPathLine(line) && !PATH_COUNT_HEADER_RE.test(line);
+}
+
+/** Strip a producer marker and surrounding whitespace from a line. */
+function stripMarker(line: string): string {
+  return line.replace(MARKER_PREFIX_RE, "").trim();
+}
+
+/** First sentence of a line, when it has one — a bare "." in a path never splits it. */
+function firstSentenceOf(text: string): string {
+  const end = text.search(/[.!?](?:\s|$)/);
+  return end >= 0 ? text.slice(0, end + 1).trim() : text.trim();
+}
+
+/**
+ * Build the lead that opens the "Error Details" field (#333 decision H).
+ *
+ * The field used to open with whatever the raw dump started with — on #289
+ * that was ten file paths followed by a two-sentence policy essay, pushing the
+ * actionable part (the preserved patch path) below the fold.
+ *
+ * What can never be the lead, and why:
+ *   - a stack frame — it says where, not what;
+ *   - a raw JSON line — an envelope the extractor could not open is noise;
+ *   - a path or a "N path(s):" header — a location is not a reason.
+ * A producer marker (`[stage:worktree-containment]`) is stripped rather than
+ * skipped: it prefixes the reason line, so skipping it discards the reason.
+ *
+ * When a `preserved: <path>` line exists it is appended, because the recovery
+ * action is the part an operator acts on and it was thirteen rows down.
+ *
+ * Exported for unit testing.
+ */
+export function buildErrorLead(stageLabel: string, extracted: string): string | null {
+  const lines = extracted
+    .split("\n")
+    .map((l) => stripMarker(l))
+    .filter((l) => l.length > 0);
+  if (lines.length === 0) return null;
+
+  const speakable = lines.filter(
+    (l) => !STACK_FRAME_RE.test(l) && !l.startsWith("{") && !l.startsWith("[")
+  );
+
+  if (speakable.length === 0) {
+    // Nothing but frames and unopenable JSON. Say that, and name one frame —
+    // the field must never simply open on a raw frame.
+    const firstFrame = lines.find((l) => STACK_FRAME_RE.test(l));
+    if (!firstFrame) return null;
+    return `**${stageLabel}** — stack only; first frame: ${truncate(
+      firstFrame.trim(),
+      MAX_ERROR_LEAD_LENGTH
+    )}`;
+  }
+
+  // Prefer an explanation; fall back to the first speakable line if the whole
+  // payload is locations.
+  const message = speakable.find(isProseLine) ?? speakable[0];
+  const head = `**${stageLabel}** — ${truncate(firstSentenceOf(message), MAX_ERROR_LEAD_LENGTH)}`;
+
+  const preserved = lines.find((l) => PRESERVED_RE.test(l));
+  return preserved ? `${head}\n${preserved}` : head;
+}
+
+/**
+ * Trim an extracted error to what a reader needs (#333 AC9).
+ *
+ * Two kinds of bulk drown the detail: a long file list (containment reports up
+ * to 25 paths) and a policy paragraph explaining *why the rule exists*, which
+ * the operator already knows. Runs of path-only lines collapse to the first
+ * three plus a count; over-long prose is cut to its first sentence. Nothing
+ * that names a cause or an action is dropped.
+ *
+ * Exported for unit testing.
+ */
+export function collapseErrorDetail(extracted: string): string {
+  const lines = extracted.split("\n");
+  const out: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed.length > 0 && isPathLine(trimmed)) {
+      // Consume the whole run of paths at once.
+      const run: string[] = [];
+      while (i < lines.length && lines[i].trim().length > 0 && isPathLine(lines[i].trim())) {
+        run.push(lines[i]);
+        i++;
+      }
+      i--; // the outer loop re-increments
+      out.push(...run.slice(0, MAX_LISTED_PATHS));
+      if (run.length > MAX_LISTED_PATHS) {
+        out.push(`· ${run.length - MAX_LISTED_PATHS} more`);
+      }
+      continue;
+    }
+
+    // A line naming a preserved artifact is never trimmed — cutting prose must
+    // not be able to cut the recovery action, whatever line it landed on.
+    if (trimmed.length > MAX_PROSE_LINE_LENGTH && !/preserved:/i.test(trimmed)) {
+      const sentence = firstSentenceOf(trimmed);
+      out.push(sentence.length < trimmed.length ? `${sentence} …` : line);
+      continue;
+    }
+
+    out.push(line);
+  }
+
+  return out.join("\n");
+}
+
+/**
+ * Would the lead only restate the single detail line beneath it?
+ *
+ * With one failed stage whose error is a single sentence, "lead + blank +
+ * detail" prints the same sentence twice. Compared after normalising the two
+ * renderings' decoration (`❌`, `**`, the `stage:` / `stage —` prefix) so the
+ * check is about content, not formatting.
+ */
+function leadRestatesDetail(lead: string, detail: string): boolean {
+  const normalize = (s: string): string =>
+    s
+      .replace(/\*\*/g, "")
+      .replace(/^❌\s*/, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const stripStage = (s: string): string => normalize(s).replace(/^[^—:]+\s*[—:]\s*/, "");
+  return stripStage(detail).startsWith(stripStage(lead));
+}
+
+/**
+ * Render the whole "Error Details" body: lead, then one collapsed dump per
+ * failed stage. Shared by both notifiers so Mattermost cannot drift from
+ * Discord on the field the operator reads first.
+ *
+ * @param failedStages - `[stageKey, rawError]` for every stage in `failed`.
+ * Exported for unit testing.
+ */
+export function buildErrorDetailsBody(
+  failedStages: ReadonlyArray<readonly [string, string | undefined]>
+): string {
+  const byStage = failedStages.map(
+    ([name, error]) =>
+      [STAGE_LABEL[name] ?? name, collapseErrorDetail(formatErrorForDiscord(error))] as const
+  );
+
+  const lead = byStage
+    .map(([label, extracted]) => (extracted ? buildErrorLead(label, extracted) : null))
+    .find((l): l is string => l != null);
+
+  const detailLines = byStage.map(
+    ([label, extracted]) => `❌ **${label}**${extracted ? `: ${extracted}` : ""}`
+  );
+
+  const redundant =
+    lead != null && detailLines.length === 1 && leadRestatesDetail(lead, detailLines[0]);
+
+  return (lead && !redundant ? [lead, "", ...detailLines] : detailLines).join("\n");
+}
+
 /**
  * Extract human-readable content from a stream-JSON envelope that came out of
  * the Claude Agent SDK / CLI (`--output-format stream-json`).
@@ -376,7 +572,12 @@ export function formatErrorForDiscord(raw: string | undefined | null): string {
       const text = extractTextFromEnvelope(envelope);
       if (text) extracted.push(text);
     } catch {
-      // Ignore — may be a truncated line or non-JSON noise
+      // Looks like JSON, isn't. Keep it — same as any other non-JSON line.
+      // Discarding these is how the #289 containment reason vanished: its
+      // first character is the `[` of `[stage:worktree-containment]`, which
+      // routed the whole payload here, and every line then failed to parse
+      // and was dropped. A leading bracket is not evidence of an envelope.
+      extracted.push(s);
     }
   }
 
@@ -398,42 +599,128 @@ export function formatErrorForDiscord(raw: string | undefined | null): string {
 }
 
 /**
- * Maps a PipelineOutcomeType to the Discord embed color and status label.
- * Exported for unit testing.
+ * Cross-check context for {@link outcomeDisplay} (#333 decision B / AC3).
+ *
+ * `failedStageCount` is derived by the caller from `state.stages` so both
+ * notifiers (Discord embed, Mattermost attachment) inherit one implementation
+ * of the honesty check rather than each re-deriving it.
+ */
+export interface OutcomeDisplayContext {
+  /** How many stages are in `failed` status in the run's own stage list. */
+  failedStageCount?: number;
+  logger?: WarnLogger;
+}
+
+/**
+ * Count the run's failed stages — the ground truth `outcomeDisplay` is
+ * cross-checked against. Shared by both notifiers. Exported for unit testing.
+ */
+export function countFailedStages(state: PipelineStateSnapshot): number {
+  return Object.values(state.stages ?? {}).filter((s) => s?.status === "failed").length;
+}
+
+/**
+ * Base color + label for an outcome, before the stage cross-check.
+ *
+ * Every member of `PipelineOutcomeType` (services/PipelineStateService.ts) has
+ * a case here, deliberately. The `default:` is for genuinely unknown strings —
+ * a future outcome nobody has taught the notifier about — and nothing else.
+ * It used to swallow half the vocabulary: `shipped-but-overbudget` (the work
+ * shipped, #3108), `deferred` (documented "NOT a failure", #189/#305),
+ * `blocked`, and even bare `success`/`partial` all reached it and rendered
+ * "Failed ✗" in red.
  *
  * Outcome taxonomy:
- *   productive          — work done, PR merged          → Complete ✓  (green)
- *   verify-and-close    — no changes needed, closed     → Complete ✓  (green)
- *   already-resolved    — issue was already done        → Already Resolved (green)
- *   budget-ceiling      — stopped by budget limit       → Budget Ceiling  (yellow)
- *   skill-no-op         — skill exited 0 but did nothing → Skill No-op    (yellow)
- *   cancelled           — manually stopped              → Cancelled       (grey)
- *   undefined           — still running                 → Running…        (blurple)
- *   <unknown>           — fallback for future types     → Failed ✗        (red)
+ *   success / productive / verify-and-close  → Complete ✓                (green)
+ *   already-resolved      — was already done → Already Resolved          (green)
+ *   shipped-but-overbudget — PR merged, budget blown → Shipped — over budget (yellow)
+ *   budget-ceiling        — stopped by the limit → Budget Ceiling        (yellow)
+ *   skill-no-op           — exit 0, nothing changed → Skill No-op        (yellow)
+ *   blocked               — repo config, no retry clears it → Blocked — repo config (yellow)
+ *   deferred              — dependencies still open, nothing ran → Deferred … (grey)
+ *   cancelled             — manually stopped   → Cancelled               (grey)
+ *   failure / partial     — the work did not land → Failed ✗             (red)
+ *   undefined             — still running       → Running…               (blurple)
+ *   <unknown>             — future type         → Failed ✗               (red)
  */
-export function outcomeDisplay(outcomeType: string | undefined): {
+function baseOutcomeDisplay(outcomeType: string | undefined): {
   color: number;
   label: string;
 } {
   switch (outcomeType) {
+    case "success":
     case "productive":
     case "verify-and-close":
       return { color: COLOR_COMPLETE, label: "Complete ✓" };
     case "already-resolved":
       return { color: COLOR_COMPLETE, label: "Already Resolved" };
+    case "shipped-but-overbudget":
+      // The PR merged out-of-band after a budget kill — the work shipped, so
+      // this is not a failure; the overspend is why it is not green (#3108).
+      return { color: COLOR_WARNING, label: "Shipped — over budget" };
     case "budget-ceiling":
       return { color: COLOR_WARNING, label: "Budget Ceiling" };
     case "skill-no-op":
       // Yellow — same urgency as budget-ceiling. The skill said success but
       // the gate detected no state change. See #3267.
       return { color: COLOR_WARNING, label: "Skill No-op" };
+    case "blocked":
+      // A human must change repo config; no retry clears it. Naming the
+      // blocker class is the whole point of the outcome (#190).
+      return { color: COLOR_WARNING, label: "Blocked — repo config" };
+    case "deferred":
+      // Nothing ran and nothing crashed — pickup deferred on open blockers
+      // (#189/#305). Grey, like cancelled: a non-event, not a failure.
+      return { color: COLOR_NEUTRAL, label: "Deferred (blocked by dependencies)" };
     case "cancelled":
       return { color: COLOR_NEUTRAL, label: "Cancelled" };
+    case "failure":
+    case "partial":
+      return { color: COLOR_FAILED, label: "Failed ✗" };
     case undefined:
       return { color: COLOR_RUNNING, label: "Running…" };
     default:
       return { color: COLOR_FAILED, label: "Failed ✗" };
   }
+}
+
+/**
+ * Maps a PipelineOutcomeType to the Discord embed color and status label,
+ * cross-checked against the run's own stage list.
+ * Exported for unit testing.
+ *
+ * A success outcome is never rendered as an unqualified success while the
+ * run's own stage list contains a failure: the #289 message read
+ * "— Complete ✓" above a stage list with one ❌ and three ⏳. The embed must
+ * never assert a state its own detail contradicts.
+ *
+ * Membership is driven off the resolved *color*, not off a list of outcome
+ * names, so the check cannot be bypassed by a green outcome someone forgets to
+ * add to it — which is exactly how `already-resolved` (green, and in the
+ * authoritative `SUCCESS_OUTCOMES` set in utils/telemetryEventBuilder.ts) used
+ * to render unqualified over a failed stage while `productive` did not.
+ */
+export function outcomeDisplay(
+  outcomeType: string | undefined,
+  ctx: OutcomeDisplayContext = {}
+): {
+  color: number;
+  label: string;
+} {
+  const base = baseOutcomeDisplay(outcomeType);
+  const failed = ctx.failedStageCount ?? 0;
+  if (failed === 0 || base.color !== COLOR_COMPLETE) return base;
+
+  ctx.logger?.warn(
+    "Notifier: success outcome contradicted by the run's own stage list — rendering the contradiction",
+    { outcomeType, failedStageCount: failed }
+  );
+  // The success glyph goes with the unqualified claim it belonged to.
+  const bare = base.label.replace(/\s*✓$/, "");
+  return {
+    color: COLOR_WARNING,
+    label: `${bare} — ${failed} stage${failed > 1 ? "s" : ""} failed ⚠️`,
+  };
 }
 
 /**
@@ -970,17 +1257,23 @@ export class DiscordService implements Notifier, vscode.Disposable {
 
   private buildEmbed(run: ActiveRun, state: PipelineStateSnapshot): DiscordEmbed {
     const elapsedMs = Date.now() - run.startTime;
-    const { color, label: statusLabel } = outcomeDisplay(state.outcome_type);
+    const { color, label: statusLabel } = outcomeDisplay(state.outcome_type, {
+      failedStageCount: countFailedStages(state),
+      logger: this.logger,
+    });
     const { icon: modeIcon } = modeDisplay(state.pipeline_meta);
     const modeBadge = modeIcon ? ` ${modeIcon}` : "";
+    // Resolved once per render so the invariant warning is logged once, not
+    // once per consumer of the total.
+    const runTotalUsd = this.resolveRunTotalUsd(run, state);
 
     return {
       title: `🔨 Pipeline #${run.issueNumber}${modeBadge} — ${statusLabel}`,
       url: run.prUrl,
       description: truncate(this.buildDescription(run, state), MAX_DESCRIPTION_LENGTH),
       color,
-      fields: this.buildFields(run, state).slice(0, MAX_FIELDS),
-      footer: { text: this.buildFooter(run, elapsedMs) },
+      fields: this.buildFields(run, state, runTotalUsd).slice(0, MAX_FIELDS),
+      footer: { text: this.buildFooter(runTotalUsd, elapsedMs) },
       timestamp: new Date().toISOString(),
     };
   }
@@ -999,7 +1292,10 @@ export class DiscordService implements Notifier, vscode.Disposable {
       baseBranch && baseBranch !== "main" ? `${branchDisplay} → \`${baseBranch}\`` : branchDisplay;
     const header = `${titleText}\n\`${run.repoName}\` · ${branchLine}`;
 
-    // Context line: complexity, file count, epic progress, routing, mode
+    // Context line: complexity, file count, epic progress, routing.
+    // The performance mode is deliberately absent — it is the title badge and
+    // nothing else (#333 decision I); it used to be stated three times in one
+    // message (badge, this line, and the mode field).
     const contextParts: string[] = [];
     if (meta?.complexity) contextParts.push(`**${meta.complexity}**`);
     if (meta?.file_count) contextParts.push(`${meta.file_count} files`);
@@ -1010,11 +1306,6 @@ export class DiscordService implements Notifier, vscode.Disposable {
     }
     if (meta?.route && meta.route !== "standard") {
       contextParts.push(`${meta.route} route`);
-    }
-    const { label: modeLabel, icon: modeContextIcon, modelSuffix } = modeDisplay(meta);
-    if (modeLabel !== "Elevated") {
-      const prefix = modeContextIcon ? `${modeContextIcon} ` : "";
-      contextParts.push(`${prefix}**${modeLabel}**${modelSuffix}`);
     }
     if (meta?.skip_stages && meta.skip_stages.length > 0) {
       const skipped = meta.skip_stages.map((s) => STAGE_LABEL[s] ?? s).join(", ");
@@ -1067,7 +1358,11 @@ export class DiscordService implements Notifier, vscode.Disposable {
     return `${header}${contextLine}\n\n${stageLines.join("\n")}`;
   }
 
-  private buildFields(run: ActiveRun, state: PipelineStateSnapshot): DiscordField[] {
+  private buildFields(
+    run: ActiveRun,
+    state: PipelineStateSnapshot,
+    runTotalUsd: number = this.resolveRunTotalUsd(run, state)
+  ): DiscordField[] {
     const fields: DiscordField[] = [];
     const isTerminal = !!state.outcome_type;
 
@@ -1105,28 +1400,31 @@ export class DiscordService implements Notifier, vscode.Disposable {
       });
     }
 
-    // Mode field — surface performance mode + envelope ceiling + routing in
-    // real-time so users can see which configuration is driving the run
-    // (high-cost runs, Fable-capable Frontier, fast-track skips, etc.)
+    // Limits field — the mode and its consequences, stated exactly once
+    // (#333 decision I). The value *leads with the mode label*: the title
+    // badge is an icon, an accent rather than a name, and Elevated — the
+    // default — has no icon at all, so a badge-only rule left the commonest
+    // mode named nowhere in the message.
     const liveMeta = state.pipeline_meta;
     const {
       label: liveModeLabel,
-      icon: liveModeIcon,
       modelSuffix: liveSuffix,
       ceiling: liveCeiling,
     } = modeDisplay(liveMeta);
-    let modeValue = `${liveModeIcon ? liveModeIcon + " " : ""}${liveModeLabel}${liveSuffix}`;
-    // Show the routing envelope's model ceiling ("up to Fable/Opus/Sonnet") so
-    // the mode reads as a capability, not just a name. Maximum pins Opus and
-    // already names it in the suffix, so suppress the hint there.
-    if (liveModeLabel !== "Maximum") modeValue += `  ·  up to ${liveCeiling}`;
-    const modeParts: string[] = [modeValue];
+    // Maximum pins a model rather than declaring an envelope, so it names the
+    // pinned model instead of a "up to …" ceiling.
+    const limitParts: string[] = [
+      liveModeLabel,
+      liveModeLabel === "Maximum"
+        ? `pinned${liveSuffix || ` ${liveCeiling}`}`
+        : `up to ${liveCeiling}`,
+    ];
     if (liveMeta?.route && liveMeta.route !== "standard") {
-      modeParts.push(`route: ${liveMeta.route}`);
+      limitParts.push(`route: ${liveMeta.route}`);
     }
     fields.push({
-      name: "⚙️ Mode",
-      value: modeParts.join("  ·  "),
+      name: "⚙️ Limits",
+      value: limitParts.join("  ·  "),
       inline: true,
     });
 
@@ -1159,19 +1457,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
       ([, s]) => s?.status === "failed"
     );
     if (failedStages.length > 0) {
-      const errorLines = failedStages.map(([name, s]) => {
-        const label = STAGE_LABEL[name] ?? name;
-        // Raw errors often contain stream-JSON envelopes from the Claude Agent
-        // SDK (tool_result, assistant text, task_notification).  Run them
-        // through formatErrorForDiscord so the user sees the actual error
-        // message instead of a JSON blob.
-        const extracted = formatErrorForDiscord(s?.error);
-        const err = extracted ? `: ${extracted}` : "";
-        return `❌ **${label}**${err}`;
-      });
+      // Raw errors often contain stream-JSON envelopes from the Claude Agent
+      // SDK (tool_result, assistant text, task_notification), and often do
+      // not. buildErrorDetailsBody extracts, collapses the bulk, and leads
+      // with what actually went wrong (#333 decision H / AC9).
       fields.push({
         name: "🔍 Error Details",
-        value: truncate(errorLines.join("\n"), MAX_FIELD_VALUE_LENGTH),
+        value: truncate(
+          buildErrorDetailsBody(failedStages.map(([name, s]) => [name, s?.error] as const)),
+          MAX_FIELD_VALUE_LENGTH
+        ),
       });
     }
 
@@ -1199,7 +1494,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
     if (state.outcome_type === "budget-ceiling") {
       fields.push({
         name: "💰 Budget Ceiling",
-        value: `Spent ${formatCost(run.costUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
+        value: `Spent ${formatCost(runTotalUsd)} before hitting limit\nIncrease budget or re-run with higher ceiling`,
       });
     }
 
@@ -1216,18 +1511,26 @@ export class DiscordService implements Notifier, vscode.Disposable {
       });
     }
 
-    // Budget usage (for successful and failed runs). See formatBudgetFieldValue
-    // (transport.ts) for why the pre-flight estimate is labeled "Pre-run est."
-    // with an accuracy ratio rather than a bare "Est:" figure (#267).
+    // Budget usage — only when it says something (#333 decision F). A ceiling
+    // ratio below the warn threshold is a top-level field that reports
+    // "nothing is wrong" on every run; see shouldRenderBudgetField.
     const meta = state.pipeline_meta;
-    if (meta?.budget_ceiling_usd && meta.budget_ceiling_usd > 0) {
+    const ceilingUsd = meta?.budget_ceiling_usd ?? 0;
+    if (shouldRenderBudgetField(runTotalUsd, ceilingUsd, state.outcome_type)) {
       fields.push({
         name: "💰 Budget",
-        value: formatBudgetFieldValue(
-          run.costUsd,
-          meta.budget_ceiling_usd,
-          meta.budget_estimate_usd
-        ),
+        value: formatBudgetFieldValue(runTotalUsd, ceilingUsd),
+        inline: true,
+      });
+    }
+
+    // Cost accuracy — predicted vs actual, the strongest single pipeline-health
+    // signal in the message. Its own field, not a suffix (#333 decision G).
+    const estimateUsd = meta?.budget_estimate_usd;
+    if (estimateUsd != null && estimateUsd > 0) {
+      fields.push({
+        name: "📊 Cost Accuracy",
+        value: formatCostAccuracyValue(runTotalUsd, estimateUsd),
         inline: true,
       });
     }
@@ -1254,12 +1557,22 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const cacheRead = state.tokens?.total_cache_read ?? 0;
     const totalInput = state.tokens?.total_input ?? 0;
     if (cacheRead > 0 && totalInput > 0) {
-      const hitPct = ((cacheRead / totalInput) * 100).toFixed(0);
-      fields.push({
-        name: "📦 Cache",
-        value: `${hitPct}% hit rate`,
-        inline: true,
-      });
+      const hitPct = (cacheRead / totalInput) * 100;
+      if (hitPct > 100) {
+        // A rate above 100% means the operands are wrong, not that caching is
+        // miraculous. Clamping to 100% would render a lie that hides the bad
+        // input; suppress the field and name both numbers (#333 decision C).
+        this.logger.warn(
+          "DiscordService: impossible cache hit rate — suppressing the Cache field",
+          { cacheRead, totalInput, hitPct }
+        );
+      } else {
+        fields.push({
+          name: "📦 Cache",
+          value: `${hitPct.toFixed(0)}% hit rate`,
+          inline: true,
+        });
+      }
     }
 
     // PR number (explicit — complement to the embed URL link)
@@ -1297,8 +1610,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
     return fields;
   }
 
-  private buildFooter(run: ActiveRun, elapsedMs: number): string {
-    const cost = run.costUsd > 0 ? `💰 ${formatCost(run.costUsd)}  ` : "";
+  /**
+   * The run total this embed is allowed to assert (#333 decision A / AC1) —
+   * `run.costUsd` unless the run's own per-stage costs contradict it.
+   */
+  private resolveRunTotalUsd(run: ActiveRun, state: PipelineStateSnapshot): number {
+    return reconcileRunTotalUsd(run.costUsd, state.tokens?.per_stage, this.logger);
+  }
+
+  private buildFooter(runTotalUsd: number, elapsedMs: number): string {
+    const cost = runTotalUsd > 0 ? `💰 ${formatCost(runTotalUsd)}  ` : "";
     return `${cost}⏱ ${formatDuration(elapsedMs)}`;
   }
 
