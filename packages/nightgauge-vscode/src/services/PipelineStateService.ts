@@ -2453,18 +2453,15 @@ export class PipelineStateService implements vscode.Disposable {
           runId?: string;
           success: boolean;
         };
-        // The one inbound envelope that gets the STRICT ARM ONLY, not the full
-        // `acceptsEvent`. This handler had NO issue pre-filter before ADR-017,
-        // because it is a GLOBAL dashboard refresh trigger (`Dashboard.ts`
-        // re-reads all metrics on it, not this issue's). Routing it through
-        // `acceptsEvent` would give it an issue filter it never had and make
-        // the dashboard go stale for every concurrent-slot run — the same
-        // "a filter made a UX surface go dark" defect Decision 6 forbids. So
-        // it drops only when BOTH sides name a run and the names disagree,
-        // which is unreachable until step 4 stamps the envelope.
-        if (this.runId && d.runId && d.runId !== this.runId) {
-          return;
-        }
+        // DELIBERATELY UNFILTERED — the one inbound envelope with NO identity
+        // routing and NO issue pre-filter, before or after ADR-017. Its only
+        // consumer is a GLOBAL dashboard refresh trigger (`Dashboard.ts`
+        // re-reads ALL metrics on it, not this issue's), so ANY filter here —
+        // issue-keyed via `acceptsEvent` or run-keyed via the strict arm —
+        // stales the dashboard for every concurrent run that is not this
+        // service's own: the "a filter made a UX surface go dark" defect
+        // Decision 6 forbids. When step 4 stamps `runId` on this envelope, do
+        // NOT add identity routing here; a global consumer wants every event.
         this._onHistoryRecorded.fire(d);
       })
     );
