@@ -672,7 +672,7 @@ func TestReconcileTerminalFailureCardsNilStateRetractsNothing(t *testing.T) {
 		t.Errorf("the skip is silent — nothing names why the reconcile declined to act; got %q", out)
 	}
 	// Same volume as the sibling fail-open skips (the zero-roots worktree sweep
-	// logs `worktree-reconcile: WARN ...`): an unreadable autonomous state that
+	// logs `autonomous: worktree sweep: WARN ...`): an unreadable state that
 	// suppresses a whole producer's reconciliation is a warning, not a debug
 	// line, and an operator grepping WARN must find it.
 	if !strings.Contains(out, "WARN") {

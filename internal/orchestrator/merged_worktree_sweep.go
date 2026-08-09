@@ -6,37 +6,63 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 )
 
-// runMergedWorktreeSweep is the ONE merged-worktree sweep (#403). Both
-// schedulers route through it: the autonomous reconcile pass (the copy that
-// runs in production) and the plain scheduler's startup pass. They differ only
-// in where their in-flight set comes from and what they call themselves in the
-// log — everything that decides whether a directory is removed lives here, so
-// the two paths cannot drift apart on protection again.
+// runMergedWorktreeSweep is the ONE merged-worktree sweep (#403), and it has
+// exactly ONE production caller: (*AutonomousScheduler).sweepMergedWorktrees.
+// Everything that decides whether a directory is removed lives here, so no
+// second copy can drift apart from it on protection again.
 //
 // # What protects a worktree, and what does not
 //
-// The protected set is exactly the CALLER'S IN-FLIGHT RUNS — `state.Running`
-// for the autonomous scheduler, the queue for the plain one. It covers the one
-// race the content check cannot: a run whose PR has just landed still has
-// stages to execute in that directory, so its branch reads fully merged while
-// the worktree is very much alive.
+// Read this before adding a caller. The protection is weaker and narrower than
+// "we only delete merged worktrees" suggests.
 //
-// Everything else is protected by the merge test itself, which is the primary
-// guard and not a fallback: a worktree is only reclaimed once its branch
-// content is already represented on the default branch. Adopted, rehydrating,
-// cross-repo, and mid-re-key runs (ADR 017) are unmerged by definition — they
-// have work in the directory that has not landed — so the sweep never reaches
-// them. `execution.SweepMergedWorktrees` additionally refuses anything locked,
-// detached, dirty, or not pipeline-named.
+// The merge/content test is one of SEVERAL reclaim doors in
+// `execution.classifyWorktree`, not a gate every candidate must pass. A clean
+// pipeline-named worktree sitting ON the default branch is reclaimed on the
+// strength of that alone, with no content comparison at all — the default
+// branch is the comparison base, so the merge test structurally cannot apply
+// there. "The merge test protects everything" is false for that door.
 //
-// The active-worktree scan is therefore NOT unioned into the protected set on
-// either path, and the `determined` bit is the only thing it contributes.
-// Before #403 the plain Scheduler did union it, which made that sweep a
-// structural no-op: `execution.ActiveWorktreeIssues` walks the same roots with
-// the same `git worktree list` and the same `issue-NNN` parser as the sweep's
-// own candidate enumeration, so every candidate protected itself by
-// construction. Restoring that path's function means dropping the union, not
-// exporting it to the path that still works.
+// Where the merge test does apply, it protects a run only until that run's PR
+// LANDS — not until the run finishes. From the merge onward the branch reads
+// fully merged while the worktree is still executing stages, and the ONLY thing
+// standing between it and `git worktree remove --force` is `inFlight`. That
+// window is not instantaneous: the terminal path runs ~160 lines of bookkeeping
+// between `onPipelineComplete` and `execution.Manager.CleanupWorktree` finally
+// removing the directory, including a telemetry emit and a remote-branch
+// cleanup that both talk to the network.
+//
+// And `inFlight` covers only the runs the CALLING PROCESS knows about. It is
+// not a machine-global registry: a bare Scheduler built by a CLI command
+// (`queue list`, the promote gates) has an empty queue and no visibility into
+// an autonomous fleet running in another process, so a sweep from there would
+// see every live run as unprotected. That is why the autonomous reconcile is
+// the only caller — `state.Running` is authoritative for the process that
+// dispatched those runs, in that process. Any new caller has to answer the same
+// question first: is your in-flight set authoritative for the runs whose
+// directories you are about to delete?
+//
+// One known race remains and is benign. `onPipelineComplete` vacates the item
+// from `state.Running` at the top of the terminal path, ~160 lines before
+// `CleanupWorktree` removes the directory, so a reconcile landing in that tail
+// sees a merged worktree with nothing protecting it and may reclaim it first.
+// That is the correct outcome — the run is done with the directory — and both
+// deleters tolerate losing the race: `execution.reclaimWorktree` falls back to
+// `os.RemoveAll` + `git worktree prune` when `git worktree remove` fails, and
+// CleanupWorktree treats an already-gone worktree as success.
+//
+// The active-worktree scan is NOT unioned into the protected set; the
+// `determined` bit is the only thing it contributes. Before #403 the plain
+// Scheduler unioned it, which made that sweep a structural no-op:
+// `execution.ActiveWorktreeIssues` walks the same roots with the same `git
+// worktree list` and the same `issue-NNN` parser as the sweep's own candidate
+// enumeration, so every candidate protected itself by construction. That
+// receiver was DELETED rather than armed. It rode `NewScheduler` → `loadQueue`,
+// which is the construction path of every `nightgauge queue …` invocation and
+// of the deps-gate / baseline-gate promote commands. A constructor is the wrong
+// place to remove directories no matter how good the protection is — being a
+// no-op was the only reason `queue list`, a printf loop, never destroyed a live
+// run's worktree.
 //
 // # Why an undetermined answer stops the sweep
 //

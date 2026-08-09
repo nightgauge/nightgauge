@@ -2061,37 +2061,15 @@ func (s *Scheduler) loadQueue() {
 
 	s.recoverOrchestratorCrash()
 	s.reconcileOrphanedComposeProjects()
-	s.sweepMergedWorktrees()
-}
-
-// sweepMergedWorktrees reclaims pipeline-created worktrees whose branch is
-// already fully represented on the default branch, for the non-autonomous Go
-// entry point (a plain `nightgauge run` / scheduler invocation outside the
-// autonomous loop), which otherwise has no startup/reconcile sweep at all
-// (#106). Runs once at scheduler startup, alongside
-// reconcileOrphanedComposeProjects.
-//
-// The decision logic lives in runMergedWorktreeSweep, shared with
-// (*AutonomousScheduler).sweepMergedWorktrees (#403); this receiver only
-// supplies the queue-derived in-flight set and log prefix. Read that
-// function's doc before changing what is protected here — this copy used to
-// union activeWorktreeIssues() into the protected set, which protected every
-// candidate by construction and made the sweep a no-op.
-func (s *Scheduler) sweepMergedWorktrees() {
-	// Queued work is off-limits regardless of how merged its branch looks: an
-	// item still in the queue may have stages left to execute in that
-	// directory.
-	s.mu.Lock()
-	inFlight := make(map[int]bool, len(s.queue))
-	for _, item := range s.queue {
-		inFlight[item.IssueNumber] = true
-	}
-	s.mu.Unlock()
-
-	// s.mu is released before the scan: activeWorktreeIssues shells out to git
-	// and must never run under the queue lock.
-	_, determined := s.activeWorktreeIssues()
-	runMergedWorktreeSweep(s.repoScanRoots(), inFlight, determined, "worktree-reconcile")
+	// Deliberately NO merged-worktree sweep here (#403). loadQueue runs from
+	// NewScheduler, and getQueueScheduler builds a Scheduler for `queue
+	// add|list|run|remove|clear` and the deps-gate/baseline-gate promote
+	// commands — a sweep on this path makes `queue list` run `git worktree
+	// remove --force` and `git branch -D` as a construction side effect, on
+	// behalf of a process that can see no other process's in-flight runs.
+	// Constructors never delete; the sweep's one production caller is the
+	// autonomous reconcile, which owns an authoritative in-flight set. See
+	// runMergedWorktreeSweep.
 }
 
 // reconcileOrphanedComposeProjects tears down per-issue docker compose
@@ -2153,7 +2131,17 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 // worktrees exist", and the difference decides whether a destructive caller may
 // act. See execution.ActiveWorktreeIssues for why (#296).
 func (s *Scheduler) activeWorktreeIssues() (map[int]bool, bool) {
-	return execution.ActiveWorktreeIssues(s.repoScanRoots())
+	return s.activeWorktreeIssuesFor(s.repoScanRoots())
+}
+
+// activeWorktreeIssuesFor is activeWorktreeIssues over a caller-supplied root
+// set. A destructive caller resolves repoScanRoots() ONCE and passes the same
+// slice here and to the sweep, so the `determined` bit describes exactly the
+// roots the sweep then acts on. Resolving twice is not equivalent: the resolver
+// is a live callback over workspace registration, so a repo added or dropped
+// between the two calls yields a verdict about a root set that was never swept.
+func (s *Scheduler) activeWorktreeIssuesFor(roots []string) (map[int]bool, bool) {
+	return execution.ActiveWorktreeIssues(roots)
 }
 
 // repoScanRoots returns every filesystem root a workspace-wide reconcile must
