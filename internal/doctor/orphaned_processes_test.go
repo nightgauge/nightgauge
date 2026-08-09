@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // #341. A `nightgauge autonomous run --dry-run` ran for 31 hours holding a
@@ -28,7 +30,7 @@ func loadCapturedProcessTable(t *testing.T) string {
 	// Re-assert the properties the fixture is committed FOR, so a careless
 	// re-capture cannot quietly remove them.
 	if !strings.Contains(raw, "/dist/bin/nightgauge serve ") {
-		t.Fatal("the capture no longer contains the extension host's serve daemon — the one process this check must never report")
+		t.Fatal("the capture no longer contains the extension host's serve daemon — the long-lived process whose ownership this check has to get right")
 	}
 	for _, etime := range []string{"02-23:14:35", "20:04:18", "15:29"} {
 		if !strings.Contains(raw, etime) {
@@ -113,9 +115,6 @@ func TestParseProcessTable_ReadsTheCapturedTable(t *testing.T) {
 	}
 	if serve == nil {
 		t.Fatal("the nightgauge row was not recognized as a nightgauge process")
-	}
-	if serve.subcommand() != "serve" {
-		t.Errorf("subcommand = %q, want serve (argv: %q)", serve.subcommand(), serve.Command)
 	}
 	// argv survives whole: the workspace path is the operator's evidence.
 	if !strings.Contains(serve.Command, "--workspace") {
@@ -208,10 +207,38 @@ func parseRows(t *testing.T, rows ...string) []runningProcess {
 	return procs
 }
 
-func TestClassifyProcesses_ExcludesSelfAndServe(t *testing.T) {
-	// doctor is itself a nightgauge process and no sidecar claims it; the
-	// extension host's serve daemon is long-lived by design (#388 replaces the
-	// argv exception with a sidecar).
+func TestClassifyProcesses_ExcludesSelfAndClaimsAHeartbeatingServeDaemon(t *testing.T) {
+	// doctor is itself a nightgauge process and no sidecar claims it. The
+	// extension host's serve daemon IS long-lived by design — ten days is
+	// ordinary — but #388 makes it say so in a file rather than in its argv:
+	// a fresh heartbeat carries it through as ordinary Owned, with no
+	// serve-shaped rule anywhere in the classifier.
+	r := newLeakRepo(t)
+	writeServeSidecar(t, r.dir, 4156, 300*time.Hour, 5*time.Minute)
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "31:14:00", "doctor --json"),
+		derivedRow(t, 4156, "10-00:00:00", "serve --workspace /Users/operator/Repositories/nightgauge"),
+	)
+
+	scan := classifyProcesses(procs, sidecarPIDs(r.dir, scanClock), os.Getpid())
+
+	if len(scan.Orphans) != 0 {
+		t.Fatalf("self or a heartbeating serve daemon was reported as an orphan: %+v", scan.Orphans)
+	}
+	if scan.Scanned != 1 {
+		t.Errorf("Scanned = %d, want 1 (self must not be counted)", scan.Scanned)
+	}
+	if scan.Owned != 1 {
+		t.Errorf("Owned = %d, want 1 — the serve daemon must be carried by its sidecar, not by a named exception", scan.Owned)
+	}
+}
+
+func TestClassifyProcesses_AServeDaemonWithNoSidecarIsAnOrphan(t *testing.T) {
+	// #388, the visibility this carrier existed for and did not have: a serve
+	// daemon that outlived its extension host is the literal "everything looks
+	// stopped but something is still running" symptom, and the argv exception
+	// excepted it right along with the healthy ones. With the exception gone,
+	// serve is claimed by a sidecar or it is reported like anything else.
 	procs := parseRows(t,
 		derivedRow(t, os.Getpid(), "31:14:00", "doctor --json"),
 		derivedRow(t, 4156, "10-00:00:00", "serve --workspace /Users/operator/Repositories/nightgauge"),
@@ -219,14 +246,59 @@ func TestClassifyProcesses_ExcludesSelfAndServe(t *testing.T) {
 
 	scan := classifyProcesses(procs, map[int]bool{}, os.Getpid())
 
-	if len(scan.Orphans) != 0 {
-		t.Fatalf("self or serve was reported as an orphan: %+v", scan.Orphans)
+	if len(scan.Orphans) != 1 {
+		t.Fatalf("an unclaimed ten-day serve daemon was not reported: %+v", scan)
 	}
-	if scan.Scanned != 1 {
-		t.Errorf("Scanned = %d, want 1 (self must not be counted)", scan.Scanned)
+	if scan.Orphans[0].PID != 4156 {
+		t.Errorf("wrong PID reported: %+v", scan.Orphans[0])
 	}
-	if scan.Serve != 1 {
-		t.Errorf("Serve = %d, want 1", scan.Serve)
+}
+
+func TestClassifyProcesses_AServeDaemonWhoseHeartbeatWentColdIsAnOrphan(t *testing.T) {
+	// The wedged / SIGKILL'd shape, and the reason the sidecar heartbeats at
+	// all. A write-once pid+started_at record would look exactly like this
+	// after a day, so a live daemon would read as leaked every time; a daemon
+	// whose heartbeat actually stopped is the case that must read as leaked.
+	// One doctrine tells them apart — progress — with no serve-specific rule.
+	r := newLeakRepo(t)
+	writeServeSidecar(t, r.dir, 4156, 300*time.Hour, 31*time.Hour)
+	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace /Users/operator/Repositories/nightgauge"))
+
+	claimed := sidecarPIDs(r.dir, scanClock)
+	scan := classifyProcesses(procs, claimed, os.Getpid())
+
+	if claimed[4156] {
+		t.Error("a sidecar 31 hours cold still claimed its PID — ownership is progress, not presence")
+	}
+	if len(scan.Orphans) != 1 || scan.Orphans[0].PID != 4156 {
+		t.Fatalf("the wedged daemon was not reported: %+v", scan)
+	}
+}
+
+func TestSidecarPIDs_AServeSidecarLeftByADeadDaemonClaimsNothingThatRuns(t *testing.T) {
+	// A SIGKILL leaves the file behind. While its heartbeat is still fresh the
+	// claim stands — this reader never probes liveness, the same accepted edge
+	// as every recycled PID — but it can only ever cover the PID it names, so
+	// an abandoned sidecar narrows nothing about the processes actually
+	// running, and expires on its own within staleSidecarClaim.
+	r := newLeakRepo(t)
+	writeServeSidecar(t, r.dir, 4156, time.Hour, 5*time.Minute)
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "31:14:00", "doctor --json"),
+		derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run"),
+	)
+
+	claimed := sidecarPIDs(r.dir, scanClock)
+	scan := classifyProcesses(procs, claimed, os.Getpid())
+
+	if len(claimed) != 1 || !claimed[4156] {
+		t.Fatalf("the abandoned sidecar claimed something other than its own PID: %v", claimed)
+	}
+	if scan.Owned != 0 {
+		t.Errorf("Owned = %d, want 0 — the dead daemon's PID belongs to no running process", scan.Owned)
+	}
+	if len(scan.Orphans) != 1 || scan.Orphans[0].PID != 7788 {
+		t.Fatalf("the abandoned sidecar suppressed an unrelated orphan: %+v", scan)
 	}
 }
 
@@ -251,6 +323,22 @@ var scanClock = time.Date(2026, 8, 8, 20, 0, 0, 0, time.UTC)
 // stamp renders an RFC3339 timestamp `ago` before scanClock.
 func stamp(ago time.Duration) string {
 	return scanClock.Add(-ago).Format(time.RFC3339)
+}
+
+// writeServeSidecar plants a serve daemon's marker (#388) through the
+// PRODUCTION writer rather than a JSON literal. Every other fixture in this
+// file is a captured or derived artifact for the same reason: a hand-authored
+// sidecar proves only that this file agrees with itself, and the shape the
+// daemon actually writes is precisely what the reader below has to survive.
+func writeServeSidecar(t *testing.T, root string, pid int, startedAgo, heartbeatAgo time.Duration) {
+	t.Helper()
+	if err := runstate.WriteServeSidecar(root, runstate.ServeSidecar{
+		PID:             pid,
+		StartedAt:       scanClock.Add(-startedAgo),
+		LastHeartbeatAt: scanClock.Add(-heartbeatAgo),
+	}); err != nil {
+		t.Fatalf("write serve sidecar: %v", err)
+	}
 }
 
 func TestClassifyProcesses_TheIncidentSpecimenIsAnOrphan(t *testing.T) {
@@ -488,12 +576,16 @@ func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
 func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 	// A carrier that writes nothing when healthy renders as no output at all,
 	// which reads as "not checked" (#332). It always writes.
+	//
+	// The captured machine's one nightgauge process is the extension host's
+	// serve daemon, and after #388 what makes it healthy is its sidecar — the
+	// claim, not its argv.
 	procs, determined := parseProcessTable(loadCapturedProcessTable(t))
 	if !determined {
 		t.Fatal("the captured table did not parse")
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{})
+	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true})
 
 	if !item.OK {
 		t.Fatalf("the captured (clean) machine must pass: %+v", item)
@@ -501,8 +593,11 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 	if warning != "" {
 		t.Errorf("unexpected warning: %q", warning)
 	}
-	if !strings.Contains(item.Detail, "1 serve") || !strings.Contains(item.Detail, "0 orphaned") {
+	if !strings.Contains(item.Detail, "1 owned") || !strings.Contains(item.Detail, "0 orphaned") {
 		t.Errorf("the healthy detail does not report its counts: %q", item.Detail)
+	}
+	if strings.Contains(item.Detail, "serve") {
+		t.Errorf("the counts still carry a serve-shaped class: %q", item.Detail)
 	}
 }
 
@@ -533,10 +628,11 @@ func TestSidecarPIDs_ReadsEverySidecarThatCarriesAPID(t *testing.T) {
 	r.write(".nightgauge/pipeline/run-state.json", fmt.Sprintf(
 		`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4003},{"run_id":"b","pid":4004}]}`,
 		stamp(time.Hour), stamp(time.Minute)))
+	writeServeSidecar(t, r.dir, 4005, 300*time.Hour, time.Minute)
 
 	claimed := sidecarPIDs(r.dir, scanClock)
 
-	for _, pid := range []int{4001, 4002, 4003, 4004} {
+	for _, pid := range []int{4001, 4002, 4003, 4004, 4005} {
 		if !claimed[pid] {
 			t.Errorf("PID %d is claimed by a sidecar but was not collected", pid)
 		}
@@ -642,37 +738,29 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	}
 }
 
-func TestSubcommand_FindsTheVerbPastGlobalFlags(t *testing.T) {
-	tests := []struct {
-		command string
-		want    string
-	}{
-		{"/opt/bin/nightgauge serve --workspace /x", "serve"},
-		{"/opt/bin/nightgauge --verbose serve", "serve"},
-		{"/opt/bin/nightgauge autonomous run --dry-run", "autonomous"},
-		{"/opt/bin/nightgauge", ""},
-		{"/opt/bin/nightgauge --help", ""},
+func TestClassifyProcesses_TheClassifierNeverReadsTheVerb(t *testing.T) {
+	// #388 retired the argv exception AND the verb reader behind it. Ownership
+	// is the sidecar's answer for every process, so how the daemon was invoked
+	// — `serve`, `--verbose serve`, `--config serve …` (the flag-value
+	// ambiguity that used to suppress a real report) — changes nothing.
+	rows := []string{
+		"serve --workspace /Users/operator/Repositories/nightgauge",
+		"--verbose serve --workspace /Users/operator/Repositories/nightgauge",
+		"--config serve --workspace /Users/operator/Repositories/nightgauge",
 	}
-	for _, tt := range tests {
-		if got := (runningProcess{Command: tt.command}).subcommand(); got != tt.want {
-			t.Errorf("subcommand(%q) = %q, want %q", tt.command, got, tt.want)
+	for i, args := range rows {
+		pid := 4157 + i
+		procs := parseRows(t, derivedRow(t, pid, "10-00:00:00", args))
+
+		unclaimed := classifyProcesses(procs, map[int]bool{}, os.Getpid())
+		claimed := classifyProcesses(procs, map[int]bool{pid: true}, os.Getpid())
+
+		if len(unclaimed.Orphans) != 1 {
+			t.Errorf("argv %q: an unclaimed daemon was not reported: %+v", args, unclaimed)
 		}
-	}
-}
-
-func TestClassifyProcesses_ServeBehindAGlobalFlagIsStillServe(t *testing.T) {
-	// A serve daemon this reader fails to recognize is reported as an orphan
-	// on every single doctor run — the failure mode that teaches operators to
-	// stop reading the output.
-	procs := parseRows(t, derivedRow(t, 4157, "10-00:00:00", "--verbose serve --workspace /Users/operator/Repositories/nightgauge"))
-
-	scan := classifyProcesses(procs, map[int]bool{}, os.Getpid())
-
-	if len(scan.Orphans) != 0 {
-		t.Fatalf("a serve daemon behind a global flag was reported: %+v", scan.Orphans)
-	}
-	if scan.Serve != 1 {
-		t.Errorf("Serve = %d, want 1", scan.Serve)
+		if claimed.Owned != 1 || len(claimed.Orphans) != 0 {
+			t.Errorf("argv %q: a sidecar-claimed daemon was not carried: %+v", args, claimed)
+		}
 	}
 }
 

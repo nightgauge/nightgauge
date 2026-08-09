@@ -4203,6 +4203,16 @@ func serveCmd() *cobra.Command {
 			// Set up persistent file-based logging (tees to stderr + file)
 			closeLog := setupServeLogging(workspaceRoot)
 			defer closeLog()
+
+			// Claim the workspace's serve sidecar and heartbeat it (#388).
+			// Without this marker `doctor` cannot tell a live daemon from one
+			// that outlived its extension host, and had to except every serve
+			// process by argv — which excepted the leaked ones too. Deferred
+			// beside closeLog so every exit below unwinds it, not just the
+			// signal path; a SIGKILL leaves the file to expire on its own.
+			stopServeSidecar := runstate.StartServeSidecar(workspaceRoot, log.Printf)
+			defer stopServeSidecar()
+
 			opts = append(opts, ipc.WithWorkspaceRoot(workspaceRoot))
 
 			// Load config from .nightgauge/config.yaml

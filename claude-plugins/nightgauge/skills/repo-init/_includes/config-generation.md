@@ -40,7 +40,7 @@ automatically). Otherwise, write the full file:
 #   config.yaml           — repository-wide pipeline configuration
 #   .gitignore            — this file
 #   */.gitkeep            — preserve directory structure
-# nightgauge-gitignore-version: 5
+# nightgauge-gitignore-version: 8
 
 # ─── Pipeline context, state, and execution data ─────────────────────
 pipeline/*
@@ -81,6 +81,12 @@ logs/*
 # ─── Autonomous scheduler state ─────────────────────────────────────
 /autonomous/
 
+# ─── Serve daemon PID sidecar (#388) ────────────────────────────────
+# The running IPC daemon's pid, start time, and heartbeat. Per-machine
+# runtime state with a pid in it — meaningless on any other machine, and
+# rewritten every 15 minutes while the daemon lives.
+/serve.json
+
 # ─── Skill usage telemetry (local, per-machine) ─────────────────────
 /skills/
 
@@ -105,6 +111,20 @@ pipeline/queue-state.json
 
 # ─── Health telemetry (gate metrics, trend data) ─────────────────────
 /health/
+
+# ─── Action Center decision requests (ADR 015) ───────────────────────
+# Cards are produced locally by the attention sweeps, carry local run ids,
+# and are resolved/auto-resolved against local state. Per-machine runtime
+# state, exactly like /health/ and /autonomous/ — never shared via git.
+/attention/
+# The coverage snapshot the sweep writes beside the cards. Same runtime
+# class, but it sits at .nightgauge/ root so /attention/ never matched it.
+/attention-coverage.json
+
+# ─── Write-containment records (#129) ────────────────────────────────
+# Per-run capture of out-of-worktree writes plus attributed.json. Local
+# forensic state tied to specific run ids; regenerated every run.
+/containment/
 
 # ─── Knowledge base (scaffolded per-issue, local pipeline data) ──────
 /knowledge/

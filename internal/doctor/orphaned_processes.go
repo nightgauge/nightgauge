@@ -95,25 +95,6 @@ func (p runningProcess) isNightgauge() bool {
 	return exe != "" && filepath.Base(exe) == "nightgauge"
 }
 
-// subcommand returns the verb: the first token after argv[0] that does not
-// start with `-`. "" when the process was invoked bare or carries only flags.
-//
-// Positional rather than strictly argv[1] because a global flag may precede
-// the verb (`nightgauge --verbose serve`), and a verb this reader misses is a
-// serve daemon reported as an orphan on every single doctor run.
-func (p runningProcess) subcommand() string {
-	fields := strings.Fields(p.Command)
-	if len(fields) < 2 {
-		return ""
-	}
-	for _, f := range fields[1:] {
-		if !strings.HasPrefix(f, "-") {
-			return f
-		}
-	}
-	return ""
-}
-
 // enumerateProcesses returns the raw process table.
 //
 // Thin by design: everything that decides anything lives in parseProcessTable,
@@ -252,14 +233,16 @@ func sidecarRoots(startDir string) []string {
 
 // sidecarPIDs collects every PID claimed by a sidecar that has made recent
 // progress, across every sidecar root: the autonomous scheduler's state.json,
-// the in-flight run's current-run.json, and each attempt in run-state.json.
+// the in-flight run's current-run.json, the serve daemon's serve.json, and
+// each attempt in run-state.json.
 //
 // A claim counts only when the sidecar's own progress timestamp is within
 // staleSidecarClaim of now — see that constant for why presence alone cannot
 // be ownership. Each file is read with the timestamp its writer actually
 // records: the scheduler's per-cycle lastScanAt, the run sidecar's
-// stage_started_at, run-state's updated_at, each falling back to its
-// start-of-life stamp when the progress field has not been written yet.
+// stage_started_at, the serve daemon's 15-minute last_heartbeat_at,
+// run-state's updated_at, each falling back to its start-of-life stamp when
+// the progress field has not been written yet.
 //
 // A missing, unparsable, or undated sidecar contributes no PIDs and does NOT
 // undetermine the scan. Ownership is a narrowing filter here, so failing to
@@ -296,6 +279,21 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 		if readJSONFile(filepath.Join(root, ".nightgauge", "pipeline", "current-run.json"), &currentRun) &&
 			progressIsFresh(now, currentRun.StageStart, currentRun.StartedAt) {
 			claimPID(claimed, currentRun.PID)
+		}
+
+		// runstate.ServeSidecar: the daemon rewrites last_heartbeat_at every
+		// 15 minutes, so it is serve's proof of life. Read by the SAME
+		// progress doctrine as its peers and given no rule of its own — a
+		// serve-specific exemption here would be the argv exception #388
+		// retired, wearing a filename.
+		var serve struct {
+			PID             int    `json:"pid"`
+			StartedAt       string `json:"started_at"`
+			LastHeartbeatAt string `json:"last_heartbeat_at"`
+		}
+		if readJSONFile(filepath.Join(root, ".nightgauge", "serve.json"), &serve) &&
+			progressIsFresh(now, serve.LastHeartbeatAt, serve.StartedAt) {
+			claimPID(claimed, serve.PID)
 		}
 
 		// runstate.RunState: updated_at moves on every lifecycle transition.
@@ -362,16 +360,23 @@ type processScan struct {
 	// Scanned is every nightgauge process except this one.
 	Scanned int
 	Owned   int
-	Serve   int
 	// Recent counts unowned processes below staleProcessAge — seen, and
 	// deliberately not reported.
 	Recent  int
 	Orphans []runningProcess
 }
 
-// classifyProcesses splits nightgauge processes into serve daemons, sidecar-
-// owned runs, too-recent runs, and orphans. self is excluded: `doctor` is a
-// nightgauge process and no sidecar claims it.
+// classifyProcesses splits nightgauge processes into sidecar-owned runs,
+// too-recent runs, and orphans. self is excluded: `doctor` is a nightgauge
+// process and no sidecar claims it.
+//
+// There is no verb-shaped arm here and there must not be one. `serve` had a
+// named argv exception until #388 gave the daemon a heartbeat sidecar: it was
+// the one place this file let argv decide ownership, and what it actually
+// bought was invisibility — a serve daemon that outlived its extension host
+// was excepted exactly like a healthy one, which is the symptom this whole
+// carrier exists to surface. Every process is now claimed by a sidecar or
+// reported.
 func classifyProcesses(procs []runningProcess, claimed map[int]bool, self int) processScan {
 	var scan processScan
 	for _, p := range procs {
@@ -380,21 +385,6 @@ func classifyProcesses(procs []runningProcess, claimed map[int]bool, self int) p
 		}
 		scan.Scanned++
 		switch {
-		case p.subcommand() == "serve":
-			// Named exception. The extension host's serve daemon is long-lived
-			// by design, owns no run, and writes no sidecar, so every other
-			// rule here would report it on every invocation. #388 replaces this
-			// argv test with a sidecar the daemon writes — until then the
-			// exception is argv-shaped, which is the one place this file lets
-			// argv decide anything.
-			//
-			// Residual ambiguity, accepted until #388 retires the argv test
-			// entirely: subcommand() skips flags but cannot skip a flag's
-			// VALUE, so `nightgauge --config serve …` would read `serve` as the
-			// verb. It errs toward NOT reporting, which is the safe direction
-			// for a check whose worst outcome is naming an operator's own
-			// daemon.
-			scan.Serve++
 		case claimed[p.PID]:
 			scan.Owned++
 		case p.Age < staleProcessAge:
@@ -467,8 +457,8 @@ func unverifiableProcessScan(cause error) (CheckItem, string) {
 // rules are testable against the captured process table.
 func orphanedProcessReport(procs []runningProcess, claimed map[int]bool) (CheckItem, string) {
 	scan := classifyProcesses(procs, claimed, os.Getpid())
-	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d serve, %d recent, %d orphaned",
-		scan.Scanned, scan.Owned, scan.Serve, scan.Recent, len(scan.Orphans))
+	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
+		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
 	if len(scan.Orphans) == 0 {
 		return CheckItem{OK: true, Detail: detail}, ""
 	}

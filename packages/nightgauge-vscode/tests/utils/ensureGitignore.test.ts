@@ -63,6 +63,10 @@ describe("ensureGitignore", () => {
       "/containment/",
       "/health/",
       "/autonomous/",
+      // #388: the serve daemon's pid + heartbeat sidecar. Rewritten every 15
+      // minutes while the extension host is up, so leaving it out puts a file
+      // that changes four times an hour into every user's `git status`.
+      "/serve.json",
     ]) {
       expect(generated).toContain(rule);
     }
@@ -71,6 +75,26 @@ describe("ensureGitignore", () => {
   it("carries a version marker the updater can compare against", () => {
     const generated = renderGeneratedGitignore();
     expect(generated).toMatch(/# nightgauge-gitignore-version: \d+/);
+  });
+
+  it("keeps the repo-init skill mirrors on the same block", () => {
+    // The skill writes this file for CLI-only workflows, so its copy is a
+    // third artifact with the same intent — and it had already drifted two
+    // versions behind (v5, missing /attention/ and /containment/) before
+    // anything compared them. A stale mirror is not cosmetic: a repo
+    // scaffolded from it starts life with the pipeline's own runtime state
+    // untracked-but-visible, which is what deadlocked nine worktrees in #332.
+    const generated = renderGeneratedGitignore().replace(/\n$/, "");
+    for (const mirror of [
+      "skills/nightgauge-repo-init/_includes/config-generation.md",
+      "claude-plugins/nightgauge/skills/repo-init/_includes/config-generation.md",
+    ]) {
+      const doc = fs.readFileSync(path.join(repoRoot, mirror), "utf8");
+      expect(doc, `${mirror} has no fenced gitignore block`).toContain("```gitignore\n");
+      expect(doc, `${mirror} has drifted from ensureGitignore.ts`).toContain(
+        "```gitignore\n" + generated + "\n```"
+      );
+    }
   });
 });
 

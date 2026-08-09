@@ -3187,10 +3187,11 @@ every row whose argv[0] **basename** is `nightgauge`:
 | Class    | Rule                                                              | Reported? |
 | -------- | ----------------------------------------------------------------- | --------- |
 | self     | PID equals this `doctor` process                                  | no        |
-| serve    | the verb (first non-flag token after argv[0]) is `serve`          | no        |
 | owned    | PID claimed by a sidecar that has made progress within 24h        | no        |
 | recent   | unowned, younger than `staleProcessAge` (1h)                      | counted   |
 | orphaned | unowned and at least 1h old                                       | **yes**   |
+
+There is no verb-shaped class. `serve` had one until **#388** — see below.
 
 - **argv is evidence, never ownership.** Matching the word `nightgauge`
   anywhere in the command line would claim every `grep`, every editor with a
@@ -3221,13 +3222,24 @@ every row whose argv[0] **basename** is `nightgauge`:
   fails toward REPORTING — safe only because this carrier never acts. Accepted
   edge: a dead writer's PID recycled by another nightgauge process reads as
   owned while the claim stays fresh.
-- **`serve` is a named exception.** The extension host's daemon is long-lived
-  by design, owns no run, and writes no sidecar, so every other rule would
-  report it on every invocation. **#388** replaces this argv test with a
-  sidecar the daemon writes; until then it is the one place argv decides
-  anything. Residual ambiguity accepted until then: the verb scan skips flags
-  but cannot skip a flag's _value_, so `nightgauge --config serve …` would read
-  `serve` as the verb — an error toward not reporting.
+- **`serve` is claimed like everything else (#388).** The extension host's
+  daemon used to be a named argv exception — the one place this carrier let
+  argv decide ownership — because it wrote no marker. What that bought was
+  invisibility: a daemon that outlived its extension host, the exact
+  "everything looks stopped but something is still running" symptom, was
+  excepted right alongside the healthy ones. `serve` now writes
+  `.nightgauge/serve.json` (`pid`, `started_at`, `last_heartbeat_at`) at the
+  workspace root through the same temp+rename contract as its peers, refreshes
+  `last_heartbeat_at` every 15 minutes, and removes the file on clean
+  shutdown. It is read by the standard progress doctrine with no rule of its
+  own; the heartbeat exists because a write-once `pid`+`started_at` record
+  would go stale at 24h and report every daemon older than a day. A SIGKILL'd
+  daemon leaves the file behind and needs no special handling — the abandoned
+  claim stops making progress and expires within `staleSidecarClaim`, after
+  which any surviving process is reported like any other unclaimed one. On
+  startup a sidecar naming a dead PID is overwritten silently; one naming a
+  different **live** PID logs a WARN naming both (two daemons on one
+  workspace) and is taken over, last writer wins.
 - **The 1h age floor** keeps transient CLI invocations and scan races from
   paging the operator: every verb except `serve` and `autonomous run` finishes
   in minutes, and the incident specimen had been up for 31 hours.
@@ -3248,7 +3260,6 @@ Accepted limitations, documented rather than papered over:
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Space in binary path**  | `ps` does not delimit argv[0], so a nightgauge binary installed under a path containing a space reads as a truncated argv[0] and is invisible to the basename test — inherent `ps` ambiguity, not a parser bug |
 | **Recycled PID**          | A dead writer's PID reused by another nightgauge process reads as owned until the claim goes stale                                                                 |
-| **Flag value named `serve`** | A global flag whose value is `serve` suppresses the report for that process (retired by #388)                                                                   |
 
 The parser is exercised against a **captured, redacted process table** from a
 real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the

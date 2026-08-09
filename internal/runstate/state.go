@@ -7,6 +7,11 @@
 // Mirrors packages/nightgauge-sdk/src/context/schemas/run-state.ts
 // field-for-field. The schema_version on disk gates compatibility — see
 // docs/PIPELINE_STATE_SCHEMA.md for the full version history.
+//
+// It also owns the two records that answer "is a writer still there?" for
+// processes outside a run: ProcessAlive (the one liveness probe, #341) and the
+// serve daemon's heartbeat sidecar (serve_sidecar.go, #388), which lives here
+// so both share this package's atomic-write contract and that single probe.
 package runstate
 
 import (
