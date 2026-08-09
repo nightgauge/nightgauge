@@ -3857,17 +3857,24 @@ func (s *Server) registerMethods() {
 		if allowlist := s.resolveAutonomousAllowlist(p.WorkspaceRepos); len(allowlist) > 0 {
 			s.autonomousScheduler.FilterRepos(allowlist)
 		}
-		if s.autonomousScheduler.IsRunning() {
-			// Goroutine is alive but may be blocked by a paused or safety_tripped
-			// state. Resume() transitions it back to running and triggers an
-			// immediate re-scan. If already running, this is a safe no-op for
-			// paused/tripped — it only transitions away from those states.
-			s.autonomousScheduler.Resume()
-		} else {
+		// The scheduler may be blocked by a paused or safety_tripped state;
+		// resuming transitions it back to running, resets the safety rails so
+		// a fresh goroutine doesn't immediately re-trip, and triggers an
+		// immediate re-scan. Harmless when already running or stopped.
+		//
+		// #405 — with ONE exception: a machine-raised halt. The scheduler
+		// paused the whole fleet on a terminal stage failure and raised a
+		// blocking_fleet card asking a human to decide; Start is "bring the
+		// backend back up", not "I triaged that". Leaving the halt in force
+		// keeps the card standing, and the returned status (paused, with the
+		// pause reason) is how the caller learns the fleet came up halted.
+		// Resume — the card's own Retry/Park options, or the explicit Resume
+		// action — is what clears it.
+		if !s.autonomousScheduler.ResumeUnlessMachineHalted() {
+			log.Printf("autonomous: started with a machine-raised halt still in force — no dispatch until an explicit resume")
+		}
+		if !s.autonomousScheduler.IsRunning() {
 			// No goroutine running (fresh server start or prior completion).
-			// If persisted state shows paused/tripped, reset safety rails first
-			// so the new goroutine doesn't immediately re-trip on first cycle.
-			s.autonomousScheduler.Resume() // no-op if status is stopped/complete
 			go func() {
 				if err := s.autonomousScheduler.Run(ctx); err != nil {
 					log.Printf("autonomous scheduler exited: %v", err)

@@ -1372,8 +1372,21 @@ export function registerAutonomousCommands(
 
         const result = await ipc.autonomousStart(intersectWithEnabledRepos(workspaceRepos));
 
+        // Issue #405 — Start no longer implies "running". A machine-raised
+        // halt (haltQueueOnSlotFailure) now survives a backend restart, and
+        // the start handler deliberately declines to resume it, so the daemon
+        // can legitimately come up paused. Rendering an unconditional
+        // "running" would show a Pause button where the operator needs Resume
+        // and flip the activity gate on for a fleet that dispatches nothing —
+        // so both the badge and the context keys follow the returned status.
+        const startedHalted = result.status === "paused" || result.status === "safety_tripped";
+
         // Update status bar
-        statusBar.showAutonomousRunning(result.running.length, result.remaining);
+        if (startedHalted) {
+          statusBar.showAutonomousPaused();
+        } else {
+          statusBar.showAutonomousRunning(result.running.length, result.remaining);
+        }
         startAutonomousStallWatchdog(logger);
 
         // Drain any queue items that survived the reload — they won't get an
@@ -1383,11 +1396,15 @@ export function registerAutonomousCommands(
         }
 
         // Set context for UI visibility — drives Run/Pause/Resume/Stop button visibility.
-        setAutonomousContextKeys("running");
+        setAutonomousContextKeys(result.status);
 
         // Log to output channel
         const channel = getOutputChannel();
-        const action = currentStatus?.status === "safety_tripped" ? "resumed" : "started";
+        const action = startedHalted
+          ? "started — fleet still halted, Resume to clear"
+          : currentStatus?.status === "safety_tripped"
+            ? "resumed"
+            : "started";
         channel.appendLine(`[${new Date().toISOString()}] Autonomous mode ${action}`);
         channel.appendLine(formatStatus(result));
         channel.show(true);

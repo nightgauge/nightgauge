@@ -1083,15 +1083,30 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	}
 	as.running = true
 	as.stopRequested = false
-	as.state.Status = "running"
+	// #405 — starting the loop is not triage. A machine-raised halt that
+	// survived the restart (loadState) stays in force: the loop comes up
+	// alive-but-halted, exactly as the crash found it, and runCycle's
+	// `Status != "running"` early return keeps the fleet dormant until a human
+	// Resume()s. Forcing "running" here and wiping the provenance is what
+	// made the standing terminal-failure cards read "nothing is wrong" one
+	// cycle later, and brought back the misleading fleet-idle card #148
+	// suppresses. Every other state starts clean: a fresh Run is not a paused
+	// state.
+	if !haltedOnSlotFailure(as.state.Status, as.state.PauseTriggeredBy) {
+		as.state.Status = "running"
+		as.state.PauseReason = ""
+		as.state.PauseTriggeredBy = ""
+		as.state.PausedAt = ""
+	} else {
+		log.Printf("autonomous: starting into a preserved halt (triggeredBy=%s) — no dispatch until an explicit Resume: %s",
+			as.state.PauseTriggeredBy, as.state.PauseReason)
+	}
 	as.state.StartedAt = time.Now().UTC().Format(time.RFC3339)
 	as.state.PID = os.Getpid()
-	// Clear stale pause provenance — a fresh Run is not a paused state.
-	as.state.PauseReason = ""
-	as.state.PauseTriggeredBy = ""
-	as.state.PausedAt = ""
 	// A fresh, explicit Run starts clean — any prior restart-reconcile no
-	// longer applies (Issue #274).
+	// longer applies (Issue #274). Unconditional: the flag records that the
+	// PROCESS died ungracefully, and a Run beginning is what retires it,
+	// independent of whether the fleet is dispatching or halted.
 	as.state.RestartedFromRunning = false
 	as.fireStatusChangeLocked()
 	as.mu.Unlock()
@@ -1824,6 +1839,35 @@ func (as *AutonomousScheduler) Resume() {
 	}
 }
 
+// ResumeUnlessMachineHalted is the resume step of the Start action (the IPC
+// `autonomous.start` handler). It Resume()s everything Start has always
+// resumed, EXCEPT a machine-raised halt, which it leaves in force — returning
+// false so the caller can say so.
+//
+// Start and Resume were the same button for a halt (#405): after a crash,
+// loadState's paused->stopped downgrade left Start as the only reachable path,
+// and Start called Resume() unconditionally. An operator restarting a wedged
+// backend and clicking Start therefore cleared a human gate they never
+// answered — the blocking_fleet card that named the terminal failure retracted
+// on the first cycle. Splitting them makes Resume the one explicit action that
+// clears a halt (which is also what the card's own Retry/Park options invoke),
+// and leaves Start meaning only "bring the scheduler process back up".
+//
+// Returns true when the scheduler was resumed (or when there was nothing to
+// resume — Resume() is a no-op on stopped/complete, exactly as before).
+func (as *AutonomousScheduler) ResumeUnlessMachineHalted() bool {
+	as.mu.Lock()
+	halted := haltedOnSlotFailure(as.state.Status, as.state.PauseTriggeredBy)
+	reason := as.state.PauseReason
+	as.mu.Unlock()
+	if halted {
+		log.Printf("autonomous: start declined to resume a machine-raised halt — resolve the terminal-failure card or Resume explicitly: %s", reason)
+		return false
+	}
+	as.Resume()
+	return true
+}
+
 // ClearQuotaCooldown unconditionally removes the global Anthropic-quota
 // cooldown so the next runCycle dispatches without waiting for the recorded
 // deadline. Returns (cleared, previousUntil) — cleared=false when no cooldown
@@ -2424,7 +2468,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	as.mu.Unlock()
 
 	as.mu.Lock()
-	haltedForTerminalFailure := shouldSuppressFleetIdle(as.state.Status, as.state.PauseTriggeredBy)
+	haltedForTerminalFailure := haltedOnSlotFailure(as.state.Status, as.state.PauseTriggeredBy)
 	as.mu.Unlock()
 
 	if remaining == 0 && runningCount == 0 {
@@ -2471,16 +2515,41 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	}
 }
 
-// shouldSuppressFleetIdle reports whether the "Fleet idle — N promotable"
-// card should be suppressed in favor of the terminal-failure card (#148). A
-// halted queue and an empty queue both satisfy remaining==0 && running==0,
-// but "N promotable, go add work" is false while the scheduler paused itself
-// on purpose — so the guard must be specific to the haltQueueOnSlotFailure
-// pause, never every pause (a user-requested pause, a safety-rail trip, etc.
-// still get the honest "nothing to do" fleet-idle card if the queue happens
-// to also be empty).
-func shouldSuppressFleetIdle(status, pauseTriggeredBy string) bool {
-	return status == "paused" && pauseTriggeredBy == "haltQueueOnSlotFailure"
+// machineRaisedHalts is the set of PauseTriggeredBy tags whose pause was
+// raised by the SCHEDULER rather than by a human. Today it has exactly one
+// member: haltQueueOnSlotFailure, the only machine trigger that lands on
+// Status "paused" — the two safety-rail triggers ("safety:rail-check",
+// CascadePauseReason) land on "safety_tripped", which loadState already
+// preserves as terminal.
+//
+// Membership is load-bearing in three places (#405): such a pause survives a
+// restart untouched, Run() re-enters its loop with it still in force, and the
+// Start button declines to clear it. Adding a tag here is therefore a
+// deliberate act, not bookkeeping — and it should come with a rename of
+// haltedOnSlotFailure, which is named for today's single member.
+var machineRaisedHalts = map[string]bool{
+	"haltQueueOnSlotFailure": true,
+}
+
+// haltedOnSlotFailure reports whether (status, pauseTriggeredBy) describes a
+// fleet the scheduler halted on itself after a terminal stage failure — one
+// fact, one definition, two hard requirements on it:
+//
+//   - It gates the "Fleet idle — N promotable" card (#148). A halted queue and
+//     an empty queue both satisfy remaining==0 && running==0, but "N
+//     promotable, go add work" is false while the scheduler paused itself on
+//     purpose. A human-requested pause or a safety trip still gets the honest
+//     "nothing to do" card when the queue also happens to be empty.
+//   - It gates whether the standing terminal-failure cards stay raised
+//     (attention_wiring.go). The two used to be separate copies of the same
+//     conjunct, so a change to one silently diverged from the other — #405 hit
+//     exactly that: the restart laundering retracted the cards AND resurrected
+//     the idle card, one defect showing up twice.
+//
+// The status conjunct matters: a stale trigger tag left on a running or
+// stopped state is not a halt.
+func haltedOnSlotFailure(status, pauseTriggeredBy string) bool {
+	return status == "paused" && machineRaisedHalts[pauseTriggeredBy]
 }
 
 // CandidateItem is a prioritized item ready for dispatch.
@@ -5215,11 +5284,29 @@ func (as *AutonomousScheduler) loadState() {
 	}
 	// Only restore non-terminal states as "stopped" (need explicit restart).
 	// Terminal states (complete, budget_exhausted, safety_tripped) are preserved as-is.
-	reconciledFromRunning := false
+	//
+	// #405 — a machine-raised halt joins the preserved set. It is a
+	// human-must-triage state exactly like safety_tripped: the scheduler
+	// stopped the whole fleet because a stage failed terminally, and raised a
+	// blocking_fleet card asking a person to decide. A crash resolves none of
+	// that, so the downgrade cannot be allowed to answer the card on the
+	// operator's behalf. Downgrading also made the halt UNRECOVERABLE by the
+	// intended route — Resume() acts only on paused|safety_tripped, so
+	// "stopped" left Start as the only way back, and Start is precisely the
+	// path that erased the provenance the standing-card predicate reads.
+	//
+	// RestartedFromRunning is still set: the process did exit ungracefully,
+	// and that is a different fact from why it was paused (#274).
+	reconciledOnLoad := false
 	if loaded.Status == "running" || loaded.Status == "paused" {
-		loaded.Status = "stopped"
+		if haltedOnSlotFailure(loaded.Status, loaded.PauseTriggeredBy) {
+			log.Printf("autonomous: preserving machine-raised halt across restart (triggeredBy=%s): %s",
+				loaded.PauseTriggeredBy, loaded.PauseReason)
+		} else {
+			loaded.Status = "stopped"
+		}
 		loaded.RestartedFromRunning = true
-		reconciledFromRunning = true
+		reconciledOnLoad = true
 	}
 	// Preserve stale Running items on load so RecoverOrphanedRunning can
 	// observe them and reset each board item to "Ready". Previously loadState
@@ -5247,14 +5334,15 @@ func (as *AutonomousScheduler) loadState() {
 	as.state = &loaded
 	log.Printf("autonomous: loaded state from disk (status=%s, completed=%d, failed=%d)",
 		loaded.Status, len(loaded.Completed), len(loaded.Failed))
-	// Flush the running/paused->stopped reconcile immediately rather than
-	// leaving it in memory only — otherwise a process that crashes again
-	// before the next scan cycle leaves state.json claiming "running"
-	// forever (Issue #274). loadState runs single-threaded during
-	// construction, before `as` is exposed to other goroutines, so no
-	// additional locking is needed here (consistent with the unguarded
-	// as.state assignment above).
-	if reconciledFromRunning {
+	// Flush the load-time reconcile immediately rather than leaving it in
+	// memory only — otherwise a process that crashes again before the next
+	// scan cycle leaves state.json claiming "running" forever (Issue #274).
+	// This covers the preserved-halt branch too: it still writes
+	// RestartedFromRunning, and a second crash must not lose it. loadState
+	// runs single-threaded during construction, before `as` is exposed to
+	// other goroutines, so no additional locking is needed here (consistent
+	// with the unguarded as.state assignment above).
+	if reconciledOnLoad {
 		as.persistStateLocked()
 	}
 }

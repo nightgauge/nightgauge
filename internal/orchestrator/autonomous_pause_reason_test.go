@@ -225,13 +225,20 @@ func TestPauseReasonDefaultsAreFriendly(t *testing.T) {
 	}
 }
 
-// TestShouldSuppressFleetIdle covers #148: the "Fleet idle — N promotable"
-// card must be suppressed ONLY for a haltQueueOnSlotFailure pause — a queue
-// halted on a real failure is not the same fact as an empty queue. Every
-// other pause (user-requested, a safety-rail trip, etc.) still gets the
-// honest fleet-idle card if the queue also happens to be empty; the guard
-// must not swallow every pause, only this specific one.
-func TestShouldSuppressFleetIdle(t *testing.T) {
+// TestHaltedOnSlotFailure covers #148: the "Fleet idle — N promotable" card
+// must be suppressed ONLY for a haltQueueOnSlotFailure pause — a queue halted
+// on a real failure is not the same fact as an empty queue. Every other pause
+// (user-requested, a safety-rail trip, etc.) still gets the honest fleet-idle
+// card if the queue also happens to be empty; the guard must not swallow every
+// pause, only this specific one.
+//
+// #405 renamed this predicate from shouldSuppressFleetIdle when the identical
+// conjunct in reconcileTerminalFailureCards was folded into it: the fleet-idle
+// suppression and the standing terminal-failure cards are two consequences of
+// one fact, and keeping two copies is what let a single state rewrite break
+// both. The rows below are unchanged — the behavior is the same predicate,
+// now with one home.
+func TestHaltedOnSlotFailure(t *testing.T) {
 	cases := []struct {
 		name        string
 		status      string
@@ -244,11 +251,17 @@ func TestShouldSuppressFleetIdle(t *testing.T) {
 		{"paused with empty triggeredBy", "paused", "", false},
 		{"running with stale haltQueueOnSlotFailure tag", "running", "haltQueueOnSlotFailure", false},
 		{"safety_tripped, not paused", "safety_tripped", "haltQueueOnSlotFailure", false},
+		// The two machine triggers that are NOT in machineRaisedHalts: both
+		// land on safety_tripped, which loadState already preserves, so
+		// promoting them here would change nothing except make the predicate
+		// lie about what it matches.
+		{"cascade trip is not a slot-failure halt", "paused", CascadePauseReason, false},
+		{"rail-check trip is not a slot-failure halt", "paused", "safety:rail-check", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := shouldSuppressFleetIdle(tc.status, tc.triggeredBy); got != tc.want {
-				t.Errorf("shouldSuppressFleetIdle(%q, %q) = %v, want %v", tc.status, tc.triggeredBy, got, tc.want)
+			if got := haltedOnSlotFailure(tc.status, tc.triggeredBy); got != tc.want {
+				t.Errorf("haltedOnSlotFailure(%q, %q) = %v, want %v", tc.status, tc.triggeredBy, got, tc.want)
 			}
 		})
 	}

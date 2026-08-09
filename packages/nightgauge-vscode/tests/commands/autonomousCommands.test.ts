@@ -337,6 +337,35 @@ describe("registerAutonomousCommands", () => {
       );
     });
 
+    // Issue #405 — a machine-raised halt (haltQueueOnSlotFailure) survives a
+    // backend restart and the Go start handler deliberately declines to resume
+    // it, so autonomousStart can return "paused". Rendering the old
+    // unconditional "running" would show a Pause button where the operator
+    // needs Resume, and flip the activity gate on for a fleet that dispatches
+    // nothing. The badge and the context keys must follow the returned status.
+    it("renders the halted state when Start comes up into a preserved halt", async () => {
+      vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Start" as any);
+      mockIpc.autonomousStart.mockResolvedValue(
+        createMockStatus({
+          status: "paused",
+          pauseReason: "haltQueueOnSlotFailure: issue #405 failed at feature-validate",
+          pauseTriggeredBy: "haltQueueOnSlotFailure",
+          running: [],
+        })
+      );
+
+      const handler = getHandlerById("nightgauge.autonomousRun");
+      await handler();
+
+      expect(mockStatusBar.showAutonomousPaused).toHaveBeenCalled();
+      expect(mockStatusBar.showAutonomousRunning).not.toHaveBeenCalled();
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+        "setContext",
+        "nightgauge.autonomousRunning",
+        false
+      );
+    });
+
     it("redirects to dry run when user selects 'Dry Run First'", async () => {
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Dry Run First" as any);
 
