@@ -96,6 +96,11 @@ describe("ConcurrentPipelineManager — token passthrough (#3704)", () => {
       onPhaseStart: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+      // ADR-017 step 3 (#370): the manager installs the dispatch's run
+      // identity on the slot's own state service before anything emits.
+      beginRun: vi.fn(),
+      endRun: vi.fn(),
+      getRunId: vi.fn().mockReturnValue(null),
       initEmpty: vi.fn(),
       setMeta: vi.fn(),
       getState: vi.fn().mockResolvedValue({
@@ -177,6 +182,11 @@ describe("ConcurrentPipelineManager — token passthrough (#3704)", () => {
       onPhaseStart: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
+      // ADR-017 step 3 (#370): the manager installs the dispatch's run
+      // identity on the slot's own state service before anything emits.
+      beginRun: vi.fn(),
+      endRun: vi.fn(),
+      getRunId: vi.fn().mockReturnValue(null),
       initEmpty: vi.fn().mockImplementation(() => initEmptyCalls.push(1)),
       setMeta: vi.fn(),
       getState: vi.fn().mockResolvedValue(null),

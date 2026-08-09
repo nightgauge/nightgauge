@@ -5,7 +5,7 @@
  * Flow:
  *   1. Extract runId from the command payload
  *   2. Find the active slot by runId via ConcurrentPipelineManager
- *   3. If found: call cancelByRunId (sets userCancelled=true + SIGTERM→10s→SIGKILL)
+ *   3. If found: call cancelByRemoteRunId (sets userCancelled=true + SIGTERM→10s→SIGKILL)
  *   4. If not found: log warning and return (no-op per AC#4)
  *
  * The terminal platform telemetry (pipeline_done, success=false) is emitted by
@@ -48,7 +48,7 @@ export class CancelCommandHandler implements CommandHandler {
       return;
     }
 
-    const found = await this.concurrentManager.cancelByRunId(runId);
+    const found = await this.concurrentManager.cancelByRemoteRunId(runId);
 
     if (!found) {
       this.logger.warn("CancelCommandHandler: no active pipeline for runId — no-op", {

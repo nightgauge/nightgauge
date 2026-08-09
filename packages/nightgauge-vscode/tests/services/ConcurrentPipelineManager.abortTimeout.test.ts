@@ -12,7 +12,7 @@
  * running-slot entry), no slot teardown. The fix books all three — for slots
  * AND for stranded reservations, which hold a Go scheduler seat from dispatch
  * time even though they never became a slot — and then TOMBSTONES the dispatch
- * generation, so the wedged run settling later cannot double-book or, once the
+ * run id, so the wedged run settling later cannot double-book or, once the
  * operator has re-queued the issue, book against the successor.
  *
  * The exactly-once invariant is the point of races (a)–(f) below: a dispatch
@@ -187,6 +187,11 @@ function createControllableFactory() {
         onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
         onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
         getState,
+        // ADR-017 step 3 (#370): the manager installs the dispatch's run
+        // identity on the slot's own state service before anything emits.
+        beginRun: vi.fn(),
+        endRun: vi.fn(),
+        getRunId: vi.fn().mockReturnValue(null),
         initEmpty: vi.fn(),
         initializePipeline: vi.fn().mockResolvedValue(undefined),
         setMeta: vi.fn(),
@@ -766,7 +771,7 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     expect(mockQueue.enqueue).not.toHaveBeenCalled();
     expect(mockQueue.complete).not.toHaveBeenCalled();
     // And the seat is released exactly once — the dispatch's own unwind must
-    // not fire a second autonomousComplete for the same generation.
+    // not fire a second autonomousComplete for the same run id.
     expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
     expect(manager.activeSlotCount).toBe(0);
     // The reservation is released by its own dispatch, so the seat comes back.

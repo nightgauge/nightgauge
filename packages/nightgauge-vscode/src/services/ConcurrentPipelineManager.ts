@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
-import { classifyTerminalKind, type PipelineStage } from "@nightgauge/sdk";
+import { classifyTerminalKind, uuidV7, type PipelineStage } from "@nightgauge/sdk";
 import { WorktreeManager, type WorktreeInfo } from "../utils/WorktreeManager";
 import { killAllActiveProcesses } from "../utils/skillRunner";
 import { getPRForIssue } from "../utils/prDetection";
@@ -126,8 +126,8 @@ interface SlotReservation {
   index: number;
   /** "owner/repo" for cross-repo dispatches; "" when unknown. */
   repo: string;
-  /** Per-dispatch identity — see {@link PipelineSlot.generation}. */
-  generation: string;
+  /** Per-dispatch run identity — see {@link PipelineSlot.runId}. */
+  runId: string;
   /**
    * THE CLAIM on this dispatch's single terminal outcome, with exactly the
    * semantics of {@link PipelineSlot.terminalOutcomeDispatched} (#307). A
@@ -151,26 +151,36 @@ interface PipelineSlot {
   /** Slot index (0-based) */
   index: number;
   /**
-   * Per-DISPATCH identity, minted in `startSlot` before the reservation is
-   * taken and never reused (#307). The issue number is NOT an identity: the
-   * same issue can be force-cleared and re-queued within one extension-host
+   * THE RUN IDENTITY — a UUIDv7 minted in `startSlot` before the reservation
+   * is taken, never reused, and now sent to Go on every call this run makes
+   * (ADR-017 step 3, #370). The issue number is NOT an identity: the same
+   * issue can be force-cleared and re-queued within one extension-host
    * session, so a late event from the dead run and a live event from its
-   * successor are indistinguishable when keyed by issue. Everything in THIS
-   * process that must tell "this run" from "a later run of the same issue"
-   * keys off it: `forceClearedGenerations` (the abort tombstone),
-   * `stillOwnsIssue` (the supersede check in `cleanupSlot`), and the
-   * `reservedSlots` record.
+   * successor are indistinguishable when keyed by issue. Everything that must
+   * tell "this run" from "a later run of the same issue" keys off it:
+   * `forceClearedRunIds` (the abort tombstone), `stillOwnsIssue` (the
+   * supersede check in `cleanupSlot`), the `reservedSlots` record — and, from
+   * this step, the slot's `PipelineStateService`, which sends it on every
+   * `pipeline.*` call.
    *
-   * EXTENSION-INTERNAL, deliberately. The token is never sent to Go: the Go
-   * runtime registry is keyed by bare issue number, and re-keying it by run
-   * identity is an ADR-scale change with its own failure modes (a lost
-   * `initialized` message would silently lock a live run out of every write).
-   * That work is tracked as issue #370; see the KNOWN EXPOSURE paragraph in
-   * docs/GO_BINARY.md § "Force-Clear Terminal Bookkeeping (Issue #307)".
+   * WHAT #307 CALLED THE "GENERATION" IS THIS FIELD. It was deliberately
+   * extension-internal then, because Go's runtime registry was keyed by bare
+   * issue number and re-keying it was ADR-scale work. That work is ADR-017:
+   * the id now goes on the wire, where the server ACCEPTS AND IGNORES it
+   * until the step-4 re-key. Until that lands, the KNOWN EXPOSURE paragraph
+   * in docs/GO_BINARY.md § "Force-Clear Terminal Bookkeeping (Issue #307)"
+   * still describes the Go side's behaviour: a late call from a dead run
+   * still resolves to whatever runtime holds its issue number.
    */
-  generation: string;
-  /** Platform run ID from ack — used to route cancel commands to the right slot */
-  runId?: string;
+  runId: string;
+  /**
+   * Platform run ID from a dashboard-trigger ack — routes cancel/approve/
+   * reject commands back to this slot (#3552). NOT this run's identity: it is
+   * minted by the platform, may be absent entirely (every non-triggered
+   * dispatch), and naming it `runId` next to the real one is how the two get
+   * conflated. See ADR-017 Decision 2.
+   */
+  remoteRunId?: string;
   /** Issue number being processed */
   issueNumber: number;
   /** Issue title for display */
@@ -230,6 +240,9 @@ interface PipelineSlot {
    * generation" are different questions and have separate answers — which is
    * why `runSlotPipeline` tracks its own claim in an invocation-local
    * variable rather than re-reading this shared flag.
+   *
+   * ("a force-clear booked this generation" above is now "…this run id" — the
+   * concept did not change, only its name and its reach onto the wire.)
    */
   terminalOutcomeDispatched?: boolean;
   /**
@@ -415,17 +428,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * and the per-repo running set reflect intent-to-run immediately. #3874.
    */
   private reservedSlots: Map<number, SlotReservation> = new Map();
-  private pendingRunIds: Map<number, string> = new Map(); // runId from ack, applied when slot opens
-
-  /** Monotonic source for {@link PipelineSlot.generation}. */
-  private dispatchCounter = 0;
+  /** Platform ack run id, applied to {@link PipelineSlot.remoteRunId} when the slot opens. */
+  private pendingRemoteRunIds: Map<number, string> = new Map();
 
   /**
-   * TOMBSTONES: dispatch generations the abort deadline force-cleared (#307).
+   * TOMBSTONES: run identities the abort deadline force-cleared (#307).
    *
    * `abortAll`'s deadline branch books a force-cleared slot's terminal state on
    * the run's behalf (queue mark, terminal outcome callback, slot teardown) and
-   * then records the generation here. Every terminal boundary in
+   * then records the run id here. Every terminal boundary in
    * `runSlotPipeline` — the try-block outcome dispatch, the catch, and the
    * fenced finally — checks this FIRST and exits silently, so the wedged run
    * settling minutes later cannot fire a second `onSlotFailed`
@@ -433,7 +444,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * cascade breaker), release a successor's queue mark, or delete a
    * successor's worktree.
    *
-   * PERMANENT for the generation, by design. There is no release path and no
+   * PERMANENT for the run id, by design. There is no release path and no
    * budget that un-claims an entry: a tombstone that can be revoked is a
    * tombstone that expires exactly when the wedge is worst, and round 1 proved
    * that shape re-opens the original defect (the release ran on the LIKELY
@@ -442,11 +453,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * string per force-cleared slot, and a force-clear costs a 30s abort
    * deadline, so this is operator-rate-bounded, not request-rate-bounded.
    *
-   * Keyed by GENERATION, never by issue number: the whole point is to stay
+   * Keyed by RUN ID, never by issue number: the whole point is to stay
    * correct while a live successor for the same issue sits in `slots` or in
    * `reservedSlots`.
+   *
+   * Note for ADR-017: this set is a local tombstone, not the run's terminal
+   * state on the Go side. `pipeline.abandonRun` — the verb that tells the
+   * server a force-cleared dispatch is over — lands in step 6, and the funnel
+   * starts calling it there.
    */
-  private readonly forceClearedGenerations = new Set<string>();
+  private readonly forceClearedRunIds = new Set<string>();
 
   /**
    * In-flight slot lifecycle promises, keyed by issue number. Unlike
@@ -891,11 +907,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private async startSlot(item: QueueItem): Promise<StartSlotOutcome> {
     const slotIndex = this.findAvailableSlotIndex();
     const branchName = `feat/${item.issueNumber}-${this.slugify(item.title)}`;
-    // Per-dispatch identity (#307). Minted BEFORE the reservation so the
-    // reservation record and the eventual PipelineSlot carry the same token —
-    // that is what lets a late event prove whether the thing currently holding
-    // this issue number is still itself or a later dispatch.
-    const generation = this.mintDispatchGeneration(item.issueNumber);
+    // THE run identity (#307 / ADR-017). Minted BEFORE the reservation so the
+    // reservation record, the eventual PipelineSlot and the slot's state
+    // service all carry the same id — that is what lets a late event prove
+    // whether the thing currently holding this issue number is still itself
+    // or a later dispatch, on both sides of the wire.
+    const runId = uuidV7();
 
     // Reserve this slot's identity (index + repo) synchronously, before any
     // async work below (worktree creation). This makes `availableSlotCount`
@@ -906,7 +923,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     const reservation: SlotReservation = {
       index: slotIndex,
       repo: item.repoName ?? "",
-      generation,
+      runId,
     };
     this.reservedSlots.set(item.issueNumber, reservation);
     let reservationReleased = false;
@@ -918,7 +935,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // it and the operator re-queued the issue; deleting by issue number alone
       // would strip the successor's reservation, which is what makes the #188
       // duplicate-dispatch guard and the per-repo concurrency cap correct.
-      if (this.reservedSlots.get(item.issueNumber)?.generation === generation) {
+      if (this.reservedSlots.get(item.issueNumber)?.runId === runId) {
         this.reservedSlots.delete(item.issueNumber);
       }
     };
@@ -929,10 +946,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // (the operator stopped it — silently putting it back is not a stop) nor
       // clears a queue mark that now belongs to a successor: the force-clear
       // already released this dispatch's own mark.
-      if (this.forceClearedGenerations.has(generation)) {
+      if (this.forceClearedRunIds.has(runId)) {
         this.logger.debug("startSlot unwound after its dispatch was force-cleared (#307)", {
           issueNumber: item.issueNumber,
-          generation,
+          runId,
           innerOutcome: outcome,
         });
         return "abandoned";
@@ -947,14 +964,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Mint a fresh per-dispatch generation token (#307). Unique within the
-   * extension host: a monotonic counter makes it collision-free even for two
-   * dispatches of the same issue in the same millisecond, and the issue number
-   * and timestamp are carried only so the token reads usefully in a log line.
+   * Resolve the "owner/repo" this dispatch belongs to (ADR-017 Decision 10).
+   *
+   * The identity is globally unique on its own; the repo is an ATTRIBUTE of
+   * the run that the Go layer needs to materialise the platform's run row and
+   * to key the issue index (`repo#issue`). `item.repoName` is the field the
+   * queue already stamps for a cross-repo dispatch; for a dispatch into the
+   * workspace's own repo it is absent, so fall back to the workspace
+   * manifest's entry for the root this slot's worktree manager resolved.
+   * Never invents one — a slot with no resolvable owner/name reports "" and
+   * says so, exactly as `raiseAbandonedDispatchCard` already does.
    */
-  private mintDispatchGeneration(issueNumber: number): string {
-    this.dispatchCounter += 1;
-    return `${issueNumber}:${this.dispatchCounter}:${Date.now()}`;
+  private resolveSlotRepoSlug(item: QueueItem, worktreeManager: WorktreeManager): string {
+    if (item.repoName?.includes("/")) return item.repoName;
+    const root = worktreeManager.getRepoRoot();
+    for (const repository of this.workspaceManager?.getAllRepositories() ?? []) {
+      if (repository.path !== root) continue;
+      const gh = repository.github;
+      if (gh?.owner && gh.repo) return `${gh.owner}/${gh.repo}`;
+    }
+    this.logger.warn("Dispatch has no resolvable owner/repo — run telemetry will be unattributed", {
+      issueNumber: item.issueNumber,
+      repoRoot: root,
+    });
+    return "";
   }
 
   /**
@@ -971,9 +1004,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private stillOwnsIssue(slot: PipelineSlot): boolean {
     const liveSlot = this.slots.get(slot.issueNumber);
-    if (liveSlot) return liveSlot.generation === slot.generation;
+    if (liveSlot) return liveSlot.runId === slot.runId;
     const reservation = this.reservedSlots.get(slot.issueNumber);
-    if (reservation) return reservation.generation === slot.generation;
+    if (reservation) return reservation.runId === slot.runId;
     // Nobody holds the issue: this slot was already torn out of the map by its
     // own cleanup (or by the abort deadline). Nothing to protect.
     return true;
@@ -999,7 +1032,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       fire();
     } catch (err) {
       this.logger.error("Reservation terminal outcome threw — Go scheduler seat may stay held", {
-        generation: reservation.generation,
+        runId: reservation.runId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -1016,7 +1049,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     branchName: string,
     reservation: SlotReservation
   ): Promise<StartSlotOutcome> {
-    const generation = reservation.generation;
+    const runId = reservation.runId;
     // Resolve the correct WorktreeManager for this item (cross-repo aware).
     // Returns null if the item targets a repo not present in this workspace.
     const slotWorktreeManager = this.resolveWorktreeManager(item);
@@ -1170,10 +1203,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // afterwards would otherwise open a live slot for a run the operator
     // stopped — and, if the issue was re-queued in between, a SECOND live slot
     // for an issue that already has one.
-    if (this.isShuttingDown || this.forceClearedGenerations.has(generation)) {
+    if (this.isShuttingDown || this.forceClearedRunIds.has(runId)) {
       this.logger.info("Stop pressed during worktree creation — aborting slot", {
         issueNumber: item.issueNumber,
-        forceCleared: this.forceClearedGenerations.has(generation),
+        forceCleared: this.forceClearedRunIds.has(runId),
       });
       try {
         await slotWorktreeManager.cleanup(item.issueNumber, true);
@@ -1185,6 +1218,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
     const { orchestrator, stateService } = this.orchestratorFactory(
       worktree.path,
+      item.issueNumber
+    );
+    // Install THIS dispatch's identity on the slot's own state service before
+    // anything it owns can emit (ADR-017 Decision 10, #370). The factory
+    // hands back a fresh service per slot, so the not-ambient refusal cannot
+    // fire here — and if it ever does, the dispatch must fail loudly rather
+    // than run under whatever identity was already installed.
+    stateService.beginRun(
+      runId,
+      this.resolveSlotRepoSlug(item, slotWorktreeManager),
       item.issueNumber
     );
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
@@ -1216,14 +1259,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // Capture the slot's worktreeManager so cleanup uses the correct repo
     // even if updateRepoRoot() is called while this slot is running.
     // For cross-repo items, this is the target repo's manager (not this.worktreeManager).
-    const pendingRunId = this.pendingRunIds.get(item.issueNumber);
-    if (pendingRunId !== undefined) {
-      this.pendingRunIds.delete(item.issueNumber);
+    const pendingRemoteRunId = this.pendingRemoteRunIds.get(item.issueNumber);
+    if (pendingRemoteRunId !== undefined) {
+      this.pendingRemoteRunIds.delete(item.issueNumber);
     }
 
     const slot: PipelineSlot = {
       index: slotIndex,
-      generation,
+      runId,
       issueNumber: item.issueNumber,
       title: item.title,
       epicNumber: item.epicNumber,
@@ -1234,7 +1277,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       stateService,
       startedAt: new Date().toISOString(),
       epicOrder: item.epicOrder,
-      runId: pendingRunId,
+      remoteRunId: pendingRemoteRunId,
     };
 
     this.slots.set(item.issueNumber, slot);
@@ -1408,7 +1451,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (this.isForceCleared(slot)) {
         this.logger.debug("Force-cleared run settled — outcome dropped (#307)", {
           issueNumber: slot.issueNumber,
-          generation: slot.generation,
+          runId: slot.runId,
           success: result.success,
         });
         return result;
@@ -1554,7 +1597,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         if (this.isForceCleared(slot)) {
           this.logger.debug("Force-cleared run threw — failure dropped (#307)", {
             issueNumber: slot.issueNumber,
-            generation: slot.generation,
+            runId: slot.runId,
             error: error instanceof Error ? error.message : "Unknown error",
           });
           throw error;
@@ -1592,7 +1635,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // is updated, which is the moment to check the Go path for the same
       // behavior)
       //
-      // TERMINAL BOUNDARY 3 of 3 (#307). FIRST act of the funnel: a generation
+      // TERMINAL BOUNDARY 3 of 3 (#307). FIRST act of the funnel: a run id
       // the abort deadline force-cleared has already had this whole block run
       // on its behalf by `forceClearStuckSlots`, so running it again is not
       // idempotent repair — it is corruption once the operator has re-queued
@@ -1605,7 +1648,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (this.isForceCleared(slot)) {
         this.logger.debug("Force-cleared run reached its finally — skipped (#307)", {
           issueNumber: slot.issueNumber,
-          generation: slot.generation,
+          runId: slot.runId,
         });
       } else {
         this.logger.info("[SlotLifecycle] FINALLY block entered", {
@@ -1873,10 +1916,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (!this.stillOwnsIssue(slot)) {
       this.logger.warn("cleanupSlot stood down — a newer dispatch owns this issue (#307)", {
         issueNumber: slot.issueNumber,
-        generation: slot.generation,
-        successorGeneration:
-          this.slots.get(slot.issueNumber)?.generation ??
-          this.reservedSlots.get(slot.issueNumber)?.generation,
+        runId: slot.runId,
+        successorRunId:
+          this.slots.get(slot.issueNumber)?.runId ??
+          this.reservedSlots.get(slot.issueNumber)?.runId,
       });
       try {
         slot.stateService.dispose();
@@ -1898,7 +1941,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (slot.cleanupDone === true) {
       this.logger.debug("cleanupSlot skipped — this slot was already torn down (#307)", {
         issueNumber: slot.issueNumber,
-        generation: slot.generation,
+        runId: slot.runId,
       });
       return;
     }
@@ -2705,12 +2748,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   /**
    * True when the abort deadline force-cleared THIS dispatch (#307).
    *
-   * Keyed by generation, never by issue number: by the time a wedged run
+   * Keyed by RUN ID, never by issue number: by the time a wedged run
    * settles, the operator may have re-queued the issue, so a live successor can
    * be sitting in `slots` or in `reservedSlots` under the same number.
    */
   private isForceCleared(slot: PipelineSlot): boolean {
-    return this.forceClearedGenerations.has(slot.generation);
+    return this.forceClearedRunIds.has(slot.runId);
   }
 
   /**
@@ -2761,12 +2804,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     const stuckSlots = Array.from(this.slots.values());
     const strandedReservations = Array.from(this.reservedSlots.entries());
 
-    // --- synchronous prologue: no await until every generation is tombstoned
+    // --- synchronous prologue: no await until every run id is tombstoned
     for (const slot of stuckSlots) {
-      this.forceClearedGenerations.add(slot.generation);
+      this.forceClearedRunIds.add(slot.runId);
     }
     for (const [, reservation] of strandedReservations) {
-      this.forceClearedGenerations.add(reservation.generation);
+      this.forceClearedRunIds.add(reservation.runId);
     }
     this.slots.clear();
     this.emitSlotsChanged();
@@ -2827,7 +2870,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // means the run took the claim first and WILL fire its own outcome when it
     // resumes; booking a second one here is the double-charge this flag exists
     // to prevent.
-    this.forceClearedGenerations.add(slot.generation);
+    this.forceClearedRunIds.add(slot.runId);
     const alreadyClaimed = slot.terminalOutcomeDispatched === true;
     if (!alreadyClaimed) slot.terminalOutcomeDispatched = true;
     // Read in the SAME synchronous step, and read separately from the claim:
@@ -2839,7 +2882,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.logger.warn("Force-clearing stuck slot — booking its terminal state (#307)", {
       slotIndex: slot.index,
       issueNumber: slot.issueNumber,
-      generation: slot.generation,
+      runId: slot.runId,
       runAlreadyClaimedItsOwnOutcome: alreadyClaimed,
       runReportedItsOwnOutcome,
     });
@@ -3045,7 +3088,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     reservation: SlotReservation
   ): Promise<void> {
     // ── CHECK-AND-CLAIM, before the first await ──────────────────────────
-    this.forceClearedGenerations.add(reservation.generation);
+    this.forceClearedRunIds.add(reservation.runId);
     // Read BEFORE our own claim fires anything, for the same reason the slot
     // arm reads its flag up front: the question is whether the DISPATCH
     // reported an outcome, not whether anybody did (#305 review).
@@ -3064,7 +3107,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.logger.warn("Force-clearing stranded reservation — booking its terminal state (#307)", {
       slotIndex: reservation.index,
       issueNumber,
-      generation: reservation.generation,
+      runId: reservation.runId,
       dispatchAlreadyClaimedItsOwnOutcome: !booked,
       dispatchReportedItsOwnOutcome,
     });
@@ -3113,7 +3156,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
     // The `reservedSlots` entry is deliberately LEFT IN PLACE. It is what stops
     // a re-dispatch from colliding with the still-running `startSlot`, and that
-    // dispatch removes its own entry (by generation) when it unwinds. A wedge
+    // dispatch removes its own entry (by run id) when it unwinds. A wedge
     // that never unwinds therefore holds the reserved capacity for the life of
     // the extension host — pre-existing, unchanged here, and recorded in the
     // force-clear-terminal-bookkeeping row.
@@ -3219,46 +3262,56 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Store a pending runId for an issue before fillSlots() creates the slot.
-   * Applied when startSlot() creates the PipelineSlot for that issueNumber.
+   * Store a pending PLATFORM run id for an issue before fillSlots() creates
+   * the slot. Applied to {@link PipelineSlot.remoteRunId} when startSlot()
+   * creates the PipelineSlot for that issueNumber.
+   *
+   * NOT this run's identity (ADR-017 Decision 2). The dispatch mints its own
+   * UUIDv7 in `startSlot`; this value comes from the dashboard trigger's ack
+   * and exists only so the platform's cancel/approve/reject commands — which
+   * address a run by the id THEY minted — reach the right slot.
    * @see Issue #3552 — cancel command handler
    */
-  setPendingRunId(issueNumber: number, runId: string): void {
-    this.pendingRunIds.set(issueNumber, runId);
+  setPendingRemoteRunId(issueNumber: number, remoteRunId: string): void {
+    this.pendingRemoteRunIds.set(issueNumber, remoteRunId);
   }
 
   /**
-   * Drop a pending runId that will never be consumed because the dispatch was
-   * abandoned before a slot opened (e.g. an enqueue refused by the stop guard
-   * after the ack already returned a runId). Leaving it set would let a future,
-   * unrelated dispatch of the same issueNumber wrongly adopt this stale runId.
+   * Drop a pending platform run id that will never be consumed because the
+   * dispatch was abandoned before a slot opened (e.g. an enqueue refused by
+   * the stop guard after the ack already returned one). Leaving it set would
+   * let a future, unrelated dispatch of the same issueNumber wrongly adopt it.
    * @see Issue #4118 — dashboard trigger enqueue path
    */
-  clearPendingRunId(issueNumber: number): void {
-    this.pendingRunIds.delete(issueNumber);
+  clearPendingRemoteRunId(issueNumber: number): void {
+    this.pendingRemoteRunIds.delete(issueNumber);
   }
 
   /**
-   * Find the issueNumber whose active slot has the given runId.
+   * Find the issueNumber whose active slot carries the given PLATFORM run id.
    * Returns null if no active slot matches (e.g., pipeline already completed).
+   *
+   * Deliberately matches on `remoteRunId`, never on the slot's own identity:
+   * the caller is a platform command quoting the id the platform assigned, so
+   * comparing it against a locally-minted UUIDv7 would never match anything.
    * @see Issue #3552 — cancel command handler
    */
-  findSlotByRunId(runId: string): number | null {
+  findSlotByRemoteRunId(remoteRunId: string): number | null {
     for (const [issueNumber, slot] of this.slots) {
-      if (slot.runId === runId) return issueNumber;
+      if (slot.remoteRunId === remoteRunId) return issueNumber;
     }
     return null;
   }
 
   /**
-   * Cancel the pipeline slot identified by runId.
+   * Cancel the pipeline slot identified by the platform's run id.
    * Sets userCancelled=true so the slot completion handler suppresses failure
    * bookkeeping, then calls gracefulStop(SIGTERM → 10s → SIGKILL).
    * Returns true if a slot was found and stop initiated, false if no match.
    * @see Issue #3552 — cancel command handler
    */
-  async cancelByRunId(runId: string): Promise<boolean> {
-    const issueNumber = this.findSlotByRunId(runId);
+  async cancelByRemoteRunId(remoteRunId: string): Promise<boolean> {
+    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
     if (issueNumber === null) return false;
     const slot = this.slots.get(issueNumber);
     if (!slot) return false;
@@ -3268,12 +3321,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Forward an approval decision to the pipeline slot identified by runId.
+   * Forward an approval decision to the slot identified by the platform's run id.
    * Returns true if a slot was found and approve() called, false if no match.
    * @see Issue #3553 — approve command handler
    */
-  approveByRunId(runId: string): boolean {
-    const issueNumber = this.findSlotByRunId(runId);
+  approveByRemoteRunId(remoteRunId: string): boolean {
+    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
     if (issueNumber === null) return false;
     const slot = this.slots.get(issueNumber);
     if (!slot) return false;
@@ -3282,12 +3335,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Reject the approval gate for the pipeline slot identified by runId.
+   * Reject the approval gate for the slot identified by the platform's run id.
    * Returns true if a slot was found and reject() called, false if no match.
    * @see Issue #3553 — reject command handler
    */
-  rejectByRunId(runId: string): boolean {
-    const issueNumber = this.findSlotByRunId(runId);
+  rejectByRemoteRunId(remoteRunId: string): boolean {
+    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
     if (issueNumber === null) return false;
     const slot = this.slots.get(issueNumber);
     if (!slot) return false;

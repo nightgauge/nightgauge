@@ -99,6 +99,12 @@ function createMockOrchestratorFactory() {
     onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     getState: vi.fn().mockResolvedValue(null),
+    // ADR-017 step 3 (#370): every run-bearing entry point receives or
+    // mints an identity, and initializePipeline refuses without one.
+    getRunId: vi.fn().mockReturnValue(null),
+    getRunRepo: vi.fn().mockReturnValue(""),
+    beginRun: vi.fn(),
+    endRun: vi.fn(),
     initializePipeline: vi.fn().mockResolvedValue(undefined),
     setMeta: vi.fn(),
     dispose: vi.fn(),
