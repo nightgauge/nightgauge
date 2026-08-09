@@ -1323,7 +1323,21 @@ export async function initializeServices(
                   });
                 });
                 if (pipelineStateService) {
-                  await pipelineStateService.resumePipeline();
+                  // Say it out loud when nothing was cleared on the Go side.
+                  // The resume runs BEFORE `runPipeline` installs an identity,
+                  // so `setPaused` refuses and only the in-memory flag moves.
+                  // ADR-017 step 8 fixes this by construction (pause-restore
+                  // parses the id from the claimed filename and installs it
+                  // via `beginRun` after winning the rename); until then the
+                  // log is the record, not a claim of success.
+                  const clearedOnGo = await pipelineStateService.resumePipeline();
+                  if (!clearedOnGo) {
+                    logger.warn(
+                      "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
+                        "The in-memory pause flag is cleared; Go still holds the paused state.",
+                      { issueNumber: runtime.issueNumber }
+                    );
+                  }
                 }
                 headlessOrchestrator.runPipeline(runtime.issueNumber!).catch((err) => {
                   logger.error("Failed to resume paused pipeline", { err });
@@ -3602,8 +3616,28 @@ export async function initializeServices(
     };
 
     // Handle pipeline completion after pr-merge
+    /**
+     * Release the singleton's run identity at a terminal point of the
+     * context-file route (ADR-017 Decision 10).
+     *
+     * Keyed `endRun`, NOT `clearPipeline`: #113 requires `_lastState` to
+     * survive until the operator resets (the summary panel reads it), and the
+     * identity is a separate fact from the state. Without this the route's
+     * `beginRun` is a corpse that refuses the NEXT pickup forever.
+     */
+    const releaseRunIdentity = (reason: string, issueNumber: number): void => {
+      const held = pipelineStateService?.getRunId();
+      if (!held) return;
+      pipelineStateService?.endRun(held);
+      logger.debug("Released the run identity", { reason, issueNumber, runId: held });
+    };
+
     const handlePipelineComplete = async (issueNumber: number) => {
       logger.info("Pipeline complete", { issueNumber });
+      // Terminal point of the context-file route. Released FIRST so no exit
+      // path below (the summary's early return, the fallback notification's
+      // "Keep Open") can skip it.
+      releaseRunIdentity("pipeline-complete", issueNumber);
 
       // Notify user with completion sound
       if (notificationService) {
@@ -3727,14 +3761,47 @@ export async function initializeServices(
         baseBranch: issueInfo.baseBranch,
       });
 
-      // Initialize PipelineStateService for this issue
+      // Initialize PipelineStateService for this issue.
+      //
+      // ROUTE STATUS: UNREACHABLE TODAY. `contextWatcher.suspend()` runs
+      // unconditionally at the end of this block (#1831 — all pipelines run in
+      // worktrees), every producer of `_onIssuePickedUp` returns early on
+      // `_suspended`, and nothing in `src/` calls `resume()` or
+      // `scanExistingContext()`. It is wired correctly below anyway: a dead
+      // route that is wrong is a trap for whoever revives it.
       if (pipelineStateService) {
+        // A context-file pickup IS a dispatch, so it mints its own identity
+        // (ADR-017 Decision 10). #870's auto-clear rule first: an identity
+        // left behind by a DIFFERENT, already-complete issue is cleared to
+        // make room, exactly as retryFailedIssue does. A LIVE run is never
+        // cleared — `beginRun` refuses, and the refusal is SURFACED and the
+        // route STOPS, because advancing the tree while the state service
+        // speaks for another run is how the two sides silently diverge.
         try {
-          // A context-file pickup IS a dispatch, so it mints its own identity
-          // (ADR-017 Decision 10). If the singleton is already speaking for a
-          // live run, `beginRun` refuses and the catch below surfaces it —
-          // that refusal is the point: two runs cannot share one holder.
+          const existingState = await pipelineStateService.getState();
+          if (
+            existingState &&
+            existingState.issue_number !== issueInfo.number &&
+            pipelineStateService.isPipelineComplete(existingState)
+          ) {
+            await pipelineStateService.clearPipeline();
+            logger.info("Auto-cleared completed pipeline before context-file pickup", {
+              cleared: existingState.issue_number,
+              issueNumber: issueInfo.number,
+            });
+          }
           pipelineStateService.beginRun(uuidV7(), resolveWorkspaceRepoSlug(), issueInfo.number);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error("Refusing context-file pickup — the pipeline holds another run", {
+            issueNumber: issueInfo.number,
+            error,
+          });
+          vscode.window.showErrorMessage(`Cannot pick up issue #${issueInfo.number}: ${message}`);
+          return;
+        }
+
+        try {
           await pipelineStateService.initializePipeline(
             issueInfo.number,
             issueInfo.title,
@@ -3782,6 +3849,11 @@ export async function initializeServices(
 
       // Clean up pipeline-complete tracking set (Issue #2545)
       pipelineCompleteIssues.delete(issueNumber);
+
+      // The other terminal of this route: the context file is gone, so the run
+      // is over even if `handlePipelineComplete` never fired. Releases the
+      // IDENTITY only — the state below is deliberately preserved (#113).
+      releaseRunIdentity("issue-cleared", issueNumber);
 
       // DO NOT clear pipeline state here - let summary panel handle cleanup
       // The state must be preserved until user clicks "Reset & Start New"

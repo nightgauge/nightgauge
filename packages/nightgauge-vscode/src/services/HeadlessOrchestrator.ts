@@ -1496,8 +1496,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * the active workspace's git remote via `gh`. Returns "" when unresolvable —
    * callers treat that as "no run-creation context" rather than emitting a
    * malformed repo. Best-effort and non-throwing.
+   *
+   * PUBLIC because `ConcurrentPipelineManager.startSlotInner` needs the same
+   * answer BEFORE it installs the slot's identity (ADR-017 Decision 10): the
+   * workspace-manifest lookup it prefers reads `Repository.github`, a getter
+   * over a config that nobody has necessarily loaded yet, so without this
+   * last resort a same-repo slot dispatch can install `repo: ""` — and with
+   * no repo Go keeps the runtime snapshot off disk entirely (#307).
    */
-  private async resolveRunRepoSlug(): Promise<string> {
+  async resolveRunRepoSlug(): Promise<string> {
     if (this.repoOverride?.includes("/")) {
       return this.repoOverride;
     }
@@ -8704,12 +8711,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // every stage transition carries as the platform's run-creation context
     // ("owner/name"). Without it the Go IPC layer emits stage events with an
     // empty repo and the live Pipelines view never materialises the run.
-    // Best-effort: resolving the repo must never block or fail the run.
+    //
+    // CHECK-AND-CLAIM IS AWAIT-FREE (#307/C10 discipline). The repo resolution
+    // spawns `gh repo view` with a 15s timeout; resolving it BEFORE the
+    // claiming check means no other producer can install an identity between
+    // the check and `beginRun`. The outer test only avoids paying for the
+    // subprocess when an identity is obviously already installed — the inner
+    // one is the decision. A refusal is NOT swallowed: a run must never
+    // proceed under another run's identity.
     if (this.stateService && this.stateService.getRunId() === null) {
-      try {
-        this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), issueNumber);
-      } catch (err) {
-        this.logger.warn("Could not install the run identity for telemetry — continuing", { err });
+      const repo = await this.resolveRunRepoSlug();
+      if (this.stateService.getRunId() === null) {
+        this.stateService.beginRun(uuidV7(), repo, issueNumber);
       }
     }
 
@@ -11609,6 +11622,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   async startNextQueuedIssue(item: { issueNumber: number; title?: string }): Promise<void> {
     // Initialize pipeline state for the queued issue
     if (this.stateService) {
+      // Resolved BEFORE the clear+claim pair so the pair is await-free
+      // (#307/C10): a 15s `gh repo view` between releasing the predecessor's
+      // identity and installing this one is a window in which another
+      // producer can claim the singleton.
+      const repo = await this.resolveRunRepoSlug();
       try {
         await this.stateService.clearPipeline();
       } catch {
@@ -11618,7 +11636,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // `clearPipeline` above released whatever identity the previous run
       // left installed, so this cannot land on a live one — and if it does,
       // `beginRun` refuses rather than stamping over a running issue.
-      this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), item.issueNumber);
+      this.stateService.beginRun(uuidV7(), repo, item.issueNumber);
       await this.stateService.initializePipeline(
         item.issueNumber,
         item.title || `Issue #${item.issueNumber}`,
@@ -11986,12 +12004,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // around it. Only the second case mints, and only the second case ends
     // the run — a stage inside a pipeline must never release the pipeline's
     // identity when it returns.
-    const mintedHere = this.stateService !== null && this.stateService.getRunId() === null;
-    if (mintedHere && this.stateService) {
-      try {
-        this.stateService.beginRun(uuidV7(), await this.resolveRunRepoSlug(), issueNumber);
-      } catch (err) {
-        this.logger.warn("Could not install a run identity for this single-stage run", { err });
+    //
+    // CHECK-AND-CLAIM IS AWAIT-FREE and the latch is set on the CLAIM, not on
+    // the pre-check (#307/C10). `resolveRunRepoSlug` spawns `gh repo view`
+    // with a 15s timeout; latching before that await and releasing in the
+    // `finally` would let a claim that LOST the race release the WINNER's
+    // identity. Resolving first, then re-testing, means `mintedId` is non-null
+    // only when this call actually installed the id it later releases. A
+    // refusal propagates — the run must not proceed under another's identity.
+    let mintedId: string | null = null;
+    if (this.stateService && this.stateService.getRunId() === null) {
+      const repo = await this.resolveRunRepoSlug();
+      if (this.stateService.getRunId() === null) {
+        const candidate = uuidV7();
+        this.stateService.beginRun(candidate, repo, issueNumber);
+        mintedId = candidate;
       }
     }
     try {
@@ -12005,7 +12032,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         modelOverrideSource
       );
     } finally {
-      if (mintedHere) this.stateService?.endRun();
+      // Keyed release: a stale id (the run already ended and a successor
+      // installed its own) is a no-op rather than a theft.
+      if (mintedId) this.stateService?.endRun(mintedId);
     }
   }
 

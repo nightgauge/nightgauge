@@ -35,10 +35,23 @@ import {
   type StageExecutionMode,
 } from "../utils/incrediConfig";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
-import { parsePhaseMarker } from "@nightgauge/sdk";
+import { parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
 import { validateAskUserQuestionPayload, formatResponseForStdin } from "../types/askUserQuestion";
+import { getRepoIdentity } from "../utils/configPathResolver";
+
+/**
+ * The "owner/name" a manually dispatched stage belongs to. Same resolver
+ * `retryFailedIssue` uses (`.nightgauge/config.yaml` + git remote), so the two
+ * single-stage dispatch points agree about what they are attributing to.
+ */
+async function resolveCommandRepoSlug(): Promise<string> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) return "";
+  const identity = await getRepoIdentity(root);
+  return identity ? `${identity.owner}/${identity.repo}` : "";
+}
 
 /**
  * Stage options for quick pick
@@ -536,6 +549,49 @@ export function registerRunStageCommand(
       }
 
       /**
+       * RECEIVE OR MINT (ADR-017 Decision 10, #370).
+       *
+       * `nightgauge.runStage` is a DISPATCH: it does not go through
+       * `HeadlessOrchestrator.runStage`, it spawns the stage itself, and it
+       * drives `startStage`/`completeStage`/`failStage` on the singleton. With
+       * no identity installed those seven raw `notifyStageTransition` sites
+       * send `runId: ""`, which step 4 refuses — and if a stale id IS
+       * installed, the stage books under a dead run and that run's issue.
+       *
+       * RELEASED AT THE RUN'S TERMINAL POINT, NOT AT THE END OF THIS
+       * FUNCTION. The command is fire-and-forget: it spawns and returns while
+       * the stage keeps running, so a `finally` here would release the
+       * identity before `completeStage` ever fires. The release therefore
+       * lives in `onComplete` (the stage's terminal) and on every path that
+       * bails before the child exists.
+       */
+      let mintedId: string | null = null;
+      if (pipelineStateService && pipelineStateService.getRunId() === null) {
+        const repo = await resolveCommandRepoSlug();
+        if (pipelineStateService.getRunId() === null) {
+          const candidate = uuidV7();
+          try {
+            pipelineStateService.beginRun(candidate, repo, issueNumber);
+            mintedId = candidate;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            logger.error("Refusing to run stage — the pipeline holds another run", {
+              stage,
+              issueNumber,
+              error,
+            });
+            vscode.window.showErrorMessage(`Cannot run ${getStageLabel(stage)}: ${message}`);
+            return;
+          }
+        }
+      }
+      const releaseMintedRun = (): void => {
+        if (!mintedId) return;
+        pipelineStateService?.endRun(mintedId);
+        mintedId = null;
+      };
+
+      /**
        * Mark stage as running in state service (Issue #246 fix).
        * This was missing — stages went from 'pending' directly to 'complete'.
        *
@@ -853,6 +909,11 @@ export function registerRunStageCommand(
             );
             statusBar.showError(result.error?.message || "Stage failed");
           }
+
+          // The stage is over — release what this dispatch minted (ADR-017
+          // Decision 10). Keyed, so a successor that has since claimed the
+          // singleton keeps its identity.
+          releaseMintedRun();
         },
         onError: (error) => {
           logger.error("Stage execution error", { stage, issueNumber, error });
@@ -906,7 +967,9 @@ export function registerRunStageCommand(
         // terminal) but exposes writeToStdin, so it is NOT a bail. Mirrors the
         // guard in runInteractiveStage.ts.
         if (!handle.process && !handle.writeToStdin) {
-          // Error already reported via callbacks
+          // Error already reported via callbacks. No child exists, so no
+          // terminal callback is coming — release here instead.
+          releaseMintedRun();
           return;
         }
 
@@ -926,6 +989,8 @@ export function registerRunStageCommand(
           );
         }
       } catch (error) {
+        // The spawn itself failed: no child, no terminal callback.
+        releaseMintedRun();
         const message = error instanceof Error ? error.message : "Unknown error occurred";
         logger.error("Failed to start stage", error instanceof Error ? error : undefined);
         statusBar.showError(message);

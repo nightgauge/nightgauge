@@ -146,48 +146,72 @@ export function registerRetryFailedIssueCommand(
         // the operator verbatim rather than swallowed — there is deliberately
         // no pre-clear here, because clearing a LIVE run to make room for its
         // own retry is the corruption, not the fix.
-        if (stateService) {
-          stateService.beginRun(uuidV7(), await resolveRetryRepoSlug(), issueNumber);
-          await stateService.initializePipeline(issueNumber, failedIssue.title, failedIssue.branch);
-        }
+        //
+        // WHAT THIS DISPATCH INSTALLS, THIS DISPATCH RELEASES. `runStage`'s
+        // receive-or-mint sees an identity already installed, so it does not
+        // mint and therefore does not release; the single-stage path never
+        // reaches `firePipelineComplete`, so `notifyPipelineComplete`'s
+        // release never fires either. Without the keyed `finally` below the
+        // id outlives the retry, the SECOND retry of the same issue is refused
+        // "already running" for a run that is not (MAX_RETRIES becomes
+        // unreachable past attempt one), and every later `retryStage` /
+        // `retryFromPhase` books its transitions under this dead run's id.
+        const mintedId = stateService ? uuidV7() : null;
+        try {
+          if (stateService && mintedId) {
+            stateService.beginRun(mintedId, await resolveRetryRepoSlug(), issueNumber);
+            await stateService.initializePipeline(
+              issueNumber,
+              failedIssue.title,
+              failedIssue.branch
+            );
+          }
 
-        // Remove from failed list
-        service.removeFromFailed(issueNumber);
+          // Remove from failed list
+          service.removeFromFailed(issueNumber);
 
-        // Show info message
-        vscode.window.showInformationMessage(
-          `Retrying issue #${issueNumber} from ${failedIssue.failed_stage}...`
-        );
-
-        // Run pipeline from failed stage
-        const stage = failedIssue.failed_stage as PipelineStage;
-
-        // Run the stage and let the orchestrator handle the rest
-        const result = await orchestrator.runStage(stage, issueNumber, {
-          onStageComplete: (completedStage: PipelineStage, stageResult: StageRunResult) => {
-            if (stageResult.success) {
-              vscode.window.showInformationMessage(
-                `Stage ${completedStage} completed successfully.`
-              );
-            }
-          },
-          onStageError: (errorStage: PipelineStage, error: Error) => {
-            vscode.window.showErrorMessage(`Stage ${errorStage} failed: ${error.message ?? error}`);
-          },
-        });
-
-        if (!result.success) {
-          // Re-add to failed list with incremented retry count
-          service.addFailed(
-            issueNumber,
-            failedIssue.title,
-            failedIssue.branch,
-            stage,
-            result.error instanceof Error
-              ? result.error.message
-              : String(result.error ?? "Unknown error"),
-            failedIssue.labels
+          // Show info message
+          vscode.window.showInformationMessage(
+            `Retrying issue #${issueNumber} from ${failedIssue.failed_stage}...`
           );
+
+          // Run pipeline from failed stage
+          const stage = failedIssue.failed_stage as PipelineStage;
+
+          // Run the stage and let the orchestrator handle the rest
+          const result = await orchestrator.runStage(stage, issueNumber, {
+            onStageComplete: (completedStage: PipelineStage, stageResult: StageRunResult) => {
+              if (stageResult.success) {
+                vscode.window.showInformationMessage(
+                  `Stage ${completedStage} completed successfully.`
+                );
+              }
+            },
+            onStageError: (errorStage: PipelineStage, error: Error) => {
+              vscode.window.showErrorMessage(
+                `Stage ${errorStage} failed: ${error.message ?? error}`
+              );
+            },
+          });
+
+          if (!result.success) {
+            // Re-add to failed list with incremented retry count
+            service.addFailed(
+              issueNumber,
+              failedIssue.title,
+              failedIssue.branch,
+              stage,
+              result.error instanceof Error
+                ? result.error.message
+                : String(result.error ?? "Unknown error"),
+              failedIssue.labels
+            );
+          }
+        } finally {
+          // Keyed: when `beginRun` REFUSED (a live run holds the issue) this
+          // is a no-op, so the refusal path cannot release the live run's
+          // identity on its way out through the outer catch.
+          if (stateService && mintedId) stateService.endRun(mintedId);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";

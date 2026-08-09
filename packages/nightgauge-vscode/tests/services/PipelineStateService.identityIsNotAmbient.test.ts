@@ -160,7 +160,7 @@ describe("PipelineStateService — identity is not ambient (ADR-017 F23)", () =>
     const svc = await makeService(370);
     const first = await mint();
     svc.beginRun(first, "nightgauge/nightgauge", 370);
-    svc.endRun();
+    svc.endRun(first);
     expect(svc.getRunId()).toBeNull();
 
     const second = await mint();
@@ -170,9 +170,50 @@ describe("PipelineStateService — identity is not ambient (ADR-017 F23)", () =>
 
   it("endRun is idempotent", async () => {
     const svc = await makeService(370);
-    svc.endRun();
-    svc.endRun();
+    const runId = await mint();
+    svc.beginRun(runId, "nightgauge/nightgauge", 370);
+    svc.endRun(runId);
+    svc.endRun(runId);
     expect(svc.getRunId()).toBeNull();
+  });
+
+  it("endRun with a STALE id is a no-op — a loser never releases the winner", async () => {
+    // The shape this guards: a producer captures its id, crosses an await
+    // (an IPC round trip, a stage), and by the time its `finally` runs the
+    // singleton has already been cleared and re-begun by a SUCCESSOR. An
+    // un-keyed release nulls the successor's identity and it emits
+    // `runId: ""` for the rest of its life.
+    const svc = await makeService(370);
+    const dead = await mint();
+    const live = await mint();
+    svc.beginRun(live, "nightgauge/nightgauge", 370);
+
+    svc.endRun(dead);
+
+    expect(svc.getRunId()).toBe(live);
+    expect(svc.getRunRepo()).toBe("nightgauge/nightgauge");
+  });
+
+  it("a mint race loser neither continues nor releases the winner's identity", async () => {
+    // The await-free check-and-claim contract the dispatch sites keep: a
+    // second `beginRun` against a live identity THROWS and mutates nothing,
+    // so the loser has no id to release and its keyed `finally` is inert.
+    const svc = await makeService(370);
+    const winner = await mint();
+    const loser = await mint();
+    svc.beginRun(winner, "nightgauge/nightgauge", 370);
+
+    let mintedByLoser: string | null = null;
+    expect(() => {
+      svc.beginRun(loser, "nightgauge/nightgauge", 370);
+      mintedByLoser = loser;
+    }).toThrowError(/already running/);
+    expect(mintedByLoser).toBeNull();
+
+    // The loser's `finally` fires with nothing latched — and even if it fired
+    // with its candidate id, the keyed release refuses it.
+    svc.endRun(loser);
+    expect(svc.getRunId()).toBe(winner);
   });
 
   it("notifyPipelineComplete releases the identity after sending it", async () => {
@@ -190,16 +231,25 @@ describe("PipelineStateService — identity is not ambient (ADR-017 F23)", () =>
     expect(svc.getRunId()).toBeNull();
   });
 
-  it("clearPipeline and dispose both release the identity", async () => {
+  it("clearPipeline releases the identity; dispose deliberately KEEPS it", async () => {
     const cleared = await makeService(370);
     cleared.beginRun(await mint(), "nightgauge/nightgauge", 370);
     await cleared.clearPipeline();
     expect(cleared.getRunId()).toBeNull();
 
+    // `cleanupSlot` disposes a force-cleared slot's service while its run may
+    // still be in flight, and that run's own late `notifyPipelineComplete` is
+    // the sole writer of its history record and learning outcome. Releasing
+    // here would send that call unattributed — refused `run_id_required` at
+    // step 4 — so both records would silently stop being written. Nothing
+    // recycles a disposed service (`createForWorktree` returns a NEW instance
+    // and the singleton pairs dispose with `resetInstance`), so keeping the
+    // id costs nothing and keeps the dead run attributable.
     const disposed = await makeService(371);
-    disposed.beginRun(await mint(), "nightgauge/nightgauge", 371);
+    const survivingId = await mint();
+    disposed.beginRun(survivingId, "nightgauge/nightgauge", 371);
     disposed.dispose();
-    expect(disposed.getRunId()).toBeNull();
+    expect(disposed.getRunId()).toBe(survivingId);
   });
 
   it("pause/resume refuse to write with no identity, and carry repo+runId with one", async () => {
