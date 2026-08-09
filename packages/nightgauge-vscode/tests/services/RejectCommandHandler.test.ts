@@ -35,7 +35,7 @@ function makeLogger() {
 
 function makeConcurrentManager(rejectResult = true) {
   return {
-    rejectByRunId: vi.fn().mockReturnValue(rejectResult),
+    rejectByRemoteRunId: vi.fn().mockReturnValue(rejectResult),
   };
 }
 
@@ -64,21 +64,21 @@ describe("RejectCommandHandler", () => {
   it("ignores non-reject command types", () => {
     const cmd: ReceivedCommand = { id: "c", type: "heartbeat", payload: {}, createdAt: "" };
     handler.handle(cmd);
-    expect(concurrentManager.rejectByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.rejectByRemoteRunId).not.toHaveBeenCalled();
   });
 
-  it("happy path: calls rejectByRunId with correct runId and logs info", async () => {
+  it("happy path: calls rejectByRemoteRunId with correct runId and logs info", async () => {
     const cmd = makeRejectCmd("run-xyz", "cmd-2");
     handler.handle(cmd);
-    await vi.waitFor(() => expect(concurrentManager.rejectByRunId).toHaveBeenCalledTimes(1));
-    expect(concurrentManager.rejectByRunId).toHaveBeenCalledWith("run-xyz");
+    await vi.waitFor(() => expect(concurrentManager.rejectByRemoteRunId).toHaveBeenCalledTimes(1));
+    expect(concurrentManager.rejectByRemoteRunId).toHaveBeenCalledWith("run-xyz");
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("gate rejected"),
       expect.objectContaining({ runId: "run-xyz", commandId: "cmd-2" })
     );
   });
 
-  it("logs warn and skips rejectByRunId when runId is missing", async () => {
+  it("logs warn and skips rejectByRemoteRunId when runId is missing", async () => {
     const cmd: ReceivedCommand = {
       id: "cmd-3",
       type: "reject",
@@ -91,10 +91,10 @@ describe("RejectCommandHandler", () => {
       expect.stringContaining("missing runId"),
       expect.objectContaining({ commandId: "cmd-3" })
     );
-    expect(concurrentManager.rejectByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.rejectByRemoteRunId).not.toHaveBeenCalled();
   });
 
-  it("logs warn when rejectByRunId returns false (no pipeline waiting at gate)", async () => {
+  it("logs warn when rejectByRemoteRunId returns false (no pipeline waiting at gate)", async () => {
     concurrentManager = makeConcurrentManager(false);
     handler = new RejectCommandHandler(concurrentManager as never, logger as never);
 

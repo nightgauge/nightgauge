@@ -32,6 +32,20 @@ import {
 } from "../utils/skillRunner";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
 import { getExecutionAdapter } from "../utils/incrediConfig";
+import { uuidV7 } from "@nightgauge/sdk";
+import { getRepoIdentity } from "../utils/configPathResolver";
+
+/**
+ * The "owner/name" a manually dispatched interactive stage belongs to. Same
+ * resolver `runStage.ts` and `retryFailedIssue.ts` use, so all three
+ * single-stage dispatch points attribute identically.
+ */
+async function resolveCommandRepoSlug(): Promise<string> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) return "";
+  const identity = await getRepoIdentity(root);
+  return identity ? `${identity.owner}/${identity.repo}` : "";
+}
 
 /**
  * Stage options for quick pick
@@ -201,6 +215,38 @@ export function registerRunInteractiveStageCommand(
         }
       }
 
+      // RECEIVE OR MINT (ADR-017 Decision 10, #370). Same reasoning as
+      // `commands/runStage.ts`: an interactive stage run is a DISPATCH that
+      // drives the singleton's raw notify sites directly, so with no identity
+      // installed it emits `runId: ""` — which step 4 refuses. Released at the
+      // stage's terminal (`onComplete`) and on every pre-child bail, never in
+      // a `finally` here: this command spawns and returns while the stage runs.
+      let mintedId: string | null = null;
+      if (pipelineStateService && pipelineStateService.getRunId() === null) {
+        const repo = await resolveCommandRepoSlug();
+        if (pipelineStateService.getRunId() === null) {
+          const candidate = uuidV7();
+          try {
+            pipelineStateService.beginRun(candidate, repo, issueNumber);
+            mintedId = candidate;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            logger.error("Refusing to run interactive stage — the pipeline holds another run", {
+              stage,
+              issueNumber,
+              error,
+            });
+            vscode.window.showErrorMessage(`Cannot run ${getStageLabel(stage)}: ${message}`);
+            return;
+          }
+        }
+      }
+      const releaseMintedRun = (): void => {
+        if (!mintedId) return;
+        pipelineStateService?.endRun(mintedId);
+        mintedId = null;
+      };
+
       // Start stage in pipeline state
       if (pipelineStateService) {
         try {
@@ -318,6 +364,10 @@ export function registerRunInteractiveStageCommand(
             );
             statusBar.showError(result.error?.message || "Stage failed");
           }
+
+          // Terminal point of this dispatch — release what it minted (keyed,
+          // so a successor's identity is never taken).
+          releaseMintedRun();
         },
         onError: (error) => {
           logger.error("Interactive stage error", {
@@ -342,6 +392,8 @@ export function registerRunInteractiveStageCommand(
         // path (#4024) legitimately has no child process (it runs in a terminal)
         // but exposes writeToStdin, so it is NOT a bail.
         if (!handle.process && !handle.writeToStdin) {
+          // No child, so no terminal callback is coming.
+          releaseMintedRun();
           return;
         }
 
@@ -356,6 +408,8 @@ export function registerRunInteractiveStageCommand(
           stage
         );
       } catch (error) {
+        // The spawn itself failed: no child, no terminal callback.
+        releaseMintedRun();
         const message = error instanceof Error ? error.message : "Unknown error occurred";
         logger.error("Failed to start interactive stage", { error });
         statusBar.showError(message);

@@ -3228,6 +3228,34 @@ allowed-tools: Read Write Edit Bash
     expect(envObj.NIGHTGAUGE_RUN_ID).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
   });
 
+  it("fires onStageChildSpawned synchronously with the child's pid (ADR-017 §7.2)", () => {
+    // The reconciler's liveness arm 3 has nothing else to check for a stage
+    // that emits no assistant tokens for a whole grace window — a pr-merge
+    // polling CI is the ordinary profile, and F26 is what happens without it:
+    // the backend restarts, and at T+120s a LIVE run is booked
+    // pipeline_done(success=false) with a signal-free learning row.
+    //
+    // SYNCHRONOUS is the contract, not an implementation detail: the caller
+    // reads the captured pid the instant runStageSkillHeadless returns, so it
+    // can attach it to this attempt's single `running` transition.
+    // The shared mock process has no pid (nothing else needs one); give this
+    // one a real value so the assertion is about the value that was passed,
+    // not about undefined matching undefined.
+    (mockProcess as { pid?: number }).pid = 987654;
+    const spawned: number[] = [];
+    let pidAtReturn: number | undefined;
+
+    const handle = runStageSkillHeadless("feature-dev", 42, {
+      onStageChildSpawned: (pid) => {
+        spawned.push(pid);
+      },
+    });
+    pidAtReturn = spawned[0];
+
+    expect(spawned).toEqual([mockProcess.pid]);
+    expect(pidAtReturn).toBe(handle.process?.pid);
+  });
+
   it("strips an INHERITED NIGHTGAUGE_RUN_ID when no runId is supplied", () => {
     // The anti-laundering half of the contract, and the reason absence has to
     // be produced rather than assumed.

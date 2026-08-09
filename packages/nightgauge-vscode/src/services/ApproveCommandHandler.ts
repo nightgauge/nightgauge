@@ -5,7 +5,7 @@
  * Flow:
  *   1. Extract runId from the command payload
  *   2. Find the active slot by runId via ConcurrentPipelineManager
- *   3. If found: call approveByRunId (resolves the approval gate with true)
+ *   3. If found: call approveByRemoteRunId (resolves the approval gate with true)
  *   4. If not found: log warning and return (no-op per AC#3)
  *
  * @see Issue #3553 — Handle approve/reject command — forward gate approval to waiting pipeline
@@ -42,7 +42,7 @@ export class ApproveCommandHandler implements CommandHandler {
       return;
     }
 
-    const found = this.concurrentManager.approveByRunId(runId);
+    const found = this.concurrentManager.approveByRemoteRunId(runId);
 
     if (!found) {
       this.logger.warn(

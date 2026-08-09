@@ -197,6 +197,10 @@ function createControllableFactory() {
         setRepoOverride: vi.fn(),
         setRunRepoRoot: vi.fn(),
         setUnattended: vi.fn(),
+        // ADR-017 step 3 (#370): the slot resolves its repo through the
+        // orchestrator when the queue item and the workspace manifest cannot
+        // name one, BEFORE beginRun installs the identity.
+        resolveRunRepoSlug: vi.fn().mockResolvedValue("nightgauge/nightgauge"),
         runPipeline: vi.fn().mockReturnValue(runPromise),
         stop: vi.fn(), // no-op — the stop that does not unblock runPipeline
         dispose: vi.fn(),
@@ -207,6 +211,11 @@ function createControllableFactory() {
         onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
         onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
         getState,
+        // ADR-017 step 3 (#370): the manager installs the dispatch's run
+        // identity on the slot's own state service before anything emits.
+        beginRun: vi.fn(),
+        endRun: vi.fn(),
+        getRunId: vi.fn().mockReturnValue(null),
         initEmpty: vi.fn(),
         initializePipeline: vi.fn().mockResolvedValue(undefined),
         setMeta: vi.fn(),

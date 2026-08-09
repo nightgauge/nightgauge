@@ -51,8 +51,8 @@ function makeConcurrentManager(isRunning = false) {
   return {
     isRunning: vi.fn().mockReturnValue(isRunning),
     fillSlots: vi.fn().mockResolvedValue(1),
-    setPendingRunId: vi.fn(),
-    clearPendingRunId: vi.fn(),
+    setPendingRemoteRunId: vi.fn(),
+    clearPendingRemoteRunId: vi.fn(),
   };
 }
 
@@ -138,8 +138,8 @@ describe("TriggerCommandHandler", () => {
     await vi.waitFor(() => expect(concurrentManager.fillSlots).toHaveBeenCalledTimes(1));
 
     // Pending runId must be set BEFORE enqueue so the slot adopts it on open.
-    expect(concurrentManager.setPendingRunId).toHaveBeenCalledWith(10, "run-abc");
-    const setOrder = concurrentManager.setPendingRunId.mock.invocationCallOrder[0];
+    expect(concurrentManager.setPendingRemoteRunId).toHaveBeenCalledWith(10, "run-abc");
+    const setOrder = concurrentManager.setPendingRemoteRunId.mock.invocationCallOrder[0];
     const enqOrder = queueService.enqueue.mock.invocationCallOrder[0];
     expect(setOrder).toBeLessThan(enqOrder);
 
@@ -207,7 +207,7 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.clearPendingRunId).toHaveBeenCalledWith(42);
+    expect(concurrentManager.clearPendingRemoteRunId).toHaveBeenCalledWith(42);
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
@@ -221,7 +221,7 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.clearPendingRunId).toHaveBeenCalledWith(42);
+    expect(concurrentManager.clearPendingRemoteRunId).toHaveBeenCalledWith(42);
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 

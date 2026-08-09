@@ -35,7 +35,7 @@ function makeLogger() {
 
 function makeConcurrentManager(approveResult = true) {
   return {
-    approveByRunId: vi.fn().mockReturnValue(approveResult),
+    approveByRemoteRunId: vi.fn().mockReturnValue(approveResult),
   };
 }
 
@@ -64,21 +64,21 @@ describe("ApproveCommandHandler", () => {
   it("ignores non-approve command types", () => {
     const cmd: ReceivedCommand = { id: "c", type: "heartbeat", payload: {}, createdAt: "" };
     handler.handle(cmd);
-    expect(concurrentManager.approveByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.approveByRemoteRunId).not.toHaveBeenCalled();
   });
 
-  it("happy path: calls approveByRunId with correct runId and logs info", async () => {
+  it("happy path: calls approveByRemoteRunId with correct runId and logs info", async () => {
     const cmd = makeApproveCmd("run-xyz", "cmd-2");
     handler.handle(cmd);
-    await vi.waitFor(() => expect(concurrentManager.approveByRunId).toHaveBeenCalledTimes(1));
-    expect(concurrentManager.approveByRunId).toHaveBeenCalledWith("run-xyz");
+    await vi.waitFor(() => expect(concurrentManager.approveByRemoteRunId).toHaveBeenCalledTimes(1));
+    expect(concurrentManager.approveByRemoteRunId).toHaveBeenCalledWith("run-xyz");
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("gate approved"),
       expect.objectContaining({ runId: "run-xyz", commandId: "cmd-2" })
     );
   });
 
-  it("logs warn and skips approveByRunId when runId is missing", async () => {
+  it("logs warn and skips approveByRemoteRunId when runId is missing", async () => {
     const cmd: ReceivedCommand = {
       id: "cmd-3",
       type: "approve",
@@ -91,10 +91,10 @@ describe("ApproveCommandHandler", () => {
       expect.stringContaining("missing runId"),
       expect.objectContaining({ commandId: "cmd-3" })
     );
-    expect(concurrentManager.approveByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.approveByRemoteRunId).not.toHaveBeenCalled();
   });
 
-  it("logs warn when approveByRunId returns false (no pipeline waiting at gate)", async () => {
+  it("logs warn when approveByRemoteRunId returns false (no pipeline waiting at gate)", async () => {
     concurrentManager = makeConcurrentManager(false);
     handler = new ApproveCommandHandler(concurrentManager as never, logger as never);
 

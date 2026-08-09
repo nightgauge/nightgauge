@@ -35,10 +35,23 @@ import {
   type StageExecutionMode,
 } from "../utils/incrediConfig";
 import { isStreamJsonEnvelope, isEnvelopeFragment } from "../utils/streamJsonFilter";
-import { parsePhaseMarker } from "@nightgauge/sdk";
+import { parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
 import { createPhaseTracker } from "../utils/phaseTracker";
 import { createToolCallData, type ToolCallData } from "../views/outputWindow/ToolCallIndicator";
 import { validateAskUserQuestionPayload, formatResponseForStdin } from "../types/askUserQuestion";
+import { getRepoIdentity } from "../utils/configPathResolver";
+
+/**
+ * The "owner/name" a manually dispatched stage belongs to. Same resolver
+ * `retryFailedIssue` uses (`.nightgauge/config.yaml` + git remote), so the two
+ * single-stage dispatch points agree about what they are attributing to.
+ */
+async function resolveCommandRepoSlug(): Promise<string> {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!root) return "";
+  const identity = await getRepoIdentity(root);
+  return identity ? `${identity.owner}/${identity.repo}` : "";
+}
 
 /**
  * Stage options for quick pick
@@ -535,18 +548,73 @@ export function registerRunStageCommand(
         }
       }
 
-      // Mark stage as running in state service (Issue #246 fix)
-      // This was missing — stages went from 'pending' directly to 'complete'
-      if (pipelineStateService) {
+      /**
+       * RECEIVE OR MINT (ADR-017 Decision 10, #370).
+       *
+       * `nightgauge.runStage` is a DISPATCH: it does not go through
+       * `HeadlessOrchestrator.runStage`, it spawns the stage itself, and it
+       * drives `startStage`/`completeStage`/`failStage` on the singleton. With
+       * no identity installed those seven raw `notifyStageTransition` sites
+       * send `runId: ""`, which step 4 refuses — and if a stale id IS
+       * installed, the stage books under a dead run and that run's issue.
+       *
+       * RELEASED AT THE RUN'S TERMINAL POINT, NOT AT THE END OF THIS
+       * FUNCTION. The command is fire-and-forget: it spawns and returns while
+       * the stage keeps running, so a `finally` here would release the
+       * identity before `completeStage` ever fires. The release therefore
+       * lives in `onComplete` (the stage's terminal) and on every path that
+       * bails before the child exists.
+       */
+      let mintedId: string | null = null;
+      if (pipelineStateService && pipelineStateService.getRunId() === null) {
+        const repo = await resolveCommandRepoSlug();
+        if (pipelineStateService.getRunId() === null) {
+          const candidate = uuidV7();
+          try {
+            pipelineStateService.beginRun(candidate, repo, issueNumber);
+            mintedId = candidate;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Unknown error";
+            logger.error("Refusing to run stage — the pipeline holds another run", {
+              stage,
+              issueNumber,
+              error,
+            });
+            vscode.window.showErrorMessage(`Cannot run ${getStageLabel(stage)}: ${message}`);
+            return;
+          }
+        }
+      }
+      const releaseMintedRun = (): void => {
+        if (!mintedId) return;
+        pipelineStateService?.endRun(mintedId);
+        mintedId = null;
+      };
+
+      /**
+       * Mark stage as running in state service (Issue #246 fix).
+       * This was missing — stages went from 'pending' directly to 'complete'.
+       *
+       * Deferred to the spawn (ADR-017 §7.2) so this attempt's ONE `running`
+       * transition carries the child's pid. Latched: a second would re-enter
+       * Go's BeginStage and reset the stage clock.
+       */
+      let runningTransitionSent = false;
+      const markStageRunning = async (stagePid?: number): Promise<void> => {
+        if (runningTransitionSent) return;
+        runningTransitionSent = true;
+        if (!pipelineStateService) return;
         try {
-          await pipelineStateService.startStage(stage);
+          await pipelineStateService.startStage(stage, {
+            ...(stagePid ? { stagePid } : {}),
+          });
         } catch (error) {
           logger.warn("Failed to update pipeline state on stage start", {
             stage,
             error,
           });
         }
-      }
+      };
 
       // Update OutputWindow with starting status — this command is
       // invoked by an explicit user action (Run Stage), so reveal the
@@ -633,7 +701,16 @@ export function registerRunStageCommand(
       }
 
       // Set up callbacks to stream output to OutputWindow
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition carries it (§7.2).
+       */
+      let stageChildPid = 0;
+
       const callbacks: SkillRunCallbacks = {
+        onStageChildSpawned: (pid) => {
+          stageChildPid = pid;
+        },
         onStdout: (data) => {
           const items = parseStreamOutput(data);
           for (const item of items) {
@@ -832,6 +909,11 @@ export function registerRunStageCommand(
             );
             statusBar.showError(result.error?.message || "Stage failed");
           }
+
+          // The stage is over — release what this dispatch minted (ADR-017
+          // Decision 10). Keyed, so a successor that has since claimed the
+          // singleton keeps its identity.
+          releaseMintedRun();
         },
         onError: (error) => {
           logger.error("Stage execution error", { stage, issueNumber, error });
@@ -852,7 +934,32 @@ export function registerRunStageCommand(
         const handle =
           executionMode === "interactive"
             ? runStageSkillInteractive(stage, issueNumber, callbacks)
-            : runStageSkillHeadless(stage, issueNumber, callbacks);
+            : runStageSkillHeadless(
+                stage,
+                issueNumber,
+                callbacks,
+                undefined, // issueMetadata
+                undefined, // batchContext
+                undefined, // skipToPhase
+                undefined, // modelOverride
+                undefined, // pauseAutoRouting
+                undefined, // pinnedWorkspaceRoot
+                undefined, // modelOverrideSource
+                undefined, // injectedSkillContent
+                undefined, // autonomousMode
+                undefined, // warnThresholdUsd
+                undefined, // targetRepoOverride
+                // ADR-017 step 3: export the identity of the run this command
+                // is driving. Undefined when the service holds none — a
+                // manual single-stage invocation must not invent one, and
+                // must not inherit the outer run's id either.
+                pipelineStateService?.getRunId() ?? undefined
+              );
+
+        // ADR-017 §7.2: this attempt's single `running` transition, carrying
+        // the pid the synchronous spawn callback captured (headless only —
+        // the interactive runner spawns no stage child to name).
+        void markStageRunning(stageChildPid || undefined);
 
         // A failed launch returns an error stub (no child process, no stdin
         // writer) after reporting via callbacks — bail then. The Codex
@@ -860,7 +967,9 @@ export function registerRunStageCommand(
         // terminal) but exposes writeToStdin, so it is NOT a bail. Mirrors the
         // guard in runInteractiveStage.ts.
         if (!handle.process && !handle.writeToStdin) {
-          // Error already reported via callbacks
+          // Error already reported via callbacks. No child exists, so no
+          // terminal callback is coming — release here instead.
+          releaseMintedRun();
           return;
         }
 
@@ -880,6 +989,8 @@ export function registerRunStageCommand(
           );
         }
       } catch (error) {
+        // The spawn itself failed: no child, no terminal callback.
+        releaseMintedRun();
         const message = error instanceof Error ? error.message : "Unknown error occurred";
         logger.error("Failed to start stage", error instanceof Error ? error : undefined);
         statusBar.showError(message);

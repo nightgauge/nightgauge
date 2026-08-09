@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { uuidV7 } from "@nightgauge/sdk";
 
 // ---------------------------------------------------------------------------
 // IPC event handler capture
@@ -65,7 +66,13 @@ async function makeService(issueNumber: number) {
   PipelineStateService.resetInstance();
   ipcHandlers.clear();
 
-  return PipelineStateService.createForWorktree("/tmp/repo", issueNumber);
+  const svc = PipelineStateService.createForWorktree("/tmp/repo", issueNumber);
+  // ADR-017 step 3 (#370): identity is not ambient. A dispatch installs it
+  // before anything run-bearing runs, and `initializePipeline` refuses
+  // without one — so the harness performs the same beginRun the production
+  // dispatch point does, with a real minted UUIDv7.
+  svc.beginRun(uuidV7(), "nightgauge/nightgauge", issueNumber);
+  return svc;
 }
 
 // ---------------------------------------------------------------------------

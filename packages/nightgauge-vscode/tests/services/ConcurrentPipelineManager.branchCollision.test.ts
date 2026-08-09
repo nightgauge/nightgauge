@@ -86,6 +86,10 @@ function createMockOrchestratorFactory() {
   const mockOrchestrator = {
     setWorktreeOverride: vi.fn(),
     setUnattended: vi.fn(),
+    // ADR-017 step 3 (#370): the slot resolves its repo through the
+    // orchestrator when the queue item and the workspace manifest cannot
+    // name one, BEFORE beginRun installs the identity.
+    resolveRunRepoSlug: vi.fn().mockResolvedValue("nightgauge/nightgauge"),
     setRepoOverride: vi.fn(),
     setRunRepoRoot: vi.fn(),
     runPipeline: vi.fn().mockReturnValue(runPromise),
@@ -99,6 +103,12 @@ function createMockOrchestratorFactory() {
     onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     onUnifiedTokenUsage: vi.fn().mockReturnValue({ dispose: vi.fn() }),
     getState: vi.fn().mockResolvedValue(null),
+    // ADR-017 step 3 (#370): every run-bearing entry point receives or
+    // mints an identity, and initializePipeline refuses without one.
+    getRunId: vi.fn().mockReturnValue(null),
+    getRunRepo: vi.fn().mockReturnValue(""),
+    beginRun: vi.fn(),
+    endRun: vi.fn(),
     initializePipeline: vi.fn().mockResolvedValue(undefined),
     setMeta: vi.fn(),
     dispose: vi.fn(),

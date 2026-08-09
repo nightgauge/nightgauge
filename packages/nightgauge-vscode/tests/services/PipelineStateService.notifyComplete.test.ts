@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { uuidV7 } from "@nightgauge/sdk";
 
 const { callSpy } = vi.hoisted(() => ({
   callSpy: vi.fn().mockResolvedValue({ status: "ok" }),
@@ -49,7 +50,10 @@ describe("PipelineStateService.notifyPipelineComplete — prMerged forwarding (#
 
   function make(): PipelineStateService {
     const svc = PipelineStateService.createForWorktree("/tmp/worktree-266", 266);
-    svc.setRunRepo("nightgauge/acmeapp");
+    // ADR-017 step 3 (#370): beginRun installs the identity AND the repo —
+    // setRunRepo is gone, because a repo with no run to attach it to was how
+    // an identity-less stub reached the registry in the first place.
+    svc.beginRun(uuidV7(), "nightgauge/acmeapp", 266);
     return svc;
   }
 

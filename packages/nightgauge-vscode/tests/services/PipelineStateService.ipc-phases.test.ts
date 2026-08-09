@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { uuidV7 } from "@nightgauge/sdk";
 
 // ---------------------------------------------------------------------------
 // IPC event handler capture
@@ -77,6 +78,13 @@ async function makeService(issueNumber: number | null = null) {
     issueNumber !== null
       ? PipelineStateService.createForWorktree("/tmp/repo", issueNumber)
       : PipelineStateService.getInstance("/tmp/repo");
+
+  // ADR-017 step 3 (#370): identity is not ambient — a dispatch installs it
+  // before anything run-bearing runs. The issue-less singleton case models an
+  // extension host with no run in flight, so it stays identity-less.
+  if (issueNumber !== null) {
+    svc.beginRun(uuidV7(), "nightgauge/nightgauge", issueNumber);
+  }
 
   return svc;
 }

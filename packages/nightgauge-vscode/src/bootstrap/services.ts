@@ -11,7 +11,9 @@ import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { type PipelineStage, parsePhaseMarker } from "@nightgauge/sdk";
+import { type PipelineStage, parsePhaseMarker, uuidV7 } from "@nightgauge/sdk";
+import type { NotifyStageProgressParams } from "../services/ipcNotifyParams";
+import { handleIpcRejection } from "../services/ipcRejection";
 import { Logger } from "../utils/logger";
 import { StatusBarManager } from "../utils/statusBar";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -1321,7 +1323,21 @@ export async function initializeServices(
                   });
                 });
                 if (pipelineStateService) {
-                  await pipelineStateService.resumePipeline();
+                  // Say it out loud when nothing was cleared on the Go side.
+                  // The resume runs BEFORE `runPipeline` installs an identity,
+                  // so `setPaused` refuses and only the in-memory flag moves.
+                  // ADR-017 step 8 fixes this by construction (pause-restore
+                  // parses the id from the claimed filename and installs it
+                  // via `beginRun` after winning the rename); until then the
+                  // log is the record, not a claim of success.
+                  const clearedOnGo = await pipelineStateService.resumePipeline();
+                  if (!clearedOnGo) {
+                    logger.warn(
+                      "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
+                        "The in-memory pause flag is cleared; Go still holds the paused state.",
+                      { issueNumber: runtime.issueNumber }
+                    );
+                  }
                 }
                 headlessOrchestrator.runPipeline(runtime.issueNumber!).catch((err) => {
                   logger.error("Failed to resume paused pipeline", { err });
@@ -3105,6 +3121,24 @@ export async function initializeServices(
   if (incrediRoot) {
     const contextWatcher = new ContextWatcherService(incrediRoot, logger);
 
+    /**
+     * The "owner/repo" the singleton state service's runs belong to.
+     *
+     * Read from the workspace manifest entry for the root this extension host
+     * is driving — the same source `ConcurrentPipelineManager` uses for a
+     * slot with no cross-repo override. Not invented and not a guess: a repo
+     * with no resolvable GitHub identity returns "" and the run is reported
+     * unattributed, exactly as it was before ADR-017 (#370).
+     */
+    const resolveWorkspaceRepoSlug = (): string => {
+      for (const repository of workspaceManager?.getAllRepositories() ?? []) {
+        if (incrediRoot && repository.path !== incrediRoot) continue;
+        const gh = repository.github;
+        if (gh?.owner && gh.repo) return `${gh.owner}/${gh.repo}`;
+      }
+      return "";
+    };
+
     // Helper to run a stage with OutputWindow status updates via headless CLI
     // Uses PipelineStateService as single source of truth (Issue #154)
     const runStageWithOutput = async (
@@ -3124,18 +3158,33 @@ export async function initializeServices(
       // This distinguishes extension-initiated from chat-initiated runs (Issue #81)
       activeExtensionExecutions.add(stage);
 
-      // Update PipelineStateService (single source of truth)
-      // This will trigger onStateChanged which updates UI components
-      if (pipelineStateService) {
+      /**
+       * Send this stage attempt's ONE `running` transition (ADR-017 §7.2).
+       *
+       * Deferred out of this position and fired from the spawn below so the
+       * transition can carry the child's pid — the reconciler's liveness
+       * arm 3 has nothing else to check for a stage that goes quiet (F26).
+       * `runStageSkillHeadless` is synchronous and fires
+       * `onStageChildSpawned` before it returns, so the pid is known by then
+       * or the spawn failed. Latched: a second `running` would re-enter Go's
+       * BeginStage and reset the stage clock.
+       */
+      let runningTransitionSent = false;
+      const markStageRunning = async (stagePid?: number): Promise<void> => {
+        if (runningTransitionSent) return;
+        runningTransitionSent = true;
+        if (!pipelineStateService) return;
         try {
-          await pipelineStateService.startStage(stage);
+          await pipelineStateService.startStage(stage, {
+            ...(stagePid ? { stagePid } : {}),
+          });
         } catch (error) {
           logger.warn("Failed to update pipeline state on stage start", {
             stage,
             error,
           });
         }
-      }
+      };
 
       // Show and configure output window — runStageWithOutput is driven
       // by the ContextWatcher (chat-initiated flow), not a direct user
@@ -3166,8 +3215,18 @@ export async function initializeServices(
         costUsd: 0,
       };
 
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback
+       * so this attempt's single `running` transition carries it (ADR-017
+       * §7.2). Zero when the spawn produced none.
+       */
+      let stageChildPid = 0;
+
       // Set up callbacks for streaming output to OutputWindow
       const callbacks: SkillRunCallbacks = {
+        onStageChildSpawned: (pid) => {
+          stageChildPid = pid;
+        },
         onStdout: (data) => {
           // Parse stream-json output for display
           for (const line of data.split("\n")) {
@@ -3240,15 +3299,29 @@ export async function initializeServices(
         onStageProgress: (usage) => {
           IpcClient.getInstance()
             .call("pipeline.notifyStageProgress", {
-              repo: "",
+              // The singleton's installed run pins its own repo (beginRun),
+              // which is the dispatch's real "owner/name". The hardcoded ""
+              // this replaces is why these estimates reached the platform
+              // unattributed (ADR-017 Decision 10).
+              repo: pipelineStateService?.getRunRepo() ?? "",
               issueNumber,
               stage,
               inputTokens: usage.inputTokens,
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadTokens,
               costUsd: usage.costUsd,
-            })
-            .catch((err) => {
+              // A progress callback can fire on a run this service never
+              // began; "" is the honest answer and the server ignores it
+              // (Decision 6's outbound fallback). Never throw from here.
+              runId: pipelineStateService?.getRunId() ?? "",
+            } satisfies NotifyStageProgressParams)
+            .catch((err: unknown) => {
+              handleIpcRejection({
+                method: "pipeline.notifyStageProgress",
+                stage,
+                runId: pipelineStateService?.getRunId() ?? null,
+                err,
+              });
               logger.warn("Failed to notify stage progress", { stage, err });
             });
         },
@@ -3343,7 +3416,30 @@ export async function initializeServices(
       // Run stage via headless Claude Code CLI
       // SKILL.md instructions are passed as prompt
       // Each command starts a NEW conversation (context isolation)
-      const handle = runStageSkillHeadless(stage, issueNumber, callbacks);
+      const handle = runStageSkillHeadless(
+        stage,
+        issueNumber,
+        callbacks,
+        undefined, // issueMetadata
+        undefined, // batchContext
+        undefined, // skipToPhase
+        undefined, // modelOverride
+        undefined, // pauseAutoRouting
+        undefined, // pinnedWorkspaceRoot
+        undefined, // modelOverrideSource
+        undefined, // injectedSkillContent
+        undefined, // autonomousMode
+        undefined, // warnThresholdUsd
+        undefined, // targetRepoOverride
+        // ADR-017 step 3: export the singleton's installed identity to the
+        // stage child as NIGHTGAUGE_RUN_ID. Undefined when no run is
+        // installed — the child must inherit nothing in that case.
+        pipelineStateService?.getRunId() ?? undefined
+      );
+
+      // ADR-017 §7.2: the ONE `running` transition for this attempt, now that
+      // the synchronous spawn callback has captured the pid.
+      void markStageRunning(stageChildPid || undefined);
 
       if (!handle.process) {
         // Error already reported via callbacks
@@ -3520,8 +3616,28 @@ export async function initializeServices(
     };
 
     // Handle pipeline completion after pr-merge
+    /**
+     * Release the singleton's run identity at a terminal point of the
+     * context-file route (ADR-017 Decision 10).
+     *
+     * Keyed `endRun`, NOT `clearPipeline`: #113 requires `_lastState` to
+     * survive until the operator resets (the summary panel reads it), and the
+     * identity is a separate fact from the state. Without this the route's
+     * `beginRun` is a corpse that refuses the NEXT pickup forever.
+     */
+    const releaseRunIdentity = (reason: string, issueNumber: number): void => {
+      const held = pipelineStateService?.getRunId();
+      if (!held) return;
+      pipelineStateService?.endRun(held);
+      logger.debug("Released the run identity", { reason, issueNumber, runId: held });
+    };
+
     const handlePipelineComplete = async (issueNumber: number) => {
       logger.info("Pipeline complete", { issueNumber });
+      // Terminal point of the context-file route. Released FIRST so no exit
+      // path below (the summary's early return, the fallback notification's
+      // "Keep Open") can skip it.
+      releaseRunIdentity("pipeline-complete", issueNumber);
 
       // Notify user with completion sound
       if (notificationService) {
@@ -3645,8 +3761,46 @@ export async function initializeServices(
         baseBranch: issueInfo.baseBranch,
       });
 
-      // Initialize PipelineStateService for this issue
+      // Initialize PipelineStateService for this issue.
+      //
+      // ROUTE STATUS: UNREACHABLE TODAY. `contextWatcher.suspend()` runs
+      // unconditionally at the end of this block (#1831 — all pipelines run in
+      // worktrees), every producer of `_onIssuePickedUp` returns early on
+      // `_suspended`, and nothing in `src/` calls `resume()` or
+      // `scanExistingContext()`. It is wired correctly below anyway: a dead
+      // route that is wrong is a trap for whoever revives it.
       if (pipelineStateService) {
+        // A context-file pickup IS a dispatch, so it mints its own identity
+        // (ADR-017 Decision 10). #870's auto-clear rule first: an identity
+        // left behind by a DIFFERENT, already-complete issue is cleared to
+        // make room, exactly as retryFailedIssue does. A LIVE run is never
+        // cleared — `beginRun` refuses, and the refusal is SURFACED and the
+        // route STOPS, because advancing the tree while the state service
+        // speaks for another run is how the two sides silently diverge.
+        try {
+          const existingState = await pipelineStateService.getState();
+          if (
+            existingState &&
+            existingState.issue_number !== issueInfo.number &&
+            pipelineStateService.isPipelineComplete(existingState)
+          ) {
+            await pipelineStateService.clearPipeline();
+            logger.info("Auto-cleared completed pipeline before context-file pickup", {
+              cleared: existingState.issue_number,
+              issueNumber: issueInfo.number,
+            });
+          }
+          pipelineStateService.beginRun(uuidV7(), resolveWorkspaceRepoSlug(), issueInfo.number);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          logger.error("Refusing context-file pickup — the pipeline holds another run", {
+            issueNumber: issueInfo.number,
+            error,
+          });
+          vscode.window.showErrorMessage(`Cannot pick up issue #${issueInfo.number}: ${message}`);
+          return;
+        }
+
         try {
           await pipelineStateService.initializePipeline(
             issueInfo.number,
@@ -3695,6 +3849,11 @@ export async function initializeServices(
 
       // Clean up pipeline-complete tracking set (Issue #2545)
       pipelineCompleteIssues.delete(issueNumber);
+
+      // The other terminal of this route: the context file is gone, so the run
+      // is over even if `handlePipelineComplete` never fired. Releases the
+      // IDENTITY only — the state below is deliberately preserved (#113).
+      releaseRunIdentity("issue-cleared", issueNumber);
 
       // DO NOT clear pipeline state here - let summary panel handle cleanup
       // The state must be preserved until user clicks "Reset & Start New"

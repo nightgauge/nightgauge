@@ -168,7 +168,7 @@ export class TriggerCommandHandler implements CommandHandler {
     // Store runId BEFORE the issue can be dequeued so the slot adopts it when it
     // opens (#3552). enqueue() can trigger a debounced fillSlots via onItemAdded,
     // so the pending runId must be in place first.
-    this.concurrentManager.setPendingRunId(issueNumber, runId);
+    this.concurrentManager.setPendingRemoteRunId(issueNumber, runId);
 
     // Enqueue the issue so fillSlots() has something to dequeue. Without this the
     // command acked but the run never started — fillSlots found an empty queue
@@ -181,7 +181,7 @@ export class TriggerCommandHandler implements CommandHandler {
         // Adopt the ack runId as the pipeline-run id (via the Go queue item's
         // RemoteRunID) so command.runId === pipeline_runs.runId and the
         // dashboard's run deep-link resolves instead of 404ing (#4120). This is
-        // the same value passed to setPendingRunId above for cancel-routing.
+        // the same value passed to setPendingRemoteRunId above for cancel-routing.
         remoteRunId: runId,
       });
       if (!queued) {
@@ -189,7 +189,7 @@ export class TriggerCommandHandler implements CommandHandler {
           "TriggerCommandHandler: enqueue refused (stop in progress?) — pipeline not started",
           { issueNumber, commandId: cmd.id, runId }
         );
-        this.concurrentManager.clearPendingRunId(issueNumber);
+        this.concurrentManager.clearPendingRemoteRunId(issueNumber);
         return;
       }
     } catch (err) {
@@ -199,7 +199,7 @@ export class TriggerCommandHandler implements CommandHandler {
         runId,
         err: err instanceof Error ? err.message : String(err),
       });
-      this.concurrentManager.clearPendingRunId(issueNumber);
+      this.concurrentManager.clearPendingRemoteRunId(issueNumber);
       return;
     }
 

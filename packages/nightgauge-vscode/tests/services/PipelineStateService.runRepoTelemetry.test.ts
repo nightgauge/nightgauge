@@ -5,10 +5,11 @@
  *
  * Regression guard for the "No pipeline runs yet" bug: extension/Headless
  * orchestrator runs sent stage transitions with an empty repo, so the platform
- * never materialised a run. setRunRepo must propagate to the IPC payload.
+ * never materialised a run. beginRun must propagate the repo to the IPC payload.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { uuidV7 } from "@nightgauge/sdk";
 
 // Capture every ipc.call(method, params) — resolving so the service takes the
 // real IPC path (not the local-fallback catch branch).
@@ -51,10 +52,15 @@ vi.mock("vscode", () => ({
   },
 }));
 
-async function makeService(issueNumber: number) {
+async function makeService(issueNumber: number, repo = "nightgauge/acmeapp") {
   const { PipelineStateService } = await import("../../src/services/PipelineStateService");
   PipelineStateService.resetInstance();
-  return PipelineStateService.createForWorktree("/tmp/repo", issueNumber);
+  const svc = PipelineStateService.createForWorktree("/tmp/repo", issueNumber);
+  // ADR-017 step 3 (#370): `beginRun` replaced `setRunRepo`. The repo is now
+  // an attribute installed WITH the identity, never on its own — a repo with
+  // no run to attach it to is what let `setPaused` mint an unattributed stub.
+  svc.beginRun(uuidV7(), repo, issueNumber);
+  return svc;
 }
 
 function callsTo(method: string) {
@@ -66,9 +72,8 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
     ipcCalls.length = 0;
   });
 
-  it("threads setRunRepo into stage transitions (start/complete/fail)", async () => {
+  it("threads the installed run repo into stage transitions (start/complete/fail)", async () => {
     const svc = await makeService(153);
-    svc.setRunRepo("nightgauge/acmeapp");
 
     await svc.startStage("issue-pickup");
     await svc.completeStage("issue-pickup");
@@ -87,7 +92,6 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
 
   it("completeStage forwards the served model + adapter attribution (#268)", async () => {
     const svc = await makeService(268);
-    svc.setRunRepo("nightgauge/acmeapp");
 
     await svc.completeStage("feature-dev", { model: "claude-opus-4-8", adapter: "claude" });
 
@@ -101,7 +105,6 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
 
   it("completeStage omits model/adapter keys when no attribution is passed (#268)", async () => {
     const svc = await makeService(268);
-    svc.setRunRepo("nightgauge/acmeapp");
 
     await svc.completeStage("feature-dev");
 
@@ -116,8 +119,7 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
   });
 
   it("initializePipeline carries the run repo (not an empty string)", async () => {
-    const svc = await makeService(42);
-    svc.setRunRepo("nightgauge/nightgauge");
+    const svc = await makeService(42, "nightgauge/nightgauge");
 
     await svc.initializePipeline(42, "Title", "feat/42");
 
@@ -130,7 +132,6 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
 
   it("notifyPipelineComplete sends the terminal pipeline_done signal", async () => {
     const svc = await makeService(153);
-    svc.setRunRepo("nightgauge/acmeapp");
 
     await svc.notifyPipelineComplete({
       success: true,
@@ -149,8 +150,12 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
     });
   });
 
-  it("defaults repo to empty string before setRunRepo is called", async () => {
-    const svc = await makeService(7);
+  it("sends an empty repo when the dispatch could not resolve one", async () => {
+    // A dispatch with no resolvable owner/name is a real state, not an
+    // error: the manager logs it and the run is reported unattributed. What
+    // must NOT happen is a fabricated repo — the platform would materialise
+    // the run row against the wrong repository.
+    const svc = await makeService(7, "");
     await svc.startStage("issue-pickup");
     const t = callsTo("pipeline.notifyStageTransition")[0];
     expect(t.params.repo).toBe("");

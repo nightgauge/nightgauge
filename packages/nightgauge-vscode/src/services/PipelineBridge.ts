@@ -38,6 +38,11 @@ import {
 import { getRetryConfig } from "../utils/incrediConfig";
 import { StallStatusBarItem } from "./StallStatusBarItem";
 import type { StallEscalationLevel, PauseForStallPayload } from "../schemas/pipelineState";
+// D9's compile-time guard on the key names step 4 starts refusing on. These
+// two literals drive the GO-SCHEDULER path — the primary production
+// orchestration path — so leaving them untyped left the guard with a hole
+// exactly where a silently-refused key would hurt most.
+import type { NotifyPhaseTransitionParams, NotifyStageProgressParams } from "./ipcNotifyParams";
 
 /**
  * IPC RunStageParams as received from Go.
@@ -297,7 +302,7 @@ export class PipelineBridge {
             index,
             total,
             eventType: "start",
-          })
+          } satisfies NotifyPhaseTransitionParams)
           .catch((err) => {
             this.logger.error("PipelineBridge: notifyPhaseTransition failed", {
               error: String(err),
@@ -375,7 +380,7 @@ export class PipelineBridge {
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens,
             costUsd: usage.costUsd,
-          })
+          } satisfies NotifyStageProgressParams)
           .catch((err) => {
             this.logger.warn("PipelineBridge: notifyStageProgress failed", {
               stage,

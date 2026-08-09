@@ -40,7 +40,7 @@ function makeLogger() {
 
 function makeConcurrentManager(opts: { found?: boolean } = {}) {
   return {
-    cancelByRunId: vi.fn().mockResolvedValue(opts.found ?? true),
+    cancelByRemoteRunId: vi.fn().mockResolvedValue(opts.found ?? true),
   };
 }
 
@@ -69,14 +69,14 @@ describe("CancelCommandHandler", () => {
   it("ignores non-cancel commands", () => {
     const cmd: ReceivedCommand = { id: "c", type: "trigger", payload: {}, createdAt: "" };
     handler.handle(cmd);
-    expect(concurrentManager.cancelByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.cancelByRemoteRunId).not.toHaveBeenCalled();
   });
 
-  it("happy path: calls cancelByRunId and logs cancellation", async () => {
+  it("happy path: calls cancelByRemoteRunId and logs cancellation", async () => {
     const cmd = makeCancelCmd("run-abc");
     handler.handle(cmd);
-    await vi.waitFor(() => expect(concurrentManager.cancelByRunId).toHaveBeenCalledTimes(1));
-    expect(concurrentManager.cancelByRunId).toHaveBeenCalledWith("run-abc");
+    await vi.waitFor(() => expect(concurrentManager.cancelByRemoteRunId).toHaveBeenCalledTimes(1));
+    expect(concurrentManager.cancelByRemoteRunId).toHaveBeenCalledWith("run-abc");
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("pipeline cancelled"),
       expect.objectContaining({ runId: "run-abc" })
@@ -111,6 +111,6 @@ describe("CancelCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.cancelByRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.cancelByRemoteRunId).not.toHaveBeenCalled();
   });
 });
