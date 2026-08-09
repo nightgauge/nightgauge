@@ -66,8 +66,11 @@ export function registerPausePipelineCommand(
     });
 
     try {
-      // Set paused flag in state service
-      await stateService.pausePipeline();
+      // Set paused flag in state service. It reports whether the pause was
+      // PERSISTED to Go — `false` when the singleton holds no run identity
+      // (every concurrent-slot run, ADR-017 Decision 10), in which case the
+      // pause is in-memory only and does not survive a reload.
+      const persisted = await stateService.pausePipeline();
 
       // Update status bar to show paused state
       statusBar.showPaused(runningStage || undefined);
@@ -75,10 +78,16 @@ export function registerPausePipelineCommand(
       // Update context for UI
       vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
 
-      // Show notification with Resume action
-      const message = runningStage
+      // Show notification with Resume action. Say plainly when the pause was
+      // not written to Go — telling the operator "Pipeline paused." while
+      // nothing persisted is how #239's cross-session recovery silently stops
+      // working for slot runs.
+      const base = runningStage
         ? `Pipeline will pause after ${runningStage} completes.`
         : "Pipeline paused.";
+      const message = persisted
+        ? base
+        : `${base} This session only — not persisted (no run identity; ADR-017 step 8).`;
 
       const selection = await vscode.window.showInformationMessage(message, "Resume");
 

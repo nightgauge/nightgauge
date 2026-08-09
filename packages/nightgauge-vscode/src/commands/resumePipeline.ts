@@ -103,8 +103,13 @@ export function registerResumePipelineCommand(
     });
 
     try {
-      // Clear paused flag in state service
-      await stateService.resumePipeline();
+      // Clear paused flag in state service. Reports whether the CLEAR reached
+      // Go; `false` means the persisted pause is still on disk and will
+      // re-prompt on the next activation (no run identity — ADR-017 step 8).
+      const persisted = await stateService.resumePipeline();
+      const notPersisted = persisted
+        ? ""
+        : " This session only — the persisted pause was not cleared (no run identity; ADR-017 step 8).";
 
       // Update context for UI
       vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", false);
@@ -125,7 +130,7 @@ export function registerResumePipelineCommand(
         // Show running state — use the next pending stage or fallback to pipeline-start
         const goResumeStage = nextStage ?? "pipeline-start";
         statusBar.showRunning(goResumeStage);
-        vscode.window.showInformationMessage("Pipeline resumed.");
+        vscode.window.showInformationMessage(`Pipeline resumed.${notPersisted}`);
         logger.info("Pipeline resumed (Go-driven path)", {
           issueNumber: state.issue_number,
           activeSlots: concurrentPipelineManager.activeSlotCount,
@@ -135,7 +140,9 @@ export function registerResumePipelineCommand(
         statusBar.showRunning(nextStage);
 
         const stageLabel = getStageLabel(nextStage);
-        vscode.window.showInformationMessage(`Pipeline resumed. Running ${stageLabel}...`);
+        vscode.window.showInformationMessage(
+          `Pipeline resumed. Running ${stageLabel}...${notPersisted}`
+        );
 
         // Use runPipeline() for unified execution path (Issue #531, #535)
         logger.info("Calling runPipeline for resume", {
@@ -175,7 +182,7 @@ export function registerResumePipelineCommand(
         // No pending stages - pipeline may be complete or a stage is still running
         statusBar.showIdle();
         vscode.window.showInformationMessage(
-          "Pipeline resumed. Waiting for current stage to complete."
+          `Pipeline resumed. Waiting for current stage to complete.${notPersisted}`
         );
         logger.info("Pipeline resumed, no pending stages");
       }
