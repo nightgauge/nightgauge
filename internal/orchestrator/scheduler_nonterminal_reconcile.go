@@ -38,8 +38,10 @@ var reconcileExecGh = func(ctx context.Context, args ...string) ([]byte, error) 
 // unparseable response returns false so a genuine failure is never masked. Only
 // a positive, verified resolved state reconciles the exit.
 //
-// branch is the feature branch (from loadFeatureBranch); when empty, only the
-// issue-closed check runs (the PR lookup needs a head branch).
+// branch is the feature branch (from resolveFeatureBranch — NOT the bare
+// workspace-root lookup, which answers "" for every worktree-isolated run,
+// #299); when empty, only the issue-closed check runs (the PR lookup needs a
+// head branch), and the caller must log that the PR half was skipped.
 func reconcileIssueResolved(ctx context.Context, item types.BoardItem, branch string) bool {
 	repo := item.Repo
 	// Validate before shelling out. exec (argv, no shell) already prevents
