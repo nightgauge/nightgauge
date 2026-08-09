@@ -873,6 +873,53 @@ excluded. The confirmed instances are filed as:
   placeholder (#397 tracks removing the fabrication itself). A reconciled
   stage also finishes the run instead of re-manufacturing the failure at the
   #2870 output check or the next stage's prerequisite check
+- **#398** — the non-terminal reconcile's OPEN-PR arm treated _any_ open PR as
+  proof the failure was a phantom. #299 armed that probe on every
+  worktree-isolated run, which made the post-#4072 rewind shape reachable:
+  conflict recovery rewinds pr-merge → feature-dev, **this run's own** PR is
+  open, and a genuine feature-dev failure reconciles to a recorded success on
+  the one path where the run demonstrably has unfinished work — and since #299
+  the reconciled run ends there, so nothing downstream re-catches it.
+  **Fixed:** ownership is decided by **identity, not content**. A run owns the
+  PR whose **number** its pr-create recorded in `pr-{N}.json`, or — belt, for
+  the edge where that record was never written — any open PR on the branch once
+  the run has **reached pr-create** at all (a rewind is the only way an own PR
+  can be open while a `feature-*` stage fails). The probe requests
+  `--json state,number`; no git call and no SHA are involved. A two-pass scan
+  decides it: (1) any **MERGED** PR reconciles unconditionally — list order must
+  not let an open PR veto a merge; (2) otherwise an **own-run OPEN** PR blocks
+  the reconcile, even when a foreign open PR is also listed; (3) otherwise a
+  **foreign OPEN** PR still reconciles — #3873's stale-prior-run case,
+  preserved, since the issue stays visibly open-with-a-PR for an operator while
+  a false page erodes trust in every page. A PR the probe reported **no usable
+  number** for counts as own-run: this arm's mistake direction is laundering a
+  real failure into a success, so it must not act on a comparison it could not
+  make.
+  **Why not a commit comparison:** both content tests were measured and both
+  misclassify, in opposite directions. Head-SHA equality calls an **own** PR
+  foreign — the post-#4072 rewind re-dispatch rebases and commits on the branch,
+  and WIP checkpoints commit locally with the push deferred, so the local tip
+  outruns the pushed head and the genuine failure reconciles anyway (the defect,
+  on its own motivating path). Head-SHA equality also calls a **foreign** PR own
+  — issue-pickup reuses and resets the branch to the pushed tip
+  (`reused-remote`), so a re-run's fresh checkout sits exactly at the prior PR's
+  head and #3873's arm dies in the shape it was written for. Ancestry fails in
+  both directions for the same two reasons: a rebase rewrites commits so the old
+  head is no longer an ancestor, and branch reuse puts genuinely foreign heads
+  inside the current tip's ancestry.
+  The reconcile now reports **which** arm fired instead of a bare bool, so the
+  log names the actual evidence (the old line said "closed / branch PR landed"
+  for every arm), **every non-reconciling exit says why** — the own-run block,
+  the no-PR fallthrough, the unnameable branch and the failed probe each log one
+  line naming the issue — and the run's terminal board status is per-arm:
+  issue-CLOSED → **Done**; PR-MERGED → **In Review**, because that arm runs only
+  after the issue check already answered NOT-closed and since #299 the
+  reconciled run ends there, so `Done` would durably record
+  Done-with-an-open-issue against the `Done ⟺ closed` invariant; stale foreign
+  OPEN PR → **In Review** (in review, not merged); every non-reconciled
+  completion keeps its long-standing **In Review**. The board write is no longer
+  discarded — a status the run resolved but failed to persist logs
+  `board status <S> NOT written: <err>`
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage
   killed before the `result` event books zero tokens
 - **#301** — `captureConflictContextFromIndex` writes an empty capture as
