@@ -3187,10 +3187,11 @@ every row whose argv[0] **basename** is `nightgauge`:
 | Class    | Rule                                                              | Reported? |
 | -------- | ----------------------------------------------------------------- | --------- |
 | self     | PID equals this `doctor` process                                  | no        |
-| serve    | the verb (first non-flag token after argv[0]) is `serve`          | no        |
 | owned    | PID claimed by a sidecar that has made progress within 24h        | no        |
 | recent   | unowned, younger than `staleProcessAge` (1h)                      | counted   |
 | orphaned | unowned and at least 1h old                                       | **yes**   |
+
+There is no verb-shaped class. `serve` had one until **#388** — see below.
 
 - **argv is evidence, never ownership.** Matching the word `nightgauge`
   anywhere in the command line would claim every `grep`, every editor with a
@@ -3221,13 +3222,54 @@ every row whose argv[0] **basename** is `nightgauge`:
   fails toward REPORTING — safe only because this carrier never acts. Accepted
   edge: a dead writer's PID recycled by another nightgauge process reads as
   owned while the claim stays fresh.
-- **`serve` is a named exception.** The extension host's daemon is long-lived
-  by design, owns no run, and writes no sidecar, so every other rule would
-  report it on every invocation. **#388** replaces this argv test with a
-  sidecar the daemon writes; until then it is the one place argv decides
-  anything. Residual ambiguity accepted until then: the verb scan skips flags
-  but cannot skip a flag's _value_, so `nightgauge --config serve …` would read
-  `serve` as the verb — an error toward not reporting.
+- **`serve` is claimed like everything else (#388).** The extension host's
+  daemon used to be a named argv exception — the one place this carrier let
+  argv decide ownership — because it wrote no marker. What that bought was
+  invisibility: a daemon that outlived its extension host, the exact
+  "everything looks stopped but something is still running" symptom, was
+  excepted right alongside the healthy ones. `serve` now writes a claim
+  (`pid`, `started_at`, `last_heartbeat_at`, `workspace_root`) through the same
+  temp+rename contract as its peers, refreshes it every 15 minutes, and
+  releases it on clean shutdown. It is read by the standard progress doctrine
+  with no rule of its own; the heartbeat exists because a write-once
+  `pid`+`started_at` record would go stale at 24h and report every daemon older
+  than a day. On startup a claim naming a dead PID is overwritten silently; one
+  naming a different **live** PID logs a WARN naming both (two daemons on one
+  workspace) and is taken over, last writer wins. The loser never fights back:
+  it re-reads before every heartbeat, stands down when the record names another
+  live PID, and its shutdown deletes the record only while that record still
+  names its own pid.
+- **Serve claims are machine-global: `~/.nightgauge/serve/<hash>.json`.** One
+  file per workspace, named by a hash of the workspace root, with the root
+  itself inside the record. Not `.nightgauge/serve.json` in the workspace,
+  because this carrier's two halves have different reach: `ps -axo` enumerates
+  the **whole machine**, while the sidecar walk visits only the invoking
+  workspace's roots. A workspace-local claim is therefore unreadable to a
+  doctor run started anywhere else — another workspace on the same box, or a
+  sibling repo whose upward walk never reaches the workspace marker — and a
+  claim doctor cannot see means a healthy daemon reported as an orphan on every
+  run past the 1h floor, which is how a check teaches operators to stop reading
+  it. The directory is read unconditionally, and `workspace_root` is what lets
+  a **cold** claim be attributed: an orphan line names the workspace whose
+  daemon stopped making progress.
+- **The heartbeat is host attachment, not liveness (#388).** A bare ticker
+  would be a presence test wearing a timestamp — it refreshes for any process
+  still alive enough to schedule a goroutine, which is precisely what the
+  motivating leak does: `serve` blocks on a stdin whose write end outlives the
+  extension host, so an abandoned daemon would vouch for itself forever. So the
+  daemon records its parent at claim time and refreshes **only while that is
+  still its parent**. The extension host always spawns `serve` as its direct
+  child, and an operator running it from a terminal has the shell as parent; in
+  both cases losing the parent (macOS and Linux reparent the orphan to
+  init/launchd) is the abandoned shape. On the first observed change the daemon
+  logs one WARN naming the old and new ppid and stops refreshing permanently —
+  the claim then expires within `staleSidecarClaim` and the process is
+  reported. A deliberately detached daemon (`nohup … &` from a shell that
+  exits) reads the same way, which is intended: nothing supervises it. The
+  rejected alternative, an IPC self-ping, is self-attestation wearing a
+  protocol — a wedged daemon answers pings, and `doctor` frequently runs with
+  no host attached at all. A SIGKILL'd daemon needs no special handling either:
+  the abandoned claim stops making progress and expires the same way.
 - **The 1h age floor** keeps transient CLI invocations and scan races from
   paging the operator: every verb except `serve` and `autonomous run` finishes
   in minutes, and the incident specimen had been up for 31 hours.
@@ -3248,7 +3290,7 @@ Accepted limitations, documented rather than papered over:
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Space in binary path**  | `ps` does not delimit argv[0], so a nightgauge binary installed under a path containing a space reads as a truncated argv[0] and is invisible to the basename test — inherent `ps` ambiguity, not a parser bug |
 | **Recycled PID**          | A dead writer's PID reused by another nightgauge process reads as owned until the claim goes stale                                                                 |
-| **Flag value named `serve`** | A global flag whose value is `serve` suppresses the report for that process (retired by #388)                                                                   |
+| **Wedged but attached `serve`** | A daemon that is alive AND still parented to a live extension host, but internally wedged, keeps refreshing its claim and is never reported. Host attachment is the only progress signal available: the alternatives are a bare ticker (which the abandoned daemon also passes) and an application-level probe, and no such probe exists — an IPC self-ping is self-attestation, and `doctor` frequently runs with no host attached to ask |
 
 The parser is exercised against a **captured, redacted process table** from a
 real machine (`internal/doctor/testdata/orphaned-processes/`, captured with the

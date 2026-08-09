@@ -18,9 +18,12 @@ wrong when both the fixture and the parser are invented together.
 
 The capturing machine was running the VS Code extension host's `nightgauge
 serve` daemon, which is the reason it is in the fixture: `serve` is the one
-long-lived nightgauge process a healthy workstation always has, and it is the
-process the classifier must **never** report. A fixture without it could not
-express the rule.
+long-lived nightgauge process a healthy workstation always has, so it is the
+row that decides whether the classifier gets ownership right. Until #388 it
+was excepted by argv and could never be reported; it is now carried by the
+heartbeat claim it writes (`~/.nightgauge/serve/<hash>.json`) and is reported
+like anything else without one. A fixture without this row could not express
+either half of that.
 
 ## By what
 
@@ -73,8 +76,16 @@ the fixture contains none. Cases that need one — an aged
 `autonomous run --dry-run`, a sidecar-owned run, a malformed row — are built in
 `orphaned_processes_test.go` by **deriving** from captured rows: the serve
 daemon's row supplies the real binary path and column spacing, and only the pid,
-the etime, and the subcommand tokens are substituted. Nothing in the test suite
+the etime, and the argv tokens are substituted. Nothing in the test suite
 invents a `ps` line from scratch, and new cases must not either.
+
+The same rule covers the sidecars those rows are classified against. The serve
+claim (#388) is planted with `runstate.WriteServeSidecar` — the function the
+daemon itself calls — rather than a JSON literal, so a writer that changes shape
+breaks the reader's tests instead of passing them. Because that claim store is
+per-user and machine-global, every test that touches it first points `$HOME` at
+a temp dir (`isolateMachineState`): without that, a test would read the
+developer's own running daemon into its fixtures and could delete its claim.
 
 The incident this carrier exists for is on the derived side by necessity: a
 `nightgauge autonomous run --dry-run` that had been running for **31 hours**,

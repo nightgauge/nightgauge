@@ -56,15 +56,31 @@ func Save(baseDir string, rs *RunState) error {
 // it as a no-op and certain filesystems / Windows disallow opening a
 // directory as a file. Those cases are not failures.
 //
+// The temp file's name is unique per write (os.CreateTemp), not a fixed
+// `target + ".tmp"`. A fixed name is a collision the moment two writers touch
+// one target — and this primitive now backs a record that two processes
+// genuinely race for, the serve daemon's machine-global claim (#388): both
+// would open the SAME temp path, interleave their bytes into it, and each
+// rename it into place, so the atomicity this function's whole contract rests
+// on would be gone exactly when it is needed. Residue is still removed on
+// every error path; only a hard kill mid-write can leave one behind, and a
+// `*.tmp` name matches no reader in the tree.
+//
 // This is the canonical durability primitive for everything under
 // .nightgauge/pipeline/. Other packages (state.AtomicWriteFile) call into
 // this implementation via the same shape — kept duplicated only because we
 // don't want every package to import internal/runstate just for I/O.
 func AtomicWriteFile(target string, data []byte, perm os.FileMode) error {
-	tmp := target + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("open tmp: %w", err)
+	}
+	tmp := f.Name()
+	// CreateTemp opens 0600; the caller's perm is the contract.
+	if err := os.Chmod(tmp, perm); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("chmod tmp: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
