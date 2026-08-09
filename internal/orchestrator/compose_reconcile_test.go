@@ -197,25 +197,10 @@ func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 	}
 }
 
-// TestSweepMergedWorktrees_UndeterminedSkipsSweep guards the OTHER caller of
-// activeWorktreeIssues. The scan widens the protected set beyond the queue, so
-// an undetermined answer is not weaker protection — it is unknown protection,
-// and the sweep removes directories. One unreadable sibling must stop the
-// sweep, not silently shrink what it protects.
-func TestSweepMergedWorktrees_UndeterminedSkipsSweep(t *testing.T) {
-	root, wt := mergedWorktreeRepo(t, 701) // reclaimable: content already on main
-	notARepo := t.TempDir()
-	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notARepo))
-
-	s := &Scheduler{
-		workspaceRoot:     root,
-		repoRootsResolver: func() []string { return []string{notARepo} },
-	}
-	s.sweepMergedWorktrees()
-
-	if _, err := os.Stat(wt); err != nil {
-		t.Errorf("worktree %s was reclaimed on an undetermined active set: %v", wt, err)
-	}
-}
+// The merged-worktree sweep's undetermined guard used to be pinned twice here,
+// once per receiver. (*Scheduler).sweepMergedWorktrees no longer exists (#403 —
+// constructors never delete), so the surviving pin is
+// TestSweepMergedWorktrees_UndeterminedSkipsAutonomousSweep, on the one caller
+// that still reclaims.
 
 func s0(root string) *Scheduler { return &Scheduler{workspaceRoot: root} }

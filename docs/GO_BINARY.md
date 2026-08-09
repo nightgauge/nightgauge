@@ -934,6 +934,13 @@ and is also exposed for manual/CI invocation:
 nightgauge worktree sweep [--workdir <repo>] [--default-branch main] [--dry-run] [--json]
 ```
 
+**Those two are the only entry points** (#403). A plain scheduler no longer
+sweeps at construction: `NewScheduler` → `loadQueue` is how every `nightgauge
+queue …` invocation and the promote gates build a Scheduler, and a constructor
+must not remove directories on behalf of a process that cannot see any other
+process's in-flight runs. The autonomous reconcile is the one caller that can —
+`state.Running` is authoritative for the process that dispatched those runs.
+
 **Merged-ness is a content check, not an ancestry check.** A squash merge leaves
 the branch tip a non-ancestor of the default branch, so `git merge-base
 --is-ancestor` reports a false negative for every merged branch. The sweep uses
@@ -959,6 +966,11 @@ with its reason:
 worktree created at the tip of the default branch that has committed nothing yet
 also has an empty content diff, and is indistinguishable from a run about to
 start writing.
+
+`active-run` is the one guard the sweep cannot derive from git: the in-flight
+set is supplied by the caller. The autonomous reconcile passes `state.Running`;
+`nightgauge worktree sweep` passes none, so on that path a run whose PR has
+already landed is protected only by the guards above.
 
 Reclaiming removes the worktree and deletes the local branch with `-D` (a squash
 merge makes `-d` refuse it). Removal failures are logged at `[WARN]` rather than

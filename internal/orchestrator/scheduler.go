@@ -2061,64 +2061,15 @@ func (s *Scheduler) loadQueue() {
 
 	s.recoverOrchestratorCrash()
 	s.reconcileOrphanedComposeProjects()
-	s.sweepMergedWorktrees()
-}
-
-// sweepMergedWorktrees reclaims pipeline-created worktrees whose branch is
-// already fully represented on the default branch. Mirrors
-// (*AutonomousScheduler).sweepMergedWorktrees (autonomous_worktree_sweep.go)
-// for the non-autonomous Go entry point (a plain `nightgauge run` / scheduler
-// invocation outside the autonomous loop), which otherwise has no
-// startup/reconcile sweep at all (#106). Runs once at scheduler startup,
-// alongside reconcileOrphanedComposeProjects. Best-effort: a per-repo failure
-// is logged and the worktrees stay for the next reconcile.
-func (s *Scheduler) sweepMergedWorktrees() {
-	roots := s.repoScanRoots()
-	if len(roots) == 0 {
-		// Mirrors the autonomous copy of this guard (#302). Same reasoning as
-		// the undetermined-worktree-set skip below, and the same volume: this
-		// pass is the only thing that notices leaked worktrees, so a silent
-		// skip is indistinguishable from a clean sweep.
-		log.Printf("worktree-reconcile: WARN no repo scan roots resolved — skipping the merged-worktree sweep; leaked worktrees stay undetected until the root lookup is fixed")
-		return
-	}
-
-	s.mu.Lock()
-	active := make(map[int]bool, len(s.queue))
-	for _, item := range s.queue {
-		active[item.IssueNumber] = true
-	}
-	s.mu.Unlock()
-	// The worktree scan WIDENS the protected set beyond the queue, so an
-	// undetermined answer is not a smaller protection — it is an unknown one,
-	// and the sweep removes directories. Skip rather than reclaim on a set we
-	// could not read (#296).
-	worktreeIssues, determined := s.activeWorktreeIssues()
-	if !determined {
-		log.Printf("worktree-reconcile: WARN active-worktree set is undetermined — skipping the merged-worktree sweep")
-		return
-	}
-	for issue := range worktreeIssues {
-		active[issue] = true
-	}
-
-	for _, root := range roots {
-		res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
-			RepoRoot:     root,
-			ActiveIssues: active,
-		})
-		if err != nil {
-			log.Printf("worktree-reconcile: sweep %s: %v", root, err)
-			continue
-		}
-		for _, wt := range res.Reclaimed {
-			log.Printf("worktree-reconcile: reclaimed %s (branch %s, issue #%d — content already on %s)",
-				wt.Path, wt.Branch, wt.IssueNumber, res.BaseRef)
-		}
-		if len(res.Errors) > 0 {
-			log.Printf("worktree-reconcile: %s: %d removal failure(s): %v", root, len(res.Errors), res.Errors)
-		}
-	}
+	// Deliberately NO merged-worktree sweep here (#403). loadQueue runs from
+	// NewScheduler, and getQueueScheduler builds a Scheduler for `queue
+	// add|list|run|remove|clear` and the deps-gate/baseline-gate promote
+	// commands — a sweep on this path makes `queue list` run `git worktree
+	// remove --force` and `git branch -D` as a construction side effect, on
+	// behalf of a process that can see no other process's in-flight runs.
+	// Constructors never delete; the sweep's one production caller is the
+	// autonomous reconcile, which owns an authoritative in-flight set. See
+	// runMergedWorktreeSweep.
 }
 
 // reconcileOrphanedComposeProjects tears down per-issue docker compose
@@ -2180,7 +2131,17 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 // worktrees exist", and the difference decides whether a destructive caller may
 // act. See execution.ActiveWorktreeIssues for why (#296).
 func (s *Scheduler) activeWorktreeIssues() (map[int]bool, bool) {
-	return execution.ActiveWorktreeIssues(s.repoScanRoots())
+	return s.activeWorktreeIssuesFor(s.repoScanRoots())
+}
+
+// activeWorktreeIssuesFor is activeWorktreeIssues over a caller-supplied root
+// set. A destructive caller resolves repoScanRoots() ONCE and passes the same
+// slice here and to the sweep, so the `determined` bit describes exactly the
+// roots the sweep then acts on. Resolving twice is not equivalent: the resolver
+// is a live callback over workspace registration, so a repo added or dropped
+// between the two calls yields a verdict about a root set that was never swept.
+func (s *Scheduler) activeWorktreeIssuesFor(roots []string) (map[int]bool, bool) {
+	return execution.ActiveWorktreeIssues(roots)
 }
 
 // repoScanRoots returns every filesystem root a workspace-wide reconcile must

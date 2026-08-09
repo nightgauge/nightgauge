@@ -889,7 +889,9 @@ excluded. The confirmed instances are filed as:
   retained bash entry carried a usable `tool_use` id (retained-window
   indexed-ness — deliberately not lifetime correlation, which misdiagnoses a
   stage killed mid-command and goes blind to partial id-drift); zero resolved
-  scan roots WARN at both `sweepMergedWorktrees` copies; nil autonomous state
+  scan roots WARN in the sweep implementation (then two `sweepMergedWorktrees`
+  copies, since unified by #403 with the scheduler-construction copy removed —
+  constructors never delete); nil autonomous state
   is a logged fail-open that retracts nothing (per rule 2, "could not look" ≠
   "nothing wrong" — the reachable production analogue is #405); and all THREE
   terminal-funnel call sites (completed/failed/deferred) resolve their target
