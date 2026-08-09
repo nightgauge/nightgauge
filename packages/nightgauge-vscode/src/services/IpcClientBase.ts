@@ -1522,6 +1522,36 @@ export abstract class IpcClientBase implements vscode.Disposable {
     this.process = null;
   }
 
+  /**
+   * Close the transport for good WITHOUT disposing the client object: kill the
+   * Go process, latch `disposed` so the restart ladder never fires again, and
+   * reject everything in flight with `reason`.
+   *
+   * Distinct from {@link dispose} on purpose. `dispose()` frees the singleton,
+   * so the next `getInstance()` hands out a fresh, un-latched client that
+   * happily respawns the binary. ADR-017's protocol hard-fail needs the
+   * opposite: one client that stays in place and refuses every call for the
+   * rest of the activation. Emitters stay alive so the status listeners still
+   * see the disconnect.
+   */
+  protected shutdownTransport(reason: string): void {
+    this.disposed = true;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      this.pending.delete(id);
+    }
+    if (this.process && !this.process.killed) {
+      this.process.kill("SIGTERM");
+    }
+    this.cleanup();
+    this._onDidChangeStatus.fire(false);
+  }
+
   dispose(): void {
     this.disposed = true;
     if (this.restartTimer) {

@@ -3297,6 +3297,19 @@ export async function initializeServices(
         // driven by onTokenUsage above, so this does NOT touch pipelineStateService
         // (avoids double-counting) — it only streams the estimate to the platform.
         onStageProgress: (usage) => {
+          // No identity installed → no send (ADR-017 step 4, D2).
+          // `notifyStageProgress` is run-progress class, so `runId: ""` is
+          // refused `run_id_required` — once per 5-second tick — by a
+          // callback that was never speaking for a run. Skip and say so.
+          const progressRunId = pipelineStateService?.getRunId() ?? null;
+          if (progressRunId === null) {
+            logger.warn(
+              "pipeline.notifyStageProgress — local-only state service — no run identity " +
+                "installed; IPC notify skipped (ADR-017 step 4)",
+              { stage, issueNumber }
+            );
+            return;
+          }
           IpcClient.getInstance()
             .call("pipeline.notifyStageProgress", {
               // The singleton's installed run pins its own repo (beginRun),
@@ -3310,16 +3323,13 @@ export async function initializeServices(
               outputTokens: usage.outputTokens,
               cacheReadTokens: usage.cacheReadTokens,
               costUsd: usage.costUsd,
-              // A progress callback can fire on a run this service never
-              // began; "" is the honest answer and the server ignores it
-              // (Decision 6's outbound fallback). Never throw from here.
-              runId: pipelineStateService?.getRunId() ?? "",
+              runId: progressRunId,
             } satisfies NotifyStageProgressParams)
             .catch((err: unknown) => {
               handleIpcRejection({
                 method: "pipeline.notifyStageProgress",
                 stage,
-                runId: pipelineStateService?.getRunId() ?? null,
+                runId: progressRunId,
                 err,
               });
               logger.warn("Failed to notify stage progress", { stage, err });
