@@ -1845,8 +1845,14 @@ The full formula is therefore:
 effectiveCap = baseCap × modelScale × modeMultiplier × providerScale
 ```
 
-Provider scale defaults (seeded from C1 pricing-table ratios — see
-`packages/nightgauge-vscode/src/utils/providerPricing.ts`):
+Provider scale defaults. These are a frozen calibration snapshot of
+cost-per-stage RATIOS, originally seeded from the C1 pricing tables in
+`providerPricing.ts` — a second rate table deleted in #391. The single pricing
+authority is now the model registry
+(`packages/nightgauge-sdk/src/eval/model-registry.json`, mirrored into
+`internal/models/model-registry.json` by `scripts/sync-model-registry.sh`).
+The scales below are deliberately NOT re-derived from it: they are ratios, not
+rates, and re-deriving them would move every cost cap.
 
 | Adapter      | Default scale | Effective cap (base = $23, feature-dev, sonnet/medium, elevated) |
 | ------------ | ------------- | ---------------------------------------------------------------- |

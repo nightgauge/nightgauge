@@ -203,8 +203,10 @@ describe("model registry — cost computation (parity with prior hardcoded rates
   });
 
   it("non-Anthropic registry models cost at their own rates (#56)", () => {
+    // Rates live-verified 2026-08-09 and pinned to their vendor citations by
+    // packages/nightgauge-vscode/tests/utils/registryRatesLiveVerified.test.ts.
     expect(computeCostUsd("gemini-2.5-flash", { input: M, output: M })).toBeCloseTo(0.3 + 2.5, 6);
-    expect(computeCostUsd("gpt-5.5", { input: M, output: M })).toBeCloseTo(1.25 + 10.0, 6);
+    expect(computeCostUsd("gpt-5.5", { input: M, output: M })).toBeCloseTo(5.0 + 30.0, 6);
   });
 
   it("bills cache tokens at their rates, with the two cache-write tiers priced apart (#358)", () => {

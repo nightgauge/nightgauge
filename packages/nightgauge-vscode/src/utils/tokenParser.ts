@@ -660,6 +660,17 @@ export class TokenAccumulator {
    * from the requested one (the CLI's refusal fallback), so the computed
    * cost fallback prices the model that produced the tokens. No-op impact
    * on the native-cost path, which stays authoritative.
+   *
+   * ORDERING (verified for #392, since pricing is exact-id-only): every
+   * `skillRunner` stream site calls `observeServedModel(parsed)` — which calls
+   * this — BEFORE the matching `add(parsed.usage)` / `getTotal()` pair, so a
+   * wire-reported id is always in place before any cost is read from it. The
+   * one construction that does NOT start from a concrete id is the resume path
+   * (`new TokenAccumulator("claude", defaultModel ?? "sonnet")`): a bare tier
+   * is not a registry id, so until the stream names a model the computed
+   * fallback reads `'unknown'`/$0. That path is Claude-only and Claude always
+   * emits a native `total_cost_usd`, which wins outright — so the gap is
+   * inert today rather than a mispriced stage. Left as-is deliberately.
    */
   setModel(model: string): void {
     if (model) {
@@ -684,7 +695,14 @@ export class TokenAccumulator {
         input: this.accumulated.inputTokens,
         output: this.accumulated.outputTokens,
         cache_read: this.accumulated.cacheReadTokens,
-        cache_creation: this.accumulated.cacheCreationTokens,
+        // `cacheCreationTokens` is a single UNSPLIT total — the stream parser
+        // does not yet carry the CLI's per-TTL `cache_creation.{ephemeral_5m,
+        // ephemeral_1h}` split (#390). Per the #358 floor convention it books
+        // into the 5m slot, the CHEAPER tier, so the estimate is a floor and
+        // never an overstatement. On captured Claude traffic the writes are
+        // 1h-heavy, so that floor under-prices the cache-creation pool by
+        // 37.5% (1.25x vs 2.0x base input) until #390 plumbs the split.
+        cache_creation_5m: this.accumulated.cacheCreationTokens,
       },
       this.addedNative ? this.accumulated.costUsd : undefined
     );
@@ -825,12 +843,15 @@ export class LiveStageEstimator {
     if (!this.adapter || !this.model) {
       return base;
     }
-    // No native cost on assistant messages — always table-computed.
+    // No native cost on assistant messages — always registry-computed. This is
+    // the ONE surface the Go scheduler never re-prices, so an unpriced pool
+    // here is simply lost. Unsplit cache creation books to the 5m slot per the
+    // #358 floor convention (see TokenAccumulator.getTotal for why).
     const result = computeStageCost(this.adapter, this.model, {
       input: base.inputTokens,
       output: base.outputTokens,
       cache_read: base.cacheReadTokens,
-      cache_creation: base.cacheCreationTokens,
+      cache_creation_5m: base.cacheCreationTokens,
     });
     return { ...base, costUsd: result.cost_usd, costSource: result.source };
   }

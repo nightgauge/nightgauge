@@ -1,5 +1,5 @@
 {
-  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. Anthropic bills TWO cache-write tiers, so cache creation has two rates: `cache_creation_5m` (5-minute TTL, 1.25x base input) and `cache_creation_1h` (1-hour TTL, 2.0x base input) \u2014 the CLI reports the split as usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens (#358). `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) \u2014 the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, and Issue #56.",
+  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. Anthropic bills TWO cache-write tiers, so cache creation has two rates: `cache_creation_5m` (5-minute TTL, 1.25x base input) and `cache_creation_1h` (1-hour TTL, 2.0x base input) \u2014 the CLI reports the split as usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens (#358). `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) \u2014 the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. ABSENT CACHE RATES CARRY THREE DIFFERENT MEANINGS AND MUST NEVER BE CONFLATED (#392). (a) NOT BILLED — for OpenAI models BEFORE the GPT-5.6 family the vendor charges a discounted rate for cached input and NO separate cache-write fee (the sheet prints '-' in that column), so those entries deliberately omit BOTH `cache_creation_*`: the omission IS the published price, and adding a write rate there would invent a charge the vendor does not make. From GPT-5.6 onward OpenAI DOES bill cache writes, in the vendor's own words: \"For GPT-5.6 models and later model families, cache writes cost 1.25x the uncached input token rate\" (https://developers.openai.com/api/docs/guides/prompt-caching). Each `gpt-5.6-*` entry therefore records `cache_creation_5m` at 1.25x its input rate. `cache_creation_1h` stays ABSENT on EVERY OpenAI entry regardless of family: OpenAI publishes a single cache-write tier, so there is no second-TTL figure to transcribe and none may be derived. `copilot` entries are flat-rate (subscription) and carry explicit 0 input/output with no cache pools at all. (b) NOT RECORDED — a `cache_read` absent from an `openai` or `google` entry means the vendor publishes no row for that model (gpt-5.1-codex-mini's row has been retired; gpt-5.3-codex-spark is a research preview that has never been listed, and its 0 input/output is a placeholder, not a price). Where a rate IS published both providers bill cached input, so an unrecorded pool prices at $0 and UNDER-REPORTS the bill. Never derive one of these rates from another by multiplier or by copying a same-sticker sibling; transcribe the vendor's own published per-1M figure or leave it absent. (c) OUT OF MODEL — Google's context caching ALSO bills storage per million-tokens-per-HOUR, a dimension this schema has no field for and that `computeCostUsd`/`CalculateCost` never see. A Gemini `cache_read` therefore prices the cached-input READ only; the storage component is deliberately unpriced rather than folded into a per-token rate, so Gemini totals are a floor on cache-heavy stages. Gemini `cache_read` figures are additionally the TEXT/IMAGE/VIDEO modality tier — audio cached input bills higher and this schema has no modality axis, so an audio-heavy Gemini stage under-reports for that reason too. PRICING NOTE, claude-sonnet-5 (recorded 2026-08-09): the $3.00 input / $15.00 output recorded here (and the cache pools derived from them) is the STANDARD sticker that takes effect after 2026-08-31; introductory pricing of $2.00/$10.00 applies through that date. Recording the standard rate is a deliberate conservative overstatement through the introductory window — it needs no dated edit when the window closes, and a cost estimate that is too high never hides an overrun. Every non-Anthropic rate in this file is pinned to a live-verified vendor figure by packages/nightgauge-vscode/tests/utils/registryRatesLiveVerified.test.ts, which carries each figure's source URL and the date it was read: changing a rate here without updating that citation fails the test. Anthropic pools are pinned instead as DERIVATIONS off base input (0.1x read, 1.25x 5m write, 2.0x 1h write) by internal/models/registry_test.go. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, Issue #56, Issue #391, and Issue #392.",
   "version": "2",
   "models": [
     {
@@ -190,7 +190,9 @@
       "concrete_version": "gpt-5.6-sol",
       "rates": {
         "input": 5.0,
-        "output": 30.0
+        "output": 30.0,
+        "cache_read": 0.5,
+        "cache_creation_5m": 6.25
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -204,8 +206,10 @@
       "display_name": "GPT-5.6 Terra",
       "concrete_version": "gpt-5.6-terra",
       "rates": {
-        "input": 2.5,
-        "output": 15.0
+        "input": 2.0,
+        "output": 12.0,
+        "cache_read": 0.2,
+        "cache_creation_5m": 2.5
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -218,8 +222,10 @@
       "display_name": "GPT-5.6 Luna",
       "concrete_version": "gpt-5.6-luna",
       "rates": {
-        "input": 1.0,
-        "output": 6.0
+        "input": 0.2,
+        "output": 1.2,
+        "cache_read": 0.02,
+        "cache_creation_5m": 0.25
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -231,8 +237,9 @@
       "display_name": "GPT-5.5",
       "concrete_version": "gpt-5.5",
       "rates": {
-        "input": 1.25,
-        "output": 10.0
+        "input": 5.0,
+        "output": 30.0,
+        "cache_read": 0.5
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -244,8 +251,9 @@
       "display_name": "GPT-5.4",
       "concrete_version": "gpt-5.4",
       "rates": {
-        "input": 1.25,
-        "output": 10.0
+        "input": 2.5,
+        "output": 15.0,
+        "cache_read": 0.25
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -257,8 +265,9 @@
       "display_name": "GPT-5.4 mini",
       "concrete_version": "gpt-5.4-mini",
       "rates": {
-        "input": 0.25,
-        "output": 2.0
+        "input": 0.75,
+        "output": 4.5,
+        "cache_read": 0.075
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -284,8 +293,9 @@
       "display_name": "GPT-5.2",
       "concrete_version": "gpt-5.2",
       "rates": {
-        "input": 1.25,
-        "output": 10.0
+        "input": 1.75,
+        "output": 14.0,
+        "cache_read": 0.175
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -299,8 +309,9 @@
       "display_name": "GPT-5.3 Codex",
       "concrete_version": "gpt-5.3-codex",
       "rates": {
-        "input": 1.25,
-        "output": 10.0
+        "input": 1.75,
+        "output": 14.0,
+        "cache_read": 0.175
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -331,7 +342,8 @@
       "concrete_version": "gemini-2.5-pro",
       "rates": {
         "input": 1.25,
-        "output": 10.0
+        "output": 10.0,
+        "cache_read": 0.125
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -346,7 +358,8 @@
       "concrete_version": "gemini-2.5-flash",
       "rates": {
         "input": 0.3,
-        "output": 2.5
+        "output": 2.5,
+        "cache_read": 0.03
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
@@ -359,11 +372,13 @@
       "concrete_version": "gemini-2.0-flash",
       "rates": {
         "input": 0.1,
-        "output": 0.4
+        "output": 0.4,
+        "cache_read": 0.025
       },
       "supported_efforts": ["low", "medium", "high"],
       "supported_reasoning": ["none", "low", "medium", "high"],
-      "context_window": 1048576
+      "context_window": 1048576,
+      "deprecated": true
     },
     {
       "id": "gpt-4o-mini",

@@ -122,7 +122,13 @@ vi.mock("../../src/utils/incrediConfig", async () => {
     getCodexResumeEnabled: vi.fn(() => false),
     getCodexReasoningEffort: vi.fn(() => undefined),
     getSuperchargeCodexModel: vi.fn(() => undefined),
-    getGeminiModel: vi.fn(() => "gemini-2.0-flash"),
+    // gemini-2.5-flash: a real, non-deprecated registry id (#391 marked
+    // gemini-2.0-flash deprecated, and deprecated ids fail the adapter's
+    // closed-set preflight — the stage never spawns). Chosen over
+    // gemini-2.5-pro so the [opus, fable]→gemini-2.5-pro mapping tests below
+    // stay discriminating: the configured model must differ from the mapped
+    // result they assert.
+    getGeminiModel: vi.fn(() => "gemini-2.5-flash"),
     getGeminiAuthMethod: vi.fn(() => "api-key"),
   };
 });
@@ -477,12 +483,16 @@ describe("IPC path: servedModel is the model the adapter process was launched wi
   it("reports the Gemini model the adapter launched when no mode mapping applies", async () => {
     process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
 
-    const { result, proc } = await dispatch(params({ model: "sonnet" }));
+    // Dispatch the opus band: if mode mapping (wrongly) applied here it would
+    // yield gemini-2.5-pro, so asserting the configured gemini-2.5-flash
+    // proves the pass-through. (Dispatching sonnet would not discriminate —
+    // the sonnet band's mapped target IS the configured model.)
+    const { result, proc } = await dispatch(params({ model: "opus" }));
     finish(proc);
 
-    // The orchestrator asked for the sonnet band; the adapter launched its
+    // The orchestrator asked for the opus band; the adapter launched its
     // configured model. History must name the latter.
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.0-flash");
-    expect((await result).servedModel).toBe("gemini-2.0-flash");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
+    expect((await result).servedModel).toBe("gemini-2.5-flash");
   });
 });

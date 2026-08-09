@@ -2088,6 +2088,13 @@ describe("formatRateLimitCountdown (Issue #2573)", () => {
 });
 
 describe("TokenAccumulator.setModel (#91)", () => {
+  // Model ids here are the CONCRETE ids the CLI reports on the stream, which
+  // are also the registry's keys (#391 made the registry the only pricing
+  // authority, replacing the deleted `providerPricing.ts` table that keyed
+  // Haiku by the undated alias `claude-haiku-4-5`). The captured transcript in
+  // internal/execution/testdata reports `claude-haiku-4-5-20251001`, and
+  // `setModel` is fed straight from that stream field — so the dated id is
+  // what this path actually sees at runtime.
   it("re-points the computed-cost fallback at the served model's pricing", () => {
     const acc = new TokenAccumulator("claude", "claude-opus-4-8");
     // No native cost → the computed path prices via (adapter, model).
@@ -2101,7 +2108,7 @@ describe("TokenAccumulator.setModel (#91)", () => {
     const opusCost = acc.getTotal().costUsd;
     expect(opusCost).toBeGreaterThan(0);
 
-    acc.setModel("claude-haiku-4-5");
+    acc.setModel("claude-haiku-4-5-20251001");
     const haikuCost = acc.getTotal().costUsd;
     expect(haikuCost).toBeGreaterThan(0);
     expect(haikuCost).toBeLessThan(opusCost);
