@@ -14,7 +14,13 @@ import (
 )
 
 // ensureWorktree creates a git worktree for isolated execution.
-// Path: {workspaceRoot}/.nightgauge/worktrees/issue-{N}/
+// Path: {workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}/ — derived by
+// worktreePath, the same function CleanupWorktree tears down with. The
+// "{repo}-" prefix is load-bearing: every run in the workspace shares one
+// worktrees/ root, so two repos' issue #{N} would collide without it. The bare
+// "issue-{N}" shape belongs to the VSCode extension's WorktreeManager; both are
+// read back by IssueNumberFromWorktreeDir (#400). See
+// docs/GO_BINARY.md#worktree-directory-name-shapes.
 func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 
