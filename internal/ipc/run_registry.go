@@ -692,6 +692,18 @@ func (s *Server) currentRunForIssueLocked(repo string, issue int) (current *runE
 // verbs refresh (touchLocked): an entry installed by an administrative
 // resolution carries the zero time and can never satisfy this arm. abandonRun is
 // not evidence that a run is alive; it is the opposite claim.
+//
+// THE ZERO TIME IS LOAD-BEARING HERE, not merely absent (§7.3, "only run
+// traffic counts as re-assertion"). now.Sub(time.Time{}) overflows int64
+// nanoseconds and saturates at the maximum duration, so the comparison below
+// answers false for an administrative install — that is the mechanism by which
+// installing a run's STATE does not rescue its snapshot from the post-grace
+// re-evaluation. Anything that special-cases the zero time into "fresh" (e.g.
+// "any non-zero lastSeen pins") reintroduces F9 wearing a run id: touchLocked
+// stamps lastSeen on every accepted run-progress verb INCLUDING adopt-empty
+// adoption, so such a predicate would make organic and adopt-empty entries alike
+// unreapable. Pinned by
+// TestRunIdentity_AdministrativeInstallDoesNotRescueItsSnapshot.
 func (s *Server) runLeaseIsFresh(runID string, now time.Time) bool {
 	s.runtimesMu.Lock()
 	defer s.runtimesMu.Unlock()

@@ -2,10 +2,13 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -87,13 +90,32 @@ type runEvidence struct {
 
 // serverEvidence binds the ladder to the real registries.
 //
-// KNOWN LIMITATION, stated rather than papered over (ADR-017 7.2 per-population
-// table): the extension path's Persist is gated on a non-empty repo
-// (notifyStageTransition), so a run whose first transitions carry no repo has
-// written no snapshot at all — arms 3 and 4 are structurally false for it until
-// its first repo-carrying transition. It has no file to reconcile either, so the
-// gap costs nothing here; it means the per-population coverage claim holds from
-// the first repo-carrying transition, not from dispatch.
+// KNOWN LIMITATIONS, stated rather than papered over (ADR-017 7.2's
+// per-population table):
+//
+//   - the extension path's Persist is gated on a non-empty repo
+//     (notifyStageTransition), so a run whose first transitions carry no repo has
+//     written no snapshot at all — arms 3 and 4 are structurally false for it
+//     until its first repo-carrying transition. It has no file to reconcile
+//     either, so the gap costs nothing here; it means the per-population coverage
+//     claim holds from the first repo-carrying transition, not from dispatch.
+//
+//   - THE CODEX INTERACTIVE TUI SUB-PATH (#4024) HAS NO ARM 3, and cannot be
+//     given one from this host. It runs the stage inside a VSCode terminal
+//     (`vscode.window.createTerminal` + `sendText`), so the extension host never
+//     holds a ChildProcess for it, and the VSCode API exposes no pid for a
+//     process running INSIDE a terminal: `Terminal.processId` is documented as
+//     "the process ID of the shell process" (@types/vscode 1.125.0), and
+//     `TerminalShellExecution` carries only commandLine/cwd/read(). Sending the
+//     shell's pid would answer arm 3 with a process that is not the stage child
+//     — it exists before the stage starts and outlives it whenever the launch
+//     command's trailing `exit` does not run — i.e. a pin that never expires,
+//     which is the one thing 7.4's rows cannot correct for. So this
+//     sub-population is carried by arms 1 and 4 only (its transitions still
+//     lease and still persist), and a >30-minute silent Codex TUI session past
+//     the grace is reconcilable. Every other interactive stage DOES carry a pid
+//     since step 5 (`commands/runInteractiveStage.ts` defers its one `running`
+//     transition to the spawn).
 func (s *Server) serverEvidence(now time.Time) runEvidence {
 	return runEvidence{
 		leaseFresh: func(runID string) bool { return s.runLeaseIsFresh(runID, now) },
@@ -210,6 +232,17 @@ func classifyCandidate(c reconcileCandidate, ev runEvidence, now time.Time) disp
 		if !c.claimAgeKnown || c.claimAge <= startupGrace {
 			return dispositionKeep
 		}
+		// ARM 5 AND ONLY ARM 5 (7.3). The claim rows are decided by token age
+		// per Decision 9 rather than by the ladder — a claim artifact is another
+		// host's working state, and arms 1–4 describe THIS server's evidence
+		// about the run, which says nothing about whether that host is still
+		// mid-claim. The startup grace is different in kind: it says this
+		// process has not been up long enough to have heard from anyone, which
+		// is exactly the state a just-restarted backend is in when the claimant
+		// is about to re-announce itself.
+		if ev.withinGrace != nil && ev.withinGrace() {
+			return dispositionKeep
+		}
 		return dispositionReleaseClaim
 	}
 	// Identity-less files never reach here: ParseSnapshotFilename excludes them
@@ -238,12 +271,23 @@ func classifyCandidate(c reconcileCandidate, ev runEvidence, now time.Time) disp
 	//
 	// A nil AbandonedAt cannot be produced by markAbandonedLocked and can only
 	// arrive by hand-authored JSON. It is unageable, so it is treated as fresh
-	// (C13) — and still collected by the age cap below via its file mtime.
+	// (C13) — but it FALLS THROUGH rather than returning, or "unageable" would
+	// mean "immortal": nothing else in this table can reach a file whose
+	// abandonment has no date, and 7.4's last row says ANYTHING past the cap
+	// goes. Undated + past the cap therefore lands on emit+remove below, which
+	// is the one direction that both collects the debris and tells the platform,
+	// since an undated abandonment is no evidence that abandonRun ever emitted.
 	if c.snap.Abandoned {
-		if c.snap.AbandonedAt == nil || now.Sub(*c.snap.AbandonedAt) <= livenessWindow {
+		switch {
+		case c.snap.AbandonedAt == nil:
+			if now.Sub(c.modTime) <= snapshotAgeCap {
+				return dispositionKeep
+			}
+		case now.Sub(*c.snap.AbandonedAt) <= livenessWindow:
 			return dispositionKeep
+		default:
+			return dispositionRemove
 		}
-		return dispositionRemove
 	}
 
 	// paused, fresh: never reconciled — it powers the restore prompt (C1/C5).
@@ -340,6 +384,15 @@ func resolveCandidate(stateDir string, entry os.DirEntry, now time.Time) (reconc
 
 	issue, runID, ok := state.ParseSnapshotFilename(name)
 	if !ok {
+		// A `resuming-` name that did not parse above is not junk: it is a claim
+		// artifact whose run id or token is malformed, i.e. a pause whose
+		// restore prompt will never be offered and whose file nothing will ever
+		// collect (neither family's rules reach it). It is left alone — see
+		// TestOrphanReconcile_UnparseableOrFutureClaimTokenIsTreatedAsLive —
+		// but silence here is how such a file stays invisible forever.
+		if strings.HasPrefix(name, "resuming-") {
+			log.Printf("orphan-reconcile: %s looks like a pause-restore claim but does not parse — leaving it untouched (ADR-017 Decision 9)", name)
+		}
 		return reconcileCandidate{}, false
 	}
 	info, err := entry.Info()
@@ -440,9 +493,17 @@ func (s *Server) pipelineStateScanRoots() []string {
 		seen[root] = true
 		roots = append(roots, root)
 	}
-	// Through the accessor: workspace.setRoot writes this field from a handler
-	// goroutine while the deferred sweep reads it from the timer's (J.5).
+	// Through the accessors: workspace.setRoot writes these fields from a
+	// handler goroutine while the deferred sweep reads them from the timer's
+	// (J.5).
+	//
+	// BOTH roots, current and launch. A setRoot inside the startup grace
+	// re-points the current root, and the deferred pass then runs against a
+	// directory that is not the one it deferred FOR — the launch root's orphans
+	// would survive the only sweep this process was ever going to give them, and
+	// nothing re-scans a root the workspace has moved away from.
 	add(s.workspaceRootPath())
+	add(s.launchRootPath())
 	for _, p := range s.resolver.RegisteredPaths() {
 		add(p)
 	}
@@ -493,6 +554,16 @@ func (s *Server) startDeferredReconcile(ctx context.Context) {
 func (s *Server) startDeferredReconcileAfter(ctx context.Context, grace time.Duration) {
 	s.startupGraceUntil.Store(time.Now().Add(grace).UnixNano())
 	go func() {
+		// Same recover shape handleRequest uses, for the same reason and one
+		// more: this goroutine has NO caller to propagate to, so an unrecovered
+		// panic anywhere under reconcileOrphanedRuns takes the whole `nightgauge
+		// serve` process down — and with it every in-flight run's IPC peer.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("WARNING: PANIC in the deferred orphan sweep: %v", r)
+				log.Printf("Stack trace:\n%s", debug.Stack())
+			}
+		}()
 		log.Printf("orphan-reconcile: deferring the startup sweep %s — %d snapshot(s) present at activation (ADR-017 7.3)",
 			grace, s.countReconcileCandidates())
 		t := time.NewTimer(grace)
@@ -501,6 +572,15 @@ func (s *Server) startDeferredReconcileAfter(ctx context.Context, grace time.Dur
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+		// Expiry and cancellation can be ready at the same instant, and select
+		// picks uniformly at random between ready cases — so a server shutting
+		// down exactly at expiry would sweep on the way out one time in two.
+		// Cancellation wins that tie: the sweep is deferrable by construction
+		// (the next activation re-derives the whole candidate set), while a pass
+		// racing process teardown removes files with no one left to tell.
+		if ctx.Err() != nil {
+			return
 		}
 		s.reconcileOrphanedRuns()
 	}()
@@ -567,6 +647,14 @@ func (s *Server) reconcilePass(now time.Time) {
 // release. Best-effort throughout — emission is fire-and-forget
 // (AnalyticsService buffers offline) and a run whose event is lost anyway is
 // caught by the platform-side reaper.
+//
+// EVERY DISPOSITION IS ENUMERATED, and the default REFUSES to remove. os.Remove
+// below is the fall-through, so a disposition that reaches it by accident —
+// dispositionKeep, which is also the ZERO VALUE of the type, or a row added
+// later without a case here — would delete a file the table said to leave
+// alone. Today's collector filters Keep out, which makes that a latent trap
+// rather than a live defect; the assertion log is what turns the next one into
+// a bug report instead of a missing snapshot.
 func (s *Server) applyReconcileAction(stateDir string, act reconcileAction) {
 	switch act.Disposition {
 	case dispositionReleaseClaim:
@@ -576,7 +664,16 @@ func (s *Server) applyReconcileAction(stateDir string, act reconcileAction) {
 		if s.analyticsSvc != nil {
 			s.analyticsSvc.EmitPipelineEvent(context.Background(), act.Event)
 		}
-	case dispositionRemove, dispositionKeep:
+	case dispositionRemove:
+		// Nothing to emit — the terminal claim or abandonRun already did.
+	case dispositionKeep:
+		log.Printf("orphan-reconcile: BUG — dispositionKeep reached the executor for run %s (%s); leaving the file alone",
+			act.RunID, filepath.Base(act.Path))
+		return
+	default:
+		log.Printf("orphan-reconcile: BUG — unknown disposition %d for run %s (%s); leaving the file alone",
+			int(act.Disposition), act.RunID, filepath.Base(act.Path))
+		return
 	}
 
 	if err := os.Remove(act.Path); err != nil {
@@ -601,19 +698,63 @@ func (s *Server) applyReconcileAction(stateDir string, act reconcileAction) {
 // state with the pre-pause snapshot and re-advertise paused: true for a running
 // id (F34's consequence 1) — the exact window between the run's first
 // post-resume Persist and the claimant's delete.
+//
+// "NEVER overwritten" IS STRUCTURAL, NOT A CHECK. os.Stat-then-os.Rename is
+// check-then-act: rename(2) replaces its destination silently, so a claimant
+// suspended past the release threshold that wakes and re-persists BETWEEN the
+// two calls has its live canonical snapshot overwritten by pre-pause content —
+// F34's consequence 1 through a razor-thin window rather than through the aging
+// rule. os.Link fails atomically when the destination exists (POSIX EEXIST,
+// Windows ERROR_ALREADY_EXISTS), so link-then-unlink IS the no-replace rename
+// the row describes, decided by the filesystem rather than by a prior Stat.
 func (s *Server) releaseStaleClaim(stateDir string, act reconcileAction) {
 	canonical := filepath.Join(stateDir, state.SnapshotFilename(act.Issue, act.RunID))
-	if _, err := os.Stat(canonical); err == nil {
-		if err := os.Remove(act.Path); err != nil {
-			log.Printf("orphan-reconcile: stale claim for run %s is superseded but could not be removed: %v", act.RunID, err)
+
+	err := os.Link(act.Path, canonical)
+	switch {
+	case err == nil:
+		// The canonical name was free and this process took it atomically. The
+		// artifact is now a second name for the same inode; dropping it
+		// completes the move.
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: released stale claim for run %s but the artifact link remains: %v", act.RunID, rmErr)
+			return
+		}
+		log.Printf("orphan-reconcile: released stale claim for run %s (issue #%d) — the pause survives to the next activation (ADR-017 Decision 9)",
+			act.RunID, act.Issue)
+		return
+
+	case errors.Is(err, os.ErrExist):
+		// Canonical occupied — the claimant won and re-persisted. The artifact
+		// is superseded debris.
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: stale claim for run %s is superseded but could not be removed: %v", act.RunID, rmErr)
 			return
 		}
 		log.Printf("orphan-reconcile: removed superseded claim artifact for run %s (issue #%d) — the canonical snapshot is present and newer (ADR-017 Decision 9)",
 			act.RunID, act.Issue)
 		return
 	}
-	if err := os.Rename(act.Path, canonical); err != nil {
-		log.Printf("orphan-reconcile: could not release stale claim for run %s: %v", act.RunID, err)
+
+	// Any OTHER Link error is a filesystem that cannot hardlink (some FUSE
+	// mounts, exFAT, a few network filesystems) rather than an occupied
+	// destination. Fall back to the check-then-act sequence, logged so the
+	// weaker guarantee is visible in a support log instead of inferred: on such
+	// a filesystem "never overwritten" is enforced by a Stat, with the window
+	// this primary path exists to close.
+	log.Printf("orphan-reconcile: hardlink release unavailable for run %s (%v) — falling back to stat+rename, which cannot be atomic (ADR-017 Decision 9, A-2)",
+		act.RunID, err)
+	if _, statErr := os.Stat(canonical); statErr == nil {
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: stale claim for run %s is superseded but could not be removed: %v", act.RunID, rmErr)
+			return
+		}
+		log.Printf("orphan-reconcile: removed superseded claim artifact for run %s (issue #%d) — the canonical snapshot is present and newer (ADR-017 Decision 9)",
+			act.RunID, act.Issue)
+		return
+	}
+	if rnErr := os.Rename(act.Path, canonical); rnErr != nil {
+		log.Printf("orphan-reconcile: could not release stale claim for run %s: %v", act.RunID, rnErr)
 		return
 	}
 	log.Printf("orphan-reconcile: released stale claim for run %s (issue #%d) — the pause survives to the next activation (ADR-017 Decision 9)",
@@ -680,13 +821,37 @@ func (s *Server) reapStaleRunEntries(now time.Time) {
 	evicted := make([]string, 0, len(doomed))
 	s.runtimesMu.Lock()
 	for _, c := range doomed {
-		// Compare-and-delete: the entry may have been claimed and replaced in the
-		// unlocked window above, and evicting a successor by key would drop a live
-		// run out of its own registry.
-		if s.activeRuntimes[c.id] == c.entry {
-			delete(s.activeRuntimes, c.id)
-			evicted = append(evicted, c.id)
+		// TWO CHECKS, TWO DIFFERENT RACES, and neither covers the other.
+		//
+		// The POINTER COMPARE covers REPLACEMENT: the entry may have been
+		// claimed and replaced in the unlocked window above, and evicting a
+		// successor by key would drop a live run out of its own registry. It is
+		// blind to the commoner case, because touchLocked does not replace the
+		// entry — it refreshes lastSeen IN PLACE.
+		//
+		// So the AGE PREDICATE is re-applied under this hold, and it covers
+		// REFRESH: a run silent for >30 minutes that speaks again inside phase
+		// 2's window would otherwise be evicted holding a lease minted
+		// milliseconds ago, and the same pass would then emit a terminal
+		// pipeline_done for it and remove its snapshot (arm 1 is that entry).
+		// `now` is fixed at pass start, so any refresh since phase 1 reads
+		// fresh — the comparison cannot be fooled by the clock moving on.
+		//
+		// terminal is re-read for the same reason: a terminal claim landing in
+		// the window latches the entry, and the latch is the claim's business.
+		cur := s.activeRuntimes[c.id]
+		if cur != c.entry || cur.terminal {
+			continue
 		}
+		seen := cur.lastSeen
+		if cur.firstSeen.After(seen) {
+			seen = cur.firstSeen
+		}
+		if now.Sub(seen) <= livenessWindow {
+			continue
+		}
+		delete(s.activeRuntimes, c.id)
+		evicted = append(evicted, c.id)
 	}
 	s.runtimesMu.Unlock()
 

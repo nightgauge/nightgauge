@@ -1226,7 +1226,11 @@ the pause-restore claim RENAME on the TypeScript side (step 8) and the
 legacy-file sweep (step 9) are still outstanding — the rows below marked with
 those steps describe the destination, not today's tree. The `resuming-*` rows
 below are implemented and tested but production-inert until step 8 mints the
-first such file.
+first such file. One population is knowingly uncovered by the ladder's PID arm:
+the Codex interactive TUI runs its stage inside a VSCode terminal, and VSCode
+exposes no pid for a process running inside one, so a silent Codex TUI session
+older than the 30-minute liveness window can be reconciled — see ADR 017 §7.2's
+per-population table.
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.

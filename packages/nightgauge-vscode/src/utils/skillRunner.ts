@@ -4097,9 +4097,7 @@ export function runStageSkillHeadless(
   });
 
   // ADR-017 §7.2: surface the stage child's pid to whoever owns this stage's
-  // `running` transition, synchronously and exactly once. This is the ONLY
-  // stage-spawn site — the interactive and Codex TUI spawns below run no
-  // pipeline stage and therefore have no transition to attach a pid to.
+  // `running` transition, synchronously and exactly once.
   if (proc.pid) {
     callbacks?.onStageChildSpawned?.(proc.pid);
   }
@@ -7055,6 +7053,22 @@ export function runStageSkillInteractive(
       ...autoAcceptEnv,
     },
   });
+
+  // ADR-017 §7.2, the same contract the headless spawn honours: surface the
+  // stage child's pid synchronously and exactly once, so this attempt's single
+  // `running` transition can carry it.
+  //
+  // An interactive stage NEEDS this arm more than a headless one, not less.
+  // Its traffic profile is one `running` transition and then nothing until the
+  // stage ends — a conversation emits no token stream — so after 30 minutes the
+  // lease (arm 1) is stale, nothing has persisted since that transition (arm 4
+  // is stale), it is not a scheduler run (arm 2) and the startup grace is long
+  // gone (arm 5). Without a pid the reconciler sees a live session as an orphan
+  // and closes it: terminal pipeline_done(success=false), snapshot removed,
+  // the run's stages and cost lost (C18).
+  if (proc.pid) {
+    callbacks?.onStageChildSpawned?.(proc.pid);
+  }
 
   // Write the initial prompt to stdin
   // IMPORTANT: Do NOT call stdin.end() - keep it open for user input

@@ -67,12 +67,21 @@ type Server struct {
 	billingSvc        *platform.BillingService
 	commandExecutor   *executor.CommandExecutor
 
-	// workspaceRoot is the IPC launch root, and it is MUTABLE: workspace.setRoot
+	// workspaceRoot is the CURRENT root, and it is MUTABLE: workspace.setRoot
 	// re-points it on a multi-repo workspace switch, from a handler goroutine,
 	// while the deferred reconcile sweep reads it from a timer goroutine (ADR-017
 	// 7.3). Every access goes through workspaceRootPath/setWorkspaceRoot — an
 	// unlocked read is a data race the moment the sweep stopped being inline.
+	//
+	// launchRoot is the root this server was CONSTRUCTED with, written once by
+	// the first setWorkspaceRoot and never again. The deferred sweep is the
+	// reason it exists: it counts candidates at activation and re-scans two
+	// minutes later, and a workspace switch inside that window would otherwise
+	// silently narrow the scan to the new root — the orphans of the root the
+	// process started in would then never be collected by the pass that was
+	// deferred FOR them. pipelineStateScanRoots always adds it.
 	workspaceRoot   string
+	launchRoot      string
 	workspaceRootMu sync.RWMutex
 
 	// startupGraceUntil is ladder arm 5 as a deadline in UnixNano, armed by
@@ -523,12 +532,27 @@ func (s *Server) workspaceRootPath() string {
 	return s.workspaceRoot
 }
 
-// setWorkspaceRoot is THE ONLY WRITER of the field. It takes no other lock, so
-// it cannot participate in a lock cycle.
+// setWorkspaceRoot is THE ONLY WRITER of either field. It takes no other lock,
+// so it cannot participate in a lock cycle.
+//
+// The FIRST non-empty root also becomes the immutable launch root. First rather
+// than "the one WithWorkspaceRoot passed", because a server may be constructed
+// without one and told its root by the client's opening workspace.setRoot —
+// that call is this process's launch root by any honest reading.
 func (s *Server) setWorkspaceRoot(root string) {
 	s.workspaceRootMu.Lock()
 	defer s.workspaceRootMu.Unlock()
 	s.workspaceRoot = root
+	if s.launchRoot == "" {
+		s.launchRoot = root
+	}
+}
+
+// launchRootPath returns the root this server started in. See launchRoot.
+func (s *Server) launchRootPath() string {
+	s.workspaceRootMu.RLock()
+	defer s.workspaceRootMu.RUnlock()
+	return s.launchRoot
 }
 
 // WithCommandExecutor attaches a CommandExecutor to the IPC server.
@@ -895,7 +919,9 @@ func (s *Server) registerMethods() {
 		// STILL INLINE (ADR-017 7.3): a setRoot arrives from a connected, live
 		// extension host, so ladder arms 1 and 2 carry real information here.
 		// Inside the server's own startup grace arm 5 defers every candidate
-		// anyway, so the pass then does terminal-removals only.
+		// anyway — so during the window this pass removes terminal snapshots
+		// (they carry their own proof, 7.4's first row) and nothing else: claim
+		// releases defer on the same arm, and the reaping is skipped whole.
 		s.reconcileOrphanedRuns()
 		return &WorkspaceSetRootResult{OK: true}, nil
 	}

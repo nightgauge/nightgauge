@@ -153,29 +153,47 @@ func TestOrphanReconcile_LiveLeaseIsNotReconciled(t *testing.T) {
 // a scheduler runtime whose PID came from SetProcess, and an extension runtime
 // whose PID arrived as stagePid on a `running` transition. An arm no run in a
 // population writes is not a fallback for that population (C18).
+//
+// Each population writes its snapshot THE WAY IT ACTUALLY DOES: the scheduler's
+// through SetProcess (internal/execution/manager.go), the extension's through
+// the real notifyStageTransition handler with the wire field set. A fixture that
+// called rt.SetStageChild directly would pin the state layer and leave the
+// handler — the only thing that turns a wire field into arm-3 evidence —
+// unexercised, which is precisely the shape of F32.
 func TestOrphanReconcile_LivePidIsNotReconciled(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		write func(rt *state.RuntimeState, pid int)
+		name string
+		// persist writes the run's snapshot with pid recorded as its stage
+		// child, by that population's own route, and returns the path.
+		persist func(t *testing.T, s *Server, stateDir string, issue int, runID string, pid int) string
 	}{
-		{"scheduler path (SetProcess)", func(rt *state.RuntimeState, pid int) { rt.SetProcess(pid, "/tmp/worktree") }},
-		{"extension path (stagePid)", func(rt *state.RuntimeState, pid int) { rt.SetStageChild(pid) }},
+		{"scheduler path (SetProcess)", func(t *testing.T, _ *Server, stateDir string, issue int, runID string, pid int) string {
+			rt := newInterruptedRuntime(issue, runID)
+			rt.SetProcess(pid, "/tmp/worktree")
+			return writeRuntimeSnapshot(t, stateDir, rt)
+		}},
+		{"extension path (stagePid, through the real handler)", func(t *testing.T, s *Server, stateDir string, issue int, runID string, pid int) string {
+			mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+				Repo: "nightgauge/acmeapp", IssueNumber: issue, Stage: "feature-dev", Status: "running",
+				RunID: runID, StagePid: pid,
+			})
+			return filepath.Join(stateDir, state.SnapshotFilename(issue, runID))
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, stateDir := reconcileServer(t)
 			now := time.Now()
 
-			alive := newInterruptedRuntime(420, newTestRunID())
-			tc.write(alive, os.Getpid()) // this test process is indisputably live
-			alivePath := writeRuntimeSnapshot(t, stateDir, alive)
-			backdate(t, alivePath, now.Add(-2*livenessWindow))
-
-			dead := newInterruptedRuntime(421, newTestRunID())
+			// This test process is indisputably live.
+			alivePath := tc.persist(t, s, stateDir, 420, newTestRunID(), os.Getpid())
 			// A pid that cannot be running: ProcessAlive refuses pid <= 0, which is
 			// also what stagePid: 0 produces at stage end.
-			tc.write(dead, 0)
-			deadPath := writeRuntimeSnapshot(t, stateDir, dead)
+			deadPath := tc.persist(t, s, stateDir, 421, newTestRunID(), 0)
+			backdate(t, alivePath, now.Add(-2*livenessWindow))
 			backdate(t, deadPath, now.Add(-2*livenessWindow))
+			// The handler stamps a fresh lease; arm 1 would then keep BOTH files
+			// and the test would assert nothing about arm 3.
+			ageAllLeases(s, now.Add(-2*livenessWindow))
 
 			s.reconcilePass(now)
 
@@ -577,11 +595,21 @@ func TestClassifyCandidate_TableIsEvaluatedTopToBottom(t *testing.T) {
 		{"fresh abandonment keeps the crash snapshot", reconcileCandidate{snap: freshAbandoned, modTime: stale}, runEvidence{}, dispositionKeep},
 		{"stale abandonment removes without emitting", reconcileCandidate{snap: abandoned, modTime: stale}, runEvidence{}, dispositionRemove},
 		{"an unageable abandonment is treated as fresh", reconcileCandidate{snap: undatedAbandoned, modTime: stale}, runEvidence{}, dispositionKeep},
+		// "Unageable" must not mean "immortal": 7.4's last row says ANYTHING
+		// past the cap goes, and an undated abandonment is no evidence that
+		// abandonRun emitted, so this row emits before it removes.
+		{"an unageable abandonment past the cap is still collected", reconcileCandidate{snap: undatedAbandoned, modTime: now.Add(-snapshotAgeCap - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
 		{"a fresh pause is exempt", reconcileCandidate{snap: paused, modTime: now.Add(-72 * time.Hour)}, runEvidence{}, dispositionKeep},
 		{"a capped pause is not", reconcileCandidate{snap: paused, modTime: now.Add(-snapshotAgeCap - time.Hour)}, runEvidence{}, dispositionEmitAndRemove},
 		{"a live claim is untouched", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: time.Second}, runEvidence{}, dispositionKeep},
 		{"an unageable claim is untouched", reconcileCandidate{claim: true}, runEvidence{}, dispositionKeep},
 		{"a stale claim is released", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: startupGrace + time.Second}, runEvidence{}, dispositionReleaseClaim},
+		// Arm 5 and only arm 5 reaches the claim rows: the startup grace says
+		// this process has not been up long enough to have heard from the
+		// claimant, which is the one thing THIS server's evidence can say about
+		// another host's working state.
+		{"the startup grace defers a stale claim", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: startupGrace + time.Second}, grace, dispositionKeep},
+		{"a live lease does NOT defer a stale claim", reconcileCandidate{claim: true, claimAgeKnown: true, claimAge: startupGrace + time.Second}, live, dispositionReleaseClaim},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := classifyCandidate(tc.c, tc.ev, now); got != tc.want {
