@@ -94,10 +94,10 @@ func (r *worktreeIsolatedRunner) RunStage(_ context.Context, params StageRunPara
 	r.calls[params.Stage]++
 	r.mu.Unlock()
 
-	// Production parity: the execution manager stamps the worktree onto the
-	// runtime when it launches the stage process.
+	// Production parity: the execution manager stamps the worktree at provision
+	// time (#399), before any failure exit — not at process registration.
 	if params.Runtime != nil {
-		params.Runtime.SetProcess(0, r.worktree)
+		params.Runtime.SetWorktree(r.worktree)
 	}
 
 	if params.Stage == r.failStage {
@@ -393,7 +393,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 		writeIssueContextInWorktree(t, worktree, 299, repo, branch)
 
 		snap := state.NewRuntimeState(repo, 299, "item-299", testRunID())
-		snap.SetProcess(0, worktree)
+		snap.SetWorktree(worktree)
 		snap.SetBranch(branch)
 
 		rec := recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 299, Repo: repo, Title: "t"})
@@ -414,7 +414,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 		// No SetBranch: an adopted / rehydrated run whose runtime never learned
 		// the branch still has it on disk, in the worktree the stages ran in.
 		snap := state.NewRuntimeState(repo, 300, "item-300", testRunID())
-		snap.SetProcess(0, worktree)
+		snap.SetWorktree(worktree)
 
 		rec := recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 300, Repo: repo, Title: "t"})
 		if rec.Branch != wtBranch {

@@ -1080,6 +1080,36 @@ turns a worktree directory name into an issue number.
 `TestExactlyOneWorktreeIssueParser` walks the AST of every non-test Go file and
 fails if a second one appears — do not add an exemption; call the shared parser.
 
+##### Worktree Directory Name Shapes
+
+The two dispatch paths lay their worktrees out differently, and the scanner sees
+both — often on the same machine, since a repo can be driven by the extension one
+day and the Go scheduler the next:
+
+| Creator                            | Directory                                                |
+| ---------------------------------- | -------------------------------------------------------- |
+| VSCode extension `WorktreeManager` | `{repoRoot}/{worktree_base}/issue-{N}`                   |
+| Go `execution.Manager`             | `{workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+
+**The `{repo}-` prefix is load-bearing, not decoration.** The extension nests its
+worktree base (default `.worktrees`) inside each repo root, so `issue-42` is
+already namespaced by the repo that contains it. The Go layer does the opposite:
+every run in the workspace shares one `{workspaceRoot}/.nightgauge/worktrees/`
+root, so in a multi-repo workspace two repos' issue #42 would land on the same
+directory without the prefix — one run checking out over another's tree. Dropping
+the prefix to "match the extension" reintroduces exactly that collision.
+
+Creation and teardown must never derive this name independently: `worktreePath`
+is the single derivation, and both `ensureWorktree` and `CleanupWorktree` call it
+(pinned end to end by
+`TestWorktreePathDerivation_CreationAndTeardownAgree`, #400). A teardown that
+computed its own path would silently leak the directory it failed to name.
+
+`IssueNumberFromWorktreeDir` accepts **both** shapes by contract — that is the
+single-parser rule above, not a leniency: it takes the last `issue-` in the base
+name and reads the digits after it, so `issue-42` and `nightgauge-issue-42` both
+resolve to 42.
+
 ### Stash Reclamation (Issue #330)
 
 Same two-half shape as worktree reclamation, for the same reason. A stage that

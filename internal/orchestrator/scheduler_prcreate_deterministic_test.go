@@ -337,7 +337,9 @@ func TestScheduler_PRCreate_ReadsContextFromWorktree(t *testing.T) {
 
 	const worktree = "/tmp/repo/.worktrees/issue-42"
 	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
-	rs.SetProcess(0, worktree) // populates runtime.WorktreeDir, as a real run does
+	// Stamps the worktree at provision time (#399), before any failure exit —
+	// the same one-field write a real run performs.
+	rs.SetWorktree(worktree)
 	rs.BeginStage(state.StagePRCreate)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 
@@ -377,7 +379,8 @@ func TestScheduler_PRMerge_ReadsContextFromWorktree(t *testing.T) {
 
 	const worktree = "/tmp/repo/.worktrees/issue-42"
 	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
-	rs.SetProcess(0, worktree)
+	// Stamps the worktree at provision time (#399), before any failure exit.
+	rs.SetWorktree(worktree)
 	rs.BeginStage(state.StagePRMerge)
 	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
 

@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -619,5 +620,58 @@ func TestRuntimeState_RunID_Persisted(t *testing.T) {
 	}
 	if loaded.RunID != rs.RunID {
 		t.Errorf("loaded RunID = %q, want %q", loaded.RunID, rs.RunID)
+	}
+}
+
+// TestSetWorktree_WritesOnlyTheWorktree pins the one-field contract behind
+// SetWorktree (#399): it is called before a child process exists, so it must
+// never write PID. Re-implementing it as SetProcess(0, dir) would satisfy the
+// worktree assertion and quietly clear a PID a later stage had recorded — and a
+// non-zero PID it invented would let a run that never spawned answer the
+// liveness ladder's "is your stage child alive?" arm.
+func TestSetWorktree_WritesOnlyTheWorktree(t *testing.T) {
+	const worktree = "/tmp/ws/.nightgauge/worktrees/nightgauge-issue-399"
+
+	rs := NewRuntimeState("nightgauge/nightgauge", 399, "item-399", testRunID())
+
+	// Populate the neighbourhood the setter must not touch. Enumerated
+	// assertions only catch the fields someone thought to enumerate — a
+	// re-implementation that wiped Branch or AuthoritativeChangeClass on its way
+	// to WorktreeDir would satisfy a "PID is still 0" list and stay green. The
+	// comparison below is structural for that reason: every field of the
+	// snapshot is in scope without being named here.
+	rs.SetBranch("fix/399-worktree-stamp")
+	rs.BeginStage(StageFeatureDev)
+	rs.SetAuthoritativeChangeClass("code")
+	rs.SetStageError(StageFeatureDev, "stage died before spawn")
+	rs.RecordStageModel(StageFeatureDev, "opus")
+	rs.RecordStageAdapter(StageFeatureDev, "codex")
+	rs.SetPrUrl("https://example.invalid/pull/399")
+
+	before := rs.Snapshot()
+	rs.SetWorktree(worktree)
+	after := rs.Snapshot()
+
+	if after.WorktreeDir != worktree {
+		t.Fatalf("WorktreeDir = %q, want %q", after.WorktreeDir, worktree)
+	}
+	// Neutralise the one field the setter is allowed to write; everything else
+	// must be identical. Snapshot reads no clocks and copies only recorded
+	// values, so deep equality here is exact, not approximate.
+	before.WorktreeDir = after.WorktreeDir
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("SetWorktree wrote more than WorktreeDir — it is called before a child exists and must be a "+
+			"one-field write (#399).\nbefore: %+v\nafter:  %+v", before, after)
+	}
+	if pid := rs.StageChildPID(); pid != 0 {
+		t.Errorf("PID = %d, want 0 — SetWorktree must not invent a process identity", pid)
+	}
+
+	// A stamp arriving after a real spawn (the idempotent re-stamp RunStage
+	// performs) must leave that process identity intact.
+	rs.SetProcess(4242, worktree)
+	rs.SetWorktree(worktree)
+	if pid := rs.StageChildPID(); pid != 4242 {
+		t.Errorf("PID = %d after a re-stamp, want 4242 — SetWorktree must not clear a recorded child", pid)
 	}
 }

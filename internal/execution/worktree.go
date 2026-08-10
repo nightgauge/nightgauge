@@ -14,7 +14,22 @@ import (
 )
 
 // ensureWorktree creates a git worktree for isolated execution.
-// Path: {workspaceRoot}/.nightgauge/worktrees/issue-{N}/
+// Path: {workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}/ — derived by
+// worktreePath, the same function CleanupWorktree tears down with. The
+// "{repo}-" prefix is load-bearing: every run in the workspace shares one
+// worktrees/ root, so two repos' issue #{N} would collide without it. The bare
+// "issue-{N}" shape belongs to the VSCode extension's WorktreeManager; both are
+// read back by IssueNumberFromWorktreeDir (#400). See
+// docs/GO_BINARY.md#worktree-directory-name-shapes.
+//
+// Error contract (#399): on error the returned path is non-empty iff the
+// worktree exists on disk. Provisioning does not end when `git worktree add`
+// returns — the SDK-CLI build for CLI adapters runs after it and can fail — and
+// a run whose worktree is already on disk must stay resolvable through that
+// failure. Returning "" there is what left RunStage unable to stamp the
+// runtime, so stageWorkspace fell back to the workspace root and the failure
+// path inspected the wrong tree. A non-nil error always means failure,
+// whatever the path: the path only ever names a tree that exists.
 func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 
@@ -60,6 +75,12 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	cmd := exec.Command("git", "worktree", "add", "--detach", worktreeDir, headSHA)
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
+		// The add is the creation boundary: it normally leaves nothing behind,
+		// but the error contract above is stated as "non-empty iff on disk", so
+		// ask the disk rather than assume which side of the boundary we are on.
+		if _, statErr := os.Stat(worktreeDir); statErr == nil {
+			return worktreeDir, fmt.Errorf("git worktree add: %s: %w", string(output), err)
+		}
 		return "", fmt.Errorf("git worktree add: %s: %w", string(output), err)
 	}
 
@@ -71,7 +92,9 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	adapter := readAdapterFromWorktree(worktreeDir)
 	if shouldBuildSdkCli(adapter) {
 		if err := buildSdkCliInWorktree(worktreeDir, repoRoot); err != nil {
-			return "", err
+			// The worktree is on disk and registered with git — the caller must
+			// be able to name it even though provisioning failed (#399).
+			return worktreeDir, err
 		}
 	}
 
@@ -214,10 +237,40 @@ func buildSdkCliInWorktree(worktreeDir string, repoRoot string) error {
 // — never blocks worktree removal), then `git worktree remove`. This prevents
 // stale containers / volumes / networks / images named `issue-NNN-*` from
 // surviving across pipeline runs and squatting host ports. See Issue #3050.
+//
+// Nothing to tear down is not a teardown failure (#400). The scheduler calls
+// this for EVERY terminal outcome, including IPC/extension runs that never had
+// a Go-layer worktree, so the common case was `git worktree remove` on a path
+// git has never heard of: exit 128 and a "[WARN] … falling back to manual
+// removal" line about a directory that was never created. That WARN is the leak
+// signal #110 added; spending it on runs with nothing to remove is how it
+// stopped meaning anything.
+//
+// So a missing directory short-circuits — but it does NOT skip the git call,
+// because "the directory is gone" and "git has no registration" are different
+// facts. Git happily removes a registered worktree whose directory was deleted
+// out from under it, quietly and successfully, and that is the only thing in
+// this function that reclaims such a registration; skipping it would leave a
+// phantom entry in `git worktree list`, which is what the active-worktree set
+// and the compose reconciler read. The remove therefore still runs, with its
+// result ignored: success clears a stale registration, failure means there was
+// nothing registered — the absence of a leak, not the signal of one.
+//
+// The per-issue compose teardown is skipped for this population, which is
+// already owned for exactly this case by the scheduler's startup
+// reconcileOrphanedComposeProjects: it tears down `issue-NNN` stacks with no
+// matching worktree (#3050).
 func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 	repoRoot := m.repoRoot(repo)
 	projectName := fmt.Sprintf("issue-%d", issueNumber)
+
+	if _, err := os.Stat(worktreeDir); os.IsNotExist(err) {
+		reclaim := exec.Command("git", "worktree", "remove", worktreeDir, "--force")
+		reclaim.Dir = repoRoot
+		_ = reclaim.Run()
+		return nil
+	}
 
 	// Preserve a worktree with uncommitted tracked changes rather than
 	// destroying work a developer may still need to inspect — a terminal

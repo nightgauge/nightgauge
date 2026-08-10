@@ -178,6 +178,23 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Create or reuse worktree
 	worktreeDir, err := m.ensureWorktree(opts.Repo, opts.IssueNumber)
+
+	// Stamp the worktree on the runtime the moment it exists (#399), not at
+	// process registration below. Everything between here and cmd.Start() can
+	// fail — model validation, the three pipes, the spawn itself — and each of
+	// those exits used to leave WorktreeDir empty on a run whose worktree is
+	// already on disk, so stageWorkspace fell back to the workspace root and
+	// the failure path inspected the wrong tree. SetWorktree writes that one
+	// field and deliberately not PID: no child exists yet.
+	//
+	// The stamp sits ABOVE the error check on purpose: ensureWorktree's own
+	// provisioning continues after `git worktree add` (the SDK-CLI build), so
+	// it can fail with the worktree already created. Its error contract is
+	// "path non-empty iff the worktree exists on disk", which makes the path —
+	// not the error — the authority on whether there is a tree to name.
+	if worktreeDir != "" && opts.Runtime != nil {
+		opts.Runtime.SetWorktree(worktreeDir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("worktree setup: %w", err)
 	}
