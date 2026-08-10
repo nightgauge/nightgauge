@@ -248,7 +248,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		if tier == "" {
 			tier = "opus"
 		}
-		if err := orchestrator.WriteEscalationOverride(s.workspaceRoot, issue, tier, actor); err != nil {
+		if err := orchestrator.WriteEscalationOverride(s.workspaceRootPath(), issue, tier, actor); err != nil {
 			return err
 		}
 		return s.redispatchAfterOverride(ctx, key, repo, issue, argString(opt.Args, "then"))
@@ -413,7 +413,7 @@ func (s *Server) approveArchitecture(ctx context.Context, key, repo, owner, name
 	}
 
 	label := config.DefaultArchitectureApprovalLabel
-	if cfg, err := config.Load(s.workspaceRoot); err == nil && cfg != nil {
+	if cfg, err := config.Load(s.workspaceRootPath()); err == nil && cfg != nil {
 		if resolved := cfg.Pipeline.ResolveArchitectureApprovalLabel(); resolved != "" {
 			label = resolved
 		}

@@ -679,29 +679,24 @@ func (s *Server) currentRunForIssueLocked(repo string, issue int) (current *runE
 	return current, others
 }
 
-// hasLiveRunForIssue reports whether ANY non-terminal entry for the issue is in
-// the registry. It is the reconciler's skip predicate seam (#44): a run whose
-// snapshot is on disk while its runtime is live must never be reconciled as an
-// orphan, and after the re-key "live" is a property of the ISSUE's entries
-// rather than of one issue-shaped key.
+// runLeaseIsFresh is ARM 1 of the reconciler's liveness ladder (ADR-017 7.2):
+// this server's registry holds the run, it is not terminal-latched, and its
+// lease was refreshed inside livenessWindow.
 //
-// IT IS DELIBERATELY LEASE-BLIND until ADR-017 step 5's liveness ladder. Today
-// ANY non-terminal entry pins the issue, including an adopt-empty entry whose
-// lastSeen has not moved in hours: the ladder that weighs the scheduler
-// registry, the lease window and the recorded PID against each other — and the
-// reaping that lets such an entry expire at all — is step 5's scope, and a
-// half-ladder here would be a liveness rule nobody could reason about. Erring
-// toward "live" is the safe direction for a predicate whose false negative
-// terminates a running pipeline.
-func (s *Server) hasLiveRunForIssue(issue int) bool {
+// It is keyed on the RUN, which is the whole correction. The issue-keyed
+// predicate it replaces let any non-terminal entry of an issue pin every
+// snapshot of that issue — including an adopt-empty entry whose lastSeen had not
+// moved in hours, and including the other concurrent dispatch's file.
+//
+// lastSeen is the SERVER-OBSERVED stamp that only run-progress and terminal
+// verbs refresh (touchLocked): an entry installed by an administrative
+// resolution carries the zero time and can never satisfy this arm. abandonRun is
+// not evidence that a run is alive; it is the opposite claim.
+func (s *Server) runLeaseIsFresh(runID string, now time.Time) bool {
 	s.runtimesMu.Lock()
 	defer s.runtimesMu.Unlock()
-	for _, e := range s.activeRuntimes {
-		if e != nil && e.issue == issue && !e.terminal {
-			return true
-		}
-	}
-	return false
+	e := s.activeRuntimes[runID]
+	return e != nil && !e.terminal && now.Sub(e.lastSeen) < livenessWindow
 }
 
 // PipelineGetStateResult is pipeline.getState's answer once one issue can name

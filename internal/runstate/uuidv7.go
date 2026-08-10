@@ -38,3 +38,31 @@ func NewRunID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s",
 		hexStr[0:8], hexStr[8:12], hexStr[12:16], hexStr[16:20], hexStr[20:32]), nil
 }
+
+// UUIDv7Millis decodes the 48-bit big-endian Unix-millisecond prefix NewRunID
+// writes above. It is the ONLY decoder in the tree and it has exactly one
+// caller: ADR-017 Decision 9's pause-restore claim token, whose age decides
+// whether the reconciler releases a claim (7.4, C17). Run identities are never
+// decoded for a correctness rule — identity.go states that carve-out.
+//
+// The version nibble is validated (through IsIdentity, whose pattern pins it to
+// 7): a non-v7 UUID carries random bits at this offset, and reading them as a
+// time yields a confident wrong answer — which is the shape of the mtime rule
+// this replaces (F34). An error is the caller's signal to treat the claim as
+// FRESH and never release it.
+func UUIDv7Millis(id string) (int64, error) {
+	if !IsIdentity(id) {
+		return 0, fmt.Errorf("uuidv7: %q is not a canonical v7 identity", id)
+	}
+	// Offsets are fixed by the 8-4-4-4-12 layout: the first six bytes are the
+	// timestamp, i.e. the first two hyphen-separated groups.
+	raw, err := hex.DecodeString(id[0:8] + id[9:13])
+	if err != nil {
+		return 0, fmt.Errorf("uuidv7: decode timestamp prefix of %q: %w", id, err)
+	}
+	var ms int64
+	for _, b := range raw {
+		ms = ms<<8 | int64(b)
+	}
+	return ms, nil
+}

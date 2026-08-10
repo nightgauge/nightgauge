@@ -1,6 +1,9 @@
 package runstate
 
-import "regexp"
+import (
+	"fmt"
+	"regexp"
+)
 
 // Run-identity shape — ADR-017 Decision 1 (see docs/decisions/017-runtime-identity-keying.md).
 //
@@ -52,6 +55,14 @@ func IsIdentity(s string) bool {
 // recognise is F34's shape.
 var ResumingArtifactRegexp = regexp.MustCompile(
 	`^resuming-(\d+)-(` + IdentityPattern + `)\.(` + IdentityPattern + `)\.json$`)
+
+// ResumingArtifactName composes the claim-artifact filename ParseResumingArtifactName
+// reads. The producing rename is TypeScript-side (ADR-017 step 8); this exists
+// so the Go READER — the reconciler's release path — cannot be exercised against
+// a shape it invented for itself. One composer, one parser, one regex.
+func ResumingArtifactName(issueNumber int, runID, claimToken string) string {
+	return fmt.Sprintf("resuming-%d-%s.%s.json", issueNumber, runID, claimToken)
+}
 
 // ParseResumingArtifactName returns the issue number, run identity and claim
 // token encoded in a pause-restore claim artifact filename. ok is false for

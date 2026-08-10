@@ -636,6 +636,41 @@ func TestLoadPersistedState_AddressesByIdentity_NotByIssue(t *testing.T) {
 	}
 }
 
+// LoadSnapshotByIdentity is the exact-path reader the reconciler uses: it
+// already holds both components, and paying a full os.ReadDir per entry of a
+// directory it just listed is quadratic in snapshot count — the direction the
+// one-file-per-RUN scheme makes worse.
+func TestLoadSnapshotByIdentity_ReadsTheOnePathTheComponentsCompose(t *testing.T) {
+	dir := t.TempDir()
+	a := NewRuntimeState("nightgauge/nightgauge", 370, "item-a", testRunID())
+	a.SetPrUrl("https://example.invalid/pr/a")
+	b := NewRuntimeState("nightgauge/nightgauge", 370, "item-b", testRunID())
+	for _, rs := range []*RuntimeState{a, b} {
+		if err := rs.Persist(dir); err != nil {
+			t.Fatalf("Persist: %v", err)
+		}
+	}
+
+	loaded, err := LoadSnapshotByIdentity(dir, 370, a.RunID)
+	if err != nil {
+		t.Fatalf("LoadSnapshotByIdentity: %v", err)
+	}
+	if loaded.RunID != a.RunID || loaded.PrUrl != "https://example.invalid/pr/a" {
+		t.Errorf("loaded run %q (%q), want %q", loaded.RunID, loaded.PrUrl, a.RunID)
+	}
+
+	// The issue number is part of the ADDRESS here, not a filter: a wrong pair
+	// names a file that does not exist rather than the run's snapshot.
+	if _, err := LoadSnapshotByIdentity(dir, 371, a.RunID); err == nil {
+		t.Error("a mismatched (issue, runId) pair must not resolve")
+	}
+	// Same sink discipline as LoadPersistedState: the identity becomes a path
+	// component, so it is validated before it is interpolated.
+	if _, err := LoadSnapshotByIdentity(dir, 370, "../../etc/passwd"); err == nil {
+		t.Error("LoadSnapshotByIdentity accepted a non-identity as an address")
+	}
+}
+
 func TestFindPersistedStatesForIssue_ReturnsEveryCandidateNewestFirst(t *testing.T) {
 	dir := t.TempDir()
 	base := time.Date(2026, 8, 9, 10, 0, 0, 0, time.UTC)

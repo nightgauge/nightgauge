@@ -1214,13 +1214,19 @@ runtime files are ignored.
 
 #### Run Identity Keying (Issue #370 / ADR 017)
 
-**Status: the re-key has landed (ADR 017 steps 0–4).** The IPC server's runtime
-registry (`internal/ipc/server.go`, `activeRuntimes`) is keyed by the
-caller-minted **run identity**; the issue number survives only as a derived
-index. The reconciler's liveness ladder (step 5), `pipeline.abandonRun` (step
-6), the learning/gate identity threading (step 7), the pause-restore claim
-rename (step 8) and the legacy-file sweep (step 9) are still outstanding — the
-rows below marked with those steps describe the destination, not today's tree.
+**Status: the re-key and the reconciler have landed (ADR 017 steps 0–5).** The
+IPC server's runtime registry (`internal/ipc/server.go`, `activeRuntimes`) is
+keyed by the caller-minted **run identity**; the issue number survives only as a
+derived index. The reconciler (`internal/ipc/pipeline_orphan_reconcile.go`) now
+skips on the five-arm liveness ladder, defers its startup sweep 120s and
+re-evaluates from scratch, applies the retention table, reaps stale registry
+entries, and releases a pause-restore claim by decoding its token.
+`pipeline.abandonRun` (step 6), the learning/gate identity threading (step 7),
+the pause-restore claim RENAME on the TypeScript side (step 8) and the
+legacy-file sweep (step 9) are still outstanding — the rows below marked with
+those steps describe the destination, not today's tree. The `resuming-*` rows
+below are implemented and tested but production-inert until step 8 mints the
+first such file.
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.

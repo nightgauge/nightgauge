@@ -35,15 +35,39 @@ func newInterruptedRuntime(issueNumber int, runID string) *state.RuntimeState {
 	return rt
 }
 
-func TestCollectOrphanedRuns_BuildsTerminalEventForInterruptedRun(t *testing.T) {
+// backdate moves a fixture's mtime so LADDER ARM 4 (the disk-side lease) is
+// false. writeRuntimeSnapshot goes through Persist, so every fixture is written
+// "now" and arm 4 would skip it — a reconcile test that forgets this asserts
+// nothing and passes (ADR-017 7.2).
+func backdate(t *testing.T, path string, when time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, when, when); err != nil {
+		t.Fatalf("backdate %s: %v", filepath.Base(path), err)
+	}
+}
+
+// staleSnapshot writes an interrupted run's snapshot and ages it past the
+// liveness window, which is the precondition for every "this run is not alive"
+// assertion below.
+func staleSnapshot(t *testing.T, stateDir string, issueNumber int, runID string, now time.Time) string {
+	t.Helper()
+	path := writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(issueNumber, runID))
+	backdate(t, path, now.Add(-2*livenessWindow))
+	return path
+}
+
+func TestCollectReconcileActions_BuildsTerminalEventForInterruptedRun(t *testing.T) {
 	stateDir := t.TempDir()
 	runID := newTestRunID()
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(205, runID))
+	staleSnapshot(t, stateDir, 205, runID, reconcileNow)
 
-	orphans := collectOrphanedRuns(stateDir, nil, reconcileNow)
+	orphans := collectReconcileActions(stateDir, runEvidence{}, reconcileNow)
 
 	if len(orphans) != 1 {
 		t.Fatalf("got %d orphans, want 1", len(orphans))
+	}
+	if orphans[0].Disposition != dispositionEmitAndRemove {
+		t.Fatalf("disposition = %s, want emit+remove", orphans[0].Disposition)
 	}
 	ev := orphans[0].Event
 	if ev.EventType != "pipeline_done" {
@@ -65,12 +89,16 @@ func TestCollectOrphanedRuns_BuildsTerminalEventForInterruptedRun(t *testing.T) 
 	}
 }
 
-func TestCollectOrphanedRuns_SkipsPausedAndRunIDLessSnapshots(t *testing.T) {
+func TestCollectReconcileActions_SkipsPausedAndRunIDLessSnapshots(t *testing.T) {
 	stateDir := t.TempDir()
 
 	paused := newInterruptedRuntime(101, newTestRunID())
 	paused.SetPaused(true)
-	writeRuntimeSnapshot(t, stateDir, paused)
+	// Aged past the LIVENESS window but well inside the 14-day cap: a paused
+	// snapshot is exempt from reconciliation while it is fresh in the cap's
+	// sense, because the restore prompt reads it at the next activation
+	// (ADR-017 7.4, C5).
+	backdate(t, writeRuntimeSnapshot(t, stateDir, paused), reconcileNow.Add(-2*livenessWindow))
 
 	// The name/body-mismatch case is a CORRUPTION GUARD, not a discovery
 	// filter: Persist refuses an identity-less runtime outright and composes
@@ -96,23 +124,30 @@ func TestCollectOrphanedRuns_SkipsPausedAndRunIDLessSnapshots(t *testing.T) {
 		`","stage":"feature-dev","completedStages":[{"stage":"issue-pickup","durationMs":1000}],"skippedStages":[],"phaseHistory":[],"stageErrors":{}}`), 0644); err != nil {
 		t.Fatal(err)
 	}
+	backdate(t, empty, reconcileNow.Add(-2*livenessWindow))
+	backdate(t, mismatched, reconcileNow.Add(-2*livenessWindow))
 
-	orphans := collectOrphanedRuns(stateDir, nil, reconcileNow)
+	orphans := collectReconcileActions(stateDir, runEvidence{}, reconcileNow)
 
 	if len(orphans) != 0 {
 		ids := make([]string, 0, len(orphans))
 		for _, o := range orphans {
-			ids = append(ids, o.Event.RunID)
+			ids = append(ids, o.RunID)
 		}
 		t.Fatalf("got %d orphans %v, want 0 — paused, content-runID-less, and name/body-mismatched files must all be skipped", len(orphans), ids)
 	}
 }
 
-func TestCollectOrphanedRuns_SkipsLiveRuntimesAndIgnoresJunk(t *testing.T) {
+// The skip is PER RUN now (ADR-017 7.2): a live lease pins its own run, not
+// every snapshot that happens to share an issue number. The two runs below are
+// two dispatches of the same issue, which is the case the issue-keyed predicate
+// could not express at all.
+func TestCollectReconcileActions_SkipsLiveRunsAndIgnoresJunk(t *testing.T) {
 	stateDir := t.TempDir()
+	liveID := newTestRunID()
 	deadID := newTestRunID()
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(201, newTestRunID()))
-	writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(202, deadID))
+	staleSnapshot(t, stateDir, 201, liveID, reconcileNow)
+	staleSnapshot(t, stateDir, 201, deadID, reconcileNow)
 
 	// Junk that must not trip the scanner: a malformed new-scheme file, a
 	// LEGACY-named file (which the new discovery regex must not match at all),
@@ -127,40 +162,71 @@ func TestCollectOrphanedRuns_SkipsLiveRuntimesAndIgnoresJunk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	skipIssue := func(n int) bool { return n == 201 }
-	orphans := collectOrphanedRuns(stateDir, skipIssue, reconcileNow)
+	ev := runEvidence{leaseFresh: func(id string) bool { return id == liveID }}
+	orphans := collectReconcileActions(stateDir, ev, reconcileNow)
 
 	if len(orphans) != 1 {
 		t.Fatalf("got %d orphans, want 1", len(orphans))
 	}
 	if orphans[0].Event.RunID != deadID {
-		t.Errorf("RunID = %q, want %q", orphans[0].Event.RunID, deadID)
+		t.Errorf("RunID = %q, want %q — the live run's sibling dispatch must be the one collected", orphans[0].Event.RunID, deadID)
 	}
 }
 
-func TestCollectOrphanedRuns_MissingDirIsNoop(t *testing.T) {
-	orphans := collectOrphanedRuns(filepath.Join(t.TempDir(), "does-not-exist"), nil, reconcileNow)
+func TestCollectReconcileActions_MissingDirIsNoop(t *testing.T) {
+	orphans := collectReconcileActions(filepath.Join(t.TempDir(), "does-not-exist"), runEvidence{}, reconcileNow)
 	if len(orphans) != 0 {
 		t.Fatalf("got %d orphans, want 0", len(orphans))
 	}
 }
 
-func TestReconcileOrphanedRuns_GuardsWithoutAnalyticsOrRoot(t *testing.T) {
-	stateDir := t.TempDir()
-	file := writeRuntimeSnapshot(t, stateDir, newInterruptedRuntime(303, newTestRunID()))
+// TestOrphanReconcile_RunsAndRemovesWithoutAnalytics is the DELIBERATE INVERSION
+// of what this file asserted before ADR-017 step 5 (F24).
+//
+// The old test pinned "the snapshot survives a reconcile when analyticsSvc is
+// nil", which is `reconcileOrphanedRuns` returning on line 1 — and AGENTS.md
+// states the product "runs fully locally against your own model keys with no
+// account and no server". On that first-class configuration the reconciler, the
+// retention rules and the legacy sweep were all dead code, while the scheme
+// moved from one file per ISSUE (overwritten by every re-dispatch) to one file
+// per RUN: monotonic growth exactly where nothing collects it.
+//
+// Emission and removal are split. The scan and every removal rule run
+// unconditionally; only the emission is skipped.
+func TestOrphanReconcile_RunsAndRemovesWithoutAnalytics(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	now := time.Now()
+	file := staleSnapshot(t, stateDir, 303, newTestRunID(), now)
 
-	// No analytics service: reconcile must not delete evidence it cannot emit.
-	s := NewServer(nil, WithWorkspaceRoot(filepath.Dir(filepath.Dir(stateDir))))
-	s.reconcileOrphanedRuns()
-	if _, err := os.Stat(file); err != nil {
-		t.Fatalf("snapshot must survive reconcile without analytics service: %v", err)
+	s := NewServer(nil, WithWorkspaceRoot(root))
+	if s.analyticsSvc != nil {
+		t.Fatal("this test is about the nil-analytics path")
+	}
+	// The emission the pass will NOT make is still decided, and decided the same
+	// way — the platform's absence changes who is told, never what is collected.
+	acts := collectReconcileActions(stateDir, s.serverEvidence(now), now)
+	if len(acts) != 1 || acts[0].Disposition != dispositionEmitAndRemove {
+		t.Fatalf("collector gave %+v, want one emit+remove", acts)
 	}
 
-	// No workspace root: same guard.
-	s2 := NewServer(nil)
-	s2.reconcileOrphanedRuns()
-	if _, err := os.Stat(file); err != nil {
-		t.Fatalf("snapshot must survive reconcile without workspace root: %v", err)
+	s.reconcilePass(now)
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("a local-only workspace must still collect its snapshots, stat err = %v", err)
+	}
+
+	// No workspace root: pipelineStateScanRoots yields nothing, so a second
+	// server touches no directory at all. This arm was VACUOUS before the split
+	// (the nil-analytics early return fired first); it is a real assertion now.
+	other := t.TempDir()
+	survivor := staleSnapshot(t, filepath.Join(other, ".nightgauge", "pipeline"), 304, newTestRunID(), now)
+	rootless := NewServer(nil)
+	if got := rootless.pipelineStateScanRoots(); len(got) != 0 {
+		t.Fatalf("a rootless server must scan nothing, got %v", got)
+	}
+	rootless.reconcilePass(now)
+	if _, err := os.Stat(survivor); err != nil {
+		t.Fatalf("a server with no workspace root must not reach another directory: %v", err)
 	}
 }
 
@@ -180,17 +246,19 @@ func TestOrphanReconcile_CrashReopenFlowIsIdempotent(t *testing.T) {
 		t.Fatalf("persist: %v", err)
 	}
 
+	backdate(t, filepath.Join(stateDir, state.SnapshotFilename(205, rt.RunID)), reconcileNow.Add(-2*livenessWindow))
+
 	// Session 2 activates: collector finds the orphan, server removes the file.
-	orphans := collectOrphanedRuns(stateDir, nil, reconcileNow)
+	orphans := collectReconcileActions(stateDir, runEvidence{}, reconcileNow)
 	if len(orphans) != 1 {
 		t.Fatalf("first activation: got %d orphans, want 1", len(orphans))
 	}
-	if err := os.Remove(orphans[0].FilePath); err != nil {
+	if err := os.Remove(orphans[0].Path); err != nil {
 		t.Fatalf("remove reconciled snapshot: %v", err)
 	}
 
 	// Session 3 activates: nothing left to reconcile.
-	if again := collectOrphanedRuns(stateDir, nil, reconcileNow); len(again) != 0 {
+	if again := collectReconcileActions(stateDir, runEvidence{}, reconcileNow); len(again) != 0 {
 		t.Fatalf("second activation: got %d orphans, want 0 (must be idempotent)", len(again))
 	}
 }

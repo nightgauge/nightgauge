@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
@@ -64,8 +65,25 @@ type Server struct {
 	auditRetentionSvc *platform.AuditRetentionService
 	teamSvc           *platform.TeamService
 	billingSvc        *platform.BillingService
-	workspaceRoot     string
 	commandExecutor   *executor.CommandExecutor
+
+	// workspaceRoot is the IPC launch root, and it is MUTABLE: workspace.setRoot
+	// re-points it on a multi-repo workspace switch, from a handler goroutine,
+	// while the deferred reconcile sweep reads it from a timer goroutine (ADR-017
+	// 7.3). Every access goes through workspaceRootPath/setWorkspaceRoot — an
+	// unlocked read is a data race the moment the sweep stopped being inline.
+	workspaceRoot   string
+	workspaceRootMu sync.RWMutex
+
+	// startupGraceUntil is ladder arm 5 as a deadline in UnixNano, armed by
+	// Run and read by every reconcile pass including workspace.setRoot's inline
+	// one. Zero means no grace was ever armed.
+	startupGraceUntil atomic.Int64
+
+	// reconcileMu serializes reconcile passes. The deferred startup sweep and
+	// workspace.setRoot's inline pass walk the same directories; two of them at
+	// once would race each other's removals and renames.
+	reconcileMu sync.Mutex
 
 	// activeRuntimes holds the live runs the IPC server owns — the
 	// extension/HeadlessOrchestrator population. KEYED BY RUN IDENTITY
@@ -488,8 +506,29 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 // WithWorkspaceRoot sets the workspace root for git operations.
 func WithWorkspaceRoot(root string) ServerOption {
 	return func(s *Server) {
-		s.workspaceRoot = root
+		s.setWorkspaceRoot(root)
 	}
+}
+
+// workspaceRootPath returns the IPC launch root. THE ONLY READER OF THE FIELD.
+//
+// The field is written after construction by workspace.setRoot, so once the
+// startup reconcile stopped being inline (ADR-017 7.3) an unlocked read from the
+// sweep's goroutine became a data race the detector proves. Guarding one field
+// rather than the two goroutines that happen to meet today is what keeps the
+// next background reader from re-opening it.
+func (s *Server) workspaceRootPath() string {
+	s.workspaceRootMu.RLock()
+	defer s.workspaceRootMu.RUnlock()
+	return s.workspaceRoot
+}
+
+// setWorkspaceRoot is THE ONLY WRITER of the field. It takes no other lock, so
+// it cannot participate in a lock cycle.
+func (s *Server) setWorkspaceRoot(root string) {
+	s.workspaceRootMu.Lock()
+	defer s.workspaceRootMu.Unlock()
+	s.workspaceRoot = root
 }
 
 // WithCommandExecutor attaches a CommandExecutor to the IPC server.
@@ -702,7 +741,7 @@ func (s *Server) repoRoot(repo string) string {
 			return root
 		}
 	}
-	return s.workspaceRoot
+	return s.workspaceRootPath()
 }
 
 // pipelineStateDir resolves the .nightgauge/pipeline directory a run's
@@ -732,9 +771,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	// Close out platform rows orphaned by runs that died with this server's
-	// previous incarnation (#44). Server start is extension activation, so
-	// this is the "workspace reopened" reconciliation moment.
-	s.reconcileOrphanedRuns()
+	// previous incarnation (#44) — DEFERRED by startupGrace and re-evaluated
+	// from scratch at expiry (ADR-017 7.3). Server start is extension
+	// activation, but it is ALSO the client's automatic backend restart, under
+	// which the extension host and every in-flight run survive; an inline sweep
+	// closed those live runs (F26). Nothing about the handshake below waits for
+	// it.
+	s.startDeferredReconcile(ctx)
 
 	// Emit ipc.ready event with protocol version so the TypeScript client
 	// can validate binary compatibility on startup.
@@ -844,10 +887,15 @@ func (s *Server) registerMethods() {
 		if p.Root == "" {
 			return nil, fmt.Errorf("root must not be empty")
 		}
-		s.workspaceRoot = p.Root
+		s.setWorkspaceRoot(p.Root)
 		// A multi-repo workspace switch exposes a different .nightgauge/pipeline
 		// dir — close out any runs orphaned there too (#44). Idempotent: each
 		// reconciled snapshot is removed after its terminal event is emitted.
+		//
+		// STILL INLINE (ADR-017 7.3): a setRoot arrives from a connected, live
+		// extension host, so ladder arms 1 and 2 carry real information here.
+		// Inside the server's own startup grace arm 5 defers every candidate
+		// anyway, so the pass then does terminal-removals only.
 		s.reconcileOrphanedRuns()
 		return &WorkspaceSetRootResult{OK: true}, nil
 	}
@@ -900,7 +948,7 @@ func (s *Server) registerMethods() {
 		}
 		root := p.Root
 		if root == "" {
-			root = s.workspaceRoot
+			root = s.workspaceRootPath()
 		}
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
@@ -927,7 +975,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method configGetHealthThresholds params:none result:ConfigGetHealthThresholdsResult
 	s.methods["config.getHealthThresholds"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -981,7 +1029,7 @@ func (s *Server) registerMethods() {
 		}
 		root := p.Root
 		if root == "" {
-			root = s.workspaceRoot
+			root = s.workspaceRootPath()
 		}
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
@@ -1007,7 +1055,7 @@ func (s *Server) registerMethods() {
 		if s.notificationReloader == nil {
 			return nil, fmt.Errorf("notifications.reloadTokens: receiver not enabled")
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -1160,7 +1208,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method forgeList params:none result:ForgeListResult
 	s.methods["forge.list"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return &ForgeListResult{Forges: []ForgeListEntry{}}, nil
 		}
@@ -1193,7 +1241,7 @@ func (s *Server) registerMethods() {
 		if p.InstanceID == "" {
 			return nil, fmt.Errorf("instance_id is required")
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -1442,7 +1490,7 @@ func (s *Server) registerMethods() {
 	// --- Intelligence methods ---
 
 	complexityEstimator := complexity.NewEstimator()
-	modelRouter := routing.NewRouter(s.platformClient, s.workspaceRoot)
+	modelRouter := routing.NewRouter(s.platformClient, s.workspaceRootPath())
 	failureClassifier := failure.NewClassifier()
 	//ipc:method intelligenceComplexity params:ComplexityEstimateParams result:ComplexityResult skip
 	s.methods["intelligence.complexity"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
@@ -1717,7 +1765,7 @@ func (s *Server) registerMethods() {
 		if s.analyticsSvc == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
-		if s.workspaceRoot == "" {
+		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("workspace root not set")
 		}
 
@@ -1730,7 +1778,7 @@ func (s *Server) registerMethods() {
 			daysBack = 7
 		}
 
-		hw := state.NewHistoryWriter(s.workspaceRoot)
+		hw := state.NewHistoryWriter(s.workspaceRootPath())
 		records, err := hw.ReadRecentV2(limit, daysBack)
 		if err != nil {
 			return nil, fmt.Errorf("read history: %w", err)
@@ -2318,7 +2366,7 @@ func (s *Server) registerMethods() {
 		if s.ipcRunner != nil {
 			autonomousActive := s.autonomousScheduler != nil && s.autonomousScheduler.IsRunning()
 			if autonomousActive {
-				if cfg, err := config.Load(s.workspaceRoot); err == nil && cfg.Autonomous.IsStallEscalationEnabled() {
+				if cfg, err := config.Load(s.workspaceRootPath()); err == nil && cfg.Autonomous.IsStallEscalationEnabled() {
 					s.ipcRunner.AutonomousMode = true
 					log.Printf("autonomous: stall escalation enabled (pause timeout: %s)", cfg.Autonomous.ResolvedStallPauseTimeout())
 				}
@@ -2382,7 +2430,7 @@ func (s *Server) registerMethods() {
 		if s.ipcRunner != nil {
 			autonomousActive := s.autonomousScheduler != nil && s.autonomousScheduler.IsRunning()
 			if autonomousActive {
-				if cfg, err := config.Load(s.workspaceRoot); err == nil && cfg.Autonomous.IsStallEscalationEnabled() {
+				if cfg, err := config.Load(s.workspaceRootPath()); err == nil && cfg.Autonomous.IsStallEscalationEnabled() {
 					s.ipcRunner.AutonomousMode = true
 					log.Printf("autonomous: stall escalation enabled (pause timeout: %s)", cfg.Autonomous.ResolvedStallPauseTimeout())
 				}
@@ -2743,6 +2791,24 @@ func (s *Server) registerMethods() {
 			rt.SkipStage(stage)
 		case "deferred":
 			rt.SkipStage(stage) // treat deferred as skipped in Go state
+		}
+
+		// Ladder arm 3's input (ADR-017 7.2): the extension path's stage child.
+		// Recorded on EVERY transition, including the zero — `running` is the
+		// only status that names a live child, and the stage-terminal transitions
+		// send 0 explicitly so a finished child cannot vouch for the run and the
+		// PID-reuse window is bounded by one stage. `model-resolved`, `skipped`
+		// and `deferred` omit the field, which arrives as the same zero and means
+		// the same thing: no child is executing this run right now.
+		//
+		// NOT on the scheduler-owned arm: that runtime's PID belongs to
+		// SetProcess (internal/execution/manager.go), written from the scheduler's
+		// own process tree. Writing the extension's pid over it would destroy the
+		// scheduler population's arm-3 evidence with a pid from another tree.
+		//
+		// The value reaches disk through the Persist below — no new persist site.
+		if !res.schedulerOwned {
+			rt.SetStageChild(p.StagePid)
 		}
 
 		// Persist the runtime snapshot (carrying RunID) so a crash between here
@@ -3334,17 +3400,17 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRoot == "" {
+		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
 		// Read persisted wave status from disk
-		statusPath := filepath.Join(s.workspaceRoot, ".nightgauge", "pipeline",
+		statusPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
 			fmt.Sprintf("wave-status-%d.json", p.EpicNumber))
 		data, err := os.ReadFile(statusPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Try wave plan (orchestration may still be running)
-				planPath := filepath.Join(s.workspaceRoot, ".nightgauge", "pipeline",
+				planPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
 					fmt.Sprintf("wave-plan-%d.json", p.EpicNumber))
 				planData, planErr := os.ReadFile(planPath)
 				if planErr != nil {
@@ -3378,10 +3444,10 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRoot == "" {
+		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
-		ctxPath := filepath.Join(s.workspaceRoot, ".nightgauge", "pipeline",
+		ctxPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
 			fmt.Sprintf("epic-context-%d.json", p.EpicNumber))
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
@@ -3413,11 +3479,11 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRoot == "" {
+		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
 
-		dir := filepath.Join(s.workspaceRoot, ".nightgauge", "pipeline")
+		dir := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("create pipeline dir: %w", err)
 		}
@@ -4433,7 +4499,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method pipelineGetMaxConcurrent params:PipelineGetMaxConcurrentParams result:PipelineMaxConcurrentResult
 	s.methods["pipeline.getMaxConcurrent"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		cfg, err := config.Load(s.workspaceRoot)
+		cfg, err := config.Load(s.workspaceRootPath())
 		if err != nil || cfg == nil {
 			return map[string]interface{}{"maxConcurrent": config.DefaultPipelineMaxConcurrent}, nil
 		}
@@ -4450,7 +4516,7 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		m := focus.NewManager(s.workspaceRoot)
+		m := focus.NewManager(s.workspaceRootPath())
 		st, err := m.Set(p.Lens, "ipc")
 		if err != nil {
 			return nil, err
@@ -4468,7 +4534,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method focusShow params:none result:FocusShowResult
 	s.methods["focus.show"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		m := focus.NewManager(s.workspaceRoot)
+		m := focus.NewManager(s.workspaceRootPath())
 		st, lens, err := m.Show()
 		if err != nil {
 			return nil, err
@@ -4485,7 +4551,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method focusClear params:none result:FocusShowResult
 	s.methods["focus.clear"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		m := focus.NewManager(s.workspaceRoot)
+		m := focus.NewManager(s.workspaceRootPath())
 		st, err := m.Clear("ipc")
 		if err != nil {
 			return nil, err
@@ -4515,7 +4581,7 @@ func (s *Server) registerMethods() {
 		if staleDays < 0 {
 			staleDays = 30
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -4544,7 +4610,7 @@ func (s *Server) registerMethods() {
 		if strings.TrimSpace(p.Query) == "" {
 			return KnowledgeSearchResult{Hits: []KnowledgeRecallHit{}, TotalHits: 0}, nil
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -4585,7 +4651,7 @@ func (s *Server) registerMethods() {
 				return nil, fmt.Errorf("parse knowledge.backlinks params: %w", err)
 			}
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -4611,7 +4677,7 @@ func (s *Server) registerMethods() {
 		if p.IssueNumber <= 0 {
 			return nil, fmt.Errorf("issueNumber is required")
 		}
-		root := s.workspaceRoot
+		root := s.workspaceRootPath()
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
@@ -4667,7 +4733,7 @@ func (s *Server) registerMethods() {
 
 	//ipc:method focusList params:none result:FocusListResult
 	s.methods["focus.list"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		m := focus.NewManager(s.workspaceRoot)
+		m := focus.NewManager(s.workspaceRootPath())
 		st, _ := m.Load()
 		var lenses []map[string]interface{}
 		for _, l := range m.AllLenses() {
@@ -4717,7 +4783,7 @@ func (s *Server) registerMethods() {
 // Short names in enabled_repos are expanded using the configured owner.
 func (s *Server) resolveAutonomousAllowlist(workspaceRepos []string) []string {
 	var enabled []string
-	if cfg, err := config.Load(s.workspaceRoot); err == nil && cfg != nil && cfg.Autonomous != nil {
+	if cfg, err := config.Load(s.workspaceRootPath()); err == nil && cfg != nil && cfg.Autonomous != nil {
 		enabled = cfg.Autonomous.ResolvedEnabledRepos(cfg.Owner)
 	}
 
@@ -4751,7 +4817,7 @@ func (s *Server) resolveAutonomousAllowlist(workspaceRepos []string) []string {
 func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 	dir := workDir
 	if dir == "" {
-		dir = s.workspaceRoot
+		dir = s.workspaceRootPath()
 	}
 	if dir == "" {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
@@ -4849,7 +4915,7 @@ func (s *Server) sendError(id int, code int, message string) {
 //
 // See Issue #3195.
 func (s *Server) persistMaxConcurrent(n int) error {
-	yamlPath := filepath.Join(s.workspaceRoot, ".nightgauge", "config.yaml")
+	yamlPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "config.yaml")
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
 		return fmt.Errorf("read config.yaml: %w", err)
