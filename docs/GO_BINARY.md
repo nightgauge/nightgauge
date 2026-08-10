@@ -1214,19 +1214,23 @@ runtime files are ignored.
 
 #### Run Identity Keying (Issue #370 / ADR 017)
 
-**Status: decided, not yet implemented.** The prose in this document describes
-the registry as it exists on `main`; this section is the pointer to what
-replaces it. See
+**Status: the re-key has landed (ADR 017 steps 0–4).** The IPC server's runtime
+registry (`internal/ipc/server.go`, `activeRuntimes`) is keyed by the
+caller-minted **run identity**; the issue number survives only as a derived
+index. The reconciler's liveness ladder (step 5), `pipeline.abandonRun` (step
+6), the learning/gate identity threading (step 7), the pause-restore claim
+rename (step 8) and the legacy-file sweep (step 9) are still outstanding — the
+rows below marked with those steps describe the destination, not today's tree.
+See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.
 
-Today the IPC server's runtime registry (`internal/ipc/server.go`,
-`activeRuntimes`) is keyed by **bare issue number** — the struct comment claims
-`"repo#issueNumber"`, but all seven key-construction sites build
-`fmt.Sprintf("%d", p.IssueNumber)`. An issue number is not an identity: it is
-shared by every dispatch of that issue, by every repo in a multi-repo workspace
-that numbers an issue the same, and by the zombie of a force-cleared run that
-unwedges later. The consequences are catalogued under
+What the key WAS, and why it had to change: `fmt.Sprintf("%d", p.IssueNumber)`
+at all seven key-construction sites (the struct comment claimed
+`"repo#issueNumber"` and was never true). An issue number is not an identity: it
+is shared by every dispatch of that issue, by every repo in a multi-repo
+workspace that numbers an issue the same, and by the zombie of a force-cleared
+run that unwedges later. The consequences are catalogued under
 [Force-Clear Terminal Bookkeeping](#force-clear-terminal-bookkeeping-issue-307).
 
 ADR 017 decides:

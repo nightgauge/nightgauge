@@ -37,7 +37,10 @@ const GENERATED_TS = path.join(
   "services",
   "IpcClient.generated.ts"
 );
-const CODEGEN_GO = path.join(REPO_ROOT, "cmd", "ipc-codegen", "main.go");
+// The ONE source of truth for the wire version (ADR-017 step 4): the codegen
+// used to carry a second `const ProtocolVersion` of its own, so a bump could
+// land in one file and not the other while this check still passed.
+const PROTOCOL_GO = path.join(REPO_ROOT, "internal", "ipc", "protocol.go");
 
 // ─── Parsers ─────────────────────────────────────────────────────────────────
 
@@ -137,15 +140,15 @@ describe("IPC contract coverage (structural)", () => {
     ).toHaveLength(0);
   });
 
-  it("TypeScript IPC_PROTOCOL_VERSION matches Go ProtocolVersion in codegen", () => {
+  it("TypeScript IPC_PROTOCOL_VERSION matches Go ProtocolVersion", () => {
     const generatedContent = fs.readFileSync(GENERATED_TS, "utf8");
-    const codegenContent = fs.readFileSync(CODEGEN_GO, "utf8");
+    const protocolContent = fs.readFileSync(PROTOCOL_GO, "utf8");
 
     const tsMatch = /IPC_PROTOCOL_VERSION\s*=\s*(\d+)/.exec(generatedContent);
-    const goMatch = /const\s+ProtocolVersion\s*=\s*(\d+)/.exec(codegenContent);
+    const goMatch = /const\s+ProtocolVersion\s*=\s*(\d+)/.exec(protocolContent);
 
     expect(tsMatch, "IPC_PROTOCOL_VERSION not found in IpcClient.generated.ts").toBeTruthy();
-    expect(goMatch, "ProtocolVersion not found in cmd/ipc-codegen/main.go").toBeTruthy();
+    expect(goMatch, "ProtocolVersion not found in internal/ipc/protocol.go").toBeTruthy();
 
     const tsVersion = parseInt(tsMatch![1], 10);
     const goVersion = parseInt(goMatch![1], 10);

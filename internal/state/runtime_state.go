@@ -317,6 +317,55 @@ func (rs *RuntimeState) MarkTerminal(outcome string) {
 	rs.markTerminalLocked(outcome)
 }
 
+// ClaimTerminal is claim steps 1b–1d of ADR-017 Decision 5 as ONE critical
+// section under rs.mu, and it exists because rs.mu is unexported: the claim
+// lives in internal/ipc, which cannot hold this mutex itself, so the three
+// mutations the sequence declares to be atomic have to be composed here or they
+// are not atomic at all.
+//
+//	1b. replay the dispatcher's terminal payload (#309) — these are the LAST
+//	    mutations the run will ever accept, and they run INSIDE the claim rather
+//	    than before it: latching first would refuse them (silently dropping
+//	    execution_path / punt_reason from every extension-path history record),
+//	    and running them before the claim but outside the lock reintroduces the
+//	    unlocked resolve-then-mutate window Decision 5 exists to delete;
+//	1c. latch the DURABLE half of the terminal latch (the registry's
+//	    runEntry.terminal is the caller's to set, in the same runtimesMu hold);
+//	1d. snapshot, so the seconds of unlocked work that follow run against a copy
+//	    and never against the live pointer.
+//
+// The caller holds runtimesMu across this call — lock order runtimesMu → rs.mu,
+// never the reverse. This is the one exported RuntimeState method the claim
+// invokes under runtimesMu, and it is sound for the reason C16's rule is really
+// about: it ACQUIRES rs.mu once from a caller that holds no rs.mu, so there is
+// no re-entry and no cycle.
+//
+// Both maps are keyed by stage name and may be nil; the …Locked recorders ignore
+// empty values, so an absent map is a no-op.
+//
+// outcomeFor derives the terminal outcome string from the run's terminating
+// stage. It is a callback rather than a plain string because the caller's
+// outcome depends on that stage (#266's pr-merge ground truth) and reading the
+// stage before the claim would put a resolve-then-mutate window back exactly
+// where Decision 5 removed one. It must be pure and must not touch this
+// RuntimeState — it runs inside rs.mu. nil records an empty outcome.
+func (rs *RuntimeState) ClaimTerminal(executionPaths, puntReasons map[string]string, outcomeFor func(stage PipelineStage) string) *RuntimeState {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	for stg, path := range executionPaths {
+		rs.recordExecutionPathLocked(PipelineStage(stg), path)
+	}
+	for stg, reason := range puntReasons {
+		rs.recordStagePuntReasonLocked(PipelineStage(stg), reason)
+	}
+	outcome := ""
+	if outcomeFor != nil {
+		outcome = outcomeFor(rs.Stage)
+	}
+	rs.markTerminalLocked(outcome)
+	return rs.snapshotLocked()
+}
+
 // markTerminalLocked is MarkTerminal's body for callers that already hold rs.mu
 // — the claim sequence's step 1c calls this form, because sync.Mutex is not
 // reentrant (C16, F36).
@@ -382,6 +431,49 @@ func (rs *RuntimeState) SetStageChild(pid int) {
 // setStageChildLocked is SetStageChild's body for callers already holding rs.mu.
 func (rs *RuntimeState) setStageChildLocked(pid int) {
 	rs.PID = pid
+}
+
+// SeedRunContext fills the run's descriptive fields from a transition that
+// carries them and returns the run's resulting Repo.
+//
+// Latest-wins for Branch; first-wins for Repo and Title, because the run's
+// target repo is resolved asynchronously by the dispatcher and the first
+// transition to carry it is the authority (#307's persist gate depends on it).
+//
+// It exists so the IPC transition handler stops writing these fields directly:
+// they are run CONTENT, owned by rs.mu (ADR-017 Decision 12), and the handler
+// held the REGISTRY's mutex while writing them — a torn read against any
+// concurrent snapshotLocked/persistLocked, on fields that end up in every byte
+// the run writes.
+func (rs *RuntimeState) SeedRunContext(repo, title, branch string) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if title != "" && rs.Title == "" {
+		rs.Title = title
+	}
+	if branch != "" {
+		rs.Branch = branch
+	}
+	if repo != "" && rs.Repo == "" {
+		rs.Repo = repo
+	}
+	return rs.Repo
+}
+
+// TargetRepo returns the run's target repo under rs.mu, or "" before a
+// repo-carrying transition has seeded one.
+//
+// It exists because SeedRunContext WRITES Repo under rs.mu (ADR-017 Decision
+// 12: repo is run CONTENT), so every reader outside the constructor path must
+// take the same mutex — the IPC transition handler and the progress handler run
+// in separate goroutines and the race detector proves the unlocked read. A
+// lock-safe single-field read rather than Snapshot(): the progress path calls it
+// at >= 1 per 5s per run, and deep-copying every stage record to read one string
+// is a cost that scales with the run (the same argument FeatureBranch makes).
+func (rs *RuntimeState) TargetRepo() string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Repo
 }
 
 // IsTerminal reports whether the durable terminal marker is latched.
@@ -1147,6 +1239,18 @@ var ErrRunSealed = errors.New("run is sealed: its terminal snapshot was written 
 //     every caller, including any future one.
 var ErrNoRunIdentity = errors.New("runtime state's run id is not a valid run identity: refusing to persist")
 
+// ErrSealWriteFailed reports that SealAndRemove could not WRITE the
+// terminal-stamped snapshot (claim step 4). It exists so the caller's log can
+// be honest per branch: on this branch the terminal marker never reached disk
+// and the stale snapshot was removed instead, whereas a bare remove failure
+// leaves a file that DOES carry `terminal: true`. Saying "the snapshot is
+// terminal-marked either way" covers only the second case, and the difference
+// is exactly what a reader needs to know about what is left on disk.
+//
+// The seal is latched on both branches: a run that reached its terminal claim
+// never re-opens to further writes, whatever the filesystem did.
+var ErrSealWriteFailed = errors.New("seal and remove: the terminal snapshot could not be written")
+
 // Persist writes the current state atomically to {stateDir}/runtime-{issue}-{runId}.json.
 //
 // It is a Lock/defer-Unlock wrapper over persistLocked so the two forms cannot
@@ -1216,10 +1320,32 @@ func (rs *RuntimeState) SealAndRemove(stateDir string) error {
 	if !runstate.IsIdentity(rs.RunID) {
 		return fmt.Errorf("seal and remove for #%d: %w", rs.IssueNumber, ErrNoRunIdentity)
 	}
-	if err := rs.persistLocked(stateDir); err != nil {
-		return err
+	// An already-sealed runtime writes nothing and removes nothing — the same
+	// refusal every other write path gives. Stated here rather than left to
+	// persistLocked so the write-failure branch below is about genuine write
+	// failures only.
+	if rs.sealed {
+		return ErrRunSealed
 	}
 	target := filepath.Join(stateDir, SnapshotFilename(rs.IssueNumber, rs.RunID))
+	if err := rs.persistLocked(stateDir); err != nil {
+		// THE WRITE-FAILURE BRANCH STILL SEALS AND STILL REMOVES (F27).
+		// Returning here left the run unsealed AND left the stale NON-terminal
+		// snapshot on disk — the one shape adoption happily rehydrates, which
+		// is R-4's richer-record overwrite: a restart adopts the dead run, its
+		// next call produces a record strictly richer by one stage, and the
+		// history layer accepts that as an upgrade over the authoritative one.
+		// The authoritative record was already durably written in claim step 2,
+		// so removing the stale file costs at worst R-4's adopt-empty noise,
+		// which is strictly better than resurrection.
+		rs.sealed = true
+		if rmErr := os.Remove(target); rmErr != nil && !os.IsNotExist(rmErr) {
+			return fmt.Errorf("seal and remove %s: %w (%v) AND the stale non-terminal snapshot could not be removed: %v",
+				filepath.Base(target), ErrSealWriteFailed, err, rmErr)
+		}
+		return fmt.Errorf("seal and remove %s: %w (%v); the stale non-terminal snapshot was REMOVED instead",
+			filepath.Base(target), ErrSealWriteFailed, err)
+	}
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
 		// The seal is still latched below: a failed remove leaves a snapshot
 		// that carries `terminal: true`, which adoption refuses and the

@@ -68,10 +68,10 @@ func TestNotifyComplete_WritesSuccessRunRecord(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":232,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":232,"stage":"feature-dev","status":"running","runId":"019000e8-0000-7000-8000-000000000232"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":232,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":232,"success":true,"totalDurationMs":1000,"runId":"019000e8-0000-7000-8000-000000000232"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -112,13 +112,13 @@ func TestNotifyComplete_AttributesStageModelAndAdapter(t *testing.T) {
 
 	// running carries the requested model; complete carries the authoritative
 	// served model + adapter — latest-wins, so the served model must win.
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"feature-dev","status":"running","model":"claude-sonnet-4-5","adapter":"claude"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"feature-dev","status":"running","model":"claude-sonnet-4-5","adapter":"claude","runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"feature-dev","status":"complete","model":"claude-opus-4-8","adapter":"claude","inputTokens":1000,"outputTokens":200,"costUsd":0.05}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"feature-dev","status":"complete","model":"claude-opus-4-8","adapter":"claude","inputTokens":1000,"outputTokens":200,"costUsd":0.05,"runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"success":true,"totalDurationMs":1000,"runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -157,23 +157,23 @@ func TestNotifyComplete_WritesFailureRunRecordAndRuntimeSurvivesFailedTransition
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"stage":"feature-dev","status":"running","runId":"019000e9-0000-7000-8000-000000000233"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"stage":"feature-dev","status":"failed","error":"context deadline exceeded"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"stage":"feature-dev","status":"failed","error":"context deadline exceeded","runId":"019000e9-0000-7000-8000-000000000233"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
 
 	// The runtime must survive the failed transition so notifyComplete can
 	// record the failure — assert it is still present before the terminal event.
 	s.runtimesMu.Lock()
-	_, alive := s.activeRuntimes["233"]
+	_, alive := s.activeRuntimes["019000e9-0000-7000-8000-000000000233"]
 	s.runtimesMu.Unlock()
 	if !alive {
 		t.Fatal("runtime must survive the failed transition so notifyComplete can build the failed RunRecord")
 	}
 
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"success":false,"totalDurationMs":2000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":233,"success":false,"totalDurationMs":2000,"runId":"019000e9-0000-7000-8000-000000000233"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -197,7 +197,7 @@ func TestNotifyComplete_WritesFailureRunRecordAndRuntimeSurvivesFailedTransition
 
 	// notifyComplete must also drop the runtime (terminal cleanup).
 	s.runtimesMu.Lock()
-	_, stillAlive := s.activeRuntimes["233"]
+	_, stillAlive := s.activeRuntimes["019000e9-0000-7000-8000-000000000233"]
 	s.runtimesMu.Unlock()
 	if stillAlive {
 		t.Error("runtime must be cleaned up by notifyComplete after the terminal event")
@@ -215,10 +215,10 @@ func TestNotifyComplete_WritesRunRecordIntoTargetRepo(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"feature-dev","status":"running","runId":"019000f4-0000-7000-8000-000000000244"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"success":true,"totalDurationMs":1000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"success":true,"totalDurationMs":1000,"runId":"019000f4-0000-7000-8000-000000000244"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -274,16 +274,16 @@ func TestNotifyComplete_MergedPrMergeFailureRecordedComplete(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"stage":"pr-merge","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"stage":"pr-merge","status":"running","runId":"0190010a-0000-7000-8000-000000000266"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
 	// A late progress-runaway kill fires at pr-merge AFTER the merge landed.
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"stage":"pr-merge","status":"failed","error":"[runaway-progress-exceeded] Stage pr-merge terminated: progress stalled"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"stage":"pr-merge","status":"failed","error":"[runaway-progress-exceeded] Stage pr-merge terminated: progress stalled","runId":"0190010a-0000-7000-8000-000000000266"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
 
 	// Extension reports the run failed but signals a forge-confirmed merge.
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"success":false,"totalDurationMs":3000,"prMerged":true}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":266,"success":false,"totalDurationMs":3000,"prMerged":true,"runId":"0190010a-0000-7000-8000-000000000266"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -313,15 +313,15 @@ func TestNotifyComplete_UnmergedPrMergeFailureStaysFailed(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"pr-merge","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"pr-merge","status":"running","runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"pr-merge","status":"failed","error":"[runaway-progress-exceeded] Stage pr-merge terminated: progress stalled"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"stage":"pr-merge","status":"failed","error":"[runaway-progress-exceeded] Stage pr-merge terminated: progress stalled","runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(failed): %v", err)
 	}
 
 	// No prMerged signal — the PR did not merge; this is a real failure.
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"success":false,"totalDurationMs":3000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":268,"success":false,"totalDurationMs":3000,"runId":"0190010c-0000-7000-8000-000000000268"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -353,12 +353,13 @@ func TestNotifyComplete_ThreadsStageExecutionPathsFromParams(t *testing.T) {
 	transition := s.methods["pipeline.notifyStageTransition"]
 	complete := s.methods["pipeline.notifyComplete"]
 
+	runID := newTestRunID()
 	// pr-create ran (its LLM path completed) and pr-merge ran (deterministic).
 	for _, stage := range []string{"pr-create", "pr-merge"} {
-		if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":309,"stage":"`+stage+`","status":"running"}`)); err != nil {
+		if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":309,"stage":"`+stage+`","status":"running","runId":"`+runID+`"}`)); err != nil {
 			t.Fatalf("notifyStageTransition(%s running): %v", stage, err)
 		}
-		if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":309,"stage":"`+stage+`","status":"complete"}`)); err != nil {
+		if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":309,"stage":"`+stage+`","status":"complete","runId":"`+runID+`"}`)); err != nil {
 			t.Fatalf("notifyStageTransition(%s complete): %v", stage, err)
 		}
 	}
@@ -367,7 +368,7 @@ func TestNotifyComplete_ThreadsStageExecutionPathsFromParams(t *testing.T) {
 	// pr-merge=deterministic (no punt reason), pr-create=llm (punted, with why).
 	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":309,"success":true,"totalDurationMs":1000,`+
 		`"stageExecutionPaths":{"pr-merge":"deterministic","pr-create":"llm"},`+
-		`"stagePuntReasons":{"pr-create":"missing-validate-context"}}`)); err != nil {
+		`"stagePuntReasons":{"pr-create":"missing-validate-context"},"runId":"`+runID+`"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 
@@ -415,29 +416,29 @@ func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
 	complete := s.methods["pipeline.notifyComplete"]
 
 	// Stage 1: feature-planning succeeds at $1.52.
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"running","runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(planning running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"complete","inputTokens":1000,"outputTokens":200,"costUsd":1.52}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-planning","status":"complete","inputTokens":1000,"outputTokens":200,"costUsd":1.52,"runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(planning complete): %v", err)
 	}
 	// Stage 2: feature-dev fails at $13.32.
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"running"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"running","runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(dev running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"failed","error":"stage gate failed","inputTokens":90000,"outputTokens":8000,"costUsd":13.32}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"failed","error":"stage gate failed","inputTokens":90000,"outputTokens":8000,"costUsd":13.32,"runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(dev failed): %v", err)
 	}
 
 	// The in-memory runtime — the source of the stateChanged snapshot the
 	// extension mirrors into tokens.estimated_cost_usd — must carry X+Y.
-	s.mu.Lock()
-	rt := s.activeRuntimes["293"]
-	s.mu.Unlock()
-	if rt == nil {
+	s.runtimesMu.Lock()
+	entry := s.activeRuntimes["01900125-0000-7000-8000-000000000293"]
+	s.runtimesMu.Unlock()
+	if entry == nil {
 		t.Fatal("runtime missing after failed transition (must survive until notifyComplete, #232)")
 	}
-	snap := rt.Snapshot()
+	snap := entry.rs.Snapshot()
 	if got, want := snap.TotalCostUSD, 1.52+13.32; got < want-0.001 || got > want+0.001 {
 		t.Errorf("snapshot TotalCostUSD = %.4f, want %.2f (failing stage's cost must be booked, not dropped)", got, want)
 	}
@@ -446,7 +447,7 @@ func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
 	// attribution for BOTH stages and no double count from the
 	// terminating-stage synthesis branch (the stage is in CompletedStages,
 	// so synthesis must not fire).
-	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"success":false,"failedStage":"feature-dev","error":"stage gate failed","totalDurationMs":295000}`)); err != nil {
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"success":false,"failedStage":"feature-dev","error":"stage gate failed","totalDurationMs":295000,"runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyComplete: %v", err)
 	}
 	records := readHistoryRecords(t, dir)

@@ -28,7 +28,7 @@ func newEscalatingStageRunner(buf *bytes.Buffer) (*IpcStageRunner, *orchestrator
 	srv := &Server{
 		writer:         buf,
 		methods:        make(map[string]Handler),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
 	}
 	engine := orchestrator.NewRetryEngine(orchestrator.DefaultRetryConfig())
 	return NewIpcStageRunner(srv, engine), engine

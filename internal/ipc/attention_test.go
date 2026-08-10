@@ -8,7 +8,6 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
-	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // testRepos are the repo slugs the attention tests raise against. They are
@@ -37,7 +36,7 @@ func newAttentionTestServer(t *testing.T) *Server {
 		writer:              io.Discard,
 		workspaceRoot:       root,
 		resolver:            resolver,
-		activeRuntimes:      make(map[string]*state.RuntimeState),
+		activeRuntimes:      make(map[string]*runEntry),
 		methods:             make(map[string]Handler),
 	}
 	// Register the real method table so tests can drive the daemon through the

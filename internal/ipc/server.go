@@ -36,7 +36,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
-	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -68,10 +67,33 @@ type Server struct {
 	workspaceRoot     string
 	commandExecutor   *executor.CommandExecutor
 
-	// activeRuntimes holds RuntimeState for HeadlessOrchestrator-initiated pipelines.
-	// Keyed by "repo#issueNumber". Protected by runtimesMu.
-	activeRuntimes map[string]*state.RuntimeState
+	// activeRuntimes holds the live runs the IPC server owns — the
+	// extension/HeadlessOrchestrator population. KEYED BY RUN IDENTITY
+	// (ADR-017 Decision 1, step 4), not by issue number: two dispatches of one
+	// issue are two runs, and an issue-shaped key merged them into one runtime,
+	// one snapshot and one set of accumulators. The issue number survives as a
+	// DERIVED index (Decision 6, currentRunForIssue) — there is no second map.
+	//
+	// adopting is the per-id adoption singleflight (Decision 4) and closedRuns
+	// the FIFO ring of ids whose terminal claim has run. All three, and every
+	// runEntry field, are protected by runtimesMu.
+	activeRuntimes map[string]*runEntry
+	adopting       map[string]*adoptFlight
+	closedRuns     closedRunRing
 	runtimesMu     sync.Mutex
+
+	// rejectLogSeen rate-limits the identity-rejection log to one line per
+	// (method, runId) per minute — the notifyStageProgress cadence is why.
+	// Deliberately NOT under runtimesMu: logging a refusal must never queue
+	// behind the registry.
+	rejectLogSeen map[string]time.Time
+	rejectLogMu   sync.Mutex
+
+	// schedulerRuns is the narrow read surface ADR-017 Decision 11 needs from
+	// the Go scheduler's own registry. It is set from the same scheduler
+	// WithScheduler attaches; it exists as an interface so the resolution
+	// rule's scheduler arm is testable without standing up a full scheduler.
+	schedulerRuns schedulerRunRegistry
 
 	// autonomousScheduler is the cross-repo autonomous scheduler (optional).
 	autonomousScheduler *orchestrator.AutonomousScheduler
@@ -150,6 +172,18 @@ func (s *Server) ForgeInstanceFor(owner, repo string) (ForgeInstanceConfig, bool
 	return cfg, ok
 }
 
+// schedulerRunRegistry is the Go scheduler's half of ADR-017 Decision 11's
+// "two registries" boundary, as the IPC server needs to see it: which runs the
+// scheduler owns, and the identity-gated write arms for phase markers.
+// *orchestrator.Scheduler satisfies it.
+type schedulerRunRegistry interface {
+	LookupRunByID(runID string) *state.RuntimeState
+	IsRunLive(runID string) bool
+	RecordPhaseStartForRun(runID string, issueNumber int, stage, name string, index, total int)
+	RecordPhaseCompleteForRun(runID string, issueNumber int, stage, name string)
+	RunIDForIssue(issueNumber int) string
+}
+
 // Handler processes an IPC request and returns a result or error.
 type Handler func(ctx context.Context, params json.RawMessage) (interface{}, error)
 
@@ -160,7 +194,8 @@ func NewServer(client *gh.Client, opts ...ServerOption) *Server {
 		writer:         os.Stdout,
 		methods:        make(map[string]Handler),
 		userClients:    make(map[string]*gh.Client),
-		activeRuntimes: make(map[string]*state.RuntimeState),
+		activeRuntimes: make(map[string]*runEntry),
+		adopting:       make(map[string]*adoptFlight),
 		forgeRegistry:  make(map[string]ForgeInstanceConfig),
 	}
 	for _, opt := range opts {
@@ -208,6 +243,12 @@ func WithExecutionManager(mgr *execution.Manager) ServerOption {
 func WithScheduler(sched *orchestrator.Scheduler) ServerOption {
 	return func(s *Server) {
 		s.scheduler = sched
+		// Guarded: a nil *Scheduler stored in an interface field is a NON-nil
+		// interface, and every `if s.schedulerRuns != nil` guard downstream
+		// would then call through a nil receiver.
+		if sched != nil {
+			s.schedulerRuns = sched
+		}
 	}
 }
 
@@ -240,6 +281,25 @@ func WithAuthService(as *platform.AuthService) ServerOption {
 // after NewServer). See #3348.
 func (s *Server) SetScheduler(sched *orchestrator.Scheduler) {
 	s.scheduler = sched
+	// THE PRODUCTION ATTACH PATH, and therefore the one that must wire
+	// Decision 11's scheduler arm. `nightgauge serve` builds the scheduler
+	// AFTER the server (it needs IpcStageRunner) and reaches the server through
+	// here; WithScheduler has no production caller at all. Wiring the registry
+	// only there left `s.schedulerRuns` nil in every real deployment, so every
+	// scheduler-run phase event fell through to ADOPTION — a phantom registry
+	// entry that holds a lease, is never terminal-claimed, poisons the derived
+	// issue index and swallows the PhaseHistory the scheduler's own runtime
+	// should have received.
+	//
+	// Guarded exactly as WithScheduler is: a nil *Scheduler stored in an
+	// interface field is a NON-nil interface, and every `if s.schedulerRuns !=
+	// nil` guard downstream would then call through a nil receiver. The guard
+	// covers the callback wiring too — `initSchedulerCallbacks` dereferences
+	// its argument on the first line.
+	if sched == nil {
+		return
+	}
+	s.schedulerRuns = sched
 	s.initSchedulerCallbacks(sched)
 }
 
@@ -355,13 +415,26 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 			"durationMs":        durationMs,
 			"perStage":          perStage,
 		})
+		// The run identity travels on the envelope (ADR-017 Decision 6),
+		// sourced from the snapshot this callback is about. NOTE: the
+		// TypeScript consumer of pipeline.historyRecorded is the GLOBAL
+		// dashboard refresh and must stay UNFILTERED — the id is here to
+		// correlate, not to route.
 		s.Emit("pipeline.historyRecorded", map[string]interface{}{
 			"issueNumber": issue,
+			"runId":       snap.RunID,
 			"success":     ok,
 		})
 		if snap.LicenseExpiredMidRun {
+			// The last envelope in this callback that described a run without
+			// naming it. Every sibling above carries the identity off the same
+			// snapshot; this one keyed on issueNumber alone, which is ambiguous
+			// the moment two dispatches of one issue overlap (ADR-017 Decision
+			// 6). Envelope completeness only — the TS consumer is a global
+			// warning toast and gains no routing from it.
 			s.Emit("pipeline.licenseExpired", map[string]interface{}{
 				"issueNumber": issue,
+				"runId":       snap.RunID,
 			})
 		}
 		owner, _ := splitOwnerRepo(cbRepo)
@@ -371,9 +444,13 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 	})
 	sched.OnStateChanged(func(cbRepo string, issue int, runtime *state.RuntimeState) {
 		snap := runtime
+		// runId from the snapshot the callback carries — the scheduler stamps
+		// a real identity on every run, so the ordinary case is a strict match
+		// for the extension's run-id routing filter (ADR-017 Decision 6).
 		s.Emit("pipeline.stateChanged", map[string]interface{}{
 			"repo":        cbRepo,
 			"issueNumber": issue,
+			"runId":       snap.RunID,
 			"state":       snap,
 		})
 	})
@@ -391,9 +468,15 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 		})
 	})
 	sched.OnPhaseDetected(func(cbRepo string, issue int, pStage, pName string, pIndex, pTotal int) {
+		// Resolved from the scheduler's OWN registry, never fabricated: the
+		// callback fires from inside runPipeline for this issue, so the
+		// registered runtime IS the run this event is about (ADR-017 Decision
+		// 6). An empty id (the run already unregistered) falls back to the
+		// consumer's issue-number pre-filter rather than being dropped.
 		s.Emit("phase.start", map[string]interface{}{
 			"repo":        cbRepo,
 			"issueNumber": issue,
+			"runId":       sched.RunIDForIssue(issue),
 			"stage":       pStage,
 			"name":        pName,
 			"index":       pIndex,
@@ -704,7 +787,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) {
 
 	result, err := handler(ctx, req.Params)
 	if err != nil {
-		s.sendError(req.ID, ErrInternal, err.Error())
+		s.sendError(req.ID, rpcCodeFor(err), err.Error())
 		return
 	}
 
@@ -712,6 +795,17 @@ func (s *Server) handleRequest(ctx context.Context, req Request) {
 		ID:     req.ID,
 		Result: result,
 	})
+}
+
+// rpcCodeFor maps a handler error onto its JSON-RPC code. An ADR-017 identity
+// refusal gets its own code so a client can tell "this run message was refused"
+// from "the server broke"; everything else stays ErrInternal.
+func rpcCodeFor(err error) int {
+	var rie *runIdentityError
+	if errors.As(err, &rie) {
+		return ErrRunIdentity
+	}
+	return ErrInternal
 }
 
 // reconcilePrMergeGroundTruth applies the #266 ground-truth rule at the
@@ -2351,41 +2445,33 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		rt, ok := s.activeRuntimes[runtimeKey]
-		if !ok {
-			// Deleted outright in ADR-017 step 4, when `runId` + `repo` +
-			// `issueNumber` become required and creation here is forbidden
-			// altogether (F9). Until then it exists so the in-memory paused
-			// flag has somewhere to live.
-			//
-			// IT MINTS AN IDENTITY, symmetric with notifyStageTransition's
-			// interim mint below and for the same reason. setPaused has no
-			// identity to offer — the caller sends only an issue number — but
-			// this entry is installed under the ISSUE key, so the run that
-			// arrives next ADOPTS it: notifyStageTransition mints only in its
-			// own `!ok` branch, so an identity-less stub here made every later
-			// Persist for that run return ErrNoRunIdentity, and the whole run
-			// wrote ZERO snapshots behind a "non-fatal" log line — no crash
-			// snapshot, no gate records, no pause-restore. (On main the shared
-			// runtime-{issue}.json had no identity gate, so the same sequence
-			// persisted normally; this is a regression the per-run filename
-			// introduced, not a pre-existing gap.) A minted stub costs nothing
-			// and is at least persistable and discoverable in the interim.
-			//
-			// The #307 repo gate below still keeps THIS write off disk: with no
-			// repo there is no correct home, so the first repo-carrying
-			// transition is what actually persists it.
-			runID, mintErr := runstate.NewRunID()
-			if mintErr != nil {
-				log.Printf("setPaused: #%d cannot mint a run identity: %v — this run's snapshots will be refused (ADR-017 Decision 1)",
-					p.IssueNumber, mintErr)
-			}
-			rt = state.NewRuntimeState("", p.IssueNumber, "", runID)
-			s.activeRuntimes[runtimeKey] = rt
+		// THE OPERATOR-WIDE ARM, and it exists for this verb only.
+		// MattermostCommandDispatcher's /pause and /resume send
+		// pipelineSetPaused(0, …) — a GLOBAL pause naming no run, because there
+		// is no run to name. An operator-wide pause is a DIFFERENT TRANSACTION
+		// from pausing one run, so it is accepted without an identity and it
+		// touches nothing: no registry, no runtime, no disk, no event. Retarget
+		// onto a verb that means what it says is tracked in #423.
+		//
+		// Checked BEFORE the identity checks: an issue number of 0 is the signal
+		// that this is not a run message at all.
+		if p.IssueNumber == 0 {
+			log.Printf("setPaused: operator-wide pause=%v arm (issueNumber 0, no run identity) — no runtime touched, nothing persisted, nothing emitted (ADR-017 step 4; retarget tracked in #423)", p.Paused)
+			return map[string]string{"status": "ok"}, nil
 		}
-		s.runtimesMu.Unlock()
+
+		// ADMINISTRATIVE CLASS (Decision 3): a caller asserting something ABOUT
+		// a run. It RESOLVES, NEVER INVENTS — a live entry is served and
+		// corroborated against repo + issueNumber, a scheduler-owned run is
+		// refused run_wrong_owner, a snapshot on disk is adopted through the
+		// singleflight with its lease left at zero, and nothing at all is
+		// run_not_found. The stub-minting create-on-miss this replaces is F9:
+		// it pinned an issue against #44 forever with a runtime nobody ran.
+		res, err := s.resolveRun("pipeline.setPaused", verbAdministrative, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		rt := res.rs
 
 		rt.SetPaused(p.Paused)
 
@@ -2401,6 +2487,12 @@ func (s *Server) registerMethods() {
 		// launched from — cross-contaminating a repo that never ran the issue.
 		// An identity-less runtime has no correct home; skip the disk write and
 		// let a later, repo-carrying transition persist it to the right repo.
+		//
+		// The write goes through the LIVE adopted object, which is the whole
+		// point of routing the administrative path through adoption (F33): from
+		// the instant the entry is installed, rs.mu serialises this write against
+		// every Persist the live run makes, so there is exactly one
+		// *RuntimeState for the id to disagree with itself about.
 		if snap.Repo != "" {
 			if stateDir := s.pipelineStateDir(snap.Repo); stateDir != "" {
 				if err := rt.Persist(stateDir); err != nil {
@@ -2409,10 +2501,13 @@ func (s *Server) registerMethods() {
 			}
 		}
 
-		// Emit stateChanged so UI updates
+		// Emit stateChanged so UI updates. The envelope carries the run identity
+		// the server RESOLVED (Decision 6) — never the caller's parameter
+		// unresolved, and never a fabricated one.
 		s.Emit("pipeline.stateChanged", map[string]interface{}{
 			"repo":        snap.Repo,
 			"issueNumber": p.IssueNumber,
+			"runId":       snap.RunID,
 			"state":       snap,
 		})
 
@@ -2448,37 +2543,58 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		// Try live execution state first (scheduler path — key is "owner/repo#N")
+		// LOOKUP CLASS (ADR-017 Decision 3): not a run message. It carries no
+		// identity requirement, issue-addressed reads stay supported, and
+		// "nothing resolved" is an EMPTY RESPONSE rather than an error.
+		//
+		// Tier 0 — live execution state (scheduler path, key "owner/repo#N").
+		// Scheduler-driven runs are not in the IPC issue index and are never
+		// "current" there; they continue to resolve here, unchanged.
 		if s.execMgr != nil {
 			key := fmt.Sprintf("%s/%s#%d", p.Owner, p.Repo, p.IssueNumber)
 			if st := s.execMgr.GetState(key); st != nil {
 				return st, nil
 			}
 		}
-		// Try activeRuntimes (HeadlessOrchestrator path — keyed by issueNumber)
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		if rt, ok := s.activeRuntimes[runtimeKey]; ok {
-			snap := rt.Snapshot()
-			s.runtimesMu.Unlock()
-			return snap, nil
-		}
-		s.runtimesMu.Unlock()
-		// Fall back to persisted file — scoped to the target repo's state
-		// dir, where notifyStageTransition/setPaused persist it (#215).
 		repoSlug := ""
 		if p.Owner != "" && p.Repo != "" {
 			repoSlug = p.Owner + "/" + p.Repo
 		}
+		// Tier 1 — the DERIVED ISSUE INDEX (Decision 6): the non-abandoned,
+		// non-terminal entry for repo#issue with the newest lease. Replaces the
+		// old `activeRuntimes[issueNumber]` lookup, which could not exist once
+		// the registry keys on the run.
+		if current, others := s.currentRunForIssue(repoSlug, p.IssueNumber); current != nil {
+			snap := current.rs.Snapshot()
+			return newPipelineGetStateResult(snap, others), nil
+		}
+		// Tier 2 — persisted snapshots for the issue in that repo's dir, where
+		// notifyStageTransition/setPaused persist them (#215).
 		if stateDir := s.pipelineStateDir(repoSlug); stateDir != "" {
-			// Issue-addressed fallback tier: getState answers "what is #N
-			// doing?", so it takes the standard pick — prefer a non-terminal
-			// snapshot, then newest StartedAt (ADR-017 Decision 8).
-			persisted, err := state.PickPersistedStateForIssue(stateDir, p.IssueNumber)
-			if err == nil {
-				return persisted, nil
+			found, err := state.FindPersistedStatesForIssue(stateDir, p.IssueNumber)
+			if err == nil && len(found) > 0 {
+				// The standard pick: prefer a non-terminal snapshot, then newest
+				// StartedAt (Decision 8). FindPersistedStatesForIssue already
+				// sorts newest-first.
+				pick := found[0]
+				for _, c := range found {
+					if !c.Terminal {
+						pick = c
+						break
+					}
+				}
+				var others []string
+				for _, c := range found {
+					if c != pick {
+						others = append(others, c.RunID)
+					}
+				}
+				return newPipelineGetStateResult(pick, others), nil
 			}
 		}
+		// Issue-addressed reads may now return NOTHING where they previously
+		// returned a dead run's snapshot indefinitely (F12). That is an accepted
+		// improvement: no answer is better than a confidently wrong one.
 		return nil, nil
 	}
 
@@ -2490,88 +2606,54 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-
-		s.runtimesMu.Lock()
-		rt, ok := s.activeRuntimes[runtimeKey]
-		// IDENTITY REPAIR IS REPLACEMENT. An entry already under this issue key
-		// whose RunID is not a canonical identity cannot be fixed in place —
-		// RunID is a constructor fact with no setter — so it is REBUILT with a
-		// freshly minted one, carrying over what an administrative stub can
-		// legitimately hold. Without this, a stub installed by another handler
-		// is ADOPTED by the run: every Persist for the rest of that run returns
-		// ErrNoRunIdentity behind a "non-fatal" log line and the run writes zero
-		// snapshots. setPaused's stub now mints its own identity, so this branch
-		// is the defence for any OTHER path that ever installs one (and for the
-		// mint-failure runtime constructed a few lines below, whose next
-		// transition retries the mint here).
-		var carried *state.RuntimeState
-		if ok && !runstate.IsIdentity(rt.RunID) {
-			log.Printf("notifyStageTransition: #%d had a registry entry with no valid run identity (%q) — replacing it with a freshly minted one (ADR-017 Decision 1)",
-				p.IssueNumber, rt.RunID)
-			carried = rt.Snapshot()
-			ok = false
+		// RUN-PROGRESS CLASS (ADR-017 Decision 3): a caller describing its OWN
+		// run. The identity is required, validated before any use, and resolved
+		// against the IPC registry, then the scheduler's, then adoption — which
+		// REHYDRATES from runtime-{issue}-{runId}.json when one exists, turning
+		// the ordinary case (an IPC server restarted mid-run) from lossy into
+		// very nearly lossless.
+		//
+		// The interim server-side mint that stood here is DELETED. Minting on
+		// miss is what let a successor's messages land on a zombie's runtime: the
+		// identity now comes from the caller, so an adopting zombie re-creates
+		// ITS OWN run under ITS OWN key and every write it makes lands on its own
+		// record.
+		res, err := s.resolveRun("pipeline.notifyStageTransition", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
 		}
-		if !ok {
-			// INTERIM SERVER-SIDE MINT — ADR-017 Decision 1 deletes it, but in
-			// STEP 4, not here. The extension population does not acquire its
-			// own identity until step 3 (beginRun on PipelineStateService), so
-			// deleting the mint now would make every extension-path runtime
-			// identity-less, Persist would refuse all of them, and every
-			// extension run between these two merges would write zero
-			// snapshots behind a healthy-looking UI — F16 reached inside the
-			// migration that exists to prevent it.
-			//
-			// What DOES change now is the shape: runstate.NewRunID() is the
-			// canonical lowercase UUIDv7 the whole ADR keys on, replacing a v4
-			// that the identity regex, the snapshot filename and the wire
-			// validation would all reject. Both minters now agree by
-			// construction with the Go scheduler's.
-			//
-			// A mint failure keeps the old behaviour's shape rather than
-			// dropping the transition: construct with an empty identity and let
-			// Persist's refusal (Decision 1) and the #307 repo gate keep it off
-			// disk, so the run still updates in-memory state and still emits
-			// stateChanged.
-			runID, mintErr := runstate.NewRunID()
-			if mintErr != nil {
-				log.Printf("notifyStageTransition: #%d cannot mint a run identity: %v — this run's snapshots will be refused (ADR-017 Decision 1)",
-					p.IssueNumber, mintErr)
-			}
-			rt = state.NewRuntimeState(p.Repo, p.IssueNumber, "", runID)
-			if carried != nil {
-				// The scalar state a stub can hold. Stage accumulators are not
-				// carried: the only entry that can reach here holding any is a
-				// mint-failure runtime (crypto/rand failed), which persisted
-				// nothing on the old identity either, so nothing on disk
-				// disagrees with the replacement.
-				rt.Paused = carried.Paused
-				rt.Title = carried.Title
-				rt.Branch = carried.Branch
-				rt.ItemID = carried.ItemID
-				if rt.Repo == "" {
-					rt.Repo = carried.Repo
-				}
-			}
-			s.activeRuntimes[runtimeKey] = rt
-		}
-		// Propagate title/branch from the transition params so that stateChanged
-		// events carry the real GitHub issue title instead of an empty string.
-		if p.Title != "" && rt.Title == "" {
-			rt.Title = p.Title
-		}
-		if p.Branch != "" {
-			rt.Branch = p.Branch
-		}
-		// Seed the run's repo from the first transition that carries it (the
-		// TypeScript orchestrator sets it via PipelineStateService.setRunRepo).
-		// Required for the platform's run-creation context (owner/name format).
-		if p.Repo != "" && rt.Repo == "" {
-			rt.Repo = p.Repo
-		}
+		rt := res.rs
+		// Unlocked by exemption, not by omission: RunID is a CONSTRUCTOR
+		// ARGUMENT with no setter (ADR-017 Decision 1), so no goroutine can
+		// write it while this one reads it. Every MUTABLE field of a resolved
+		// runtime goes through rs.mu — see the repo read below.
 		runID := rt.RunID
-		repo := rt.Repo
-		s.runtimesMu.Unlock()
+
+		var repo string
+		if res.schedulerOwned {
+			// A read-through call records this run's PROGRESS onto the
+			// scheduler's runtime; it does not re-describe a run the scheduler
+			// owns. Repo is a constructor fact on THAT path — the scheduler
+			// builds its runtime with the repo already resolved and nothing
+			// re-seeds it, because SeedRunContext is only reached through the
+			// non-scheduler arm below — so this read needs no lock.
+			repo = rt.Repo
+		} else {
+			// Title/branch/repo are run CONTENT, seeded under the run's OWN
+			// mutex — the handler used to write them while holding the
+			// REGISTRY's mutex, which is a torn read against any concurrent
+			// snapshot or persist (Decision 12).
+			repo = rt.SeedRunContext(p.Repo, p.Title, p.Branch)
+			// The entry's index key follows the runtime's repo, so the derived
+			// issue index (Decision 6) can rank without ever taking rs.mu.
+			if res.entry != nil && repo != "" {
+				s.runtimesMu.Lock()
+				if res.entry.repo == "" {
+					res.entry.repo = repo
+				}
+				s.runtimesMu.Unlock()
+			}
+		}
 
 		stage := state.PipelineStage(p.Stage)
 
@@ -2665,9 +2747,20 @@ func (s *Server) registerMethods() {
 
 		// Persist the runtime snapshot (carrying RunID) so a crash between here
 		// and pipeline.notifyComplete leaves the run's platform UUID on disk for
-		// orphan reconciliation at next activation (#44). On "failed" the run is
-		// terminal — remove the snapshot instead so reconcile never re-emits.
-		// Best-effort: persistence failures must never block the pipeline.
+		// orphan reconciliation at next activation (#44).
+		// Best-effort: persistence failures must never block the pipeline — and
+		// after the terminal claim they are EXPECTED: Persist returns ErrRunSealed
+		// without writing, which is how an in-flight transition cannot resurrect a
+		// snapshot the claim already sealed and removed (F27).
+		//
+		// THE `failed` SNAPSHOT REMOVAL THAT STOOD HERE IS DELETED (Decision 5).
+		// It was a second, redundant terminal path — notifyComplete fires
+		// immediately after with Success=false — and it is what let a zombie
+		// destroy a live run's crash snapshot (F3). It was also wrong on its own
+		// terms: if the host dies between the `failed` transition and
+		// notifyComplete, the run never reached a terminal event and DESERVES
+		// reconciliation, which the removal prevented. A canonical snapshot now
+		// leaves the directory through exactly three doors, and this was not one.
 		//
 		// #307: gate on a known repo. The first "initialized" transition of a
 		// concurrent HeadlessOrchestrator slot arrives before setRunRepo seeds
@@ -2677,31 +2770,27 @@ func (s *Server) registerMethods() {
 		// in the launch repo — a repo that never ran the issue — which the
 		// startup restore then tried to resurrect. Wait for a repo-carrying
 		// transition; the run's own repo dir is the only correct home.
-		if repo != "" {
+		//
+		// A SCHEDULER-OWNED run is served read-through and never persisted from
+		// here: the scheduler owns that snapshot's whole lifecycle, and a second
+		// writer aiming at a directory derived from the CALLER's repo param is
+		// exactly the split-brain Decision 11 separates the registries to avoid.
+		if repo != "" && !res.schedulerOwned {
 			if stateDir := s.pipelineStateDir(repo); stateDir != "" {
-				if p.Status == "failed" {
-					// Composed through the one composer, never by hand: the
-					// filename now carries the run identity, so this remove can
-					// only ever take THIS run's snapshot (ADR-017 Decision 8).
-					// A hand-written `runtime-{issue}.json` here would miss the
-					// file entirely and leave every completed extension run's
-					// snapshot for the reconciler to double-terminal.
-					// (Deleting this removal outright — it is a second,
-					// redundant terminal path, F3 — is ADR-017 step 4's job,
-					// with the terminal claim that replaces it.)
-					// RunID is immutable after construction, so it needs no lock.
-					_ = os.Remove(filepath.Join(stateDir, state.SnapshotFilename(p.IssueNumber, rt.RunID)))
-				} else if err := rt.Persist(stateDir); err != nil {
+				if err := rt.Persist(stateDir); err != nil {
 					log.Printf("notifyStageTransition: persist runtime snapshot failed (non-fatal): %v", err)
 				}
 			}
 		}
 
-		// Emit stateChanged event
+		// Emit stateChanged event. The envelope carries the RESOLVED run identity
+		// (Decision 6) so PipelineStateService and PipelineSlotsTracker can route
+		// by run rather than by issue number — the filter that closes F19.
 		snap := rt.Snapshot()
 		s.Emit("pipeline.stateChanged", map[string]interface{}{
 			"repo":        p.Repo,
 			"issueNumber": p.IssueNumber,
+			"runId":       snap.RunID,
 			"state":       snap,
 		})
 
@@ -2726,20 +2815,26 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
-		// Resolve the run's stable UUID + repo from the active runtime, keyed by
-		// issue number (same lookup as notifyStageTransition). Progress is
-		// best-effort and IN-FLIGHT ONLY: do NOT create a runtime when absent and
-		// do NOT mutate CompletedStages — the terminal "complete" transition owns
-		// the authoritative per-stage totals; this only streams a live estimate.
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		rt, ok := s.activeRuntimes[runtimeKey]
-		var runID, repo string
-		if ok {
-			runID = rt.RunID
-			repo = rt.Repo
+		// RUN-PROGRESS CLASS (ADR-017 Decision 3), resolved by identity like
+		// every other run message. Progress is a live estimate only: it never
+		// mutates CompletedStages — the terminal "complete" transition owns the
+		// authoritative per-stage totals.
+		//
+		// It DOES adopt. This is the caller Decision 4 names as the ordinary
+		// concurrent adopter (>= 1 call per 5s, arriving alongside the next
+		// transition for the same unknown id after a server restart), and the
+		// per-id singleflight is what keeps the two from building two runtimes.
+		res, err := s.resolveRun("pipeline.notifyStageProgress", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
 		}
-		s.runtimesMu.Unlock()
+		// RunID is a CONSTRUCTOR FACT and immutable — no setter exists — so it
+		// is the one field a resolved runtime may be read off without rs.mu.
+		// Repo is not: SeedRunContext writes it under rs.mu from the transition
+		// handler, which runs in a DIFFERENT GOROUTINE from this one, so the
+		// read goes through the locked accessor (ADR-017 Decision 12).
+		runID := res.rs.RunID
+		repo := res.rs.TargetRepo()
 		if repo == "" {
 			repo = p.Repo
 		}
@@ -2758,54 +2853,82 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
-		// Resolve the run's stable UUID from the active runtime so the platform
-		// can transition the live row from 'running' to 'complete'/'failed'.
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		rt, ok := s.activeRuntimes[runtimeKey]
-		var runID string
-		if ok {
-			runID = rt.RunID
+		// TERMINAL CLASS — THE CLAIM (ADR-017 Decision 5). The sequence below is
+		// normative and complete: a mutation that is not in it is refused, and
+		// anything added later must be added here or it does not happen.
+		//
+		// STEP 0 — resolve, holding NEITHER lock. This is where Decision 3's class
+		// policy applies: a scheduler-owned id stops here with run_wrong_owner
+		// (the scheduler books that run's record itself through
+		// OnPipelineComplete, and serving a terminal verb from a registry with no
+		// latch, no lease and no compare-and-delete target would write a SECOND
+		// authoritative record under one run id — F29), a terminal snapshot yields
+		// run_closed, and the singleflight may perform the disk read. The
+		// singleflight takes runtimesMu up to three times itself, so containing it
+		// in the claim's critical section would deadlock (F36).
+		res, err := s.resolveRun("pipeline.notifyComplete", verbTerminal, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
 		}
-		s.runtimesMu.Unlock()
-
-		// #266 ground-truth reconciliation. A run whose PR merged must never be
-		// booked as failed by a late per-stage kill (progress-runaway / stall /
-		// budget) that fired at pr-merge AFTER the merge already landed — that
-		// misattribution recorded bowlsheet #261 (a merged run) as
-		// failed/stall_kill. Resolve the terminal stage from the runtime
-		// snapshot and, when the extension signalled a forge-confirmed merge,
-		// flip the reported failure to success BEFORE both telemetry and the
-		// RunRecord so every surface reflects the merge, not a phantom kill.
-		// #309: replay the TS orchestrator's per-stage execution-path decisions
-		// onto the runtime BEFORE snapshotting, so BuildV2Record stamps
-		// execution_path / punt_reason on the authoritative history stage records.
-		// The dogfood path (HeadlessOrchestrator) runs the deterministic-first
-		// pr-create/pr-merge (and issue-pickup) hooks in TypeScript, so the Go
-		// runtime never saw those decisions — its stageExecutionPaths map lived
-		// only in the extension process. RecordExecutionPath / RecordStagePuntReason
-		// ignore empty values, so an absent map is a no-op.
-		if ok {
-			for stg, path := range p.StageExecutionPaths {
-				rt.RecordExecutionPath(state.PipelineStage(stg), path)
-			}
-			for stg, reason := range p.StagePuntReasons {
-				rt.RecordStagePuntReason(state.PipelineStage(stg), reason)
-			}
+		if res.entry == nil {
+			// Defence in depth: resolveRun refuses a scheduler-owned run for this
+			// class, so an entry-less terminal resolution is unreachable. If it
+			// ever happens, refuse rather than claim something with no latch.
+			return nil, s.rejectRun("pipeline.notifyComplete", codeRunWrongOwner, p.RunID, p.IssueNumber,
+				"terminal resolution produced no claimable registry entry")
 		}
+		// Unlocked by exemption: RunID is immutable after construction. The
+		// claim below takes rs.mu for every field that is not.
+		runID := res.entry.rs.RunID
 
-		var snap *state.RuntimeState
-		if ok {
-			snap = rt.Snapshot()
-			if effective := reconcilePrMergeGroundTruth(p.Success, p.PrMerged, string(snap.Stage)); effective != p.Success {
-				log.Printf(
-					"notifyComplete: #%d reported failed at pr-merge but the PR is MERGED — recording complete (ground truth, #266)",
-					p.IssueNumber,
-				)
+		// #266 ground-truth reconciliation, evaluated INSIDE the claim against the
+		// run's own terminating stage. A run whose PR merged must never be booked
+		// as failed by a late per-stage kill (progress-runaway / stall / budget)
+		// that fired at pr-merge AFTER the merge already landed — that
+		// misattribution recorded a merged run as failed/stall_kill. The flip
+		// happens BEFORE both telemetry and the RunRecord so every surface
+		// reflects the merge, not a phantom kill.
+		groundTruthFlipped := false
+		outcomeFor := func(stage state.PipelineStage) string {
+			if effective := reconcilePrMergeGroundTruth(p.Success, p.PrMerged, string(stage)); effective != p.Success {
 				p.Success = effective
+				groundTruthFlipped = true
+			}
+			switch {
+			case p.Success:
+				return "complete"
+			case p.Deferred:
+				return "cancelled"
+			default:
+				return "failed"
 			}
 		}
 
+		// STEP 1 — the claim: 1a re-check (one retry), 1b the #309 replay, 1c both
+		// halves of the latch, 1d the snapshot. Everything after this runs against
+		// `snap`, NEVER against the live pointer.
+		//
+		// 1b is the dispatcher's terminal payload: the TypeScript orchestrator's
+		// per-stage execution-path decisions, which the Go runtime never saw
+		// because the deterministic-first pr-create/pr-merge (and issue-pickup)
+		// hooks run in the extension process. They are the LAST mutations the run
+		// will ever accept and they run inside the claim — before the latch would
+		// refuse them, and after the point where an unlocked mutation window could
+		// exist.
+		claimed, snap, err := s.runTerminalClaim("pipeline.notifyComplete", res, runID, p.Repo, p.IssueNumber,
+			p.StageExecutionPaths, p.StagePuntReasons, outcomeFor)
+		if err != nil {
+			return nil, err
+		}
+		rt := claimed.rs
+		if groundTruthFlipped {
+			log.Printf(
+				"notifyComplete: #%d reported failed at pr-merge but the PR is MERGED — recording complete (ground truth, #266)",
+				p.IssueNumber,
+			)
+		}
+
+		// STEP 2 — the work, UNLOCKED, against the snapshot.
 		s.emitPipelineDoneTelemetry(runID, p)
 
 		// Write the authoritative interactive RunRecord (#232). notifyComplete
@@ -2816,280 +2939,318 @@ func (s *Server) registerMethods() {
 		// (#215) so history isn't split across repos, and must run BEFORE the
 		// runtime delete below so the snapshot is still available. Best-effort:
 		// a write failure is logged but never blocks the pipeline.
-		if ok {
-			if root := s.repoRoot(p.Repo); root != "" {
-				errMsg := ""
-				if !p.Success {
-					errMsg = snap.StageErrors[string(snap.Stage)]
-					if errMsg == "" {
-						for _, v := range snap.StageErrors {
-							if v != "" {
-								errMsg = v
-								break
-							}
+		//
+		// THE ROOT COMES FROM THE CLAIMED SNAPSHOT'S OWN `Repo`, for the same
+		// reason the seal's directory does (Decision 4 fix #3): a
+		// notifyComplete whose repo param disagrees with the run's persisted
+		// repo would otherwise file repo A's record under repo B while sealing
+		// repo A's snapshot — the run's state split across two repos, which is
+		// exactly what #215/#232 settled. p.Repo remains the fallback for a run
+		// whose transitions never carried one (it has no snapshot either).
+		recordRepo := snap.Repo
+		if recordRepo == "" {
+			recordRepo = p.Repo
+		}
+		if root := s.repoRoot(recordRepo); root != "" {
+			errMsg := ""
+			if !p.Success {
+				errMsg = snap.StageErrors[string(snap.Stage)]
+				if errMsg == "" {
+					for _, v := range snap.StageErrors {
+						if v != "" {
+							errMsg = v
+							break
 						}
 					}
-					if errMsg == "" {
-						errMsg = "pipeline failed"
-					}
 				}
-				input := state.V2RunInput{
-					Title: snap.Title,
-					// Issue body captured at pickup (#183). Empty unless the
-					// runtime state carried a body (autonomous path); flows to
-					// the telemetry wire's issueBody when present.
-					Body:        snap.Body,
-					Branch:      snap.Branch,
-					BaseBranch:  "main",
-					RoutingPath: "standard",
+				if errMsg == "" {
+					errMsg = "pipeline failed"
 				}
-				// A blocked-dependency deferral (#305) is a NON-FAILURE even
-				// though p.Success is false — skip the terminal-kind
-				// classification entirely so the record is not stamped as a
-				// failure. Its outcome fields are overridden below after the
-				// record is built.
-				if !p.Success && !p.Deferred {
-					// Mirror the scheduler's failure records: classify the
-					// terminal kind (which bumps schema_version to "3"), and
-					// fall back to the most generic kind when the error text is
-					// unclassifiable so the record still distinguishes "failed"
-					// from "complete" in dashboards that group by terminal kind.
-					// Prefer the failing stage's gate-sourced structured kind
-					// over prose classification of errMsg (Issue #9).
-					gateRan := false
-					gateTerminalKind := ""
-					if gateResults := snap.StageGateResults[string(snap.Stage)]; len(gateResults) > 0 {
-						gateRan = true
-						gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
-					}
-					kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
-					if kind == "" {
-						kind = orchestrator.TerminalKindSubagentCrash
-					}
-					input.TerminalFailureKind = kind
-					// Refine into a first-class outcome_type when the failure is a
-					// needs-human repo-config block (pr-merge blocked by a required
-					// check no retry can clear) so the dashboard shows "blocked",
-					// not a generic failure. Empty for ordinary failures.
-					input.OutcomeType = orchestrator.OutcomeTypeForTerminalFailure(errMsg)
+			}
+			input := state.V2RunInput{
+				Title: snap.Title,
+				// Issue body captured at pickup (#183). Empty unless the
+				// runtime state carried a body (autonomous path); flows to
+				// the telemetry wire's issueBody when present.
+				Body:        snap.Body,
+				Branch:      snap.Branch,
+				BaseBranch:  "main",
+				RoutingPath: "standard",
+			}
+			// A blocked-dependency deferral (#305) is a NON-FAILURE even
+			// though p.Success is false — skip the terminal-kind
+			// classification entirely so the record is not stamped as a
+			// failure. Its outcome fields are overridden below after the
+			// record is built.
+			if !p.Success && !p.Deferred {
+				// Mirror the scheduler's failure records: classify the
+				// terminal kind (which bumps schema_version to "3"), and
+				// fall back to the most generic kind when the error text is
+				// unclassifiable so the record still distinguishes "failed"
+				// from "complete" in dashboards that group by terminal kind.
+				// Prefer the failing stage's gate-sourced structured kind
+				// over prose classification of errMsg (Issue #9).
+				gateRan := false
+				gateTerminalKind := ""
+				if gateResults := snap.StageGateResults[string(snap.Stage)]; len(gateResults) > 0 {
+					gateRan = true
+					gateTerminalKind = gateResults[len(gateResults)-1].TerminalKind
 				}
-				// Hydrate Labels/Size/Type from the run's issue-{N}.json (#112).
-				// These were left absent on the assumption they were cosmetic
-				// display fields. Size is not: it is the join key the VSCode
-				// pre-flight estimator matches run history on, so every record
-				// written without it was unusable as calibration input and the
-				// projection collapsed to the raw static estimate — which ran a
-				// median 3.9x under actual across 112 runs before anyone noticed.
-				cls := loadIssueClassification(root, snap.WorktreeDir, p.IssueNumber)
-				input.Labels = cls.Labels
-				input.IssueType = cls.Type
-				input.Size = cls.Size
-				// The routing PREDICTION the run was picked up under. It sits in
-				// the same issue-{N}.json read above and was being dropped: every
-				// record this handler wrote carried routing.complexity_score 0,
-				// while the scheduler path recorded the real score into the same
-				// corpus field, leaving one field with two meanings and no
-				// discriminator (#304).
-				input.ComplexityScore = cls.ComplexityScore
-				if cls.ComplexityScore <= 0 {
-					log.Printf(
-						"notifyComplete: #%d has no routing.complexity_score — no issue context reached this handler, so the run records no routing prediction at all (#304)",
-						p.IssueNumber,
-					)
+				kind := orchestrator.ResolveTerminalKind(gateRan, gateTerminalKind, errMsg)
+				if kind == "" {
+					kind = orchestrator.TerminalKindSubagentCrash
 				}
-				if cls.Size == "" {
-					// Loud by design: a silently size-less record is exactly how
-					// the calibration path stayed switched off unnoticed (#112).
-					log.Printf(
-						"notifyComplete: #%d has no size:* label — its run record cannot calibrate the pre-flight cost estimate (#112)",
-						p.IssueNumber,
-					)
-				}
-
-				hw := state.NewHistoryWriter(root)
-				now := time.Now()
-				record := hw.BuildV2Record(snap, p.Success, errMsg, input, now)
-
-				// #305: book a blocked-dependency deferral as a first-class
-				// NON-FAILURE. BuildV2Record maps p.Success==false to
-				// outcome="failed"; override the three run-level fields so the
-				// record — and every surface that reads it (local JSONL, the
-				// platform push below via V2RunRecordToExecutionHistoryRunRecord,
-				// which accepts "cancelled" as a telemetry outcome) — reflects a
-				// non-failure deferral: outcome "cancelled" (closest non-failure
-				// value the complete|failed|cancelled enum accepts), NO terminal
-				// failure kind, and outcome_type "deferred".
-				if p.Deferred {
-					record.Outcome = "cancelled"
-					record.TerminalFailureKind = ""
-					record.OutcomeType = orchestrator.OutcomeTypeDeferred
-				}
-				// #304: derive the learning/calibration outcome from the SAME
-				// record about to be written. Until this, the outcome corpus
-				// (.nightgauge/pipeline/history/outcomes.jsonl — the input to the
-				// calibration, cost-optimization and reliability loop verdicts and
-				// to `nightgauge learn tune`) had exactly ONE writer,
-				// scheduler.recordOutcome, reachable only from
-				// Scheduler.runPipeline. Extension runs go
-				// ConcurrentPipelineManager → HeadlessOrchestrator → this handler
-				// and never enter that loop, so in the mode the product is
-				// actually operated in NOTHING recorded an outcome and the
-				// self-improvement loops steered on autonomous-only evidence.
-				// Derived here rather than rebuilt: an independently-built mirror
-				// record is exactly what drifted in #261.
-				outcome, outcomeVerdict := learningOutcomeFor(record, cls, snap, p.Repo, now)
-				if outcomeVerdict == outcomeRecord {
-					// Parity with the Go path, where recordOutcome's return value
-					// is threaded into recordV2History: the predicted-vs-actual
-					// routing fields belong on the run record too. Must be set
-					// BEFORE the write and the platform push below, both of which
-					// consume `record`.
-					record.OutcomePrediction = outcomePredictionFrom(outcome)
-				}
-
-				if err := hw.WriteV2Record(record, now); err != nil {
-					log.Printf("notifyComplete: write RunRecord failed (non-fatal): %v", err)
-				}
-
-				// Append the learning outcome. Best-effort — a corpus write
-				// failure is logged and never blocks the pipeline, same
-				// discipline as the RunRecord write above.
-				//
-				// The recorder is rooted at `root` — s.repoRoot(p.Repo), the run's
-				// TARGET repo — the SAME root the run record above was written to.
-				// It is emphatically NOT s.workspaceRoot: that field is a mutable
-				// pointer to the workspace's ACTIVE repo (workspace.setRoot, sent
-				// by the extension from resolveActiveRepository — in a multi-repo
-				// workspace, whichever repo owns the focused editor), so rooting
-				// the corpus there would file repo B's outcome under repo A the
-				// moment the operator clicked into a different file. #215/#232
-				// already settled where a run's persisted state belongs: with its
-				// target repo, or the run's state is split across two repos. The
-				// outcome is derived from that record and follows it.
-				//
-				// `nightgauge intelligence loop-verdicts --workdir X` and
-				// `nightgauge learn tune --workdir X` read one root — and they read
-				// X's run history from that same root, so a per-repo corpus is
-				// exactly what makes their two inputs describe the same runs.
-				//
-				// Idempotency is inherited, not enforced here: learning.Recorder
-				// .Record is a blind append with no dedup. This call sits inside
-				// `if ok` — the runtime is deleted at the end of this handler, so
-				// a repeated notifyComplete finds none and records nothing — and
-				// the scheduler path never calls notifyComplete. Moving this call
-				// outside the `if ok` guard would silently double the corpus.
-				switch outcomeVerdict {
-				case outcomeRecord:
-					// Loud by design on EVERY unattributed field. An empty value
-					// really is recoverable — learning.Recorder.Calibrate and the
-					// calibration loop verdict both count a row toward an
-					// accuracy only when BOTH halves of that pair are non-empty,
-					// so an absent value is excluded rather than booked as a miss
-					// — but only if somebody knows it happened: the pre-#304
-					// corpus was 100% model-less and nobody noticed for the life
-					// of the product.
-					//
-					// The sentences come from orchestrator.Outcome*Diagnostic,
-					// beside the rule that produces the empty band, because the
-					// band has THREE causes and this writer and the scheduler's
-					// must not name different ones for one corpus field: absent,
-					// or a value the registry has no band for. On a gemini /
-					// lm-studio / ollama workspace the implementation stage DOES
-					// report a model — so the old single sentence told exactly
-					// those operators that the stage never ran (#340).
-					if outcome.PredictedModel == "" {
-						log.Printf("notifyComplete: #%d %s", p.IssueNumber,
-							orchestrator.OutcomePredictedModelDiagnostic(p.IssueNumber, cls.PredictedModel))
-					}
-					if outcome.ActualModel == "" {
-						log.Printf("notifyComplete: #%d %s", p.IssueNumber,
-							orchestrator.OutcomeActualModelDiagnostic(rawServedDevModel(record, snap)))
-					}
-					if err := learning.NewRecorder(root).Record(outcome); err != nil {
-						log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
-					}
-				case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
-					log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
-						p.IssueNumber, outcomeVerdict)
-				case outcomeUnset:
-					log.Printf("notifyComplete: #%d learning outcome decision was never made — this is a bug",
-						p.IssueNumber)
-				}
-
-				// Push the completed-run record to the platform telemetry sink
-				// (POST /v1/telemetry/pipeline-run), the interactive mirror of the
-				// autonomous scheduler's recordOutcome → PushPipelineRun. Without
-				// this, interactive runs only wrote local JSONL + real-time stage
-				// events, so the platform's usage_events / cost_events /
-				// stage.snapshot rows (and pipeline_runs.cost) — the analytics
-				// surface the dashboard's "Tokens today" and cost widgets read —
-				// were never produced for extension-driven runs. Delegating this
-				// to the extension's TelemetryUploaderService alone was unreliable
-				// (consent/credential gating + a single-workspace-root JSONL scan
-				// that misses target-repo runs in a multi-repo workspace). The
-				// platform ingest is idempotent per (account, issue, started_at),
-				// so this server-side push is safe alongside that best-effort
-				// uploader. Fire-and-forget: PushPipelineRun buffers + retries
-				// internally and never blocks the pipeline.
-				if s.analyticsSvc != nil {
-					repoForPush := record.Repo
-					if repoForPush == "" {
-						repoForPush = p.Repo
-					}
-					runRecord, mapErr := platform.V2RunRecordToExecutionHistoryRunRecord(
-						record, platform.ExecutionHistoryMapperInput{Repo: repoForPush},
-					)
-					if mapErr != nil {
-						log.Printf("notifyComplete: map RunRecord for platform push failed (non-fatal): %v", mapErr)
-					} else {
-						s.analyticsSvc.PushPipelineRun(context.Background(), runRecord)
-					}
-				}
-			} else {
-				// Loud by design: with no resolvable root the run produces
-				// NEITHER a history record NOR a learning outcome. Silence here
-				// is the shape of #304 — a terminal run that persists nothing
-				// and reports success.
+				input.TerminalFailureKind = kind
+				// Refine into a first-class outcome_type when the failure is a
+				// needs-human repo-config block (pr-merge blocked by a required
+				// check no retry can clear) so the dashboard shows "blocked",
+				// not a generic failure. Empty for ordinary failures.
+				input.OutcomeType = orchestrator.OutcomeTypeForTerminalFailure(errMsg)
+			}
+			// Hydrate Labels/Size/Type from the run's issue-{N}.json (#112).
+			// These were left absent on the assumption they were cosmetic
+			// display fields. Size is not: it is the join key the VSCode
+			// pre-flight estimator matches run history on, so every record
+			// written without it was unusable as calibration input and the
+			// projection collapsed to the raw static estimate — which ran a
+			// median 3.9x under actual across 112 runs before anyone noticed.
+			cls := loadIssueClassification(root, snap.WorktreeDir, p.IssueNumber)
+			input.Labels = cls.Labels
+			input.IssueType = cls.Type
+			input.Size = cls.Size
+			// The routing PREDICTION the run was picked up under. It sits in
+			// the same issue-{N}.json read above and was being dropped: every
+			// record this handler wrote carried routing.complexity_score 0,
+			// while the scheduler path recorded the real score into the same
+			// corpus field, leaving one field with two meanings and no
+			// discriminator (#304).
+			input.ComplexityScore = cls.ComplexityScore
+			if cls.ComplexityScore <= 0 {
 				log.Printf(
-					"notifyComplete: #%d repo %q resolves to no on-disk root — run record and learning outcome NOT written (#304)",
-					p.IssueNumber, p.Repo,
+					"notifyComplete: #%d has no routing.complexity_score — no issue context reached this handler, so the run records no routing prediction at all (#304)",
+					p.IssueNumber,
 				)
 			}
-		}
+			if cls.Size == "" {
+				// Loud by design: a silently size-less record is exactly how
+				// the calibration path stayed switched off unnoticed (#112).
+				log.Printf(
+					"notifyComplete: #%d has no size:* label — its run record cannot calibrate the pre-flight cost estimate (#112)",
+					p.IssueNumber,
+				)
+			}
 
-		// Drop the runtime now the run is terminal so a subsequent run of the
-		// same issue starts with a fresh UUID rather than reusing this one.
-		s.runtimesMu.Lock()
-		delete(s.activeRuntimes, runtimeKey)
-		s.runtimesMu.Unlock()
+			hw := state.NewHistoryWriter(root)
+			now := time.Now()
+			record := hw.BuildV2Record(snap, p.Success, errMsg, input, now)
 
-		// The run reached its terminal event — remove the crash-recovery
-		// snapshot so orphan reconciliation (#44) never re-terminates it.
-		// Resolved per-repo: the snapshot lives in the run's target repo (#215).
-		//
-		// THE PATH IS THE IDENTITY (ADR-017 Decision 8): composed from this
-		// run's own runId, so the remove cannot take a successor's file even in
-		// principle — the bare-issue delete this replaces could and did (F3).
-		// An unresolvable identity therefore removes NOTHING rather than
-		// guessing at a filename — but it says so, because a snapshot that
-		// outlives its own notifyComplete is the input to two known defects: it
-		// stays non-terminal forever (nothing sets the durable marker before
-		// ADR-017 step 4), so it is a permanent extra candidate for the
-		// issue-addressed readers, and the next server start reconciles it into
-		// a contradictory Success:false pipeline_done for a run that succeeded.
-		// Resolution-by-scan is NOT the fix — with two snapshots for the issue
-		// it would remove the wrong run's file. Step 4's claim resolves it by
-		// construction. (Replacing this whole tail with the claim sequence's
-		// SealAndRemove is ADR-017 step 4.)
-		if runID != "" {
-			if stateDir := s.pipelineStateDir(p.Repo); stateDir != "" {
-				_ = os.Remove(filepath.Join(stateDir, state.SnapshotFilename(p.IssueNumber, runID)))
+			// #305: book a blocked-dependency deferral as a first-class
+			// NON-FAILURE. BuildV2Record maps p.Success==false to
+			// outcome="failed"; override the three run-level fields so the
+			// record — and every surface that reads it (local JSONL, the
+			// platform push below via V2RunRecordToExecutionHistoryRunRecord,
+			// which accepts "cancelled" as a telemetry outcome) — reflects a
+			// non-failure deferral: outcome "cancelled" (closest non-failure
+			// value the complete|failed|cancelled enum accepts), NO terminal
+			// failure kind, and outcome_type "deferred".
+			if p.Deferred {
+				record.Outcome = "cancelled"
+				record.TerminalFailureKind = ""
+				record.OutcomeType = orchestrator.OutcomeTypeDeferred
+			}
+			// #304: derive the learning/calibration outcome from the SAME
+			// record about to be written. Until this, the outcome corpus
+			// (.nightgauge/pipeline/history/outcomes.jsonl — the input to the
+			// calibration, cost-optimization and reliability loop verdicts and
+			// to `nightgauge learn tune`) had exactly ONE writer,
+			// scheduler.recordOutcome, reachable only from
+			// Scheduler.runPipeline. Extension runs go
+			// ConcurrentPipelineManager → HeadlessOrchestrator → this handler
+			// and never enter that loop, so in the mode the product is
+			// actually operated in NOTHING recorded an outcome and the
+			// self-improvement loops steered on autonomous-only evidence.
+			// Derived here rather than rebuilt: an independently-built mirror
+			// record is exactly what drifted in #261.
+			outcome, outcomeVerdict := learningOutcomeFor(record, cls, snap, p.Repo, now)
+			if outcomeVerdict == outcomeRecord {
+				// Parity with the Go path, where recordOutcome's return value
+				// is threaded into recordV2History: the predicted-vs-actual
+				// routing fields belong on the run record too. Must be set
+				// BEFORE the write and the platform push below, both of which
+				// consume `record`.
+				record.OutcomePrediction = outcomePredictionFrom(outcome)
+			}
+
+			if err := hw.WriteV2Record(record, now); err != nil {
+				log.Printf("notifyComplete: write RunRecord failed (non-fatal): %v", err)
+			}
+
+			// Append the learning outcome. Best-effort — a corpus write
+			// failure is logged and never blocks the pipeline, same
+			// discipline as the RunRecord write above.
+			//
+			// The recorder is rooted at `root` — s.repoRoot(p.Repo), the run's
+			// TARGET repo — the SAME root the run record above was written to.
+			// It is emphatically NOT s.workspaceRoot: that field is a mutable
+			// pointer to the workspace's ACTIVE repo (workspace.setRoot, sent
+			// by the extension from resolveActiveRepository — in a multi-repo
+			// workspace, whichever repo owns the focused editor), so rooting
+			// the corpus there would file repo B's outcome under repo A the
+			// moment the operator clicked into a different file. #215/#232
+			// already settled where a run's persisted state belongs: with its
+			// target repo, or the run's state is split across two repos. The
+			// outcome is derived from that record and follows it.
+			//
+			// `nightgauge intelligence loop-verdicts --workdir X` and
+			// `nightgauge learn tune --workdir X` read one root — and they read
+			// X's run history from that same root, so a per-repo corpus is
+			// exactly what makes their two inputs describe the same runs.
+			//
+			// Idempotency is inherited, not enforced here: learning.Recorder
+			// .Record is a blind append with no dedup. What guarantees at most
+			// one corpus row per run is the TERMINAL LATCH plus closedRuns
+			// (ADR-017 Decision 5): this handler is only reachable through a
+			// claim that won `entry.terminal`, a second notifyComplete for the
+			// same identity is refused run_closed before it can resolve, and the
+			// scheduler path never calls notifyComplete at all. The `if ok`
+			// guard this comment used to name is gone — the missing-runtime
+			// accident it relied on was never the real mechanism, and after the
+			// re-key a second dispatch of the SAME ISSUE is a different run id
+			// with its own record, which is correct rather than a double.
+			switch outcomeVerdict {
+			case outcomeRecord:
+				// Loud by design on EVERY unattributed field. An empty value
+				// really is recoverable — learning.Recorder.Calibrate and the
+				// calibration loop verdict both count a row toward an
+				// accuracy only when BOTH halves of that pair are non-empty,
+				// so an absent value is excluded rather than booked as a miss
+				// — but only if somebody knows it happened: the pre-#304
+				// corpus was 100% model-less and nobody noticed for the life
+				// of the product.
+				//
+				// The sentences come from orchestrator.Outcome*Diagnostic,
+				// beside the rule that produces the empty band, because the
+				// band has THREE causes and this writer and the scheduler's
+				// must not name different ones for one corpus field: absent,
+				// or a value the registry has no band for. On a gemini /
+				// lm-studio / ollama workspace the implementation stage DOES
+				// report a model — so the old single sentence told exactly
+				// those operators that the stage never ran (#340).
+				if outcome.PredictedModel == "" {
+					log.Printf("notifyComplete: #%d %s", p.IssueNumber,
+						orchestrator.OutcomePredictedModelDiagnostic(p.IssueNumber, cls.PredictedModel))
+				}
+				if outcome.ActualModel == "" {
+					log.Printf("notifyComplete: #%d %s", p.IssueNumber,
+						orchestrator.OutcomeActualModelDiagnostic(rawServedDevModel(record, snap)))
+				}
+				if err := learning.NewRecorder(root).Record(outcome); err != nil {
+					log.Printf("notifyComplete: record learning outcome failed (non-fatal): %v", err)
+				}
+			case outcomeSkipDeferred, outcomeSkipNetworkUnavailable:
+				log.Printf("notifyComplete: #%d skipping learning outcome (%s)",
+					p.IssueNumber, outcomeVerdict)
+			case outcomeUnset:
+				log.Printf("notifyComplete: #%d learning outcome decision was never made — this is a bug",
+					p.IssueNumber)
+			}
+
+			// Push the completed-run record to the platform telemetry sink
+			// (POST /v1/telemetry/pipeline-run), the interactive mirror of the
+			// autonomous scheduler's recordOutcome → PushPipelineRun. Without
+			// this, interactive runs only wrote local JSONL + real-time stage
+			// events, so the platform's usage_events / cost_events /
+			// stage.snapshot rows (and pipeline_runs.cost) — the analytics
+			// surface the dashboard's "Tokens today" and cost widgets read —
+			// were never produced for extension-driven runs. Delegating this
+			// to the extension's TelemetryUploaderService alone was unreliable
+			// (consent/credential gating + a single-workspace-root JSONL scan
+			// that misses target-repo runs in a multi-repo workspace). The
+			// platform ingest is idempotent per (account, issue, started_at),
+			// so this server-side push is safe alongside that best-effort
+			// uploader. Fire-and-forget: PushPipelineRun buffers + retries
+			// internally and never blocks the pipeline.
+			if s.analyticsSvc != nil {
+				repoForPush := record.Repo
+				if repoForPush == "" {
+					repoForPush = p.Repo
+				}
+				runRecord, mapErr := platform.V2RunRecordToExecutionHistoryRunRecord(
+					record, platform.ExecutionHistoryMapperInput{Repo: repoForPush},
+				)
+				if mapErr != nil {
+					log.Printf("notifyComplete: map RunRecord for platform push failed (non-fatal): %v", mapErr)
+				} else {
+					s.analyticsSvc.PushPipelineRun(context.Background(), runRecord)
+				}
 			}
 		} else {
+			// Loud by design: with no resolvable root the run produces
+			// NEITHER a history record NOR a learning outcome. Silence here
+			// is the shape of #304 — a terminal run that persists nothing
+			// and reports success.
 			log.Printf(
-				"notifyComplete: #%d has no resolvable run identity (no registry entry — typically a backend restart under a surviving extension host) — its crash-recovery snapshot is NOT removed and will read as a live orphan until ADR-017 step 4",
-				p.IssueNumber,
+				"notifyComplete: #%d repo %q resolves to no on-disk root — run record and learning outcome NOT written (#304)",
+				p.IssueNumber, recordRepo,
 			)
+		}
+
+		// STEP 3 — COMPARE-AND-DELETE, under runtimesMu: drop the registry entry
+		// only if the entry stored there is the SAME POINTER that was claimed, so
+		// a successor installed during the unlocked step-2 window survives (F5).
+		// The id is recorded in closedRuns in the same hold, which is what makes a
+		// late duplicate notifyComplete a cheap in-memory refusal.
+		s.compareAndDeleteRun(claimed, runID)
+
+		// STEP 4 — SEAL AND REMOVE, under rs.mu, as ONE operation holding NO
+		// registry lock: write the terminal-stamped snapshot, remove that same
+		// path, then latch `sealed` so every later Persist returns ErrRunSealed
+		// without writing (F27's in-flight-Persist resurrection).
+		//
+		// THE DIRECTORY COMES FROM THE CLAIMED SNAPSHOT'S OWN `Repo`, never from
+		// p.Repo (Decision 4 fix #3): a notifyComplete whose repo param disagrees
+		// with the run's persisted repo could otherwise leave the real file behind
+		// while deleting nothing. And THE PATH IS THE IDENTITY — composed from
+		// this run's own runId — so the remove cannot take a successor's file even
+		// in principle, which the bare-issue delete this replaces could and did
+		// (F3).
+		//
+		// Write-then-remove is idempotent if the reconciler removed the file
+		// first: the write re-creates it as terminal and the remove takes it away
+		// again, net nothing.
+		//
+		// Gated on a KNOWN repo, for the same reason the transition's persist is
+		// (#307): a run whose transitions never carried a repo has no snapshot
+		// anywhere, and pipelineStateDir("") resolves the shared launch root —
+		// sealing there would write and remove a file in a repo that never ran
+		// the issue.
+		if snap.Repo == "" {
+			log.Printf("notifyComplete: #%d run %s never carried a repo — it has no snapshot to seal (#307)",
+				p.IssueNumber, runID)
+		} else if sealDir := s.pipelineStateDir(snap.Repo); sealDir != "" {
+			if err := rt.SealAndRemove(sealDir); err != nil {
+				// TWO BRANCHES, TWO DIFFERENT THINGS LEFT ON DISK, and the log
+				// must not blur them: the earlier "terminal-marked either way"
+				// line was true only of the remove failure.
+				if errors.Is(err, state.ErrSealWriteFailed) {
+					// The terminal marker never reached disk. The seal is
+					// latched and the stale NON-TERMINAL snapshot was removed
+					// rather than left for a restart to rehydrate, so the worst
+					// remaining case is R-4's adopt-empty noise — not a
+					// resurrected run.
+					log.Printf("notifyComplete: #%d seal for run %s could NOT WRITE the terminal marker; the stale snapshot was removed instead (non-fatal): %v",
+						p.IssueNumber, runID, err)
+				} else {
+					// The file on disk DOES carry `terminal: true`; only its
+					// removal failed. Adoption refuses that snapshot and the
+					// reconciler removes it without emitting.
+					log.Printf("notifyComplete: #%d seal-and-remove for run %s failed AFTER the snapshot was terminal-marked (non-fatal): %v",
+						p.IssueNumber, runID, err)
+				}
+			}
+		} else {
+			log.Printf("notifyComplete: #%d run %s repo %q resolves to no on-disk root — nothing to seal",
+				p.IssueNumber, runID, snap.Repo)
 		}
 
 		return map[string]string{"status": "ok"}, nil
@@ -3102,46 +3263,57 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
 
-		// Look up the runtime for phase recording. Two runtime registries
-		// exist: activeRuntimes (HeadlessOrchestrator path) and the
-		// scheduler's per-issue registry (Go-scheduler / IPC mode). Phase
-		// markers must be recorded in whichever runtime actually drives the
-		// current run so the snapshot embedded in pipeline.stateChanged
-		// carries PhaseHistory — otherwise the tree view loses phase counts
-		// on already-completed stages whenever the extension reloads
-		// mid-pipeline.
-		runtimeKey := fmt.Sprintf("%d", p.IssueNumber)
-		s.runtimesMu.Lock()
-		rt, hasRuntime := s.activeRuntimes[runtimeKey]
-		s.runtimesMu.Unlock()
+		// RUN-PROGRESS CLASS (ADR-017 Decision 3), resolved by identity. Two
+		// runtime registries exist — this server's activeRuntimes
+		// (extension/HeadlessOrchestrator path) and the scheduler's per-issue
+		// registry — and Decision 11 decides which one serves the call: a live
+		// scheduler run is served READ-THROUGH onto the scheduler's own runtime
+		// and never adopted here, because a second in-memory entry for a run the
+		// scheduler already owns would hold a lease, never be terminal-claimed,
+		// and become "current" for its repo#issue in the derived index.
+		//
+		// Phase markers must land in whichever runtime actually drives the run so
+		// the snapshot embedded in pipeline.stateChanged carries PhaseHistory —
+		// otherwise the tree view loses phase counts on already-completed stages
+		// whenever the extension reloads mid-pipeline.
+		res, err := s.resolveRun("pipeline.notifyPhaseTransition", verbRunProgress, p.RunID, p.Repo, p.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		rt := res.rs
+		runID := res.runID()
 
 		stage := state.PipelineStage(p.Stage)
 		switch p.EventType {
 		case "start":
-			if hasRuntime {
+			if res.schedulerOwned {
+				// The scheduler's arm carries the IDENTITY GATE (Decision 11): it
+				// resolves by issue and no-ops unless the registered runtime's
+				// RunID equals this one, so a foreign run can never write into a
+				// scheduler run's PhaseHistory.
+				s.schedulerRuns.RecordPhaseStartForRun(runID, p.IssueNumber, p.Stage, p.Name, p.Index, p.Total)
+			} else {
 				rt.BeginPhase(stage, p.Name, p.Index, p.Total)
-			}
-			if s.scheduler != nil {
-				s.scheduler.RecordPhaseStart(p.IssueNumber, p.Stage, p.Name, p.Index, p.Total)
 			}
 			s.Emit("phase.start", map[string]interface{}{
 				"repo":        p.Repo,
 				"issueNumber": p.IssueNumber,
+				"runId":       runID,
 				"stage":       p.Stage,
 				"name":        p.Name,
 				"index":       p.Index,
 				"total":       p.Total,
 			})
 		case "complete":
-			if hasRuntime {
+			if res.schedulerOwned {
+				s.schedulerRuns.RecordPhaseCompleteForRun(runID, p.IssueNumber, p.Stage, p.Name)
+			} else {
 				rt.CompletePhase(stage, p.Name)
-			}
-			if s.scheduler != nil {
-				s.scheduler.RecordPhaseComplete(p.IssueNumber, p.Stage, p.Name)
 			}
 			s.Emit("phase.complete", map[string]interface{}{
 				"repo":        p.Repo,
 				"issueNumber": p.IssueNumber,
+				"runId":       runID,
 				"stage":       p.Stage,
 				"name":        p.Name,
 				"index":       p.Index,

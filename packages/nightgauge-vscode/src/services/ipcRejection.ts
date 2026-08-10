@@ -16,11 +16,14 @@
  * designed in the first place (#307 round 3). This module only makes the
  * refusal VISIBLE, at a severity that matches what it means.
  *
- * THE `run_*` INPUTS ARE INERT UNTIL STEP 4. The server accepts and ignores
- * `runId` today and no verb refuses anything, so every rejection reaching
- * here right now is a transport failure. The identity/ownership/terminal arms
- * exist so that the step-4 flip lands into a classifier that already knows
- * what each code means, rather than into twelve silent catches.
+ * THE `run_*` ARMS ARE LIVE (ADR-017 step 4). The server keys on the run
+ * identity and refuses: `run_id_required` / `run_id_invalid` for a missing or
+ * malformed id, `run_closed` once a run's own terminal claim has latched,
+ * `run_not_found` and `run_wrong_owner` on the administrative and terminal
+ * classes. `transport` is now what it says on the tin — the socket, the daemon,
+ * a timeout — and is no longer the only reachable classification. Severity is
+ * chosen accordingly: a closed run's late chatter is expected noise (debug),
+ * an ownership or identity refusal is a real defect somewhere (warn).
  *
  * @see docs/decisions/017-runtime-identity-keying.md — Decision 3
  * @see internal/ipc/server.go — `sendError` writes the frame this parses
@@ -90,8 +93,11 @@ const RPC_ERROR_PREFIX = /^IPC error (-?\d+): (.*)$/s;
 
 /**
  * The machine-readable refusal codes ADR-017 Decision 3 defines. Matched as a
- * whole token anywhere in the server's message so the classifier does not
- * depend on where step 4 chooses to put it (leading token, wrapped sentence).
+ * whole token anywhere in the server's message rather than at a fixed
+ * position: the code LEADS the message today (`runIdentityError.Error`), but
+ * the transport wraps the handler error into `RPCError.Message`, and a
+ * classifier that depended on the offset would break the first time a wrapper
+ * was added.
  */
 const RUN_CODE = /\brun_(closed|not_found|wrong_owner|id_required|id_invalid)\b/;
 

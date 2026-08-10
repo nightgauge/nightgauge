@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -152,12 +151,13 @@ func (s *Server) reconcileOrphanedRuns() {
 		return
 	}
 
+	// "Live" is now a property of the ISSUE's registry entries rather than of
+	// one issue-shaped key (ADR-017 step 4): the registry keys on run identity,
+	// so the predicate asks whether ANY non-terminal run of that issue is in
+	// flight. The full liveness ladder — the scheduler registry, the lease
+	// window, the recorded PID — is ADR-017 step 5.
 	skipIssue := func(issueNumber int) bool {
-		runtimeKey := strconv.Itoa(issueNumber)
-		s.runtimesMu.Lock()
-		defer s.runtimesMu.Unlock()
-		_, live := s.activeRuntimes[runtimeKey]
-		return live
+		return s.hasLiveRunForIssue(issueNumber)
 	}
 
 	for _, root := range s.pipelineStateScanRoots() {

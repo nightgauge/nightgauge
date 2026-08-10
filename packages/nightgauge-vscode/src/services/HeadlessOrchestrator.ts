@@ -13485,6 +13485,20 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             // the run-detail view shows tokens/cost accruing mid-stage. The
             // authoritative per-stage totals still flow through the "complete"
             // transition; this is a live estimate only. Best-effort.
+            //
+            // No identity installed → no send (ADR-017 step 4, D2).
+            // `notifyStageProgress` is run-progress class, so `runId: ""` is
+            // refused `run_id_required` every 5 seconds by a callback that was
+            // never speaking for a run. Skip it and log the skip once.
+            const progressRunId = this.stateService?.getRunId() ?? null;
+            if (progressRunId === null) {
+              this.logger.warn(
+                "pipeline.notifyStageProgress — local-only state service — no run identity " +
+                  "installed; IPC notify skipped (ADR-017 step 4)",
+                { stage, issueNumber }
+              );
+              return;
+            }
             IpcClient.getInstance()
               .call("pipeline.notifyStageProgress", {
                 // The installed run's repo is the resolveRunRepoSlug-derived
@@ -13497,17 +13511,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 outputTokens: usage.outputTokens,
                 cacheReadTokens: usage.cacheReadTokens,
                 costUsd: usage.costUsd,
-                // Progress is a callback on a run that may not have begun
-                // (ADR-017 Decision 6): send "" rather than throw out of a
-                // callback — the server ignores it and the outbound fallback
-                // covers it.
-                runId: this.stateService?.getRunId() ?? "",
+                runId: progressRunId,
               } satisfies NotifyStageProgressParams)
               .catch((err: unknown) => {
                 handleIpcRejection({
                   method: "pipeline.notifyStageProgress",
                   stage,
-                  runId: this.stateService?.getRunId() ?? null,
+                  runId: progressRunId,
                   err,
                 });
                 this.logger.warn("Failed to notify stage progress", { stage, err });

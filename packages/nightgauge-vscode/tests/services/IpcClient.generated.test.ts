@@ -491,7 +491,8 @@ describe("IpcClient.generated — auto-generated methods", () => {
   describe("protocol version", () => {
     it("exports IPC_PROTOCOL_VERSION matching Go ProtocolVersion", async () => {
       const { IPC_PROTOCOL_VERSION } = await import("../../src/services/IpcClient.generated");
-      expect(IPC_PROTOCOL_VERSION).toBe(1);
+      // 2 since ADR-017 step 4 (#370): the pipeline.* run verbs require `runId`.
+      expect(IPC_PROTOCOL_VERSION).toBe(2);
       expect(typeof IPC_PROTOCOL_VERSION).toBe("number");
     });
   });

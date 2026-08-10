@@ -323,19 +323,22 @@ func TestProtocol_ErrorCode_SerializesAsInteger(t *testing.T) {
 
 // ─── ProtocolVersion ─────────────────────────────────────────────────────────
 
-// TestProtocol_ProtocolVersion_IsOne verifies that ProtocolVersion = 1.
+// TestProtocol_ProtocolVersion_IsTwo verifies that ProtocolVersion = 2
+// (ADR-017 step 4, #370: the pipeline.* run verbs now REQUIRE `runId`).
 // This constant MUST match IPC_PROTOCOL_VERSION in IpcClient.generated.ts.
-// A mismatch causes the TypeScript client to reject the ipc.ready event and
-// refuse to send requests, silently breaking the entire pipeline.
-func TestProtocol_ProtocolVersion_IsOne(t *testing.T) {
-	if ProtocolVersion != 1 {
-		t.Errorf("ProtocolVersion = %d, want 1 (must match IPC_PROTOCOL_VERSION in IpcClient.generated.ts)", ProtocolVersion)
+// A mismatch makes the TypeScript client disconnect, raise a blocking modal
+// and refuse every subsequent call — deliberately, because an older extension
+// would otherwise keep running while every one of its run messages is refused
+// run_id_required.
+func TestProtocol_ProtocolVersion_IsTwo(t *testing.T) {
+	if ProtocolVersion != 2 {
+		t.Errorf("ProtocolVersion = %d, want 2 (must match IPC_PROTOCOL_VERSION in IpcClient.generated.ts)", ProtocolVersion)
 	}
 }
 
 // TestProtocol_ProtocolVersion_AppearsInReadyEventWireJSON verifies that when
 // ProtocolVersion is embedded in an ipc.ready event payload and marshaled, the
-// integer 1 appears in the wire JSON as expected by the TypeScript client.
+// integer 2 appears in the wire JSON as expected by the TypeScript client.
 func TestProtocol_ProtocolVersion_AppearsInReadyEventWireJSON(t *testing.T) {
 	ready := Event{
 		Event: "ipc.ready",
@@ -350,8 +353,8 @@ func TestProtocol_ProtocolVersion_AppearsInReadyEventWireJSON(t *testing.T) {
 	}
 	wire := string(data)
 
-	// TypeScript checks: data.protocolVersion === IPC_PROTOCOL_VERSION (1)
-	if !strings.Contains(wire, `"protocolVersion":1`) {
-		t.Errorf("ipc.ready wire JSON must contain protocolVersion:1, got: %s", wire)
+	// TypeScript checks: data.protocolVersion === IPC_PROTOCOL_VERSION (2)
+	if !strings.Contains(wire, `"protocolVersion":2`) {
+		t.Errorf("ipc.ready wire JSON must contain protocolVersion:2, got: %s", wire)
 	}
 }

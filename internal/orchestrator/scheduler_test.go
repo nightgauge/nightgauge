@@ -359,7 +359,7 @@ func TestRecordPhaseStart_PopulatesRuntime(t *testing.T) {
 	s.registerRuntime(3486, rt)
 	defer s.unregisterRuntime(3486)
 
-	s.RecordPhaseStart(3486, "feature-dev", "implementation", 7, 17)
+	s.RecordPhaseStartForRun(rt.RunID, 3486, "feature-dev", "implementation", 7, 17)
 
 	if len(rt.PhaseHistory) != 1 {
 		t.Fatalf("PhaseHistory len = %d, want 1", len(rt.PhaseHistory))
@@ -382,8 +382,8 @@ func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
 	s.registerRuntime(3486, rt)
 	defer s.unregisterRuntime(3486)
 
-	s.RecordPhaseStart(3486, "feature-dev", "implementation", 7, 17)
-	s.RecordPhaseComplete(3486, "feature-dev", "implementation")
+	s.RecordPhaseStartForRun(rt.RunID, 3486, "feature-dev", "implementation", 7, 17)
+	s.RecordPhaseCompleteForRun(rt.RunID, 3486, "feature-dev", "implementation")
 
 	if len(rt.PhaseHistory) != 1 {
 		t.Fatalf("PhaseHistory len = %d, want 1", len(rt.PhaseHistory))
@@ -396,8 +396,8 @@ func TestRecordPhaseComplete_MarksRunningPhaseDone(t *testing.T) {
 func TestRecordPhaseStart_NoRuntimeIsNoOp(t *testing.T) {
 	s := &Scheduler{}
 	// No runtime registered for issue 9999 — call must not panic.
-	s.RecordPhaseStart(9999, "feature-dev", "implementation", 0, 17)
-	s.RecordPhaseComplete(9999, "feature-dev", "implementation")
+	s.RecordPhaseStartForRun(testRunID(), 9999, "feature-dev", "implementation", 0, 17)
+	s.RecordPhaseCompleteForRun(testRunID(), 9999, "feature-dev", "implementation")
 }
 
 func TestRegisterRuntime_RejectsInvalidInputs(t *testing.T) {
@@ -423,8 +423,8 @@ func TestActiveRuntimes_IsolatedPerIssue(t *testing.T) {
 	defer s.unregisterRuntime(100)
 	defer s.unregisterRuntime(200)
 
-	s.RecordPhaseStart(100, "feature-dev", "implementation", 7, 17)
-	s.RecordPhaseStart(200, "feature-planning", "load-context", 1, 13)
+	s.RecordPhaseStartForRun(rtA.RunID, 100, "feature-dev", "implementation", 7, 17)
+	s.RecordPhaseStartForRun(rtB.RunID, 200, "feature-planning", "load-context", 1, 13)
 
 	if len(rtA.PhaseHistory) != 1 || rtA.PhaseHistory[0].Name != "implementation" {
 		t.Errorf("rtA PhaseHistory = %+v", rtA.PhaseHistory)
@@ -2573,5 +2573,53 @@ func TestRunRootResolvesTargetRepo(t *testing.T) {
 	// resolution stays consistent with run state.
 	if got := s.execMgr.RepoRoot("owner/other"); got != "/tmp/other" {
 		t.Errorf("execMgr.RepoRoot(owner/other) = %q, want /tmp/other (forwarded)", got)
+	}
+}
+
+// TestRunIdentity_SchedulerPhaseArmsAreIdentityGated covers ADR-017 Decision 11
+// at the layer that owns the registry.
+//
+// The scheduler's registry stays keyed by issue number (C11; re-keying it is
+// follow-up R-5), so the phase write arms carry an IDENTITY GATE instead: they
+// resolve by issue and no-op unless the registered runtime's RunID equals the
+// one the caller named. That is sound here for a reason the IPC registry cannot
+// claim — registerRuntime/unregisterRuntime bracket runPipeline in one
+// goroutine, so the only cross-run hazard is a write arriving from OUTSIDE over
+// IPC, which is exactly what this rejects (the second arm of F10).
+func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
+	s := &Scheduler{}
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 370, "item-1", testRunID())
+	s.registerRuntime(370, rt)
+	defer s.unregisterRuntime(370)
+
+	foreign := testRunID()
+	s.RecordPhaseStartForRun(foreign, 370, "feature-dev", "implementation", 1, 3)
+	s.RecordPhaseCompleteForRun(foreign, 370, "feature-dev", "implementation")
+	if len(rt.PhaseHistory) != 0 {
+		t.Fatalf("a foreign run wrote into the scheduler runtime's PhaseHistory: %+v", rt.PhaseHistory)
+	}
+
+	// The run's OWN identity is recorded.
+	s.RecordPhaseStartForRun(rt.RunID, 370, "feature-dev", "implementation", 1, 3)
+	if len(rt.PhaseHistory) != 1 {
+		t.Fatalf("the run's own phase was refused: %+v", rt.PhaseHistory)
+	}
+	s.RecordPhaseCompleteForRun(rt.RunID, 370, "feature-dev", "implementation")
+	if rt.PhaseHistory[0].Status != "complete" {
+		t.Errorf("phase.Status = %q, want complete", rt.PhaseHistory[0].Status)
+	}
+
+	// LookupRunByID / IsRunLive answer for the registered run only.
+	if s.LookupRunByID(rt.RunID) != rt {
+		t.Error("LookupRunByID did not find the registered run")
+	}
+	if s.LookupRunByID(foreign) != nil || s.IsRunLive(foreign) {
+		t.Error("a run the scheduler never registered reported live")
+	}
+	if got := s.RunIDForIssue(370); got != rt.RunID {
+		t.Errorf("RunIDForIssue = %q, want %q", got, rt.RunID)
+	}
+	if got := s.RunIDForIssue(9999); got != "" {
+		t.Errorf("RunIDForIssue for an unrun issue = %q, want empty", got)
 	}
 }
