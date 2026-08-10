@@ -479,8 +479,9 @@ describe("ContextWatcherService", () => {
 
       // For issue files, deletion fires the event. `filename` is a bare
       // basename from the table above, not a path, so this substring test
-      // cannot collide with the ambient checkout directory. #426-ok
-      if (filename.startsWith("issue-")) {
+      // cannot collide with the ambient checkout directory.
+      const isIssueFixture = filename.startsWith("issue-"); // #426-ok: bare basename
+      if (isIssueFixture) {
         issueWatcher?.callbacks.onDelete?.(mockUri);
         expect(clearedHandler).toHaveBeenCalledWith(expectedNumber);
       }

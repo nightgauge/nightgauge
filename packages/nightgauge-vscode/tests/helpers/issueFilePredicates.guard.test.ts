@@ -2,11 +2,20 @@
  * Regression guard for #426 — fs-mock predicates must identify issue context
  * files by basename, never by a substring of the ambient checkout path.
  *
- * Two layers:
+ * Three layers:
  *  1. Unit tests on the shared helper, including an executed simulation of the
  *     old predicate class against a colliding checkout path.
- *  2. A meta-scan over the test trees that fails if any test file reintroduces
- *     an inline ambient-path predicate of the banned class.
+ *  2. Unit tests on the detector itself (`scanLine`), so the guard's own
+ *     sensitivity is pinned: it must flag the three original offenders and the
+ *     shapes that escaped the first, literal-needle revision of this scan.
+ *  3. A meta-scan over the *live* test surface — every package's `tests/` tree
+ *     plus every in-`src/` `__tests__` file — that fails if any of those files
+ *     reintroduces an inline ambient-path predicate.
+ *
+ * Both this file and `issueFilePredicates.ts` are scanned like everything else.
+ * There is no whole-file exemption list: the scan machinery builds its needles
+ * by concatenation (see `ambientPathScan.ts`) so it cannot flag itself, and the
+ * handful of legitimate lines below carry the line-scoped opt-out instead.
  */
 
 import * as fs from "fs";
@@ -14,22 +23,13 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { describe, expect, it } from "vitest";
 
+import { discoverScanRoots, OPT_OUT_MARKER, scanLine } from "./ambientPathScan";
 import { isIssueJsonPath, isIssueJsonPathFor } from "./issueFilePredicates";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // tests/helpers -> tests -> <package> -> packages
 const VSCODE_TESTS_DIR = path.resolve(HERE, "..");
 const PACKAGES_DIR = path.resolve(VSCODE_TESTS_DIR, "..", "..");
-const SDK_TESTS_DIR = path.join(PACKAGES_DIR, "nightgauge-sdk", "tests");
-
-/**
- * Absolute paths that legitimately mention the banned needles: this guard file
- * (which names them to ban them) and the helper module's explanatory comment.
- */
-const EXEMPT_FILES = new Set<string>([
-  path.join(HERE, "issueFilePredicates.guard.test.ts"),
-  path.join(HERE, "issueFilePredicates.ts"),
-]);
 
 // Paths that a real checkout can produce: the directory mentions an issue
 // number, the file itself is not an issue context file.
@@ -74,14 +74,16 @@ describe("#426 issue-file predicates are basename-anchored", () => {
   it("executes the old predicate class to show it matched the collision path", () => {
     // Verbatim shape of the pre-#426 predicates, inlined here as data so the
     // collision is demonstrated by execution rather than described in prose.
-    const oldPredicate = (p: string) => p.includes("issue-42");
-    const oldGenericPredicate = (p: string) => p.includes("issue-") && p.endsWith(".json");
+    // These two lines are the banned class on purpose; the opt-out is
+    // line-scoped, so each of them carries its own marker.
+    const oldPredicate = (p: string) => p.includes("issue-42"); // #426-ok: demo
+    const oldGeneric = (p: string) => p.includes("issue-") && p.endsWith(".json"); // #426-ok
 
     const collision = "/x/.nightgauge/worktrees/issue-422/repo/other.json";
 
     // OLD: false positive on an unrelated file inside an issue-named checkout.
     expect(oldPredicate(collision)).toBe(true);
-    expect(oldGenericPredicate(collision)).toBe(true);
+    expect(oldGeneric(collision)).toBe(true);
 
     // NEW: the same path is correctly rejected.
     expect(isIssueJsonPathFor(collision, 42)).toBe(false);
@@ -95,62 +97,105 @@ describe("#426 issue-file predicates are basename-anchored", () => {
 });
 
 /**
- * Needles are assembled by concatenation so this guard file never matches
- * itself (and neither does any future copy of the banned expression).
+ * Fixtures for the detector tests.
+ *
+ * Every fixture is assembled from `TOKEN` rather than written out, so no line
+ * in this file contains the banned character sequence verbatim and the
+ * meta-scan below can run over this file unexempted.
  */
-function bannedNeedles(): string[] {
-  const methods = ["includes", "indexOf", "startsWith"];
-  const openers = ['("', "('", "(`"];
-  const literal = "issue-";
-  const needles: string[] = [];
-  for (const m of methods) {
-    for (const o of openers) {
-      needles.push("." + m + o + literal);
-    }
-  }
-  return needles;
-}
+const TOKEN = "issue" + "-";
 
-function collectTsFiles(dir: string, out: string[] = []): string[] {
-  if (!fs.existsSync(dir)) return out;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist") continue;
-      collectTsFiles(full, out);
-    } else if (entry.isFile() && full.endsWith(".ts")) {
-      out.push(full);
-    }
-  }
-  return out;
-}
+/** The three predicates that actually shipped in this repo before #426. */
+const ORIGINAL_OFFENDERS = [
+  'String(p).includes("' + TOKEN + '42")',
+  'filePath.includes("' + TOKEN + '") && filePath.endsWith(".json")',
+  'p.includes("' + TOKEN + '")',
+];
 
 /**
- * Line-scoped opt-out for the rare case where the receiver is already a
- * basename (not a path), so the substring test cannot collide with the ambient
- * checkout. Put `#426-ok: <reason>` on the offending line or the line above it.
+ * Shapes that are the same bug but which the first revision of this guard —
+ * a fixed list of `.<method>("<token>` string needles — did not see.
  */
-const OPT_OUT_MARKER = "#426" + "-ok";
+const ESCAPE_SHAPES = [
+  'p.includes("/' + TOKEN + '")',
+  "/" + TOKEN + "/.test(p)",
+  "String(p).match(/" + TOKEN + ".../)",
+  'String(p).lastIndexOf("' + TOKEN + '") > -1',
+  'String(p).search("' + TOKEN + '") >= 0',
+  'p.split("' + TOKEN + '")',
+];
+
+/** Lines that mention an issue file but are not path-substring predicates. */
+const CLEAN_SHAPES = [
+  // Exact basename comparison — no scanned method call at all.
+  'name === "' + TOKEN + '42.json"',
+  // The banned shape, explicitly opted out on its own line.
+  'p.includes("' + TOKEN + '") // ' + OPT_OUT_MARKER + ": receiver is a basename",
+  // Prose that merely names the issue.
+  "// the ambient checkout under " + TOKEN + "426 collides with this class",
+  // `join` composes a path, it does not test one.
+  "path.join(dir, `" + TOKEN + "${n}.json`)",
+];
+
+describe("#426 scanLine detects the bug class, not a fixed needle list", () => {
+  it("flags all three predicates that shipped before the fix", () => {
+    for (const shape of ORIGINAL_OFFENDERS) {
+      expect(scanLine(shape) ?? "", shape).toContain(TOKEN);
+    }
+  });
+
+  it("flags the shapes that escaped the literal-needle revision", () => {
+    for (const shape of ESCAPE_SHAPES) {
+      expect(scanLine(shape) ?? "", shape).toContain(TOKEN);
+    }
+  });
+
+  it("does not flag lines outside the bug class", () => {
+    for (const shape of CLEAN_SHAPES) {
+      expect(scanLine(shape), shape).toBeNull();
+    }
+  });
+});
+
+/**
+ * Roots that must exist and must contain files today. Naming them here means a
+ * package rename, a `tests/` move, or the SDK's in-`src` suites relocating
+ * turns this guard red instead of silently shrinking the scanned surface.
+ */
+const REQUIRED_ROOTS = [
+  "nightgauge-vscode/tests",
+  "nightgauge-sdk/tests",
+  "nightgauge-sdk/src/__tests__",
+];
 
 describe("#426 meta-scan: no inline ambient-path issue predicates in tests", () => {
-  it("finds no banned substring predicate in any test file", () => {
-    const needles = bannedNeedles();
-    const files = [...collectTsFiles(VSCODE_TESTS_DIR), ...collectTsFiles(SDK_TESTS_DIR)];
+  const roots = discoverScanRoots(PACKAGES_DIR);
 
-    expect(files.length).toBeGreaterThan(0);
+  it.each(REQUIRED_ROOTS)("scans the %s root and finds test files there", (label) => {
+    const root = roots.find((r) => r.label === label);
+    expect(
+      root?.files.length ?? 0,
+      [
+        `Scan root "${label}" contributed no files to the #426 meta-scan.`,
+        "Either the package/directory moved or was renamed, or the discovery",
+        "in tests/helpers/ambientPathScan.ts no longer matches the layout.",
+        `Discovered roots: ${roots.map((r) => `${r.label}(${r.files.length})`).join(", ") || "none"}`,
+      ].join("\n")
+    ).toBeGreaterThan(0);
+  });
 
+  it("finds no banned path predicate in any scanned test file", () => {
     const offenders: string[] = [];
-    for (const file of files) {
-      if (EXEMPT_FILES.has(file)) continue;
-      const lines = fs.readFileSync(file, "utf8").split("\n");
-      lines.forEach((line, i) => {
-        const hits = needles.filter((n) => line.includes(n));
-        if (hits.length === 0) return;
-        const exempted =
-          line.includes(OPT_OUT_MARKER) || (lines[i - 1]?.includes(OPT_OUT_MARKER) ?? false);
-        if (exempted) return;
-        offenders.push(`${path.relative(PACKAGES_DIR, file)}:${i + 1} → ${hits.join(", ")}`);
-      });
+
+    for (const root of roots) {
+      for (const file of root.files) {
+        const lines = fs.readFileSync(file, "utf8").split("\n");
+        lines.forEach((line, i) => {
+          const shape = scanLine(line);
+          if (shape === null) return;
+          offenders.push(`${path.relative(PACKAGES_DIR, file)}:${i + 1} → ${shape}`);
+        });
+      }
     }
 
     expect(

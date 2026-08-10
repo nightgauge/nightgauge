@@ -36,14 +36,23 @@ vi.mock("../../src/services/BinaryResolver", () => ({
   BinaryResolver: { fromVSCode: () => ({ resolve: async () => "/fake/nightgauge" }) },
 }));
 
-const { parentNumber, existingEpicBranch, createReturnsBranch, writtenBase, createBranchCalls } =
-  vi.hoisted(() => ({
-    parentNumber: { value: "null" as string },
-    existingEpicBranch: { value: "" as string },
-    createReturnsBranch: { value: "epic/3-backend-contract" as string },
-    writtenBase: { value: "" as string },
-    createBranchCalls: { value: 0 },
-  }));
+const {
+  parentNumber,
+  existingEpicBranch,
+  createReturnsBranch,
+  writtenBase,
+  createBranchCalls,
+  contextBase,
+} = vi.hoisted(() => ({
+  parentNumber: { value: "null" as string },
+  existingEpicBranch: { value: "" as string },
+  createReturnsBranch: { value: "epic/3-backend-contract" as string },
+  writtenBase: { value: "" as string },
+  createBranchCalls: { value: 0 },
+  // `base_branch` the intercepted issue context file hands back. Per-test so
+  // the mock's return value is observable, not a constant nobody can see.
+  contextBase: { value: "main" as string },
+}));
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -97,7 +106,7 @@ vi.mock("fs", async () => {
       // ambient checkout path (e.g. .nightgauge/worktrees/issue-422/...), so
       // every unrelated read returned an issue context document.
       if (isIssueJsonPath(p)) {
-        return JSON.stringify({ base_branch: "main" });
+        return JSON.stringify({ base_branch: contextBase.value });
       }
       return "{}";
     }),
@@ -125,6 +134,7 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     createReturnsBranch.value = "epic/3-backend-contract";
     writtenBase.value = "";
     createBranchCalls.value = 0;
+    contextBase.value = "main";
     delete process.env.NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH;
     logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
   });
@@ -174,6 +184,26 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/epic #3/);
     expect(writtenBase.value).toBe(""); // never retargeted to main
+  });
+
+  it("leaves a context file that already targets an epic branch untouched", async () => {
+    // Makes the intercepted read load-bearing (#426). The mock hands back a
+    // base_branch distinguishable from both "main" and the epic branch this
+    // parent would resolve to, and the assertions below only hold if that
+    // value was actually consumed: with the fs predicate matching nothing,
+    // readFileSync falls through to "{}", currentBase defaults to "main",
+    // parent #3 resolves to epic/3-backend-contract, and writtenBase is
+    // rewritten — so this test fails rather than silently passing.
+    contextBase.value = "epic/99-preexisting-target";
+    parentNumber.value = "3";
+    existingEpicBranch.value = "epic/3-backend-contract";
+
+    const o = makeOrchestrator();
+    const res = await o.enforceEpicBaseBranch(7);
+
+    expect(res.ok).toBe(true);
+    expect(writtenBase.value).toBe(""); // short-circuited before any rewrite
+    expect(createBranchCalls.value).toBe(0);
   });
 
   it("preserves the historical fall-through when auto_create_epic_branch is disabled", async () => {

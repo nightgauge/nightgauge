@@ -9,8 +9,10 @@
  * composes the same basename by hand). The identity of that file is therefore
  * its **basename**, never a substring of its absolute path.
  *
- * Mocks that matched with `String(p).includes("issue-42")` matched the ambient
- * checkout path too: any run whose working copy lives under a directory such as
+ * Mocks written in the old inline form
+ * `String(p).includes("issue-42")`  (#426-ok: prose, not a live predicate)
+ * matched the ambient checkout path too: any run whose working copy lives
+ * under a directory such as
  * `.nightgauge/worktrees/issue-422/` made every unrelated `existsSync` /
  * `readFileSync` call hit the mock, and the suite failed spuriously depending
  * on where it was checked out. Anchor on the basename so the predicate answers
