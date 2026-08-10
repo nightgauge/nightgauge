@@ -1,0 +1,101 @@
+{
+  "event": "pipeline.stateChanged",
+  "data": {
+    "issueNumber": 407,
+    "repo": "acme/widgets",
+    "runId": "019fede2-f8ba-7144-adc9-44a4602aca82",
+    "state": {
+      "repo": "acme/widgets",
+      "issueNumber": 407,
+      "itemId": "",
+      "runId": "019fede2-f8ba-7144-adc9-44a4602aca82",
+      "stage": "pr-merge",
+      "startedAt": "2026-08-10T16:55:03.325418-06:00",
+      "stageStart": "2026-08-10T16:55:03.425123-06:00",
+      "inputTokens": 83200,
+      "outputTokens": 12400,
+      "totalCostUsd": 0.712,
+      "completedStages": [
+        {
+          "stage": "issue-pickup",
+          "startedAt": "2026-08-10T16:55:03.325453-06:00",
+          "duration": 9754209,
+          "exitCode": 0,
+          "inputTokens": 6000,
+          "outputTokens": 900,
+          "cacheRead": 1800,
+          "costUsd": 0.031
+        },
+        {
+          "stage": "feature-dev",
+          "startedAt": "2026-08-10T16:55:03.345158-06:00",
+          "duration": 9872458,
+          "exitCode": 0,
+          "inputTokens": 49000,
+          "outputTokens": 7400,
+          "cacheRead": 18000,
+          "costUsd": 0.412
+        },
+        {
+          "stage": "feature-validate",
+          "startedAt": "2026-08-10T16:55:03.385166-06:00",
+          "duration": 9883083,
+          "exitCode": 0,
+          "inputTokens": 22700,
+          "outputTokens": 3100,
+          "cacheRead": 7200,
+          "costUsd": 0.244
+        },
+        {
+          "stage": "pr-create",
+          "startedAt": "2026-08-10T16:55:03.405167-06:00",
+          "duration": 9821041,
+          "exitCode": 0,
+          "inputTokens": 2900,
+          "outputTokens": 600,
+          "cacheRead": 800,
+          "costUsd": 0.014
+        },
+        {
+          "stage": "pr-merge",
+          "startedAt": "2026-08-10T16:55:03.425123-06:00",
+          "duration": 9906708,
+          "exitCode": 0,
+          "inputTokens": 2600,
+          "outputTokens": 400,
+          "cacheRead": 700,
+          "costUsd": 0.011
+        }
+      ],
+      "skippedStages": [],
+      "phaseHistory": [],
+      "stageErrors": {},
+      "stageAdapters": {
+        "feature-dev": "claude",
+        "feature-validate": "claude",
+        "issue-pickup": "claude",
+        "pr-create": "claude",
+        "pr-merge": "claude"
+      },
+      "stageModels": {
+        "feature-dev": "claude-sonnet-4-6",
+        "feature-validate": "claude-opus-4-8",
+        "issue-pickup": "claude-haiku-4-5",
+        "pr-create": "claude-haiku-4-5",
+        "pr-merge": "claude-haiku-4-5"
+      },
+      "terminatingStageTokens": {
+        "feature-validate": {
+          "stage": "feature-validate",
+          "startedAt": "0001-01-01T00:00:00Z",
+          "duration": 0,
+          "exitCode": -1,
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cacheRead": 0,
+          "costUsd": 0
+        }
+      }
+    }
+  }
+}

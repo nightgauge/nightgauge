@@ -2797,9 +2797,27 @@ func (s *Server) registerMethods() {
 			// where the operator decides Retry vs recover. Mirrors the Go
 			// scheduler path, which books cost unconditionally after a stage
 			// returns and records terminating-stage ground truth on failure
-			// (#146); the stage also lands in StageErrors below, which the TS
-			// snapshot applier applies after completedStages, so its UI status
-			// stays "failed".
+			// (#146).
+			//
+			// #407: an entry in StageErrors means "this stage's MOST RECENT
+			// attempt failed". completeStageInternal is the clear site, but it
+			// clears only on a SUCCEEDING booking — so the exit-1 booking below
+			// cannot retire the error this branch is about to record, and no
+			// ordering between the two calls is load-bearing.
+			//
+			// This branch still writes unconditionally, including for a failure
+			// the scheduler is about to retry (retry/escalation is a first-class
+			// `continue` in internal/orchestrator/scheduler.go). That is correct
+			// under the contract: the retry's own "complete" transition retires
+			// the entry. Before #407 nothing ever removed a key, so a stage that
+			// failed and then SUCCEEDED sat in CompletedStages and StageErrors at
+			// once — and because both TS appliers apply stageErrors after
+			// completedStages, it rendered "failed" for the rest of the run and
+			// dragged a green run's outcome down to "Complete — 1 stage failed".
+			// The applier ordering is deliberately RETAINED: with the contract in
+			// place, a stage in both maps is the legitimate backtrack case
+			// (completed earlier, re-run later, failed) and the latest attempt
+			// must win.
 			if p.CostUsd > 0 {
 				rt.CompleteStageWithCost(1, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			} else if p.InputTokens > 0 || p.OutputTokens > 0 {

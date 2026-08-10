@@ -99,8 +99,31 @@ type RuntimeState struct {
 	SkippedStages   []string      `json:"skippedStages"`
 
 	// Phase tracking
-	PhaseHistory []PhaseRecord     `json:"phaseHistory"`
-	StageErrors  map[string]string `json:"stageErrors"` // stage → error message
+	PhaseHistory []PhaseRecord `json:"phaseHistory"`
+	// StageErrors is CURRENT-ATTEMPT state, not a run-long failure log (#407).
+	// CONTRACT: a stage has an entry here ⇔ that stage's MOST RECENT attempt
+	// failed, OR the pipeline refused before that stage could attempt anything.
+	// The refusal writers are real and record entries for stages that never
+	// dispatched at all — internal/orchestrator/scheduler.go's pipeline-start
+	// preflights, budget-ceiling terminate, branch-fork preflight and mid-run
+	// license halt — so "an entry means an attempt happened" would be false.
+	// (Gate refusals such as the pr-merge merge verification are the ordinary
+	// case: the stage ran and the gate is what failed it.)
+	//
+	// SetStageError writes on failure; completeStageInternal deletes when — and
+	// only when — a completion for the stage both SUCCEEDS (exit 0) and is
+	// actually booked (not suppressed by the #230 idempotency guard). A stage
+	// that failed and then succeeded on retry therefore has NO entry, and both
+	// TS appliers may keep applying stageErrors after completedStages — with
+	// this contract, a stage in both maps is the legitimate backtrack case
+	// (completed earlier, re-run later, failed) and "most recent attempt
+	// failed" is what must win.
+	//
+	// Rehydration deliberately preserves whatever was on disk: a crash snapshot
+	// for a stage that later completes successfully is cleared by that
+	// completion, and a terminal failure's stage never completes, so its entry
+	// survives.
+	StageErrors map[string]string `json:"stageErrors"` // stage → most recent attempt's error message
 
 	// Pause state (persisted to runtime-{issue}-{runId}.json for reload recovery)
 	Paused bool `json:"paused,omitempty"`
@@ -551,6 +574,52 @@ func (rs *RuntimeState) completeStageInternal(exitCode, inputTokens, outputToken
 		}
 	}
 
+	// THE CLEAR SITE for the StageErrors contract (#407): an entry means "this
+	// stage's MOST RECENT attempt failed" (or that the pipeline refused before
+	// the stage could attempt at all), so a SUCCEEDING completion for the stage
+	// retires the previous attempt's entry. Without a clear site StageErrors
+	// was write-only in production — the only writer was SetStageError and
+	// nothing ever removed a key — so a stage that failed and then succeeded on
+	// retry sat in BOTH CompletedStages and StageErrors for the rest of the
+	// run. Both TS snapshot appliers apply stageErrors AFTER completedStages,
+	// so that stage rendered "failed" forever; countFailedStages saw it, and
+	// outcomeDisplay downgraded a fully green run to "Complete — 1 stage
+	// failed" plus a contradiction warning. history.go's V2 stage detail
+	// stamped it "failed" in the durable record too.
+	//
+	// TWO conditions guard the delete, and both are load-bearing:
+	//
+	//   exitCode == 0 — a FAILING booking must clear nothing. The Go scheduler
+	//   books every stage's exit at the top of its post-run block, then EMITS
+	//   pipeline.stateChanged and PERSISTS the runtime to disk, and only after
+	//   that reaches the branches that call SetStageError. An unconditional
+	//   clear therefore broadcast and wrote to disk a retry whose second
+	//   attempt had just failed as "complete, no error" — both TS appliers
+	//   render that green and countFailedStages returns 0. With the gate, the
+	//   previous attempt's entry survives that window until SetStageError
+	//   overwrites it with the new attempt's text.
+	//
+	//   after the #230 guard — a completion the guard suppresses books nothing,
+	//   so it must retire nothing. Clearing ahead of the guard laundered a
+	//   stage whose only booked occurrence exited 1 into a "complete" durable
+	//   record: BuildV2Record never reads StageResult.ExitCode, it stamps
+	//   "complete" for every CompletedStages entry and only a StageErrors entry
+	//   flips it to "failed" (internal/state/history.go, "Check for stage
+	//   error").
+	//
+	// No call ORDER between a failure path's booking and its SetStageError is
+	// load-bearing any more — a failing booking clears nothing, so neither
+	// sequence can lose the error. Do not reintroduce that argument.
+	//
+	// SETTLED (#407): recovery is NOT a distinct UI state and gets no
+	// StageResult field. A stage that failed and then succeeded renders as
+	// plain success; the failure-then-recovery history already lives in the
+	// retry-engine records, the outcome records, and the stage exit records.
+	// Do not reintroduce a "recovered" status here.
+	if exitCode == 0 {
+		delete(rs.StageErrors, string(rs.Stage))
+	}
+
 	result := StageResult{
 		Stage:        rs.Stage,
 		StartedAt:    rs.StageStart,
@@ -793,7 +862,24 @@ func (rs *RuntimeState) SetPaused(paused bool) {
 	rs.Paused = paused
 }
 
-// SetStageError records an error message for a stage.
+// SetStageError records the error message for a stage's most recent attempt.
+//
+// One half of the StageErrors contract (#407): this is the only writer, and
+// completeStageInternal is the only clear site — and it clears only when a
+// completion for the stage both succeeds and is actually booked. An entry
+// therefore means "this stage's LATEST attempt failed", or — for the writers
+// that refuse before dispatch — "the pipeline refused before this stage could
+// attempt anything". It never means "this stage failed at some point in the
+// run".
+//
+// Callers that record a failure the pipeline is about to retry are correct to
+// write here unconditionally: the retry's SUCCESSFUL completion retires the
+// entry, and a retry that fails again overwrites it here with its own text.
+// Callers on a terminal path (pipeline-start preflights, budget-ceiling
+// terminate, branch-fork preflight, mid-run license halt, gate refusals,
+// exhausted retries) write an entry that no completion will ever clear — and
+// the first four write it for a stage that never dispatched at all — which is
+// exactly right.
 func (rs *RuntimeState) SetStageError(stage PipelineStage, errMsg string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
