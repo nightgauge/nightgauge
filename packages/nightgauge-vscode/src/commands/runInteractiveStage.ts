@@ -247,16 +247,36 @@ export function registerRunInteractiveStageCommand(
         mintedId = null;
       };
 
-      // Start stage in pipeline state
-      if (pipelineStateService) {
+      /**
+       * This attempt's ONE `running` transition, deferred to the spawn so it
+       * carries the stage child's pid (ADR-017 §7.2) — the same contract
+       * `runStage.ts` and `HeadlessOrchestrator` follow. Latched: a second
+       * would re-enter Go's BeginStage and reset the stage clock.
+       *
+       * The deferral is not cosmetic. An interactive stage sends this
+       * transition and then nothing at all until the stage ends, so the pid is
+       * the ONLY ladder arm that can carry it past 30 minutes: the lease goes
+       * stale with the silence, nothing re-persists (so the file's age goes
+       * stale with it), it is not a scheduler run, and the startup grace is
+       * 120 seconds. Sent pid-less, a live conversation is reconciled as an
+       * orphan — terminal `pipeline_done(success=false)`, snapshot removed,
+       * stages and cost lost (C18).
+       */
+      let runningTransitionSent = false;
+      const markStageRunning = async (stagePid?: number): Promise<void> => {
+        if (runningTransitionSent) return;
+        runningTransitionSent = true;
+        if (!pipelineStateService) return;
         try {
-          await pipelineStateService.startStage(stage);
+          await pipelineStateService.startStage(stage, {
+            ...(stagePid ? { stagePid } : {}),
+          });
           // Record that this stage is running in interactive mode
           await pipelineStateService.setStageExecutionMode(stage, "interactive");
         } catch (error) {
           logger.warn("Failed to update pipeline state", { stage, error });
         }
-      }
+      };
 
       // Update UI — this command is invoked by an explicit user action
       // (Run Stage in Interactive Mode), so reveal the panel to the
@@ -278,8 +298,20 @@ export function registerRunInteractiveStageCommand(
       statusBar.showRunning(stage, "interactive");
       treeProvider.updateStageStatus(stage, "running");
 
+      /**
+       * The stage child's pid, captured synchronously by the spawn callback so
+       * this attempt's single `running` transition carries it (§7.2). Stays 0
+       * on the Codex TUI sub-path (#4024), which spawns no child in this host
+       * — see the KNOWN LIMITATION note in `serverEvidence`
+       * (internal/ipc/pipeline_orphan_reconcile.go).
+       */
+      let stageChildPid = 0;
+
       // Set up callbacks
       const callbacks: SkillRunCallbacks = {
+        onStageChildSpawned: (pid) => {
+          stageChildPid = pid;
+        },
         onStdout: (data) => {
           const lines = parseInteractiveOutput(data);
           for (const line of lines) {
@@ -392,10 +424,18 @@ export function registerRunInteractiveStageCommand(
         // path (#4024) legitimately has no child process (it runs in a terminal)
         // but exposes writeToStdin, so it is NOT a bail.
         if (!handle.process && !handle.writeToStdin) {
-          // No child, so no terminal callback is coming.
+          // No child, so no terminal callback is coming. No `running`
+          // transition either: the stage never started, and one sent here would
+          // leave Go holding a stage that nothing will ever complete.
           releaseMintedRun();
           return;
         }
+
+        // ADR-017 §7.2: the transition, now that the spawn callback has run.
+        // Fire-and-forget for the same reason the headless callers are — the
+        // stage is already executing, and awaiting an IPC round trip here would
+        // stall the UI behind it.
+        void markStageRunning(stageChildPid || undefined);
 
         outputWindow.appendLine(
           `Running ${getStageLabel(stage)} in interactive mode...`,

@@ -1359,7 +1359,17 @@ func TestRunIdentity_UnreadableSnapshotIsRefusedNotAdoptedEmpty(t *testing.T) {
 // singleflight inside the claim's critical section — wedges on the first call,
 // because resolveOrAdopt takes runtimesMu up to three times itself.
 //
-// (The reconciler passes join this test in ADR-017 step 5.)
+// THE RECONCILER PASSES JOINED IT IN ADR-017 STEP 5, as that step's own note
+// here promised. They are the new lock-order participant: a pass takes
+// runtimesMu in arm 1 and in each of the reaping's two LOCKED phases, RELEASES
+// it for the unlocked phase between them (the scheduler consult and the
+// ProcessAlive syscall), and removes files under neither lock while the
+// transition handlers persist into the same directory.
+//
+// The reaping's later phases only run when phase 1 found a candidate, so ONE
+// back-dated entry is seeded below: without it the reaper returns at
+// `len(candidates) == 0` and this test exercises exactly one of its three
+// phases while claiming all of them.
 func TestRunIdentity_ClaimSequenceIsDeadlockFree(t *testing.T) {
 	root := t.TempDir()
 	s := NewServer(nil, WithWorkspaceRoot(root))
@@ -1368,16 +1378,22 @@ func TestRunIdentity_ClaimSequenceIsDeadlockFree(t *testing.T) {
 		runners = 12
 	)
 
+	// The reaper's candidate: no lease, no scheduler, no live process. It is
+	// reaped by the first pass, so the "no leftovers" assertion below still
+	// means every RUNNER's entry was claimed away.
+	staleRunID := newTestRunID()
+	installRegistryEntry(t, s, state.NewRuntimeState(repo, 7999, "", staleRunID), time.Now().Add(-2*livenessWindow))
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
 		for i := 0; i < runners; i++ {
+			issue := 7000 + i
+			runID := newTestRunID()
 			wg.Add(1)
-			go func(i int) {
+			go func() {
 				defer wg.Done()
-				issue := 7000 + i
-				runID := newTestRunID()
 				_ = callRunVerb(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 					Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
 				})
@@ -1397,16 +1413,31 @@ func TestRunIdentity_ClaimSequenceIsDeadlockFree(t *testing.T) {
 					}()
 				}
 				inner.Wait()
-			}(i)
+			}()
 			wg.Add(1)
-			go func(i int) {
+			go func() {
 				defer wg.Done()
 				for j := 0; j < 20; j++ {
-					s.currentRunForIssue(repo, 7000+i)
-					s.hasLiveRunForIssue(7000 + i)
+					s.currentRunForIssue(repo, issue)
+					// The ladder's arm 1, on a run that is concurrently being
+					// adopted, leased and terminal-claimed.
+					s.runLeaseIsFresh(runID, time.Now())
 				}
-			}(i)
+			}()
 		}
+		// The reconciler passes, walking the same directory the runners are
+		// persisting into while they hold the registry. Each pass takes
+		// runtimesMu in arm 1 and in both locked reaping phases, and RELEASES it
+		// across the unlocked one — the lock order this test exists to prove
+		// acyclic. The seeded stale entry is what carries the first pass past
+		// phase 1 into the other two.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				s.reconcileOrphanedRuns()
+			}
+		}()
 		wg.Wait()
 	}()
 

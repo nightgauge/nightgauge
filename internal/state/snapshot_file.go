@@ -94,6 +94,22 @@ func LoadPersistedState(stateDir, runID string) (*RuntimeState, error) {
 	return nil, fmt.Errorf("no runtime snapshot for run %s in %s: %w", runID, stateDir, fs.ErrNotExist)
 }
 
+// LoadSnapshotByIdentity reads the ONE path (issueNumber, runID) composes, with
+// no directory scan at all. It is for readers that already hold both components
+// — the reconciler, which parsed them out of a name it is standing on.
+//
+// LoadPersistedState exists for readers holding only the identity and pays a
+// full os.ReadDir to find the issue number; calling it once per entry of a
+// directory it just listed is quadratic in snapshot count, and the scheme is one
+// file per RUN with a 14-day retention, i.e. the direction that makes N grow.
+func LoadSnapshotByIdentity(stateDir string, issueNumber int, runID string) (*RuntimeState, error) {
+	if !runstate.IsIdentity(runID) {
+		// Same reason as LoadPersistedState: the value becomes a path component.
+		return nil, fmt.Errorf("load runtime snapshot: %q is not a run identity", runID)
+	}
+	return readSnapshotFile(filepath.Join(stateDir, SnapshotFilename(issueNumber, runID)))
+}
+
 // FindPersistedStatesForIssue returns EVERY snapshot in stateDir belonging to
 // the given issue (ADR-017 Decision 8). The issue number is a derived index,
 // not an address: concurrent dispatches of one issue coexist, so an

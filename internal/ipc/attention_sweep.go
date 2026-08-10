@@ -152,7 +152,7 @@ func (s *Server) sweepWorkspace(ctx context.Context, store *attention.Store, rep
 		Store:         store,
 		Registry:      sweep.Default,
 		Forge:         client,
-		WorkspaceRoot: s.workspaceRoot,
+		WorkspaceRoot: s.workspaceRootPath(),
 	}
 	wres, err := sweeper.SweepWorkspace(ctx, repos)
 	if err != nil {
@@ -179,7 +179,7 @@ func (s *Server) sweepOneRepo(ctx context.Context, store *attention.Store, repo 
 		Store:         store,
 		Registry:      sweep.Default,
 		Forge:         client,
-		WorkspaceRoot: s.workspaceRoot,
+		WorkspaceRoot: s.workspaceRootPath(),
 	}
 	result, err := sweeper.Sweep(ctx, repo)
 	if err != nil {

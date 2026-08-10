@@ -957,8 +957,12 @@ export function registerRunStageCommand(
               );
 
         // ADR-017 §7.2: this attempt's single `running` transition, carrying
-        // the pid the synchronous spawn callback captured (headless only —
-        // the interactive runner spawns no stage child to name).
+        // the pid the synchronous spawn callback captured. BOTH runners surface
+        // one now — `runStageSkillInteractive` spawns a `claude` child too, and
+        // that pid is the interactive population's only ladder arm past the
+        // liveness window. The Codex TUI sub-path (#4024) still has none: it
+        // runs the stage inside a VSCode terminal, and no VSCode API names a
+        // process running inside one.
         void markStageRunning(stageChildPid || undefined);
 
         // A failed launch returns an error stub (no child process, no stdin

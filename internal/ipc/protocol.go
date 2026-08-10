@@ -925,8 +925,15 @@ type PipelineNotifyStageTransitionParams struct {
 	// adapter-unknown, never defaulted to claude.
 	Adapter string `json:"adapter,omitempty"`
 	// StagePid is the advisory OS pid of the process executing the stage (ADR-017
-	// §7.2). Advisory, not an identity — omitempty is fine. No producer yet
-	// (step 3); the field simply starts existing on the wire.
+	// §7.2). Advisory, not an identity — omitempty is fine.
+	//
+	// Produced by the extension since step 3 (PipelineStateService.startStage,
+	// fed by skillRunner's onStageChildSpawned) and consumed since step 5:
+	// notifyStageTransition records it with rt.SetStageChild, which is the
+	// liveness ladder's arm 3 for the extension population. A stage-terminal
+	// transition sends 0; `model-resolved`, `skipped` and `deferred` omit the
+	// field, which is the same zero and means the same thing — no child is
+	// executing this run right now.
 	StagePid int `json:"stagePid,omitempty"`
 	// RunID is the run identity the server keys on (ADR-017 step 4, Decision
 	// 1). REQUIRED: an absent value is refused run_id_required and a

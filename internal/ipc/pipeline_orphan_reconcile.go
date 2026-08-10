@@ -2,120 +2,480 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/platform"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// Orphaned-run reconciliation (#44).
+// Orphaned-run reconciliation (#44), keyed on the RUN (ADR-017 7.2–7.4).
 //
-// The extension/HeadlessOrchestrator path mints its platform run UUID
-// in-memory (pipeline.notifyStageTransition) and emits the terminal
-// pipeline_done only via pipeline.notifyComplete. When the extension host
-// dies mid-run (window closed, crash, sleep), that terminal event never
-// fires and the platform's pipeline_runs row stays 'running' forever — the
-// "phantom in-flight run" symptom. The persisted snapshot
-// carries the run's RunID across the crash; this reconciler scans those
-// leftovers at server start (extension activation) and emits the missing
-// pipeline_done so the platform row leaves 'running' immediately instead of
-// waiting for the platform-side stale-run reaper.
+// The extension/HeadlessOrchestrator path emits its terminal pipeline_done only
+// via pipeline.notifyComplete. When the extension host dies mid-run (window
+// closed, crash, sleep) that event never fires and the platform's pipeline_runs
+// row stays 'running' forever — the "phantom in-flight run" symptom. The
+// persisted snapshot carries the run's identity across the crash, so this
+// reconciler can close the row from a process that has no registry at all.
 //
-// Paused runs are intentionally skipped: their snapshot powers the
-// pause-restore prompt (#2008) and the user may still resume them. A resumed
-// run gets a fresh RunID, so reconciliation never conflicts with a live run.
+// Three things make that safe, and each is a defect this replaces:
 //
-// Discovery is now `runtime-{issue}-{runId}.json` (ADR-017 Decision 8), parsed
-// by state.ParseSnapshotFilename — the same expression the composer and the IPC
-// wire validation are built from, so no id shape can pass validation and fail
-// discovery. That mismatch is what would have stranded dashboard-triggered runs
-// outside this scan while the TypeScript stub sweep deleted their live crash
-// snapshots.
+//   - the skip predicate is the FIVE-ARM LIVENESS LADDER below, not "does this
+//     issue have a registry entry". An issue-keyed skip is blind to Go-scheduler
+//     runs, which are never in activeRuntimes and whose snapshots sit in the same
+//     directories — so every workspace.setRoot closed live scheduler runs (F21);
+//   - the startup sweep DEFERS. The extension client restarts the Go backend on
+//     process exit while the extension host and all its in-flight runs survive,
+//     so an inline sweep at Server.Run reconciled live runs into skeleton records
+//     (F26). It now re-evaluates from scratch at startupGrace expiry;
+//   - emission and removal are SPLIT. Gating the whole pass on a platform client
+//     made retention dead code on a local-only workspace while the scheme moved
+//     from one file per issue to one file per run (F24).
+//
+// Discovery is `runtime-{issue}-{runId}.json` (Decision 8) plus its one sibling,
+// the pause-restore claim artifact `resuming-{issue}-{runId}.{claimToken}.json`
+// (Decision 9), both parsed from the shared identity constant. The claim rows are
+// production-INERT until step 8 mints the first artifact — inert, not wrong.
 
-// orphanedRun pairs a leftover runtime snapshot's terminal event with the
-// file that proves it, so the caller can emit then delete.
-type orphanedRun struct {
-	FilePath string
-	Event    platform.PipelineEvent
+// The ladder's and the retention table's constants. Each is a threshold the ADR
+// derives rather than picks, so the derivation lives next to the value.
+const (
+	// livenessWindow bounds arms 1 and 4 (ADR-017 7.2). 30 minutes: the lease is
+	// a coarse backstop for a lost abandonRun, not the primary mechanism — it can
+	// only fire for a run that lost its abandon call, crossed a 30-minute stage
+	// boundary gap, and has no live process.
+	livenessWindow = 30 * time.Minute
+
+	// startupGrace is ladder arm 5 and the claim-release threshold (7.3, 9).
+	// Derived, not chosen by feel: the client's five backend-restart attempts sum
+	// to 2+4+8+16+32 = 62s of backoff, plus process start, plus the first
+	// notifyStageProgress at a >= 5s cadence. 120s clears that ladder with margin.
+	startupGrace = 120 * time.Second
+
+	// claimSkewTolerance is one-sided on purpose (C17): tolerance for a claim
+	// token minted slightly AHEAD of this reader's clock, never a grace period
+	// added to startupGrace. There is exactly one release threshold.
+	claimSkewTolerance = 60 * time.Second
+
+	// snapshotAgeCap is 7.4's last row: anything with an identity that nothing
+	// has collected in two weeks is debris, INCLUDING a paused snapshot. A pause
+	// is never reconciled while it is fresh (C5 — it powers the restore prompt at
+	// the next activation, possibly days later), but a pause nobody resumed in two
+	// weeks is not a pending decision.
+	snapshotAgeCap = 14 * 24 * time.Hour
+)
+
+// --- The liveness ladder (ADR-017 7.2) -------------------------------------
+
+// runEvidence is the ladder's evidence, injected so each arm is independently
+// fakeable: a test makes exactly one arm true and asserts the candidate
+// survives. Production wiring is serverEvidence below — the IPC registry lease,
+// the scheduler's own registry, the #341 process probe, and the startup grace.
+//
+// Arm 4 (the disk-side lease) is not here: it is the candidate's own file mtime,
+// which the scan already holds.
+type runEvidence struct {
+	leaseFresh    func(runID string) bool
+	schedulerLive func(runID string) bool
+	processAlive  func(pid int) bool
+	withinGrace   func() bool
 }
 
-// collectOrphanedRuns scans stateDir for persisted
-// runtime-{issue}-{runId}.json snapshots left behind by interrupted runs and
-// builds the terminal pipeline_done event for each. Skipped: paused snapshots
-// (resumable — see package comment), snapshots whose CONTENT carries no RunID
-// (corruption — the name promised one), unparseable files, and issues for which
-// skipIssue reports a live runtime.
-func collectOrphanedRuns(stateDir string, skipIssue func(int) bool, now time.Time) []orphanedRun {
+// serverEvidence binds the ladder to the real registries.
+//
+// KNOWN LIMITATIONS, stated rather than papered over (ADR-017 7.2's
+// per-population table):
+//
+//   - the extension path's Persist is gated on a non-empty repo
+//     (notifyStageTransition), so a run whose first transitions carry no repo has
+//     written no snapshot at all — arms 3 and 4 are structurally false for it
+//     until its first repo-carrying transition. It has no file to reconcile
+//     either, so the gap costs nothing here; it means the per-population coverage
+//     claim holds from the first repo-carrying transition, not from dispatch.
+//
+//   - THE CODEX INTERACTIVE TUI SUB-PATH (#4024) HAS NO ARM 3, and cannot be
+//     given one from this host. It runs the stage inside a VSCode terminal
+//     (`vscode.window.createTerminal` + `sendText`), so the extension host never
+//     holds a ChildProcess for it, and the VSCode API exposes no pid for a
+//     process running INSIDE a terminal: `Terminal.processId` is documented as
+//     "the process ID of the shell process" (@types/vscode 1.125.0), and
+//     `TerminalShellExecution` carries only commandLine/cwd/read(). Sending the
+//     shell's pid would answer arm 3 with a process that is not the stage child
+//     — it exists before the stage starts and outlives it whenever the launch
+//     command's trailing `exit` does not run — i.e. a pin that never expires,
+//     which is the one thing 7.4's rows cannot correct for. So this
+//     sub-population is carried by arms 1 and 4 only (its transitions still
+//     lease and still persist), and a >30-minute silent Codex TUI session past
+//     the grace is reconcilable. Every other interactive stage DOES carry a pid
+//     since step 5 (`commands/runInteractiveStage.ts` defers its one `running`
+//     transition to the spawn).
+func (s *Server) serverEvidence(now time.Time) runEvidence {
+	return runEvidence{
+		leaseFresh: func(runID string) bool { return s.runLeaseIsFresh(runID, now) },
+		schedulerLive: func(runID string) bool {
+			// Guarded exactly as every other schedulerRuns call site: a nil
+			// *Scheduler in an interface field is a NON-nil interface.
+			if s.schedulerRuns == nil {
+				return false
+			}
+			// Called with NO lock held — runtimesMu and the scheduler's
+			// activeRuntimesMu are never held at the same time.
+			return s.schedulerRuns.IsRunLive(runID)
+		},
+		processAlive: runstate.ProcessAlive,
+		withinGrace:  s.withinStartupGrace,
+	}
+}
+
+// skipRun is the ladder, evaluated in ADR-017 7.2's order and short-circuiting.
+//
+// EVERY ARM CAN ONLY PRODUCE A SKIP, NEVER A CLOSE, and the asymmetry is the
+// design (C13): a false positive — a recycled pid, a snapshot touched by
+// something else — costs one deferred sweep, collected on the next activation
+// and unconditionally by the 14-day cap; a false negative costs a live run its
+// entire record, its learning row and its telemetry, silently.
+//
+// `abandoned` is deliberately NOT on this ladder. The first draft's `&&
+// !abandoned` made a fresh, actively-streaming abandoned run ineligible for the
+// skip and handed its crash snapshot to the remover — abandonment describes a
+// dispatch, not a run (7.1).
+func skipRun(ev runEvidence, runID string, snap *state.RuntimeState, modTime, now time.Time) bool {
+	switch {
+	case ev.leaseFresh != nil && ev.leaseFresh(runID):
+		return true // 1. this server's registry, lease inside the window
+	case ev.schedulerLive != nil && ev.schedulerLive(runID):
+		return true // 2. the Go scheduler's registry (Decision 11)
+	case snap != nil && ev.processAlive != nil && ev.processAlive(snap.PID):
+		return true // 3. the run's own stage child
+	case now.Sub(modTime) < livenessWindow:
+		return true // 4. the disk-side lease; a future mtime skips too, by design
+	case ev.withinGrace != nil && ev.withinGrace():
+		return true // 5. the reconnect window (7.3)
+	}
+	return false
+}
+
+// --- The disposition table (ADR-017 7.4) -----------------------------------
+
+// disposition is what the retention table says to do with one file. The table
+// is a PURE classifier: no I/O, no server, no analytics — so the rows are
+// table-testable, and "does the platform exist" cannot reach the removal rules.
+type disposition int
+
+const (
+	// dispositionKeep leaves the file untouched.
+	dispositionKeep disposition = iota
+	// dispositionRemove removes without emitting: the terminal claim already
+	// emitted, or abandonRun did.
+	dispositionRemove
+	// dispositionEmitAndRemove is the ordinary orphan: one terminal
+	// pipeline_done(success=false), then removal. The removal happens whether or
+	// not the emission does (F24).
+	dispositionEmitAndRemove
+	// dispositionReleaseClaim releases a stale pause-restore claim (Decision 9).
+	// The executor decides rename-back vs remove from whether the canonical name
+	// is occupied — it NEVER overwrites an occupied one.
+	dispositionReleaseClaim
+)
+
+func (d disposition) String() string {
+	switch d {
+	case dispositionRemove:
+		return "remove"
+	case dispositionEmitAndRemove:
+		return "emit+remove"
+	case dispositionReleaseClaim:
+		return "release-claim"
+	default:
+		return "keep"
+	}
+}
+
+// reconcileCandidate is one discovered file, resolved far enough to classify.
+type reconcileCandidate struct {
+	name    string
+	issue   int
+	runID   string
+	modTime time.Time
+
+	// snap is the parsed canonical snapshot. Nil for a claim artifact, which is
+	// classified by its NAME alone — its body is another host's working state.
+	snap *state.RuntimeState
+
+	// claim marks a resuming-{issue}-{runId}.{claimToken}.json artifact.
+	// claimAge is decoded from the TOKEN, never from the file's mtime, which
+	// rename(2) does not update (C17/F34); claimAgeKnown is false when the token
+	// does not parse or names an instant beyond claimSkewTolerance in the future,
+	// and both of those fail safe to "live".
+	claim         bool
+	claimAge      time.Duration
+	claimAgeKnown bool
+}
+
+// classifyCandidate resolves one file to exactly one row of 7.4's table,
+// evaluated TOP TO BOTTOM. Row order is literal: a `terminal: true` snapshot is
+// removed even when a registry entry exists for the run, because the claim
+// already emitted and the entry is latched.
+func classifyCandidate(c reconcileCandidate, ev runEvidence, now time.Time) disposition {
+	// The claim artifact is a DISJOINT file family — a name is either
+	// `runtime-…` or `resuming-…`, never both — so its two rows are decided
+	// here rather than interleaved with the snapshot rows they cannot compete
+	// with. Both fail-safe directions live in claimAgeKnown.
+	if c.claim {
+		if !c.claimAgeKnown || c.claimAge <= startupGrace {
+			return dispositionKeep
+		}
+		// ARM 5 AND ONLY ARM 5 (7.3). The claim rows are decided by token age
+		// per Decision 9 rather than by the ladder — a claim artifact is another
+		// host's working state, and arms 1–4 describe THIS server's evidence
+		// about the run, which says nothing about whether that host is still
+		// mid-claim. The startup grace is different in kind: it says this
+		// process has not been up long enough to have heard from anyone, which
+		// is exactly the state a just-restarted backend is in when the claimant
+		// is about to re-announce itself.
+		if ev.withinGrace != nil && ev.withinGrace() {
+			return dispositionKeep
+		}
+		return dispositionReleaseClaim
+	}
+	// Identity-less files never reach here: ParseSnapshotFilename excludes them
+	// from discovery and the Go legacy sweep (Migration, step 9) owns them. So
+	// does a file whose body disagrees with its name — resolveCandidate refuses
+	// it as corruption rather than giving it a row.
+	if c.snap == nil {
+		return dispositionKeep
+	}
+
+	// terminal: true — no emission (the claim already emitted), removed at any
+	// age, grace or no grace.
+	if c.snap.Terminal {
+		return dispositionRemove
+	}
+
+	// skipRun true on any arm, including the startup grace.
+	if skipRun(ev, c.runID, c.snap, c.modTime, now) {
+		return dispositionKeep
+	}
+
+	// abandoned: the two rows the F4 correction split apart. Inside the window
+	// the dispatch is abandoned but the run may still be streaming, so its crash
+	// snapshot stays; outside it, removal WITHOUT emitting, because abandonRun
+	// already emitted the dispatch-terminal event.
+	//
+	// A nil AbandonedAt cannot be produced by markAbandonedLocked and can only
+	// arrive by hand-authored JSON. It is unageable, so it is treated as fresh
+	// (C13) — but it FALLS THROUGH rather than returning, or "unageable" would
+	// mean "immortal": nothing else in this table can reach a file whose
+	// abandonment has no date, and 7.4's last row says ANYTHING past the cap
+	// goes. Undated + past the cap therefore lands on emit+remove below, which
+	// is the one direction that both collects the debris and tells the platform,
+	// since an undated abandonment is no evidence that abandonRun ever emitted.
+	if c.snap.Abandoned {
+		switch {
+		case c.snap.AbandonedAt == nil:
+			if now.Sub(c.modTime) <= snapshotAgeCap {
+				return dispositionKeep
+			}
+		case now.Sub(*c.snap.AbandonedAt) <= livenessWindow:
+			return dispositionKeep
+		default:
+			return dispositionRemove
+		}
+	}
+
+	// paused, fresh: never reconciled — it powers the restore prompt (C1/C5).
+	// "Fresh" here is the AGE CAP, not the liveness window: the prompt is read at
+	// the next activation, which may be days later.
+	if c.snap.Paused && now.Sub(c.modTime) <= snapshotAgeCap {
+		return dispositionKeep
+	}
+
+	// Everything left is either an ordinary orphan or something past the 14-day
+	// cap that was never reconciled — one pipeline_done(success=false), then the
+	// file goes. A paused snapshot past the cap arrives here, which is the row's
+	// whole point.
+	return dispositionEmitAndRemove
+}
+
+// --- The scan ---------------------------------------------------------------
+
+// reconcileAction pairs a file with the disposition the table gave it, and with
+// the terminal event that must be emitted BEFORE the removal when there is one.
+type reconcileAction struct {
+	Path        string
+	Disposition disposition
+	// Event is set only for dispositionEmitAndRemove. It is built by the pure
+	// collector so a test can assert what WOULD be emitted without a platform.
+	Event platform.PipelineEvent
+	// RunID and Issue name the run for the executor's log line — a claim
+	// artifact has no loaded snapshot to name it from.
+	RunID string
+	Issue int
+}
+
+// collectReconcileActions scans stateDir and returns one action per file the
+// table did not keep. It is the whole reconciler minus its effects: no removal,
+// no rename, no emission, so the rules can be tested against a directory
+// without a Server.
+func collectReconcileActions(stateDir string, ev runEvidence, now time.Time) []reconcileAction {
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		return nil
 	}
 
-	var orphans []orphanedRun
+	var actions []reconcileAction
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		issueNumber, runID, ok := state.ParseSnapshotFilename(entry.Name())
+		c, ok := resolveCandidate(stateDir, entry, now)
 		if !ok {
 			continue
 		}
-		if skipIssue != nil && skipIssue(issueNumber) {
+		d := classifyCandidate(c, ev, now)
+		if d == dispositionKeep {
 			continue
 		}
-		// Load by the runId the FILENAME carried, not by issue: concurrent
-		// dispatches of one issue coexist, so the issue number is an index and
-		// only the identity is an address (ADR-017 Decision 8).
-		rt, err := state.LoadPersistedState(stateDir, runID)
-		if err != nil || rt == nil {
-			continue
+		act := reconcileAction{
+			Path:        filepath.Join(stateDir, c.name),
+			Disposition: d,
+			RunID:       c.runID,
+			Issue:       c.issue,
 		}
-		// The name promised an identity; this checks the CONTENT delivered THE
-		// SAME ONE. It is a corruption guard, not the discovery filter it used
-		// to be — a file whose body disagrees with its name is not something to
-		// emit a terminal event from.
-		//
-		// The predicate is EQUALITY, not `!= ""`. Every in-tree writer composes
-		// the filename from the same fields it marshals, so name and body always
-		// agree; but `!= ""` only catches the empty body, which
-		// buildPipelineDoneEvent below refuses anyway — the guard was a no-op
-		// and could be deleted with every reconcile test green. Equality catches
-		// the case that actually escapes: a body carrying a DIFFERENT valid
-		// identity, which builds a perfectly well-formed pipeline_done and
-		// reports the wrong run terminal to the platform.
-		if rt.RunID != runID || rt.Paused {
-			continue
+		if d == dispositionEmitAndRemove {
+			event, built := buildOrphanDoneEvent(c.snap, now)
+			if !built {
+				// Nothing nameable to close. Leaving the file is the safe
+				// direction: the age cap will take it on a later pass.
+				continue
+			}
+			act.Event = event
 		}
-
-		snap := rt.Snapshot()
-		stagesRun := make([]string, 0, len(snap.CompletedStages))
-		var totalDuration time.Duration
-		for _, sr := range snap.CompletedStages {
-			stagesRun = append(stagesRun, string(sr.Stage))
-			totalDuration += sr.Duration
-		}
-		event, ok := buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
-			Repo:        snap.Repo,
-			IssueNumber: snap.IssueNumber,
-			Success:     false,
-			// Sum of completed-stage durations, NOT wall clock since start —
-			// the run has been dead for an unknowable stretch of that wall
-			// time (the 42h-elapsed-timer symptom this reconciler fixes).
-			TotalDurationMs: int(totalDuration.Milliseconds()),
-			StagesRun:       stagesRun,
-		}, now)
-		if !ok {
-			continue
-		}
-		orphans = append(orphans, orphanedRun{
-			FilePath: filepath.Join(stateDir, entry.Name()),
-			Event:    event,
-		})
+		actions = append(actions, act)
 	}
-	return orphans
+	return actions
+}
+
+// resolveCandidate turns a directory entry into a classifiable candidate. ok is
+// false for anything that is not one of the two known families, for an
+// unreadable file, and for the corruption case below.
+func resolveCandidate(stateDir string, entry os.DirEntry, now time.Time) (reconcileCandidate, bool) {
+	name := entry.Name()
+
+	if issueStr, runID, token, ok := runstate.ParseResumingArtifactName(name); ok {
+		// ParseResumingArtifactName returns the issue as a STRING (its regex
+		// captures text); the reconciler only needs it for the canonical name it
+		// may rename back to, which is composed from the same digits.
+		issue, err := strconv.Atoi(issueStr)
+		if err != nil {
+			return reconcileCandidate{}, false
+		}
+		c := reconcileCandidate{name: name, issue: issue, runID: runID, claim: true}
+		c.claimAge, c.claimAgeKnown = claimAgeOf(token, now)
+		return c, true
+	}
+
+	issue, runID, ok := state.ParseSnapshotFilename(name)
+	if !ok {
+		// A `resuming-` name that did not parse above is not junk: it is a claim
+		// artifact whose run id or token is malformed, i.e. a pause whose
+		// restore prompt will never be offered and whose file nothing will ever
+		// collect (neither family's rules reach it). It is left alone — see
+		// TestOrphanReconcile_UnparseableOrFutureClaimTokenIsTreatedAsLive —
+		// but silence here is how such a file stays invisible forever.
+		if strings.HasPrefix(name, "resuming-") {
+			log.Printf("orphan-reconcile: %s looks like a pause-restore claim but does not parse — leaving it untouched (ADR-017 Decision 9)", name)
+		}
+		return reconcileCandidate{}, false
+	}
+	info, err := entry.Info()
+	if err != nil {
+		return reconcileCandidate{}, false
+	}
+	// Loaded by the EXACT path (issue, runId) already names — LoadPersistedState
+	// would re-read the whole directory per candidate.
+	rt, err := state.LoadSnapshotByIdentity(stateDir, issue, runID)
+	if err != nil || rt == nil {
+		return reconcileCandidate{}, false
+	}
+	// The name promised an identity; this checks the CONTENT delivered THE SAME
+	// ONE. The predicate is EQUALITY, not `!= ""`: every in-tree writer composes
+	// the filename from the fields it marshals, so the case that actually escapes
+	// is a body carrying a DIFFERENT valid identity, which builds a perfectly
+	// well-formed pipeline_done and reports the WRONG run terminal to the
+	// platform. Such a file gets no row in the table and is never touched here —
+	// residual debris classes belong to step 9's sweep.
+	if rt.RunID != runID {
+		log.Printf("orphan-reconcile: %s carries run %q in its body — leaving it untouched (name/body identity mismatch)",
+			name, rt.RunID)
+		return reconcileCandidate{}, false
+	}
+	return reconcileCandidate{
+		name:    name,
+		issue:   issue,
+		runID:   runID,
+		modTime: info.ModTime(),
+		snap:    rt,
+	}, true
+}
+
+// claimAgeOf decodes a pause-restore claim's age from its TOKEN (ADR-017 9,
+// C17). ok is false — meaning "treat this claim as FRESH, never release it" —
+// when the token does not decode, or names an instant more than
+// claimSkewTolerance ahead of this reader's clock. A future claim is not an old
+// one, and both failure modes bias toward not releasing (C13): the cost is a
+// paused run needing one more activation to re-prompt; the cost of the other
+// direction is two live dispatches under one identity.
+//
+// NEVER the file's mtime. rename(2) updates the inode's st_ctime and the two
+// directories' st_mtime, but never the renamed file's own st_mtime, so an
+// mtime-aged claim inherits the age of the PAUSE and is born releasable — the
+// release then renames stale paused content back over a live run's canonical
+// snapshot and re-advertises paused: true for a running id (F34).
+func claimAgeOf(claimToken string, now time.Time) (time.Duration, bool) {
+	ms, err := runstate.UUIDv7Millis(claimToken)
+	if err != nil {
+		log.Printf("orphan-reconcile: claim token %q does not decode — treating the claim as live (ADR-017 C17): %v",
+			claimToken, err)
+		return 0, false
+	}
+	claimedAt := time.UnixMilli(ms)
+	if claimedAt.After(now.Add(claimSkewTolerance)) {
+		log.Printf("orphan-reconcile: claim token %q names %s, ahead of this clock — treating the claim as live (ADR-017 C17)",
+			claimToken, claimedAt.UTC().Format(time.RFC3339))
+		return 0, false
+	}
+	return now.Sub(claimedAt), true
+}
+
+// buildOrphanDoneEvent builds the terminal pipeline_done for an interrupted run.
+func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.PipelineEvent, bool) {
+	if snap == nil {
+		return platform.PipelineEvent{}, false
+	}
+	stagesRun := make([]string, 0, len(snap.CompletedStages))
+	var totalDuration time.Duration
+	for _, sr := range snap.CompletedStages {
+		stagesRun = append(stagesRun, string(sr.Stage))
+		totalDuration += sr.Duration
+	}
+	return buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
+		Repo:        snap.Repo,
+		IssueNumber: snap.IssueNumber,
+		Success:     false,
+		// Sum of completed-stage durations, NOT wall clock since start — the run
+		// has been dead for an unknowable stretch of that wall time (the
+		// 42h-elapsed-timer symptom this reconciler fixes).
+		TotalDurationMs: int(totalDuration.Milliseconds()),
+		StagesRun:       stagesRun,
+	}, now)
 }
 
 // pipelineStateScanRoots returns every workspace root whose
@@ -133,45 +493,370 @@ func (s *Server) pipelineStateScanRoots() []string {
 		seen[root] = true
 		roots = append(roots, root)
 	}
-	add(s.workspaceRoot)
+	// Through the accessors: workspace.setRoot writes these fields from a
+	// handler goroutine while the deferred sweep reads them from the timer's
+	// (J.5).
+	//
+	// BOTH roots, current and launch. A setRoot inside the startup grace
+	// re-points the current root, and the deferred pass then runs against a
+	// directory that is not the one it deferred FOR — the launch root's orphans
+	// would survive the only sweep this process was ever going to give them, and
+	// nothing re-scans a root the workspace has moved away from.
+	add(s.workspaceRootPath())
+	add(s.launchRootPath())
 	for _, p := range s.resolver.RegisteredPaths() {
 		add(p)
 	}
 	return roots
 }
 
-// reconcileOrphanedRuns emits the missing terminal pipeline_done for every
-// orphaned runtime snapshot under the workspace's pipeline state roots (the
-// launch root plus every registered repo — see pipelineStateScanRoots), then
-// removes each snapshot so the reconcile is idempotent across activations.
-// Best-effort: emission is fire-and-forget (AnalyticsService buffers offline)
-// and a run whose event is lost anyway is caught by the platform-side reaper.
+// --- The passes -------------------------------------------------------------
+
+// withinStartupGrace is ladder arm 5. It is a SERVER-level predicate, not a
+// local of the startup goroutine, because workspace.setRoot reconciles inline
+// and must defer exactly like the startup pass while the window is open.
+//
+// Zero means no grace was ever armed — a Server that never ran Run (every test
+// that is not about the sweep, and the socket-only transport) reconciles
+// normally rather than being frozen forever.
+func (s *Server) withinStartupGrace() bool {
+	until := s.startupGraceUntil.Load()
+	return until != 0 && time.Now().UnixNano() < until
+}
+
+// startDeferredReconcile arms the startup grace and schedules the one-shot
+// re-evaluation (ADR-017 7.3). Server.Run must NOT reconcile inline: the client
+// restarts the Go backend on process exit (5 attempts, 2000ms · 2^(n-1) backoff)
+// WHILE the extension host and all its in-flight runs survive, so an inline
+// sweep runs with both registries empty against runs that are alive — it emits a
+// terminal pipeline_done for a live run, removes its snapshot, and leaves the
+// eventual notifyComplete to write a skeleton record with no measurable routing
+// signal (F26).
+//
+// The candidate set is deliberately NOT carried across the window: at expiry the
+// pass re-scans FROM SCRATCH, so a run that reconnected has an entry (arm 1), a
+// refreshed file (arm 4) or a live stage child (arm 3), and a snapshot created
+// during the window is judged on its own evidence rather than being exempt for
+// having arrived late.
+//
+// ctx is Run's, which is the only cancellation channel the server has — there is
+// no Close/Stop/Shutdown — so `nightgauge serve`'s SIGTERM handler cancels the
+// timer through the same cancel() that ends the stdio loop.
+func (s *Server) startDeferredReconcile(ctx context.Context) {
+	s.startDeferredReconcileAfter(ctx, startupGrace)
+}
+
+// startDeferredReconcileAfter is startDeferredReconcile with the window named.
+// The production caller passes the constant; the parameter exists so the timer
+// and its cancellation are observable in a test that does not sleep for two
+// minutes — an untested timer is the only part of this that cannot be asserted
+// through the pass itself.
+func (s *Server) startDeferredReconcileAfter(ctx context.Context, grace time.Duration) {
+	s.startupGraceUntil.Store(time.Now().Add(grace).UnixNano())
+	go func() {
+		// Same recover shape handleRequest uses, for the same reason and one
+		// more: this goroutine has NO caller to propagate to, so an unrecovered
+		// panic anywhere under reconcileOrphanedRuns takes the whole `nightgauge
+		// serve` process down — and with it every in-flight run's IPC peer.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("WARNING: PANIC in the deferred orphan sweep: %v", r)
+				log.Printf("Stack trace:\n%s", debug.Stack())
+			}
+		}()
+		log.Printf("orphan-reconcile: deferring the startup sweep %s — %d snapshot(s) present at activation (ADR-017 7.3)",
+			grace, s.countReconcileCandidates())
+		t := time.NewTimer(grace)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		// Expiry and cancellation can be ready at the same instant, and select
+		// picks uniformly at random between ready cases — so a server shutting
+		// down exactly at expiry would sweep on the way out one time in two.
+		// Cancellation wins that tie: the sweep is deferrable by construction
+		// (the next activation re-derives the whole candidate set), while a pass
+		// racing process teardown removes files with no one left to tell.
+		if ctx.Err() != nil {
+			return
+		}
+		s.reconcileOrphanedRuns()
+	}()
+}
+
+// countReconcileCandidates reports how many canonical snapshots the scan roots
+// hold. Observability only — the sweep re-derives its own set at expiry, so this
+// number is a log line and never a decision.
+func (s *Server) countReconcileCandidates() int {
+	n := 0
+	for _, root := range s.pipelineStateScanRoots() {
+		entries, err := os.ReadDir(filepath.Join(root, ".nightgauge", "pipeline"))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			if _, _, ok := state.ParseSnapshotFilename(entry.Name()); ok {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// reconcileOrphanedRuns runs one reconcile pass over every scan root.
+//
+// Both call sites — the deferred startup timer and workspace.setRoot — run THIS
+// function, and reconcileMu serializes them: two passes over one directory would
+// race each other's removals and renames, and a setRoot arriving at grace expiry
+// is exactly when that happens.
+//
+// NOTHING HERE IS GATED ON THE PLATFORM. The scan and every removal rule run
+// unconditionally; only the emission is skipped when analyticsSvc is nil, so a
+// local-only workspace collects its snapshots on the same schedule as a
+// connected one and simply tells nobody (F24).
 func (s *Server) reconcileOrphanedRuns() {
-	if s.analyticsSvc == nil {
+	s.reconcilePass(time.Now())
+}
+
+func (s *Server) reconcilePass(now time.Time) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
+	// Reaping is a post-grace act for the same reason the sweep is: during the
+	// window an entry that has not been re-asserted yet may belong to a run that
+	// is about to reconnect.
+	if !s.withinStartupGrace() {
+		s.reapStaleRunEntries(now)
+	}
+
+	ev := s.serverEvidence(now)
+	for _, root := range s.pipelineStateScanRoots() {
+		stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+		for _, act := range collectReconcileActions(stateDir, ev, now) {
+			s.applyReconcileAction(stateDir, act)
+		}
+	}
+}
+
+// applyReconcileAction is the effect half: emission, removal, and the claim
+// release. Best-effort throughout — emission is fire-and-forget
+// (AnalyticsService buffers offline) and a run whose event is lost anyway is
+// caught by the platform-side reaper.
+//
+// EVERY DISPOSITION IS ENUMERATED, and the default REFUSES to remove. os.Remove
+// below is the fall-through, so a disposition that reaches it by accident —
+// dispositionKeep, which is also the ZERO VALUE of the type, or a row added
+// later without a case here — would delete a file the table said to leave
+// alone. Today's collector filters Keep out, which makes that a latent trap
+// rather than a live defect; the assertion log is what turns the next one into
+// a bug report instead of a missing snapshot.
+func (s *Server) applyReconcileAction(stateDir string, act reconcileAction) {
+	switch act.Disposition {
+	case dispositionReleaseClaim:
+		s.releaseStaleClaim(stateDir, act)
+		return
+	case dispositionEmitAndRemove:
+		if s.analyticsSvc != nil {
+			s.analyticsSvc.EmitPipelineEvent(context.Background(), act.Event)
+		}
+	case dispositionRemove:
+		// Nothing to emit — the terminal claim or abandonRun already did.
+	case dispositionKeep:
+		log.Printf("orphan-reconcile: BUG — dispositionKeep reached the executor for run %s (%s); leaving the file alone",
+			act.RunID, filepath.Base(act.Path))
+		return
+	default:
+		log.Printf("orphan-reconcile: BUG — unknown disposition %d for run %s (%s); leaving the file alone",
+			int(act.Disposition), act.RunID, filepath.Base(act.Path))
 		return
 	}
 
-	// "Live" is now a property of the ISSUE's registry entries rather than of
-	// one issue-shaped key (ADR-017 step 4): the registry keys on run identity,
-	// so the predicate asks whether ANY non-terminal run of that issue is in
-	// flight. The full liveness ladder — the scheduler registry, the lease
-	// window, the recorded PID — is ADR-017 step 5.
-	skipIssue := func(issueNumber int) bool {
-		return s.hasLiveRunForIssue(issueNumber)
+	if err := os.Remove(act.Path); err != nil {
+		log.Printf("orphan-reconcile: %s for run %s but could not remove %s: %v",
+			act.Disposition, act.RunID, act.Path, err)
+		return
+	}
+	log.Printf("orphan-reconcile: %s — run %s (issue #%d) from %s",
+		act.Disposition, act.RunID, act.Issue, filepath.Base(act.Path))
+}
+
+// releaseStaleClaim applies Decision 9's release table to a claim artifact whose
+// token is older than startupGrace.
+//
+// Canonical ABSENT: rename the artifact back. The claim is released, the pause
+// survives, the next activation prompts again — which is also what a claimant
+// killed between the rename and its first persist leaves behind.
+//
+// Canonical PRESENT: NEVER rename back. The claimant won, resumed, and its run
+// has already re-persisted; the artifact is superseded debris whose content is
+// strictly older by construction. Renaming here would overwrite a live run's
+// state with the pre-pause snapshot and re-advertise paused: true for a running
+// id (F34's consequence 1) — the exact window between the run's first
+// post-resume Persist and the claimant's delete.
+//
+// "NEVER overwritten" IS STRUCTURAL, NOT A CHECK. os.Stat-then-os.Rename is
+// check-then-act: rename(2) replaces its destination silently, so a claimant
+// suspended past the release threshold that wakes and re-persists BETWEEN the
+// two calls has its live canonical snapshot overwritten by pre-pause content —
+// F34's consequence 1 through a razor-thin window rather than through the aging
+// rule. os.Link fails atomically when the destination exists (POSIX EEXIST,
+// Windows ERROR_ALREADY_EXISTS), so link-then-unlink IS the no-replace rename
+// the row describes, decided by the filesystem rather than by a prior Stat.
+func (s *Server) releaseStaleClaim(stateDir string, act reconcileAction) {
+	canonical := filepath.Join(stateDir, state.SnapshotFilename(act.Issue, act.RunID))
+
+	err := os.Link(act.Path, canonical)
+	switch {
+	case err == nil:
+		// The canonical name was free and this process took it atomically. The
+		// artifact is now a second name for the same inode; dropping it
+		// completes the move.
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: released stale claim for run %s but the artifact link remains: %v", act.RunID, rmErr)
+			return
+		}
+		log.Printf("orphan-reconcile: released stale claim for run %s (issue #%d) — the pause survives to the next activation (ADR-017 Decision 9)",
+			act.RunID, act.Issue)
+		return
+
+	case errors.Is(err, os.ErrExist):
+		// Canonical occupied — the claimant won and re-persisted. The artifact
+		// is superseded debris.
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: stale claim for run %s is superseded but could not be removed: %v", act.RunID, rmErr)
+			return
+		}
+		log.Printf("orphan-reconcile: removed superseded claim artifact for run %s (issue #%d) — the canonical snapshot is present and newer (ADR-017 Decision 9)",
+			act.RunID, act.Issue)
+		return
 	}
 
-	for _, root := range s.pipelineStateScanRoots() {
-		stateDir := filepath.Join(root, ".nightgauge", "pipeline")
-		orphans := collectOrphanedRuns(stateDir, skipIssue, time.Now())
-		for _, orphan := range orphans {
-			s.analyticsSvc.EmitPipelineEvent(context.Background(), orphan.Event)
-			if err := os.Remove(orphan.FilePath); err != nil {
-				log.Printf("orphan-reconcile: emitted pipeline_done for run %s but could not remove %s: %v",
-					orphan.Event.RunID, orphan.FilePath, err)
-			} else {
-				log.Printf("orphan-reconcile: closed orphaned run %s (issue #%d) from %s",
-					orphan.Event.RunID, orphan.Event.IssueNumber, filepath.Base(orphan.FilePath))
-			}
+	// Any OTHER Link error is a filesystem that cannot hardlink (some FUSE
+	// mounts, exFAT, a few network filesystems) rather than an occupied
+	// destination. Fall back to the check-then-act sequence, logged so the
+	// weaker guarantee is visible in a support log instead of inferred: on such
+	// a filesystem "never overwritten" is enforced by a Stat, with the window
+	// this primary path exists to close.
+	log.Printf("orphan-reconcile: hardlink release unavailable for run %s (%v) — falling back to stat+rename, which cannot be atomic (ADR-017 Decision 9, A-2)",
+		act.RunID, err)
+	if _, statErr := os.Stat(canonical); statErr == nil {
+		if rmErr := os.Remove(act.Path); rmErr != nil {
+			log.Printf("orphan-reconcile: stale claim for run %s is superseded but could not be removed: %v", act.RunID, rmErr)
+			return
 		}
+		log.Printf("orphan-reconcile: removed superseded claim artifact for run %s (issue #%d) — the canonical snapshot is present and newer (ADR-017 Decision 9)",
+			act.RunID, act.Issue)
+		return
+	}
+	if rnErr := os.Rename(act.Path, canonical); rnErr != nil {
+		log.Printf("orphan-reconcile: could not release stale claim for run %s: %v", act.RunID, rnErr)
+		return
+	}
+	log.Printf("orphan-reconcile: released stale claim for run %s (issue #%d) — the pause survives to the next activation (ADR-017 Decision 9)",
+		act.RunID, act.Issue)
+}
+
+// reapStaleRunEntries evicts registry entries that no evidence supports.
+//
+// It exists because adoption has no expiry of its own: an adopt-empty entry
+// (Decision 4) holds its key forever, so the registry grows without bound in a
+// long-lived server and every one of those entries answers arm 1 for a run
+// nobody is running. The predicate is the ladder minus its disk arms — the
+// entry's own lease, the scheduler, and the recorded pid.
+//
+// A reaped id is NOT added to closedRuns. The ring means "a terminal claim has
+// run"; a reaped entry's run never reached one, so a run that later proves alive
+// must be able to re-adopt from its snapshot and book honestly (C13's bias).
+//
+// Lock discipline: runtimesMu is taken twice with the evidence gathered in
+// between, because the scheduler's activeRuntimesMu may never be held at the
+// same time as runtimesMu, and ProcessAlive is a syscall.
+func (s *Server) reapStaleRunEntries(now time.Time) {
+	type reapCandidate struct {
+		id    string
+		entry *runEntry
+		rs    *state.RuntimeState
+	}
+
+	var candidates []reapCandidate
+	s.runtimesMu.Lock()
+	for id, e := range s.activeRuntimes {
+		if e == nil || e.terminal {
+			continue
+		}
+		// max(lastSeen, firstSeen): an administrative install leaves lastSeen at
+		// the zero time deliberately (it may state a run's state, never that the
+		// run is alive), so firstSeen is what keeps a just-installed entry from
+		// being reaped on the very next pass.
+		seen := e.lastSeen
+		if e.firstSeen.After(seen) {
+			seen = e.firstSeen
+		}
+		if now.Sub(seen) <= livenessWindow {
+			continue
+		}
+		candidates = append(candidates, reapCandidate{id: id, entry: e, rs: e.rs})
+	}
+	s.runtimesMu.Unlock()
+	if len(candidates) == 0 {
+		return
+	}
+
+	doomed := make([]reapCandidate, 0, len(candidates))
+	for _, c := range candidates {
+		if s.schedulerRuns != nil && s.schedulerRuns.IsRunLive(c.id) {
+			continue
+		}
+		if c.rs != nil && runstate.ProcessAlive(c.rs.StageChildPID()) {
+			continue
+		}
+		doomed = append(doomed, c)
+	}
+
+	evicted := make([]string, 0, len(doomed))
+	s.runtimesMu.Lock()
+	for _, c := range doomed {
+		// TWO CHECKS, TWO DIFFERENT RACES, and neither covers the other.
+		//
+		// The POINTER COMPARE covers REPLACEMENT: the entry may have been
+		// claimed and replaced in the unlocked window above, and evicting a
+		// successor by key would drop a live run out of its own registry. It is
+		// blind to the commoner case, because touchLocked does not replace the
+		// entry — it refreshes lastSeen IN PLACE.
+		//
+		// So the AGE PREDICATE is re-applied under this hold, and it covers
+		// REFRESH: a run silent for >30 minutes that speaks again inside phase
+		// 2's window would otherwise be evicted holding a lease minted
+		// milliseconds ago, and the same pass would then emit a terminal
+		// pipeline_done for it and remove its snapshot (arm 1 is that entry).
+		// `now` is fixed at pass start, so any refresh since phase 1 reads
+		// fresh — the comparison cannot be fooled by the clock moving on.
+		//
+		// terminal is re-read for the same reason: a terminal claim landing in
+		// the window latches the entry, and the latch is the claim's business.
+		cur := s.activeRuntimes[c.id]
+		if cur != c.entry || cur.terminal {
+			continue
+		}
+		seen := cur.lastSeen
+		if cur.firstSeen.After(seen) {
+			seen = cur.firstSeen
+		}
+		if now.Sub(seen) <= livenessWindow {
+			continue
+		}
+		delete(s.activeRuntimes, c.id)
+		evicted = append(evicted, c.id)
+	}
+	s.runtimesMu.Unlock()
+
+	for _, id := range evicted {
+		log.Printf("orphan-reconcile: reaped registry entry for run %s — no lease, no scheduler, no live process for %s (ADR-017 7.2)",
+			id, livenessWindow)
 	}
 }

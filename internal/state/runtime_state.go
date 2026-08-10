@@ -407,20 +407,15 @@ func (rs *RuntimeState) markAbandonedLocked(at time.Time, reason string) {
 
 // SetStageChild records the PID of the stage's child process (ADR-017 7.2).
 //
-// NO PRODUCTION CALLER YET — this is the state-layer half, landed in step 1
-// with the rest of the lock-discipline work; the wiring is ADR-017 step 7.2.
-// Everything below is the CONTRACT IT WILL BE WIRED TO, not shipped behaviour:
-// do not build on `PID` from the extension path until that step lands, because
-// nothing writes it there today.
+// Wired in step 5: pipeline.notifyStageTransition feeds it the wire's stagePid
+// on every extension-path transition. Deliberately NOT SetProcess, which also
+// writes WorktreeDir and belongs to the scheduler path — this is the extension
+// path's one-field setter. A stage's terminal transition sends 0, so a finished
+// child cannot vouch for the run and the PID-reuse window is bounded by one
+// stage rather than by the whole run.
 //
-// Deliberately NOT SetProcess, which also writes WorktreeDir and belongs to the
-// scheduler path: this is the extension path's one-field setter, which WILL be
-// fed by notifyStageTransition's stagePid. A stage's terminal transition will
-// send 0, so a finished child cannot vouch for the run and the PID-reuse window
-// is bounded by one stage rather than by the whole run.
-//
-// The value will reach disk through the transition handler's existing Persist —
-// no new persist site is introduced, which is what makes the liveness ladder's
+// The value reaches disk through the transition handler's existing Persist — no
+// new persist site is introduced, which is what makes the liveness ladder's
 // arm 3 cheap.
 func (rs *RuntimeState) SetStageChild(pid int) {
 	rs.mu.Lock()
@@ -431,6 +426,19 @@ func (rs *RuntimeState) SetStageChild(pid int) {
 // setStageChildLocked is SetStageChild's body for callers already holding rs.mu.
 func (rs *RuntimeState) setStageChildLocked(pid int) {
 	rs.PID = pid
+}
+
+// StageChildPID reads the recorded pid under rs.mu — ladder arm 3 (ADR-017 7.2)
+// asking a LIVE runtime whether its stage child is still there. A lock-safe
+// single-field read rather than Snapshot(), for TargetRepo's reason: deep-copying
+// every stage record to read one int is a cost that scales with the run.
+//
+// The reconciler's own arm 3 reads PID off a snapshot it loaded from disk, where
+// no mutex applies; this is the registry-side reader.
+func (rs *RuntimeState) StageChildPID() int {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.PID
 }
 
 // SeedRunContext fills the run's descriptive fields from a transition that
