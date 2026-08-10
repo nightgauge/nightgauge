@@ -47,27 +47,38 @@ func TestNotifyStageTransition_RetrySuccessClearsTheStageError(t *testing.T) {
 	)
 	runID := newTestRunID()
 
-	send := func(status, errMsg string, exitCost float64) {
+	// The wire messages are field-for-field what PipelineStateService emits.
+	// completeStage threads the stage's accumulated usage; failStage and
+	// markStageRunning carry NO token/cost fields at all, so neither does this.
+	// A failed-with-cost message would be a shape production cannot produce —
+	// and it would quietly change the outcome, because the server's "failed"
+	// branch only books a completion when there IS spend to book.
+	sendRunning := func() {
 		t.Helper()
 		mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
-			Repo:            repo,
-			IssueNumber:     issue,
-			Stage:           stage,
-			Status:          status,
-			Error:           errMsg,
-			RunID:           runID,
-			Model:           "claude-sonnet-4-6",
-			Adapter:         "claude",
-			InputTokens:     9000,
-			OutputTokens:    2500,
-			CacheReadTokens: 3000,
-			CostUsd:         exitCost,
+			Repo: repo, IssueNumber: issue, Stage: stage, Status: "running",
+			RunID: runID, Model: "claude-sonnet-4-6", Adapter: "claude",
+		})
+	}
+	sendFailed := func(errMsg string) {
+		t.Helper()
+		mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+			Repo: repo, IssueNumber: issue, Stage: stage, Status: "failed", Error: errMsg,
+			RunID: runID, Model: "claude-sonnet-4-6", Adapter: "claude",
+		})
+	}
+	sendComplete := func(cost float64) {
+		t.Helper()
+		mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
+			Repo: repo, IssueNumber: issue, Stage: stage, Status: "complete",
+			RunID: runID, Model: "claude-sonnet-4-6", Adapter: "claude",
+			InputTokens: 9000, OutputTokens: 2500, CacheReadTokens: 3000, CostUsd: cost,
 		})
 	}
 
 	// Attempt 1: the stage runs and fails.
-	send("running", "", 0)
-	send("failed", "exit 1: 2 tests failed", 0.19)
+	sendRunning()
+	sendFailed("exit 1: 2 tests failed")
 
 	// The failure must be visible while it IS the latest attempt — otherwise
 	// this test could pass by never recording anything at all.
@@ -76,8 +87,8 @@ func TestNotifyStageTransition_RetrySuccessClearsTheStageError(t *testing.T) {
 	}
 
 	// Attempt 2: the scheduler retries the same stage and it succeeds.
-	send("running", "", 0)
-	send("complete", "", 0.24)
+	sendRunning()
+	sendComplete(0.24)
 
 	emitted := latestEmittedState(t, &wire)
 	if msg, ok := emitted.StageErrors[stage]; ok {
@@ -121,10 +132,10 @@ func TestNotifyStageTransition_TerminalFailureKeepsTheStageError(t *testing.T) {
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "running", RunID: runID,
 	})
+	// No tokens/cost — failStage sends none (see the recovery test above).
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "feature-dev", Status: "failed",
 		Error: "exit 1: build failed", RunID: runID,
-		InputTokens: 4000, OutputTokens: 900, CostUsd: 0.12,
 	})
 	// A LATER stage completing must not launder the earlier stage's failure.
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{

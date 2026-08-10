@@ -68,6 +68,7 @@ interface CapturedEnvelope {
       stage?: string;
       completedStages?: Array<{ stage: string; exitCode: number }>;
       stageErrors?: Record<string, string> | null;
+      terminatingStageTokens?: Record<string, { exitCode: number }> | null;
     };
   };
 }
@@ -105,14 +106,22 @@ describe("recovered stage (#407) — the captured Go snapshot", () => {
     ipcHandlers.clear();
   });
 
-  it("is a genuine recovery: the stage ran twice, failed then succeeded, and Go cleared its error", () => {
+  it("is a genuine recovery: the stage failed, was re-run, succeeded, and Go cleared its error", () => {
     // A guard on the EVIDENCE, not on the code under test. If a regenerated
     // fixture ever stops showing a recovery, every assertion below would pass
     // vacuously — this is the tripwire for that.
+    //
+    // The failed attempt is NOT in completedStages, and that absence is itself
+    // production shape rather than an omission: `failStage` sends no
+    // token/cost fields, so the Go server's "failed" branch has no spend to
+    // book and appends nothing. What survives the failure is the
+    // `terminatingStageTokens` entry, which only that branch writes — so it is
+    // the proof that a failure actually happened here.
+    expect(capture.data.state.terminatingStageTokens ?? {}).toHaveProperty(RECOVERED_STAGE);
     const attempts = (capture.data.state.completedStages ?? []).filter(
       (s) => s.stage === RECOVERED_STAGE
     );
-    expect(attempts.map((a) => a.exitCode)).toEqual([1, 0]);
+    expect(attempts.map((a) => a.exitCode)).toEqual([0]);
     expect(capture.data.state.stageErrors ?? {}).toEqual({});
   });
 

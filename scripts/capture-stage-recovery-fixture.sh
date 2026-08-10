@@ -18,11 +18,13 @@
 # `pipeline.stateChanged` event the server emitted — verbatim.
 #
 # Nothing in the output is written by this script. The keys, the nesting, the
-# presence/absence of `stageErrors` entries, the two `completedStages` entries
-# for the retried stage, the time formats: all of it is produced by the Go
-# marshaller in the shipping binary. The only authored material is the INPUT —
-# the wire messages, which are themselves the production
-# PipelineNotifyStageTransitionParams shape.
+# presence/absence of `stageErrors` entries, which attempts reach
+# `completedStages` at all, the surviving `terminatingStageTokens` entry, the
+# time formats: all of it is produced by the Go marshaller in the shipping
+# binary. The only authored material is the INPUT — the wire messages, and each
+# one is field-for-field what the corresponding PipelineStateService emitter
+# sends (see the `failed` transition below, which deliberately carries no spend
+# because failStage carries none).
 #
 # ONE REQUEST AT A TIME, response awaited before the next is sent. The IPC
 # server dispatches each request on its own goroutine, so a fire-and-forget
@@ -169,10 +171,21 @@ transition("feature-dev", "complete", model="claude-sonnet-4-6",
            inputTokens=31000, outputTokens=7400, cacheReadTokens=18000, costUsd=0.412)
 
 # THE RECOVERY: attempt 1 fails, the escalated attempt 2 succeeds.
+#
+# The `failed` transition carries NO token or cost fields, because
+# PipelineStateService.failStage — the extension's only emitter of
+# status:"failed" — carries none: its params are
+# {repo, issueNumber, stage, status, error, model?, adapter?, stagePid, runId}.
+# Inventing a failed-with-cost message here would make the fixture a shape
+# production cannot produce, which is the #166 failure mode wearing a capture's
+# clothes. The consequence is real and shows up below: with no cost and no
+# tokens, neither arm of the server's `failed` branch books a completion, so the
+# failing attempt leaves NO completedStages entry — only a
+# terminatingStageTokens entry and (until the retry clears it) a stageErrors
+# entry.
 transition("feature-validate", "running", model="claude-sonnet-4-6")
 transition("feature-validate", "failed", model="claude-sonnet-4-6",
-           error="exit 1: 2 tests failed",
-           inputTokens=12000, outputTokens=2600, cacheReadTokens=6000, costUsd=0.188)
+           error="exit 1: 2 tests failed")
 transition("feature-validate", "running", model="claude-opus-4-8")
 transition("feature-validate", "complete", model="claude-opus-4-8",
            inputTokens=15500, outputTokens=3100, cacheReadTokens=7200, costUsd=0.244)
@@ -201,11 +214,19 @@ errors = state.get("stageErrors") or {}
 if "feature-validate" in errors:
     sys.exit("capture-stage-recovery-fixture: the recovered stage is still in stageErrors "
              "(%r) — capture aborted; the binary under capture does not carry #407" % errors)
+# The failing attempt books no completion (production's `failed` message carries
+# no spend), so terminatingStageTokens is what proves a failure was actually
+# driven for this stage — without it every assertion downstream would pass
+# vacuously against a run that simply never failed.
+if "feature-validate" not in (state.get("terminatingStageTokens") or {}):
+    sys.exit("capture-stage-recovery-fixture: no terminatingStageTokens entry for feature-validate "
+             "— the `failed` transition never landed, so this is not a recovery")
+entries = [s for s in (state.get("completedStages") or []) if s.get("stage") == "feature-validate"]
+if [s.get("exitCode") for s in entries] != [0]:
+    sys.exit("capture-stage-recovery-fixture: expected exactly one feature-validate completion, "
+             "exit 0 (the retry) — got %r" % [s.get("exitCode") for s in entries])
 completed = [s.get("stage") for s in (state.get("completedStages") or [])]
-if completed.count("feature-validate") != 2:
-    sys.exit("capture-stage-recovery-fixture: expected both feature-validate attempts in "
-             "completedStages, got %r" % completed)
-if completed.count("") or len(completed) != 6:
+if completed.count("") or len(completed) != 5:
     sys.exit("capture-stage-recovery-fixture: transitions raced — completedStages is %r" % completed)
 
 # Written verbatim — re-indented only so the committed file is reviewable in a
