@@ -2384,6 +2384,22 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		as.sweepMergedWorktrees()
 	}
 
+	// 2f. (#410) Tear down per-issue docker compose stacks whose run is gone.
+	// This reconcile used to ride NewScheduler → loadQueue, so `queue list` ran
+	// `docker compose down -v --remove-orphans` as a construction side effect;
+	// #403 moved the worktree sweep off that path and left this one behind.
+	// Local docker only — no forge quota — and paced with the other sweeps.
+	//
+	// AFTER the worktree sweep, deliberately: the sweep has just retired the
+	// worktrees of runs whose branches landed, and this pass rebuilds its own
+	// in-flight union afterwards, so those stacks are collected in the SAME cycle
+	// instead of waiting for the next one. Safe because the union still carries
+	// as.state.Running — a run whose worktree was reclaimed while it is still
+	// executing is protected by the running set, not by its directory.
+	if graphWasFresh {
+		as.sweepOrphanedComposeProjects()
+	}
+
 	// 3. Re-check effective slots after graph build — a pipeline may have
 	// completed while we were fetching.
 	availableSlots = as.effectiveAvailableSlots()

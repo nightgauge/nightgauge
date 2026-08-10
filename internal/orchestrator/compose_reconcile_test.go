@@ -71,7 +71,7 @@ func TestActiveWorktreeIssues_SeesCrossRepoWorktree(t *testing.T) {
 		repoRootsResolver: func() []string { return []string{siblingRoot} },
 	}
 
-	active, determined := s.activeWorktreeIssues()
+	active, determined := s.activeWorktreeIssuesFor(s.repoScanRoots())
 	if !determined {
 		t.Fatal("a readable workspace must produce a determined answer")
 	}
@@ -89,7 +89,7 @@ func TestActiveWorktreeIssues_SeesCrossRepoWorktree(t *testing.T) {
 func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 	t.Run("no roots configured", func(t *testing.T) {
 		s := &Scheduler{}
-		if _, determined := s.activeWorktreeIssues(); determined {
+		if _, determined := s.activeWorktreeIssuesFor(s.repoScanRoots()); determined {
 			t.Error("no workspace root is not evidence that no worktrees exist")
 		}
 	})
@@ -100,7 +100,7 @@ func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 		notARepo := t.TempDir()
 		t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(notARepo))
 		s := &Scheduler{workspaceRoot: notARepo}
-		if _, determined := s.activeWorktreeIssues(); determined {
+		if _, determined := s.activeWorktreeIssuesFor(s.repoScanRoots()); determined {
 			t.Error("a failed `git worktree list` must undetermine the answer, not report zero worktrees")
 		}
 	})
@@ -115,7 +115,7 @@ func TestActiveWorktreeIssues_UndeterminedPaths(t *testing.T) {
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("remove worktree: %v: %s", err, out)
 		}
-		active, determined := s0(root).activeWorktreeIssues()
+		active, determined := s0(root).activeWorktreeIssuesFor(s0(root).repoScanRoots())
 		if !determined {
 			t.Fatal("a readable repo with no worktrees is a determined answer")
 		}
@@ -134,7 +134,7 @@ func TestActiveWorktreeIssues_MissingRootIsSkipped(t *testing.T) {
 		workspaceRoot:     root,
 		repoRootsResolver: func() []string { return []string{filepath.Join(t.TempDir(), "deleted-sibling")} },
 	}
-	active, determined := s.activeWorktreeIssues()
+	active, determined := s.activeWorktreeIssuesFor(s.repoScanRoots())
 	if !determined {
 		t.Fatal("a missing sibling root must be skipped, not undetermine the whole answer")
 	}
@@ -159,7 +159,14 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 		composeTeardown: recordingTeardown(&torn),
 	}
 
-	s.reconcileOrphanedComposeProjects()
+	// The in-flight set is now the caller's to supply (#410). Undetermined is
+	// what the CALLER could not read, and it must veto teardown regardless of
+	// how empty the set it managed to build looks.
+	inFlight, determined := s.activeWorktreeIssuesFor(s.repoScanRoots())
+	if determined {
+		t.Fatal("fixture is not the undetermined state — `git worktree list` succeeded")
+	}
+	s.reconcileOrphanedComposeProjects(inFlight, determined)
 
 	if len(torn) != 0 {
 		t.Errorf("tore down %v on an undetermined worktree set — that is `down -v` against a possibly-live run", torn)
@@ -169,22 +176,30 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 // TestReconcileOrphanedCompose_CrossRepoRunSurvives is the end-to-end shape of
 // the reported defect: a live run in a SIBLING repo whose compose stack was
 // destroyed because the worktree scan only looked at the launch root.
+//
+// Driven through the autonomous receiver (#410) rather than the Scheduler
+// method, because the receiver is what builds the in-flight union now — testing
+// the method with a hand-built set would assert nothing about the roots the
+// union actually covers.
 func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 	launchRoot := worktreeRepo(t, 601)
 	siblingRoot := worktreeRepo(t, 602)
 
 	var torn []string
-	s := &Scheduler{
-		workspaceRoot:     launchRoot,
-		repoRootsResolver: func() []string { return []string{siblingRoot} },
-		composeLister: listing(
-			dockercompose.Project{Name: "issue-602", IssueNumber: 602}, // live, in the sibling
-			dockercompose.Project{Name: "issue-999", IssueNumber: 999}, // genuinely orphaned
-		),
-		composeTeardown: recordingTeardown(&torn),
+	as := &AutonomousScheduler{
+		scheduler: &Scheduler{
+			workspaceRoot:     launchRoot,
+			repoRootsResolver: func() []string { return []string{siblingRoot} },
+			composeLister: listing(
+				dockercompose.Project{Name: "issue-602", IssueNumber: 602}, // live, in the sibling
+				dockercompose.Project{Name: "issue-999", IssueNumber: 999}, // genuinely orphaned
+			),
+			composeTeardown: recordingTeardown(&torn),
+		},
+		state: &AutonomousState{},
 	}
 
-	s.reconcileOrphanedComposeProjects()
+	as.sweepOrphanedComposeProjects()
 
 	for _, name := range torn {
 		if name == "issue-602" {
@@ -194,6 +209,82 @@ func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 	// The guard must not disable reconciliation: the real orphan still goes.
 	if len(torn) != 1 || torn[0] != "issue-999" {
 		t.Errorf("expected exactly the orphaned project to be torn down, got %v", torn)
+	}
+}
+
+// installRecordingDocker puts a `docker` shim on PATH that appends its argv to
+// a log file, so a test can assert what the code under test asked docker to do
+// — including that it asked NOTHING. Without the shim a host with no docker
+// makes every "no teardown happened" assertion pass for the wrong reason:
+// dockercompose.IsAvailable fails and ListIssueProjects returns early, so the
+// production default seams are indistinguishable from a fixed constructor.
+//
+// lsOutput is what `docker compose ls` reports; teardown of `issue-N` is
+// accepted and recorded like any other call.
+func installRecordingDocker(t *testing.T, lsOutput string) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+echo "$@" >> "$RECORDING_DOCKER_LOG"
+case "$1" in
+  version) exit 0 ;;
+  compose)
+    case "$2" in
+      ls) printf '%s' "$RECORDING_DOCKER_LS" ; exit 0 ;;
+    esac
+    exit 0 ;;
+  images) exit 0 ;;
+  rmi) exit 0 ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write recording docker: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	logPath := filepath.Join(dir, "docker-calls.log")
+	t.Setenv("RECORDING_DOCKER_LOG", logPath)
+	t.Setenv("RECORDING_DOCKER_LS", lsOutput)
+	return logPath
+}
+
+func dockerCalls(t *testing.T, logPath string) string {
+	t.Helper()
+	data, err := os.ReadFile(logPath)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("read docker call log: %v", err)
+	}
+	return string(data)
+}
+
+// TestNewScheduler_ConstructionTearsDownNoContainers is #410 gap 2 — the other
+// half of #403's inversion, which fixed worktrees and left containers behind.
+//
+// loadQueue ran reconcileOrphanedComposeProjects, and loadQueue is on the
+// construction path of every `nightgauge queue …` invocation and of the
+// deps-gate / baseline-gate promote commands. So `queue list`, a printf loop,
+// ran `docker compose down -v --remove-orphans` (plus image removal) as a side
+// effect of being constructed — on behalf of a process that can see no other
+// process's in-flight runs. Constructors delete NOTHING: not worktrees, not
+// containers, not volumes.
+//
+// The assertion is on the shim's call log rather than on a recording seam,
+// because the seams are unexported fields that cannot be injected before
+// NewScheduler runs loadQueue — this is the PRODUCTION attach path, defaults and
+// all (#399's lesson).
+func TestNewScheduler_ConstructionTearsDownNoContainers(t *testing.T) {
+	// issue-909 has no worktree in this repo, so pre-fix the constructor
+	// classified it as orphaned and tore it down.
+	logPath := installRecordingDocker(t, `[{"Name":"issue-909","Status":"running(1)"}]`)
+	root := worktreeRepo(t, 908)
+
+	_ = NewScheduler(nil, SchedulerConfig{WorkspaceRoot: root})
+
+	if calls := dockerCalls(t, logPath); strings.TrimSpace(calls) != "" {
+		t.Errorf("constructing a Scheduler shelled out to docker — construction must never delete containers.\ndocker calls:\n%s", calls)
 	}
 }
 
