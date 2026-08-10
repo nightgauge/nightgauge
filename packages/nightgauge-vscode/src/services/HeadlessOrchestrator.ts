@@ -1470,7 +1470,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    *
    * `warnings` and `skippedRoots` are logged rather than dropped — a root that
    * was not swept, or an issue the in-flight scan declined to protect, is the
-   * only evidence that this pass was narrower than it looks.
+   * only evidence that this pass was narrower than it looks. Each skipped root
+   * carries its own `reason`, which is rendered verbatim.
+   *
+   * The document shape is pinned on the Go side by
+   * TestWorktreeSweep_JSONContractMatchesTheExtensionParser
+   * (cmd/nightgauge/worktree_sweep_test.go), which decodes `--json` into the same
+   * field names read below — so renaming `results`, `door`, `warnings` or
+   * `skippedRoots` fails a test instead of silently muting this log.
    */
   async runStartupWorktreeSweep(): Promise<void> {
     try {
@@ -1497,7 +1504,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           errors?: string[];
         }>;
         warnings?: string[];
-        skippedRoots?: string[];
+        skippedRoots?: Array<{ root?: string; reason?: string }>;
       };
       for (const perRoot of result.results ?? []) {
         for (const wt of perRoot.reclaimed ?? []) {
@@ -1522,8 +1529,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         );
       }
       if (result.skippedRoots?.length) {
+        // The REASON is logged as given, never assumed. Three different failures
+        // land in this list — a root that resolves to no main checkout, one whose
+        // in-flight set was unreadable, and one whose git sweep failed after the
+        // in-flight set read fine — and asserting one cause for all three is the
+        // same defect as the reclaim line that named a check it never ran.
+        const detail = result.skippedRoots
+          .map((s) => `${s.root ?? "<unnamed root>"} (${s.reason ?? "unreported"})`)
+          .join(", ");
         this.logger.warn(
-          `worktree-reconcile: ${result.skippedRoots.length} root(s) NOT swept — their in-flight set could not be read`,
+          `worktree-reconcile: ${result.skippedRoots.length} root(s) NOT swept — ${detail}`,
           { skippedRoots: result.skippedRoots }
         );
       }

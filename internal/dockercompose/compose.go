@@ -1,7 +1,7 @@
 // Package dockercompose owns docker-compose teardown for the per-issue
 // pipeline stacks (project name "issue-NNN"). It is shared by the Go
 // worktree cleanup, the `nightgauge cleanup` CLI, the doctor orphan
-// check, and the scheduler startup reconciler. See docs/PIPELINE_EXECUTION.md
+// check, and the autonomous compose reconcile. See docs/PIPELINE_EXECUTION.md
 // for the project-naming contract.
 package dockercompose
 

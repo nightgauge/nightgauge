@@ -2139,13 +2139,13 @@ func (s *Scheduler) loadQueue() {
 	}
 
 	s.recoverOrchestratorCrash()
-	// CONSTRUCTORS DELETE NOTHING — not worktrees, not containers, not volumes
-	// (#403, then #410 for the half #403 missed). loadQueue runs from
-	// NewScheduler, and getQueueScheduler builds a Scheduler for `queue
-	// add|list|run|remove|clear` and the deps-gate/baseline-gate promote
-	// commands, so anything destructive here runs as a side effect of being
-	// constructed, on behalf of a process that can see no other process's
-	// in-flight runs.
+	// CONSTRUCTION REMOVES NO WORKTREE, CONTAINER, VOLUME OR BRANCH — and it
+	// never touches a LIVE run's state (#403, then #410 for the half #403
+	// missed). loadQueue runs from NewScheduler, and getQueueScheduler builds a
+	// Scheduler for `queue add|list|run|remove|clear` and the
+	// deps-gate/baseline-gate promote commands, so anything destructive here runs
+	// as a side effect of being constructed, on behalf of a process that can see
+	// no other process's in-flight runs.
 	//
 	// #403 removed the merged-worktree sweep from this line and left
 	// reconcileOrphanedComposeProjects sitting right beside it, which made
@@ -2163,10 +2163,16 @@ func (s *Scheduler) loadQueue() {
 	// destroy. See runMergedWorktreeSweep and
 	// (*AutonomousScheduler).sweepOrphanedComposeProjects.
 	//
-	// What is left on this path reads queue state and synthesizes a crash record
-	// for a previous orchestrator that died mid-stage. Neither removes a
-	// directory, a container, a volume or a branch — that is the line
-	// construction must not cross.
+	// WHAT CONSTRUCTION STILL WRITES, named rather than implied by a banner:
+	// recoverOrchestratorCrashAt synthesizes a terminal-failure RunRecord into
+	// the daily JSONL, pauses and persists queue-state.json, and unlinks
+	// `.nightgauge/pipeline/current-run.json`. That is bookkeeping about a run
+	// whose process is GONE — the gate is runstate.ProcessAlive on the pid the
+	// sidecar carries, so a live run is left entirely alone: no record, no pause,
+	// no unlink. Writing a crash record for a dead orchestrator is not the same
+	// act as deleting live state, and the sidecar is the TypeScript side's index
+	// into a run, so removing one belonging to a live run would have been the
+	// same class of construction side effect #403/#410 exist to end.
 }
 
 // reconcileOrphanedComposeProjects tears down per-issue docker compose stacks
@@ -2185,13 +2191,18 @@ func (s *Scheduler) loadQueue() {
 // as.state.Running (authoritative for the runs it dispatched) with the
 // active-worktree scan.
 //
-// determined=false means the caller could not READ its worktree set. Every
-// project would then be torn down with `down -v --remove-orphans` on the
-// strength of a set nobody obtained. Doing nothing leaves stale containers
-// squatting ports, which a later cycle fixes; guessing destroys a live run's
-// named volumes, which nothing recovers.
-func (s *Scheduler) reconcileOrphanedComposeProjects(inFlight map[int]bool, determined bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+// determined=false means the caller could not READ one of its in-flight
+// sources. Every project would then be torn down with `down -v
+// --remove-orphans` on the strength of a set nobody obtained. Doing nothing
+// leaves stale containers squatting ports, which a later cycle fixes; guessing
+// destroys a live run's named volumes, which nothing recovers.
+//
+// ctx is the CALLER's context, not a fresh Background (#410). The pass now runs
+// inside the autonomous cycle, so an orchestrator shutdown must cancel it rather
+// than wait on docker; the 60s budget is derived from the cycle context and
+// remains a soft cap on the whole fan-out.
+func (s *Scheduler) reconcileOrphanedComposeProjects(ctx context.Context, inFlight map[int]bool, determined bool) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	lister := s.composeLister
@@ -2212,7 +2223,7 @@ func (s *Scheduler) reconcileOrphanedComposeProjects(inFlight map[int]bool, dete
 		return
 	}
 	if !determined {
-		log.Printf("compose-reconcile: WARN active-worktree set is undetermined — skipping teardown of %d compose project(s) rather than risk destroying a live run's volumes", len(projects))
+		log.Printf("compose-reconcile: WARN the in-flight set is undetermined (the caller could not read one of its sources) — skipping teardown of %d compose project(s) rather than risk destroying a live run's volumes", len(projects))
 		return
 	}
 	for _, p := range projects {
@@ -2299,8 +2310,20 @@ func (s *Scheduler) recoverOrchestratorCrash() {
 // with the rest of that run's on-disk state (#229), matching where a normal run
 // records history via runRoot.
 //
-// Guard: only synthesizes when the sidecar's StartedAt is in the past (defense
-// against clock skew or stale workspace moves).
+// Guards, in order:
+//
+//  1. LIVENESS. A sidecar is not evidence of a crash — it is evidence of a RUN,
+//     and it is present for the entire life of a healthy one. The recorded pid is
+//     the orchestrator's own (writeCurrentRunSidecar stamps os.Getpid() at stage
+//     start), so `runstate.ProcessAlive` distinguishes the two cases with the
+//     tree's one liveness probe (#341). Without this check, constructing a
+//     Scheduler in a second terminal — `nightgauge queue list`, a printf loop —
+//     destroyed the live run's sidecar (the TypeScript side's INDEX into that
+//     run), invented a terminal-failure record for a run that was still
+//     executing, and paused the queue. That is the construction side effect
+//     #403/#410 exist to end, one noun outside the banner's list (#410).
+//  2. Clock sanity: only synthesizes when the sidecar's StartedAt is in the past
+//     (defense against clock skew or stale workspace moves).
 func (s *Scheduler) recoverOrchestratorCrashAt(root string, now time.Time) {
 	sc, err := readCurrentRunSidecar(root)
 	if err != nil {
@@ -2308,6 +2331,11 @@ func (s *Scheduler) recoverOrchestratorCrashAt(root string, now time.Time) {
 		return
 	}
 	if sc == nil {
+		return
+	}
+	if runstate.ProcessAlive(sc.PID) {
+		log.Printf("recovery: current-run sidecar at %s names LIVE pid %d (#%d, stage=%s, run_id=%s) — that run is still executing; no crash record, no queue pause, no sidecar removal",
+			root, sc.PID, sc.IssueNumber, sc.Stage, sc.RunID)
 		return
 	}
 	if !sc.StartedAt.Before(now) {

@@ -130,10 +130,36 @@ type worktreeSweepOutput struct {
 	// reclaim decision made against an incomplete in-flight set is auditable
 	// from the command's output instead of only from the operator's memory.
 	Warnings []string `json:"warnings,omitempty"`
-	// SkippedRoots names roots whose in-flight set could not be read and which
-	// were therefore NOT swept at all.
-	SkippedRoots []string `json:"skippedRoots,omitempty"`
+	// SkippedRoots names every root that was NOT swept, each WITH ITS REASON.
+	// Three different failures land here and they are not interchangeable — a
+	// root nobody could canonicalize, a root whose in-flight set was unreadable,
+	// and a root whose git sweep failed after the in-flight set read fine. A
+	// single string list forced every consumer to assert one cause for all
+	// three, which is the same defect class as the sweep's old "content already
+	// on <base>" line: a report naming a check that was not the one performed.
+	SkippedRoots []skippedRoot `json:"skippedRoots,omitempty"`
 }
+
+// skippedRoot is one root the sweep declined to touch, and why.
+type skippedRoot struct {
+	Root   string `json:"root"`
+	Reason string `json:"reason"`
+}
+
+// The reasons a root is skipped. Stable strings: the extension logs them
+// verbatim rather than inferring a cause from the field name.
+const (
+	// skipNotAGitRepo — config.MainCheckoutRoot could not resolve a main
+	// checkout (not a git repo, or a bare one). Never swept: without a
+	// canonical root there is no snapshot directory to protect it with.
+	skipNotAGitRepo = "not-a-git-repo"
+	// skipInFlightUnreadable — the snapshot scan failed. "I could not look" is
+	// never "nothing is running" (#296).
+	skipInFlightUnreadable = "in-flight-set-unreadable"
+	// skipSweepFailed — the in-flight set read fine and the git sweep itself
+	// failed (git unusable, base ref unresolvable).
+	skipSweepFailed = "sweep-failed"
+)
 
 func worktreeSweepCmd() *cobra.Command {
 	var (
@@ -158,10 +184,18 @@ Merged-ness is decided by content diff against origin/<default>, not by
 ancestry: a squash merge leaves the branch tip a non-ancestor of the default
 branch, so an ancestry check reports a false negative for every merged branch.
 
+Every root is canonicalized to its repository's MAIN checkout first, including an
+explicit --workdir. A linked worktree has a .nightgauge/pipeline directory of its
+own (the .gitkeep is tracked) and it is always empty, so a sweep rooted there
+would read "no runs in flight" while git still listed — and this command still
+removed — every worktree of the repository.
+
 Runs in flight are protected by their runtime snapshots
-(.nightgauge/pipeline/runtime-<issue>-<runId>.json), read per root: an issue with
-a live snapshot is never reclaimed however merged its branch looks. A root whose
-snapshot directory cannot be read is skipped entirely rather than swept blind.
+(.nightgauge/pipeline/runtime-<issue>-<runId>.json), read per canonicalized root,
+plus the in-flight sidecar (.nightgauge/pipeline/current-run.json) when the
+process it names is alive: an issue with a live run is never reclaimed however
+merged its branch looks. A root whose snapshot directory cannot be read, or that
+resolves to no main checkout at all, is skipped entirely rather than swept blind.
 
 Never removed: the primary checkout, locked worktrees, detached worktrees,
 worktrees with uncommitted or untracked changes, branches carrying unmerged
@@ -175,17 +209,26 @@ created for a run about to start), and any issue with a run in flight.`,
 			out := cmd.OutOrStdout()
 			errOut := cmd.ErrOrStderr()
 
-			roots, err := worktreeSweepRoots(workdir)
+			roots, skipped, err := worktreeSweepRoots(workdir)
 			if err != nil {
 				return err
 			}
 
-			result := worktreeSweepOutput{}
+			result := worktreeSweepOutput{SkippedRoots: skipped}
+			for _, s := range skipped {
+				fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: %s — root NOT swept\n", s.Root, s.Reason)
+			}
 			for _, root := range roots {
 				// THE IN-FLIGHT SET IS RESOLVED PER ROOT, from that root's own
 				// snapshot directory (#410). A run's state is rooted in its
 				// target repo since #229, so one shared set would answer with a
 				// sibling repo's runs — and this command deletes directories.
+				//
+				// `root` is a MAIN CHECKOUT by construction (worktreeSweepRoots
+				// canonicalizes every root, --workdir included), which is the
+				// precondition ActiveIssuesFromSnapshots documents: a linked
+				// worktree's state dir exists, is empty, and answers "nothing is
+				// running" with no error at all.
 				active, scanErr := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(root))
 				if scanErr != nil {
 					// "I could not look" is never "nothing is running" (#296).
@@ -200,7 +243,7 @@ created for a run about to start), and any issue with a run in flight.`,
 						return fmt.Errorf("worktree sweep: %s: in-flight set unreadable, refusing to sweep blind: %w", root, scanErr)
 					}
 					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: in-flight set unreadable (%v) — root NOT swept\n", root, scanErr)
-					result.SkippedRoots = append(result.SkippedRoots, root)
+					result.SkippedRoots = append(result.SkippedRoots, skippedRoot{Root: root, Reason: skipInFlightUnreadable})
 					continue
 				}
 				for _, w := range active.Warnings {
@@ -221,14 +264,21 @@ created for a run about to start), and any issue with a run in flight.`,
 						return sweepErr
 					}
 					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: %v\n", root, sweepErr)
-					result.SkippedRoots = append(result.SkippedRoots, root)
+					result.SkippedRoots = append(result.SkippedRoots, skippedRoot{Root: root, Reason: skipSweepFailed})
 					continue
 				}
 				result.Results = append(result.Results, res)
 			}
 
 			if jsonOut {
-				return printJSON(result)
+				// Through the COBRA WRITER, not fmt.Println to os.Stdout (the
+				// emitRecoverResult idiom above). The extension's startup sweep
+				// parses this document, and a contract nothing can capture is a
+				// contract nothing can pin: every cmd-level test here would have
+				// exercised only the human output.
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
 			}
 
 			multi := len(roots) > 1
@@ -267,7 +317,8 @@ created for a run about to start), and any issue with a run in flight.`,
 	return cmd
 }
 
-// worktreeSweepRoots resolves which repositories the sweep covers.
+// worktreeSweepRoots resolves which repositories the sweep covers, CANONICALIZED
+// to main checkouts, plus the roots it refuses to sweep and why.
 //
 // --workdir is the explicit SINGLE-root override. Without it the default is
 // every repo root the workspace resolves (config.WorkspaceRepoRoots — the same
@@ -276,21 +327,63 @@ created for a run about to start), and any issue with a run in flight.`,
 // directory cannot see a cross-repo run's leftovers at all, which is the
 // population that accumulates fastest.
 //
+// EVERY root is then canonicalized with config.MainCheckoutRoot, --workdir
+// included, because a root here is used for two different things: `git worktree
+// list` (correct from any worktree of the repo) and the `.nightgauge/pipeline`
+// state dir (correct ONLY at the main checkout). A linked worktree satisfies the
+// first and silently defeats the second — its state dir exists, is empty, and
+// reports a determined "no runs in flight" — so the un-canonicalized form ran
+// `git worktree remove --force` over a live run's directory with zero protection
+// and zero warnings. The default resolution puts the worktree FIRST (the git
+// toplevel of cwd precedes the manifest entries), so in the dogfood shape the
+// blind pass ran before the protected one; deduping after canonicalization
+// collapses both into the one repository they always were.
+//
+// config.WorkspaceRepoRoots itself is deliberately NOT changed: `doctor` and
+// `cleanup` use it for repo-wide `git worktree list`, where a worktree root is
+// correct and harmless. The narrowing belongs to the destructive caller.
+//
 // Zero resolved roots is an ERROR, not an empty sweep. Even a single-repo
 // workspace resolves its primary root, so an empty set means the lookup failed —
 // and this is the leak-detection pass: reporting "nothing to reclaim" from a scan
-// that never ran is how worktree accumulation stays invisible (#302).
-func worktreeSweepRoots(workdir string) ([]string, error) {
+// that never ran is how worktree accumulation stays invisible (#302). A root that
+// resolves to no main checkout at all is reported as skipped rather than swept on
+// a guess; when that leaves nothing to sweep it is an error for the same reason.
+func worktreeSweepRoots(workdir string) ([]string, []skippedRoot, error) {
+	var raw []string
+	origin := workdir
 	if workdir != "" {
-		return []string{workdir}, nil
+		raw = []string{workdir}
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, nil, fmt.Errorf("get working directory: %w", err)
+		}
+		origin = cwd
+		raw = config.WorkspaceRepoRoots(cwd)
+		if len(raw) == 0 {
+			return nil, nil, fmt.Errorf("no repo roots resolved from %s — run inside a git repository or pass --workdir", cwd)
+		}
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("get working directory: %w", err)
+
+	var roots []string
+	var skipped []skippedRoot
+	seen := map[string]bool{}
+	for _, r := range raw {
+		main := config.MainCheckoutRoot(r)
+		if main == "" {
+			skipped = append(skipped, skippedRoot{Root: r, Reason: skipNotAGitRepo})
+			continue
+		}
+		if seen[main] {
+			continue
+		}
+		seen[main] = true
+		roots = append(roots, main)
 	}
-	roots := config.WorkspaceRepoRoots(cwd)
 	if len(roots) == 0 {
-		return nil, fmt.Errorf("no repo roots resolved from %s — run inside a git repository or pass --workdir", cwd)
+		return nil, skipped, fmt.Errorf("no main checkout resolved from %s — %d root(s) skipped as %s; run inside a git repository or pass --workdir at a repository",
+			origin, len(skipped), skipNotAGitRepo)
 	}
-	return roots, nil
+	return roots, skipped, nil
 }

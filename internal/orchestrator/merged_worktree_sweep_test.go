@@ -79,7 +79,12 @@ func TestMergedWorktreeSweep_DefaultBranchReclaimIsNotLoggedAsMerged(t *testing.
 	if strings.Contains(out, "content already on") {
 		t.Errorf("the default-branch door reclaimed on the strength of the checkout alone, but the log claims a content comparison; got:\n%s", out)
 	}
-	if !strings.Contains(out, "default branch") {
+	// Anchored to text ONLY reclaimRationale can produce. "default branch" alone
+	// was satisfied by execution's pre-existing "kept branch %s (default branch)"
+	// line, which is emitted whatever the rationale says — so the assertion held
+	// even with the door left unset and the rationale degraded to
+	// "UNACCOUNTED-FOR".
+	if !strings.Contains(out, "parked on the default branch") {
 		t.Errorf("the reclaim log does not name what actually authorized it; got:\n%s", out)
 	}
 	if !strings.Contains(out, "no content comparison") {

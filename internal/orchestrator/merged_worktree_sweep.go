@@ -49,10 +49,15 @@ import (
 // through this function — it has no scheduler and no `state.Running` — and it
 // answers the question above with a different source: `state.
 // ActiveIssuesFromSnapshots`, which scans each repo's own
-// `.nightgauge/pipeline/runtime-{issue}-{runId}.json` directory. That is the one
-// machine-wide in-flight source there is (ADR-017 Decision 8 built the layout to
-// be readable "by a process with no registry"), and it is what makes the CLI's
-// `ActiveIssues` mean something instead of being the empty map it used to pass.
+// `.nightgauge/pipeline/` directory — the `runtime-{issue}-{runId}.json`
+// snapshots plus the in-flight `current-run.json` sidecar when the process it
+// names is alive. That is the one machine-wide in-flight source there is (ADR-017
+// Decision 8 built the layout to be readable "by a process with no registry"),
+// and it is what makes the CLI's `ActiveIssues` mean something instead of being
+// the empty map it used to pass. It reads that directory at each repo's MAIN
+// CHECKOUT, canonicalized: a linked worktree has a state dir of its own and it is
+// always empty, so an un-canonicalized root answers "nothing is running" with no
+// error at all.
 //
 // It is strictly WEAKER than this caller's set, and the residuals are accepted
 // deliberately rather than papered over:
@@ -61,12 +66,13 @@ import (
 //     Persist is gated on a repo-carrying transition, so a run has no file until
 //     its first one; on any path, a dispatched run that never wrote a snapshot is
 //     a bug elsewhere. `--dry-run` remains for the cautious operator;
-//   - protection is bounded by liveness (a live stage child, or a snapshot
-//     touched inside runstate.LivenessWindow), NOT by "a non-terminal snapshot
-//     exists". It has to be: nothing latches terminal on the Go-scheduler path
-//     and nothing removes the file after a crash, so an existence test would
-//     protect every leaked worktree forever — the same structural no-op #403
-//     deleted, pointing the other way;
+//   - protection is bounded by liveness (a live orchestrator named by the
+//     in-flight sidecar, a live recorded stage child, or a snapshot touched inside
+//     runstate.LivenessWindow), NOT by "a non-terminal snapshot exists". It has to
+//     be: nothing latches terminal on the Go-scheduler path and nothing removes
+//     the file after a crash, so an existence test would protect every leaked
+//     worktree forever — the same structural no-op #403 deleted, pointing the
+//     other way;
 //   - there is deliberately NO blanket age floor on the CLI path. A 24-hour
 //     "only touch old worktrees" rule would neuter the command's primary use,
 //     which is reclaiming leftovers of a run that merged an hour ago.

@@ -1,6 +1,13 @@
 package orchestrator
 
-import "log"
+import (
+	"context"
+	"log"
+	"os"
+
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/state"
+)
 
 // composeReconcileLogPrefix labels every line the autonomous compose reconcile
 // emits, including the guards that decline to run it. A skip logged under a
@@ -19,20 +26,50 @@ const composeReconcileLogPrefix = "autonomous: compose reconcile"
 // sweep off that path and left this one behind; a constructor is the wrong place
 // to destroy state no matter how good the protection is.
 //
-// THE IN-FLIGHT SET IS A UNION, and each half covers what the other cannot:
+// THE IN-FLIGHT SET IS A UNION of three sources, and each covers what the others
+// cannot:
 //
 //   - as.state.Running is authoritative for the runs THIS process dispatched,
-//     and it is the only thing that protects a run whose worktree has already
-//     been reclaimed (post-merge cleanup ran, the stack has not been torn down
-//     yet) — a worktree scan sees nothing for it;
+//     and nothing else protects a run whose worktree has already been reclaimed
+//     (post-merge cleanup ran, the stack has not been torn down yet);
 //   - the active-worktree scan covers runs this process did NOT dispatch: a
 //     cross-repo worktree registered in a sibling root, and a run left behind by
-//     a previous orchestrator incarnation. state.Running is empty for those.
+//     a previous orchestrator incarnation. state.Running is empty for those —
+//     startup recovery clears it;
+//   - the per-root SNAPSHOT scan (state.ActiveIssuesFromSnapshots, the same
+//     machine-wide source the CLI worktree sweep uses) covers a live run that has
+//     NEITHER: not dispatched here, and its worktree legitimately gone. That is
+//     not hypothetical — the merged-worktree sweep in this very cycle reclaims
+//     exactly the worktrees state.Running does not cover, so without this half the
+//     protection would depend on a directory another pass is allowed to delete.
 //
-// Taking either half alone is a live run's volumes. `down -v` removes named
-// volumes and nothing recovers them, which is why the undetermined bail (in
-// reconcileOrphanedComposeProjects) refuses to act on a set it could not read.
-func (as *AutonomousScheduler) sweepOrphanedComposeProjects() {
+// Taking any of them alone is a live run's volumes. `down -v` removes named
+// volumes and nothing recovers them, which is why an unreadable source vetoes the
+// whole pass (the undetermined bail in reconcileOrphanedComposeProjects) instead
+// of shrinking the protected set.
+//
+// RESIDUAL — candidate set is HOST-GLOBAL, protection is ROOT-SCOPED. Candidates
+// come from `docker compose ls --all`, which lists every `issue-N` project on the
+// host with no repo attribution; all three protection halves are bounded by
+// s.repoScanRoots() (execution.ActiveWorktreeIssues says so itself: "the answer
+// covers exactly the roots it is given"). So a live run in a repo this workspace
+// never registered — an unregistered sibling, a repo dropped from the manifest —
+// is protected by nothing here and its stack is still torn down. Stated the way
+// runMergedWorktreeSweep states its three residuals; the durable fix is bounding
+// the CANDIDATES (compose ls reports ConfigFiles), which is filed separately.
+//
+// ORDERING INVARIANT, since the protection snapshot is taken before the candidate
+// list is fetched (inside the reconcile): safe only while dispatch happens on the
+// cycle goroutine AFTER this pass. runCycle is serialized by the single Start
+// loop and the only Running-append site (enqueueItem) runs later in the same
+// cycle, so no stack can appear between the two reads. A dispatcher that appends
+// to Running from another goroutine must be unioned in here before this ordering
+// is trusted.
+//
+// PACING — this runs under the same graph-TTL gate as the other reconciles, so a
+// stopped, cooling-down or fully saturated fleet reconciles nothing until a slot
+// frees. `nightgauge cleanup` is the operator door in the meantime.
+func (as *AutonomousScheduler) sweepOrphanedComposeProjects(ctx context.Context) {
 	if as.scheduler == nil {
 		return
 	}
@@ -53,9 +90,10 @@ func (as *AutonomousScheduler) sweepOrphanedComposeProjects() {
 	}
 	as.mu.Unlock()
 
-	// One resolution of the roots feeds both the determined bit and the scan, so
-	// the verdict describes exactly the root set the union was built from
-	// (repoRootsResolver is a live callback over workspace registration).
+	// One resolution of the roots feeds the determined bit, the worktree scan AND
+	// the snapshot scan, so the verdict describes exactly the root set the union
+	// was built from (repoRootsResolver is a live callback over workspace
+	// registration).
 	//
 	// as.mu is released above before anything touches the scheduler, and neither
 	// repoScanRoots nor activeWorktreeIssuesFor takes s.mu — the two locks are
@@ -75,6 +113,58 @@ func (as *AutonomousScheduler) sweepOrphanedComposeProjects() {
 	for n := range active {
 		inFlight[n] = true
 	}
+	if snapshotIssues, ok := as.snapshotInFlightIssues(roots); ok {
+		for n := range snapshotIssues {
+			inFlight[n] = true
+		}
+	} else {
+		determined = false
+	}
 
-	as.scheduler.reconcileOrphanedComposeProjects(inFlight, determined)
+	as.scheduler.reconcileOrphanedComposeProjects(ctx, inFlight, determined)
+}
+
+// snapshotInFlightIssues reads the machine-wide in-flight set from every root's
+// runtime snapshots, plus whether that answer is DETERMINED.
+//
+// Each root is canonicalized to its main checkout first (config.MainCheckoutRoot):
+// a linked worktree's `.nightgauge/pipeline` exists and is always empty, so an
+// un-canonicalized root answers "nothing is running" with no error — the exact
+// silent-blindness this pass cannot afford (#410). A root that does not exist is
+// skipped, mirroring execution.ActiveWorktreeIssues: a deleted sibling holds no
+// runs and must not permanently disable reconciliation. A root that exists but
+// canonicalizes to nothing, or whose state dir cannot be read, is a FAILED READ
+// and undetermines the whole answer.
+//
+// A paused run's snapshot protects its stack here, which is the intended
+// semantics of a pause: `--resume later` means the containers are still that
+// run's, not debris.
+func (as *AutonomousScheduler) snapshotInFlightIssues(roots []string) (map[int]bool, bool) {
+	out := map[int]bool{}
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			log.Printf("%s: WARN cannot stat repo root %s: %v — the snapshot half of the in-flight set is UNDETERMINED", composeReconcileLogPrefix, root, err)
+			return nil, false
+		}
+		main := config.MainCheckoutRoot(root)
+		if main == "" {
+			log.Printf("%s: WARN %s resolves to no main checkout (not a git work tree) — the snapshot half of the in-flight set is UNDETERMINED", composeReconcileLogPrefix, root)
+			return nil, false
+		}
+		res, err := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(main))
+		if err != nil {
+			log.Printf("%s: WARN snapshot scan failed at %s: %v — the snapshot half of the in-flight set is UNDETERMINED", composeReconcileLogPrefix, main, err)
+			return nil, false
+		}
+		for _, w := range res.Warnings {
+			log.Printf("%s: %s: %s", composeReconcileLogPrefix, main, w)
+		}
+		for n := range res.Issues {
+			out[n] = true
+		}
+	}
+	return out, true
 }

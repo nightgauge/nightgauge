@@ -166,7 +166,7 @@ func TestReconcileOrphanedCompose_UndeterminedTearsDownNothing(t *testing.T) {
 	if determined {
 		t.Fatal("fixture is not the undetermined state — `git worktree list` succeeded")
 	}
-	s.reconcileOrphanedComposeProjects(inFlight, determined)
+	s.reconcileOrphanedComposeProjects(context.Background(), inFlight, determined)
 
 	if len(torn) != 0 {
 		t.Errorf("tore down %v on an undetermined worktree set — that is `down -v` against a possibly-live run", torn)
@@ -199,7 +199,7 @@ func TestReconcileOrphanedCompose_CrossRepoRunSurvives(t *testing.T) {
 		state: &AutonomousState{},
 	}
 
-	as.sweepOrphanedComposeProjects()
+	as.sweepOrphanedComposeProjects(context.Background())
 
 	for _, name := range torn {
 		if name == "issue-602" {

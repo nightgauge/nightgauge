@@ -939,9 +939,20 @@ nightgauge worktree sweep [--workdir <repo>] [--default-branch main] [--dry-run]
 sweeps at construction: `NewScheduler` → `loadQueue` is how every `nightgauge
 queue …` invocation and the promote gates build a Scheduler, and a constructor
 must not remove directories on behalf of a process that cannot see any other
-process's in-flight runs. **Constructors delete nothing — not worktrees, not
-containers** (#410 closed the compose half #403 left behind; see
+process's in-flight runs. **Construction removes no worktree, container, volume
+or branch, and never touches a live run's state** (#410 closed the compose half
+#403 left behind; see
 [Compose Orphan Reconciliation](#compose-orphan-reconciliation-issue-3050)).
+
+What construction **does** still write, stated precisely because a banner that
+over-claims is how the next side effect slips in: the crash-recovery path
+synthesizes a terminal-failure `RunRecord`, pauses and persists
+`queue-state.json`, and removes `.nightgauge/pipeline/current-run.json` — all
+gated on `runstate.ProcessAlive(sidecar.PID)`, so it only ever happens for a run
+whose process is **gone**. A live run is left entirely alone (no record, no pause,
+no removal): that sidecar is the TypeScript side's index into the run, and
+`nightgauge queue list` in a second terminal used to destroy it, invent a terminal
+record for a run that was still executing, and pause the queue (#410).
 
 **The CLI sweep covers the whole workspace by default** (#410). A run's worktree
 is created in its **target** repo (#229), so a sweep rooted only at the
@@ -950,6 +961,21 @@ population that accumulates fastest, since nobody remembers to re-run the comman
 once per sibling repo. Roots come from `config.WorkspaceRepoRoots` (the resolver
 `doctor` already walks); zero resolved roots is an error, not an empty sweep.
 `--workdir` is the explicit single-root override and never reaches a sibling.
+
+**Every root is canonicalized to its repository's main checkout first**
+(`config.MainCheckoutRoot`), `--workdir` included, and deduped afterwards. A root
+is used for two different things and a linked worktree is only correct for one of
+them: `git worktree list` run from a worktree enumerates the whole repository,
+while the worktree's own `.nightgauge/pipeline` directory exists (the `.gitkeep`
+is tracked, so every checkout has one) and is always empty. Un-canonicalized, a
+bare `nightgauge worktree sweep` from inside any pipeline worktree — which is
+where every stage runs — read a determined "no runs in flight", with no error and
+no warning, and then ran `git worktree remove --force` across every worktree of
+the repository including a live run's. The dogfood shape made it worse: the git
+toplevel of cwd sorts before the manifest entries, so the same repository was
+swept twice and the blind pass ran first. A root that resolves to no main checkout
+(not a git work tree, or bare) is reported in `skippedRoots` with reason
+`not-a-git-repo` and never swept.
 
 Each reclaim reports the **door** that authorized it, because the sweep has two
 reclaim rules and only one of them compares anything (#410):
@@ -1003,18 +1029,26 @@ for the runs whose directories I am about to delete?"
 it passed nothing, so `active-run` was structurally unreachable from the command
 line: one `nightgauge worktree sweep` during any run that was past its merge ran
 `git worktree remove --force` on the directory that run was still executing in.
-The set is now read per root from
-`{repoRoot}/.nightgauge/pipeline/runtime-<issue>-<runId>.json` — the layout
+The set is now read per **canonicalized** root from
+`{mainCheckout}/.nightgauge/pipeline/runtime-<issue>-<runId>.json` — the layout
 ADR-017 Decision 8 built to be readable "by a process with no registry" — and a
 root whose snapshot directory cannot be read is **skipped entirely** rather than
 swept blind.
 
-An issue is treated as in flight when its snapshot is:
+An issue is treated as in flight when the **in-flight sidecar**
+(`current-run.json`) names it and the process it records is alive, or when its
+snapshot is:
 
 - **not terminal**, and either its recorded stage child is alive
   (`runstate.ProcessAlive`) or the file was touched inside
   `runstate.LivenessWindow` (30 min, the same constant the IPC orphan
-  reconciler's ladder uses — one threshold, one authority); or
+  reconciler's ladder uses — one threshold, one authority). Note what that
+  timestamp means: the snapshot is **refreshed at stage boundaries only** — the
+  orchestrator persists after a stage completes, the IPC server on repo-carrying
+  transitions, and no progress tick writes anything (there is no heartbeat). On
+  the Go-scheduler path the persisted pid also names a stage child that had
+  already exited when the file was written, which is why the sidecar arm exists:
+  it is the one signal that path writes while the run is alive; or
 - **paused** — a deliberate "resume later" that powers the restore prompt days
   later, so it is never aged out by the liveness lease; or
 - **terminal within the tail window** — the terminal marker lands before the
@@ -1108,17 +1142,41 @@ run from `NewScheduler` → `loadQueue`, which is the construction path of every
 commands — so `queue list`, a printf loop, ran `docker compose down -v
 --remove-orphans` plus image removal as a side effect of being constructed. #403
 moved the merged-worktree sweep off that path and left this one sitting beside it
-with the same blind spot. **Constructors delete nothing.**
+with the same blind spot. **Construction removes no container, volume or
+worktree.**
 
-**The in-flight set is a union**, and each half covers what the other cannot:
+It runs **before** the merged-worktree sweep in the same cycle, and the order is
+load-bearing (#410). The sweep protects with `state.Running` alone, so the only
+worktrees it can reclaim belong to runs `state.Running` does not cover — exactly
+the population whose compose protection is the active-worktree half of this
+union. Sweeping first deletes that evidence and the teardown then runs `down -v`
+on a live run's stack. The cost of this ordering is one graph-TTL cycle of latency
+for a just-retired run's stack.
 
-| Half                             | Covers                                                                                       |
-| -------------------------------- | -------------------------------------------------------------------------------------------- |
-| `as.state.Running`               | Runs this process dispatched — including one whose worktree was already reclaimed.           |
-| `execution.ActiveWorktreeIssues` | Runs this process did **not** dispatch: cross-repo worktrees, a previous incarnation's runs. |
+**The in-flight set is a union of three sources**, each covering what the others
+cannot:
 
-Either half alone tears down a live run's named volumes, which nothing recovers.
-An **undetermined** worktree scan vetoes the whole pass (see below).
+| Source                            | Covers                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `as.state.Running`                | Runs this process dispatched — including one whose worktree was already reclaimed.                           |
+| `execution.ActiveWorktreeIssues`  | Runs this process did **not** dispatch: cross-repo worktrees, a previous incarnation's runs.                 |
+| `state.ActiveIssuesFromSnapshots` | A live run with neither: not dispatched here **and** its worktree already gone. Read per canonicalized root. |
+
+Any source alone tears down a live run's named volumes, which nothing recovers.
+An **undetermined** read of any of them vetoes the whole pass (see below). A
+**paused** run's snapshot keeps its stack alive, which is what a pause means.
+
+**Pacing** — the pass sits under the same graph-TTL gate as the other reconciles,
+so a stopped, cooling-down, or fully saturated fleet reconciles nothing until a
+slot frees; before #410 it ran on every Scheduler construction, so the pacing is
+new exposure for compose. `nightgauge cleanup` is the operator path in the
+meantime.
+
+**Residual** — the candidate list is host-global (`docker compose ls --all` has no
+repo attribution) while all three protection sources are bounded by the scanned
+repo roots, so a live run in a repo this workspace never registered is protected
+by none of them. Bounding the candidates by their compose `ConfigFiles` is the
+durable fix and is filed separately.
 
 #### Active-Worktree Scanning — Single-Scanner Contract (Issue #323)
 
