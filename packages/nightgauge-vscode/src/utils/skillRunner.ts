@@ -57,6 +57,7 @@ import {
   AdapterError,
   clampTier,
   getModelDescriptor,
+  EFFORT_LEVELS,
   type ModelSelectionResult,
   type IssueMetadata,
   type ExperimentAssignment,
@@ -958,11 +959,16 @@ function buildAutoRouterOptions(
 /**
  * Effort levels in ascending reasoning depth, for envelope clamping (Issue #19).
  *
- * Must list EVERY `ClaudeEffort` member: `clampEffortToEnvelope` treats an
- * unlisted value as unclampable and returns it untouched, so a missing entry
- * silently exempts that level from the mode envelope's ceiling (#75).
+ * Derived from `EFFORT_LEVELS` — the one effort vocabulary (#394) — rather than
+ * re-listed, because the ladder must cover EVERY `ClaudeEffort` member:
+ * `clampEffortToEnvelope` returns an unlisted value untouched, so a level
+ * missing here would be silently exempt from the mode envelope's ceiling (#75).
+ * `EFFORT_LEVELS` is already declared low → max in ascending depth, which is the
+ * order the clamp indexes against. The `i < 0` branch below therefore no longer
+ * covers a drifted copy; it only covers input that is not an effort level at
+ * all (an unchecked cast, a value off the wire), which stays unclamped.
  */
-const EFFORT_ORDER: ClaudeEffort[] = ["low", "medium", "high", "xhigh", "max"];
+const EFFORT_ORDER: readonly ClaudeEffort[] = EFFORT_LEVELS;
 
 /**
  * Clamp a complexity-derived effort into the mode envelope's `[effortFloor,

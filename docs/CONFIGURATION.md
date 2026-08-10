@@ -3333,15 +3333,15 @@ Model routing configuration controls how pipeline stages select AI models. This
 is a cross-cutting concern placed at the top level (alongside `pipeline`,
 `routing`) because it affects how `pipeline.stage_models` are interpreted.
 
-| Option                  | Type   | Default                                      | Description                                                                                                                                       |
-| ----------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                  | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                              |
-| `complexity_thresholds` | object | -                                            | Score boundaries for auto model tier selection                                                                                                    |
-| `minimum_model`         | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                      |
-| `confidence_threshold`  | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                       |
-| `stage_efforts`         | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high`)                                                                                                     |
-| `effort_auto`           | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                     |
-| `default_effort`        | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high`). Overridden by `stage_efforts`. Silently ignored for Haiku. |
+| Option                  | Type   | Default                                      | Description                                                                                                                                                   |
+| ----------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                  | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                          |
+| `complexity_thresholds` | object | -                                            | Score boundaries for auto model tier selection                                                                                                                |
+| `minimum_model`         | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                  |
+| `confidence_threshold`  | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                   |
+| `stage_efforts`         | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                     |
+| `effort_auto`           | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                 |
+| `default_effort`        | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku. |
 
 **Model Routing Modes:**
 

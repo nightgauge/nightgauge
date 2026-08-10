@@ -10,7 +10,12 @@
 
 import * as fs from "node:fs";
 import * as vscode from "vscode";
-import { AutoModelSelector, getModelDescriptor, type IssueMetadata } from "@nightgauge/sdk";
+import {
+  AutoModelSelector,
+  EFFORT_LEVELS,
+  getModelDescriptor,
+  type IssueMetadata,
+} from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
@@ -256,9 +261,16 @@ export function getStageBudget(
  * `supported_efforts` is authoritative, so a model that lacks a level rejects
  * it loudly rather than being silently downgraded.
  */
-export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type ClaudeEffort = (typeof EFFORT_LEVELS)[number];
 
-const VALID_CLAUDE_EFFORTS: ClaudeEffort[] = ["low", "medium", "high", "xhigh", "max"];
+const VALID_CLAUDE_EFFORTS: readonly ClaudeEffort[] = EFFORT_LEVELS;
+
+/**
+ * Alternation for the config-file effort regexes, derived from the same array —
+ * a hand-written `(low|medium|high|xhigh)` was one of the copies that fell
+ * behind when `max` was added (#75, #394).
+ */
+const EFFORT_ALTERNATION = EFFORT_LEVELS.join("|");
 
 /**
  * Default per-stage model overrides — Sonnet 4.6 era cost-optimized strategy.
@@ -1002,7 +1014,7 @@ export function getExplicitStageEffort(
 
       if (inStageEfforts) {
         const effortMatch = trimmed.match(
-          /^([a-z][-a-z]*):\s*['"]?(low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
+          new RegExp(`^([a-z][-a-z]*):\\s*['"]?(${EFFORT_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (effortMatch && effortMatch[1] === stage) {
           return effortMatch[2] as ClaudeEffort;
@@ -1068,7 +1080,7 @@ export function getModelDefaultEffort(workspaceRoot?: string): ClaudeEffort | un
 
       if (inModelRouting) {
         const match = trimmed.match(
-          /^default_effort:\s*['"]?(low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
+          new RegExp(`^default_effort:\\s*['"]?(${EFFORT_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           return match[1] as ClaudeEffort;

@@ -55,10 +55,9 @@ type ModelDescriptor struct {
 	// SupportedEfforts: an empty slice is a positive declaration ("this model
 	// has no effort axis", e.g. Haiku), not missing data — the canonical schema
 	// requires the field, so unknown is descriptor-absence, never `[]` (#336).
-	SupportedEfforts   []string `json:"supported_efforts"`
-	SupportedReasoning []string `json:"supported_reasoning"`
-	ContextWindow      int      `json:"context_window"`
-	Deprecated         bool     `json:"deprecated,omitempty"`
+	SupportedEfforts []string `json:"supported_efforts"`
+	ContextWindow    int      `json:"context_window"`
+	Deprecated       bool     `json:"deprecated,omitempty"`
 	// Replacement is the current id callers should migrate to (deprecated models).
 	Replacement string `json:"replacement,omitempty"`
 	// Recommended marks the provider's default for its strongest band (UI hint).

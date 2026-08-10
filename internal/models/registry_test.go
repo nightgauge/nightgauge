@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"testing"
 )
 
@@ -499,4 +500,102 @@ func ratesEqual(got, want float64) bool {
 		return true
 	}
 	return math.Abs(got-want) <= 1e-12*math.Abs(want)
+}
+
+// ---------------------------------------------------------------------------
+// Cross-language pin for the effort ladder (#394).
+//
+// EffortOrder in registry.go says it "Mirrors EFFORT_LEVELS in the SDK", and
+// until now nothing enforced that claim: the two lists were identical by hand.
+// #394 made EFFORT_LEVELS the single effort vocabulary authority on the
+// TypeScript side, and every TS surface now derives from it — but Go cannot
+// import TypeScript, so EffortOrder is a genuine second definition. Drift here
+// is not cosmetic: effortIndex returns -1 for a level Go has not heard of, so a
+// ladder entry the SDK adds and Go misses is silently treated as "not an effort
+// level" by every Go comparison that walks the ladder.
+//
+// This test reads the SDK source, extracts the EFFORT_LEVELS array literal, and
+// requires EffortOrder to equal it element-for-element IN ORDER — the ladder is
+// ascending reasoning depth, so a reordering is as wrong as a missing member.
+// It never skips: an unreadable file, or a const that has been renamed or
+// rewritten in a form this extractor cannot read, is a FAILURE, because a pin
+// that quietly stops checking hides exactly the drift it exists to catch.
+
+// tsEffortSourcePath is the SDK-side authority, relative to this package
+// directory (go test runs with cwd = the package dir).
+var tsEffortSourcePath = filepath.Join(
+	"..", "..", "packages", "nightgauge-sdk", "src", "eval", "modelEvalSchemas.ts",
+)
+
+// tsEffortLiteralRegexp lifts `export const EFFORT_LEVELS = [...] as const;`
+// out of the TypeScript source. Whitespace is elastic because prettier reflows
+// the array whenever its width changes. The `(?m)^` anchor requires the
+// declaration at column 0 — a module-scope `export const` always is — so a
+// `//`- or ` * `-prefixed COPY inside a comment can never satisfy the pin.
+//
+// Capture 1 is the raw bracket contents; tsEffortMemberRegexp splits it.
+var tsEffortLiteralRegexp = regexp.MustCompile(
+	`(?m)^export const EFFORT_LEVELS\s*=\s*\[([^\]]*)\]\s*as const;`)
+
+// tsEffortMemberRegexp pulls the quoted members out of the array body, in
+// source order. Both quote styles are accepted because prettier's choice is a
+// formatting decision, not a semantic one.
+var tsEffortMemberRegexp = regexp.MustCompile(`["']([^"']+)["']`)
+
+// effortRealignHint is appended to every failure: the fixer needs to know which
+// two sites are peers and which one is the authority.
+const effortRealignHint = "re-align the two definition sites: " +
+	"internal/models/registry.go (EffortOrder) and " +
+	"packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts (EFFORT_LEVELS). " +
+	"EFFORT_LEVELS is the authority (#394) — every TypeScript surface derives " +
+	"from it — so Go follows it, in the same ascending-depth order."
+
+func TestEffortOrderPinnedToSDKEffortLevels(t *testing.T) {
+	source, err := os.ReadFile(tsEffortSourcePath)
+	if err != nil {
+		t.Fatalf("cannot read the SDK authority at %s: %v\n"+
+			"This pin is path-coupled: if modelEvalSchemas.ts moved or was renamed, move "+
+			"tsEffortSourcePath in this test with it — do NOT delete the pin. %s",
+			tsEffortSourcePath, err, effortRealignHint)
+	}
+
+	matches := tsEffortLiteralRegexp.FindAllStringSubmatch(string(source), -1)
+	switch len(matches) {
+	case 1:
+		// The pinned shape. Fall through to the comparison below.
+	case 0:
+		t.Fatalf("no `export const EFFORT_LEVELS = [...] as const;` array literal found in %s.\n"+
+			"The const was renamed, deleted, or rewritten in a form this pin cannot read "+
+			"(e.g. built from another array at runtime — keep the inline literal so both "+
+			"languages can read the ladder from one place). The literal must be a top-level "+
+			"declaration in THIS file: a commented-out copy or a re-export from another "+
+			"module does not count. A missing definition is a FAILURE, never a skip. %s",
+			tsEffortSourcePath, effortRealignHint)
+	default:
+		t.Fatalf("found %d `export const EFFORT_LEVELS = [...]` literals in %s; expected exactly 1.\n"+
+			"Ambiguous: this pin cannot tell which one the SDK actually exports, and #394 "+
+			"exists precisely to keep the vocabulary to a single declaration. %s",
+			len(matches), tsEffortSourcePath, effortRealignHint)
+	}
+
+	var want []string
+	for _, m := range tsEffortMemberRegexp.FindAllStringSubmatch(matches[0][1], -1) {
+		want = append(want, m[1])
+	}
+	if len(want) == 0 {
+		t.Fatalf("EFFORT_LEVELS in %s parsed to zero members from body %q.\n"+
+			"An empty extraction would make this pin pass against anything. %s",
+			tsEffortSourcePath, matches[0][1], effortRealignHint)
+	}
+	t.Logf("extracted EFFORT_LEVELS from %s: %q", tsEffortSourcePath, want)
+
+	if !reflect.DeepEqual(EffortOrder, want) {
+		t.Errorf("effort ladder has DRIFTED between Go and the SDK:\n"+
+			"  Go   EffortOrder    = %q\n"+
+			"  TS   EFFORT_LEVELS  = %q\n"+
+			"(internal/models/registry.go vs %s)\n"+
+			"Order matters as much as membership: the ladder is ascending reasoning depth "+
+			"and effortIndex compares positions in it. %s",
+			EffortOrder, want, tsEffortSourcePath, effortRealignHint)
+	}
 }

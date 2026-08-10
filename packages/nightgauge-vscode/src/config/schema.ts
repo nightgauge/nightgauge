@@ -13,8 +13,10 @@
  */
 
 import { z } from "zod";
-import { CODEX_DEFAULT_BASE_MODEL } from "@nightgauge/sdk";
+import { CODEX_DEFAULT_BASE_MODEL, EFFORT_LEVELS } from "@nightgauge/sdk";
 import { PipelineStageSchema } from "../schemas/pipelineState";
+// Type-only: erased at emit, so this cannot form a runtime import cycle.
+import type { ClaudeEffort } from "../utils/resolvers/stageResolver";
 
 // ============================================================================
 // Enums
@@ -1884,8 +1886,37 @@ export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
  */
 export const DefaultModelSchema = z.enum(["sonnet", "opus", "haiku", "fable"]);
 export type DefaultModel = z.infer<typeof DefaultModelSchema>;
-export const ClaudeEffortSchema = z.enum(["low", "medium", "high", "xhigh"]);
-export type ClaudeEffort = z.infer<typeof ClaudeEffortSchema>;
+/**
+ * Effort ladder for `model_routing` — derived from `EFFORT_LEVELS`, the single
+ * effort vocabulary authority, never re-listed.
+ *
+ * This enum used to spell the ladder out and stopped at `xhigh`, so a config
+ * setting `default_effort: max` — a value the resolver reads and honours — was
+ * rejected by validation (#394). It exports no type of its own: the one
+ * authoritative union is `ClaudeEffort` from `utils/resolvers/stageResolver`.
+ */
+export const ClaudeEffortSchema = z.enum(EFFORT_LEVELS);
+
+/**
+ * Tripwire, not a parity check between two independent declarations.
+ *
+ * Both sides already derive from `EFFORT_LEVELS`, so today this assertion is
+ * trivially true and cannot fail — that is the point. It fires the moment
+ * someone re-lists either side as a literal (`z.enum(["low", …])` here, or a
+ * hand-written union in `stageResolver`) and that literal drifts from the
+ * other: the mutual-assignability test then fails to compile instead of
+ * shipping a validator that rejects a level the resolver honours. Verified by
+ * executed mutation — replacing either side with a short literal breaks
+ * `tsc`. Delete this only together with the derivation it protects.
+ */
+type _ClaudeEffortParity =
+  z.infer<typeof ClaudeEffortSchema> extends ClaudeEffort
+    ? ClaudeEffort extends z.infer<typeof ClaudeEffortSchema>
+      ? true
+      : never
+    : never;
+const _claudeEffortParity: _ClaudeEffortParity = true;
+void _claudeEffortParity;
 
 // ============================================================================
 // Model Routing Configuration

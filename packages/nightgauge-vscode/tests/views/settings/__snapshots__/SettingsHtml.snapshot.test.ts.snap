@@ -2446,7 +2446,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="model_routing.default_effort"
                 disabled>
-          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option>
+          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option><option value="max" >Max (highest budget)</option>
         </select>
       </div>
     </div>
@@ -6526,7 +6526,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="model_routing.default_effort"
                 >
-          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option>
+          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option><option value="max" >Max (highest budget)</option>
         </select>
       </div>
     </div>
@@ -10604,7 +10604,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="model_routing.default_effort"
                 >
-          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option>
+          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option><option value="max" >Max (highest budget)</option>
         </select>
       </div>
     </div>
@@ -14698,7 +14698,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="model_routing.default_effort"
                 disabled>
-          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option>
+          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option><option value="max" >Max (highest budget)</option>
         </select>
       </div>
     </div>
@@ -18778,7 +18778,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="model_routing.default_effort"
                 >
-          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option>
+          <option value="" selected>Use provider/model defaults</option><option value="low" >Low</option><option value="medium" >Medium</option><option value="high" >High</option><option value="xhigh" >Extra High</option><option value="max" >Max (highest budget)</option>
         </select>
       </div>
     </div>

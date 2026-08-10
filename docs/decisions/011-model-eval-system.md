@@ -50,9 +50,10 @@ primitives (`ModelTierSchema`, `PIPELINE_SKILLS`, `EvalVerdictSchema`,
 
 - **`ModelDescriptor`** — provider-neutral identity + economics: `provider`,
   optional tier alias, `concrete_version`, **token rates**
-  (input/output/cache-read/cache-creation), supported **effort** and
-  **reasoning** levels, context window. The single shape the S2 registry
-  populates and from which cost is computed.
+  (input/output/cache-read/cache-creation), supported **effort** levels,
+  context window. The single shape the S2 registry populates and from which
+  cost is computed. (`supported_reasoning` was part of this shape until #395;
+  see §8.)
 - **`EvalTask`** — a realistic task: instruction, `job_class`, target
   stage(s), difficulty, a **fixture reference** (how to materialize seed repo
   state), deterministic **check commands**, and a **rubric**.
@@ -122,10 +123,25 @@ a code change.
 
 ### 8. Effort and reasoning axes
 
-`effort` reuses `ClaudeEffort` (`low|medium|high`). `reasoning` is a **new
-provider-neutral budget axis** (`none|low|medium|high`) — today effort is
-derived but not injected into the adapter spawn; S4 (#4171) wires both axes so
-they actually change model behavior.
+`effort` reuses `ClaudeEffort` (derived from `EFFORT_LEVELS`, the single effort
+vocabulary authority — #394). `reasoning` is a **provider-neutral budget axis**
+(`none|low|medium|high`) — today effort is derived but not injected into the
+adapter spawn; S4 (#4171) wires both axes so they actually change model
+behavior.
+
+**Amended by #395.** `reasoning` remains an eval **matrix** axis
+(`EvalMatrixCell.reasoning`, `REASONING_LEVELS`, the adapter directives in
+`evalAdapters.ts`), but the per-model `supported_reasoning` list has been
+removed from `ModelDescriptor` (and from both registry copies and the Go
+`models.ModelDescriptor` struct). It never gained a reader on either side and
+carried no per-model signal — every real model declared the same four levels
+(`none`, `low`, `medium`, `high`), and the one entry that differed was
+`vendor-x-pro`, the provider-neutral placeholder, whose shorter list is fixture
+shape rather than an observed vendor constraint. The
+runtime reasoning-budget decision is a preference cascade (env → config yaml →
+provider default), not a registry lookup; if per-model reasoning support ever
+becomes a real constraint, it should be reintroduced together with the code
+that enforces it.
 
 ---
 

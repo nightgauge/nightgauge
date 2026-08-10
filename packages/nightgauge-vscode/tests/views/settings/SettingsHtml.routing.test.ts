@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { EFFORT_LEVELS } from "@nightgauge/sdk";
 import { getSettingsHtml } from "../../../src/views/settings/SettingsHtml";
 import { getDefaultConfig } from "../../../src/config/schema";
 import type { IncrediConfig } from "../../../src/views/settings/types";
@@ -99,5 +100,42 @@ describe("SettingsHtml routing section", () => {
     expect(html).toContain('data-path="model_routing.mode"');
     // Badges appear because we're in merged view with sources
     expect(html).toContain("setting-modified");
+  });
+});
+
+describe("SettingsHtml default_effort select — effort vocabulary (#394)", () => {
+  function effortSelectHtml(config: IncrediConfig): string {
+    const html = getSettingsHtml({ cspSource: "test-csp" } as any, config);
+    const match = html.match(/<select id="model_routing\.default_effort"[\s\S]*?<\/select>/);
+    expect(match, "default_effort select should be rendered").toBeTruthy();
+    return match![0];
+  }
+
+  it("offers every level in EFFORT_LEVELS, including max", () => {
+    const select = effortSelectHtml(getDefaultConfig() as IncrediConfig);
+
+    for (const level of EFFORT_LEVELS) {
+      expect(select).toContain(`<option value="${level}"`);
+    }
+    // The provider-defaults sentinel stays first.
+    expect(select.indexOf('<option value=""')).toBeLessThan(select.indexOf('<option value="low"'));
+  });
+
+  it("marks 'max' selected when the config carries default_effort: max", () => {
+    const config = getDefaultConfig() as IncrediConfig;
+    config.model_routing = { ...(config.model_routing ?? {}), default_effort: "max" };
+
+    const select = effortSelectHtml(config);
+
+    expect(select).toContain('<option value="max" selected>');
+    // The sentinel must not win by default when a real value is set.
+    expect(select).not.toMatch(/<option value="" selected>/);
+  });
+
+  it("marks 'xhigh' selected when the config carries default_effort: xhigh", () => {
+    const config = getDefaultConfig() as IncrediConfig;
+    config.model_routing = { ...(config.model_routing ?? {}), default_effort: "xhigh" };
+
+    expect(effortSelectHtml(config)).toContain('<option value="xhigh" selected>');
   });
 });

@@ -12,6 +12,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { AuditConfig } from "@nightgauge/sdk";
+import { EFFORT_LEVELS } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import type { DefaultModel } from "./modelResolver";
@@ -2604,7 +2605,7 @@ export function getExperimentConfig(workspaceRoot?: string): ExperimentConfigRes
       return null;
     }
 
-    const validEfforts: ClaudeEffort[] = ["low", "medium", "high"];
+    const validEfforts: readonly ClaudeEffort[] = EFFORT_LEVELS;
     const controlEffort = control.effort
       ? validEfforts.includes(String(control.effort) as ClaudeEffort)
         ? (String(control.effort) as ClaudeEffort)

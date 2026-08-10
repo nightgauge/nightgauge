@@ -16,7 +16,6 @@
         "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -44,7 +43,6 @@
         "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true,
       "replacement": "claude-opus-5",
@@ -72,7 +70,6 @@
         "cache_creation_1h": 6.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -98,7 +95,6 @@
         "cache_creation_1h": 2.0
       },
       "supported_efforts": [],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "behavior": {
         "thinking_default": "off",
@@ -119,7 +115,6 @@
         "cache_creation_1h": 20.0
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -142,7 +137,6 @@
         "cache_creation_1h": 6.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
@@ -160,7 +154,6 @@
         "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
@@ -178,7 +171,6 @@
         "cache_creation_1h": 10.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
@@ -195,7 +187,6 @@
         "cache_creation_5m": 6.25
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1050000,
       "recommended": true
     },
@@ -212,7 +203,6 @@
         "cache_creation_5m": 2.5
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1050000
     },
     {
@@ -228,7 +218,6 @@
         "cache_creation_5m": 0.25
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1050000
     },
     {
@@ -242,7 +231,6 @@
         "cache_read": 0.5
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -256,7 +244,6 @@
         "cache_read": 0.25
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -270,7 +257,6 @@
         "cache_read": 0.075
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -283,7 +269,6 @@
         "output": 0.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000,
       "research_preview": true
     },
@@ -298,7 +283,6 @@
         "cache_read": 0.175
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.4"
@@ -314,7 +298,6 @@
         "cache_read": 0.175
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.5"
@@ -329,7 +312,6 @@
         "output": 2.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.4-mini"
@@ -346,7 +328,6 @@
         "cache_read": 0.125
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1048576,
       "recommended": true
     },
@@ -362,7 +343,6 @@
         "cache_read": 0.03
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1048576
     },
     {
@@ -376,7 +356,6 @@
         "cache_read": 0.025
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 1048576,
       "deprecated": true
     },
@@ -391,7 +370,6 @@
         "output": 0.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 128000
     },
     {
@@ -405,7 +383,6 @@
         "output": 0.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 128000
     },
     {
@@ -419,7 +396,6 @@
         "output": 0.0
       },
       "supported_efforts": ["low", "medium", "high"],
-      "supported_reasoning": ["none", "low", "medium", "high"],
       "context_window": 200000
     },
     {
@@ -432,7 +408,6 @@
         "output": 8.0
       },
       "supported_efforts": ["medium", "high"],
-      "supported_reasoning": ["none", "high"],
       "context_window": 128000
     }
   ]
