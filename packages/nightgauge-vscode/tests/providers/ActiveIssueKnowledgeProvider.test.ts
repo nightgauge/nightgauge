@@ -9,6 +9,7 @@ import {
 } from "../../src/providers/items/ActiveIssueKnowledgeTreeItem";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { IpcClient } from "../../src/services/IpcClient";
+import { isIssueJsonPath } from "../helpers/issueFilePredicates";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -104,7 +105,9 @@ function makeProvider(
   const pss = makePipelineStateService(issueNumber);
   vi.mocked(fsModule.readFileSync).mockImplementation((p: unknown) => {
     const filePath = p as string;
-    if (filePath.includes("issue-") && filePath.endsWith(".json")) {
+    // Basename-anchored (#426): the old substring form also matched the ambient
+    // checkout path (e.g. .nightgauge/worktrees/issue-422/.../anything.json).
+    if (isIssueJsonPath(filePath)) {
       return JSON.stringify({ knowledge_path: knowledgePath });
     }
     throw new Error(`ENOENT: ${filePath}`);

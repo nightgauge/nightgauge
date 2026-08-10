@@ -19,6 +19,7 @@ import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
 import { existsSync, readFileSync } from "fs";
+import { isIssueJsonPathFor } from "../helpers/issueFilePredicates";
 
 // Mock skillRunner (imported by HeadlessOrchestrator)
 vi.mock("../../src/utils/skillRunner", () => ({
@@ -313,7 +314,9 @@ describe("HeadlessOrchestrator context handoff validation (Issue #2499)", () => 
     // second check (feature-planning's precondition check), so the precondition fails.
     let issueFileCheckCount = 0;
     vi.mocked(existsSync).mockImplementation((p) => {
-      if (String(p).includes("issue-42")) {
+      // Basename-anchored (#426): matching on a path substring also matched the
+      // ambient checkout directory (e.g. .nightgauge/worktrees/issue-422/...).
+      if (isIssueJsonPathFor(p, 42)) {
         issueFileCheckCount++;
         return issueFileCheckCount <= 1; // true on resume check, false on precondition
       }

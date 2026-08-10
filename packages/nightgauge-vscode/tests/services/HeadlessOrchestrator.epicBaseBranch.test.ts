@@ -20,6 +20,7 @@ import * as fs from "fs";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
+import { isIssueJsonPath } from "../helpers/issueFilePredicates";
 
 vi.mock("../../src/utils/skillRunner", () => ({
   hasActiveProcess: vi.fn().mockReturnValue(false),
@@ -92,7 +93,10 @@ vi.mock("fs", async () => {
     ...actual,
     existsSync: vi.fn().mockReturnValue(true),
     readFileSync: vi.fn().mockImplementation((p: string) => {
-      if (typeof p === "string" && p.includes("issue-")) {
+      // Basename-anchored (#426): the old substring form also matched the
+      // ambient checkout path (e.g. .nightgauge/worktrees/issue-422/...), so
+      // every unrelated read returned an issue context document.
+      if (isIssueJsonPath(p)) {
         return JSON.stringify({ base_branch: "main" });
       }
       return "{}";

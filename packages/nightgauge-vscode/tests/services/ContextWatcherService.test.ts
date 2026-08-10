@@ -477,7 +477,9 @@ describe("ContextWatcherService", () => {
         fsPath: `/test/workspace/.nightgauge/pipeline/${filename}`,
       };
 
-      // For issue files, deletion fires the event
+      // For issue files, deletion fires the event. `filename` is a bare
+      // basename from the table above, not a path, so this substring test
+      // cannot collide with the ambient checkout directory. #426-ok
       if (filename.startsWith("issue-")) {
         issueWatcher?.callbacks.onDelete?.(mockUri);
         expect(clearedHandler).toHaveBeenCalledWith(expectedNumber);
