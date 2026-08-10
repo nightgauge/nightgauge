@@ -19,7 +19,8 @@ import { getTierBadgeHtml, getTierBadgeStyles, getUxTierBadgeHtml } from "./Tier
 import type { TierAuditEntry } from "../../services/IpcClientBase";
 import { modelSupportsEffort } from "../../utils/incrediConfig";
 import type { DefaultModel } from "../../utils/incrediConfig";
-import { CODEX_DEFAULT_BASE_MODEL } from "@nightgauge/sdk";
+import { CODEX_DEFAULT_BASE_MODEL, EFFORT_LEVELS } from "@nightgauge/sdk";
+import type { ClaudeEffort } from "../../utils/resolvers/stageResolver";
 import type { RepositoryProjectSettingsState } from "../../services/RepositoryProjectSettingsService";
 
 /**
@@ -1997,6 +1998,23 @@ function getEnforcementSectionHtml(
 }
 
 /**
+ * Display labels for the effort ladder, keyed by `ClaudeEffort` (#394).
+ *
+ * The option list for `model_routing.default_effort` is derived from
+ * `EFFORT_LEVELS` rather than hand-listed, so a level can never be missing from
+ * the picker while the resolver honours it — the shape that made
+ * `default_effort: max` render as unset. Keying the record by `ClaudeEffort`
+ * turns a new, unlabelled level into a compile error instead of a blank option.
+ */
+const EFFORT_LABELS: Record<ClaudeEffort, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra High",
+  max: "Max (highest budget)",
+};
+
+/**
  * Generate Routing section HTML
  */
 function getRoutingSectionHtml(
@@ -2044,10 +2062,10 @@ function getRoutingSectionHtml(
                 mr.default_effort ?? "",
                 [
                   { value: "", label: "Use provider/model defaults" },
-                  { value: "low", label: "Low" },
-                  { value: "medium", label: "Medium" },
-                  { value: "high", label: "High" },
-                  { value: "xhigh", label: "Extra High" },
+                  ...EFFORT_LEVELS.map((level) => ({
+                    value: level,
+                    label: EFFORT_LABELS[level],
+                  })),
                 ],
                 disabled,
                 g("model_routing.default_effort"),

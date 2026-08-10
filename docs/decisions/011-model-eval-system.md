@@ -134,7 +134,10 @@ behavior.
 `evalAdapters.ts`), but the per-model `supported_reasoning` list has been
 removed from `ModelDescriptor` (and from both registry copies and the Go
 `models.ModelDescriptor` struct). It never gained a reader on either side and
-carried no per-model signal — every entry declared the same four levels. The
+carried no per-model signal — every real model declared the same four levels
+(`none`, `low`, `medium`, `high`), and the one entry that differed was
+`vendor-x-pro`, the provider-neutral placeholder, whose shorter list is fixture
+shape rather than an observed vendor constraint. The
 runtime reasoning-budget decision is a preference cascade (env → config yaml →
 provider default), not a registry lookup; if per-model reasoning support ever
 becomes a real constraint, it should be reintroduced together with the code

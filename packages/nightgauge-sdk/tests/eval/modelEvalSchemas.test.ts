@@ -61,8 +61,13 @@ const TASK: EvalTask = {
 };
 
 describe("model-eval schemas — parity guards", () => {
-  it("EFFORT_LEVELS matches the ClaudeEffort union exactly", () => {
-    // `max` is the top of the ladder from Opus 5 (#75).
+  it("EFFORT_LEVELS pins the five-level ladder, in ascending order", () => {
+    // Not a union-parity check any more: since #394 every other surface
+    // (`ClaudeEffort`, the Zod validators, the resolver, the Go `EffortOrder`
+    // mirror) derives from this array, so nothing can disagree with it by
+    // construction. What still needs pinning is the array's own content and
+    // ORDER — the ladder is ascending reasoning depth and the clamps index
+    // against it. `max` is the top of the ladder from Opus 5 (#75).
     expect([...EFFORT_LEVELS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 

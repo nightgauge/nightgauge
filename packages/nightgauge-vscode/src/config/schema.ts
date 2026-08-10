@@ -1893,11 +1893,22 @@ export type DefaultModel = z.infer<typeof DefaultModelSchema>;
  * This enum used to spell the ladder out and stopped at `xhigh`, so a config
  * setting `default_effort: max` — a value the resolver reads and honours — was
  * rejected by validation (#394). It exports no type of its own: the one
- * authoritative union is `ClaudeEffort` from `utils/resolvers/stageResolver`,
- * and the guard below pins this enum's inferred type to it in both directions.
+ * authoritative union is `ClaudeEffort` from `utils/resolvers/stageResolver`.
  */
 export const ClaudeEffortSchema = z.enum(EFFORT_LEVELS);
 
+/**
+ * Tripwire, not a parity check between two independent declarations.
+ *
+ * Both sides already derive from `EFFORT_LEVELS`, so today this assertion is
+ * trivially true and cannot fail — that is the point. It fires the moment
+ * someone re-lists either side as a literal (`z.enum(["low", …])` here, or a
+ * hand-written union in `stageResolver`) and that literal drifts from the
+ * other: the mutual-assignability test then fails to compile instead of
+ * shipping a validator that rejects a level the resolver honours. Verified by
+ * executed mutation — replacing either side with a short literal breaks
+ * `tsc`. Delete this only together with the derivation it protects.
+ */
 type _ClaudeEffortParity =
   z.infer<typeof ClaudeEffortSchema> extends ClaudeEffort
     ? ClaudeEffort extends z.infer<typeof ClaudeEffortSchema>
