@@ -178,9 +178,6 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	// Create or reuse worktree
 	worktreeDir, err := m.ensureWorktree(opts.Repo, opts.IssueNumber)
-	if err != nil {
-		return nil, fmt.Errorf("worktree setup: %w", err)
-	}
 
 	// Stamp the worktree on the runtime the moment it exists (#399), not at
 	// process registration below. Everything between here and cmd.Start() can
@@ -189,8 +186,17 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// already on disk, so stageWorkspace fell back to the workspace root and
 	// the failure path inspected the wrong tree. SetWorktree writes that one
 	// field and deliberately not PID: no child exists yet.
-	if opts.Runtime != nil {
+	//
+	// The stamp sits ABOVE the error check on purpose: ensureWorktree's own
+	// provisioning continues after `git worktree add` (the SDK-CLI build), so
+	// it can fail with the worktree already created. Its error contract is
+	// "path non-empty iff the worktree exists on disk", which makes the path —
+	// not the error — the authority on whether there is a tree to name.
+	if worktreeDir != "" && opts.Runtime != nil {
 		opts.Runtime.SetWorktree(worktreeDir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("worktree setup: %w", err)
 	}
 
 	// Provision Codex provider context on the Go-direct spawn path (#4041):

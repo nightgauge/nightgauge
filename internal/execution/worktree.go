@@ -21,6 +21,15 @@ import (
 // "issue-{N}" shape belongs to the VSCode extension's WorktreeManager; both are
 // read back by IssueNumberFromWorktreeDir (#400). See
 // docs/GO_BINARY.md#worktree-directory-name-shapes.
+//
+// Error contract (#399): on error the returned path is non-empty iff the
+// worktree exists on disk. Provisioning does not end when `git worktree add`
+// returns — the SDK-CLI build for CLI adapters runs after it and can fail — and
+// a run whose worktree is already on disk must stay resolvable through that
+// failure. Returning "" there is what left RunStage unable to stamp the
+// runtime, so stageWorkspace fell back to the workspace root and the failure
+// path inspected the wrong tree. A non-nil error always means failure,
+// whatever the path: the path only ever names a tree that exists.
 func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 
@@ -66,6 +75,12 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	cmd := exec.Command("git", "worktree", "add", "--detach", worktreeDir, headSHA)
 	cmd.Dir = repoRoot
 	if output, err := cmd.CombinedOutput(); err != nil {
+		// The add is the creation boundary: it normally leaves nothing behind,
+		// but the error contract above is stated as "non-empty iff on disk", so
+		// ask the disk rather than assume which side of the boundary we are on.
+		if _, statErr := os.Stat(worktreeDir); statErr == nil {
+			return worktreeDir, fmt.Errorf("git worktree add: %s: %w", string(output), err)
+		}
 		return "", fmt.Errorf("git worktree add: %s: %w", string(output), err)
 	}
 
@@ -77,7 +92,9 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 	adapter := readAdapterFromWorktree(worktreeDir)
 	if shouldBuildSdkCli(adapter) {
 		if err := buildSdkCliInWorktree(worktreeDir, repoRoot); err != nil {
-			return "", err
+			// The worktree is on disk and registered with git — the caller must
+			// be able to name it even though provisioning failed (#399).
+			return worktreeDir, err
 		}
 	}
 

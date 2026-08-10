@@ -86,10 +86,11 @@ func (r *ownRunPRRunner) RunStage(_ context.Context, params StageRunParams) (*St
 	r.calls[params.Stage]++
 	r.mu.Unlock()
 
-	// Production parity: the execution manager stamps the worktree onto the
-	// runtime when it launches the stage process (internal/execution/manager.go).
+	// Production parity: the execution manager stamps the worktree at provision
+	// time (#399), before any failure exit — not at process registration
+	// (internal/execution/manager.go).
 	if params.Runtime != nil {
-		params.Runtime.SetProcess(0, r.worktree)
+		params.Runtime.SetWorktree(r.worktree)
 	}
 
 	if params.Stage == r.failStage {
