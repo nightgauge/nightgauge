@@ -621,3 +621,29 @@ func TestRuntimeState_RunID_Persisted(t *testing.T) {
 		t.Errorf("loaded RunID = %q, want %q", loaded.RunID, rs.RunID)
 	}
 }
+
+// TestSetWorktree_WritesOnlyTheWorktree pins the one-field contract behind
+// SetWorktree (#399): it is called before a child process exists, so it must
+// never write PID. Re-implementing it as SetProcess(0, dir) would satisfy the
+// worktree assertion and quietly clear a PID a later stage had recorded — and a
+// non-zero PID it invented would let a run that never spawned answer the
+// liveness ladder's "is your stage child alive?" arm.
+func TestSetWorktree_WritesOnlyTheWorktree(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 399, "", testRunID())
+
+	rs.SetWorktree("/tmp/ws/.nightgauge/worktrees/nightgauge-issue-399")
+	if got, want := rs.Snapshot().WorktreeDir, "/tmp/ws/.nightgauge/worktrees/nightgauge-issue-399"; got != want {
+		t.Errorf("WorktreeDir = %q, want %q", got, want)
+	}
+	if pid := rs.StageChildPID(); pid != 0 {
+		t.Errorf("PID = %d, want 0 — SetWorktree must not invent a process identity", pid)
+	}
+
+	// A stamp arriving after a real spawn (the idempotent re-stamp RunStage
+	// performs) must leave that process identity intact.
+	rs.SetProcess(4242, "/tmp/ws/.nightgauge/worktrees/nightgauge-issue-399")
+	rs.SetWorktree("/tmp/ws/.nightgauge/worktrees/nightgauge-issue-399")
+	if pid := rs.StageChildPID(); pid != 4242 {
+		t.Errorf("PID = %d after a re-stamp, want 4242 — SetWorktree must not clear a recorded child", pid)
+	}
+}

@@ -182,6 +182,17 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		return nil, fmt.Errorf("worktree setup: %w", err)
 	}
 
+	// Stamp the worktree on the runtime the moment it exists (#399), not at
+	// process registration below. Everything between here and cmd.Start() can
+	// fail — model validation, the three pipes, the spawn itself — and each of
+	// those exits used to leave WorktreeDir empty on a run whose worktree is
+	// already on disk, so stageWorkspace fell back to the workspace root and
+	// the failure path inspected the wrong tree. SetWorktree writes that one
+	// field and deliberately not PID: no child exists yet.
+	if opts.Runtime != nil {
+		opts.Runtime.SetWorktree(worktreeDir)
+	}
+
 	// Provision Codex provider context on the Go-direct spawn path (#4041):
 	// AGENTS.md baseline steering (#4028) and $CODEX_HOME/config.toml MCP servers
 	// (#4025), at parity with the TypeScript StageExecutor. No-op for non-codex

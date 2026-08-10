@@ -607,7 +607,6 @@ func (rs *RuntimeState) IsStageSkipped(stage PipelineStage) bool {
 	return false
 }
 
-// SetProcess records the child process PID and worktree path.
 // SetAuthoritativeChangeClass records the post-dev change classification on the
 // runtime so it survives worktree archival and is read back at record time.
 func (rs *RuntimeState) SetAuthoritativeChangeClass(class string) {
@@ -616,6 +615,31 @@ func (rs *RuntimeState) SetAuthoritativeChangeClass(class string) {
 	rs.AuthoritativeChangeClass = class
 }
 
+// SetWorktree stamps the run's worktree as soon as it is provisioned — BEFORE
+// the child process exists (#399).
+//
+// The worktree is knowable the moment `git worktree add` returns, but the only
+// writer used to be SetProcess, which runs after cmd.Start() succeeds. Every
+// error exit in the window between the two (model validation, stdin/stdout/
+// stderr pipes, the spawn itself) therefore left WorktreeDir empty on a run
+// whose worktree exists on disk, and the scheduler's stageWorkspace fell back
+// to the workspace root — so failure-path work (branch resolution, gates,
+// cleanup) looked at the wrong tree.
+//
+// Deliberately NOT SetProcess, which also writes PID (the SetStageChild
+// precedent): a run that never spawned must not acquire a process identity as
+// a side effect of learning where its worktree is. Nothing may read a
+// non-empty WorktreeDir as evidence that a child started — PID is that
+// evidence, and it stays 0 here.
+//
+// Idempotent: RunStage's post-start SetProcess re-stamps the same path.
+func (rs *RuntimeState) SetWorktree(worktreeDir string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.WorktreeDir = worktreeDir
+}
+
+// SetProcess records the child process PID and worktree path.
 func (rs *RuntimeState) SetProcess(pid int, worktreeDir string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
