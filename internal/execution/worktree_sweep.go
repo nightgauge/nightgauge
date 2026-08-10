@@ -58,12 +58,39 @@ const (
 	SkipUnmergedContent SkipReason = "unmerged-content"
 )
 
+// Door names WHICH reclaim rule authorized a removal. classifyWorktree has two
+// of them and they are not variations on one check: the content door compares
+// the branch against the base ref, the default-branch door compares nothing at
+// all. Reporting them as one line let the sweep's only operator-visible record
+// of its most destructive reclaim assert a comparison that never ran (#410).
+//
+// It is a field on the verdict rather than an inference from KeepBranch: the two
+// happen to coincide today, and a reader who derives the door from the branch
+// policy is one added door away from mislabelling every reclaim.
+type Door string
+
+const (
+	// ReclaimContentMerged — mergedIntoBase found the branch's content already
+	// fully represented in the base ref. This is the load-bearing check.
+	ReclaimContentMerged Door = "content-merged"
+	// ReclaimDefaultBranchCheckout — a clean pipeline-named worktree parked ON
+	// the default branch. NO content comparison happens here and none can: the
+	// default branch is the comparison base, so the branch has no commits of
+	// its own by construction. The directory is the leak; the branch is
+	// preserved. See classifyWorktree's onDefaultBranch door.
+	ReclaimDefaultBranchCheckout Door = "default-branch-checkout"
+)
+
 // ReclaimedWorktree records one worktree the sweep removed (or, under DryRun,
-// would have removed) together with the branch it held.
+// would have removed) together with the branch it held and the door that
+// authorized it.
 type ReclaimedWorktree struct {
 	Path        string `json:"path"`
 	Branch      string `json:"branch"`
 	IssueNumber int    `json:"issueNumber"`
+	// Door names the rule that authorized the removal. Never empty on a
+	// reclaim — a reclaim with no door is a reclaim nobody can account for.
+	Door Door `json:"door"`
 }
 
 // SkippedWorktree records one worktree the sweep deliberately left in place.
@@ -157,7 +184,9 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 		}
 		num := verdict.IssueNumber
 		if opts.DryRun {
-			res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{Path: wt.Path, Branch: wt.Branch, IssueNumber: num})
+			res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{
+				Path: wt.Path, Branch: wt.Branch, IssueNumber: num, Door: verdict.Door,
+			})
 			continue
 		}
 		if err := reclaimWorktree(opts.RepoRoot, wt, verdict.KeepBranch); err != nil {
@@ -165,7 +194,9 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 			res.Errors = append(res.Errors, err.Error())
 			continue
 		}
-		res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{Path: wt.Path, Branch: wt.Branch, IssueNumber: num})
+		res.Reclaimed = append(res.Reclaimed, ReclaimedWorktree{
+			Path: wt.Path, Branch: wt.Branch, IssueNumber: num, Door: verdict.Door,
+		})
 	}
 
 	return res, nil
@@ -183,6 +214,11 @@ type worktreeVerdict struct {
 	// pipeline worktree parked on the default branch: the directory is the
 	// leak, the branch is everyone's.
 	KeepBranch bool
+	// Door names the rule that cleared this worktree for removal. Set on every
+	// non-skip verdict and on no skip verdict. Deliberately NOT derived from
+	// KeepBranch: the branch policy and the authorizing check are two different
+	// facts that happen to agree at both of today's doors.
+	Door Door
 }
 
 // classifyWorktree returns the reason a worktree must be left alone, or an
@@ -243,7 +279,7 @@ func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef 
 	// permanent. Nothing is at risk, because the branch itself is preserved;
 	// only the stray checkout goes.
 	if onDefaultBranch {
-		return worktreeVerdict{IssueNumber: num, KeepBranch: true}
+		return worktreeVerdict{IssueNumber: num, KeepBranch: true, Door: ReclaimDefaultBranchCheckout}
 	}
 
 	merged, hasOwnCommits, err := mergedIntoBase(opts.RepoRoot, baseRef, wt.Branch)
@@ -256,7 +292,7 @@ func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef 
 	if !merged {
 		return worktreeVerdict{Skip: SkipUnmergedContent, IssueNumber: num}
 	}
-	return worktreeVerdict{IssueNumber: num}
+	return worktreeVerdict{IssueNumber: num, Door: ReclaimContentMerged}
 }
 
 // BranchAheadInfo reports whether a branch carries committed, unmerged work

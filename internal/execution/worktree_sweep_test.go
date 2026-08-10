@@ -101,6 +101,12 @@ func TestSweepMergedWorktrees_ReclaimsSquashMergedBranch(t *testing.T) {
 	if res.Reclaimed[0].IssueNumber != 110 {
 		t.Errorf("IssueNumber = %d, want 110", res.Reclaimed[0].IssueNumber)
 	}
+	// #410: the reclaim must say WHICH door authorized it. This one really did
+	// compare content, and it is the only door for which "content already on
+	// <base>" is a true statement.
+	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
+		t.Errorf("Door = %q, want %q", got, ReclaimContentMerged)
+	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Errorf("worktree directory still on disk at %s", wt)
 	}
@@ -246,6 +252,12 @@ func TestSweepMergedWorktrees_DryRunRemovesNothing(t *testing.T) {
 	}
 	if len(res.Reclaimed) != 1 {
 		t.Fatalf("dry run must still classify, got %+v", res.Reclaimed)
+	}
+	// #410: the dry-run append site is a SECOND place the verdict is projected
+	// onto the result, and it dropped KeepBranch before it dropped Door. A
+	// preview whose door is empty is a preview an operator cannot audit.
+	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
+		t.Errorf("dry-run Door = %q, want %q", got, ReclaimContentMerged)
 	}
 	if _, err := os.Stat(wt); err != nil {
 		t.Errorf("dry run removed the worktree: %v", err)
@@ -533,6 +545,13 @@ func TestSweepMergedWorktrees_ReclaimsPipelineWorktreeParkedOnDefaultBranch(t *t
 	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Path != wt {
 		t.Fatalf("a pipeline worktree parked on the default branch must be reclaimable, got reclaimed=%+v skipped=%+v",
 			res.Reclaimed, res.Skipped)
+	}
+	// #410: this door compared NOTHING — the default branch is the comparison
+	// base, so mergedIntoBase structurally cannot apply. The record must say so,
+	// or the sweep's only operator-visible line about its most destructive
+	// reclaim claims a check that never ran.
+	if got := res.Reclaimed[0].Door; got != ReclaimDefaultBranchCheckout {
+		t.Errorf("Door = %q, want %q", got, ReclaimDefaultBranchCheckout)
 	}
 	if _, err := os.Stat(wt); !os.IsNotExist(err) {
 		t.Errorf("worktree still on disk at %s", wt)

@@ -582,10 +582,18 @@ Three layers protect against leaked compose state:
    (TS) run `docker compose -p issue-<N> down -v --remove-orphans` and
    remove project-tagged images BEFORE removing the worktree directory.
    Soft-fail: docker missing or daemon down logs a warning and proceeds.
-2. **Startup reconcile** — the orchestrator scheduler calls
-   `dockercompose.ListIssueProjects` on startup and tears down projects
-   whose worktree no longer exists. Catches leaks from a crashed
-   orchestrator that never reached `CleanupWorktree`.
+2. **Reconcile pass** — the autonomous scheduler
+   (`sweepOrphanedComposeProjects`) calls `dockercompose.ListIssueProjects` on
+   its reconcile cycle, under the same graph-TTL pacing gate as the other
+   sweeps, and tears down projects with **no run in flight**. The in-flight
+   set is a union — `state.Running`, the active-worktree scan, and the
+   per-root runtime-snapshot scan — and an **undetermined** read of any of
+   them vetoes the whole pass rather than shrinking the protected set. It does
+   **not** run at scheduler construction: `queue list` used to tear down
+   containers as a side effect of building a Scheduler (#403/#410). See
+   [docs/GO_BINARY.md](GO_BINARY.md#compose-orphan-reconciliation-issue-3050).
+   Catches leaks from a crashed orchestrator that never reached
+   `CleanupWorktree`.
 3. **Operator escape hatch** — `nightgauge cleanup` lists or tears
    down leaked projects manually:
 

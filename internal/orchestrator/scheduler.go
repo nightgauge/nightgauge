@@ -2139,26 +2139,70 @@ func (s *Scheduler) loadQueue() {
 	}
 
 	s.recoverOrchestratorCrash()
-	s.reconcileOrphanedComposeProjects()
-	// Deliberately NO merged-worktree sweep here (#403). loadQueue runs from
-	// NewScheduler, and getQueueScheduler builds a Scheduler for `queue
-	// add|list|run|remove|clear` and the deps-gate/baseline-gate promote
-	// commands — a sweep on this path makes `queue list` run `git worktree
-	// remove --force` and `git branch -D` as a construction side effect, on
-	// behalf of a process that can see no other process's in-flight runs.
-	// Constructors never delete; the sweep's one production caller is the
-	// autonomous reconcile, which owns an authoritative in-flight set. See
-	// runMergedWorktreeSweep.
+	// CONSTRUCTION REMOVES NO WORKTREE, CONTAINER, VOLUME OR BRANCH — and it
+	// never touches a LIVE run's state (#403, then #410 for the half #403
+	// missed). loadQueue runs from NewScheduler, and getQueueScheduler builds a
+	// Scheduler for `queue add|list|run|remove|clear` and the
+	// deps-gate/baseline-gate promote commands, so anything destructive here runs
+	// as a side effect of being constructed, on behalf of a process that can see
+	// no other process's in-flight runs.
+	//
+	// #403 removed the merged-worktree sweep from this line and left
+	// reconcileOrphanedComposeProjects sitting right beside it, which made
+	// `queue list` — a printf loop — run `docker compose down -v
+	// --remove-orphans` plus image removal against every `issue-NNN` stack whose
+	// worktree it could not see. Its protection was the same
+	// activeWorktreeIssues scan the worktree sweep had, and had exactly the same
+	// blind spot: a live run whose worktree is registered in a root this process
+	// does not scan reads as orphaned, and `down -v` destroys named volumes
+	// nothing recovers.
+	//
+	// Both reconciles now have ONE production caller each, the autonomous
+	// reconcile cycle, because that is the only process holding an authoritative
+	// in-flight set (as.state.Running) for the runs whose state it is about to
+	// destroy. See runMergedWorktreeSweep and
+	// (*AutonomousScheduler).sweepOrphanedComposeProjects.
+	//
+	// WHAT CONSTRUCTION STILL WRITES, named rather than implied by a banner:
+	// recoverOrchestratorCrashAt synthesizes a terminal-failure RunRecord into
+	// the daily JSONL, pauses and persists queue-state.json, and unlinks
+	// `.nightgauge/pipeline/current-run.json`. That is bookkeeping about a run
+	// whose process is GONE — the gate is runstate.ProcessAlive on the pid the
+	// sidecar carries, so a live run is left entirely alone: no record, no pause,
+	// no unlink. Writing a crash record for a dead orchestrator is not the same
+	// act as deleting live state, and the sidecar is the TypeScript side's index
+	// into a run, so removing one belonging to a live run would have been the
+	// same class of construction side effect #403/#410 exist to end.
 }
 
-// reconcileOrphanedComposeProjects tears down per-issue docker compose
-// stacks (`issue-NNN`) whose worktree no longer exists. Runs once at
-// scheduler startup so a previous crash that bypassed CleanupWorktree
-// cannot leave stale containers, volumes, networks, or images squatting
-// host ports across pipeline runs. Soft-fail: errors are logged and
-// teardown continues for remaining projects. See Issue #3050.
-func (s *Scheduler) reconcileOrphanedComposeProjects() {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+// reconcileOrphanedComposeProjects tears down per-issue docker compose stacks
+// (`issue-NNN`) whose run is gone, so a crash that bypassed CleanupWorktree
+// cannot leave containers, volumes, networks, or images squatting host ports
+// across pipeline runs. Soft-fail: errors are logged and teardown continues for
+// the remaining projects. See Issue #3050.
+//
+// inFlight and determined are PARAMETERS, not something this function resolves
+// (#410). It used to ride NewScheduler → loadQueue and compute its own
+// protection from s.activeWorktreeIssues(), which is a worktree scan of the
+// roots THIS process knows about — so `queue list` ran `docker compose down -v`
+// against a fleet it could not see. The caller must now state whose in-flight
+// set this is; the one production caller is
+// (*AutonomousScheduler).sweepOrphanedComposeProjects, which unions
+// as.state.Running (authoritative for the runs it dispatched) with the
+// active-worktree scan.
+//
+// determined=false means the caller could not READ one of its in-flight
+// sources. Every project would then be torn down with `down -v
+// --remove-orphans` on the strength of a set nobody obtained. Doing nothing
+// leaves stale containers squatting ports, which a later cycle fixes; guessing
+// destroys a live run's named volumes, which nothing recovers.
+//
+// ctx is the CALLER's context, not a fresh Background (#410). The pass now runs
+// inside the autonomous cycle, so an orchestrator shutdown must cancel it rather
+// than wait on docker; the 60s budget is derived from the cycle context and
+// remains a soft cap on the whole fan-out.
+func (s *Scheduler) reconcileOrphanedComposeProjects(ctx context.Context, inFlight map[int]bool, determined bool) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
 	lister := s.composeLister
@@ -2178,20 +2222,21 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	if len(projects) == 0 {
 		return
 	}
-	active, determined := s.activeWorktreeIssues()
 	if !determined {
-		// Every project here would be torn down with `down -v --remove-orphans`
-		// on the strength of a set we could not read. Doing nothing leaves stale
-		// containers squatting ports, which is what a later sweep is for;
-		// guessing destroys a live run's volumes, which nothing recovers.
-		log.Printf("compose-reconcile: WARN active-worktree set is undetermined — skipping teardown of %d compose project(s) rather than risk destroying a live run's volumes", len(projects))
+		log.Printf("compose-reconcile: WARN the in-flight set is undetermined (the caller could not read one of its sources) — skipping teardown of %d compose project(s) rather than risk destroying a live run's volumes", len(projects))
 		return
 	}
 	for _, p := range projects {
-		if active[p.IssueNumber] {
+		if inFlight[p.IssueNumber] {
 			continue
 		}
-		log.Printf("compose-reconcile: tearing down orphaned compose project %s (no matching worktree)", p.Name)
+		// "no run in flight", not "no matching worktree" (#410): the protecting
+		// set is now a union, and a worktree is only half of it. A log naming a
+		// check that is no longer the one performed is the same defect as the
+		// sweep's "content already on <base>" line for a door that compared
+		// nothing.
+		log.Printf("compose-reconcile: tearing down orphaned compose project %s (no run in flight for #%d)",
+			p.Name, p.IssueNumber)
 		if _, err := teardown(ctx, p.Name, dockercompose.TeardownOptions{
 			RemoveImages: true,
 		}); err != nil {
@@ -2200,23 +2245,20 @@ func (s *Scheduler) reconcileOrphanedComposeProjects() {
 	}
 }
 
-// activeWorktreeIssues returns the issue numbers held by an active worktree
-// across every repo root the scheduler reconciles, plus whether that answer is
-// DETERMINED. The scan itself lives in execution.ActiveWorktreeIssues — the one
-// implementation shared with `doctor` and `cleanup` (#323); the scheduler's
-// only distinct contribution is knowing which roots to scan.
+// activeWorktreeIssuesFor returns the issue numbers held by an active worktree
+// across a CALLER-SUPPLIED root set, plus whether that answer is DETERMINED. The
+// scan itself lives in execution.ActiveWorktreeIssues — the one implementation
+// shared with `doctor` and `cleanup` (#323); the scheduler's only distinct
+// contribution is knowing which roots to scan.
 //
 // determined=false means "I could not find out", which is not the same as "no
 // worktrees exist", and the difference decides whether a destructive caller may
 // act. See execution.ActiveWorktreeIssues for why (#296).
-func (s *Scheduler) activeWorktreeIssues() (map[int]bool, bool) {
-	return s.activeWorktreeIssuesFor(s.repoScanRoots())
-}
-
-// activeWorktreeIssuesFor is activeWorktreeIssues over a caller-supplied root
-// set. A destructive caller resolves repoScanRoots() ONCE and passes the same
-// slice here and to the sweep, so the `determined` bit describes exactly the
-// roots the sweep then acts on. Resolving twice is not equivalent: the resolver
+//
+// The roots are a PARAMETER and there is deliberately no self-resolving variant:
+// a destructive caller resolves repoScanRoots() ONCE and passes the same slice
+// here and to the pass it protects, so the `determined` bit describes exactly the
+// roots that are then acted on. Resolving twice is not equivalent — the resolver
 // is a live callback over workspace registration, so a repo added or dropped
 // between the two calls yields a verdict about a root set that was never swept.
 func (s *Scheduler) activeWorktreeIssuesFor(roots []string) (map[int]bool, bool) {
@@ -2268,8 +2310,20 @@ func (s *Scheduler) recoverOrchestratorCrash() {
 // with the rest of that run's on-disk state (#229), matching where a normal run
 // records history via runRoot.
 //
-// Guard: only synthesizes when the sidecar's StartedAt is in the past (defense
-// against clock skew or stale workspace moves).
+// Guards, in order:
+//
+//  1. LIVENESS. A sidecar is not evidence of a crash — it is evidence of a RUN,
+//     and it is present for the entire life of a healthy one. The recorded pid is
+//     the orchestrator's own (writeCurrentRunSidecar stamps os.Getpid() at stage
+//     start), so `runstate.ProcessAlive` distinguishes the two cases with the
+//     tree's one liveness probe (#341). Without this check, constructing a
+//     Scheduler in a second terminal — `nightgauge queue list`, a printf loop —
+//     destroyed the live run's sidecar (the TypeScript side's INDEX into that
+//     run), invented a terminal-failure record for a run that was still
+//     executing, and paused the queue. That is the construction side effect
+//     #403/#410 exist to end, one noun outside the banner's list (#410).
+//  2. Clock sanity: only synthesizes when the sidecar's StartedAt is in the past
+//     (defense against clock skew or stale workspace moves).
 func (s *Scheduler) recoverOrchestratorCrashAt(root string, now time.Time) {
 	sc, err := readCurrentRunSidecar(root)
 	if err != nil {
@@ -2277,6 +2331,11 @@ func (s *Scheduler) recoverOrchestratorCrashAt(root string, now time.Time) {
 		return
 	}
 	if sc == nil {
+		return
+	}
+	if runstate.ProcessAlive(sc.PID) {
+		log.Printf("recovery: current-run sidecar at %s names LIVE pid %d (#%d, stage=%s, run_id=%s) — that run is still executing; no crash record, no queue pause, no sidecar removal",
+			root, sc.PID, sc.IssueNumber, sc.Stage, sc.RunID)
 		return
 	}
 	if !sc.StartedAt.Before(now) {

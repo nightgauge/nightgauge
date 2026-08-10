@@ -256,10 +256,13 @@ func buildSdkCliInWorktree(worktreeDir string, repoRoot string) error {
 // result ignored: success clears a stale registration, failure means there was
 // nothing registered — the absence of a leak, not the signal of one.
 //
-// The per-issue compose teardown is skipped for this population, which is
-// already owned for exactly this case by the scheduler's startup
-// reconcileOrphanedComposeProjects: it tears down `issue-NNN` stacks with no
-// matching worktree (#3050).
+// The per-issue compose teardown is skipped for this population. Its owner is
+// (*AutonomousScheduler).sweepOrphanedComposeProjects, which tears down
+// `issue-NNN` stacks with no run in flight (#3050, re-homed by #410). Residual,
+// stated because the handoff is no longer unconditional: that pass runs on the
+// autonomous reconcile cycle only, so in a workspace where autonomous mode is not
+// running — or is paused, cooling down or fully saturated — such a stack is
+// collected by `nightgauge cleanup` and by nothing else.
 func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 	repoRoot := m.repoRoot(repo)

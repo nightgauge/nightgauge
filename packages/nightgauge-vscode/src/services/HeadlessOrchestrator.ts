@@ -1455,6 +1455,29 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * the Go non-autonomous scheduler's own startup sweep
    * (Scheduler.sweepMergedWorktrees) added in the same issue. Best-effort:
    * a missing binary or a failed sweep is logged and does not block startup.
+   *
+   * #410 changed what the command does under this call, in two ways that matter
+   * here:
+   *
+   * - it now sweeps EVERY repo root in the workspace, and the JSON is one
+   *   result per root (`results[]`) rather than a single bare object. A run's
+   *   worktree lives in its target repo, so the old single-root shape could not
+   *   describe the sweep this call actually wants;
+   * - it derives its in-flight set from each root's runtime snapshots, so a live
+   *   run's worktree is protected. Before that this call passed no in-flight set
+   *   at all: an extension restart during any run past its merge could reclaim
+   *   the directory that run was still executing in.
+   *
+   * `warnings` and `skippedRoots` are logged rather than dropped — a root that
+   * was not swept, or an issue the in-flight scan declined to protect, is the
+   * only evidence that this pass was narrower than it looks. Each skipped root
+   * carries its own `reason`, which is rendered verbatim.
+   *
+   * The document shape is pinned on the Go side by
+   * TestWorktreeSweep_JSONContractMatchesTheExtensionParser
+   * (cmd/nightgauge/worktree_sweep_test.go), which decodes `--json` into the same
+   * field names read below — so renaming `results`, `door`, `warnings` or
+   * `skippedRoots` fails a test instead of silently muting this log.
    */
   async runStartupWorktreeSweep(): Promise<void> {
     try {
@@ -1470,18 +1493,54 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         timeout: 30_000,
       });
       const result = JSON.parse(stdout.toString()) as {
-        reclaimed?: Array<{ path: string; branch: string; issueNumber: number }>;
-        errors?: string[];
+        results?: Array<{
+          repoRoot?: string;
+          reclaimed?: Array<{
+            path: string;
+            branch: string;
+            issueNumber: number;
+            door?: string;
+          }>;
+          errors?: string[];
+        }>;
+        warnings?: string[];
+        skippedRoots?: Array<{ root?: string; reason?: string }>;
       };
-      for (const wt of result.reclaimed ?? []) {
-        this.logger.info(
-          `worktree-reconcile: reclaimed ${wt.path} (branch ${wt.branch}, issue #${wt.issueNumber})`
+      for (const perRoot of result.results ?? []) {
+        for (const wt of perRoot.reclaimed ?? []) {
+          // The door is logged because the sweep has two reclaim rules and only
+          // one of them compares content — a removal line that names neither is
+          // unauditable after the fact.
+          this.logger.info(
+            `worktree-reconcile: reclaimed ${wt.path} (branch ${wt.branch}, issue #${wt.issueNumber}, door ${wt.door ?? "unreported"})`
+          );
+        }
+        if (perRoot.errors?.length) {
+          this.logger.warn(
+            `worktree-reconcile: ${perRoot.errors.length} removal failure(s) in ${perRoot.repoRoot ?? cwd}`,
+            { errors: perRoot.errors }
+          );
+        }
+      }
+      if (result.warnings?.length) {
+        this.logger.warn(
+          `worktree-reconcile: ${result.warnings.length} in-flight scan warning(s)`,
+          { warnings: result.warnings }
         );
       }
-      if (result.errors?.length) {
-        this.logger.warn(`worktree-reconcile: ${result.errors.length} removal failure(s)`, {
-          errors: result.errors,
-        });
+      if (result.skippedRoots?.length) {
+        // The REASON is logged as given, never assumed. Three different failures
+        // land in this list — a root that resolves to no main checkout, one whose
+        // in-flight set was unreadable, and one whose git sweep failed after the
+        // in-flight set read fine — and asserting one cause for all three is the
+        // same defect as the reclaim line that named a check it never ran.
+        const detail = result.skippedRoots
+          .map((s) => `${s.root ?? "<unnamed root>"} (${s.reason ?? "unreported"})`)
+          .join(", ");
+        this.logger.warn(
+          `worktree-reconcile: ${result.skippedRoots.length} root(s) NOT swept — ${detail}`,
+          { skippedRoots: result.skippedRoots }
+        );
       }
     } catch (err) {
       this.logger.debug("Startup worktree sweep failed — continuing", {

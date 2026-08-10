@@ -771,12 +771,17 @@ func (s *Server) repoRoot(repo string) string {
 // pipelineStateDir resolves the .nightgauge/pipeline directory a run's
 // runtime-{issue}-{runId}.json belongs in, scoped to the run's target repo via repoRoot.
 // Returns "" when no root resolves (e.g. an unconfigured server).
+//
+// The SLUG→root resolution is this server's own business; the layout is not, so
+// the join is state.PipelineStateDir's (#410). A second hand-written copy of the
+// path is a second answer to "where does a run's state live?" waiting to
+// disagree.
 func (s *Server) pipelineStateDir(repo string) string {
 	root := s.repoRoot(repo)
 	if root == "" {
 		return ""
 	}
-	return filepath.Join(root, ".nightgauge", "pipeline")
+	return state.PipelineStateDir(root)
 }
 
 // invalidateOnAuth401 evicts the cached client for (owner, repo) when a

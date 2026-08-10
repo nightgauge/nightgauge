@@ -138,3 +138,97 @@ func TestWorkspaceRepoRoots_OutsideAnyRepoIsEmpty(t *testing.T) {
 		t.Errorf("WorkspaceRepoRoots outside any repo = %v, want empty", roots)
 	}
 }
+
+// mainCheckoutFixture builds a repo with one linked worktree and returns
+// (mainCheckout, linkedWorktree). #410's defect lives entirely in the difference
+// between those two paths, so the fixture is the whole test.
+func mainCheckoutFixture(t *testing.T) (string, string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s (in %s): %v: %s", strings.Join(args, " "), dir, err, out)
+		}
+	}
+	root := filepath.Join(base, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(root, "init", "-b", "main")
+	git(root, "config", "user.email", "test@test")
+	git(root, "config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(root, "README"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(root, "add", ".")
+	git(root, "commit", "-m", "initial")
+	wt := filepath.Join(root, ".worktrees", "issue-410")
+	git(root, "worktree", "add", wt, "-b", "fix/410-work")
+	return root, wt
+}
+
+// TestMainCheckoutRoot_FromALinkedWorktree is #410's core correction. A linked
+// worktree carries its own (tracked, always empty) .nightgauge/pipeline
+// directory, so a destructive caller that derives state from gitToplevel reads a
+// determined "nothing is running" while git still lists — and it still
+// removes — every worktree of the repository.
+func TestMainCheckoutRoot_FromALinkedWorktree(t *testing.T) {
+	main, wt := mainCheckoutFixture(t)
+
+	if got := gitToplevel(wt); got != wt {
+		t.Fatalf("fixture assumption broken: gitToplevel(worktree) = %q, want the worktree %q", got, wt)
+	}
+	if got := MainCheckoutRoot(wt); got != main {
+		t.Errorf("MainCheckoutRoot(%s) = %q, want the main checkout %q", wt, got, main)
+	}
+}
+
+// TestMainCheckoutRoot_FromTheMainCheckoutIsIdentity: canonicalization must be a
+// no-op where the root is already right, including from a subdirectory.
+func TestMainCheckoutRoot_FromTheMainCheckoutIsIdentity(t *testing.T) {
+	main, _ := mainCheckoutFixture(t)
+	sub := filepath.Join(main, "nested", "deeper")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range []string{main, sub} {
+		if got := MainCheckoutRoot(dir); got != main {
+			t.Errorf("MainCheckoutRoot(%s) = %q, want %q", dir, got, main)
+		}
+	}
+}
+
+// TestMainCheckoutRoot_NoWorkTreeIsEmpty: a bare repo and a non-repo directory
+// both have no checkout to canonicalize to. Returning a plausible-looking parent
+// directory instead is how a destructive caller ends up sweeping a path nobody
+// verified — the caller must skip such a root, so the answer has to be empty.
+func TestMainCheckoutRoot_NoWorkTreeIsEmpty(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(base))
+
+	bare := filepath.Join(base, "origin.git")
+	cmd := exec.Command("git", "init", "--bare", "-b", "main", bare)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("init bare: %v: %s", err, out)
+	}
+	plain := filepath.Join(base, "not-a-repo")
+	if err := os.MkdirAll(plain, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dir := range []string{bare, plain, ""} {
+		if got := MainCheckoutRoot(dir); got != "" {
+			t.Errorf("MainCheckoutRoot(%q) = %q, want \"\" — no work tree means no root to sweep", dir, got)
+		}
+	}
+}

@@ -337,6 +337,9 @@ func WorkspaceRepoRoots(startDir string) []string {
 // dir is not inside one. Inside a worktree this reports the worktree's own
 // directory, which is the correct scan root: `git worktree list` run from a
 // worktree still enumerates every worktree of its repository.
+//
+// It is the WRONG answer for anything that reads a repo's `.nightgauge/`
+// state — see MainCheckoutRoot.
 func gitToplevel(dir string) string {
 	if dir == "" {
 		return ""
@@ -348,6 +351,65 @@ func gitToplevel(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// MainCheckoutRoot resolves dir to the MAIN checkout of the repository that
+// contains it — the one directory where that repo's `.nightgauge/pipeline`
+// state actually lives — or "" when dir is not inside a usable git work tree
+// (not a repo at all, or a bare repo, which has no checkout to canonicalize to).
+//
+// A caller that derives on-disk STATE from a root must canonicalize with this
+// and not with gitToplevel (#410). Inside a linked worktree gitToplevel reports
+// the worktree, whose `.nightgauge/pipeline` directory EXISTS — the `.gitkeep`
+// is tracked, so every checkout has one — and is empty. A destructive caller
+// then reads a DETERMINED EMPTY in-flight set with no error and no warning,
+// while `git worktree list` from that same directory still enumerates every
+// worktree of the repository: total blindness with undiminished reach. That is
+// how a bare `nightgauge worktree sweep`, run from inside any pipeline worktree
+// (which is where every stage runs), reached `git worktree remove --force` on a
+// live run's directory.
+//
+// `--git-common-dir` is the discriminator, and it is a git fact rather than a
+// path convention: in a linked worktree the per-worktree git dir is
+// `<main>/.git/worktrees/<name>` while the common dir is `<main>/.git`, so the
+// main checkout is the common dir's parent. In the main checkout the two are
+// equal and `--show-toplevel` already names the answer (which also stays correct
+// for a `--separate-git-dir` checkout, where the parent-of-common-dir rule would
+// not).
+//
+// Canonicalizing also makes the root set a set: the dogfood shape (cwd = a
+// worktree, manifest naming the main root) resolves the SAME repository twice,
+// and the un-canonicalized entry sorts first — so the blind pass ran before the
+// protected one. Dedupe AFTER this call.
+func MainCheckoutRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.Command("git", "rev-parse",
+		"--path-format=absolute", "--absolute-git-dir", "--git-common-dir", "--show-toplevel")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		// Not a git repo, or a bare one: `--show-toplevel` fails outside a work
+		// tree. Either way there is no checkout to canonicalize to, and the
+		// caller must skip the root rather than sweep it.
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 {
+		return ""
+	}
+	gitDir := strings.TrimSpace(lines[0])
+	commonDir := strings.TrimSpace(lines[1])
+	toplevel := strings.TrimSpace(lines[2])
+	if gitDir == "" || commonDir == "" {
+		return ""
+	}
+	if gitDir == commonDir {
+		// The main checkout: its own toplevel is the answer.
+		return filepath.Clean(toplevel)
+	}
+	return filepath.Dir(filepath.Clean(commonDir))
 }
 
 // ProjectMappingMismatch is one repo whose workspace-manifest project_number

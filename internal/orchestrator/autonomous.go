@@ -2375,7 +2375,28 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 		as.sweepSurvivalRecords(ctx)
 	}
 
-	// 2e. (#110) Reclaim pipeline worktrees whose branch already landed on the
+	// 2e. (#410) Tear down per-issue docker compose stacks whose run is gone.
+	// This reconcile used to ride NewScheduler → loadQueue, so `queue list` ran
+	// `docker compose down -v --remove-orphans` as a construction side effect;
+	// #403 moved the worktree sweep off that path and left this one behind.
+	// Local docker only — no forge quota — and paced with the other sweeps.
+	//
+	// BEFORE the worktree sweep, deliberately, and the order is load-bearing
+	// rather than cosmetic. The sweep can only reclaim worktrees that
+	// as.state.Running does NOT cover — it protects with the running set alone —
+	// which is precisely the population whose compose protection is the
+	// active-worktree half of this pass's union: a run this process did not
+	// dispatch (an operator's `nightgauge queue run`, an interactive run, a
+	// previous incarnation's run — startup recovery clears Running, so those are
+	// never in it). Sweeping first deletes the only evidence that pass has, and
+	// the compose reconcile then runs `down -v` on a live run's stack, removing
+	// named volumes nothing recovers. Cost of this ordering: a just-retired run's
+	// stack waits one graph-TTL cycle.
+	if graphWasFresh {
+		as.sweepOrphanedComposeProjects(ctx)
+	}
+
+	// 2f. (#110) Reclaim pipeline worktrees whose branch already landed on the
 	// default branch. Inline post-merge cleanup misses every run that was swept
 	// mid-flight, so without a reconcile pass those worktrees accumulate
 	// forever. Local git only — no forge quota — but paced with the other

@@ -36,11 +36,50 @@ import (
 // not a machine-global registry: a bare Scheduler built by a CLI command
 // (`queue list`, the promote gates) has an empty queue and no visibility into
 // an autonomous fleet running in another process, so a sweep from there would
-// see every live run as unprotected. That is why the autonomous reconcile is
-// the only caller — `state.Running` is authoritative for the process that
-// dispatched those runs, in that process. Any new caller has to answer the same
-// question first: is your in-flight set authoritative for the runs whose
-// directories you are about to delete?
+// see every live run as unprotected. That is why this function has one caller —
+// `state.Running` is authoritative for the process that dispatched those runs,
+// in that process. Any new caller has to answer the same question first: is your
+// in-flight set authoritative for the runs whose directories you are about to
+// delete?
+//
+// # The second sanctioned caller, and what it substitutes (#410)
+//
+// `nightgauge worktree sweep` (cmd/nightgauge/worktree.go) is the OTHER
+// production entry point into execution.SweepMergedWorktrees. It does not come
+// through this function — it has no scheduler and no `state.Running` — and it
+// answers the question above with a different source: `state.
+// ActiveIssuesFromSnapshots`, which scans each repo's own
+// `.nightgauge/pipeline/` directory — the `runtime-{issue}-{runId}.json`
+// snapshots plus the in-flight `current-run.json` sidecar when the process it
+// names is alive. That is the one machine-wide in-flight source there is (ADR-017
+// Decision 8 built the layout to be readable "by a process with no registry"),
+// and it is what makes the CLI's `ActiveIssues` mean something instead of being
+// the empty map it used to pass. It reads that directory at each repo's MAIN
+// CHECKOUT, canonicalized: a linked worktree has a state dir of its own and it is
+// always empty, so an un-canonicalized root answers "nothing is running" with no
+// error at all.
+//
+// It is strictly WEAKER than this caller's set, and the residuals are accepted
+// deliberately rather than papered over:
+//
+//   - a live run with NO snapshot at all is not protected. On the extension path
+//     Persist is gated on a repo-carrying transition, so a run has no file until
+//     its first one; on any path, a dispatched run that never wrote a snapshot is
+//     a bug elsewhere. `--dry-run` remains for the cautious operator;
+//   - protection is bounded by liveness (a live orchestrator named by the
+//     in-flight sidecar, a live recorded stage child, or a snapshot touched inside
+//     runstate.LivenessWindow), NOT by "a non-terminal snapshot exists". It has to
+//     be: nothing latches terminal on the Go-scheduler path and nothing removes
+//     the file after a crash, so an existence test would protect every leaked
+//     worktree forever — the same structural no-op #403 deleted, pointing the
+//     other way;
+//   - there is deliberately NO blanket age floor on the CLI path. A 24-hour
+//     "only touch old worktrees" rule would neuter the command's primary use,
+//     which is reclaiming leftovers of a run that merged an hour ago.
+//
+// `internal/doctor`'s leaked-worktree report is a THIRD reader and is
+// unaffected: it is report-only (DryRun) and substitutes staleWorktreeAge for an
+// in-flight set on purpose. Nothing here changes it.
 //
 // One known race remains and is benign. `onPipelineComplete` vacates the item
 // from `state.Running` at the top of the terminal path, ~160 lines before
@@ -102,11 +141,35 @@ func runMergedWorktreeSweep(roots []string, inFlight map[int]bool, determined bo
 			continue
 		}
 		for _, wt := range res.Reclaimed {
-			log.Printf("%s: reclaimed %s (branch %s, issue #%d — content already on %s)",
-				logPrefix, wt.Path, wt.Branch, wt.IssueNumber, res.BaseRef)
+			log.Printf("%s: reclaimed %s (branch %s, issue #%d — %s)",
+				logPrefix, wt.Path, wt.Branch, wt.IssueNumber, reclaimRationale(wt.Door, res.BaseRef))
 		}
 		if len(res.Errors) > 0 {
 			log.Printf("%s: %s: %d removal failure(s): %v", logPrefix, root, len(res.Errors), res.Errors)
 		}
+	}
+}
+
+// reclaimRationale renders the reason a reclaim was authorized, per DOOR (#410).
+//
+// This function exists because one line served both doors and named the check
+// only one of them performs. "content already on origin/main" was printed for a
+// worktree the sweep removed WITHOUT comparing anything — the default-branch
+// door structurally cannot compare, since the default branch is the comparison
+// base. A log asserting a check that never ran is worse than no log: the next
+// person auditing a wrongly-removed directory reads it as evidence the content
+// was safe, and stops looking.
+//
+// An unset door is reported as unaccounted-for rather than silently defaulted to
+// either rule. Reaching that branch means a new door was added without a
+// rationale, which is precisely the drift the typed Door prevents.
+func reclaimRationale(door execution.Door, baseRef string) string {
+	switch door {
+	case execution.ReclaimContentMerged:
+		return "content already on " + baseRef
+	case execution.ReclaimDefaultBranchCheckout:
+		return "clean pipeline worktree parked on the default branch; no content comparison — the default branch IS the base; branch preserved"
+	default:
+		return "UNACCOUNTED-FOR reclaim door " + string(door) + " — the sweep removed a directory it cannot explain"
 	}
 }

@@ -26,9 +26,7 @@ type OfflineStore struct {
 
 // NewOfflineStore creates an offline store at the workspace root.
 func NewOfflineStore(workspaceRoot string) *OfflineStore {
-	return &OfflineStore{
-		dir: filepath.Join(workspaceRoot, ".nightgauge", "pipeline"),
-	}
+	return &OfflineStore{dir: PipelineStateDir(workspaceRoot)}
 }
 
 // Save persists offline state to disk.
