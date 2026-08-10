@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"time"
 )
 
 // ConcurrentRunRefusedError is returned when a fresh run is attempted but an
@@ -52,6 +53,25 @@ func DetectConcurrent(baseDir string) (bool, *ConcurrentRunRefusedError) {
 		HostID:      strOrEmpty(last.HostID),
 	}
 }
+
+// LivenessWindow is how long a run's last observed heartbeat vouches for it
+// when no live process does — the tree's ONE "a run this quiet is not running"
+// threshold (ADR-017 7.2 arms 1 and 4).
+//
+// 30 minutes, derived rather than picked: the timestamp lease is a coarse
+// backstop for a lost terminal event, not the primary mechanism. It can only
+// decide anything for a run that lost its terminal notification, crossed a
+// 30-minute stage-boundary gap without persisting, and has no live process — so
+// the window has to be longer than the longest silent stretch a healthy run can
+// have, and shorter than an operator's patience with leaked state.
+//
+// It lives HERE, beside ProcessAlive, because the two are the same question
+// asked of different evidence, and because it now has more than one reader: the
+// IPC orphan reconciler's ladder (internal/ipc) and the snapshot-derived
+// in-flight set the CLI worktree sweep uses (internal/state). Two copies of this
+// number are two answers to "is that run still there?" waiting to disagree —
+// the exact failure ProcessAlive was exported to end (#341).
+const LivenessWindow = 30 * time.Minute
 
 // ProcessAlive reports whether `pid` is a live process on the current host.
 // Exported as the ONE liveness probe (#341): `autonomous status` carried an

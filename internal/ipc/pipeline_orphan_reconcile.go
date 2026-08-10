@@ -51,7 +51,13 @@ const (
 	// a coarse backstop for a lost abandonRun, not the primary mechanism — it can
 	// only fire for a run that lost its abandon call, crossed a 30-minute stage
 	// boundary gap, and has no live process.
-	livenessWindow = 30 * time.Minute
+	//
+	// The VALUE lives in runstate beside ProcessAlive (#410): the CLI worktree
+	// sweep now derives its in-flight set from the same snapshots with the same
+	// timestamp lease, and two copies of this threshold are two answers to "is
+	// that run still there?" waiting to disagree. This name stays because the
+	// ladder's arms read better with it.
+	livenessWindow = runstate.LivenessWindow
 
 	// startupGrace is ladder arm 5 and the claim-release threshold (7.3, 9).
 	// Derived, not chosen by feel: the client's five backend-restart attempts sum

@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -119,6 +121,20 @@ func emitRecoverResult(cmd *cobra.Command, jsonOut, recovered bool, message stri
 	return nil
 }
 
+// worktreeSweepOutput is what `sweep --json` emits. An ARRAY of per-root
+// results, because the command's default is now the whole workspace (#410) — a
+// single bare object could only ever describe one of them.
+type worktreeSweepOutput struct {
+	Results []execution.WorktreeSweepResult `json:"results"`
+	// Warnings carries the in-flight scan's own uncertainty per root, so a
+	// reclaim decision made against an incomplete in-flight set is auditable
+	// from the command's output instead of only from the operator's memory.
+	Warnings []string `json:"warnings,omitempty"`
+	// SkippedRoots names roots whose in-flight set could not be read and which
+	// were therefore NOT swept at all.
+	SkippedRoots []string `json:"skippedRoots,omitempty"`
+}
+
 func worktreeSweepCmd() *cobra.Command {
 	var (
 		workdir       string
@@ -130,66 +146,151 @@ func worktreeSweepCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sweep",
 		Short: "Reclaim pipeline worktrees whose branch already landed",
-		Long: `Scan the worktrees git has registered for this repository and remove the
+		Long: `Scan the worktrees git has registered across the workspace and remove the
 pipeline-created ones (issue-NNN / <repo>-issue-NNN) whose branch carries no
 content the default branch is missing.
+
+Every repo root in the workspace is swept by default — a run's worktree lives in
+its TARGET repo, so a single-root sweep is blind to exactly the cross-repo runs
+that leak most. Pass --workdir to sweep one repository instead.
 
 Merged-ness is decided by content diff against origin/<default>, not by
 ancestry: a squash merge leaves the branch tip a non-ancestor of the default
 branch, so an ancestry check reports a false negative for every merged branch.
 
+Runs in flight are protected by their runtime snapshots
+(.nightgauge/pipeline/runtime-<issue>-<runId>.json), read per root: an issue with
+a live snapshot is never reclaimed however merged its branch looks. A root whose
+snapshot directory cannot be read is skipped entirely rather than swept blind.
+
 Never removed: the primary checkout, locked worktrees, detached worktrees,
 worktrees with uncommitted or untracked changes, branches carrying unmerged
-work, and branches with no commits of their own (indistinguishable from a
-worktree created for a run about to start).`,
+work, branches with no commits of their own (indistinguishable from a worktree
+created for a run about to start), and any issue with a run in flight.`,
 		SilenceUsage: true,
 		Example: `  nightgauge worktree sweep --dry-run
   nightgauge worktree sweep --json
   nightgauge worktree sweep --workdir /path/to/repo`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if workdir == "" {
-				var err error
-				workdir, err = os.Getwd()
-				if err != nil {
-					return fmt.Errorf("get working directory: %w", err)
-				}
-			}
+			out := cmd.OutOrStdout()
+			errOut := cmd.ErrOrStderr()
 
-			res, err := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
-				RepoRoot:      workdir,
-				DefaultBranch: defaultBranch,
-				DryRun:        dryRun,
-			})
+			roots, err := worktreeSweepRoots(workdir)
 			if err != nil {
 				return err
 			}
 
-			if jsonOut {
-				return printJSON(res)
+			result := worktreeSweepOutput{}
+			for _, root := range roots {
+				// THE IN-FLIGHT SET IS RESOLVED PER ROOT, from that root's own
+				// snapshot directory (#410). A run's state is rooted in its
+				// target repo since #229, so one shared set would answer with a
+				// sibling repo's runs — and this command deletes directories.
+				active, scanErr := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(root))
+				if scanErr != nil {
+					// "I could not look" is never "nothing is running" (#296).
+					// The only protection this command has against destroying a
+					// live run's worktree is this set, so an unreadable snapshot
+					// dir disqualifies the root rather than downgrading to an
+					// unprotected sweep.
+					if len(roots) == 1 {
+						// Nothing else to report and nothing was swept: exit
+						// non-zero rather than printing a warning that reads
+						// like a clean pass.
+						return fmt.Errorf("worktree sweep: %s: in-flight set unreadable, refusing to sweep blind: %w", root, scanErr)
+					}
+					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: in-flight set unreadable (%v) — root NOT swept\n", root, scanErr)
+					result.SkippedRoots = append(result.SkippedRoots, root)
+					continue
+				}
+				for _, w := range active.Warnings {
+					result.Warnings = append(result.Warnings, root+": "+w)
+					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: %s\n", root, w)
+				}
+
+				res, sweepErr := execution.SweepMergedWorktrees(execution.WorktreeSweepOptions{
+					RepoRoot:      root,
+					DefaultBranch: defaultBranch,
+					ActiveIssues:  active.Issues,
+					DryRun:        dryRun,
+				})
+				if sweepErr != nil {
+					// Best-effort per root, like the autonomous sweep: one
+					// unreadable sibling must not hide the other roots' leaks.
+					if len(roots) == 1 {
+						return sweepErr
+					}
+					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s: %v\n", root, sweepErr)
+					result.SkippedRoots = append(result.SkippedRoots, root)
+					continue
+				}
+				result.Results = append(result.Results, res)
 			}
 
-			if len(res.Reclaimed) == 0 {
-				fmt.Printf("No reclaimable worktrees (scanned %d, base %s).\n", res.Scanned, res.BaseRef)
+			if jsonOut {
+				return printJSON(result)
 			}
-			for _, wt := range res.Reclaimed {
-				verb := "reclaimed"
-				if res.DryRun {
-					verb = "would reclaim"
+
+			multi := len(roots) > 1
+			for _, res := range result.Results {
+				if multi {
+					fmt.Fprintf(out, "%s\n", res.RepoRoot)
 				}
-				fmt.Printf("  %-14s %s (branch %s)\n", verb, wt.Path, wt.Branch)
-			}
-			for _, wt := range res.Skipped {
-				fmt.Printf("  %-14s %s (%s)\n", "skipped", wt.Path, wt.Reason)
-			}
-			for _, e := range res.Errors {
-				fmt.Fprintf(os.Stderr, "[WARN] worktree sweep: %s\n", e)
+				if len(res.Reclaimed) == 0 {
+					fmt.Fprintf(out, "  No reclaimable worktrees (scanned %d, base %s).\n", res.Scanned, res.BaseRef)
+				}
+				for _, wt := range res.Reclaimed {
+					verb := "reclaimed"
+					if res.DryRun {
+						verb = "would reclaim"
+					}
+					// The DOOR is printed, not inferred (#410): the sweep has two
+					// reclaim rules and the default-branch one compares no
+					// content at all, so an operator auditing a removal needs to
+					// know which rule authorized it.
+					fmt.Fprintf(out, "  %-14s %s (branch %s, door %s)\n", verb, wt.Path, wt.Branch, wt.Door)
+				}
+				for _, wt := range res.Skipped {
+					fmt.Fprintf(out, "  %-14s %s (%s)\n", "skipped", wt.Path, wt.Reason)
+				}
+				for _, e := range res.Errors {
+					fmt.Fprintf(errOut, "[WARN] worktree sweep: %s\n", e)
+				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Repository root to sweep (default: current directory)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Sweep this repository only (default: every repo root in the workspace)")
 	cmd.Flags().StringVar(&defaultBranch, "default-branch", "", "Default branch to compare against (default: detected from origin/HEAD)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Classify without removing anything")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Emit JSON instead of human-readable output")
 	return cmd
+}
+
+// worktreeSweepRoots resolves which repositories the sweep covers.
+//
+// --workdir is the explicit SINGLE-root override. Without it the default is
+// every repo root the workspace resolves (config.WorkspaceRepoRoots — the same
+// resolver `doctor`'s leaked-worktree report walks), because since #229 a run's
+// worktree is created in its TARGET repo: a sweep rooted only at the invocation
+// directory cannot see a cross-repo run's leftovers at all, which is the
+// population that accumulates fastest.
+//
+// Zero resolved roots is an ERROR, not an empty sweep. Even a single-repo
+// workspace resolves its primary root, so an empty set means the lookup failed —
+// and this is the leak-detection pass: reporting "nothing to reclaim" from a scan
+// that never ran is how worktree accumulation stays invisible (#302).
+func worktreeSweepRoots(workdir string) ([]string, error) {
+	if workdir != "" {
+		return []string{workdir}, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+	roots := config.WorkspaceRepoRoots(cwd)
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("no repo roots resolved from %s — run inside a git repository or pass --workdir", cwd)
+	}
+	return roots, nil
 }
