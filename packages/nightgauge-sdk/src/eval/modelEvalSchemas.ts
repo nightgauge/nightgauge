@@ -233,7 +233,6 @@ export const ModelDescriptorSchema = z
      * opposite.
      */
     supported_efforts: z.array(EffortLevelSchema),
-    supported_reasoning: z.array(ReasoningLevelSchema).min(1),
     context_window: z.number().int().positive(),
     deprecated: z.boolean().optional(),
     /** For deprecated models, the current id callers should migrate to. */

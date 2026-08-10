@@ -37,7 +37,6 @@ const OPUS: ModelDescriptor = {
   concrete_version: "claude-opus-4-8",
   rates: { input: 5, output: 25, cache_read: 0.5, cache_creation_5m: 6.25, cache_creation_1h: 10 },
   supported_efforts: ["low", "medium", "high"],
-  supported_reasoning: ["none", "low", "medium", "high"],
   context_window: 200000,
 };
 
@@ -98,7 +97,6 @@ describe("model-eval schemas — round-trip parse", () => {
       concrete_version: "vendor-x-pro-2026",
       rates: { input: 2, output: 8 },
       supported_efforts: ["medium", "high"],
-      supported_reasoning: ["none", "high"],
       context_window: 128000,
     };
     expect(ModelDescriptorSchema.parse(other)).toEqual(other);

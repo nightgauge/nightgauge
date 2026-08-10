@@ -48,7 +48,6 @@
         "cache_creation_1h": 5.0
       },
       "supported_efforts": ["zqxsentinel-supported-effort"],
-      "supported_reasoning": ["zqxsentinel-supported-reasoning"],
       "context_window": 123456,
       "deprecated": false,
       "replacement": "zqxsentinel-replacement",
