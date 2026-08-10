@@ -237,10 +237,40 @@ func buildSdkCliInWorktree(worktreeDir string, repoRoot string) error {
 // — never blocks worktree removal), then `git worktree remove`. This prevents
 // stale containers / volumes / networks / images named `issue-NNN-*` from
 // surviving across pipeline runs and squatting host ports. See Issue #3050.
+//
+// Nothing to tear down is not a teardown failure (#400). The scheduler calls
+// this for EVERY terminal outcome, including IPC/extension runs that never had
+// a Go-layer worktree, so the common case was `git worktree remove` on a path
+// git has never heard of: exit 128 and a "[WARN] … falling back to manual
+// removal" line about a directory that was never created. That WARN is the leak
+// signal #110 added; spending it on runs with nothing to remove is how it
+// stopped meaning anything.
+//
+// So a missing directory short-circuits — but it does NOT skip the git call,
+// because "the directory is gone" and "git has no registration" are different
+// facts. Git happily removes a registered worktree whose directory was deleted
+// out from under it, quietly and successfully, and that is the only thing in
+// this function that reclaims such a registration; skipping it would leave a
+// phantom entry in `git worktree list`, which is what the active-worktree set
+// and the compose reconciler read. The remove therefore still runs, with its
+// result ignored: success clears a stale registration, failure means there was
+// nothing registered — the absence of a leak, not the signal of one.
+//
+// The per-issue compose teardown is skipped for this population, which is
+// already owned for exactly this case by the scheduler's startup
+// reconcileOrphanedComposeProjects: it tears down `issue-NNN` stacks with no
+// matching worktree (#3050).
 func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	worktreeDir := m.worktreePath(repo, issueNumber)
 	repoRoot := m.repoRoot(repo)
 	projectName := fmt.Sprintf("issue-%d", issueNumber)
+
+	if _, err := os.Stat(worktreeDir); os.IsNotExist(err) {
+		reclaim := exec.Command("git", "worktree", "remove", worktreeDir, "--force")
+		reclaim.Dir = repoRoot
+		_ = reclaim.Run()
+		return nil
+	}
 
 	// Preserve a worktree with uncommitted tracked changes rather than
 	// destroying work a developer may still need to inspect — a terminal

@@ -270,11 +270,19 @@ func TestReclaimWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
 }
 
 func TestCleanupWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
-	// Not a git repo, so `git worktree remove` fails; the worktree directory
-	// does not exist, so the manual fallback succeeds and CleanupWorktree
-	// returns nil. The only observable signal is the log line.
+	// A worktree directory that EXISTS but that git does not know about (the
+	// root is not a git repo): `git worktree remove` fails, the manual fallback
+	// succeeds and CleanupWorktree returns nil. The only observable signal is
+	// the log line — and this is the population it has to mean something for.
+	//
+	// The directory is created deliberately (#400): teardown of a worktree that
+	// was never created returns early and says nothing, so pointing this case at
+	// a missing directory would pin the false alarm instead of the real signal.
 	root := t.TempDir()
 	m := &Manager{workspaceRoot: root}
+	if err := os.MkdirAll(m.worktreePath("nightgauge/nightgauge", 110), 0o755); err != nil {
+		t.Fatalf("create worktree dir: %v", err)
+	}
 
 	logged := captureLog(t, func() {
 		if err := m.CleanupWorktree("nightgauge/nightgauge", 110); err != nil {

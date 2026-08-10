@@ -71,6 +71,81 @@ func TestWorktreePathDerivation_CreationAndTeardownAgree(t *testing.T) {
 	}
 }
 
+// TestCleanupWorktree_NeverCreatedWorktreeIsSilent pins the other half of #400:
+// the teardown WARN is a leak signal, so it may not fire for a run that had no
+// Go-layer worktree to begin with.
+//
+// The scheduler calls CleanupWorktree on every terminal outcome, including
+// IPC/extension-dispatched runs that never went through RunStage. Those have no
+// {repo}-issue-{N} directory, and the pre-fix teardown still ran `git worktree
+// remove` against the path anyway: exit 128, "[WARN] … falling back to manual
+// removal", every single time. A warning that fires on the majority of runs is
+// not a signal, which is what made the real one (#110) unreadable.
+func TestCleanupWorktree_NeverCreatedWorktreeIsSilent(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	const issue = 4001
+
+	repoRoot := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: repoRoot}
+
+	// Precondition: nothing was ever provisioned for this issue.
+	if _, err := os.Stat(m.worktreePath(repo, issue)); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist; stat err = %v", m.worktreePath(repo, issue), err)
+	}
+
+	logged := captureLog(t, func() {
+		if err := m.CleanupWorktree(repo, issue); err != nil {
+			t.Fatalf("CleanupWorktree on a never-created worktree must succeed: %v", err)
+		}
+	})
+	if logged != "" {
+		t.Errorf("teardown of a worktree that never existed must say nothing, got:\n%s", logged)
+	}
+}
+
+// TestCleanupWorktree_StaleRegistrationIsStillReclaimed guards the other edge of
+// the same short-circuit: "the directory is gone" is not "git has nothing to
+// clean". A worktree whose directory was removed out from under the pipeline is
+// still registered, `git worktree remove` clears exactly that (quietly, and
+// successfully — no WARN was ever involved in this case), and this teardown is
+// the thing that runs it on a terminal outcome.
+//
+// A short-circuit keyed on os.Stat alone would leave the phantom entry in `git
+// worktree list`, which is the set the active-worktree scan and the compose
+// reconciler answer from — a run's issue would read as active with nothing on
+// disk.
+func TestCleanupWorktree_StaleRegistrationIsStillReclaimed(t *testing.T) {
+	const repo = "nightgauge/nightgauge"
+	const issue = 4002
+
+	repoRoot := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: repoRoot}
+
+	created, err := m.ensureWorktree(repo, issue)
+	if err != nil {
+		t.Fatalf("ensureWorktree: %v", err)
+	}
+	base := filepath.Base(created)
+	if err := os.RemoveAll(created); err != nil {
+		t.Fatalf("remove worktree directory: %v", err)
+	}
+	if !gitWorktreeListed(t, repoRoot, base) {
+		t.Fatalf("precondition: git must still list %q after its directory was deleted", base)
+	}
+
+	logged := captureLog(t, func() {
+		if err := m.CleanupWorktree(repo, issue); err != nil {
+			t.Fatalf("CleanupWorktree: %v", err)
+		}
+	})
+	if gitWorktreeListed(t, repoRoot, base) {
+		t.Errorf("git worktree list still knows %q — teardown stopped reclaiming stale registrations", base)
+	}
+	if logged != "" {
+		t.Errorf("reclaiming a stale registration is not a failure and must stay quiet, got:\n%s", logged)
+	}
+}
+
 // gitWorktreeListed reports whether repoRoot's worktree list holds an entry
 // whose directory base name is base. Compared by base name because git reports
 // the resolved path (macOS /var → /private/var), which is not the string the
