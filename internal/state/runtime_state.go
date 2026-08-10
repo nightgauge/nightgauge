@@ -99,8 +99,20 @@ type RuntimeState struct {
 	SkippedStages   []string      `json:"skippedStages"`
 
 	// Phase tracking
-	PhaseHistory []PhaseRecord     `json:"phaseHistory"`
-	StageErrors  map[string]string `json:"stageErrors"` // stage → error message
+	PhaseHistory []PhaseRecord `json:"phaseHistory"`
+	// StageErrors is CURRENT-ATTEMPT state, not a run-long failure log (#407).
+	// CONTRACT: a stage has an entry here ⇔ that stage's MOST RECENT attempt
+	// failed. SetStageError writes on failure; completeStageInternal deletes on
+	// completion. A stage that failed and then succeeded on retry therefore has
+	// NO entry, and both TS appliers may keep applying stageErrors after
+	// completedStages — with this contract, a stage in both maps is the
+	// legitimate backtrack case (completed earlier, re-run later, failed) and
+	// "most recent attempt failed" is what must win.
+	//
+	// Rehydration deliberately preserves whatever was on disk: a crash snapshot
+	// for a stage that later completes is cleared by that completion, and a
+	// terminal failure's stage never completes, so its entry survives.
+	StageErrors map[string]string `json:"stageErrors"` // stage → most recent attempt's error message
 
 	// Pause state (persisted to runtime-{issue}-{runId}.json for reload recovery)
 	Paused bool `json:"paused,omitempty"`
@@ -538,6 +550,39 @@ func (rs *RuntimeState) completeStageInternal(exitCode, inputTokens, outputToken
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
+	// THE CLEAR SITE for the StageErrors contract (#407): an entry means "this
+	// stage's MOST RECENT attempt failed", so a completion for the stage retires
+	// the previous attempt's entry. Without it StageErrors was write-only in
+	// production — the only writer was SetStageError and nothing ever removed a
+	// key — so a stage that failed and then succeeded on retry sat in BOTH
+	// CompletedStages and StageErrors for the rest of the run. Both TS snapshot
+	// appliers apply stageErrors AFTER completedStages, so that stage rendered
+	// "failed" forever; countFailedStages saw it, and outcomeDisplay downgraded
+	// a fully green run to "Complete — 1 stage failed" plus a contradiction
+	// warning. history.go's V2 stage detail stamped it "failed" in the durable
+	// record too.
+	//
+	// BEFORE the idempotency guard on purpose. "Completed ⇒ not currently
+	// failed" holds whether or not this particular call is the duplicate the
+	// guard suppresses — and the duplicate is exactly the shape a retry that
+	// re-completes without an intervening BeginStage takes. delete on a missing
+	// key is a no-op, so the cost on the overwhelmingly common never-failed
+	// path is one map probe.
+	//
+	// The failure paths that write an error all run SetStageError AFTER their
+	// completion booking (internal/ipc/server.go's "failed" branch books cost
+	// via CompleteStageWithCost first; internal/orchestrator/scheduler.go books
+	// every stage's cost at the top of the post-run block and only then reaches
+	// its SetStageError branches), so clear-then-set leaves a genuinely failed
+	// stage with its entry intact.
+	//
+	// SETTLED (#407): recovery is NOT a distinct UI state and gets no
+	// StageResult field. A stage that failed and then succeeded renders as
+	// plain success; the failure-then-recovery history already lives in the
+	// retry-engine records, the outcome records, and the stage exit records.
+	// Do not reintroduce a "recovered" status here.
+	delete(rs.StageErrors, string(rs.Stage))
+
 	// Idempotency guard (#230): if this exact stage occurrence was already
 	// completed — same Stage AND the same BeginStage-stamped StageStart — skip
 	// it so a residual double-complete yields exactly one completedStages entry
@@ -793,7 +838,16 @@ func (rs *RuntimeState) SetPaused(paused bool) {
 	rs.Paused = paused
 }
 
-// SetStageError records an error message for a stage.
+// SetStageError records the error message for a stage's most recent attempt.
+//
+// One half of the StageErrors contract (#407): this is the only writer, and
+// completeStageInternal is the only clear site. An entry therefore means "this
+// stage's LATEST attempt failed" — never "this stage failed at some point in
+// the run". Callers that record a failure the pipeline is about to retry are
+// correct to write here unconditionally; the retry's completion retires the
+// entry. Callers on a terminal path (preflight refusals, gate refusals,
+// exhausted retries) write an entry that no completion will ever clear, which
+// is exactly right.
 func (rs *RuntimeState) SetStageError(stage PipelineStage, errMsg string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()

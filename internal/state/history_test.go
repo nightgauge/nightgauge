@@ -157,7 +157,11 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
 	rs.BeginStage(StageFeatureDev)
 	rs.CompleteStage(1, tokens.TokenCounts{Input: 3000, Output: 1000}, "")
-	rs.StageErrors[string(StageFeatureDev)] = "compilation failed"
+	// Through the production writer, in the production ORDER (#407): every
+	// failure path books the stage's spend first and records the error second,
+	// and completion is now the StageErrors clear site — so a raw map poke here
+	// would no longer be exercising the sequence the pipeline actually emits.
+	rs.SetStageError(StageFeatureDev, "compilation failed")
 
 	input := V2RunInput{
 		Title:      "Failing pipeline",
@@ -948,5 +952,60 @@ func TestExtractSizeFromLabels(t *testing.T) {
 				t.Errorf("ExtractSizeFromLabels(%v) = %q, want %q", tt.labels, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildV2Record_RecoveredStageIsCompleteNotFailed is the durable-record
+// half of #407.
+//
+// BuildV2Record stamps a stage detail "complete" from CompletedStages and then
+// OVERWRITES it with "failed" for any stage present in StageErrors
+// (history.go's "Check for stage error"). That overwrite is correct and stays —
+// it is what makes a genuinely failed stage read failed — but before #407
+// nothing ever removed a StageErrors key, so a stage that failed and then
+// SUCCEEDED on retry was stamped "failed" in the permanent run record. Every
+// downstream consumer of history (pipeline-health, retro, the platform's
+// stage-effectiveness math) then treated a recovered run as a broken one.
+//
+// The record is built from the run's own state, through the production writers,
+// in the production order — no hand-built snapshot.
+func TestBuildV2Record_RecoveredStageIsCompleteNotFailed(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 407, "item-407", testRunID())
+
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStageWithCost(0, 5000, 2000, 1500, 0.03)
+
+	// feature-validate fails, then succeeds on the retry.
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(1, 9000, 2500, 3000, 0.19)
+	rs.SetStageError(StageFeatureValidate, "exit 1: 2 tests failed")
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(0, 11000, 3100, 4000, 0.24)
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	detail, ok := record.Stages[string(StageFeatureValidate)]
+	if !ok {
+		t.Fatalf("feature-validate missing from the record's stages: %+v", record.Stages)
+	}
+	if detail.Status != "complete" {
+		t.Errorf("recovered stage status = %q (error=%q), want \"complete\" — "+
+			"the stage's LATEST attempt succeeded, and the record is what health "+
+			"analysis and retro read months later", detail.Status, detail.Error)
+	}
+	if detail.Error != "" {
+		t.Errorf("recovered stage carries error text %q in the durable record", detail.Error)
+	}
+
+	// The failed attempt's spend is still booked — clearing the error must not
+	// erase the money the run actually spent (the #4172-era accumulate rule).
+	tok, ok := record.Tokens.PerStage[string(StageFeatureValidate)]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing feature-validate")
+	}
+	if want := 0.19 + 0.24; tok.CostUSD < want-0.0001 || tok.CostUSD > want+0.0001 {
+		t.Errorf("PerStage[feature-validate].CostUSD = %f, want ~%f (both attempts)", tok.CostUSD, want)
 	}
 }
