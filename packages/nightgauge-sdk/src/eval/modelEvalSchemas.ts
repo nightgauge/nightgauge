@@ -18,7 +18,6 @@
  */
 
 import { z } from "zod";
-import type { ClaudeEffort } from "../analysis/AutoModelSelector.js";
 import { EvalModeSchema, EvalVerdictSchema, ModelTierSchema, PIPELINE_SKILLS } from "./schemas.js";
 
 /**
@@ -56,20 +55,16 @@ export const ProviderSchema = z.enum(PROVIDERS);
 export type Provider = z.infer<typeof ProviderSchema>;
 
 /**
- * Effort levels. Kept identical to `ClaudeEffort` from AutoModelSelector — the
- * `satisfies`-style compile guard below fails if the two ever drift, so the
- * source of truth stays single even though Zod needs a runtime enum.
+ * Effort levels — **the single effort vocabulary authority** (#394).
+ *
+ * Every other surface derives from this array rather than re-listing it:
+ * `EffortLevel` / `ClaudeEffort` (the type), `EffortLevelSchema` and the
+ * extension's `ClaudeEffortSchema` (the runtime validators), the experiment
+ * schema, and the resolver's validator array and config regexes. Independent
+ * copies drifted three ways and silently rejected `max` after #75; derivation
+ * removes the failure mode rather than guarding against it.
  */
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-
-// Compile-time guard: the enum members must be exactly the ClaudeEffort union.
-type _EffortParity = (typeof EFFORT_LEVELS)[number] extends ClaudeEffort
-  ? ClaudeEffort extends (typeof EFFORT_LEVELS)[number]
-    ? true
-    : never
-  : never;
-const _effortParity: _EffortParity = true;
-void _effortParity;
 
 export const EffortLevelSchema = z.enum(EFFORT_LEVELS);
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;

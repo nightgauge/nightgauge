@@ -97,7 +97,12 @@ vi.mock("../../../src/utils/logger", () => ({
   },
 }));
 
-vi.mock("@nightgauge/sdk", () => ({
+// Partial mock: only `validateAdapterAuth` is stubbed. A whole-module
+// replacement would silently strip real exports the transitive import graph
+// depends on — `EFFORT_LEVELS`, the effort vocabulary authority, reaches here
+// through stageResolver (#394).
+vi.mock("@nightgauge/sdk", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@nightgauge/sdk")>()),
   validateAdapterAuth: validateAdapterAuthMock,
 }));
 

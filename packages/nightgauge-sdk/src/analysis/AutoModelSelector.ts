@@ -20,6 +20,7 @@
  */
 
 import type { ComplexityModel, MatchedPattern } from "../context/schemas/complexity-model.js";
+import type { EffortLevel } from "../eval/modelEvalSchemas.js";
 import type { StageModelCalibrationTable } from "../services/StageModelCalibrationService.js";
 import { StageModelCalibrationService } from "../services/StageModelCalibrationService.js";
 import { DEFAULT_MODEL_COST_RATES } from "./types.js";
@@ -84,11 +85,15 @@ export type ComplexityLabel = "XS" | "S" | "M" | "L" | "XL";
  * Claude effort levels for reasoning depth @since Issue #934; `xhigh` for the
  * frontier tier (#73), `max` at the top of the ladder from Opus 5 (#75).
  *
+ * Derived from `EFFORT_LEVELS` — the single effort vocabulary authority — rather
+ * than re-listed. Independent copies of this ladder drifted three ways before
+ * #394; a derived alias cannot.
+ *
  * Per-model support is NOT encoded in this union — the registry's
  * `supported_efforts` is authoritative, so a level a model does not accept is
  * rejected loudly instead of silently downgraded.
  */
-export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type ClaudeEffort = EffortLevel;
 
 /** Stage categories for the complexity-to-model matrix @since Issue #730, #942, #1593 */
 export type StageCategory =
