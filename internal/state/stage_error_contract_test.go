@@ -2,6 +2,7 @@ package state
 
 import (
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
@@ -9,9 +10,10 @@ import (
 // The StageErrors contract suite (#407).
 //
 // CONTRACT: a stage has an entry in StageErrors ⇔ that stage's MOST RECENT
-// attempt failed. SetStageError is the only writer; completeStageInternal
-// (reached through CompleteStage / CompleteStageWithCost) is the only clear
-// site.
+// attempt failed (or the pipeline refused before the stage could attempt at
+// all). SetStageError is the only writer; completeStageInternal (reached
+// through CompleteStage / CompleteStageWithCost) is the only clear site, and it
+// clears only when the completion SUCCEEDS and is actually booked.
 //
 // Before #407 there was no clear site at all in production — the map was
 // write-only — so a stage that failed and then SUCCEEDED on retry stayed in
@@ -20,8 +22,12 @@ import (
 // recovered stage rendered "failed" forever, countFailedStages counted it, and
 // a fully green run's outcome was downgraded to "Complete — 1 stage failed".
 //
-// RED-FIRST: every test below was run against the unfixed file via
-// `go test -overlay` with the pre-#407 internal/state/runtime_state.go.
+// RED-FIRST: every test below was run against an unfixed file via
+// `go test -overlay`. The recovery cases fail against the pre-#407
+// internal/state/runtime_state.go; the two placement guards
+// (SuppressedDuplicateKeepsTheEntry, FailingCompletionDoesNotClear) fail
+// against #407's first cut, which cleared unconditionally and ahead of the
+// #230 guard.
 
 // TestStageErrors_CompletionClearsTheRecoveredStage is the headline case: the
 // failure-then-retry-then-success sequence the IPC and scheduler paths both
@@ -84,16 +90,25 @@ func TestStageErrors_ClearIsScopedToTheCompletingStage(t *testing.T) {
 	}
 }
 
-// TestStageErrors_DuplicateCompletionStillClears pins the placement of the
-// delete: BEFORE the #230 idempotency guard.
+// TestStageErrors_SuppressedDuplicateKeepsTheEntry pins the placement of the
+// delete: AFTER the #230 idempotency guard.
 //
-// A retry that re-completes WITHOUT an intervening BeginStage carries the same
-// BeginStage-stamped StageStart as the previous completion, so the guard
-// early-returns to avoid double-counting tokens. If the clear sat after the
-// guard, that shape — the exact shape of a residual double-complete on a
-// recovered stage — would leave the stale error behind. "Completed ⇒ not
-// currently failed" holds regardless of dedup.
-func TestStageErrors_DuplicateCompletionStillClears(t *testing.T) {
+// A completion that arrives with the same BeginStage-stamped StageStart as the
+// previous one is a residual double-complete: the guard early-returns so the
+// occurrence is booked exactly once and its tokens/cost are not double-counted.
+// It books NOTHING, so it must retire nothing. Clearing ahead of the guard
+// laundered a failure instead: the run was left holding one CompletedStages
+// entry with ExitCode 1 and no StageErrors entry, and BuildV2Record never reads
+// StageResult.ExitCode — it stamps "complete" for every CompletedStages entry
+// and only a StageErrors entry flips it to "failed" — so the PERMANENT run
+// record said the stage completed.
+//
+// Neither production writer can emit a retry that re-completes without an
+// intervening BeginStage, which is why nothing here asserts the opposite: the
+// Go scheduler re-runs BeginStage on every loop iteration, and the extension's
+// markStageRunning latch is a per-invocation local so every attempt sends its
+// own "running".
+func TestStageErrors_SuppressedDuplicateKeepsTheEntry(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 407, "item-407", testRunID())
 
 	rs.BeginStage(StageFeatureDev)
@@ -108,9 +123,64 @@ func TestStageErrors_DuplicateCompletionStillClears(t *testing.T) {
 	if got := len(rs.CompletedStages); got != before {
 		t.Fatalf("precondition: the duplicate completion must be deduped; CompletedStages went %d → %d", before, got)
 	}
-	if msg, ok := rs.StageErrors[string(StageFeatureDev)]; ok {
-		t.Errorf("the deduped completion left the stale error %q behind — "+
-			"the clear must precede the idempotency guard", msg)
+	if got := rs.StageErrors[string(StageFeatureDev)]; got != "exit 1: build failed" {
+		t.Errorf("StageErrors[feature-dev] = %q after a SUPPRESSED completion, want the error kept — "+
+			"a completion that books nothing must retire nothing", got)
+	}
+
+	// The durable record is the reason this matters: it is exit-code blind, so
+	// the StageErrors entry is the sole carrier of "this stage failed".
+	hw := NewHistoryWriter(t.TempDir())
+	record := hw.BuildV2Record(rs, false, "", V2RunInput{}, time.Now())
+	detail, ok := record.Stages[string(StageFeatureDev)]
+	if !ok {
+		t.Fatalf("feature-dev missing from the record's stages: %+v", record.Stages)
+	}
+	if detail.Status != "failed" || detail.Error != "exit 1: build failed" {
+		t.Errorf("durable record says feature-dev is %q (error=%q), want \"failed\" with the recorded text — "+
+			"the only booked occurrence exited 1", detail.Status, detail.Error)
+	}
+}
+
+// TestStageErrors_FailingCompletionDoesNotClear is the other placement guard: a
+// completion that BOOKS A FAILURE must not retire the entry it is about to
+// replace.
+//
+// This is the retry path #407 is about. The Go scheduler books the stage's exit
+// at the top of its post-run block, then emits pipeline.stateChanged and
+// persists the runtime to disk, and only afterwards reaches the branches that
+// call SetStageError. The state asserted below is exactly what that emit and
+// that persist see. An unconditional clear made a just-failed second attempt
+// broadcast and stored as complete-with-no-error, which both TS appliers render
+// green and countFailedStages counts as zero failures — this issue's own
+// silent-failure class, on this issue's own path.
+func TestStageErrors_FailingCompletionDoesNotClear(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 407, "item-407", testRunID())
+
+	// Attempt 1 fails and records its error.
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(1, 3000, 900, 500, 0.21)
+	rs.SetStageError(StageFeatureValidate, "exit 1: 2 tests failed")
+
+	// Attempt 2 fails too. Its SetStageError has not run yet.
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(1, 3200, 950, 600, 0.23)
+
+	if got := rs.StageErrors[string(StageFeatureValidate)]; got != "exit 1: 2 tests failed" {
+		t.Errorf("StageErrors[feature-validate] = %q in the window between the failing booking and "+
+			"the new SetStageError, want the previous attempt's entry to survive", got)
+	}
+
+	snap := rs.Snapshot()
+	if _, ok := snap.StageErrors[string(StageFeatureValidate)]; !ok {
+		t.Errorf("the snapshot the scheduler emits and persists in that window carries no stageErrors "+
+			"entry for a stage whose latest attempt just failed: %+v", snap.StageErrors)
+	}
+
+	// And the new attempt's own text lands when SetStageError finally runs.
+	rs.SetStageError(StageFeatureValidate, "exit 1: 1 test failed")
+	if got := rs.StageErrors[string(StageFeatureValidate)]; got != "exit 1: 1 test failed" {
+		t.Errorf("StageErrors[feature-validate] = %q after the failure branch recorded, want the newest attempt's error", got)
 	}
 }
 

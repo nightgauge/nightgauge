@@ -2799,11 +2799,11 @@ func (s *Server) registerMethods() {
 			// returns and records terminating-stage ground truth on failure
 			// (#146).
 			//
-			// ORDER IS LOAD-BEARING (#407). An entry in StageErrors now means
-			// "this stage's MOST RECENT attempt failed" — completeStageInternal
-			// clears the stage's entry — so the cost booking above, which goes
-			// through that clear site, must run BEFORE the SetStageError below.
-			// It does.
+			// #407: an entry in StageErrors means "this stage's MOST RECENT
+			// attempt failed". completeStageInternal is the clear site, but it
+			// clears only on a SUCCEEDING booking — so the exit-1 booking below
+			// cannot retire the error this branch is about to record, and no
+			// ordering between the two calls is load-bearing.
 			//
 			// This branch still writes unconditionally, including for a failure
 			// the scheduler is about to retry (retry/escalation is a first-class

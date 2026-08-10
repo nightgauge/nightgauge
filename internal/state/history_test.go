@@ -1009,3 +1009,60 @@ func TestBuildV2Record_RecoveredStageIsCompleteNotFailed(t *testing.T) {
 		t.Errorf("PerStage[feature-validate].CostUSD = %f, want ~%f (both attempts)", tok.CostUSD, want)
 	}
 }
+
+// TestBuildV2Record_StageErrorEntryStampsFailed is the counterweight, and it
+// pins the ONLY overwrite that can produce it.
+//
+// history.go's "Check for stage error" block is what makes a genuinely failed
+// stage read "failed" in the permanent record — every CompletedStages entry is
+// stamped "complete" first and BuildV2Record never consults
+// StageResult.ExitCode, so a stage's StageErrors entry is the sole carrier of
+// the failure. Nothing else in this package pinned that direction:
+// TestWriteV2_FailedPipeline's stage detail is stamped by the global-error
+// fallback further down ("If there's a global error but no specific stage
+// error, attach to the last stage"), which targets snap.Stage regardless of
+// StageErrors, and the recovered-stage test above asserts only the
+// complete direction.
+//
+// So this case arms nothing but the overwrite: the failed stage is NOT
+// snap.Stage, and no global error is supplied, leaving the fallback disarmed.
+// Delete history.go's overwrite and this test goes red.
+func TestBuildV2Record_StageErrorEntryStampsFailed(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 407, "item-407", testRunID())
+
+	rs.BeginStage(StageIssuePickup)
+	rs.CompleteStageWithCost(0, 5000, 2000, 1500, 0.03)
+
+	// feature-dev fails and is never re-run successfully, so its entry stands.
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(1, 9000, 2500, 3000, 0.19)
+	rs.SetStageError(StageFeatureDev, "exit 1: compilation failed")
+
+	// A LATER stage is the current one, so the global-error fallback — which
+	// only ever stamps snap.Stage — cannot be what marks feature-dev failed.
+	rs.BeginStage(StageFeatureValidate)
+	rs.CompleteStageWithCost(0, 4000, 1200, 900, 0.08)
+
+	record := hw.BuildV2Record(rs, false, "", V2RunInput{}, now)
+
+	detail, ok := record.Stages[string(StageFeatureDev)]
+	if !ok {
+		t.Fatalf("feature-dev missing from the record's stages: %+v", record.Stages)
+	}
+	if detail.Status != "failed" {
+		t.Errorf("stage with a StageErrors entry recorded status %q, want \"failed\" — "+
+			"the record is exit-code blind, so this overwrite is the only thing that "+
+			"can mark a stage failed", detail.Status)
+	}
+	if detail.Error != "exit 1: compilation failed" {
+		t.Errorf("recorded error = %q, want the text SetStageError wrote", detail.Error)
+	}
+
+	// The stage the fallback WOULD have stamped is untouched, which is what
+	// proves the assertion above came from the StageErrors overwrite.
+	if got := record.Stages[string(StageFeatureValidate)].Status; got != "complete" {
+		t.Errorf("feature-validate status = %q, want \"complete\" — no global error was supplied", got)
+	}
+}
