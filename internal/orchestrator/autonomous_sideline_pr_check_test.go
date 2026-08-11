@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -14,18 +15,41 @@ import (
 // "no project config" log line before touching ghClient — that line is
 // enough to distinguish which status was chosen without a real GitHub call.
 
-func withCapturedLog(t *testing.T) *strings.Builder {
+// lockedLog is the log sink withCapturedLog installs. log.Printf from a
+// background goroutine and String() from the test body reach the same buffer
+// from different goroutines, so both sides take the lock — a bare
+// strings.Builder here is a data race even once the goroutine is joined,
+// because the join is what the tests are being taught to do, not what an
+// unsynchronized writer can assume.
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (l *lockedLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+func withCapturedLog(t *testing.T) *lockedLog {
 	t.Helper()
-	var buf strings.Builder
+	buf := &lockedLog{}
 	prevOutput := log.Writer()
 	prevFlags := log.Flags()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	log.SetFlags(0)
 	t.Cleanup(func() {
 		log.SetOutput(prevOutput)
 		log.SetFlags(prevFlags)
 	})
-	return &buf
+	return buf
 }
 
 // TestSidelineHalt_NoPR_MovesToInProgress covers the architecture-approval
@@ -42,7 +66,8 @@ func TestSidelineHalt_NoPR_MovesToInProgress(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
+	as.drainBackground()
 
 	got := buf.String()
 	if strings.Contains(got, "PR exists") {
@@ -69,7 +94,8 @@ func TestSidelineHalt_PRExists_MovesToInReview(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "pr-merge: PR was not merged")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "pr-merge: PR was not merged")
+	as.drainBackground()
 
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-review:") {
@@ -89,7 +115,8 @@ func TestSidelineHalt_QueryFails_FailsToInProgress(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
+	as.drainBackground()
 
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-progress:") {

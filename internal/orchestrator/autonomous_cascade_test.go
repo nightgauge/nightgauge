@@ -21,7 +21,7 @@ func newAutonomousForCascadeTest(t *testing.T, threshold int, window time.Durati
 	// whatever a developer might have set locally.
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
-	return &AutonomousScheduler{
+	as := &AutonomousScheduler{
 		config: AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
 			Status:  "running",
@@ -33,6 +33,12 @@ func newAutonomousForCascadeTest(t *testing.T, threshold int, window time.Durati
 			Window:    window,
 		}),
 	}
+	// Backstop only. The join that matters is as.drainBackground() in the test
+	// body; this cleanup can run after a stubReconcileGh restore (t.Cleanup is
+	// LIFO), so a test that forgets its body drain gets flagged by -race rather
+	// than silently made safe.
+	t.Cleanup(as.drainBackground)
+	return as
 }
 
 // addRunning is a thin helper so each test case can set up its own
@@ -54,6 +60,7 @@ func TestAutonomous_CascadePausesAfterThreshold(t *testing.T) {
 	for i, num := range []int{100, 101, 102} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
 		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, "subagent_crash", "stage failed")
+		as.drainBackground()
 		if i < 2 {
 			if as.state.Status == "safety_tripped" {
 				t.Fatalf("scheduler tripped early on failure %d/3", i+1)
@@ -85,6 +92,7 @@ func TestAutonomous_CascadeIgnoresStallKills(t *testing.T) {
 	for _, num := range []int{200, 201, 202, 203, 204} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
 		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindStallKill, "")
+		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {
 		t.Fatalf("scheduler tripped on stall_kill cluster; expected stall_kill to be excluded from cascade")
@@ -101,6 +109,7 @@ func TestAutonomous_CascadeIgnoresQuotaExhausted(t *testing.T) {
 	for _, num := range []int{300, 301, 302, 303} {
 		addRunning(as, "nightgauge/nightgauge", num, "issue")
 		as.onPipelineComplete("nightgauge/nightgauge", num, false, false, TerminalKindRateLimitQuotaExhausted, "")
+		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {
 		t.Errorf("scheduler tripped on quota_exhausted cluster; expected exclusion")
@@ -131,6 +140,7 @@ func TestAutonomous_PrMergeUnmerged_Recoverable(t *testing.T) {
 
 	detail := "[pr-merge-unmerged:ci_failures] PR #961 has 1 failing CI check(s): Lint, Typecheck, Test, Build. PR: https://github.com/acme/platform/pull/961 | failing-checks: Lint, Typecheck, Test, Build | recoverable: no LifetimeIssueFailures increment; resume after the blocker is resolved."
 	as.onPipelineComplete(repo, issue, false, false, TerminalKindPrMergeUnmerged, detail)
+	as.drainBackground()
 
 	key := repo + "#" + strconv.Itoa(issue)
 	if as.state.LifetimeIssueFailures[key] != 0 {
@@ -169,6 +179,7 @@ func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 	for _, num := range []int{400, 401, 402} {
 		addRunning(as, "r", num, "issue")
 		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.drainBackground()
 	}
 	if !as.cascadeTracker.IsTripped() {
 		t.Fatalf("setup: expected cascade trip")
@@ -189,31 +200,27 @@ func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	var observed []AutonomousStatusChange
-	done := make(chan struct{}, 1)
 	as.onStatusChange = func(snap AutonomousStatusChange) {
 		observed = append(observed, snap)
-		if snap.Status == "safety_tripped" {
-			select {
-			case done <- struct{}{}:
-			default:
-			}
-		}
 	}
 
 	for _, num := range []int{500, 501, 502} {
 		addRunning(as, "r", num, "issue")
 		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.drainBackground()
 	}
 
-	select {
-	case <-done:
-		// ok — async callback fired
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for safety_tripped status change; observed=%+v", observed)
+	// No wait: the in-loop drain is the happens-before edge (WaitGroup.Wait),
+	// so every status-change callback has already run and `observed` is safe to
+	// read from this goroutine. A timed wait here would let the clock, not the
+	// join, decide the outcome.
+	if len(observed) == 0 {
+		t.Fatal("no status-change event observed after 3 failures inside the window")
 	}
-
-	// Confirm the last observed status carries the canonical tag.
 	last := observed[len(observed)-1]
+	if last.Status != "safety_tripped" {
+		t.Fatalf("last observed status = %q, want safety_tripped; observed=%+v", last.Status, observed)
+	}
 	if last.PauseTriggeredBy != CascadePauseReason {
 		t.Errorf("PauseTriggeredBy = %q, want %q", last.PauseTriggeredBy, CascadePauseReason)
 	}
@@ -234,10 +241,9 @@ func TestAutonomous_CascadeOnlyFiresOnce(t *testing.T) {
 	for _, num := range []int{600, 601, 602, 603, 604, 605} {
 		addRunning(as, "r", num, "issue")
 		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.drainBackground()
 	}
 
-	// Give async callbacks time to land.
-	time.Sleep(100 * time.Millisecond)
 	if cascadeStatusEvents != 1 {
 		t.Errorf("cascade status change fired %d times, want exactly 1", cascadeStatusEvents)
 	}
@@ -254,6 +260,7 @@ func TestAutonomous_CascadeBreakerNilTrackerIsNoop(t *testing.T) {
 		addRunning(as, "r", num, "issue")
 		// Must not panic.
 		as.onPipelineComplete("r", num, false, false, "subagent_crash", "")
+		as.drainBackground()
 	}
 	if as.state.Status == "safety_tripped" {
 		t.Errorf("nil tracker should not trip safety; got %q", as.state.Status)
@@ -310,7 +317,8 @@ func TestPromoteUnblockedToReady_PromotesIndependentBacklogNode(t *testing.T) {
 		return buildTestGraph([]*depgraph.Node{completed, independent}, nil), nil
 	}
 
-	as.promoteUnblockedToReady("nightgauge/nightgauge", 1)
+	as.promoteUnblockedToReady(as.backgroundContext(), "nightgauge/nightgauge", 1)
+	as.drainBackground()
 
 	if as.state.LastPromotionEligible != 1 {
 		t.Errorf("LastPromotionEligible = %d, want 1 — an independent unblocked Backlog node must be considered even with an empty revAdj entry",

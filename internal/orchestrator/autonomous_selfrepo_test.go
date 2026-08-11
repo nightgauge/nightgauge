@@ -18,12 +18,14 @@ import (
 
 func newSelfRepoTestScheduler(t *testing.T, selfSlug string, allow bool) *AutonomousScheduler {
 	t.Helper()
-	return &AutonomousScheduler{
+	as := &AutonomousScheduler{
 		config:       AutonomousConfig{MaxConcurrent: 5, AllowSelfRepo: allow},
 		state:        &AutonomousState{},
 		selfRepoSlug: selfSlug,
 		attention:    attention.New(t.TempDir()),
 	}
+	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
+	return as
 }
 
 func selfRepoTestNodes() []*depgraph.Node {

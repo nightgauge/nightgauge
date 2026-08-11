@@ -54,6 +54,11 @@ echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
 if [ -f go.mod ]; then
   run_step "go build ./..." go build ./...
   run_step "go test ./... -count=1" go test ./... -count=1
+  # Mirrors ci.yml's "Test (race, orchestrator)" step (#428). Scoped to one
+  # package: the race detector is the only thing that fails when a
+  # drainBackground() join is deleted from a test body.
+  run_step "go test -race -count=1 ./internal/orchestrator/" \
+    go test -race -count=1 ./internal/orchestrator/
   run_step "gofmt -l ./internal ./cmd" \
     bash -c '! gofmt -l ./internal ./cmd | grep .'
 fi

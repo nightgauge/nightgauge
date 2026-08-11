@@ -185,6 +185,7 @@ func TestOnPipelineComplete_ModelUnavailable_EnvironmentalNoPause(t *testing.T) 
 	before := time.Now()
 	as.onPipelineComplete("nightgauge/nightgauge", 42, false, false,
 		TerminalKindModelUnavailable, "claude-fable-5 is not available on your current plan")
+	as.drainBackground()
 
 	key := "nightgauge/nightgauge#42"
 

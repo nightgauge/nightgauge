@@ -48,6 +48,7 @@ func TestOnPipelineComplete_ArchitectureApproval_NoRetryNoLifetimeIncrementNoCas
 		addRunning(as, c.repo, c.num, "awaiting architecture approval")
 		as.onPipelineComplete(c.repo, c.num, false, false,
 			TerminalKindArchitectureApprovalRequired, detail)
+		as.drainBackground()
 	}
 
 	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
@@ -92,6 +93,7 @@ func TestOnPipelineComplete_ArchitectureApproval_RepeatedHaltsNeverTripCap(t *te
 		as.onPipelineComplete(repo, issue, false, false,
 			TerminalKindArchitectureApprovalRequired,
 			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		as.drainBackground()
 	}
 
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
@@ -127,6 +129,7 @@ func TestArchitectureApproval_DoesNotFeedConsecutiveFailureRail(t *testing.T) {
 		as.onPipelineComplete("acme/platform", num, false, false,
 			TerminalKindArchitectureApprovalRequired,
 			"ARCHITECTURE APPROVAL REQUIRED — a human must approve this decision")
+		as.drainBackground()
 		if got := as.safetyRails.State().ConsecutiveFailures; got != before {
 			t.Fatalf("after %d approval halt(s): ConsecutiveFailures = %d, want %d unchanged — "+
 				"a run awaiting a human is not a factory failure", i+1, got, before)
@@ -155,6 +158,7 @@ func TestNotifyComplete_EmptyKindApprovalDetail_Reclassifies(t *testing.T) {
 		"", // no structured kind — only the raw gate text
 		"feature-planning exit 1: ARCHITECTURE APPROVAL REQUIRED — issue #900 is a "+
 			"high-impact decision that must be human-approved before feature-dev implements it.")
+	as.drainBackground()
 
 	key := "acme/platform#900"
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
@@ -201,7 +205,8 @@ func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
 	// sidelineHalt itself must choose "In progress", not "In review", for the
 	// halted issue given no confirmed PR.
 	buf := withCapturedLog(t)
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
+	as.drainBackground()
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-progress:") {
 		t.Errorf("expected sidelineHalt to choose In progress with no PR, got log: %q", got)

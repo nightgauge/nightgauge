@@ -45,6 +45,7 @@ func TestOnPipelineComplete_AdapterAuthFailed_TransientNoPauseNoCascade(t *testi
 			TerminalKindAdapterAuthFailed,
 			"[adapter-auth-failed] Auth pre-flight failed — auth probe timed out after retry "+
 				"(adapter CLI unresponsive — transient, not a logged-out session).")
+		as.drainBackground()
 	}
 
 	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
@@ -97,6 +98,7 @@ func TestNotifyComplete_EmptyKindAdapterAuthDetail_RoutesTransient(t *testing.T)
 
 	as.NotifyComplete("acme/infra", 162, false, false, "",
 		"[adapter-auth-failed] Auth pre-flight failed — auth probe timed out after retry.")
+	as.drainBackground()
 
 	key := "acme/infra#162"
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {

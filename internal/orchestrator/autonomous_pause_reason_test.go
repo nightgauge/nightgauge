@@ -92,18 +92,7 @@ func TestOnStatusChangeFiresOnPause(t *testing.T) {
 	})
 
 	as.Pause("manual", "user")
-
-	// Callback fires in a goroutine — give it time to land.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(received)
-		mu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	as.drainBackground()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -146,17 +135,7 @@ func TestOnStatusChangeFiresOnResume(t *testing.T) {
 	})
 
 	as.Resume()
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(received)
-		mu.Unlock()
-		if n > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	as.drainBackground()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -192,8 +171,8 @@ func TestOnStatusChangeNotFiredWhenStatusUnchanged(t *testing.T) {
 	})
 
 	as.Pause("manual", "user")
+	as.drainBackground()
 
-	time.Sleep(50 * time.Millisecond)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(received) != 0 {

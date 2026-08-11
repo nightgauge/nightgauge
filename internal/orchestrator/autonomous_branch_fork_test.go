@@ -41,6 +41,7 @@ func TestOnPipelineComplete_BranchForked_NoRetryNoLifetimeIncrementNoCascade(t *
 		as.onPipelineComplete(c.repo, c.num, false, false,
 			TerminalKindBranchForked,
 			"[branch-forked] origin/fix/163-x is at abc12345, which is NOT an ancestor of the local tip def67890")
+		as.drainBackground()
 	}
 
 	if as.state.Status == "safety_tripped" || as.state.Status == "paused" {
@@ -83,6 +84,7 @@ func TestNotifyComplete_EmptyKindBranchForkedDetail_Reclassifies(t *testing.T) {
 	as.NotifyComplete("nightgauge/nightgauge", 163, false, false,
 		"", // no structured kind — only the raw text
 		"feature-validate exit 1: PUSH REJECTED: non-fast-forward.")
+	as.drainBackground()
 
 	key := "nightgauge/nightgauge#163"
 	if got := as.state.LifetimeIssueFailures[key]; got != 0 {

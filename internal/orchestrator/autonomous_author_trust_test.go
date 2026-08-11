@@ -66,6 +66,7 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 	})
 
 	as.runRefinementCycle(context.Background())
+	as.drainBackground()
 
 	select {
 	case got := <-dispatched:
@@ -76,12 +77,13 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 		t.Fatal("timed out waiting for the trusted candidate to be dispatched")
 	}
 
-	// The untrusted candidate must never arrive — assert no second dispatch
-	// shows up within a short grace window.
+	// The untrusted candidate must never arrive. No grace window: the drain
+	// above joined every goTracked(refineIssue) spawn this cycle made, so the
+	// absence is decided by the join, not sampled by a clock.
 	select {
 	case got := <-dispatched:
 		t.Fatalf("unexpected second dispatch for issue #%d — untrusted author #1 should have been skipped", got)
-	case <-time.After(200 * time.Millisecond):
+	default:
 		// Expected: nothing else dispatched.
 	}
 }

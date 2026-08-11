@@ -55,6 +55,16 @@ jobs:
           fi
       - name: Test
         run: go test ./... -count=1
+      # Scoped to internal/orchestrator (#428): the deterministic pins in
+      # autonomous_background_lifecycle_pin_test.go guard the production
+      # lifecycle, but nothing else detects a drainBackground() call being
+      # deleted from a test body — the tests pass with or without it, which is
+      # why the flake stayed invisible. The race detector is the only mechanism
+      # that fails on a removed drain. ~40s on top of the suite above.
+      # Whole-tree -race is a follow-up: it triples the Go job and surfaces
+      # unrelated pre-existing races this change neither owns nor worsens.
+      - name: Test (race, orchestrator)
+        run: go test -race -count=1 ./internal/orchestrator/
 
   # The Node suite (~15.5k tests) is split into two parallel jobs so it fits the
   # window on 2-core runners. `npm ci` needs no registry auth: the tree vendors
