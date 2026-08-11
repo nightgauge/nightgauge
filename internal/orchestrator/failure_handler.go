@@ -563,8 +563,13 @@ func FailedRunID(issueNumber int, startedAt time.Time) string {
 //   - StageDetail for the in-flight stage marked "failed" with a synthetic
 //     error message so `failure_category` lands in the infrastructure bucket
 //     when the SDK classifier sees it.
+//   - branch: "" — ALWAYS. The sidecar does not carry the run's branch, so this
+//     synthesizer never knows one, and "" is the record's way of saying so
+//     (#397). Until #397 it wrote `feat/{IssueNumber}` whenever the issue
+//     number was positive, i.e. on essentially every crash record: a value that
+//     reads to every consumer exactly like a branch the run really used.
 //
-// @see Issue #3001 ADR-003
+// @see Issue #3001 ADR-003, Issue #397
 func SynthesizeOrchestratorCrashRecord(sc CurrentRunSidecar, now time.Time) state.V2RunRecord {
 	stageName := sc.Stage
 	if stageName == "" {
@@ -594,17 +599,12 @@ func SynthesizeOrchestratorCrashRecord(sc CurrentRunSidecar, now time.Time) stat
 		},
 	}
 
-	branch := ""
-	if sc.IssueNumber > 0 {
-		branch = fmt.Sprintf("feat/%d", sc.IssueNumber)
-	}
-
 	rec := state.V2RunRecord{
 		SchemaVersion:       "3", // V3 record — terminal_failure_kind populated.
 		RecordType:          "run",
 		IssueNumber:         sc.IssueNumber,
 		Title:               sc.Title,
-		Branch:              branch,
+		Branch:              "", // undetermined — the sidecar never carried one (#397)
 		BaseBranch:          "main",
 		ExecutionMode:       "automatic",
 		StartedAt:           startedAt.UTC().Format(time.RFC3339),

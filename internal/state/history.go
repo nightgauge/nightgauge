@@ -79,7 +79,27 @@ type V2RunRecord struct {
 	// reader's non-strict z.object() strips it for older readers. Emitted on the
 	// telemetry wire as `issueBody` so the dashboard run-detail page can show the
 	// issue context without leaving the dashboard.
-	Body              string                   `json:"body,omitempty"`
+	Body string `json:"body,omitempty"`
+	// Branch is the feature branch the run executed on, or "" when no branch
+	// could be determined from any source (#397). NO omitempty, deliberately:
+	// the on-disk contract is key-ALWAYS-present, and "" is a load-bearing
+	// value meaning "undetermined". An omitted key means something else
+	// entirely — a record that predates #397, comes from a foreign producer,
+	// or violates this contract — and omitempty would conflate the two.
+	//
+	// The reason is the bytes, not any one reader. Both TypeScript readers now
+	// tolerate BOTH shapes (#397: the V1/V2/V3 schemas in
+	// schemas/executionHistory.ts normalize an absent key via .default(""),
+	// and DashboardState.importParsedRunRecord coerces a non-string with a
+	// typeof check) — which is exactly why the WRITER has to keep the two
+	// shapes distinct. So do every non-zod consumer: jq, a human reading the
+	// JSONL, the index surface, and the byte-verbatim fixtures under
+	// packages/nightgauge-vscode/tests/fixtures/undetermined-branch/.
+	//
+	// A non-empty value is evidence of a branch that actually resolved —
+	// nothing fabricates one — for records written from #397 onward. Records
+	// written earlier may carry a synthetic `feat/{IssueNumber}` for a run that
+	// resolved nothing, and cannot be distinguished after the fact.
 	Branch            string                   `json:"branch"`
 	BaseBranch        string                   `json:"base_branch"`
 	ExecutionMode     string                   `json:"execution_mode"`
@@ -429,7 +449,13 @@ type V2IndexEntry struct {
 	Labels                 []string `json:"labels,omitempty"`
 	Size                   *string  `json:"size"`
 	Type                   *string  `json:"type"`
-	Branch                 string   `json:"branch"`
+	// Branch carries the same key-always-present contract as
+	// V2RunRecord.Branch (#397) — see its doc. HistoryIndexEntry on the
+	// TypeScript side is a plain interface with no zod default, so an
+	// omitempty here would hand `undefined` to a field typed `string` in
+	// DashboardState.indexEntryToRunSummary and
+	// LocalAuditFallbackService.entryToAuditLogEntry.
+	Branch string `json:"branch"`
 }
 
 // V2Index matches the TypeScript HistoryIndex interface.
@@ -718,10 +744,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		durationMs = now.Sub(snap.StartedAt).Milliseconds()
 	}
 
+	// The branch is recorded exactly as it resolved — including not at all
+	// (#397). Until #397 this substituted `feat/{IssueNumber}` when nothing
+	// named a branch, which is the one value the field must never hold: it is
+	// indistinguishable from a real branch to every reader, so a record that
+	// knew nothing looked exactly like a record that knew. Empty means "no
+	// branch was determined"; see V2RunRecord.Branch for the key-presence half
+	// of the contract.
 	branch := input.Branch
-	if branch == "" {
-		branch = fmt.Sprintf("feat/%d", snap.IssueNumber)
-	}
 
 	baseBranch := input.BaseBranch
 	if baseBranch == "" {

@@ -602,6 +602,47 @@ func TestDequeueIndependentSkipsPaused(t *testing.T) {
 	}
 }
 
+// TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch pins the second
+// of the two `feat/{N}` fabrications #397 deleted, directly at its writer.
+//
+// The input is the exact shape the old code fabricated from: a sidecar with a
+// POSITIVE issue number, which is the only shape production ever writes
+// (writeCurrentRunSidecar stamps IssueNumber from a board item). Pre-#397 this
+// synthesizer ran `if sc.IssueNumber > 0 { branch = fmt.Sprintf("feat/%d",
+// sc.IssueNumber) }`, so essentially every crash record on disk claimed a
+// branch the crashed run may never have had — a claim no reader, upload or
+// human could tell apart from a branch that really existed.
+//
+// The sidecar has no branch field at all, so this writer never knows one; "" is
+// the record saying exactly that. Asserted here rather than only through the
+// committed capture in
+// packages/nightgauge-vscode/tests/fixtures/undetermined-branch/crash-record.jsonl:
+// a static fixture cannot fail when the Go writer regresses, it only goes stale.
+func TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch(t *testing.T) {
+	now := time.Now().UTC()
+	sc := CurrentRunSidecar{
+		RunID:       testRunID(),
+		IssueNumber: 397,
+		Repo:        "nightgauge/nightgauge",
+		Title:       "Crash mid-stage with no branch on record",
+		StartedAt:   now.Add(-42 * time.Minute),
+		Stage:       "feature-dev",
+		StageStart:  now.Add(-7 * time.Minute),
+	}
+
+	rec := SynthesizeOrchestratorCrashRecord(sc, now)
+
+	if rec.IssueNumber != 397 {
+		t.Fatalf("rec.IssueNumber = %d, want 397 — the positive issue number IS the input under test",
+			rec.IssueNumber)
+	}
+	if rec.Branch != "" {
+		t.Errorf("rec.Branch = %q, want \"\" — the sidecar carries no branch, so this synthesizer never "+
+			"knows one; a value here is the pre-#397 `feat/{IssueNumber}` fabrication, indistinguishable "+
+			"from a branch the crashed run really used (#397)", rec.Branch)
+	}
+}
+
 // TestSidecarRoundTripAndOrchestratorCrashRecovery exercises the full
 // crash-recovery contract:
 //
@@ -671,6 +712,10 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	rec := records[0]
 	if rec.IssueNumber != 999 {
 		t.Errorf("rec.IssueNumber = %d, want 999", rec.IssueNumber)
+	}
+	if rec.Branch != "" {
+		t.Errorf("rec.Branch = %q, want \"\" — the sidecar carries no branch, so any value here is a "+
+			"fabrication indistinguishable from a branch the run really used (#397)", rec.Branch)
 	}
 	if rec.SchemaVersion != "3" {
 		t.Errorf("rec.SchemaVersion = %q, want 3 (V3 — terminal_failure_kind populated)", rec.SchemaVersion)
@@ -938,9 +983,16 @@ func TestStallKillJSONLRecord_IPCMode(t *testing.T) {
 		t.Errorf("stages[pr-create].LastOutputLines missing kill diagnostic; got %q",
 			prCreateDetail.LastOutputLines)
 	}
-	// 6) Routing/branch/base_branch sane defaults.
-	if rec.Branch == "" {
-		t.Error("branch empty — V3 record should always carry the issue branch")
+	// 6) branch/base_branch. Nothing in this fixture ever creates a branch —
+	//    the workspace is a bare temp dir and the stage runner is a stub — so
+	//    the honest record for this run carries branch "" (#397). Before #397
+	//    this asserted non-empty and passed on BuildV2Record's `feat/{N}`
+	//    fabrication, i.e. it certified as "the issue branch" a string the run
+	//    never had. base_branch is different: "main" is a real default the
+	//    record chooses, not a claim about something it observed.
+	if rec.Branch != "" {
+		t.Errorf("branch = %q, want \"\" — no branch exists in this fixture, and any non-empty value "+
+			"is a fabrication indistinguishable from a branch the run really used (#397)", rec.Branch)
 	}
 	if rec.BaseBranch == "" {
 		t.Error("base_branch empty — V3 record should always carry main as the default base")
