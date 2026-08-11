@@ -750,10 +750,11 @@ suite asserts this directly.
 - Confident picks log `[skillRunner] Auto-router: adapter=X rationale="…"` at
   info level. The rationale string includes the per-sub-score breakdown and
   the second-best score margin.
-- Per-stage history records the routing step as `model_source: "auto-router"`
-  and `adapter_source: "auto-router"` so dashboards can attribute the routing
-  decision alongside the existing precedence steps (`env`, `stage-config`,
-  `fallback`, `global-config`, `default`).
+- Per-stage history records the routing step as `adapter_source: "auto-router"`
+  so dashboards can attribute the routing decision alongside the existing
+  precedence steps (`env`, `stage-config`, `fallback`, `global-config`,
+  `default`). Model attribution is a separate axis — see
+  `model_selection.source` / `MODEL_SELECTION_SOURCES`.
 
 ### When the router abstains
 

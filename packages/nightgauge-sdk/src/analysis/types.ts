@@ -11,6 +11,80 @@ import { deriveDefaultModelCostRates } from "../eval/modelRegistry.js";
 export type ModelIdentifier = string;
 
 /**
+ * Model-selection sources — **the single `model_selection.source` vocabulary
+ * authority** (#446).
+ *
+ * Every other surface derives from this array rather than re-listing it: the
+ * `ModelSelectionSource` type, the extension's history schema
+ * (`schemas/executionHistory.ts`), the history writer's input type, and
+ * `ExecutionHistoryRecord.selectionSource` below. Six independent copies had
+ * drifted three ways and listed nine values — env / config / stage-default /
+ * auto / auto-router / experiment / default / feedback-escalation /
+ * user-override — that described a retired extension-side cascade and appeared
+ * in exactly zero real records, so EVERY record the live writer produced failed
+ * strict validation. Derivation removes the failure mode rather than guarding
+ * against it.
+ *
+ * Go is the SOLE writer of this field (`BuildV2Record`, internal/state/
+ * history.go) and holds the mirrored peer, `ModelSelectionSources` in
+ * internal/state/model_selection_source.go, pinned to this array by
+ * `TestModelSelectionSourcesPinnedToSDK`. Adding a value is a two-file change,
+ * in one commit, in this order.
+ *
+ * The members answer "how did the stage end up on the model it ran?":
+ * - `scheduler` — the scheduler resolved the model and nothing substituted it.
+ *   That resolution chain includes `NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE}`
+ *   env overrides, `pipeline.stage_models.{stage}` config pins, the manual-mode
+ *   default table and the performance-mode ceiling
+ *   (internal/orchestrator/dispatch_routing.go), so this says NOTHING about
+ *   whether a human or the router chose the model. See
+ *   `AUTOMATIC_MODEL_SELECTION_SOURCE`.
+ * - `cli-refusal-fallback` — the claude CLI's internal refusal fallback served
+ *   a different model than the one dispatched (#91).
+ * - `model-unavailable-downgrade` — a sticky downgrade because the requested
+ *   model was unavailable (#42).
+ * - `escalation` — the catch-all for the escalation path: any escalation reason
+ *   without a dedicated label above maps here, so a new reason can never leak
+ *   an out-of-vocabulary string onto disk.
+ *
+ * NOT to be confused with `ModelSource` in the extension's
+ * `utils/skillRunner.ts`: that is the DISPATCH-side axis (how the extension
+ * resolved a model to run — env / config / go-scheduler / performance-mode /
+ * supercharge) and never reaches a history record.
+ */
+export const MODEL_SELECTION_SOURCES = [
+  "scheduler",
+  "cli-refusal-fallback",
+  "model-unavailable-downgrade",
+  "escalation",
+] as const;
+
+/** How a stage's model was attributed on a history record. @see MODEL_SELECTION_SOURCES */
+export type ModelSelectionSource = (typeof MODEL_SELECTION_SOURCES)[number];
+
+/**
+ * The source that means "the scheduler resolved the model and nothing
+ * substituted it".
+ *
+ * Read the name narrowly. It does NOT mean "a router picked this model". The
+ * scheduler's resolution chain (internal/orchestrator/dispatch_routing.go)
+ * includes env overrides, `pipeline.stage_models.{stage}` config pins, the
+ * manual-mode default table and the performance-mode ceiling — under
+ * `model_routing.mode: manual` every record reads `"scheduler"` and not one of
+ * them is an automatic selection. The record cannot distinguish the two cases:
+ * `modelSelectionMode` exists in the TS schema (executionHistory.ts) but Go
+ * never writes it, so no consumer can gate on `=== "automatic"` today. Filed as
+ * a follow-up.
+ *
+ * Routing analytics compare against this rather than restating the literal:
+ * before #446 they filtered on `"auto"`, a value no writer could emit, so the
+ * routing-accuracy metrics and the model-routing health dimension were
+ * permanently empty. Every metric named "auto-selection" therefore counts
+ * operator pins too — see `analyzeAutoSelectionOutcomes`.
+ */
+export const AUTOMATIC_MODEL_SELECTION_SOURCE: ModelSelectionSource = "scheduler";
+
+/**
  * Minimal execution history record consumed by analysis modules.
  *
  * Matches the schema planned in #649 (Execution History Persistence).
@@ -47,17 +121,8 @@ export interface ExecutionHistoryRecord {
    */
   modelSelectionMode?: "manual" | "automatic" | "hybrid";
   selectedModel?: string;
-  selectionSource?:
-    | "env"
-    | "config"
-    | "stage-default"
-    | "auto"
-    /** AutoProviderRouter selected the (adapter, model) pair (Issue #3230). */
-    | "auto-router"
-    | "experiment"
-    | "default"
-    | "feedback-escalation"
-    | "user-override";
+  /** @see MODEL_SELECTION_SOURCES — derived, never re-listed (#446). */
+  selectionSource?: ModelSelectionSource;
   autoSelectorConfidence?: number;
   autoSelectorComplexity?: string;
   /** Context handoff file size in bytes (Issue #1009) */

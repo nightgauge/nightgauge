@@ -19,6 +19,10 @@ import { analyzeModelRouting } from "../../../../src/analysis/health/dimensions/
 import { DEFAULT_HEALTH_CONFIG } from "../../../../src/analysis/health/types.js";
 import type { HealthAnalysisInput } from "../../../../src/analysis/health/types.js";
 import { makeExecutionRecord, makeDataset, makeEmptyDataset } from "../fixtures.js";
+import {
+  AUTOMATIC_MODEL_SELECTION_SOURCE,
+  MODEL_SELECTION_SOURCES,
+} from "../../../../src/analysis/types.js";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -80,7 +84,7 @@ describe("analyzeModelRouting — insufficient data", () => {
     const records = buildRecords(5, {
       success: true,
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
     });
     const result = analyzeModelRouting(datasetFromRecords(records), DEFAULT_HEALTH_CONFIG);
@@ -95,7 +99,7 @@ describe("analyzeModelRouting — under-routing", () => {
   it("detects under-routing with haiku + high complexity L + auto + failure", () => {
     const underRoutingRecords = buildRecords(3, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "L",
       success: false,
       retries: 1,
@@ -104,7 +108,7 @@ describe("analyzeModelRouting — under-routing", () => {
     // Pad with healthy records so we meet sample size and don't trip other findings
     const healthyRecords = buildRecords(7, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -129,7 +133,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XL",
         success: false,
         retries: 2,
@@ -137,7 +141,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -155,7 +159,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: false,
         retries: 1,
@@ -163,7 +167,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(7, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -180,11 +184,11 @@ describe("analyzeModelRouting — under-routing", () => {
     });
   });
 
-  it("does NOT detect under-routing when selectionSource is manual (not auto)", () => {
+  it("does NOT detect under-routing when the model was substituted, not scheduler-picked", () => {
     const records = [
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "manual" as never,
+        selectionSource: "cli-refusal-fallback",
         autoSelectorComplexity: "L",
         success: false,
         retries: 1,
@@ -192,7 +196,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -210,7 +214,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: true, // succeeded, so not an under-routing failure
         retries: 0,
@@ -218,7 +222,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -236,7 +240,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "S", // low complexity — not under-routing
         success: false,
         retries: 1,
@@ -244,7 +248,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -262,7 +266,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: false,
         retries: 1,
@@ -271,7 +275,7 @@ describe("analyzeModelRouting — under-routing", () => {
       // 7 more successful auto records with same cost so mean cost doesn't penalise
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -295,7 +299,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(2, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: false,
         retries: 1,
@@ -303,7 +307,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(8, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -322,7 +326,7 @@ describe("analyzeModelRouting — under-routing", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: false,
         retries: 1,
@@ -330,7 +334,7 @@ describe("analyzeModelRouting — under-routing", () => {
       }),
       ...buildRecords(15, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -352,7 +356,7 @@ describe("analyzeModelRouting — over-routing", () => {
   it("detects over-routing with opus + low complexity XS + auto + success + 0 retries", () => {
     const overRoutingRecords = buildRecords(3, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: true,
       retries: 0,
@@ -360,7 +364,7 @@ describe("analyzeModelRouting — over-routing", () => {
     });
     const healthyRecords = buildRecords(7, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -384,7 +388,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "S",
         success: true,
         retries: 0,
@@ -392,7 +396,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -410,7 +414,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         retries: 0,
@@ -418,7 +422,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -436,7 +440,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         retries: 1, // had to retry → not over-routing
@@ -444,7 +448,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -461,7 +465,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: false, // failed, so not over-routing
         retries: 0,
@@ -469,7 +473,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -486,7 +490,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L", // high complexity — appropriate for opus
         success: true,
         retries: 0,
@@ -494,7 +498,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -513,7 +517,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         retries: 0,
@@ -521,7 +525,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -544,7 +548,7 @@ describe("analyzeModelRouting — over-routing", () => {
     const records = [
       ...buildRecords(3, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         retries: 0,
@@ -552,7 +556,7 @@ describe("analyzeModelRouting — over-routing", () => {
       }),
       ...buildRecords(7, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -576,7 +580,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     // 8 failures out of 10 auto records = 80% failure rate > 20%
     const failingAutoRecords = buildRecords(8, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: false,
       retries: 1,
@@ -584,7 +588,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     });
     const passingAutoRecords = buildRecords(2, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -612,7 +616,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     const records = [
       ...buildRecords(8, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -620,7 +624,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
       }),
       ...buildRecords(2, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -636,10 +640,10 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
   });
 
   it("does NOT produce low accuracy finding when there are no auto records", () => {
-    // All records have selectionSource='config'
+    // No record carries the automatic-selection source
     const records = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "config",
+      selectionSource: "cli-refusal-fallback",
       autoSelectorComplexity: undefined,
       success: false, // all fail, but none are auto-selected
       retries: 1,
@@ -663,7 +667,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     const records = [
       ...buildRecords(7, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -671,7 +675,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
       }),
       ...buildRecords(3, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -689,7 +693,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     const records = [
       ...buildRecords(4, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -697,7 +701,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
       }),
       ...buildRecords(6, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -717,7 +721,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     const records = [
       ...buildRecords(7, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -725,7 +729,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
       }),
       ...buildRecords(3, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -745,7 +749,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
     const records = [
       ...buildRecords(8, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -753,7 +757,7 @@ describe("analyzeModelRouting — low auto-selection accuracy", () => {
       }),
       ...buildRecords(2, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -789,7 +793,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     // So X=1.00 should work: mean=(0.10+0.20+1.00)/3=0.433, threshold=0.867, 1.00>0.867 ✓
     const cheapRecords = buildRecords(5, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -797,7 +801,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     });
     const mediumRecords = buildRecords(5, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -805,7 +809,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     });
     const expensiveRecords = buildRecords(5, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -829,7 +833,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -837,7 +841,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -854,7 +858,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     // The expensive model has only 2 records — below the per-model minimum
     const cheapRecords = buildRecords(10, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -862,7 +866,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     });
     const expensiveRecords = buildRecords(2, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -881,7 +885,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -889,7 +893,7 @@ describe("analyzeModelRouting — per-model cost efficiency", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -913,7 +917,7 @@ describe("analyzeModelRouting — single model penalty", () => {
     // 10 records, all using 'sonnet', all successful, no routing issues
     const records = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -931,7 +935,7 @@ describe("analyzeModelRouting — single model penalty", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -939,7 +943,7 @@ describe("analyzeModelRouting — single model penalty", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -970,7 +974,7 @@ describe("analyzeModelRouting — healthy data", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -978,7 +982,7 @@ describe("analyzeModelRouting — healthy data", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1017,7 +1021,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     // Current dataset: 10 auto records, all succeed
     const currentRecords = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1029,7 +1033,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     const baselineRecords = [
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1037,7 +1041,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -1058,7 +1062,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     // Current: 100% success rate
     const currentRecords = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1069,7 +1073,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     const baselineRecords = [
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1077,7 +1081,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -1100,7 +1104,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     const currentRecords = [
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1108,7 +1112,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
       }),
       ...buildRecords(5, {
         model: "sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: false,
         retries: 1,
@@ -1119,7 +1123,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     // Baseline: 100% success rate
     const baselineRecords = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1139,7 +1143,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
   it("does not populate periodComparison when baseline has no auto records", () => {
     const currentRecords = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1149,7 +1153,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
     // Baseline with no auto-selected records
     const baselineRecords = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "config",
+      selectionSource: "cli-refusal-fallback",
       autoSelectorComplexity: undefined,
       success: true,
       retries: 0,
@@ -1169,7 +1173,7 @@ describe("analyzeModelRouting — baseline comparison", () => {
   it("does not populate periodComparison when no baseline is provided", () => {
     const records = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1198,7 +1202,7 @@ describe("analyzeModelRouting — combined penalties and score clamping", () => 
     //   But we need 2 models so we don't get single model penalty
     const underRouting = buildRecords(8, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "L",
       success: false,
       retries: 1,
@@ -1206,7 +1210,7 @@ describe("analyzeModelRouting — combined penalties and score clamping", () => 
     });
     const overRouting = buildRecords(5, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: true,
       retries: 0,
@@ -1241,7 +1245,7 @@ describe("analyzeModelRouting — finding structure", () => {
     // Trigger both under-routing and over-routing, plus low accuracy
     const underRouting = buildRecords(5, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "L",
       success: false,
       retries: 1,
@@ -1249,7 +1253,7 @@ describe("analyzeModelRouting — finding structure", () => {
     });
     const overRouting = buildRecords(5, {
       model: "opus",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: true,
       retries: 0,
@@ -1257,7 +1261,7 @@ describe("analyzeModelRouting — finding structure", () => {
     });
     const extra = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1281,7 +1285,7 @@ describe("analyzeModelRouting — finding structure", () => {
   it("each finding has required fields populated", () => {
     const underRouting = buildRecords(3, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "L",
       success: false,
       retries: 1,
@@ -1289,7 +1293,7 @@ describe("analyzeModelRouting — finding structure", () => {
     });
     const healthy = buildRecords(7, {
       model: "haiku",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1326,7 +1330,7 @@ describe("analyzeModelRouting — metrics completeness", () => {
   it("always populates core metric keys when hasEnoughData is true", () => {
     const records = buildRecords(10, {
       model: "sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1356,7 +1360,7 @@ describe("analyzeModelRouting — metrics completeness", () => {
     const records = [
       ...buildRecords(5, {
         model: "haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1364,7 +1368,7 @@ describe("analyzeModelRouting — metrics completeness", () => {
       }),
       ...buildRecords(5, {
         model: "opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         retries: 0,
@@ -1387,7 +1391,7 @@ describe("analyzeModelRouting — metrics completeness", () => {
     // Even if model name has mixed case, the key should be lowercase
     const records = buildRecords(5, {
       model: "Sonnet",
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "M",
       success: true,
       retries: 0,
@@ -1398,5 +1402,64 @@ describe("analyzeModelRouting — metrics completeness", () => {
 
     expect(result.metrics).toHaveProperty("model.sonnet.successRate");
     expect(result.metrics).not.toHaveProperty("model.Sonnet.successRate");
+  });
+});
+
+// ── 11. The vocabulary this dimension actually filters on (#446) ────
+
+describe("analyzeModelRouting — counts records the real writer produces (#446)", () => {
+  // Before #446 this dimension filtered on `selectionSource === "auto"`, a
+  // value no writer has ever emitted: Go is the sole writer of
+  // `model_selection.source` and writes "scheduler" (207 of 207 stage entries
+  // on the operator's corpus). Every auto-selection metric below was therefore
+  // structurally zero for the life of the dimension.
+  //
+  // What these two cases do and do not pin. GO_WRITTEN_SOURCE is a LOCAL
+  // LITERAL in a TypeScript file — nothing here reaches Go, so
+  // `expect(AUTOMATIC_MODEL_SELECTION_SOURCE).toBe(GO_WRITTEN_SOURCE)` is a
+  // behavioural anchor for this dimension's filter, not a cross-language
+  // check. The Go side is split across two pins in
+  // internal/state/model_selection_source_test.go:
+  // TestModelSelectionSourcesPinnedToSDK covers the ARRAY only (same members,
+  // same order), and TestAutomaticModelSelectionSourcePinnedToGoDefault covers
+  // WHICH member is automatic, by lifting AUTOMATIC_MODEL_SELECTION_SOURCE
+  // from types.ts and comparing it to the source BuildV2Record stamps on a
+  // plain completed stage.
+  const GO_WRITTEN_SOURCE = "scheduler";
+
+  it("counts a stage the Go writer attributed to the scheduler", () => {
+    expect(AUTOMATIC_MODEL_SELECTION_SOURCE).toBe(GO_WRITTEN_SOURCE);
+    expect(MODEL_SELECTION_SOURCES).toContain(GO_WRITTEN_SOURCE);
+
+    const records = buildRecords(6, {
+      model: "sonnet",
+      selectionSource: GO_WRITTEN_SOURCE,
+      autoSelectorComplexity: "M",
+      success: true,
+      retries: 0,
+      costUsd: 0.2,
+    });
+
+    const result = analyzeModelRouting(datasetFromRecords(records), DEFAULT_HEALTH_CONFIG);
+
+    expect(result.metrics["autoSelectionTotal"]).toBe(6);
+    expect(result.metrics["autoSelectionSuccessRate"]).toBe(1);
+  });
+
+  it("still ignores a stage whose model was substituted after the pick", () => {
+    // A refusal fallback is not evidence about routing — the scheduler's pick
+    // is not what ran. The denominator must exclude it.
+    const records = buildRecords(6, {
+      model: "sonnet",
+      selectionSource: "cli-refusal-fallback",
+      autoSelectorComplexity: "M",
+      success: true,
+      retries: 0,
+      costUsd: 0.2,
+    });
+
+    const result = analyzeModelRouting(datasetFromRecords(records), DEFAULT_HEALTH_CONFIG);
+
+    expect(result.metrics["autoSelectionTotal"]).toBe(0);
   });
 });

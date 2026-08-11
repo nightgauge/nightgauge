@@ -291,6 +291,31 @@ type EscalationRecord struct {
 	At        time.Time     `json:"at"`
 }
 
+// EscalationReasonModelUnavailable is the Reason the sticky model-unavailable
+// downgrade (#42) records — the only reason any writer puts on an
+// EscalationRecord today. The STRING VALUE is existing on-disk telemetry
+// vocabulary and must not change; #446 named it so the two scheduler
+// construction sites and the history writer stop spelling it out
+// independently. It is mapped onto the model_selection vocabulary by
+// modelSelectionSourceForEscalationReason (model_selection_source.go) — the
+// history record never carries a raw reason string.
+const EscalationReasonModelUnavailable = "model_unavailable"
+
+// EscalationReasons is the closure list for EscalationRecord.Reason: every
+// reason a writer emits MUST be listed here. It exists because the record keeps
+// no other copy of the reason — modelSelectionSourceForEscalationReason
+// collapses it into `model_selection.source`, and no V2/V3 field carries the
+// raw string — so a reason that silently falls into the ModelSourceEscalation
+// catch-all is not merely coarsened, it is unrecoverable from the record.
+//
+// TestEscalationReasonsAreDeliberatelyLabeled walks this list and fails for any
+// member that maps to ModelSourceEscalation, so adding a reason constant forces
+// a labeling decision at test time instead of absorbing it. Answering "the
+// catch-all is right for this one" is a one-line allowlist entry in that test.
+var EscalationReasons = []string{
+	EscalationReasonModelUnavailable,
+}
+
 // StageResult records the outcome of a completed stage.
 type StageResult struct {
 	Stage        PipelineStage `json:"stage"`

@@ -149,7 +149,7 @@ function createRunRecord(
         duration_ms: 1200000,
         model_selection: {
           model: "sonnet",
-          source: "auto",
+          source: "scheduler",
           confidence: 0.85,
           complexity: "M",
           mode: "automatic",
@@ -162,7 +162,7 @@ function createRunRecord(
         duration_ms: 300000,
         model_selection: {
           model: "haiku",
-          source: "auto",
+          source: "scheduler",
           confidence: 0.92,
           complexity: "S",
           mode: "automatic",
@@ -252,7 +252,7 @@ describe("PostPipelineAnalyzer", () => {
       expect(featureDev!.outputTokens).toBe(8000);
       expect(featureDev!.costUsd).toBe(0.4);
       expect(featureDev!.durationMs).toBe(1200000);
-      expect(featureDev!.selectionSource).toBe("auto");
+      expect(featureDev!.selectionSource).toBe("scheduler");
       expect(featureDev!.autoSelectorConfidence).toBe(0.85);
       expect(featureDev!.autoSelectorComplexity).toBe("M");
 
@@ -296,7 +296,7 @@ describe("PostPipelineAnalyzer", () => {
             duration_ms: 500000,
             model_selection: {
               model: "opus",
-              source: "config",
+              source: "cli-refusal-fallback",
             },
           },
         },
@@ -306,7 +306,7 @@ describe("PostPipelineAnalyzer", () => {
       expect(result).toHaveLength(1);
       expect(result[0].success).toBe(false);
       expect(result[0].model).toBe("opus");
-      expect(result[0].selectionSource).toBe("config");
+      expect(result[0].selectionSource).toBe("cli-refusal-fallback");
     });
 
     it("sums auto + manual retry counts", () => {
@@ -318,7 +318,7 @@ describe("PostPipelineAnalyzer", () => {
             manual_retry_count: 1,
             model_selection: {
               model: "sonnet",
-              source: "auto",
+              source: "scheduler",
             },
           },
         },

@@ -64,7 +64,7 @@ describe("analyzeModelRouting", () => {
       makeRecord({
         issueNumber: 100 + i,
         model: "claude-sonnet",
-        selectionSource: "config",
+        selectionSource: "cli-refusal-fallback",
         timestamp: `2025-01-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
       })
     );
@@ -82,7 +82,7 @@ describe("analyzeModelRouting", () => {
         issueNumber: 200 + i,
         stage: "feature-dev",
         model: "claude-haiku",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XL",
         success: false,
         timestamp: `2025-02-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
@@ -104,7 +104,7 @@ describe("analyzeModelRouting", () => {
         issueNumber: 300 + i,
         stage: "pr-create",
         model: "claude-opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         retries: 0,
@@ -126,7 +126,7 @@ describe("analyzeModelRouting", () => {
         issueNumber: 400 + i,
         stage: "feature-dev",
         model: i % 2 === 0 ? "claude-sonnet" : "claude-opus",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: i % 2 === 0 ? "S" : "L",
         success: true,
         retries: 0,
@@ -142,12 +142,12 @@ describe("analyzeModelRouting", () => {
   });
 
   it("returns a reasonable score when no records have auto-selection", () => {
-    // All records with selectionSource='config' — no auto-selection data
+    // No record carries the automatic-selection source — no auto-selection data
     const records = Array.from({ length: 10 }, (_, i) =>
       makeRecord({
         issueNumber: 500 + i,
         model: "claude-sonnet",
-        selectionSource: "config",
+        selectionSource: "cli-refusal-fallback",
         autoSelectorComplexity: undefined,
         timestamp: `2025-05-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
       })
@@ -165,7 +165,7 @@ describe("analyzeModelRouting", () => {
         makeRecord({
           issueNumber: offset + i,
           model: "claude-sonnet",
-          selectionSource: "auto",
+          selectionSource: "scheduler",
           autoSelectorComplexity: "M",
           success,
           timestamp: `2025-06-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
@@ -186,7 +186,7 @@ describe("analyzeModelRouting", () => {
       makeRecord({
         issueNumber: 800 + i,
         model: i % 2 === 0 ? "claude-haiku" : "claude-sonnet",
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
         timestamp: `2025-07-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
@@ -297,7 +297,7 @@ describe("analyzeModelRouting", () => {
         makeRecord({
           issueNumber: 900 + i,
           model: "claude-haiku",
-          selectionSource: "auto",
+          selectionSource: "scheduler",
           autoSelectorComplexity: "XL",
           success: false,
           timestamp: `2025-08-${String(i + 1).padStart(2, "0")}T10:00:00Z`,
@@ -308,7 +308,7 @@ describe("analyzeModelRouting", () => {
         makeRecord({
           issueNumber: 910 + i,
           model: "claude-opus",
-          selectionSource: "auto",
+          selectionSource: "scheduler",
           autoSelectorComplexity: "XS",
           success: true,
           retries: 0,

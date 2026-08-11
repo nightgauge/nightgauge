@@ -184,7 +184,10 @@ export function exportAsCsvStages(records: ExecutionHistoryRecord[]): string {
         String(tokenData?.cache_creation ?? ""),
         tokenData?.cost_usd != null ? tokenData.cost_usd.toFixed(6) : "",
         tokenData?.model ?? stageDetail.model_selection?.model ?? "",
-        tokenData?.model_source ?? stageDetail.model_selection?.source ?? "",
+        // One source of attribution: the per-stage token block's `model_source`
+        // was deleted with #446 (it had no writer and never appeared on disk).
+        // The CSV column keeps its name so existing spreadsheets keep working.
+        stageDetail.model_selection?.source ?? "",
         String(stageDetail.context_file_size_bytes ?? ""),
         escapeCsvField(stageDetail.error ?? ""),
       ];

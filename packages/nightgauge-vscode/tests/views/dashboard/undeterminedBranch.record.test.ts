@@ -84,24 +84,6 @@ function parsedCrash(): Record<string, unknown> {
   return JSON.parse(CRASH_LINE) as Record<string, unknown>;
 }
 
-/**
- * The captured completed run with its `model_selection` blocks removed.
- *
- * Go writes `stages.<s>.model_selection.source: "scheduler"`, a value this
- * package's `source` enum does not list, so the record as captured FAILS strict
- * `safeParse` and reaches the reader's lenient raw-cast fallback — where no zod
- * default runs at all. That vocabulary drift predates #397 and is tracked
- * separately; deleting the field it lives in is what lets a test reach the
- * schema behaviour it means to test. Everything else, including the branch key,
- * is the captured record.
- */
-function runWithoutModelSelectionDrift(): Record<string, unknown> {
-  const rec = parsedRun();
-  const stages = rec.stages as Record<string, Record<string, unknown>>;
-  for (const stage of Object.values(stages)) delete stage.model_selection;
-  return rec;
-}
-
 describe("undetermined-branch history record (#397)", () => {
   describe("the fixtures match their provenance", () => {
     // These check that the committed captures still show what the README says
@@ -126,6 +108,17 @@ describe("undetermined-branch history record (#397)", () => {
       expect(rec.issue_number as number).toBeGreaterThan(0);
     });
 
+    it('carries "source":"scheduler" in the bytes Go emitted, not merely some member (#446)', () => {
+      // A VALUE pin on the raw line, for the same reason the branch pin above
+      // is one. The strict-parse test below is satisfied by ANY member of
+      // MODEL_SELECTION_SOURCES, so a fixture regenerated after a vocabulary
+      // rename would keep it green while the real corpus — 207/207 entries
+      // reading "scheduler" — dropped back to the lenient fallback. That is the
+      // exact defect #446 closed, so the byte the corpus actually carries is
+      // pinned to the file independently of what the enum happens to list.
+      expect(RUN_LINE).toContain('"source":"scheduler"');
+    });
+
     it("carries an empty branch on the index entry Go wrote alongside the run", () => {
       expect(RUN_INDEX.entries).toHaveLength(1);
       expect(RUN_INDEX.entries[0]).toHaveProperty("branch");
@@ -134,19 +127,39 @@ describe("undetermined-branch history record (#397)", () => {
   });
 
   describe("schemas/executionHistory", () => {
-    // The crash record is the one used here. The completed-run capture cannot
-    // carry a strict-parse assertion today, and the reason is worth recording
-    // because only a capture could have found it: Go writes
-    // `stages.<s>.model_selection.source` values ("scheduler",
-    // "cli-refusal-fallback", an escalation reason — internal/state/history.go)
-    // that this file's `source` enum does not list, so EVERY record with a
-    // model_selection fails safeParse and lands in the reader's lenient
-    // fallback. That drift predates #397, has nothing to do with the branch,
-    // and is not this issue's to change.
     it("accepts the captured record and keeps the branch empty", () => {
       const crash = ExecutionHistoryRunRecordV3Schema.safeParse(parsedCrash());
       expect(crash.success).toBe(true);
       expect(crash.success && crash.data.branch).toBe("");
+    });
+
+    // The completed-run capture, WHOLE — no field deleted to get it past the
+    // schema. Until #446 this assertion was impossible: Go writes
+    // `stages.<s>.model_selection.source: "scheduler"` and this package's
+    // `source` enum listed nine values that no writer emits, so every record
+    // carrying a model_selection failed safeParse and reached the reader's
+    // lenient raw-cast fallback — where no zod default runs at all. A test
+    // could only reach the schema behaviour it meant to test by deleting the
+    // field the drift lived in. #446 made the SDK's MODEL_SELECTION_SOURCES the
+    // single vocabulary authority (Go mirrors it, pinned by
+    // TestModelSelectionSourcesPinnedToSDK), so the bytes Go actually wrote now
+    // validate as captured.
+    it("STRICTLY parses the captured completed run, model_selection included (#446)", () => {
+      const run = parsedRun();
+      // Guard the premise: a capture that lost its model_selection would make
+      // this test pass for the wrong reason.
+      const stages = run.stages as Record<string, { model_selection?: { source?: string } }>;
+      const sources = Object.values(stages).map((s) => s.model_selection?.source);
+      expect(sources.length).toBeGreaterThan(0);
+      expect(sources.every((s) => typeof s === "string" && s.length > 0)).toBe(true);
+
+      const parsed = ExecutionHistoryRunRecordV2Schema.safeParse(run);
+      expect(parsed.success ? null : parsed.error.issues).toBeNull();
+      expect(parsed.success).toBe(true);
+      // The vocabulary reached the parsed record intact, not coerced away.
+      expect(
+        parsed.success && Object.values(parsed.data.stages).map((s) => s.model_selection?.source)
+      ).toEqual(sources);
     });
 
     it('normalizes an ABSENT branch key to "" instead of rejecting the record', () => {
@@ -220,12 +233,13 @@ describe("undetermined-branch history record (#397)", () => {
       });
 
       it('normalizes an ABSENT branch key to "" rather than undefined', async () => {
-        // Two derivations from the capture, both documented: the `branch` key
-        // is deleted (the shape our writer cannot produce but other producers
-        // can), and the `model_selection` blocks are dropped so the record
-        // actually reaches the strict schema instead of the lenient raw-cast
-        // fallback — see runWithoutModelSelectionDrift.
-        const record = runWithoutModelSelectionDrift();
+        // One derivation from the capture: the `branch` key is deleted — the
+        // shape our writer cannot produce but other producers can. Everything
+        // else, model_selection included, is the captured record, so this
+        // exercises the strict schema rather than the lenient raw-cast fallback
+        // (which is all a record with a model_selection could reach before
+        // #446).
+        const record = parsedRun();
         delete record.branch;
         writeHistory(JSON.stringify(record));
 
@@ -240,6 +254,23 @@ describe("undetermined-branch history record (#397)", () => {
         // whole record over.
         expect(history[0].branch).toBe("");
         expect(history[0].branch).not.toBeUndefined();
+
+        // #446's live-path regression pin, stated rather than implied. The two
+        // assertions above only prove the strict branch ran BECAUSE neither
+        // projection coerces (executionHistoryWriter's `branch: record.branch`
+        // and DashboardState's `branch: entry.branch`); a defensive `?? ""`
+        // added to either would silently delete the gate while every test
+        // stayed green. This witness does not depend on that: the #3228
+        // `cost_source` backfill runs ONLY inside `if (v2Result.success)` in
+        // ExecutionHistoryReader, and the captured per_stage blocks carry no
+        // cost_source of their own (keys: input/output/cache_read/
+        // cache_creation/cost_usd/cache_hit_rate/adapter), so its PRESENCE
+        // after a read is unambiguous proof the strict path executed on the
+        // live reader — for a record carrying a model_selection, which before
+        // #446 could only reach the lenient raw cast.
+        const recs = await ExecutionHistoryReader.readAll(root);
+        expect(recs).toHaveLength(1);
+        expect(recs[0].tokens.per_stage?.["feature-dev"]?.cost_source).toBeDefined();
       });
 
       it("rebuilds the same branch Go wrote into index.json", async () => {

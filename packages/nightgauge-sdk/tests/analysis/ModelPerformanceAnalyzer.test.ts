@@ -1037,12 +1037,12 @@ describe("analyzeAutoSelectionOutcomes", () => {
     expect(result.costSavingsVsStaticUsd).toBe(0);
   });
 
-  it("returns zeros when no records have selectionSource === auto", () => {
+  it("returns zeros when no record was left on the scheduler's automatic pick", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
-      makeRecord({ selectionSource: "env", model: "sonnet" }),
-      makeRecord({ selectionSource: "config", model: "opus" }),
-      makeRecord({ selectionSource: "default", model: "haiku" }),
+      makeRecord({ selectionSource: "cli-refusal-fallback", model: "sonnet" }),
+      makeRecord({ selectionSource: "cli-refusal-fallback", model: "opus" }),
+      makeRecord({ selectionSource: "cli-refusal-fallback", model: "haiku" }),
     ];
 
     const result = analyzer.analyzeAutoSelectionOutcomes(records);
@@ -1057,22 +1057,22 @@ describe("analyzeAutoSelectionOutcomes", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         success: true,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         success: true,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         success: false,
       }),
       makeRecord({
-        selectionSource: "env",
+        selectionSource: "cli-refusal-fallback",
         selectedModel: "sonnet",
         success: true,
       }),
@@ -1088,21 +1088,21 @@ describe("analyzeAutoSelectionOutcomes", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         stage: "feature-dev",
         success: true,
         autoSelectorConfidence: 0.9,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         stage: "feature-dev",
         success: false,
         autoSelectorConfidence: 0.7,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         stage: "pr-create",
         success: true,
@@ -1136,7 +1136,7 @@ describe("analyzeAutoSelectionOutcomes", () => {
     // show positive savings compared to hypothetical sonnet cost.
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         model: "haiku",
         costUsd: 0.005,
@@ -1145,7 +1145,7 @@ describe("analyzeAutoSelectionOutcomes", () => {
         success: true,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         model: "haiku",
         costUsd: 0.005,
@@ -1167,7 +1167,7 @@ describe("analyzeAutoSelectionOutcomes", () => {
 describe("detectUnderRouting", () => {
   it("returns empty array when there are no auto records", () => {
     const analyzer = new ModelPerformanceAnalyzer();
-    const records = [makeRecord({ selectionSource: "env", success: false })];
+    const records = [makeRecord({ selectionSource: "cli-refusal-fallback", success: false })];
 
     const result = analyzer.detectUnderRouting(records);
     expect(result).toHaveLength(0);
@@ -1178,14 +1178,14 @@ describe("detectUnderRouting", () => {
     const records = [
       // Haiku succeeds on L (not a failure)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         success: true,
       }),
       // Opus fails on XL (heavy model, not under-routing)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XL",
         success: false,
@@ -1200,21 +1200,21 @@ describe("detectUnderRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
         success: false,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
         success: false,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
@@ -1237,14 +1237,14 @@ describe("detectUnderRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         autoSelectorComplexity: "XL",
         stage: "feature-dev",
         success: false,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         autoSelectorComplexity: "XL",
         stage: "feature-dev",
@@ -1264,7 +1264,7 @@ describe("detectUnderRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
@@ -1281,14 +1281,14 @@ describe("detectUnderRouting", () => {
     const records = [
       // Group 1: haiku + L + feature-dev (2 failures)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
         success: false,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "haiku",
         autoSelectorComplexity: "L",
         stage: "feature-dev",
@@ -1296,14 +1296,14 @@ describe("detectUnderRouting", () => {
       }),
       // Group 2: sonnet + XL + feature-validate (2 failures)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         autoSelectorComplexity: "XL",
         stage: "feature-validate",
         success: false,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         autoSelectorComplexity: "XL",
         stage: "feature-validate",
@@ -1327,7 +1327,9 @@ describe("detectUnderRouting", () => {
 describe("detectOverRouting", () => {
   it("returns empty array when there are no auto records", () => {
     const analyzer = new ModelPerformanceAnalyzer();
-    const records = [makeRecord({ selectionSource: "config", success: true, retries: 0 })];
+    const records = [
+      makeRecord({ selectionSource: "cli-refusal-fallback", success: true, retries: 0 }),
+    ];
 
     const result = analyzer.detectOverRouting(records);
     expect(result).toHaveLength(0);
@@ -1338,7 +1340,7 @@ describe("detectOverRouting", () => {
     const records = [
       // Sonnet on XS (not heavy model)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "sonnet",
         autoSelectorComplexity: "XS",
         success: true,
@@ -1346,7 +1348,7 @@ describe("detectOverRouting", () => {
       }),
       // Opus on L (not simple task)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "L",
         success: true,
@@ -1362,7 +1364,7 @@ describe("detectOverRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1371,7 +1373,7 @@ describe("detectOverRouting", () => {
         costUsd: 0.5,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1380,7 +1382,7 @@ describe("detectOverRouting", () => {
         costUsd: 0.5,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1406,7 +1408,7 @@ describe("detectOverRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "S",
         stage: "pr-create",
@@ -1415,7 +1417,7 @@ describe("detectOverRouting", () => {
         costUsd: 0.4,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "S",
         stage: "pr-create",
@@ -1436,7 +1438,7 @@ describe("detectOverRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1455,7 +1457,7 @@ describe("detectOverRouting", () => {
     const records = [
       // Success with retries -- should be excluded
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1465,7 +1467,7 @@ describe("detectOverRouting", () => {
       }),
       // Success with retries -- should be excluded
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "XS",
         stage: "feature-dev",
@@ -1483,7 +1485,7 @@ describe("detectOverRouting", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = [
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "S",
         stage: "feature-dev",
@@ -1492,7 +1494,7 @@ describe("detectOverRouting", () => {
         costUsd: 1.0,
       }),
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         selectedModel: "opus",
         autoSelectorComplexity: "S",
         stage: "feature-dev",
@@ -1516,7 +1518,7 @@ describe("generateThresholdRecommendations", () => {
   it("returns empty array when fewer than 10 auto records exist", () => {
     const analyzer = new ModelPerformanceAnalyzer();
     const records = makeRecords(9, {
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: false,
     });
@@ -1530,19 +1532,19 @@ describe("generateThresholdRecommendations", () => {
     // 10 auto records: 5 XS (all succeed) + 5 L (4 succeed = 80%)
     const records = [
       ...makeRecords(5, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
       }),
       ...makeRecords(5, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: true,
       }),
     ];
     // Override one L to fail but keep rate at 80% (above 60% threshold)
     records[9] = makeRecord({
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "L",
       success: false,
       issueNumber: 10,
@@ -1558,19 +1560,19 @@ describe("generateThresholdRecommendations", () => {
     const records = [
       // 3 successful XS
       ...makeRecords(3, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
       }),
       // 4 failed S (total XS/S: 7, successes: 3, rate: 3/7 = 0.43)
       ...makeRecords(4, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "S",
         success: false,
       }),
       // Filler M records to reach >= 10 total
       ...makeRecords(5, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
       }),
@@ -1593,19 +1595,19 @@ describe("generateThresholdRecommendations", () => {
     const records = [
       // 2 successful L
       ...makeRecords(2, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: true,
       }),
       // 4 failed XL (total L/XL: 6, successes: 2, rate: 2/6 = 0.33)
       ...makeRecords(4, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XL",
         success: false,
       }),
       // Filler M records to reach >= 10 total
       ...makeRecords(5, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "M",
         success: true,
       }),
@@ -1627,25 +1629,25 @@ describe("generateThresholdRecommendations", () => {
     const records = [
       // XS/S: 1 success out of 5 = 20% (< 70%)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XS",
         success: true,
         issueNumber: 1,
       }),
       ...makeRecords(4, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "S",
         success: false,
       }),
       // L/XL: 1 success out of 5 = 20% (< 60%)
       makeRecord({
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "L",
         success: true,
         issueNumber: 10,
       }),
       ...makeRecords(4, {
-        selectionSource: "auto",
+        selectionSource: "scheduler",
         autoSelectorComplexity: "XL",
         success: false,
       }),
@@ -1664,7 +1666,7 @@ describe("generateThresholdRecommendations", () => {
     // 25 XS records that all fail = low light success rate
     // Total >= 10, light total >= 20 -> medium confidence
     const records = makeRecords(25, {
-      selectionSource: "auto",
+      selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: false,
     });

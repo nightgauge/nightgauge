@@ -188,31 +188,14 @@ export const StageStateSchema = z.object({
    * Enables auditing of skip decisions in state.json and execution history.
    */
   skip_reason: z.string().optional(),
-  /**
-   * Model selection metadata for this stage (Issue #734)
-   *
-   * Records which model was selected, how, and the auto-selector's
-   * confidence/complexity assessment. Flows into execution history.
-   */
-  model_selection: z
-    .object({
-      model: z.string(),
-      source: z.enum([
-        "env",
-        "config",
-        "auto",
-        "default",
-        "stage-default",
-        "experiment",
-        "feedback-escalation",
-        "user-override",
-      ]),
-      confidence: z.number().min(0).max(1).optional(),
-      complexity: z.string().optional(),
-      mode: z.enum(["manual", "automatic", "hybrid"]).optional(),
-      effort: z.enum(["low", "medium", "high"]).optional(),
-    })
-    .optional(),
+  // `model_selection` used to sit here, carrying a THIRD copy of the selection
+  // vocabulary (already drifted: it never gained "auto-router"). Nothing writes
+  // a model_selection into state.json — PipelineStateService.setStageModelSelection
+  // is an empty stub — and this schema's only validator, validatePipelineState
+  // below, has no callers, so the enum guarded nothing. Deleted with #446;
+  // history attribution lives on the history record
+  // (`HistoryStageDetailSchema.model_selection`), and the in-memory shape the
+  // tree view reads is PipelineStateService's own `ExtendedStageState`.
   /** Context handoff file size in bytes (Issue #1009) */
   context_file_size_bytes: z.number().int().min(0).optional(),
   /**

@@ -540,6 +540,10 @@ export {
   type ExecutionHistoryRunRecordFlat,
   type ExecutionHistoryRecordExtended,
   type ModelIdentifier,
+  // The single `model_selection.source` vocabulary authority (#446).
+  MODEL_SELECTION_SOURCES,
+  AUTOMATIC_MODEL_SELECTION_SOURCE,
+  type ModelSelectionSource,
   type ModelStagePerformance,
   type StageModelComparison,
   type SuggestionType,

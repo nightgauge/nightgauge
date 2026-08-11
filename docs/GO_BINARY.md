@@ -4717,12 +4717,12 @@ after first merge. The `analysis` block is omitted entirely when
         }
       },
       "models": { "claude-sonnet-4-6": 10, "claude-opus-4-7": 2 },
-      "model_sources": { "auto": 8, "config": 4 }
+      "model_sources": { "scheduler": 11, "cli-refusal-fallback": 1 }
     }
   },
   "model_usage": {
-    "by_stage": { "feature-dev": { "claude-sonnet-4-6": 10 } },
-    "by_source": { "feature-dev": { "auto": 8 } }
+    "by_stage": { "feature-dev": { "claude-sonnet-4-6": 10, "claude-opus-4-7": 2 } },
+    "by_source": { "feature-dev": { "scheduler": 11, "cli-refusal-fallback": 1 } }
   },
   "analysis": {
     "size_baselines": {

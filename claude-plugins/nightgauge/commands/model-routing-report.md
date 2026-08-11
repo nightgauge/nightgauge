@@ -50,17 +50,29 @@ For each run record, extract per-stage data including model selection metadata
 
 Use the parsed records to compute:
 
-1. **Auto-selection success rates by stage** — Filter to records where
-   `model_selection.source === 'auto'`, compute success/failure per stage
-2. **Cost comparison** — Compare actual costs of auto-selected runs vs
-   hypothetical static-model costs
-3. **Confidence distribution** — Histogram of auto-selector confidence values
-4. **Under-routing patterns** — Cases where auto-selection chose a lighter model
-   that failed on complex tasks
-5. **Over-routing patterns** — Cases where auto-selection chose opus for simple
-   tasks that succeeded easily
-6. **Threshold recommendations** — Suggest adjustments to
-   `complexity_thresholds.haiku_max` and `sonnet_max`
+> **What the record actually carries.** The Go writer emits
+> `model_selection` as `{ "model": ..., "source": ... }` and nothing else
+> (`V2ModelSelect`, internal/state/history.go). There is **no** auto-selector
+> confidence and **no** complexity band on a history record — do not invent
+> either, and do not report a zero for them. `source` is one of
+> `MODEL_SELECTION_SOURCES`, and `scheduler` means "the scheduler resolved the
+> model and nothing substituted it" — it counts operator pins (env overrides,
+> `pipeline.stage_models`, manual-mode defaults) exactly the same as router
+> picks, so never describe it as proof a model was chosen automatically.
+
+1. **Unsubstituted-model success rates by stage** — Filter to records where
+   `model_selection.source === 'scheduler'` (see `MODEL_SELECTION_SOURCES`),
+   compute success/failure per stage
+2. **Cost comparison** — Compare actual costs of those runs vs hypothetical
+   static-model costs
+3. **Under-routing patterns** — Cases where a lighter model failed on complex
+   tasks. Complexity is NOT recorded on history records, so this section can
+   only be filled from another source; report it as "not recorded" otherwise.
+4. **Over-routing patterns** — Cases where opus ran simple tasks that succeeded
+   easily. Same limitation: complexity is not recorded.
+5. **Threshold recommendations** — Suggest adjustments to
+   `complexity_thresholds.haiku_max` and `sonnet_max`. Requires the complexity
+   data above; omit the section when it is unavailable.
 
 ### Step 4: Output Report
 
@@ -71,25 +83,28 @@ Output a formatted report with these sections:
 
 ### Summary
 - Records analyzed: N
-- Auto-selected records: N (X%)
-- Overall auto-selection success rate: X%
+- Records with an unsubstituted model (source=scheduler): N (X%)
+- Success rate for those records: X%
 - Estimated cost savings vs static defaults: $X.XXXX
 
-### Auto-Selection Success Rates by Stage
+### Success Rates by Stage (source=scheduler)
 
-| Stage | Auto-Selected | Success Rate | Avg Confidence | Primary Model |
-|-------|---------------|-------------|----------------|---------------|
-| ...   | ...           | ...         | ...            | ...           |
+| Stage | Unsubstituted | Success Rate | Primary Model |
+|-------|---------------|-------------|---------------|
+| ...   | ...           | ...         | ...           |
 
 ### Under-Routing Patterns
-(Cases where lighter models failed on complex tasks)
+(Cases where lighter models failed on complex tasks — complexity is NOT
+recorded on history records; omit this section unless another source supplies
+it)
 
 | Stage | Model | Complexity | Failures | Suggestion |
 |-------|-------|-----------|----------|------------|
 | ...   | ...   | ...       | ...      | ...        |
 
 ### Over-Routing Patterns
-(Cases where expensive models were used on simple tasks)
+(Cases where expensive models were used on simple tasks — same complexity
+limitation as above)
 
 | Stage | Model | Complexity | Successes | Est. Waste | Suggestion |
 |-------|-------|-----------|-----------|------------|------------|
@@ -108,9 +123,9 @@ Output a formatted report with these sections:
 | ...   | ...  | ...         | ...     |
 ```
 
-If no auto-selected records exist, report "No auto-selected records found.
-Enable automatic model routing in .nightgauge/config.yaml to start
-collecting data."
+If no records carry `model_selection.source === 'scheduler'`, report "No
+records with an unsubstituted model found. Enable automatic model routing in
+.nightgauge/config.yaml to start collecting data."
 
 ## Arguments
 

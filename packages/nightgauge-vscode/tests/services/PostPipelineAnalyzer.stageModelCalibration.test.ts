@@ -127,7 +127,7 @@ function createRunRecord(
         duration_ms: 1200000,
         model_selection: {
           model: "sonnet",
-          source: "auto",
+          source: "scheduler",
           confidence: 0.85,
           complexity: "M",
           mode: "automatic",
@@ -140,7 +140,7 @@ function createRunRecord(
         duration_ms: 300000,
         model_selection: {
           model: "haiku",
-          source: "auto",
+          source: "scheduler",
           confidence: 0.92,
           complexity: "S",
           mode: "automatic",

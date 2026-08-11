@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 import {
   PipelineStageSchema,
   StageExecutionModeSchema,
@@ -43,27 +44,12 @@ export const HistoryStageTokenUsageSchema = z.object({
   cost_usd: z.number().min(0),
   /** Model used for this stage (Issue #1006) */
   model: z.string().optional(),
-  /**
-   * How the model was selected (Issue #1006).
-   *
-   * NOTE: this enum is duplicated below at
-   * `HistoryStageDetailSchema.model_selection.source`. Keep both in sync — when
-   * adding or removing a value, update both literals atomically. Issue #3230
-   * added `"auto-router"` for AutoProviderRouter picks.
-   */
-  model_source: z
-    .enum([
-      "env",
-      "config",
-      "stage-default",
-      "auto",
-      "auto-router",
-      "experiment",
-      "default",
-      "feedback-escalation",
-      "user-override",
-    ])
-    .optional(),
+  // `model_source` used to sit here, a second copy of the model_selection
+  // vocabulary on the token block. It had no writer in any language — Go's
+  // V2StageTokens has no such field — and zero occurrences across the real
+  // corpus, so it was pure vocabulary surface area to drift against. Deleted
+  // with #446; the one attribution lives at
+  // `HistoryStageDetailSchema.model_selection.source` below.
   /** Per-stage cache hit rate: cache_read / (input + cache_read). Range [0, 1]. Absent when no tokens used. (Issue #2459) */
   cache_hit_rate: z.number().min(0).max(1).optional(),
   /**
@@ -78,9 +64,11 @@ export const HistoryStageTokenUsageSchema = z.object({
   /**
    * Source step that produced the resolved adapter (Issue #3223).
    *
-   * Mirrors `model_source` so dashboards and learning consumers can distinguish
-   * a per-stage env override from a stage-config value, fallback substitution,
-   * or the global default. Absent on records emitted before the SkillRunner
+   * The adapter analogue of `model_selection.source`: it lets dashboards and
+   * learning consumers distinguish a per-stage env override from a
+   * stage-config value, fallback substitution, or the global default. Its
+   * vocabulary is `AdapterSourceSchema`'s and is unrelated to the
+   * model-selection one. Absent on records emitted before the SkillRunner
    * dispatcher honored `resolveStageAdapter` end-to-end. Populated from
    * `AdapterDecision.source` returned by the resolver.
    */
@@ -196,19 +184,17 @@ export const HistoryStageDetailSchema = z.object({
   model_selection: z
     .object({
       model: z.string(),
-      // NOTE: duplicated from HistoryStageTokenUsageSchema.model_source above.
-      // Keep both enums in sync — Issue #3230 added "auto-router".
-      source: z.enum([
-        "env",
-        "config",
-        "stage-default",
-        "auto",
-        "auto-router",
-        "experiment",
-        "default",
-        "feedback-escalation",
-        "user-override",
-      ]),
+      /**
+       * How the stage ended up on the model it ran (#446).
+       *
+       * DERIVED, never re-listed: `MODEL_SELECTION_SOURCES` in the SDK is the
+       * single authority for this vocabulary and Go — the only writer of this
+       * field — mirrors it in internal/state/model_selection_source.go under a
+       * cross-language pin. Six independent copies had drifted three ways and
+       * listed nine values no writer could emit, which cost every real record
+       * its strict parse.
+       */
+      source: z.enum(MODEL_SELECTION_SOURCES),
       confidence: z.number().min(0).max(1).optional(),
       complexity: z.string().optional(),
       mode: z.enum(["manual", "automatic", "hybrid"]).optional(),

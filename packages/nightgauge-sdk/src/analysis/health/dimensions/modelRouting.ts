@@ -8,6 +8,7 @@
  */
 
 import type { ExecutionHistoryRecord } from "../../types.js";
+import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "../../types.js";
 import type {
   HealthAnalysisInput,
   HealthAnalysisConfig,
@@ -32,8 +33,30 @@ function modelKey(record: ExecutionHistoryRecord): string {
   return (record.model ?? "unknown").toLowerCase();
 }
 
+/**
+ * True when nothing substituted the model the scheduler resolved, i.e. the
+ * record is evidence about routing rather than about a substitution. Until #446
+ * this compared against `"auto"` — a value the writer cannot produce.
+ *
+ * The comparand is corrected; this dimension is NOT thereby live. The only
+ * in-repo feeders of the health path build their records without a
+ * `selectionSource` at all — `PipelineHealthRunner.runAnalyzers`' mapper
+ * (PipelineHealthRunner.ts:116, one record per RUN) and `buildHealthInput`
+ * (buildHealthInput.ts:55, zero src callers) — so this predicate is still false
+ * for 100% of records the repo actually hands it, and `modelKey()` still
+ * buckets everything as `"unknown"`. Populating those feeders forces a
+ * per-run-vs-per-stage decision and is filed as a follow-up.
+ *
+ * The path that DID go live on #446 is
+ * `PostPipelineAnalyzer.adaptRecords` → `ModelPerformanceAnalyzer`, which
+ * copies `model_selection.source` onto every record it emits.
+ *
+ * See also AUTOMATIC_MODEL_SELECTION_SOURCE in ../../types.ts: `"scheduler"`
+ * means "nothing substituted it", which is NOT the same as "a router, rather
+ * than a human, chose it".
+ */
 function isAutoSelected(record: ExecutionHistoryRecord): boolean {
-  return record.selectionSource === "auto";
+  return record.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE;
 }
 
 function isLightweightModel(model: string): boolean {
@@ -317,9 +340,12 @@ export function analyzeModelRouting(
       severity,
       title: "Low Auto-Selection Accuracy",
       description:
-        `Auto-selected model executions have a ${(autoFailureRate * 100).toFixed(1)}% failure rate ` +
-        `across ${autoTotal} auto-routed execution(s). ` +
-        `Overall success rate for auto-selection: ${(autoSuccessRate * 100).toFixed(1)}%.`,
+        `Unsubstituted model executions have a ${(autoFailureRate * 100).toFixed(1)}% failure rate ` +
+        `across ${autoTotal} execution(s) whose dispatched model ran unchanged. ` +
+        `Overall success rate: ${(autoSuccessRate * 100).toFixed(1)}%. ` +
+        `Note: this population is "the scheduler resolved it and nothing substituted it", ` +
+        `which counts operator-pinned models (env overrides, pipeline.stage_models, ` +
+        `manual-mode defaults) as well as router picks — the record cannot distinguish them.`,
       impact:
         "Frequent auto-selection failures increase retry counts, cost, and pipeline duration. " +
         "The selection heuristic may not be calibrated correctly for current workloads.",

@@ -126,6 +126,7 @@ export type {
   ExecutionHistoryRunRecordFlat,
   ExecutionHistoryRecordExtended,
   ModelIdentifier,
+  ModelSelectionSource,
   ModelStagePerformance,
   StageModelComparison,
   SuggestionType,
@@ -148,6 +149,10 @@ export type {
 } from "./types.js";
 
 export { DEFAULT_MODEL_COST_RATES } from "./types.js";
+
+// The single `model_selection.source` vocabulary authority (#446) — Go mirrors
+// it in internal/state/model_selection_source.go, every TS surface derives.
+export { MODEL_SELECTION_SOURCES, AUTOMATIC_MODEL_SELECTION_SOURCE } from "./types.js";
 
 export type {
   FailureCategory,

@@ -28,6 +28,7 @@ import type { ProactiveEscalationRecord } from "../schemas/pipelineState";
 import type { StallEvent } from "../schemas/stallEvents";
 import type { ExecutionAdapter } from "../config/schema";
 import { classifyFailureCategory, PIPELINE_STAGE_ORDER } from "@nightgauge/sdk";
+import type { ModelSelectionSource } from "@nightgauge/sdk";
 
 /**
  * Idempotency key for a run record (Issue #313): the stable run_id when present
@@ -203,16 +204,9 @@ interface PipelineStateInput {
       auto_retry_count?: number;
       manual_retry_count?: number;
       model_selection?: {
+        /** Derived from MODEL_SELECTION_SOURCES — never re-listed (#446). */
         model: string;
-        source:
-          | "env"
-          | "config"
-          | "stage-default"
-          | "auto"
-          | "experiment"
-          | "default"
-          | "feedback-escalation"
-          | "user-override";
+        source: ModelSelectionSource;
         confidence?: number;
         complexity?: string;
         mode?: "manual" | "automatic" | "hybrid";
@@ -650,10 +644,11 @@ export class ExecutionHistoryWriter {
                 // orchestrator passes in. Omit entirely when neither is set so
                 // existing dashboards keep treating the field as "unknown".
                 const stageAdapter = state.stages[stage]?.adapter ?? options?.defaultAdapter;
-                // Issue #3223: per-stage adapter source mirrors `model_source`
-                // so dashboards can attribute the routing step (env /
-                // stage-config / fallback / global / default). Only set when
-                // the resolver actually provided a value.
+                // Issue #3223: per-stage adapter source, the adapter analogue
+                // of `model_selection.source`, so dashboards can attribute the
+                // routing step (env / stage-config / fallback / global /
+                // default). Only set when the resolver actually provided a
+                // value.
                 const stageAdapterSource = state.stages[stage]?.adapter_source;
                 // Issue #3231: persist the fallback audit trail when the
                 // walker attempted at least one fallback candidate. Absent
@@ -675,7 +670,10 @@ export class ExecutionHistoryWriter {
                   stage,
                   {
                     ...usage,
-                    ...(modelSel ? { model: modelSel.model, model_source: modelSel.source } : {}),
+                    // Only the model id: `model_source` was deleted with #446
+                    // (no writer, no reader, zero occurrences on disk). The
+                    // attribution lives on the stage detail's model_selection.
+                    ...(modelSel ? { model: modelSel.model } : {}),
                     ...(stageAdapter ? { adapter: stageAdapter } : {}),
                     ...(stageAdapterSource ? { adapter_source: stageAdapterSource } : {}),
                     ...(stageFallbackChainUsed
