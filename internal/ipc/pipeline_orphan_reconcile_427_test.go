@@ -2,8 +2,10 @@ package ipc
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -15,6 +17,12 @@ import (
 // completion and reaped. An invented "large number" pid is not reliably dead —
 // the kernel recycles — which is the same reason internal/runstate's sidecar
 // suite builds its dead pid this way rather than hard-coding one.
+//
+// The recycle precondition is checked with a RAW `kill(pid, 0)` rather than with
+// `runstate.ProcessAlive`, because ProcessAlive is the predicate the test exists
+// to exercise: asking it whether the pid is usable would let an arm-3 regression
+// (dead pids reading alive) turn this test into a silent SKIP, and the package
+// would still print `ok`.
 func reapedPID(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("true")
@@ -22,8 +30,18 @@ func reapedPID(t *testing.T) int {
 		t.Fatalf("run throwaway child: %v", err)
 	}
 	pid := cmd.Process.Pid
-	if runstate.ProcessAlive(pid) {
+
+	err := syscall.Kill(pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		// pid genuinely occupied (recycled, possibly into another user's
+		// process) — cannot serve as a dead pid. EPERM means a process exists
+		// that we may not signal; it is NOT free.
 		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
+	}
+	// Kernel says the pid is free (ESRCH). If ProcessAlive disagrees, that IS the
+	// arm-3 regression this test exists to catch — fail loudly, never skip.
+	if runstate.ProcessAlive(pid) {
+		t.Fatalf("ProcessAlive(%d) calls a reaped pid alive — ladder arm 3 would pin such a run forever", pid)
 	}
 	return pid
 }
@@ -33,15 +51,22 @@ func reapedPID(t *testing.T) int {
 // host died mid-run and left a stage marked "running" with a recorded child pid
 // that has since exited.
 //
-// The existing ladder tests reach arm 3 with pid 0 — the stage-end sentinel,
-// which `runstate.ProcessAlive` refuses on the `pid <= 0` guard before it ever
-// makes a syscall. That pins "no pid recorded"; it does not pin "the pid that
-// WAS recorded names a process that died", which is the exact input the deleted
-// scanner keyed on (`process_pid`, `kill(pid, 0)`). This test walks the full
-// arm: a real, reaped, non-zero pid, persisted through the real
-// notifyStageTransition handler, with arms 1, 2 and 4 all made false, so the
-// reconcile hinges on arm 3 answering false through the syscall and on arm 5
-// expiring.
+// Every existing ladder test in which arm 3 must answer FALSE reaches it with
+// pid 0 — the stage-end sentinel, which `runstate.ProcessAlive` refuses on the
+// `pid <= 0` guard before it ever makes a syscall. That pins "no pid recorded";
+// it does not pin "the pid that WAS recorded names a process that died", which
+// is the exact input the deleted scanner keyed on (`process_pid`,
+// `kill(pid, 0)`).
+//
+// What this file pins is precisely the DEAD-recorded-pid direction: a recorded,
+// once-live, now-reaped pid must still reconcile past the grace. It does not on
+// its own discriminate arm 3 — with arms 1, 2 and 4 false, deleting arm 3
+// outright leaves this test green. The opposite direction, arm 3 KEEPING a run
+// whose recorded pid is alive, is pinned by
+// TestOrphanReconcile_LivePidIsNotReconciled and
+// TestOrphanReconcile_InteractiveShapedRunSurvivesOnItsStagePidAlone. Together
+// the two directions discriminate the arm; this file deliberately does not
+// duplicate the alive-direction pin.
 func TestOrphanReconcile_ExtensionRunWithReapedStageChildReconcilesPastGrace(t *testing.T) {
 	s, _, stateDir := reconcileServer(t)
 	now := time.Now()

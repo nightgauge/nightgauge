@@ -1785,9 +1785,13 @@ implemented in `PipelineStateService.validateStagePreconditions()`.
 
 ### Pipeline State and Transitions
 
-All pipeline state is persisted to `.nightgauge/pipeline/state.json` via
-atomic writes in `PipelineStateService`. This single file is the source of truth
-for recovery, UI rendering, and analytics.
+`PipelineStateService` holds pipeline state in memory and relays every
+transition to the Go backend over IPC; its `getStatePath()` composes
+`<root>/.nightgauge/pipeline/state.json`, but nothing in the tree writes that
+file (#427). The durable per-run record is the Go runtime snapshot
+`.nightgauge/pipeline/runtime-{issue}-{runId}.json` (with
+`.nightgauge/pipeline/run-state.json` for the workspace-level view), and that is
+what recovery, UI rendering, and analytics read.
 
 **Per-stage status values:**
 
