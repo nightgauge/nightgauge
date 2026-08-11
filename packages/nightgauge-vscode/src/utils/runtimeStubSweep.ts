@@ -20,6 +20,8 @@
  * @see Issue #2008 - Restore paused pipeline state on activation
  */
 
+import { RUN_IDENTITY_SHAPE } from "@nightgauge/sdk";
+
 /** The subset of runtime-<N>.json fields the sweep inspects. */
 export interface RuntimeStubFields {
   repo?: string | null;
@@ -44,9 +46,12 @@ export const LEGACY_RUNTIME_FILE = /^runtime-(\d+)\.json$/;
  * `runtime-{issue}-{runId}.json` (#370). Reading and prompting are
  * non-destructive, so this is deliberately wider than the sweep's pattern.
  * Issue number is capture 1 in both, so callers parse it the same way.
+ *
+ * The identity fragment is INTERPOLATED from the one TypeScript definition
+ * (`RUN_IDENTITY_SHAPE`, @nightgauge/sdk) rather than transcribed here (#424).
+ * It contributes NO capture groups, so the issue number stays capture 1.
  */
-export const ANY_RUNTIME_FILE =
-  /^runtime-(\d+)(?:-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?\.json$/;
+export const ANY_RUNTIME_FILE = new RegExp(`^runtime-(\\d+)(?:-${RUN_IDENTITY_SHAPE})?\\.json$`);
 
 /**
  * Decide what the activation sweep may do with a file, BY NAME FIRST.

@@ -17,34 +17,19 @@
  * refused run-progress call — F16's shape. Typing the literals here is the
  * compile-time guard that makes that key name checkable before the flip.
  *
+ * THE IDENTITY SHAPE IS NOT DEFINED HERE (#424). `RUN_IDENTITY_PATTERN` /
+ * `isRunIdentity` used to be declared in this file, which made it one of four
+ * TypeScript copies of a shape Go owns. They now live in ONE place —
+ * `@nightgauge/sdk` (`packages/nightgauge-sdk/src/context/runIdentity.ts`),
+ * next to `uuidV7`, the minter that produces the shape — and callers import
+ * them from there. The Go authority is `internal/runstate/identity.go`
+ * (`IdentityPattern`), and the cross-language pin in
+ * `internal/runstate/identity_crosslang_test.go` now reads the SDK module.
+ *
  * @see docs/decisions/017-runtime-identity-keying.md — Decisions 1, 3, 10
  * @see internal/ipc/protocol.go — the authoritative param shapes
+ * @see packages/nightgauge-sdk/src/context/runIdentity.ts — the identity shape
  */
-
-/**
- * Canonical run-identity shape — lowercase UUIDv7.
- *
- * SOURCE OF TRUTH: `internal/runstate/identity.go:23` (`IdentityPattern`).
- * The literal is duplicated here because the extension cannot import Go; it
- * must stay character-identical to that constant, because an id this side
- * accepts and the Go side rejects becomes a `run_id_invalid` refusal at
- * step 4 — a run that mints a locally-valid id the server will not key on.
- */
-export const RUN_IDENTITY_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-/**
- * True when `value` is a canonical lowercase UUIDv7 run identity.
- *
- * Twin of `runstate.IsIdentity` (internal/runstate/identity.go). Called
- * BEFORE a value is installed on a service or put on the wire: the value ends
- * up as a Go map key and a `runtime-{issue}-{runId}.json` filename component,
- * so a string containing "/" or ".." is an arbitrary-path write on a socket
- * ADR-015 documents as unauthenticated.
- */
-export function isRunIdentity(value: unknown): value is string {
-  return typeof value === "string" && RUN_IDENTITY_PATTERN.test(value);
-}
 
 /** Mirrors `PipelineNotifyStageTransitionParams` (internal/ipc/protocol.go). */
 export interface NotifyStageTransitionParams {

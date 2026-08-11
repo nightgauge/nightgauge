@@ -9,6 +9,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { RunStateManager, uuidV7 } from "../context/RunStateManager.js";
+import { RUN_IDENTITY_PATTERN } from "../context/runIdentity.js";
 import {
   ConcurrentRunRefused,
   SchemaVersionMismatch,
@@ -54,9 +55,10 @@ describe("RunStateManager", () => {
     it("creates a fresh run-state.json on empty dir", async () => {
       const rs = await mgr.markRunning({ issue_number: 42, branch: "feat/x" });
       expect(rs.state).toBe("running");
-      expect(rs.run_id).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-      );
+      // Pinned against the AUTHORITY, not an inlined copy of it (#424): the
+      // minter and the validator the Go side mirrors must agree, so this arm
+      // goes red if uuidV7 ever produces something isRunIdentity refuses.
+      expect(rs.run_id).toMatch(RUN_IDENTITY_PATTERN);
       expect(rs.attempt_number).toBe(1);
       expect(rs.completed_stages).toEqual([]);
       expect(rs.resume_from_stage).toBe("issue-pickup");

@@ -104,7 +104,7 @@ vi.mock("../../src/services/IpcClient", () => ({
 }));
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
-import { isRunIdentity } from "../../src/services/ipcNotifyParams";
+import { isRunIdentity } from "@nightgauge/sdk";
 
 function makeQueueItem(issueNumber: number) {
   return {

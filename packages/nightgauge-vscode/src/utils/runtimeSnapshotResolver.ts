@@ -20,6 +20,7 @@
  * @see docs/decisions/017-runtime-identity-keying.md
  */
 
+import { RUN_IDENTITY_SHAPE } from "@nightgauge/sdk";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -40,11 +41,15 @@ interface Candidate {
  * The canonical snapshot name for one issue: `runtime-{issue}-{runId}.json`
  * where runId is a canonical lowercase UUIDv7. Mirrors the Go side's
  * `snapshotFilePattern`, itself built from `runstate.IdentityPattern`.
+ *
+ * The identity fragment is INTERPOLATED from the one TypeScript definition
+ * (`RUN_IDENTITY_SHAPE`, @nightgauge/sdk) rather than transcribed here (#424):
+ * a discovery regex that drifts from the validator is an id that passes
+ * validation and then cannot be found on disk — the phantom-snapshot shape
+ * ADR-017 Decision 1 exists to make impossible.
  */
 function snapshotNamePattern(issueNumber: number): RegExp {
-  return new RegExp(
-    `^runtime-${issueNumber}-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.json$`
-  );
+  return new RegExp(`^runtime-${issueNumber}-${RUN_IDENTITY_SHAPE}\\.json$`);
 }
 
 /** The pre-ADR-017 name, matched ONLY to diagnose the mixed-version window. */

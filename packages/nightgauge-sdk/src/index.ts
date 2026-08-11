@@ -59,6 +59,11 @@ export {
 // RunState — durable pipeline lifecycle (Issue #3238)
 export { RunStateManager, uuidV7, type ResumeDetection } from "./context/RunStateManager.js";
 
+// Run identity — the ONE TypeScript definition of the shape uuidV7 mints, and
+// the shape the Go side validates (ADR-017 Decision 1, #424). Every consumer
+// derives from here; nothing transcribes the character sequence a second time.
+export { RUN_IDENTITY_PATTERN, RUN_IDENTITY_SHAPE, isRunIdentity } from "./context/runIdentity.js";
+
 // Pipeline state errors — structured contract for the recovery UX (Gap 2).
 export {
   PipelineStateError,

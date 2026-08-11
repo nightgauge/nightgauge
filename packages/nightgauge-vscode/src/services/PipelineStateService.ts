@@ -14,9 +14,9 @@
  */
 
 import * as vscode from "vscode";
+import { isRunIdentity } from "@nightgauge/sdk";
 import { IpcClient } from "./IpcClient";
 import {
-  isRunIdentity,
   type NotifyCompleteParams,
   type NotifyPhaseTransitionParams,
   type NotifyStageTransitionParams,

@@ -10,13 +10,16 @@ import (
 // Cross-language pin for the run-identity shape — ADR-017 Decision 1, #422.
 //
 // identity.go says there is exactly ONE definition of the identity shape "in
-// the Go tree". The extension cannot import Go, so there is a second one:
-// RUN_IDENTITY_PATTERN in packages/nightgauge-vscode/src/services/
-// ipcNotifyParams.ts. Today the two are character-identical by hand and
-// nothing enforces it. ADR-017 step 4 turns `run_id_invalid` into a hard wire
-// error, at which point drift is not cosmetic: the extension mints an identity
-// the server refuses, and every progress call for that run is silently thrown
-// away (F16's shape).
+// the Go tree". TypeScript cannot import Go, so there is a second one:
+// RUN_IDENTITY_PATTERN in packages/nightgauge-sdk/src/context/runIdentity.ts —
+// and since #424 there is exactly one of it on that side too, next to uuidV7,
+// the minter that produces the shape (the extension's IPC params, snapshot
+// resolver and stub sweep all derive from it rather than transcribing it).
+// The two sides are character-identical by hand and nothing but this test
+// enforces it. ADR-017 step 4 turns `run_id_invalid` into a hard wire error, at
+// which point drift is not cosmetic: the extension mints an identity the server
+// refuses, and every progress call for that run is silently thrown away (F16's
+// shape).
 //
 // This test is the enforcement. It reads the TypeScript file, extracts the
 // regex literal, and requires it to be byte-identical to the anchored Go
@@ -24,10 +27,13 @@ import (
 // been renamed or rewritten as `new RegExp("…")`, is a FAILURE, because a pin
 // that quietly stops checking is worse than no pin.
 
-// tsIdentitySourcePath is the extension-side twin, relative to this package
-// directory (go test runs with cwd = the package dir).
+// tsIdentitySourcePath is the TypeScript-side twin, relative to this package
+// directory (go test runs with cwd = the package dir). It is the SDK module
+// (#424), not the extension: the extension depends on the SDK, never the
+// reverse, so the one definition belongs at the bottom of that dependency edge
+// where every TypeScript consumer can reach it.
 var tsIdentitySourcePath = filepath.Join(
-	"..", "..", "packages", "nightgauge-vscode", "src", "services", "ipcNotifyParams.ts")
+	"..", "..", "packages", "nightgauge-sdk", "src", "context", "runIdentity.ts")
 
 // tsIdentityLiteralRegexp lifts `export const RUN_IDENTITY_PATTERN = /…/flags`
 // out of the TypeScript source. The whitespace around `=` is elastic because
@@ -49,7 +55,7 @@ var tsIdentityLiteralRegexp = regexp.MustCompile(
 // two sites are peers and that the deadline for drift is step 4.
 const realignHint = "re-align the two definition sites: internal/runstate/identity.go " +
 	"(IdentityPattern / IdentityRegexp) and " +
-	"packages/nightgauge-vscode/src/services/ipcNotifyParams.ts (RUN_IDENTITY_PATTERN). " +
+	"packages/nightgauge-sdk/src/context/runIdentity.ts (RUN_IDENTITY_PATTERN). " +
 	"They must stay character-identical: after ADR-017 step 4 makes run_id_invalid a hard " +
 	"wire error, any drift means the extension mints run identities the server refuses at " +
 	"the IPC boundary."
@@ -75,7 +81,7 @@ func TestIdentityPatternPinnedToTypeScriptTwin(t *testing.T) {
 	source, err := os.ReadFile(tsIdentitySourcePath)
 	if err != nil {
 		t.Fatalf("cannot read the TypeScript twin at %s: %v\n"+
-			"This pin is path-coupled: if ipcNotifyParams.ts moved or was renamed, move "+
+			"This pin is path-coupled: if runIdentity.ts moved or was renamed, move "+
 			"tsIdentitySourcePath in this test with it — do NOT delete the pin. %s",
 			tsIdentitySourcePath, err, realignHint)
 	}
