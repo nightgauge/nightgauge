@@ -209,8 +209,14 @@ export const StageStateSchema = z.object({
   current_phase: z.string().optional(),
   /** Total number of phases in this stage (Issue #1206) */
   total_phases: z.number().int().min(0).optional(),
-  /** PID of the child process running this stage (Issue #1643) */
-  process_pid: z.number().int().positive().optional(),
+  // `process_pid` used to sit here (Issue #1643), the stage child's pid for the
+  // TypeScript stale-slot scanner. Its writer (`setStageProcessPid`) was an
+  // empty stub and its only reader was `StaleSlotRecoveryService`, which read a
+  // `state.json` nothing writes; both were deleted with #427. The stage-child
+  // pid that actually decides liveness travels the IPC wire as `stagePid` on
+  // `pipeline.notifyStageTransition` and lands on the Go runtime snapshot
+  // (`RuntimeState.SetStageChild`), where the orphan ladder probes it —
+  // internal/ipc/pipeline_orphan_reconcile.go, ADR-017 §7.2 arm 3.
   /**
    * Adapter that ran this stage (Issue #3221, formalised on schema in #3231).
    *

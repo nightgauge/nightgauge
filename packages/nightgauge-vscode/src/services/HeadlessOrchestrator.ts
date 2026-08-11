@@ -14395,13 +14395,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Expose the full handle to the shared budget/ceiling evaluator (#254).
       stageHandle = handle;
 
-      // Record child process PID in state.json for stale-slot recovery (Issue #1643)
-      if (this.stateService && handle.process?.pid) {
-        this.stateService.setStageProcessPid(stage, handle.process.pid).catch(() => {
-          // Non-critical — recovery will fall back to timestamp-based detection
-        });
-      }
-
       // Handle abort
       if (this.abortController) {
         const abortListener = () => {

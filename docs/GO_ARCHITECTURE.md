@@ -104,7 +104,9 @@ TypeScript ProjectBoardService without touching execution.
 ### Module 2: Pipeline State (Board-Driven)
 
 Replaces: `PipelineStateService`, `state.json`, `update-pipeline-state.sh`,
-`StaleSlotRecoveryService`, `reconcileWithGitHub()`.
+`reconcileWithGitHub()`. (`StaleSlotRecoveryService` was on this list; it was
+deleted outright by #427 rather than replaced — it scanned a `state.json`
+nothing writes, and the Go orphan ladder already owns the condition.)
 
 **Current problems this solves:**
 

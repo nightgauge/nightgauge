@@ -493,12 +493,17 @@ misclassified as quota exhaustion, triggering a global cooldown. Read
 bogus. Clear it via the "Autonomous: Clear Quota Cooldown" command (do not hand-
 edit `state.json`).
 
-### Reloading the extension mid-run marks healthy stages failed
+### Reloading the extension mid-run leaves a run with no terminal event
 
-Stale-slot recovery on activation can SIGTERM any stage alive longer than the
-threshold (elapsed, not idle) and record it as failed with an empty
-`terminal_kind`. **Do not Reload Window while a stage is mid-run.** A "stage
-failed with no error text" right after a reload is almost always this.
+Closing the window or reloading kills the extension host and orphans its stage
+children, so the run's `pipeline_done` never fires from the host. The Go orphan
+ladder reconciles it at the next activation
+(`internal/ipc/pipeline_orphan_reconcile.go`, ADR-017 §7.2–7.4): a 120s startup
+grace (`startupGrace`), after which arm 3 probes the stage child's recorded pid.
+No TypeScript scanner is involved and nothing is SIGTERM'd on activation — the
+#1643 `StaleSlotRecoveryService` was deleted by #427, and its kill had already
+been removed by #3840. **Reloading mid-run is still discouraged**: the run
+records no terminal outcome until the ladder closes it.
 
 ### Dashboard shows phantom "in flight" runs the workspace doesn't have
 

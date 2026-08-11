@@ -1401,6 +1401,38 @@ the Codex interactive TUI runs its stage inside a VSCode terminal, and VSCode
 exposes no pid for a process running inside one, so a silent Codex TUI session
 older than the 30-minute liveness window can be reconciled — see ADR 017 §7.2's
 per-population table.
+
+**This ladder is the only scanner that CLOSES a stale run (#427).** A second
+closer lived in the extension — `StaleSlotRecoveryService`, which on activation
+scanned every worktree for `<worktree>/.nightgauge/pipeline/state.json`, looked
+for a stage still marked `running`, and "repaired" it. It was inert end to end:
+nothing in the tree has ever written that `state.json`, so the scan returned
+`[]` on every activation, and its repair built an identity-less
+`PipelineStateService` whose `failStage` reached neither the wire (skipped by
+the ADR-017 step-4 guard) nor the disk (no local state to fall back on). It was
+deleted with #427 along with its `setStageProcessPid` writer stub and the
+`process_pid` state field, leaving the extension-host-died-mid-run case to the
+ladder above — arm 3 probes the stage child's pid, which arrives over the wire
+as `stagePid` and lands on the runtime snapshot via
+`RuntimeState.SetStageChild`. Two closers over one condition is the same
+single-scanner hazard
+[#323](#active-worktree-scanning--single-scanner-contract-issue-323) settled for
+worktrees.
+
+One other extension service does poll `.nightgauge/pipeline/`:
+`CliPipelineReconciliationService` reads each registered root's
+`current-run.json` on a 1s interval and probes the CLI sidecar's pid. It is
+DISCOVERY-ONLY — it mirrors `nightgauge run` pipelines into the tree view and
+drops the slot when the sidecar's process is gone; it emits no terminal event
+and removes no snapshot, so it is not a second reconciler and does not
+reintroduce the hazard.
+
+Arm 3 is the arm that scopes this: `stagePid` →
+`RuntimeState.SetStageChild` is what keeps a still-working child from being
+closed, so the sub-population that carries no obtainable child pid — the Codex
+interactive TUI (#4024), whose stage runs inside a VSCode terminal — rests on
+arms 1 and 4 alone.
+
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.

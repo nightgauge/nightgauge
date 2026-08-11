@@ -176,7 +176,6 @@ export type ExtendedStageState = {
   phase?: StagePhase;
   ptcMetrics?: PTCMetrics;
   started_at?: string;
-  process_pid?: number;
   duration_ms?: number;
   phases?: StagePhase[];
   current_phase?: string;
@@ -851,8 +850,9 @@ export class PipelineStateService implements vscode.Disposable {
    * Every notify verb is run-progress or terminal class server-side, so a call
    * carrying `runId: ""` is now refused `run_id_required` — once per stage
    * transition, per phase, per 5-second progress tick — from emitters that
-   * were never speaking for a run at all (the stale-slot repair emitter, the
-   * dead contextWatcher population). Skipping the send is the honest answer
+   * were never speaking for a run at all (the stale-slot repair emitter, since
+   * DELETED with #427 for being inert end to end; the dead contextWatcher
+   * population, still wired). Skipping the send is the honest answer
    * and it is what keeps the server from needing an empty-id hole: the local
    * state and events a method owns still happen, only the wire call is
    * dropped, and the drop is logged once instead of swallowed. `sendPaused`
@@ -1750,7 +1750,6 @@ export class PipelineStateService implements vscode.Disposable {
       this._onStateChanged.fire(this._lastState);
     }
   }
-  async setStageProcessPid(_stage: string, _pid: number): Promise<void> {}
   recordToolCall(
     _stageOrRecord: string | ToolCallRecordedEvent,
     _toolName?: string,
