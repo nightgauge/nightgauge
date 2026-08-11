@@ -176,7 +176,6 @@ export type ExtendedStageState = {
   phase?: StagePhase;
   ptcMetrics?: PTCMetrics;
   started_at?: string;
-  process_pid?: number;
   duration_ms?: number;
   phases?: StagePhase[];
   current_phase?: string;
