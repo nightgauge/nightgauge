@@ -1401,6 +1401,23 @@ the Codex interactive TUI runs its stage inside a VSCode terminal, and VSCode
 exposes no pid for a process running inside one, so a silent Codex TUI session
 older than the 30-minute liveness window can be reconciled — see ADR 017 §7.2's
 per-population table.
+
+**This ladder is the only stale-run scanner (#427).** A second one lived in the
+extension — `StaleSlotRecoveryService`, which on activation scanned every
+worktree for `<worktree>/.nightgauge/pipeline/state.json`, looked for a stage
+still marked `running`, and "repaired" it. It was inert end to end: nothing in
+the tree has ever written that `state.json`, so the scan returned `[]` on every
+activation, and its repair built an identity-less `PipelineStateService` whose
+`failStage` reached neither the wire (skipped by the ADR-017 step-4 guard) nor
+the disk (no local state to fall back on). It was deleted with #427 along with
+its `setStageProcessPid` writer stub and the `process_pid` state field, leaving
+the extension-host-died-mid-run case to the ladder above — arm 3 probes the
+stage child's pid, which arrives over the wire as `stagePid` and lands on the
+runtime snapshot via `RuntimeState.SetStageChild`. Two scanners over one
+condition is the same single-scanner hazard
+[#323](#active-worktree-scanning--single-scanner-contract-issue-323) settled for
+worktrees.
+
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.

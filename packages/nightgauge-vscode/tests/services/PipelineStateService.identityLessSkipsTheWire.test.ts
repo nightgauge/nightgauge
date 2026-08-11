@@ -7,8 +7,9 @@
  * Every `pipeline.*` notify verb is run-progress or terminal class now, so the
  * server refuses `runId: ""` with `run_id_required`. The emitters that used to
  * send one were never speaking for a run in the first place — the stale-slot
- * repair emitter (`issueNumber: 0`, `runId: ""`), the dead contextWatcher
- * population — so the honest answer is to skip the send, keep the local state
+ * repair emitter (`issueNumber: 0`, `runId: ""`), since DELETED with #427 for
+ * being inert end to end; the dead contextWatcher population, still wired — so
+ * the honest answer is to skip the send, keep the local state
  * and events, and log the skip once. That is the guard `sendPaused` has had
  * since step 1, now applied to the whole notify surface; it is also what lets
  * the server keep a hole-free identity contract.

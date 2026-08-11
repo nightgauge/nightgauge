@@ -136,7 +136,6 @@ import { resolvePlatformBaseUrl, resolvePlatformHostKey } from "../config/schema
 import { registerShowPlatformStatusCommand } from "../commands/showPlatformStatus";
 import { registerShowMachineBindingCommand } from "../commands/showMachineBinding";
 import { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
-import { StaleSlotRecoveryService } from "../services/StaleSlotRecoveryService";
 import {
   CliPipelineReconciliationService,
   type RegisteredPipelineRoot,
@@ -2029,46 +2028,14 @@ export async function initializeServices(
       },
     });
 
-    // Recover stale concurrent slots from previous session (Issue #1643)
-    const staleRecovery = new StaleSlotRecoveryService(
-      runnerRoot,
-      concurrentConfig.worktreeBase,
-      logger
-    );
-    staleRecovery
-      .recoverStaleSlots()
-      .then((recovered) => {
-        if (recovered.length === 0) return;
-
-        logger.info("Recovered stale concurrent slots", {
-          count: recovered.length,
-          issues: recovered.map((r) => r.issueNumber),
-        });
-
-        // Surface recovered slots in the Pipeline tree view as failed
-        for (const slot of recovered) {
-          const slotStateService = PipelineStateService.createForWorktree(slot.worktreePath);
-          treeProvider.addConcurrentSlot(
-            0, // slot index doesn't matter for display
-            slot.issueNumber,
-            slot.title,
-            slotStateService
-          );
-          treeProvider.updateConcurrentSlotStatus(slot.issueNumber, "failed");
-        }
-
-        // Notify user
-        const issueList = recovered.map((r) => `#${r.issueNumber}`).join(", ");
-        vscode.window.showWarningMessage(
-          `Recovered ${recovered.length} stale pipeline slot(s): ${issueList}. ` +
-            "Stages were marked as failed due to extension reload."
-        );
-      })
-      .catch((err) => {
-        logger.warn("Stale slot recovery failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+    // A second, TypeScript-side stale-slot scanner used to run here (#1643).
+    // It was deleted with #427: it scanned `<worktree>/.nightgauge/pipeline/
+    // state.json`, a file nothing in this tree has ever written, so it returned
+    // [] on every activation, and its repair path built an identity-less
+    // PipelineStateService whose failStage could reach neither the wire nor the
+    // disk. Extension-host death mid-run is reconciled by the Go orphan ladder
+    // (internal/ipc/pipeline_orphan_reconcile.go, ADR-017 §7.2-7.4), which is
+    // also the single-scanner contract #323 established.
 
     // Set callbacks for queue events (Issue #299 - failure handling, Issue #820 - blocked warning, Issue #1402 - auto-start)
     issueQueueService.setCallbacks({

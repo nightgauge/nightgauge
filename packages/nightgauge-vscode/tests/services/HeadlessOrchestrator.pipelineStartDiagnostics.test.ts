@@ -122,7 +122,6 @@ function makePipelineStateMock(): PipelineStateService {
     setMeta: vi.fn(),
     setLabels: vi.fn().mockResolvedValue(undefined),
     recordBacktrack: vi.fn().mockResolvedValue(undefined),
-    setStageProcessPid: vi.fn().mockResolvedValue(undefined),
     failPhase: vi.fn().mockResolvedValue(undefined),
   } as unknown as PipelineStateService;
 }
