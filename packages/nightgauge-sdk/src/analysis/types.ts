@@ -32,8 +32,13 @@ export type ModelIdentifier = string;
  * in one commit, in this order.
  *
  * The members answer "how did the stage end up on the model it ran?":
- * - `scheduler` — the scheduler resolved it and nothing substituted it. The
- *   automatic-selection source (see `AUTOMATIC_MODEL_SELECTION_SOURCE`).
+ * - `scheduler` — the scheduler resolved the model and nothing substituted it.
+ *   That resolution chain includes `NIGHTGAUGE_PIPELINE_STAGE_MODEL_{STAGE}`
+ *   env overrides, `pipeline.stage_models.{stage}` config pins, the manual-mode
+ *   default table and the performance-mode ceiling
+ *   (internal/orchestrator/dispatch_routing.go), so this says NOTHING about
+ *   whether a human or the router chose the model. See
+ *   `AUTOMATIC_MODEL_SELECTION_SOURCE`.
  * - `cli-refusal-fallback` — the claude CLI's internal refusal fallback served
  *   a different model than the one dispatched (#91).
  * - `model-unavailable-downgrade` — a sticky downgrade because the requested
@@ -58,12 +63,24 @@ export const MODEL_SELECTION_SOURCES = [
 export type ModelSelectionSource = (typeof MODEL_SELECTION_SOURCES)[number];
 
 /**
- * The source that means "nothing overrode the scheduler's automatic pick".
+ * The source that means "the scheduler resolved the model and nothing
+ * substituted it".
+ *
+ * Read the name narrowly. It does NOT mean "a router picked this model". The
+ * scheduler's resolution chain (internal/orchestrator/dispatch_routing.go)
+ * includes env overrides, `pipeline.stage_models.{stage}` config pins, the
+ * manual-mode default table and the performance-mode ceiling — under
+ * `model_routing.mode: manual` every record reads `"scheduler"` and not one of
+ * them is an automatic selection. The record cannot distinguish the two cases:
+ * `modelSelectionMode` exists in the TS schema (executionHistory.ts) but Go
+ * never writes it, so no consumer can gate on `=== "automatic"` today. Filed as
+ * a follow-up.
  *
  * Routing analytics compare against this rather than restating the literal:
  * before #446 they filtered on `"auto"`, a value no writer could emit, so the
  * routing-accuracy metrics and the model-routing health dimension were
- * permanently empty.
+ * permanently empty. Every metric named "auto-selection" therefore counts
+ * operator pins too — see `analyzeAutoSelectionOutcomes`.
  */
 export const AUTOMATIC_MODEL_SELECTION_SOURCE: ModelSelectionSource = "scheduler";
 

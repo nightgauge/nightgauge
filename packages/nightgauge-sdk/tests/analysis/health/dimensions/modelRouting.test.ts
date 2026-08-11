@@ -1412,10 +1412,19 @@ describe("analyzeModelRouting — counts records the real writer produces (#446)
   // value no writer has ever emitted: Go is the sole writer of
   // `model_selection.source` and writes "scheduler" (207 of 207 stage entries
   // on the operator's corpus). Every auto-selection metric below was therefore
-  // structurally zero for the life of the dimension. These two cases pin the
-  // live vocabulary against a made-up one: the literal is the string Go emits,
-  // and Go's own pin (TestModelSelectionSourcesPinnedToSDK) keeps it equal to
-  // MODEL_SELECTION_SOURCES.
+  // structurally zero for the life of the dimension.
+  //
+  // What these two cases do and do not pin. GO_WRITTEN_SOURCE is a LOCAL
+  // LITERAL in a TypeScript file — nothing here reaches Go, so
+  // `expect(AUTOMATIC_MODEL_SELECTION_SOURCE).toBe(GO_WRITTEN_SOURCE)` is a
+  // behavioural anchor for this dimension's filter, not a cross-language
+  // check. The Go side is split across two pins in
+  // internal/state/model_selection_source_test.go:
+  // TestModelSelectionSourcesPinnedToSDK covers the ARRAY only (same members,
+  // same order), and TestAutomaticModelSelectionSourcePinnedToGoDefault covers
+  // WHICH member is automatic, by lifting AUTOMATIC_MODEL_SELECTION_SOURCE
+  // from types.ts and comparing it to the source BuildV2Record stamps on a
+  // plain completed stage.
   const GO_WRITTEN_SOURCE = "scheduler";
 
   it("counts a stage the Go writer attributed to the scheduler", () => {

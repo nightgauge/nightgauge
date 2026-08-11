@@ -418,11 +418,24 @@ export class ModelPerformanceAnalyzer {
   /**
    * Analyze auto-selection outcomes across all records.
    *
-   * Filters to records the scheduler picked automatically
+   * Filters to records whose model was NOT substituted after dispatch
    * (`AUTOMATIC_MODEL_SELECTION_SOURCE`), computes per-stage success rates,
    * and compares to overall success rates. Until #446 this filtered on
    * `"auto"`, a value no writer has ever emitted, so every number below was
    * structurally zero.
+   *
+   * CAVEAT — "auto" in these field names overstates the filter. `"scheduler"`
+   * means "the dispatched model ran unsubstituted", which includes env
+   * overrides, `pipeline.stage_models` pins, manual-mode defaults and
+   * performance-mode ceilings; under `model_routing.mode: manual` every record
+   * lands here and none is an automatic selection. The record carries no way to
+   * separate the two (`modelSelectionMode` is declared in the TS schema and
+   * never written by Go — follow-up filed), so read
+   * `totalAutoSelectedRecords`, `overallAutoSuccessRate` and
+   * `costSavingsVsStaticUsd` as "unsubstituted", not "router-chosen". The
+   * denominator is also biased toward success: Go attaches a
+   * `model_selection` only to stages that completed, so a stage that failed
+   * before completing never enters the count.
    */
   analyzeAutoSelectionOutcomes(records: ExecutionHistoryRecord[]): AutoSelectionAnalysis {
     const autoRecords = records.filter(
@@ -498,11 +511,19 @@ export class ModelPerformanceAnalyzer {
   }
 
   /**
-   * Detect under-routing patterns: auto-selection chose a lighter model
-   * for a complex task that then failed.
+   * Detect under-routing patterns: a lighter model ran a complex task that
+   * then failed.
    *
-   * Looks for records where source=auto AND model was haiku/sonnet AND
+   * Looks for records where the model was NOT substituted after dispatch
+   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model was haiku/sonnet AND
    * complexity was L/XL AND the stage failed.
+   *
+   * STILL DEAD BY MISSING INPUT (#446): re-pointing the source filter did not
+   * make this analytic live. It also gates on `autoSelectorComplexity`, which
+   * the Go writer never records — `V2ModelSelect` carries `model` and `source`
+   * only (internal/state/history.go) — so `complexity` is `""` for every real
+   * record and `["L","XL"].includes("")` is false. Returns an empty list on
+   * production data until a writer emits complexity.
    */
   detectUnderRouting(records: ExecutionHistoryRecord[]): UnderRoutingPattern[] {
     const autoRecords = records.filter(
@@ -554,11 +575,16 @@ export class ModelPerformanceAnalyzer {
   }
 
   /**
-   * Detect over-routing patterns: auto-selection chose a more capable model
-   * for a simple task that succeeded easily (wasted cost).
+   * Detect over-routing patterns: a more capable model ran a simple task that
+   * succeeded easily (wasted cost).
    *
-   * Looks for records where source=auto AND model was opus AND
+   * Looks for records where the model was NOT substituted after dispatch
+   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model was opus/fable AND
    * complexity was XS/S AND the stage succeeded on first attempt.
+   *
+   * STILL DEAD BY MISSING INPUT (#446): same as `detectUnderRouting` — the
+   * `autoSelectorComplexity` gate can never pass, because Go writes only
+   * `model` and `source` onto `model_selection`.
    */
   detectOverRouting(records: ExecutionHistoryRecord[]): OverRoutingPattern[] {
     const autoRecords = records.filter(
@@ -633,8 +659,13 @@ export class ModelPerformanceAnalyzer {
   /**
    * Generate threshold adjustment recommendations based on outcome data.
    *
-   * Analyzes the distribution of auto-selected records by complexity
+   * Analyzes the distribution of unsubstituted records by complexity
    * and suggests threshold adjustments when clear patterns emerge.
+   *
+   * STILL DEAD BY MISSING INPUT (#446): every real record buckets into
+   * `"unknown"` complexity, and only the XS/S and L/XL buckets can produce a
+   * recommendation, so the returned list stays empty on production data until
+   * a writer emits `autoSelectorComplexity`.
    */
   generateThresholdRecommendations(records: ExecutionHistoryRecord[]): ThresholdRecommendation[] {
     const autoRecords = records.filter(

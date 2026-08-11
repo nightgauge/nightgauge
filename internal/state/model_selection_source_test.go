@@ -1,10 +1,14 @@
 package state
 
 import (
+	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,11 +45,21 @@ var tsModelSelectionSourcePath = filepath.Join(
 // tsModelSelectionLiteralRegexp lifts
 // `export const MODEL_SELECTION_SOURCES = [...] as const;` out of the
 // TypeScript source. Whitespace is elastic because prettier reflows the array
-// whenever its width changes. The `(?m)^` anchor requires the declaration at
-// column 0 — a module-scope `export const` always is — so a `//`- or ` * `-
-// prefixed COPY inside a comment can never satisfy the pin.
+// whenever its width changes.
 //
-// Capture 1 is the raw bracket contents; tsModelSelectionMemberRegexp splits it.
+// What the `(?m)^` anchor actually buys: the declaration must start at column
+// 0, so a `//`- or ` * `-prefixed copy (a line comment, or a jsdoc body line)
+// cannot satisfy it. It does NOT exclude every commented-out copy — a
+// `/* … */` block comment whose contents begin at column 0 matches. That case
+// does not pass silently: two declarations trip the `default:` >1-match arm,
+// and a lone commented-out one is compared like any other and fails the
+// DeepEqual unless it happens to be correct.
+//
+// Capture 1 is the raw bracket contents; tsModelSelectionMemberRegexp splits
+// it. A derived form (`[...LEGACY, "scheduler", …]`) still matches and yields
+// only the literal members after the spread, which is a PARTIAL list rather
+// than zero matches — so the extraction is rejected explicitly below rather
+// than silently compared.
 var tsModelSelectionLiteralRegexp = regexp.MustCompile(
 	`(?m)^export const MODEL_SELECTION_SOURCES\s*=\s*\[([^\]]*)\]\s*as const;`)
 
@@ -78,16 +92,29 @@ func TestModelSelectionSourcesPinnedToSDK(t *testing.T) {
 	case 0:
 		t.Fatalf("no `export const MODEL_SELECTION_SOURCES = [...] as const;` array literal found in %s.\n"+
 			"The const was renamed, deleted, or rewritten in a form this pin cannot read "+
-			"(e.g. built from another array at runtime — keep the inline literal so both "+
-			"languages can read the vocabulary from one place). The literal must be a top-level "+
-			"declaration in THIS file: a commented-out copy or a re-export from another "+
-			"module does not count. A missing definition is a FAILURE, never a skip. %s",
+			"(e.g. `satisfies` in place of `as const`, or a re-export from another module — "+
+			"keep the inline literal so both languages can read the vocabulary from one "+
+			"place). The literal must be a top-level declaration, at column 0, in THIS file. "+
+			"A missing definition is a FAILURE, never a skip. %s",
 			tsModelSelectionSourcePath, modelSelectionRealignHint)
 	default:
 		t.Fatalf("found %d `export const MODEL_SELECTION_SOURCES = [...]` literals in %s; expected exactly 1.\n"+
 			"Ambiguous: this pin cannot tell which one the SDK actually exports, and #446 "+
 			"exists precisely to keep the vocabulary to a single declaration. %s",
 			len(matches), tsModelSelectionSourcePath, modelSelectionRealignHint)
+	}
+
+	// A spread (`[...LEGACY, "scheduler", …]`) is the one degenerate shape that
+	// can pass QUIETLY: the extractor sees only the literal members after the
+	// spread, so if those happen to equal Go's list the DeepEqual is green while
+	// the exported TypeScript enum accepts strictly more values than Go writes.
+	// Reject the shape instead of comparing a partial list.
+	if strings.Contains(matches[0][1], "...") {
+		t.Fatalf("MODEL_SELECTION_SOURCES in %s is built with a spread: body %q.\n"+
+			"This pin can only read the literal members, so a spread would compare a "+
+			"PARTIAL list and could pass while the TypeScript enum accepts values Go "+
+			"never writes. Keep the vocabulary as one inline literal. %s",
+			tsModelSelectionSourcePath, matches[0][1], modelSelectionRealignHint)
 	}
 
 	var want []string
@@ -109,6 +136,75 @@ func TestModelSelectionSourcesPinnedToSDK(t *testing.T) {
 			"Go is the only writer of this field and TypeScript is the only validator of it, "+
 			"so a value Go emits that TS does not list costs the whole record its strict parse. %s",
 			ModelSelectionSources, want, tsModelSelectionSourcePath, modelSelectionRealignHint)
+	}
+}
+
+// tsAutomaticModelSelectionSourceRegexp lifts
+// `export const AUTOMATIC_MODEL_SELECTION_SOURCE: ModelSelectionSource = "…";`
+// out of the same SDK file. Same column-0 anchor and same fail-never-skip
+// discipline as the array pin above.
+var tsAutomaticModelSelectionSourceRegexp = regexp.MustCompile(
+	`(?m)^export const AUTOMATIC_MODEL_SELECTION_SOURCE: ModelSelectionSource =\s*"([^"]+)";`)
+
+// TestAutomaticModelSelectionSourcePinnedToGoDefault closes the gap the array
+// pin leaves open: TestModelSelectionSourcesPinnedToSDK proves the two
+// vocabularies hold the SAME MEMBERS in the same order, and nothing else. It
+// says nothing about WHICH member means "the scheduler resolved this model and
+// nothing substituted it" — the value every SDK routing analytic filters on
+// (isAutoSelected, analyzeAutoSelectionOutcomes, detectUnder/OverRouting,
+// generateThresholdRecommendations).
+//
+// Without this arm, adding a fifth member to both lists and making it
+// BuildV2Record's default for a plain completed stage leaves both existing pins
+// green while every routing metric silently matches nothing again — the exact
+// failure #446 exists to close, reached from the other end. The TS-side
+// assertion in modelRouting.test.ts cannot cover it: its GO_WRITTEN_SOURCE is a
+// hand-copied literal in a TypeScript file, so it compares "scheduler" to
+// "scheduler".
+//
+// The Go side of the comparison is the WRITER, not a constant: whatever
+// BuildV2Record actually stamps on an unremarkable completed stage is what the
+// SDK must call automatic.
+func TestAutomaticModelSelectionSourcePinnedToGoDefault(t *testing.T) {
+	source, err := os.ReadFile(tsModelSelectionSourcePath)
+	if err != nil {
+		t.Fatalf("cannot read the SDK authority at %s: %v\n"+
+			"This pin is path-coupled: if analysis/types.ts moved or was renamed, move "+
+			"tsModelSelectionSourcePath in this test with it — do NOT delete the pin. %s",
+			tsModelSelectionSourcePath, err, modelSelectionRealignHint)
+	}
+
+	matches := tsAutomaticModelSelectionSourceRegexp.FindAllStringSubmatch(string(source), -1)
+	switch len(matches) {
+	case 1:
+		// The pinned shape. Fall through to the comparison below.
+	case 0:
+		t.Fatalf("no `export const AUTOMATIC_MODEL_SELECTION_SOURCE: ModelSelectionSource = \"…\";` "+
+			"declaration found in %s.\n"+
+			"It was renamed, deleted, retyped, or rewritten in a form this pin cannot read "+
+			"(a derived value, a different type annotation, single quotes). Keep it a "+
+			"top-level string literal at column 0 so Go can read which member means "+
+			"automatic. A missing definition is a FAILURE, never a skip. %s",
+			tsModelSelectionSourcePath, modelSelectionRealignHint)
+	default:
+		t.Fatalf("found %d `export const AUTOMATIC_MODEL_SELECTION_SOURCE` declarations in %s; "+
+			"expected exactly 1.\nAmbiguous: this pin cannot tell which one the SDK exports. %s",
+			len(matches), tsModelSelectionSourcePath, modelSelectionRealignHint)
+	}
+	tsAutomatic := matches[0][1]
+	t.Logf("extracted AUTOMATIC_MODEL_SELECTION_SOURCE from %s: %q",
+		tsModelSelectionSourcePath, tsAutomatic)
+
+	goDefault := buildOneStageRecord(t, nil).ModelSelection.Source
+	if tsAutomatic != goDefault {
+		t.Errorf("the SDK's \"automatic\" member does not match what Go writes for a plain "+
+			"completed stage:\n"+
+			"  Go   BuildV2Record default          = %q\n"+
+			"  TS   AUTOMATIC_MODEL_SELECTION_SOURCE = %q\n"+
+			"(internal/state/history.go vs %s)\n"+
+			"Every SDK routing analytic filters on the TS constant, so a mismatch makes them "+
+			"all match zero records without any other test going red. %s",
+			goDefault, tsAutomatic, tsModelSelectionSourcePath, modelSelectionRealignHint)
 	}
 }
 
@@ -165,6 +261,59 @@ func TestModelSelectionSourceForEscalationReason_IsTotal(t *testing.T) {
 					"costs the record its strict parse, which is the whole defect #446 closed",
 					tc.reason, got, ModelSelectionSources)
 			}
+		})
+	}
+}
+
+// reasonsDeliberatelyBucketed lists the EscalationReasons members whose
+// attribution to the ModelSourceEscalation catch-all is a DECISION, not an
+// oversight. It is empty today: the one reason any writer emits
+// (EscalationReasonModelUnavailable) has its own label. Adding an entry here is
+// how you record "this cause does not deserve its own source label" — and doing
+// so is a real choice, because the record keeps no other copy of the reason.
+var reasonsDeliberatelyBucketed = map[string]string{}
+
+// TestEscalationReasonsAreDeliberatelyLabeled is the closure guard the totality
+// test cannot be. TestModelSelectionSourceForEscalationReason_IsTotal proves
+// nothing ESCAPES the vocabulary; this proves nothing is silently MERGED into
+// it. Those are different failures: the mapping's `default:` arm is total by
+// construction, so a new reason plus a scheduler site that writes it compiles,
+// passes every other test, and lands on "escalation" with nothing red — and
+// because `model_selection.source` is the only place an escalation reason
+// reaches the history record (no V2/V3 field carries the raw string), the
+// distinct cause is destroyed rather than merely coarsened.
+//
+// Declaring the reason in EscalationReasons is what forces the decision here.
+func TestEscalationReasonsAreDeliberatelyLabeled(t *testing.T) {
+	if len(EscalationReasons) == 0 {
+		t.Fatal("EscalationReasons is empty — internal/state/runtime_state.go must list " +
+			"every reason a writer puts on EscalationRecord.Reason, or this guard checks nothing")
+	}
+
+	for _, reason := range EscalationReasons {
+		t.Run(reason, func(t *testing.T) {
+			got := modelSelectionSourceForEscalationReason(reason)
+			if got != ModelSourceEscalation {
+				return
+			}
+			if why, ok := reasonsDeliberatelyBucketed[reason]; ok {
+				t.Logf("reason %q buckets into %q on purpose: %s", reason, got, why)
+				return
+			}
+			t.Errorf("escalation reason %q maps to the %q catch-all, and nothing says that was "+
+				"intended.\n"+
+				"DECIDE ONE:\n"+
+				"  (a) it deserves its own attribution — add a case to "+
+				"modelSelectionSourceForEscalationReason in "+
+				"internal/state/model_selection_source.go, a matching Source constant there, "+
+				"and the matching member to MODEL_SELECTION_SOURCES in "+
+				"packages/nightgauge-sdk/src/analysis/types.ts (one commit, both files); or\n"+
+				"  (b) the catch-all is right — record that in reasonsDeliberatelyBucketed in "+
+				"this file.\n"+
+				"Silence is not an option: the reason string reaches the history record ONLY "+
+				"through this mapping, so an unlabelled reason is unrecoverable from the "+
+				"record afterwards. (Reason declared in internal/state/runtime_state.go, "+
+				"EscalationReasons.)", reason, got)
 		})
 	}
 }
@@ -247,6 +396,54 @@ func TestBuildV2Record_ModelSelectionSourceVocabulary(t *testing.T) {
 				t.Errorf("ModelSelection.Source = %q, want %q", stage.ModelSelection.Source, tc.want)
 			}
 		})
+	}
+}
+
+// TestBuildV2Record_ModelSelectionWireKeys closes the OTHER axis of the same
+// cross-language contract. Every other pin here is about the VALUE of
+// `model_selection.source`; this one is about the KEYS the record is written
+// under. Renaming a struct tag — `json:"source"` → `json:"src"` — builds clean
+// and survives internal/state, internal/pipeline, internal/platform and the IPC
+// suites, because the vocabulary pins compare string slices lifted from source
+// text and never a marshaled record, and the TypeScript fixture pins parse a
+// frozen capture rather than fresh Go output.
+//
+// The consequence is the regression #446 just removed, restored silently and
+// wholesale: HistoryStageDetailSchema requires both keys, so a renamed tag
+// drops every record back into executionHistoryReader's lenient raw cast, where
+// no zod default runs and the routing analytics go quiet again. Before #446 the
+// key name was inert — every record already failed strict parse on the value —
+// which is exactly why this needs its own guard now that the strict path is
+// live for the whole corpus.
+//
+// Marshaling is deliberate: it asserts the wire shape, not the Go field names.
+func TestBuildV2Record_ModelSelectionWireKeys(t *testing.T) {
+	stage := buildOneStageRecord(t, nil)
+
+	b, err := json.Marshal(stage.ModelSelection)
+	if err != nil {
+		t.Fatalf("marshal ModelSelection: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal ModelSelection: %v", err)
+	}
+
+	// Both directions by construction: a sorted key-set equality catches a
+	// renamed key, a dropped key and an added key alike.
+	want := []string{"model", "source"}
+	keys := slices.Sorted(maps.Keys(got))
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("model_selection wire keys = %q, want %q.\n"+
+			"packages/nightgauge-vscode/src/schemas/executionHistory.ts "+
+			"(HistoryStageDetailSchema) requires exactly these keys; renaming or dropping a "+
+			"json tag on V2ModelSelect (internal/state/history.go) costs every record its "+
+			"strict parse, the same as writing a value the enum does not list. %s",
+			keys, want, modelSelectionRealignHint)
+	}
+	if got["source"] != ModelSourceScheduler {
+		t.Errorf("wire source = %v, want %q — the key must carry the value, not merely exist",
+			got["source"], ModelSourceScheduler)
 	}
 }
 

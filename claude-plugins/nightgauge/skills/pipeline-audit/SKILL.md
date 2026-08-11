@@ -468,8 +468,13 @@ From `model_usage`, compute:
   and how often (e.g., feature-dev: 80% sonnet, 20% opus). Read from
   `model_usage.by_stage.<stage>` (also mirrored at
   `stage_metrics.<stage>.models`).
-- **Model source distribution**: How models were selected per stage (auto vs
-  config vs env vs stage-default). Read from `model_usage.by_source.<stage>`.
+- **Model source distribution**: How the stage ended up on the model it ran
+  (`scheduler` / `cli-refusal-fallback` / `model-unavailable-downgrade` /
+  `escalation` — the `MODEL_SELECTION_SOURCES` vocabulary; plus `unknown`
+  for a record whose source is empty). Read from
+  `model_usage.by_source.<stage>`. Note `scheduler` means the scheduler's
+  resolved model ran unsubstituted — it covers operator pins as well as
+  automatic picks, so never report it as "auto-selected".
 - **Misrouting detection**: Flag runs where expensive models (opus) were used
   for deterministic stages (issue-pickup, pr-create, pr-merge)
 - **Cost-per-model**: Cross-reference with `stage_metrics.<stage>.token_stats`
@@ -682,8 +687,8 @@ Assemble the full report:
       "pr-merge": { "haiku": 15 }
     },
     "by_source": {
-      "issue-pickup": { "stage-default": 15 },
-      "feature-dev": { "auto": 12, "config": 3 }
+      "issue-pickup": { "scheduler": 15 },
+      "feature-dev": { "scheduler": 12, "cli-refusal-fallback": 3 }
     }
   },
   "size_estimation_accuracy": {
@@ -770,12 +775,12 @@ PER-STAGE CACHE HIT RATE
 
 MODEL USAGE
 ───────────────────────────────────────────────────────────
-  issue-pickup:       haiku (100% via stage-default)
-  feature-planning:   sonnet (100% via auto)
-  feature-dev:        sonnet 80% / opus 20% (auto)
-  feature-validate:   haiku 53% / sonnet 47% (auto)
-  pr-create:          haiku (100% via stage-default)
-  pr-merge:           haiku (100% via stage-default)
+  issue-pickup:       haiku (100% via scheduler)
+  feature-planning:   sonnet (100% via scheduler)
+  feature-dev:        sonnet 80% / opus 20% (scheduler)
+  feature-validate:   haiku 53% / sonnet 47% (scheduler)
+  pr-create:          haiku (100% via scheduler)
+  pr-merge:           haiku (100% via scheduler)
 
 SIZE ESTIMATE ACCURACY (90 runs with size data)
 ───────────────────────────────────────────────────────────
@@ -1111,8 +1116,9 @@ Per-stage model selection analysis:
 
 - **Model distribution by stage**: Which model was used for each stage and how
   often
-- **Selection source breakdown**: auto vs config vs stage-default vs env
-  override
+- **Selection source breakdown**: `scheduler` vs `cli-refusal-fallback` vs
+  `model-unavailable-downgrade` vs `escalation` (see
+  `MODEL_SELECTION_SOURCES`), plus `unknown` for an empty source
 - **Misrouting detection**: Expensive models used for deterministic stages
 - **Cost-per-model-per-stage**: Average cost when each model is used per stage
 

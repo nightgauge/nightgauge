@@ -7,6 +7,7 @@
  * @see Issue #1010 - Telemetry Analytics Export
  */
 
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
 import {
@@ -18,6 +19,7 @@ import type {
   ExecutionHistoryRunRecordV2,
   ExecutionHistoryRecord,
 } from "../../src/schemas/executionHistory";
+import { ExecutionHistoryRunRecordV2Schema } from "../../src/schemas/executionHistory";
 import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
 
 // ============================================================================
@@ -1029,6 +1031,24 @@ describe("Real-data fixture tests (#2794)", () => {
   });
 
   describe("health-history-multi-run.jsonl — exportAsCsvRuns", () => {
+    // The fixture corpus must speak the live vocabulary, or these ~25
+    // assertions silently run against records that fell out of strict
+    // validation into ExecutionHistoryReader's lenient raw cast — the exact
+    // defect #446 removed, re-created inside the repo's own test data.
+    // `parseJsonlFile` never fails on such a record, so nothing else here can
+    // notice. safeParse is asserted directly, per record, for that reason.
+    it("every record STRICTLY parses against the live schema (#446)", () => {
+      const lines = readFileSync(path.join(FIXTURE_DIR, "health-history-multi-run.jsonl"), "utf-8")
+        .split("\n")
+        .filter((l) => l.trim().length > 0);
+      expect(lines.length).toBeGreaterThan(0);
+
+      for (const [i, line] of lines.entries()) {
+        const parsed = ExecutionHistoryRunRecordV2Schema.safeParse(JSON.parse(line));
+        expect(parsed.success ? null : { line: i + 1, issues: parsed.error.issues }).toBeNull();
+      }
+    });
+
     it("loads 4 run records from fixture", async () => {
       const records = await loadFixture("health-history-multi-run.jsonl");
       const runs = records.filter((r) => r.record_type === "run");

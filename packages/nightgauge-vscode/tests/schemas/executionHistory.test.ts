@@ -967,6 +967,19 @@ describe("ExecutionHistory Schemas", () => {
     // while the schema quietly lists an extra value the authority never
     // sanctioned, which is exactly how the nine dead values survived here for
     // as long as they did.
+    //
+    // READ THIS BLOCK NARROWLY. It proves the schema DERIVES from the
+    // authority, not anything about the authority's CONTENT. `z.enum(
+    // MODEL_SELECTION_SOURCES)` and the expectations below read the same
+    // array, so they move together by construction: swap or rename a member in
+    // packages/nightgauge-sdk/src/analysis/types.ts, rebuild the SDK dist, and
+    // all three tests here stay green. That is the property derivation is
+    // supposed to have — it is NOT a second line of defence. The vocabulary's
+    // content is pinned cross-language ONLY by
+    // internal/state/model_selection_source_test.go's
+    // TestModelSelectionSourcesPinnedToSDK (members and order) and
+    // TestAutomaticModelSelectionSourcePinnedToGoDefault (which member means
+    // automatic). Do not delete either as redundant with this block.
     it("lists exactly the authority's members, in the authority's order", () => {
       expect(sourceOptions()).toEqual([...MODEL_SELECTION_SOURCES]);
     });

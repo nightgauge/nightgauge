@@ -319,14 +319,14 @@ under/over-routing detection.
 
 **Key metrics**:
 
-| Metric                                 | Description                                                           |
-| -------------------------------------- | --------------------------------------------------------------------- |
-| `autoSelectionSuccessRate`             | Success rate for `selectionSource === 'auto'` records                 |
-| `underRoutingCount`                    | Auto-selected, lightweight model, high-complexity task, failed        |
-| `overRoutingCount`                     | Auto-selected, Opus model, low-complexity task, first-attempt success |
-| `distinctModelCount`                   | Number of distinct models observed                                    |
-| `model.{name}.successRate`             | Per-model success rate                                                |
-| `model.{name}.effectiveCostPerSuccess` | Per-model cost per successful run                                     |
+| Metric                                 | Description                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `autoSelectionSuccessRate`             | Success rate for `selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE` (`'scheduler'`) records |
+| `underRoutingCount`                    | Auto-selected, lightweight model, high-complexity task, failed                                  |
+| `overRoutingCount`                     | Auto-selected, Opus model, low-complexity task, first-attempt success                           |
+| `distinctModelCount`                   | Number of distinct models observed                                                              |
+| `model.{name}.successRate`             | Per-model success rate                                                                          |
+| `model.{name}.effectiveCostPerSuccess` | Per-model cost per successful run                                                               |
 
 **Under-routing**: lightweight model (Haiku/Sonnet) on L/XL complexity → failed.
 **Over-routing**: Opus on XS/S complexity → first-attempt success.

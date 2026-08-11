@@ -108,6 +108,17 @@ describe("undetermined-branch history record (#397)", () => {
       expect(rec.issue_number as number).toBeGreaterThan(0);
     });
 
+    it('carries "source":"scheduler" in the bytes Go emitted, not merely some member (#446)', () => {
+      // A VALUE pin on the raw line, for the same reason the branch pin above
+      // is one. The strict-parse test below is satisfied by ANY member of
+      // MODEL_SELECTION_SOURCES, so a fixture regenerated after a vocabulary
+      // rename would keep it green while the real corpus — 207/207 entries
+      // reading "scheduler" — dropped back to the lenient fallback. That is the
+      // exact defect #446 closed, so the byte the corpus actually carries is
+      // pinned to the file independently of what the enum happens to list.
+      expect(RUN_LINE).toContain('"source":"scheduler"');
+    });
+
     it("carries an empty branch on the index entry Go wrote alongside the run", () => {
       expect(RUN_INDEX.entries).toHaveLength(1);
       expect(RUN_INDEX.entries[0]).toHaveProperty("branch");
@@ -243,6 +254,23 @@ describe("undetermined-branch history record (#397)", () => {
         // whole record over.
         expect(history[0].branch).toBe("");
         expect(history[0].branch).not.toBeUndefined();
+
+        // #446's live-path regression pin, stated rather than implied. The two
+        // assertions above only prove the strict branch ran BECAUSE neither
+        // projection coerces (executionHistoryWriter's `branch: record.branch`
+        // and DashboardState's `branch: entry.branch`); a defensive `?? ""`
+        // added to either would silently delete the gate while every test
+        // stayed green. This witness does not depend on that: the #3228
+        // `cost_source` backfill runs ONLY inside `if (v2Result.success)` in
+        // ExecutionHistoryReader, and the captured per_stage blocks carry no
+        // cost_source of their own (keys: input/output/cache_read/
+        // cache_creation/cost_usd/cache_hit_rate/adapter), so its PRESENCE
+        // after a read is unambiguous proof the strict path executed on the
+        // live reader — for a record carrying a model_selection, which before
+        // #446 could only reach the lenient raw cast.
+        const recs = await ExecutionHistoryReader.readAll(root);
+        expect(recs).toHaveLength(1);
+        expect(recs[0].tokens.per_stage?.["feature-dev"]?.cost_source).toBeDefined();
       });
 
       it("rebuilds the same branch Go wrote into index.json", async () => {

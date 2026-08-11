@@ -4721,8 +4721,8 @@ after first merge. The `analysis` block is omitted entirely when
     }
   },
   "model_usage": {
-    "by_stage": { "feature-dev": { "claude-sonnet-4-6": 10 } },
-    "by_source": { "feature-dev": { "scheduler": 11 } }
+    "by_stage": { "feature-dev": { "claude-sonnet-4-6": 10, "claude-opus-4-7": 2 } },
+    "by_source": { "feature-dev": { "scheduler": 11, "cli-refusal-fallback": 1 } }
   },
   "analysis": {
     "size_baselines": {
