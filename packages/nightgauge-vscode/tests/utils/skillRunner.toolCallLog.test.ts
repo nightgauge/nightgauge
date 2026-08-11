@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   describeToolCallCorrelationGap,
@@ -215,6 +215,32 @@ describe("ToolCallLog — indexed-ness, joins, and duration (#402)", () => {
     expect(Object.prototype.hasOwnProperty.call(unjoined, "duration_ms")).toBe(false);
   });
 
+  it("measures the interval to the FIRST join and never revises it", () => {
+    // A `duration_ms` that is merely PRESENT proves nothing — a constant 0, or a
+    // value recomputed on every redelivery, satisfies every other arm here while
+    // the Dashboard renders a wrong number for every tool call. Pin the value and
+    // the first-join semantics: the interval is the call's, not the last
+    // envelope's.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      const log = new ToolCallLog();
+      use(log, "src/a.ts", "toolu_01");
+
+      vi.advanceTimersByTime(1234);
+      log.observeToolResult("toolu_01", false, "ok");
+      expect(log.snapshot()[0].duration_ms).toBe(1234);
+
+      vi.advanceTimersByTime(5000);
+      log.observeToolResult("toolu_01", false, "ok"); // same result, second shape
+      expect(log.snapshot()[0].duration_ms).toBe(1234);
+    } finally {
+      // Mandatory: a failed assertion above must not leak fake timers into the
+      // arms that follow.
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves duration_ms absent on an id-less call — the honesty the detector reports", () => {
     const log = new ToolCallLog();
     use(log, "src/a.ts");
@@ -252,9 +278,10 @@ describe("ToolCallLog — indexed-ness, joins, and duration (#402)", () => {
     // `tool_calls` crosses IPC into the persisted run record and must match Go's
     // ToolCallRecord exactly; a stray diagnostic field would be schema drift.
     const log = new ToolCallLog();
-    use(log, "src/a.ts", "toolu_01");
-    log.observeToolResult("toolu_01", false, "ok");
-    use(log, "src/b.ts");
+    use(log, "src/ok.ts", "toolu_01");
+    log.observeToolResult("toolu_01", false, "file contents");
+    use(log, "src/boom.ts", "toolu_02");
+    log.observeToolResult("toolu_02", true, "old_string not found");
 
     const wireKeys = ["tool", "target", "timestamp", "duration_ms", "result", "error"];
     for (const entry of log.snapshot()) {
@@ -262,6 +289,18 @@ describe("ToolCallLog — indexed-ness, joins, and duration (#402)", () => {
       expect(Object.prototype.hasOwnProperty.call(entry, "indexed")).toBe(false);
       expect(Object.prototype.hasOwnProperty.call(entry, "joined")).toBe(false);
     }
+
+    // Subset alone is one-directional: it catches a leaked field but not a
+    // DROPPED one, and `snapshot()` rebuilds the wire shape from six hand-written
+    // optional copies. `stage`, `args` and `caller` already exist on Go's
+    // ToolCallRecord, so the next key added to ToolCallLogEntry would otherwise
+    // be forgotten here silently and green. Assert the union is exactly the wire
+    // shape — success covers `result`, error covers `error`, and every non-
+    // optional-in-practice key appears on both.
+    const [successEntry, errorEntry] = log.snapshot();
+    expect(new Set([...Object.keys(successEntry), ...Object.keys(errorEntry)])).toEqual(
+      new Set(wireKeys)
+    );
   });
 });
 
@@ -276,6 +315,14 @@ describe("ToolCallLog — indexed-ness, joins, and duration (#402)", () => {
  * The predicate is "none of the RETAINED calls is indexed", not "the lifetime
  * correlated count is zero", for the reasons #302 established: the lifetime
  * form misdiagnoses a stage killed mid-call and goes blind to partial drift.
+ *
+ * Every arm that gets a warning also asserts the text contains neither "error"
+ * nor "failed" (case-insensitively). That is not style policing: this string is
+ * emitted through `callbacks.onStderr`, and both production consumers of that
+ * channel classify a line's severity by exactly those two substrings
+ * (`bootstrap/services.ts`, `ConcurrentPipelineManager.ts`). A stage that merely
+ * lost tool-id correlation would otherwise surface to the operator as an errored
+ * stage — and in concurrent mode route to `onSlotError`. This is an advisory.
  */
 describe("describeToolCallCorrelationGap — the tool-call log's self-check (#402)", () => {
   const use = (log: ToolCallLog, file: string, id?: string) =>
@@ -306,6 +353,16 @@ describe("describeToolCallCorrelationGap — the tool-call log's self-check (#40
     expect(warning).toContain("feature-dev");
     expect(warning).toContain("parsed 214 tool event(s)");
     expect(warning).toContain("(Issue #402)");
+    // Both arms are #402, so the tag cannot discriminate them the way #147's did
+    // for the bash sibling. Pin the arm by its own diagnosis instead: without
+    // this, killing the zero-call branch outright makes this stage emit arm 2's
+    // wrong story ("ids diverged") and the suite stays green.
+    expect(warning).toContain("recorded no tool call");
+    expect(warning).toContain("tool_calls array");
+    expect(warning).not.toContain("NONE of the");
+    // See the block comment above: neither keyword may appear.
+    expect(warning!.toLowerCase()).not.toContain("error");
+    expect(warning!.toLowerCase()).not.toContain("failed");
   });
 
   it("warns when NONE of the retained calls carried a usable id", () => {
@@ -329,7 +386,13 @@ describe("describeToolCallCorrelationGap — the tool-call log's self-check (#40
     expect(warning).toContain("parsed 214 tool event(s)");
     expect(warning).toContain("(0 result(s) correlated over the stage)");
     expect(warning).toContain("NONE of the 2 tool call(s) retained");
+    expect(warning).toContain("carries neither result nor failure detail nor duration_ms");
     expect(warning).toContain("(Issue #402)");
+    // The symmetric half of the arm-1 discriminator.
+    expect(warning).not.toContain("recorded no tool call");
+    // See the block comment above: neither keyword may appear.
+    expect(warning!.toLowerCase()).not.toContain("error");
+    expect(warning!.toLowerCase()).not.toContain("failed");
   });
 
   it("warns when the one correlated call evicted and the retained window is id-less", () => {
@@ -351,6 +414,9 @@ describe("describeToolCallCorrelationGap — the tool-call log's self-check (#40
     // describe the stage, not the retained window.
     expect(warning).toContain(`captured ${TOOL_CALL_LOG_MAX_ENTRIES + 1} tool call(s)`);
     expect(warning).toContain("(1 result(s) correlated over the stage)");
+    // See the block comment above: neither keyword may appear.
+    expect(warning!.toLowerCase()).not.toContain("error");
+    expect(warning!.toLowerCase()).not.toContain("failed");
   });
 
   it("says nothing when the only call had a good id and the stage died first", () => {

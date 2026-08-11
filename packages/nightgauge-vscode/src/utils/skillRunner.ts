@@ -1998,6 +1998,11 @@ export class ToolCallLog {
  *    have found them. Every retained row is missing its result, its error and
  *    its `duration_ms` by construction, and the Dashboard renders that exactly
  *    like a stage where every call succeeded quietly.
+ *
+ * Read the diagnosis, not the magnitudes: id-less calls cannot be deduped
+ * across delivery shapes (#156 keeps both), so in exactly the id-less scenario
+ * arm 2 reports, `capturedTotal` and the retained count can reach twice the
+ * real workload.
  */
 export function describeToolCallCorrelationGap(args: {
   stage: string;
@@ -2041,7 +2046,7 @@ export function describeToolCallCorrelationGap(args: {
       `(${correlatedResults} result(s) correlated over the stage), but NONE of the ` +
       `${retainedCalls} tool call(s) retained in the exit record carried a usable ` +
       `tool_use id — no tool_result could bind to any of them, so every retained ` +
-      `call is missing its result, its error and its duration_ms, and renders as a ` +
+      `call carries neither result nor failure detail nor duration_ms, and renders as a ` +
       `call that quietly succeeded. The stage's tool_use ids and the parser have ` +
       `likely diverged. (Issue #402)\n`
     );

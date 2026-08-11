@@ -952,14 +952,16 @@ excluded. The confirmed instances are filed as:
   indexed when the `tool_use` arrived id-less, `observeToolResult` returned
   silently, and no counter on the public surface noticed — so the Dashboard
   rendered rows with no result and no error, indistinguishable from calls that
-  all succeeded quietly. **Fixed:** the #302 mechanism mirrored onto the log —
-  per-entry `indexed`/`joined` bookkeeping, lifetime `capturedTotal` /
+  all succeeded quietly. **Fixed** for the id-less shape — batched parallel
+  `tool_result`s (results 2..N of one user message) render the same symptom and
+  remain a separate, pre-existing capture gap: the #302 mechanism mirrored onto
+  the log — per-entry `indexed`/`joined` bookkeeping, lifetime `capturedTotal` /
   `correlatedResults` counters, a `retainedIndexedCount` over the retained
   window, and a `describeToolCallCorrelationGap` sibling emitted from the same
   self-check site under the same `[forensic-capture-gap]` prefix. The join is
   also where `duration_ms` — a wire field the Dashboard already read and
-  nothing ever wrote — now gets populated; id-less entries stay without one,
-  which is the absence the detector reports
+  nothing ever wrote to the persisted record — now gets populated; id-less
+  entries stay without one, which is the absence the detector reports
 
 ### Dual-Path Drift (Issue #257)
 
