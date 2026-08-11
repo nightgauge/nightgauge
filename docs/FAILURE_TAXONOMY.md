@@ -802,6 +802,7 @@ cause. Worst case, the empty result is read as an affirmative verdict and
 | #165  | branch cleanup         | a pathspec that matched no file, so the "is it merged?" diff was empty and read as "merged"                                            |
 | #299  | reconcile / V2 history | the same `loadFeatureBranch(workspaceRoot, …)` shape: the branch-PR probe never ran, and history recorded a fabricated `feat/{N}`      |
 | #302  | four guards            | id-less stages passed the forensic self-check; zero-root sweeps, nil-state retraction, and all three terminal-funnel skips were silent |
+| #402  | tool-call log          | `ToolCallLog` recorded calls no `tool_result` could join and counted nothing; the Dashboard rendered them as quiet successes           |
 
 Every one passed its tests. Several sat in code whose own comment asserted it
 was the sole detection channel for the thing it was failing to detect.
@@ -946,6 +947,19 @@ excluded. The confirmed instances are filed as:
   silently skipping — review found the unfixed success-path copy silently
   leaked the concurrency slot, a worse outcome than the failure path the
   issue named. #402 tracks the same hole in `ToolCallLog`
+- **#402** — the same correlation hole in the all-tools `ToolCallLog` (#144),
+  which #302 deliberately left untouched: entries were pushed but never
+  indexed when the `tool_use` arrived id-less, `observeToolResult` returned
+  silently, and no counter on the public surface noticed — so the Dashboard
+  rendered rows with no result and no error, indistinguishable from calls that
+  all succeeded quietly. **Fixed:** the #302 mechanism mirrored onto the log —
+  per-entry `indexed`/`joined` bookkeeping, lifetime `capturedTotal` /
+  `correlatedResults` counters, a `retainedIndexedCount` over the retained
+  window, and a `describeToolCallCorrelationGap` sibling emitted from the same
+  self-check site under the same `[forensic-capture-gap]` prefix. The join is
+  also where `duration_ms` — a wire field the Dashboard already read and
+  nothing ever wrote — now gets populated; id-less entries stay without one,
+  which is the absence the detector reports
 
 ### Dual-Path Drift (Issue #257)
 

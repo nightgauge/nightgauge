@@ -1808,6 +1808,31 @@ export interface ToolCallLogEntry {
 }
 
 /**
+ * A {@link ToolCallLogEntry} plus the bookkeeping the log keeps about it.
+ *
+ * Deliberately NOT part of {@link ToolCallLogEntry}: that interface is the
+ * wire shape crossing IPC into `V2RunRecord.tool_calls` and must keep matching
+ * Go's `ToolCallRecord` exactly, so `snapshot()` rebuilds each entry
+ * field-by-field and these two can never leak into the persisted array. (#402)
+ */
+interface ToolCallLogRecord extends ToolCallLogEntry {
+  /**
+   * True when this tool_use arrived with a string id and was written to
+   * `byId` — i.e. a later tool_result *could* find it. False means the entry
+   * is unreachable by construction: no result will ever bind to it, whatever
+   * the CLI sends. Decided at observe time and never revised. (#402)
+   */
+  indexed: boolean;
+  /**
+   * True once a tool_result actually joined this entry. The join, not the
+   * payload, is what "correlated" means: `result` and `error` are BOTH
+   * legitimately absent for a successful call whose tool_result carried no
+   * text, so a payload-shaped predicate would recount every redelivery of it.
+   */
+  joined: boolean;
+}
+
+/**
  * Bounded, all-tools call log for a single stage (Issue #144).
  *
  * Same observe/correlate/bound shape as {@link RecentBashRing} but without
@@ -1816,22 +1841,53 @@ export interface ToolCallLogEntry {
  * `Dashboard.writeBackupHistoryRecord` used to provide (#143), threaded
  * instead through the existing Go-authoritative `pipeline.stageResult`
  * channel rather than a second history writer.
+ *
+ * It inherited the ring's correlation hole along with its shape (#402): the
+ * join is keyed by `toolUseId`, `tokenParser` drops non-string ids by design
+ * (#155/#169), and a stage whose events arrive id-less pushes entries that are
+ * never indexed while `observeToolResult` returns silently. Nothing counted
+ * that, so the Dashboard rendered rows with no result and no error —
+ * indistinguishable from calls that all quietly succeeded. The counters and
+ * {@link describeToolCallCorrelationGap} mirror the #302 treatment.
  */
 export class ToolCallLog {
-  private readonly entries: ToolCallLogEntry[] = [];
-  private readonly byId = new Map<string, ToolCallLogEntry>();
+  private readonly entries: ToolCallLogRecord[] = [];
+  private readonly byId = new Map<string, ToolCallLogRecord>();
+
+  /**
+   * Every tool call observed over the life of the stage, including the ones
+   * since evicted. `size` reports the window; this reports the workload, and
+   * the two differ the moment a stage makes more than
+   * {@link TOOL_CALL_LOG_MAX_ENTRIES} calls — so the warning must not conflate
+   * them.
+   */
+  private captured = 0;
+
+  /**
+   * How many tool_results actually JOINED a retained entry over the life of
+   * the stage. A lifetime tally: eviction never decrements it, because the
+   * question it answers is "did correlation ever work here?".
+   *
+   * Supporting data for the #402 report, NOT its predicate — correlation races
+   * the kill, and a lifetime tally cannot describe the entries the record
+   * carries. {@link retainedIndexedCount} decides; this explains.
+   */
+  private correlated = 0;
 
   /** Record a tool_use for any tool. No-op for calls with no toolName. */
   observeToolUse(toolName: string, toolInput: unknown, toolUseId?: string): void {
     if (!toolName) return;
     if (toolUseId !== undefined && this.byId.has(toolUseId)) return;
 
-    const entry: ToolCallLogEntry = {
+    const entry: ToolCallLogRecord = {
       tool: toolName,
       target: extractToolTarget(toolInput),
       timestamp: new Date().toISOString(),
+      indexed: toolUseId !== undefined,
+      joined: false,
     };
     this.entries.push(entry);
+    this.captured++;
     if (toolUseId !== undefined) this.byId.set(toolUseId, entry);
 
     while (this.entries.length > TOOL_CALL_LOG_MAX_ENTRIES) {
@@ -1846,22 +1902,151 @@ export class ToolCallLog {
     }
   }
 
-  /** Bind a tool_result's outcome to the tool call that produced it. */
+  /**
+   * Bind a tool_result's outcome to the tool call that produced it.
+   *
+   * This is also the only moment both ends of the call's interval are known,
+   * so it is where `duration_ms` — the wire field the Dashboard already reads
+   * and nothing ever wrote — gets populated. Only joined entries get one; an
+   * id-less entry stays without, which is exactly the absence
+   * {@link describeToolCallCorrelationGap} reports on.
+   */
   observeToolResult(toolUseId: string, isError: boolean, resultText?: string): void {
     const entry = this.byId.get(toolUseId);
     if (!entry) return;
+    // Count the JOIN, not the payload. The CLI can deliver the same result
+    // through more than one envelope shape, and a repeat delivery is not a
+    // second correlated result — counting it would let one chatty result mask
+    // a stage where nothing else correlated at all.
+    if (!entry.joined) {
+      this.correlated++;
+      entry.joined = true;
+      const startedAtMs = entry.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
+      if (!Number.isNaN(startedAtMs)) {
+        entry.duration_ms = Math.max(0, Math.round(Date.now() - startedAtMs));
+      }
+    }
     entry.error = isError ? resultText || "error" : undefined;
     entry.result = !isError ? resultText : undefined;
   }
 
-  /** Oldest-first copy for serialisation. */
+  /**
+   * Oldest-first copy for serialisation, in the wire shape only. Rebuilt
+   * field-by-field so {@link ToolCallLogRecord}'s diagnostic state cannot reach
+   * the persisted `tool_calls` array as schema drift.
+   */
   snapshot(): ToolCallLogEntry[] {
-    return this.entries.map((e) => ({ ...e }));
+    return this.entries.map((e) => {
+      const wire: ToolCallLogEntry = { tool: e.tool };
+      if (e.target !== undefined) wire.target = e.target;
+      if (e.timestamp !== undefined) wire.timestamp = e.timestamp;
+      if (e.duration_ms !== undefined) wire.duration_ms = e.duration_ms;
+      if (e.result !== undefined) wire.result = e.result;
+      if (e.error !== undefined) wire.error = e.error;
+      return wire;
+    });
   }
 
   get size(): number {
     return this.entries.length;
   }
+
+  /** See {@link captured} — the lifetime workload, not the retained window. */
+  get capturedTotal(): number {
+    return this.captured;
+  }
+
+  /** See {@link correlated}; reported as supporting data by the #402 arm. */
+  get correlatedResults(): number {
+    return this.correlated;
+  }
+
+  /**
+   * How many of the CURRENTLY RETAINED entries were indexed — i.e. how many of
+   * the calls the exit record will actually carry could ever have had a result
+   * bound to them.
+   *
+   * Zero here, with a non-empty log, is the #402 shape. It is a property of
+   * the window on purpose: a stage that correlated once early and then drifted
+   * evicts its one good entry, and that is precisely the record nothing else
+   * notices.
+   */
+  get retainedIndexedCount(): number {
+    let n = 0;
+    for (const e of this.entries) if (e.indexed) n++;
+    return n;
+  }
+}
+
+/**
+ * The tool-call log's correlation self-check, as a string or nothing (#402).
+ *
+ * Sibling to {@link describeForensicCaptureGap} — same `[forensic-capture-gap]`
+ * prefix so existing log greps and #147/#302 triage keep working, same guard,
+ * same two-arm structure, same retained-window predicate. Separate function
+ * rather than a shared body because the two report different records, count
+ * different things, and name different issues; only the shape is common.
+ *
+ * Lives outside `runStageSkillHeadless` for the reason #147 established: that
+ * function spawns a subprocess and cannot be exercised cheaply, and an
+ * untestable detector is how the original gap survived 2,533 records.
+ *
+ * 1. Tool events parsed, no tool call recorded at all — `tool_calls` will be
+ *    empty and the Dashboard's feed has nothing to show.
+ * 2. Tool calls retained, and NONE of them indexed — every `tool_use` still in
+ *    the record arrived without a string id, so no `tool_result` could ever
+ *    have found them. Every retained row is missing its result, its error and
+ *    its `duration_ms` by construction, and the Dashboard renders that exactly
+ *    like a stage where every call succeeded quietly.
+ */
+export function describeToolCallCorrelationGap(args: {
+  stage: string;
+  parsedToolEventCount: number;
+  /** Calls still in the log — the ones the exit record will carry. */
+  retainedCalls: number;
+  /** How many of those were indexed and could have bound a result. */
+  retainedIndexedCalls: number;
+  /** Lifetime calls observed, including evicted ones. Reported only. */
+  capturedTotal: number;
+  /** Lifetime tool_results that joined an entry. Reported only. */
+  correlatedResults: number;
+}): string | undefined {
+  const {
+    stage,
+    parsedToolEventCount,
+    retainedCalls,
+    retainedIndexedCalls,
+    capturedTotal,
+    correlatedResults,
+  } = args;
+  // No tool events parsed at all is a different (and already-reported)
+  // condition — a stage that genuinely did nothing, not a capture gap.
+  if (parsedToolEventCount <= 0) return undefined;
+
+  if (retainedCalls === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) but recorded no tool call, so the exit record's tool_calls array ` +
+      `will be absent and neither the Dashboard nor a retro can say what the stage ` +
+      `actually did. The stream parser and the CLI's event shape have likely ` +
+      `diverged. (Issue #402)\n`
+    );
+  }
+  // One indexed entry is enough to say the shapes still agree: whether its
+  // result arrived is a race with the kill, not a capture defect.
+  if (retainedIndexedCalls === 0) {
+    return (
+      `[forensic-capture-gap] Stage ${stage} parsed ${parsedToolEventCount} tool ` +
+      `event(s) and captured ${capturedTotal} tool call(s) ` +
+      `(${correlatedResults} result(s) correlated over the stage), but NONE of the ` +
+      `${retainedCalls} tool call(s) retained in the exit record carried a usable ` +
+      `tool_use id — no tool_result could bind to any of them, so every retained ` +
+      `call is missing its result, its error and its duration_ms, and renders as a ` +
+      `call that quietly succeeded. The stage's tool_use ids and the parser have ` +
+      `likely diverged. (Issue #402)\n`
+    );
+  }
+  return undefined;
 }
 
 /**
@@ -6078,6 +6263,26 @@ export function runStageSkillHeadless(
       // lands in the session log and the exit record still looks healthy and
       // terse, which is the exact failure being reported on.
       exitStderrTail = appendTail(exitStderrTail, gapWarning, STAGE_EXIT_STDERR_TAIL_MAX);
+    }
+
+    // The same divergence one level up (Issue #402). The all-tools log (#144)
+    // correlates by tool_use id too, so an id-less stage records calls that no
+    // tool_result ever joins — and because `result`, `error` and `duration_ms`
+    // are all optional, the Dashboard renders those rows exactly like calls
+    // that succeeded quietly. Reported on the same channel, and appended to the
+    // tail for the same reason: onStderr notifies the caller, it does not write
+    // the ring.
+    const toolCallGapWarning = describeToolCallCorrelationGap({
+      stage,
+      parsedToolEventCount,
+      retainedCalls: toolCallLog.size,
+      retainedIndexedCalls: toolCallLog.retainedIndexedCount,
+      capturedTotal: toolCallLog.capturedTotal,
+      correlatedResults: toolCallLog.correlatedResults,
+    });
+    if (toolCallGapWarning) {
+      callbacks?.onStderr?.(toolCallGapWarning);
+      exitStderrTail = appendTail(exitStderrTail, toolCallGapWarning, STAGE_EXIT_STDERR_TAIL_MAX);
     }
 
     // ── Worktree write containment: verdict (Issue #129) ────────────────
