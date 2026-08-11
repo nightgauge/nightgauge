@@ -17,9 +17,11 @@ import {
   AnyOutcomeRecordSchema,
   ToolCallRecordSchema,
   HistoryStageTokenUsageSchema,
+  HistoryStageDetailSchema,
   StageGateResultSchema,
 } from "../../src/schemas/executionHistory";
 import { PipelineStateSchema, validatePipelineState } from "../../src/schemas/pipelineState";
+import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 
 describe("ExecutionHistory Schemas", () => {
   describe("ExecutionHistoryRunRecordSchema", () => {
@@ -761,16 +763,7 @@ describe("ExecutionHistory Schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should validate token usage with model and model_source", () => {
-      const result = HistoryStageTokenUsageSchema.safeParse({
-        ...baseTokenUsage,
-        model: "sonnet",
-        model_source: "auto",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("should validate token usage with only model (no model_source)", () => {
+    it("should validate token usage with only model", () => {
       const result = HistoryStageTokenUsageSchema.safeParse({
         ...baseTokenUsage,
         model: "opus",
@@ -778,24 +771,15 @@ describe("ExecutionHistory Schemas", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should reject invalid model_source value", () => {
-      const result = HistoryStageTokenUsageSchema.safeParse({
-        ...baseTokenUsage,
-        model: "sonnet",
-        model_source: "invalid",
-      });
-      expect(result.success).toBe(false);
-    });
-
-    it("should accept all valid model_source variants", () => {
-      for (const source of ["env", "config", "auto", "default"] as const) {
-        const result = HistoryStageTokenUsageSchema.safeParse({
-          ...baseTokenUsage,
-          model: "sonnet",
-          model_source: source,
-        });
-        expect(result.success).toBe(true);
-      }
+    // #446 deleted `model_source` from this block: it had no writer in any
+    // language, no reader but the CSV exporter's `??` chain, and zero
+    // occurrences across the real corpus — a second copy of the selection
+    // vocabulary that existed only to drift. Attribution lives on the stage
+    // detail (`model_selection.source`), which is asserted below.
+    it("no longer carries a model_source field", () => {
+      const shape = Object.keys(HistoryStageTokenUsageSchema.shape);
+      expect(shape).toContain("model");
+      expect(shape).not.toContain("model_source");
     });
   });
 
@@ -857,7 +841,6 @@ describe("ExecutionHistory Schemas", () => {
       const result = HistoryStageTokenUsageSchema.safeParse({
         ...baseTokenUsage,
         model: "sonnet",
-        model_source: "auto",
         cache_hit_rate: 0.75,
       });
       expect(result.success).toBe(true);
@@ -963,6 +946,54 @@ describe("ExecutionHistory Schemas", () => {
       if (result.success) {
         expect(result.data.terminal_kind).toBeUndefined();
       }
+    });
+  });
+  // ==========================================================================
+  // model_selection.source — one vocabulary, derived not restated (#446)
+  // ==========================================================================
+
+  describe("model_selection.source derives from MODEL_SELECTION_SOURCES (#446)", () => {
+    /** The zod enum's own option list, however zod chooses to expose it. */
+    function sourceOptions(): string[] {
+      const modelSelection = HistoryStageDetailSchema.shape.model_selection;
+      // `.optional()` wraps the object; unwrap to reach the shape.
+      const inner = (
+        modelSelection as unknown as { unwrap: () => { shape: Record<string, unknown> } }
+      ).unwrap().shape["source"] as { options: string[] };
+      return [...inner.options];
+    }
+
+    // BOTH directions on purpose (#402's lesson): a subset assertion passes
+    // while the schema quietly lists an extra value the authority never
+    // sanctioned, which is exactly how the nine dead values survived here for
+    // as long as they did.
+    it("lists exactly the authority's members, in the authority's order", () => {
+      expect(sourceOptions()).toEqual([...MODEL_SELECTION_SOURCES]);
+    });
+
+    it("has no member the authority does not list, and lists no member it lacks", () => {
+      const schemaSet = new Set(sourceOptions());
+      const authoritySet = new Set<string>(MODEL_SELECTION_SOURCES);
+      expect([...schemaSet].filter((v) => !authoritySet.has(v))).toEqual([]);
+      expect([...authoritySet].filter((v) => !schemaSet.has(v))).toEqual([]);
+    });
+
+    it("accepts every authority member and rejects a retired one", () => {
+      const base = { status: "complete" as const };
+      for (const source of MODEL_SELECTION_SOURCES) {
+        const result = HistoryStageDetailSchema.safeParse({
+          ...base,
+          model_selection: { model: "claude-sonnet-4-6", source },
+        });
+        expect(result.success ? null : result.error.issues).toBeNull();
+      }
+      // "auto" was the value the analytics filters and the docs believed in.
+      // No writer ever emitted it; the schema must not pretend otherwise.
+      const retired = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: { model: "claude-sonnet-4-6", source: "auto" },
+      });
+      expect(retired.success).toBe(false);
     });
   });
 });

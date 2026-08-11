@@ -745,6 +745,17 @@ const COLD_START_IDLE_KILL_FLOOR_MS = 30 * 60 * 1000;
  * - `auto`: AutoModelSelector chose based on issue complexity
  * - `default`: Global default or hardcoded fallback
  *
+ * BOUNDARY (#446): this is the DISPATCH-side axis — how the extension resolved
+ * a model to spawn with, before the stage runs. It is NOT
+ * `ModelSelectionSource` / `MODEL_SELECTION_SOURCES` in
+ * packages/nightgauge-sdk/src/analysis/types.ts, which answers a different
+ * question after the fact: how the stage ended up on the model it actually ran
+ * (scheduler / cli-refusal-fallback / model-unavailable-downgrade /
+ * escalation). Only the latter is persisted — Go writes it and no value from
+ * this type ever reaches a history record. Keep the two apart: merging them
+ * would smuggle `go-scheduler` into a vocabulary no writer emits, which is the
+ * failure #446 closed.
+ *
  * @since Issue #732
  */
 export type ModelSource =

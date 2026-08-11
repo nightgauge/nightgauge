@@ -82,11 +82,14 @@ Note what the captures show and could not have been guessed:
   one. Its issue number is deliberately **positive**: that is exactly the case
   the pre-#397 synthesizer turned into `feat/397`.
 - The completed run carries `stages.<s>.model_selection.source: "scheduler"`,
-  a value `schemas/executionHistory.ts` does not list in its `source` enum. So
-  every record with a `model_selection` fails `safeParse` and lands in
-  `executionHistoryReader`'s lenient fallback. That drift predates #397 and is
-  untouched by it — the tests say so where it constrains them — but nothing in
-  the tree revealed it until a real record was read by the real schema.
+  a value `schemas/executionHistory.ts` did not list in its `source` enum when
+  this capture was taken. So every record with a `model_selection` failed
+  `safeParse` and landed in `executionHistoryReader`'s lenient fallback —
+  nothing in the tree revealed that until a real record was read by the real
+  schema. #446 fixed it by making the SDK's `MODEL_SELECTION_SOURCES` the one
+  vocabulary authority (Go mirrors it under a cross-language pin), and the
+  capture now parses strictly, model_selection included. The test that used to
+  delete the field to reach the schema asserts the whole record instead.
 
 ## Content is synthetic — nothing to redact
 

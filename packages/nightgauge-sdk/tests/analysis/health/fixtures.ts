@@ -66,7 +66,7 @@ export function makeExecutionRecord(
     costUsd: 0.25,
     durationMs: 120000,
     timestamp: daysAgo(5),
-    selectionSource: "auto",
+    selectionSource: "scheduler",
     autoSelectorComplexity: "M",
     ...overrides,
   };
@@ -340,7 +340,7 @@ export function makeDegradingDataset(): HealthAnalysisInput {
           outputTokens: 3000 + s * 500,
           cacheReadTokens,
           cacheCreationTokens: 500,
-          selectionSource: "auto",
+          selectionSource: "scheduler",
           model: s < 2 ? "haiku" : "opus",
           autoSelectorComplexity: s < 2 ? "L" : "XS",
         })

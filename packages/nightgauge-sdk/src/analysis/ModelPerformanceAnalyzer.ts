@@ -27,6 +27,7 @@ import type {
   OverRoutingPattern,
   ThresholdRecommendation,
 } from "./types.js";
+import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "./types.js";
 import type { ExperimentReport } from "./experiment-types.js";
 import { DEFAULT_MODEL_COST_RATES } from "./types.js";
 import { AutoModelSelector } from "./AutoModelSelector.js";
@@ -417,11 +418,16 @@ export class ModelPerformanceAnalyzer {
   /**
    * Analyze auto-selection outcomes across all records.
    *
-   * Filters to records where selectionSource === 'auto', computes
-   * per-stage success rates, and compares to overall success rates.
+   * Filters to records the scheduler picked automatically
+   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`), computes per-stage success rates,
+   * and compares to overall success rates. Until #446 this filtered on
+   * `"auto"`, a value no writer has ever emitted, so every number below was
+   * structurally zero.
    */
   analyzeAutoSelectionOutcomes(records: ExecutionHistoryRecord[]): AutoSelectionAnalysis {
-    const autoRecords = records.filter((r) => r.selectionSource === "auto");
+    const autoRecords = records.filter(
+      (r) => r.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE
+    );
 
     if (autoRecords.length === 0) {
       return {
@@ -499,7 +505,9 @@ export class ModelPerformanceAnalyzer {
    * complexity was L/XL AND the stage failed.
    */
   detectUnderRouting(records: ExecutionHistoryRecord[]): UnderRoutingPattern[] {
-    const autoRecords = records.filter((r) => r.selectionSource === "auto");
+    const autoRecords = records.filter(
+      (r) => r.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE
+    );
     const patterns: UnderRoutingPattern[] = [];
 
     // Group by stage + model + complexity
@@ -553,7 +561,9 @@ export class ModelPerformanceAnalyzer {
    * complexity was XS/S AND the stage succeeded on first attempt.
    */
   detectOverRouting(records: ExecutionHistoryRecord[]): OverRoutingPattern[] {
-    const autoRecords = records.filter((r) => r.selectionSource === "auto");
+    const autoRecords = records.filter(
+      (r) => r.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE
+    );
     const patterns: OverRoutingPattern[] = [];
 
     const groups = new Map<
@@ -627,7 +637,9 @@ export class ModelPerformanceAnalyzer {
    * and suggests threshold adjustments when clear patterns emerge.
    */
   generateThresholdRecommendations(records: ExecutionHistoryRecord[]): ThresholdRecommendation[] {
-    const autoRecords = records.filter((r) => r.selectionSource === "auto");
+    const autoRecords = records.filter(
+      (r) => r.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE
+    );
     const recommendations: ThresholdRecommendation[] = [];
 
     if (autoRecords.length < 10) {

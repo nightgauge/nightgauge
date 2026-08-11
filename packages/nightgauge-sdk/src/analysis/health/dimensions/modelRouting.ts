@@ -8,6 +8,7 @@
  */
 
 import type { ExecutionHistoryRecord } from "../../types.js";
+import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "../../types.js";
 import type {
   HealthAnalysisInput,
   HealthAnalysisConfig,
@@ -32,8 +33,14 @@ function modelKey(record: ExecutionHistoryRecord): string {
   return (record.model ?? "unknown").toLowerCase();
 }
 
+/**
+ * True when nothing overrode the scheduler's automatic pick, i.e. the record is
+ * evidence about routing rather than about a substitution. Until #446 this
+ * compared against `"auto"` — a value the writer cannot produce — so this
+ * dimension reported "no auto-selection data" for every corpus ever analyzed.
+ */
 function isAutoSelected(record: ExecutionHistoryRecord): boolean {
-  return record.selectionSource === "auto";
+  return record.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE;
 }
 
 function isLightweightModel(model: string): boolean {

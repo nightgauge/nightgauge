@@ -54,7 +54,7 @@ const makeRunRecord = (
       duration_ms: 300000,
       model_selection: {
         model: "claude-haiku-4-5",
-        source: "auto",
+        source: "scheduler",
         confidence: 0.9,
         complexity: "low",
         mode: "automatic",
@@ -69,7 +69,7 @@ const makeRunRecord = (
       duration_ms: 900000,
       model_selection: {
         model: "claude-sonnet-4-6",
-        source: "config",
+        source: "scheduler",
         confidence: 0.95,
         complexity: "medium",
         mode: "automatic",
@@ -84,7 +84,7 @@ const makeRunRecord = (
       duration_ms: 1200000,
       model_selection: {
         model: "claude-opus-4-6",
-        source: "env",
+        source: "model-unavailable-downgrade",
         confidence: 1.0,
         complexity: "high",
         mode: "manual",
@@ -124,7 +124,6 @@ const makeRunRecord = (
         cache_creation: 200,
         cost_usd: 0.005,
         model: "claude-haiku-4-5",
-        model_source: "auto",
       },
       "feature-planning": {
         input: 15000,
@@ -133,7 +132,6 @@ const makeRunRecord = (
         cache_creation: 3000,
         cost_usd: 0.04,
         model: "claude-sonnet-4-6",
-        model_source: "config",
       },
       "feature-dev": {
         input: 28000,
@@ -142,7 +140,6 @@ const makeRunRecord = (
         cache_creation: 4500,
         cost_usd: 0.075,
         model: "claude-opus-4-6",
-        model_source: "env",
       },
       "pr-create": {
         input: 3000,
@@ -151,7 +148,6 @@ const makeRunRecord = (
         cache_creation: 200,
         cost_usd: 0.003,
         model: "claude-haiku-4-5",
-        model_source: "auto",
       },
       "pr-merge": {
         input: 1000,
@@ -160,7 +156,6 @@ const makeRunRecord = (
         cache_creation: 100,
         cost_usd: 0.000456,
         model: "claude-haiku-4-5",
-        model_source: "default",
       },
     },
   },
@@ -603,7 +598,7 @@ describe("exportAsCsvStages()", () => {
     expect(cols[7]).toBe("4500"); // cache_creation
     expect(cols[8]).toBe("0.075000"); // cost_usd
     expect(cols[9]).toBe("claude-opus-4-6"); // model
-    expect(cols[10]).toBe("env"); // model_source
+    expect(cols[10]).toBe("model-unavailable-downgrade"); // model_source (from model_selection)
     expect(cols[11]).toBe("32768"); // context_file_size_bytes
     expect(cols[12]).toBe(""); // error (none)
   });
@@ -624,9 +619,10 @@ describe("exportAsCsvStages()", () => {
     // Token columns are empty when per_stage is absent
     expect(cols[4]).toBe(""); // input_tokens
     expect(cols[5]).toBe(""); // output_tokens
-    // model and model_source come from model_selection
+    // model and the model_source COLUMN both come from model_selection now:
+    // the per_stage `model_source` field was deleted with #446.
     expect(cols[9]).toBe("claude-opus-4-6");
-    expect(cols[10]).toBe("env");
+    expect(cols[10]).toBe("model-unavailable-downgrade");
   });
 
   it("outputs empty strings for missing token data on a stage", () => {

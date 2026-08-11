@@ -783,18 +783,24 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// resolution from a run where model changes occurred (escalation,
 		// fallback, or the CLI's silent refusal swap), so consumers can flag
 		// substituted stages without diffing against the predicted model.
+		//
+		// Every value written here comes from ModelSelectionSources
+		// (model_selection_source.go), the vocabulary the SDK enum validates.
+		// The escalation branch maps the reason instead of passing it through:
+		// until #446 it assigned esc.Reason verbatim, so the record carried a
+		// terminal-kind string no reader's enum listed.
 		if m := snap.StageModels[stageName]; m != "" {
-			source := "scheduler"
+			source := ModelSourceScheduler
 			for _, fb := range snap.ModelRefusalFallbacks {
 				if fb.Stage == stageName {
-					source = "cli-refusal-fallback"
+					source = ModelSourceCLIRefusalFallback
 					break
 				}
 			}
-			if source == "scheduler" {
+			if source == ModelSourceScheduler {
 				for _, esc := range snap.EscalationHistory {
 					if string(esc.Stage) == stageName {
-						source = esc.Reason
+						source = modelSelectionSourceForEscalationReason(esc.Reason)
 						break
 					}
 				}

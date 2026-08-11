@@ -199,7 +199,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 600,
         cost_usd: 0.0078,
         model: "claude-haiku-4-5",
-        model_source: "auto",
       },
       "feature-planning": {
         input: 18500,
@@ -208,7 +207,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 3800,
         cost_usd: 0.0525,
         model: "claude-sonnet-4-6",
-        model_source: "config",
       },
       "feature-dev": {
         input: 38000,
@@ -217,7 +215,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 7500,
         cost_usd: 0.1134,
         model: "claude-sonnet-4-6",
-        model_source: "config",
       },
       "feature-validate": {
         input: 4200,
@@ -226,7 +223,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 400,
         cost_usd: 0.0082,
         model: "claude-haiku-4-5",
-        model_source: "auto",
       },
       "pr-create": {
         input: 2800,
@@ -235,7 +231,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 150,
         cost_usd: 0.0064,
         model: "claude-haiku-4-5",
-        model_source: "auto",
       },
       "pr-merge": {
         input: 800,
@@ -244,7 +239,6 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
         cache_creation: 50,
         cost_usd: 0.00202,
         model: "claude-haiku-4-5",
-        model_source: "default",
       },
     },
   },

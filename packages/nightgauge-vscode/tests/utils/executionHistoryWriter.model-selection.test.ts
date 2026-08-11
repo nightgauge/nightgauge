@@ -34,7 +34,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "sonnet",
-            source: "auto",
+            source: "scheduler",
             confidence: 0.85,
             complexity: "M",
             mode: "automatic",
@@ -52,7 +52,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
 
     expect(record.stages["feature-planning"]?.model_selection).toBeDefined();
     expect(record.stages["feature-planning"]?.model_selection?.model).toBe("sonnet");
-    expect(record.stages["feature-planning"]?.model_selection?.source).toBe("auto");
+    expect(record.stages["feature-planning"]?.model_selection?.source).toBe("scheduler");
     expect(record.stages["feature-planning"]?.model_selection?.confidence).toBe(0.85);
     expect(record.stages["feature-planning"]?.model_selection?.complexity).toBe("M");
     expect(record.stages["feature-planning"]?.model_selection?.mode).toBe("automatic");
@@ -71,7 +71,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
   it("should handle model_selection with all fields populated", () => {
     const fullModelSelection = {
       model: "opus",
-      source: "config" as const,
+      source: "scheduler" as const,
       confidence: 0.95,
       complexity: "XL",
       mode: "hybrid" as const,
@@ -98,7 +98,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
 
     expect(ms).toBeDefined();
     expect(ms?.model).toBe("opus");
-    expect(ms?.source).toBe("config");
+    expect(ms?.source).toBe("scheduler");
     expect(ms?.confidence).toBe(0.95);
     expect(ms?.complexity).toBe("XL");
     expect(ms?.mode).toBe("hybrid");
@@ -107,7 +107,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
   it("should handle model_selection with only required fields (model, source)", () => {
     const minimalModelSelection = {
       model: "haiku",
-      source: "default" as const,
+      source: "scheduler" as const,
     };
 
     const state = createMockPipelineState({
@@ -131,7 +131,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
 
     expect(ms).toBeDefined();
     expect(ms?.model).toBe("haiku");
-    expect(ms?.source).toBe("default");
+    expect(ms?.source).toBe("scheduler");
     expect(ms?.confidence).toBeUndefined();
     expect(ms?.complexity).toBeUndefined();
     expect(ms?.mode).toBeUndefined();
@@ -145,14 +145,14 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "haiku",
-            source: "default" as const,
+            source: "scheduler" as const,
           },
         },
         "feature-planning": {
           status: "complete",
           model_selection: {
             model: "sonnet",
-            source: "auto" as const,
+            source: "scheduler" as const,
             confidence: 0.8,
             complexity: "M",
             mode: "automatic" as const,
@@ -162,7 +162,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "opus",
-            source: "env" as const,
+            source: "cli-refusal-fallback" as const,
             confidence: 0.92,
             complexity: "XL",
             mode: "manual" as const,
@@ -172,7 +172,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "sonnet",
-            source: "config" as const,
+            source: "scheduler" as const,
             confidence: 0.75,
             complexity: "S",
           },
@@ -188,13 +188,13 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
     // issue-pickup: haiku / default
     const issueMs = record.stages["issue-pickup"]?.model_selection;
     expect(issueMs?.model).toBe("haiku");
-    expect(issueMs?.source).toBe("default");
+    expect(issueMs?.source).toBe("scheduler");
     expect(issueMs?.confidence).toBeUndefined();
 
     // feature-planning: sonnet / auto
     const planMs = record.stages["feature-planning"]?.model_selection;
     expect(planMs?.model).toBe("sonnet");
-    expect(planMs?.source).toBe("auto");
+    expect(planMs?.source).toBe("scheduler");
     expect(planMs?.confidence).toBe(0.8);
     expect(planMs?.complexity).toBe("M");
     expect(planMs?.mode).toBe("automatic");
@@ -202,7 +202,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
     // feature-dev: opus / env
     const devMs = record.stages["feature-dev"]?.model_selection;
     expect(devMs?.model).toBe("opus");
-    expect(devMs?.source).toBe("env");
+    expect(devMs?.source).toBe("cli-refusal-fallback");
     expect(devMs?.confidence).toBe(0.92);
     expect(devMs?.complexity).toBe("XL");
     expect(devMs?.mode).toBe("manual");
@@ -210,7 +210,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
     // feature-validate: sonnet / config
     const valMs = record.stages["feature-validate"]?.model_selection;
     expect(valMs?.model).toBe("sonnet");
-    expect(valMs?.source).toBe("config");
+    expect(valMs?.source).toBe("scheduler");
     expect(valMs?.confidence).toBe(0.75);
     expect(valMs?.complexity).toBe("S");
     expect(valMs?.mode).toBeUndefined();
@@ -231,7 +231,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "sonnet",
-            source: "auto",
+            source: "scheduler",
             confidence: 0.85,
             complexity: "M",
             mode: "automatic",
@@ -241,7 +241,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
           status: "complete",
           model_selection: {
             model: "opus",
-            source: "env",
+            source: "cli-refusal-fallback",
           },
         },
         "feature-validate": { status: "complete" },
@@ -283,20 +283,22 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
 
     const record = ExecutionHistoryWriter.buildRunRecord(state);
 
-    // feature-planning: has model_selection → model info in tokens
+    // feature-planning: has model_selection → model id in tokens. The
+    // companion `model_source` key is gone with #446 — the token block never
+    // had a reader for it and the attribution lives on the stage detail.
     const planTokens = record.tokens.per_stage?.["feature-planning"] as Record<string, unknown>;
     expect(planTokens?.model).toBe("sonnet");
-    expect(planTokens?.model_source).toBe("auto");
+    expect(planTokens).not.toHaveProperty("model_source");
 
-    // feature-dev: has model_selection → model info in tokens
+    // feature-dev: has model_selection → model id in tokens
     const devTokens = record.tokens.per_stage?.["feature-dev"] as Record<string, unknown>;
     expect(devTokens?.model).toBe("opus");
-    expect(devTokens?.model_source).toBe("env");
+    expect(devTokens).not.toHaveProperty("model_source");
 
     // feature-validate: no model_selection → no model info
     const valTokens = record.tokens.per_stage?.["feature-validate"] as Record<string, unknown>;
     expect(valTokens?.model).toBeUndefined();
-    expect(valTokens?.model_source).toBeUndefined();
+    expect(valTokens).not.toHaveProperty("model_source");
   });
 
   it("should not add model fields to per_stage when per_stage is absent (Issue #1006)", () => {
@@ -306,7 +308,7 @@ describe("ExecutionHistoryWriter — model_selection in buildRunRecord()", () =>
         "issue-pickup": { status: "complete" },
         "feature-planning": {
           status: "complete",
-          model_selection: { model: "sonnet", source: "auto" },
+          model_selection: { model: "sonnet", source: "scheduler" },
         },
         "feature-dev": { status: "complete" },
         "feature-validate": { status: "complete" },

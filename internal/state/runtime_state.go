@@ -291,6 +291,16 @@ type EscalationRecord struct {
 	At        time.Time     `json:"at"`
 }
 
+// EscalationReasonModelUnavailable is the Reason the sticky model-unavailable
+// downgrade (#42) records — the only reason any writer puts on an
+// EscalationRecord today. The STRING VALUE is existing on-disk telemetry
+// vocabulary and must not change; #446 named it so the two scheduler
+// construction sites and the history writer stop spelling it out
+// independently. It is mapped onto the model_selection vocabulary by
+// modelSelectionSourceForEscalationReason (model_selection_source.go) — the
+// history record never carries a raw reason string.
+const EscalationReasonModelUnavailable = "model_unavailable"
+
 // StageResult records the outcome of a completed stage.
 type StageResult struct {
 	Stage        PipelineStage `json:"stage"`

@@ -51,7 +51,9 @@ For each run record, extract per-stage data including model selection metadata
 Use the parsed records to compute:
 
 1. **Auto-selection success rates by stage** — Filter to records where
-   `model_selection.source === 'auto'`, compute success/failure per stage
+   `model_selection.source === 'scheduler'` (the source that means nothing
+   overrode the scheduler's automatic pick — see `MODEL_SELECTION_SOURCES`),
+   compute success/failure per stage
 2. **Cost comparison** — Compare actual costs of auto-selected runs vs
    hypothetical static-model costs
 3. **Confidence distribution** — Histogram of auto-selector confidence values

@@ -4591,7 +4591,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					Stage:     stage,
 					FromModel: result.FallbackFromModel,
 					ToModel:   result.FallbackToModel,
-					Reason:    "model_unavailable",
+					Reason:    state.EscalationReasonModelUnavailable,
 					At:        time.Now(),
 				})
 				tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
@@ -4950,7 +4950,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 						Stage:     stage,
 						FromModel: model,
 						ToModel:   dg.NewTier,
-						Reason:    "model_unavailable",
+						Reason:    state.EscalationReasonModelUnavailable,
 						At:        time.Now(),
 					})
 					tracer.Emit(trace.KindComplexityEscalation, string(stage), trace.EscalationPayload{
