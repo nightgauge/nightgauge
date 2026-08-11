@@ -27,7 +27,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { resolveRuntimeSnapshotPath } from "../../src/utils/runtimeSnapshotResolver";
+import {
+  resolveRuntimeSnapshotPath,
+  isSnapshotName,
+} from "../../src/utils/runtimeSnapshotResolver";
 
 /** Go `state.Persist` output, verbatim. See the provenance note above. */
 const GO_SNAPSHOTS: Record<string, string> = {
@@ -170,5 +173,28 @@ describe("resolveRuntimeSnapshotPath", () => {
     const seen2: string[] = [];
     expect(resolveRuntimeSnapshotPath(dir, 700, (f) => seen2.push(f))).not.toBeNull();
     expect(seen2).toEqual([]);
+  });
+
+  // THE NAME PATTERN'S OWN REFUSAL TABLE. Every case above reaches the pattern
+  // only through `fs.readdirSync` output, and each one only ever asserts which
+  // snapshot WINS — so four widening mutations of the pattern (drop `^`, drop
+  // `$`, re-transcribe an any-version/any-variant identity, widen by
+  // alternation) survived this whole file green. The sibling ANY_RUNTIME_FILE in
+  // runtimeStubSweep kills all four because it has a refusal table; this is that
+  // table, over the seam `isSnapshotName` exposes.
+  it("snapshot name pattern — anchored, and the VALIDATOR's identity shape", () => {
+    const live = "runtime-700-019fe6f0-14da-7470-93cf-4dfc9e88e1e8.json";
+    expect(isSnapshotName(700, live)).toBe(true);
+    for (const name of [
+      `${live}.tmp`, // mid-atomic-rename: needs the `$`. Reading a half-written
+      // file as a candidate is how a torn snapshot becomes the answer.
+      `stale-${live}`, // prefixed: needs the `^`
+      "runtime-700-3f2504e0-4f89-41d3-9a0c-0305e82c3301.json", // UUIDv4 — the
+      // fragment must be the VALIDATOR's shape, not "any UUID". An id this
+      // pattern finds but isRunIdentity refuses is the phantom snapshot.
+      "runtime-700-019FE6F0-14DA-7470-93CF-4DFC9E88E1E8.json", // uppercase
+      "runtime-701-019fe6f0-14da-7470-93cf-4dfc9e88e1e8.json", // another issue
+    ])
+      expect(isSnapshotName(700, name), name).toBe(false);
   });
 });

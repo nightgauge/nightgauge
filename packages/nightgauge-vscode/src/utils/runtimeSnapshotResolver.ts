@@ -20,8 +20,25 @@
  * @see docs/decisions/017-runtime-identity-keying.md
  */
 
+import { RUN_IDENTITY_SHAPE } from "@nightgauge/sdk";
 import * as fs from "fs";
 import * as path from "path";
+
+// LOUD BEATS SILENT. `RUN_IDENTITY_SHAPE` can arrive `undefined` at runtime, and
+// not hypothetically: the extension resolves @nightgauge/sdk from `dist/`, and a
+// dist built before #424 added the export has no such key — through esbuild's
+// CJS interop that is a plain `undefined`, not a link error. Interpolating it
+// yields the STRING "undefined" inside the pattern, so this resolver would match
+// ZERO snapshots forever — and every caller turns its null into `{}` and then
+// into a legacy heuristic, so the operator's only symptom is a false
+// `[gate-not-invoked]` (the exact silence this module was split out to end).
+// Fail at module load instead, where the message names the cause and the fix.
+if (typeof RUN_IDENTITY_SHAPE !== "string" || RUN_IDENTITY_SHAPE.length === 0) {
+  throw new Error(
+    "runtimeSnapshotResolver: a stale or mismatched @nightgauge/sdk dist did " +
+      "not provide RUN_IDENTITY_SHAPE — rebuild it (npm run build -w @nightgauge/sdk)"
+  );
+}
 
 /** The subset of the snapshot body this resolver reads. */
 interface SnapshotHeader {
@@ -40,11 +57,36 @@ interface Candidate {
  * The canonical snapshot name for one issue: `runtime-{issue}-{runId}.json`
  * where runId is a canonical lowercase UUIDv7. Mirrors the Go side's
  * `snapshotFilePattern`, itself built from `runstate.IdentityPattern`.
+ *
+ * The identity fragment is INTERPOLATED from the one TypeScript definition
+ * (`RUN_IDENTITY_SHAPE`, @nightgauge/sdk) rather than transcribed here (#424):
+ * a discovery regex that drifts from the validator is an id that passes
+ * validation and then cannot be found on disk — the phantom-snapshot shape
+ * ADR-017 Decision 1 exists to make impossible.
+ *
+ * The fragment is WRAPPED in `(?:…)` per its documented embedding contract, the
+ * same way Go groups `IdentityPattern` at every embed site. A bare
+ * interpolation is only accidentally correct: a top-level alternation inside the
+ * fragment would re-associate this pattern so `^runtime-N-` and `\.json$` bound
+ * different branches, and `<anything>.json.tmp` would read as a snapshot name.
  */
 function snapshotNamePattern(issueNumber: number): RegExp {
-  return new RegExp(
-    `^runtime-${issueNumber}-[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.json$`
-  );
+  return new RegExp(`^runtime-${issueNumber}-(?:${RUN_IDENTITY_SHAPE})\\.json$`);
+}
+
+/**
+ * True when `fileName` is issue `issueNumber`'s canonical snapshot name.
+ *
+ * Exported for one reason: {@link snapshotNamePattern} is reached only through
+ * `fs.readdirSync` output, so every property of it — the `^`/`$` anchors, and
+ * that the identity component is the VALIDATOR's shape rather than any UUID —
+ * was previously provable only by staging files on disk, and four widening
+ * mutations of the pattern survived the whole resolver suite green. This is the
+ * thin seam that lets those be red bars (#424 review). Its sibling
+ * `ANY_RUNTIME_FILE` in runtimeStubSweep.ts is exported for the same reason.
+ */
+export function isSnapshotName(issueNumber: number, fileName: string): boolean {
+  return snapshotNamePattern(issueNumber).test(fileName);
 }
 
 /** The pre-ADR-017 name, matched ONLY to diagnose the mixed-version window. */

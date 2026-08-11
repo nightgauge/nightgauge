@@ -150,11 +150,23 @@ func TestPersistAndSealRefuseAPathTraversingIdentity_AndTouchNothingOutsideState
 // getState, and nothing ever removed it — a silent phantom run, which is the
 // exact defect #44 exists to prevent.
 func TestPersist_RefusesANonCanonicalIdentity_SoNoPhantomSnapshotIsWritten(t *testing.T) {
+	// This slice and the TypeScript refusal table in
+	// packages/nightgauge-sdk/src/__tests__/runIdentity.test.ts are deliberately
+	// the SAME SET, case for case (#424 review): "both sides refuse the same
+	// strings" is only a claim while one table is a superset of the other, and a
+	// row present on one side alone is where a one-sided widening hides.
 	for _, id := range []string{
 		"3f2504e0-4f89-41d3-9a0c-0305e82c3301", // UUIDv4 — right length, wrong version nibble
 		"run_01H8XGJWBWBAQ4ZZY1N1V9PJ0M",       // ULID with a prefix
 		"019FE6F3-FCFE-7B6F-8A7C-BE0F444B6610", // canonical shape, UPPERCASE
 		"019fe6f3-fcfe-7b6f-8a7c-be0f444b6610 ",
+		" 019fe6f3-fcfe-7b6f-8a7c-be0f444b6610",  // leading space — kills a TrimLeft/TrimSpace transform
+		"019fe6f3-fcfe-7b6f-8a7c-be0f444b6610\n", // trailing newline
+		// Two canonical-shaped lines in one string. RE2 has no `m` flag here, so
+		// ^…$ bracket the whole string and this is refused; a per-line reading of
+		// the anchors would accept it. Twin of the TS embedded-newline arm.
+		"aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee\n019fe6f3-fcfe-7b6f-8a7c-be0f444b6610",
+		"019fe6f3-fcfe-7b6f-ca7c-be0f444b6610", // wrong variant nibble (c)
 	} {
 		t.Run(id, func(t *testing.T) {
 			dir := t.TempDir()

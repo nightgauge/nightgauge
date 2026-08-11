@@ -2008,6 +2008,7 @@
   },
   "scripts": {
     "generate:contributions": "tsx scripts/generate-package-contributions.ts",
+    "prebuild": "bash scripts/check-sdk-freshness.sh",
     "build": "npm run generate:contributions && npm run build:types && npm run build:bundle && npm run build:notices && npm run build:assets",
     "build:types": "tsc --emitDeclarationOnly",
     "prebuild:bundle": "bash scripts/check-sdk-freshness.sh",
@@ -2017,6 +2018,7 @@
     "watch": "npm run build:bundle -- --watch",
     "package": "bash scripts/package-local.sh",
     "clean": "rm -rf dist",
+    "pretest": "bash scripts/check-sdk-freshness.sh",
     "test": "vitest run",
     "test:run": "vitest run",
     "test:playwright": "playwright test",
