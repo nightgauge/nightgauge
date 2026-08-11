@@ -4,12 +4,13 @@
  * SOURCE OF TRUTH IS GO: `internal/runstate/identity.go` (`IdentityPattern`,
  * `IdentityRegexp`, `IsIdentity`) — ADR-017 Decision 1. TypeScript cannot
  * import Go, so this module is the second definition site, and there is
- * exactly one of it: every TypeScript consumer — the IPC notify params, the
- * snapshot-filename resolver, the runtime-stub sweep, the minter's own tests —
- * derives from here rather than transcribing the character sequence again. An
- * id one side accepts and the other refuses is a `run_id_invalid` refusal at
- * ADR-017 step 4: the extension mints an identity the server will not key on,
- * and every progress call for that run is silently discarded (F16's shape).
+ * exactly one of it: every TypeScript consumer — `PipelineStateService`'s IPC
+ * path (the validator), the snapshot-filename resolver and the runtime-stub
+ * sweep (the fragment), the minter's own tests — derives from here rather than
+ * transcribing the character sequence again. An id one side accepts and the
+ * other refuses is a `run_id_invalid` refusal at ADR-017 step 4: the extension
+ * mints an identity the server will not key on, and every progress call for that
+ * run is silently discarded (F16's shape).
  *
  * THIS FILE IS PINNED FROM GO. `internal/runstate/identity_crosslang_test.go`
  * (`TestIdentityPatternPinnedToTypeScriptTwin`) reads THIS path, lifts the
@@ -52,8 +53,26 @@ export const RUN_IDENTITY_PATTERN =
  *
  * DERIVED from {@link RUN_IDENTITY_PATTERN} by stripping its `^`/`$`, never
  * transcribed: a second hand-written copy of the character sequence is the
- * drift this module exists to remove. The fragment adds no capture groups, so
- * interpolating it never displaces a surrounding pattern's group numbers.
+ * drift this module exists to remove.
+ *
+ * EMBEDDING CONTRACT — WRAP IT IN A NON-CAPTURING GROUP:
+ * `` new RegExp(`^runtime-${n}-(?:${RUN_IDENTITY_SHAPE})\\.json$`) ``. This is
+ * public SDK API, so the contract is the exported thing, not a local habit.
+ * Today's fragment is a flat concatenation with no top-level `|`, but a BARE
+ * interpolation is only accidentally correct: the day the shape grows an
+ * alternation (a second legal id encoding, say), `^pre-${SHAPE}\.json$`
+ * re-associates as `(^pre-branchA)|(branchB\.json$)` — the anchors bind to one
+ * branch each and `anything.json.tmp` starts matching a "snapshot name". Go's
+ * embed sites already wrap for exactly this reason, so wrapping here also keeps
+ * the two languages composing the shape the same way.
+ *
+ * The two properties an embedder leans on — the fragment adds NO capture groups
+ * (so a surrounding `runtime-(\d+)` keeps group 1), and it is SELF-CONTAINED (no
+ * top-level alternation) — are pinned by red bars in the `RUN_IDENTITY_SHAPE
+ * derivation` block of `__tests__/runIdentity.test.ts` (the group-count arm and
+ * the bare `PRE-…-POST` arm), not merely asserted in this comment. The wrap is
+ * still required at embed sites: it is what keeps a future alternation contained
+ * instead of silently re-associating every embedder at once.
  */
 export const RUN_IDENTITY_SHAPE = RUN_IDENTITY_PATTERN.source.slice(1, -1);
 

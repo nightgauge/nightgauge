@@ -22,6 +22,22 @@
 
 import { RUN_IDENTITY_SHAPE } from "@nightgauge/sdk";
 
+// LOUD BEATS SILENT. `RUN_IDENTITY_SHAPE` can arrive `undefined` at runtime, and
+// not hypothetically: the extension resolves @nightgauge/sdk from `dist/`, and a
+// dist built before #424 added the export has no such key — through esbuild's
+// CJS interop that is a plain `undefined`, not a link error. Interpolating it
+// yields the STRING "undefined" inside ANY_RUNTIME_FILE, which would then refuse
+// every new-scheme snapshot: activation silently stops offering live runs for
+// restore. Fail at module load instead, where the message names the cause and
+// the fix. (`pretest`/`prebuild:bundle` run scripts/check-sdk-freshness.sh to
+// catch the same staleness one step earlier; this is the runtime backstop.)
+if (typeof RUN_IDENTITY_SHAPE !== "string" || RUN_IDENTITY_SHAPE.length === 0) {
+  throw new Error(
+    "runtimeStubSweep: a stale or mismatched @nightgauge/sdk dist did not " +
+      "provide RUN_IDENTITY_SHAPE — rebuild it (npm run build -w @nightgauge/sdk)"
+  );
+}
+
 /** The subset of runtime-<N>.json fields the sweep inspects. */
 export interface RuntimeStubFields {
   repo?: string | null;
@@ -48,10 +64,21 @@ export const LEGACY_RUNTIME_FILE = /^runtime-(\d+)\.json$/;
  * Issue number is capture 1 in both, so callers parse it the same way.
  *
  * The identity fragment is INTERPOLATED from the one TypeScript definition
- * (`RUN_IDENTITY_SHAPE`, @nightgauge/sdk) rather than transcribed here (#424).
- * It contributes NO capture groups, so the issue number stays capture 1.
+ * (`RUN_IDENTITY_SHAPE`, @nightgauge/sdk) rather than transcribed here (#424),
+ * and WRAPPED in `(?:…)` per its documented embedding contract — the same way Go
+ * groups `IdentityPattern` at every embed site. The wrap is what makes the outer
+ * `(?:-…)?` optional group mean "an OPTIONAL identity suffix" rather than
+ * "optionally the fragment's first alternative, or else its others unguarded".
+ *
+ * That the fragment contributes NO capture groups — which is what keeps the
+ * issue number at capture 1 here — is pinned in the SDK, by the group-count arm
+ * in `packages/nightgauge-sdk/src/__tests__/runIdentity.test.ts`. It cannot be
+ * pinned from this file: `(\d+)` opens before the interpolation, so group 1 is
+ * structurally immovable and an assertion about it here is a tautology.
  */
-export const ANY_RUNTIME_FILE = new RegExp(`^runtime-(\\d+)(?:-${RUN_IDENTITY_SHAPE})?\\.json$`);
+export const ANY_RUNTIME_FILE = new RegExp(
+  `^runtime-(\\d+)(?:-(?:${RUN_IDENTITY_SHAPE}))?\\.json$`
+);
 
 /**
  * Decide what the activation sweep may do with a file, BY NAME FIRST.
