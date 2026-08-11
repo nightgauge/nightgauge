@@ -200,15 +200,8 @@ func TestAutonomous_CascadeResetsOnResume(t *testing.T) {
 func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 	as := newAutonomousForCascadeTest(t, 3, 30*time.Minute)
 	var observed []AutonomousStatusChange
-	done := make(chan struct{}, 1)
 	as.onStatusChange = func(snap AutonomousStatusChange) {
 		observed = append(observed, snap)
-		if snap.Status == "safety_tripped" {
-			select {
-			case done <- struct{}{}:
-			default:
-			}
-		}
 	}
 
 	for _, num := range []int{500, 501, 502} {
@@ -217,15 +210,17 @@ func TestAutonomous_CascadeFiresStatusChange(t *testing.T) {
 		as.drainBackground()
 	}
 
-	select {
-	case <-done:
-		// ok — async callback fired
-	case <-time.After(2 * time.Second):
-		t.Fatalf("timed out waiting for safety_tripped status change; observed=%+v", observed)
+	// No wait: the in-loop drain is the happens-before edge (WaitGroup.Wait),
+	// so every status-change callback has already run and `observed` is safe to
+	// read from this goroutine. A timed wait here would let the clock, not the
+	// join, decide the outcome.
+	if len(observed) == 0 {
+		t.Fatal("no status-change event observed after 3 failures inside the window")
 	}
-
-	// Confirm the last observed status carries the canonical tag.
 	last := observed[len(observed)-1]
+	if last.Status != "safety_tripped" {
+		t.Fatalf("last observed status = %q, want safety_tripped; observed=%+v", last.Status, observed)
+	}
 	if last.PauseTriggeredBy != CascadePauseReason {
 		t.Errorf("PauseTriggeredBy = %q, want %q", last.PauseTriggeredBy, CascadePauseReason)
 	}
@@ -322,7 +317,7 @@ func TestPromoteUnblockedToReady_PromotesIndependentBacklogNode(t *testing.T) {
 		return buildTestGraph([]*depgraph.Node{completed, independent}, nil), nil
 	}
 
-	as.promoteUnblockedToReady("nightgauge/nightgauge", 1)
+	as.promoteUnblockedToReady(as.backgroundContext(), "nightgauge/nightgauge", 1)
 	as.drainBackground()
 
 	if as.state.LastPromotionEligible != 1 {

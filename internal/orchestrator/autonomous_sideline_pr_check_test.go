@@ -66,7 +66,7 @@ func TestSidelineHalt_NoPR_MovesToInProgress(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
 	as.drainBackground()
 
 	got := buf.String()
@@ -94,7 +94,7 @@ func TestSidelineHalt_PRExists_MovesToInReview(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "pr-merge: PR was not merged")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "pr-merge: PR was not merged")
 	as.drainBackground()
 
 	got := buf.String()
@@ -115,7 +115,7 @@ func TestSidelineHalt_QueryFails_FailsToInProgress(t *testing.T) {
 	buf := withCapturedLog(t)
 
 	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
 	as.drainBackground()
 
 	got := buf.String()

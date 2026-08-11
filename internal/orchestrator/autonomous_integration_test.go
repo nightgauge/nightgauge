@@ -69,6 +69,7 @@ func newTestHarness(t *testing.T, cfg AutonomousConfig, graphProvider testGraphP
 		safetyCfg.EpicCheckpoint = cfg.SafetyRails.EpicCheckpoint
 	}
 	as.safetyRails = NewSafetyRails(safetyCfg)
+	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
 
 	h := &autonomousTestHarness{
 		scheduler:     as,
@@ -197,14 +198,21 @@ func (h *autonomousTestHarness) runOneCycle(t *testing.T) {
 }
 
 // simulateCompletion simulates a pipeline completing for a given repo/number.
+//
+// Both helpers drain: onPipelineComplete spawns tracked board-recovery work
+// (promoteUnblockedToReady on success, revertFailedIssueStatus on failure), and
+// the 18 call sites in this file funnel through here — so the join belongs at
+// the trigger, not only in the harness cleanup.
 func (h *autonomousTestHarness) simulateCompletion(repo string, number int, success bool) {
 	h.scheduler.onPipelineComplete(repo, number, success, false, "", "")
+	h.scheduler.drainBackground()
 }
 
 // simulateTerminalCompletion is like simulateCompletion but lets a test
 // simulate a specific terminal failure kind (Issue #3398).
 func (h *autonomousTestHarness) simulateTerminalCompletion(repo string, number int, success bool, terminalKind string) {
 	h.scheduler.onPipelineComplete(repo, number, success, false, terminalKind, "")
+	h.scheduler.drainBackground()
 }
 
 // getCycles returns the number of cycles completed.

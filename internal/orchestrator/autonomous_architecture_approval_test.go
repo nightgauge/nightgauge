@@ -205,7 +205,7 @@ func TestArchitectureApproval_NoPRSidelinedIssueBlocksDependent(t *testing.T) {
 	// sidelineHalt itself must choose "In progress", not "In review", for the
 	// halted issue given no confirmed PR.
 	buf := withCapturedLog(t)
-	as.sidelineHalt("O/app", 900, "architecture approval required")
+	as.sidelineHalt(as.backgroundContext(), "O/app", 900, "architecture approval required")
 	as.drainBackground()
 	got := buf.String()
 	if !strings.Contains(got, "move-to-in-progress:") {

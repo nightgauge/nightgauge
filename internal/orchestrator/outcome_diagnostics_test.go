@@ -10,7 +10,6 @@
 package orchestrator
 
 import (
-	"bytes"
 	"log"
 	"strings"
 	"testing"
@@ -21,11 +20,18 @@ import (
 )
 
 // captureLog redirects the standard logger for the duration of fn.
+//
+// The sink is lockedLog, the same mutex-guarded buffer withCapturedLog installs
+// (autonomous_sideline_pr_check_test.go). Same reason: log.Logger serializes
+// writers against each other but not against a reader that never takes its
+// mutex, and every caller of this helper lives in a file with live scheduler
+// background work. One helper type for the whole package — two capture helpers
+// with different safety properties is the drift that produced the bug.
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &lockedLog{}
 	prevOut, prevFlags := log.Writer(), log.Flags()
-	log.SetOutput(&buf)
+	log.SetOutput(buf)
 	log.SetFlags(0)
 	t.Cleanup(func() {
 		log.SetOutput(prevOut)

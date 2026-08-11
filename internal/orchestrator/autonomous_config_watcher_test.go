@@ -103,6 +103,19 @@ autonomous:
 		WatchAutonomousConfig(ctx, reloader, tmp)
 		close(done)
 	}()
+	// Join before the configReloadInterval / machine-config-path restores run —
+	// the watcher reads configReloadInterval once at startup, so a restore while
+	// it is live is a write racing that read. t.Cleanup is LIFO, so registering
+	// here (after those two) puts this first, and unlike a body-tail join it
+	// still runs when an assertion below t.Fatals.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("watcher did not exit on context cancel")
+		}
+	})
 
 	// Wait for initial mtime to be recorded (a single tick).
 	time.Sleep(150 * time.Millisecond)
@@ -146,13 +159,6 @@ autonomous:
 			t.Errorf("unexpected repo in allowlist: %s", r)
 		}
 	}
-
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("watcher did not exit on context cancel")
-	}
 }
 
 func TestWatchAutonomousConfigSkipsWhenSchedulerStopped(t *testing.T) {
@@ -189,6 +195,17 @@ autonomous:
 		WatchAutonomousConfig(ctx, reloader, tmp)
 		close(done)
 	}()
+	// Same LIFO-ordered join as TestWatchAutonomousConfigReappliesAllowlistOnChange:
+	// it must run before the configReloadInterval / machine-config-path restores,
+	// and it must run even when an assertion below t.Fatals.
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("watcher did not exit on context cancel")
+		}
+	})
 
 	// Bump mtime; the watcher must observe the change but skip FilterRepos.
 	time.Sleep(100 * time.Millisecond)
@@ -202,14 +219,5 @@ autonomous:
 
 	if reloader.callCount() != 0 {
 		t.Fatalf("expected FilterRepos to be skipped while scheduler stopped, got %d calls", reloader.callCount())
-	}
-
-	// Join the watcher before the test's configReloadInterval restore cleanup
-	// runs — the watcher reads that var at startup and on every tick.
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("watcher did not exit on context cancel")
 	}
 }

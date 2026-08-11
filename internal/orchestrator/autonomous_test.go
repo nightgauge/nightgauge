@@ -4119,11 +4119,12 @@ func TestRevertFailedIssueStatus_NoProjectConfigIsNoOp(t *testing.T) {
 		repos: nil,
 		state: &AutonomousState{},
 	}
-	// Should not panic and should not block.
+	// Should not panic and should not block. The call is synchronous on this
+	// goroutine, so there is nothing tracked to join — a drain here would join
+	// an empty generation and say nothing.
 	done := make(chan struct{})
 	go func() {
-		as.revertFailedIssueStatus("nightgauge/unknown", 999)
-		as.drainBackground()
+		as.revertFailedIssueStatus(as.backgroundContext(), "nightgauge/unknown", 999)
 		close(done)
 	}()
 	select {
@@ -4151,8 +4152,8 @@ func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) 
 		rescanCh: make(chan struct{}, 1),
 	}
 
-	// Should not panic + should remove from Running. The goroutine is fire-
-	// and-forget; we don't need to synchronize on it for the unit test.
+	// Should not panic + should remove from Running. The drain joins the
+	// tracked revertFailedIssueStatus goroutine, so it cannot outlive the test.
 	as.onPipelineComplete("nightgauge/nightgauge", 871, false, false, "", "")
 	as.drainBackground()
 
@@ -4162,11 +4163,6 @@ func TestOnPipelineComplete_Failure_TriggersStatusRevertGoroutine(t *testing.T) 
 	if len(as.state.Failed) != 1 {
 		t.Fatalf("expected 1 failed after failure, got %d", len(as.state.Failed))
 	}
-
-	// Give the goroutine a moment so it doesn't leak past the test's lifetime.
-	// Without ghClient/repos it should return quickly via the no-project-config
-	// branch.
-	time.Sleep(50 * time.Millisecond)
 }
 
 func TestOnPipelineComplete_Success_DoesNotTriggerRevert(t *testing.T) {
