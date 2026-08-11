@@ -66,6 +66,7 @@ func TestRunRefinementCycle_SkipsUntrustedAuthor(t *testing.T) {
 	})
 
 	as.runRefinementCycle(context.Background())
+	as.drainBackground()
 
 	select {
 	case got := <-dispatched:

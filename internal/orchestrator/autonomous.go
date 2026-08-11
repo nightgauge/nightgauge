@@ -831,6 +831,18 @@ type AutonomousScheduler struct {
 	running bool
 	stopCh  chan struct{} // signals dispatch loop only — one reader
 
+	// Background-goroutine lifecycle (#428). Every detached spawn in this file
+	// goes through goTracked so in-flight work can be cancelled and joined:
+	// bgWG counts it, bgCtx is the parent context each detached op derives its
+	// deadline from, and bgCancel reaches in-flight `gh` execs through
+	// exec.CommandContext. Lazily initialized under bgMu — most tests in this
+	// package construct the scheduler as a bare struct literal, so the zero
+	// value must be usable. bgMu is never held while taking mu.
+	bgMu     sync.Mutex
+	bgWG     sync.WaitGroup
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+
 	// stopRefinementCh signals the refinement goroutine to exit. Kept separate
 	// from stopCh so each channel has exactly one reader, eliminating the race
 	// where the refinement goroutine drains the shared buffer before the main
@@ -1215,14 +1227,20 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 	defer timer.Stop()
 	consecutiveIdleCycles := 0
 
-	// Start refinement scan loop (parallel to dispatch loop)
+	// Start refinement scan loop (parallel to dispatch loop). It is the one
+	// tracked goroutine that loops rather than running to completion, so it
+	// needs a lifecycle-cancel arm of its own — otherwise waitBackground would
+	// block on it until the Run context ends.
 	if as.config.RefinementEnabled {
-		go func() {
+		bgDone := as.backgroundContext().Done()
+		as.goTracked(func() {
 			refinementTicker := time.NewTicker(as.config.RefinementInterval)
 			defer refinementTicker.Stop()
 			for {
 				select {
 				case <-ctx.Done():
+					return
+				case <-bgDone:
 					return
 				case <-as.stopRefinementCh:
 					return
@@ -1230,7 +1248,7 @@ func (as *AutonomousScheduler) Run(ctx context.Context) error {
 					as.runRefinementCycle(ctx)
 				}
 			}
-		}()
+		})
 	}
 
 	// Recover orphaned running items from a previous crashed session.
@@ -1725,7 +1743,76 @@ const minGitHubQuotaHeadroom = 200
 // is safe. Issue #3976.
 const boardRecoveryTimeout = 80 * time.Minute
 
+// backgroundContext returns the parent context for detached background work,
+// creating it on first use. Detached board-recovery ops derive their
+// boardRecoveryTimeout deadline from this instead of context.Background() so
+// cancelBackground reaches their in-flight `gh` execs.
+func (as *AutonomousScheduler) backgroundContext() context.Context {
+	as.bgMu.Lock()
+	defer as.bgMu.Unlock()
+	return as.ensureBackgroundLocked()
+}
+
+// ensureBackgroundLocked lazily creates the lifecycle context. Caller holds bgMu.
+func (as *AutonomousScheduler) ensureBackgroundLocked() context.Context {
+	if as.bgCtx == nil {
+		as.bgCtx, as.bgCancel = context.WithCancel(context.Background())
+	}
+	return as.bgCtx
+}
+
+// goTracked spawns fn as background work the scheduler can join. Every `go`
+// statement in this file goes through it — an untracked spawn is a goroutine
+// that outlives whatever it reads.
+func (as *AutonomousScheduler) goTracked(fn func()) {
+	as.bgMu.Lock()
+	as.ensureBackgroundLocked()
+	as.bgWG.Add(1)
+	as.bgMu.Unlock()
+	go func() {
+		defer as.bgWG.Done()
+		fn()
+	}()
+}
+
+// cancelBackground cancels the lifecycle context, unblocking in-flight `gh`
+// execs in detached board-recovery work. It does not wait.
+func (as *AutonomousScheduler) cancelBackground() {
+	as.bgMu.Lock()
+	cancel := as.bgCancel
+	as.bgMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// waitBackground blocks until every goTracked goroutine has returned.
+func (as *AutonomousScheduler) waitBackground() {
+	as.bgWG.Wait()
+}
+
+// drainBackground cancels in-flight detached work, joins it, and re-arms the
+// lifecycle context so work spawned afterwards is not born cancelled.
+//
+// Tests must call this in the test BODY, right after the action that spawns
+// background work. t.Cleanup runs LIFO, so a drain registered at scheduler
+// construction runs AFTER a stub restore registered later (stubReconcileGh) —
+// and that restore write would still race the live goroutine.
+func (as *AutonomousScheduler) drainBackground() {
+	as.cancelBackground()
+	as.waitBackground()
+	as.bgMu.Lock()
+	as.bgCtx, as.bgCancel = nil, nil
+	as.bgMu.Unlock()
+}
+
 // Stop signals the autonomous scheduler to stop.
+//
+// Stop deliberately does NOT cancel or join background work: `autonomous.stop`
+// (internal/ipc/server.go) leaves this same scheduler instance alive for
+// `autonomous.start`/`autonomous.resume` to restart, and cancelling would abort
+// an in-flight revertFailedIssueStatus mid-MoveStatus — leaving the issue stuck
+// "In progress", the #94 failure boardRecoveryTimeout exists to prevent.
 //
 // In addition to signalling stopCh (which the main select loop drains between
 // cycles), this sets stopRequested so that an already-running runCycle can
@@ -1799,7 +1886,7 @@ func (as *AutonomousScheduler) fireStatusChangeLocked() {
 		Remaining:        as.state.Remaining,
 	}
 	cb := as.onStatusChange
-	go cb(snap)
+	as.goTracked(func() { cb(snap) })
 }
 
 // Pause transitions the scheduler to paused state. It keeps state but stops
@@ -3525,12 +3612,12 @@ func (as *AutonomousScheduler) enqueueItem(ctx context.Context, item CandidateIt
 			IssueNumber: item.Number,
 			Priority:    candidatePriorityRank(item.Priority),
 		})
-		go func() {
+		as.goTracked(func() {
 			if err := as.scheduler.RunQueue(ctx); err != nil {
 				log.Printf("autonomous: queue processing error for %s#%d: %v",
 					item.Repo, item.Number, err)
 			}
-		}()
+		})
 	}
 }
 
@@ -3618,7 +3705,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// Promote newly-unblocked downstream issues from Backlog → Ready.
 		// This runs in a goroutine because it makes network calls (graph build +
 		// MoveStatus) and we're holding the mutex.
-		go as.promoteUnblockedToReady(repo, issue)
+		as.goTracked(func() { as.promoteUnblockedToReady(repo, issue) })
 	} else {
 		key := fmt.Sprintf("%s#%d", repo, issue)
 
@@ -3688,7 +3775,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-quota-low for %s — environmental, retry after %s (no lifetime-cap increment)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3722,7 +3809,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: github-network-outage for %s — environmental, retry after %s (no lifetime-cap increment, no pause)",
 				key, resetAt.UTC().Format(time.RFC3339))
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3763,7 +3850,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — environmental failure, retry in %v (no lifetime-cap increment)",
 				label, key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			// Trigger an immediate re-scan so other unblocked items proceed
 			// while this one waits out its backoff.
 			select {
@@ -3797,7 +3884,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: stall-kill for %s — transient, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3847,7 +3934,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				go as.revertFailedIssueStatus(repo, issue)
+				as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -3867,7 +3954,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — transient, retry in %v (attempt %d, no lifetime-cap increment, no pause)",
 				terminalFailureKind, key, backoff, priorAttempts+1)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3904,7 +3991,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: adapter_auth_failed for %s — retryable infra, retry in %v (no lifetime-cap increment, no cascade feed, no pause)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3947,7 +4034,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 					delete(as.retryBackoff, key)
 				}
 				as.persistStateLocked()
-				go as.revertFailedIssueStatus(repo, issue)
+				as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 				select {
 				case as.rescanCh <- struct{}{}:
 				default:
@@ -3966,7 +4053,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: permission_denied for %s — retryable harness fault, retry in %v (attempt %d, no lifetime-cap increment, no cascade feed, no pause)",
 				key, permissionDeniedBackoff, priorAttempts+1)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -3995,7 +4082,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: model_unavailable for %s — environmental, retry in %v (no lifetime-cap increment, no pause)",
 				key, streamIdleTimeoutBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4024,7 +4111,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				terminalFailureKind, key, stallKillBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4053,7 +4140,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: validation_inconclusive for %s — recoverable, retry in %v (no lifetime-cap increment)",
 				key, stallKillBackoff)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4087,7 +4174,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			log.Printf("autonomous: %s#%d blocked-dependency deferral (non-failure) — board → Ready, retry in %v (no lifetime-cap increment, no pause) — %s",
 				repo, issue, blockedDependencyBackoff, detail)
 			as.persistStateLocked()
-			go as.revertFailedIssueStatus(repo, issue)
+			as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4122,7 +4209,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			go as.moveIssueToDone(repo, issue)
+			as.goTracked(func() { as.moveIssueToDone(repo, issue) })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4265,7 +4352,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			// requeue the issue. Raised after persistState so the record and the
 			// card cannot disagree about the issue's state.
 			as.raiseArchitectureApproval(repo, issue, title, detail)
-			go as.sidelineHalt(repo, issue, "architecture approval required")
+			as.goTracked(func() { as.sidelineHalt(repo, issue, "architecture approval required") })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4287,7 +4374,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 				as.state.Safety = &safetySnap
 			}
 			as.persistStateLocked()
-			go as.sidelineHalt(repo, issue, "pr-merge: PR was not merged")
+			as.goTracked(func() { as.sidelineHalt(repo, issue, "pr-merge: PR was not merged") })
 			select {
 			case as.rescanCh <- struct{}{}:
 			default:
@@ -4367,7 +4454,7 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// idempotent — MoveStatus to Ready is a no-op if the issue is already
 		// at Ready (e.g., terminal kill before status moved). Runs in a
 		// goroutine to avoid holding as.mu during a network call.
-		go as.revertFailedIssueStatus(repo, issue)
+		as.goTracked(func() { as.revertFailedIssueStatus(repo, issue) })
 	}
 
 	// Record completion with safety rails (tokens are tracked via AddTokensSpent)
@@ -4430,7 +4517,7 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(repo string, issue int) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
@@ -4464,7 +4551,7 @@ func (as *AutonomousScheduler) moveIssueToDone(repo string, issue int) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Done"); err != nil {
@@ -4502,7 +4589,7 @@ func (as *AutonomousScheduler) moveIssueToInReview(repo string, issue int) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In review"); err != nil {
@@ -4539,7 +4626,7 @@ func (as *AutonomousScheduler) moveIssueToInProgress(repo string, issue int, rea
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 	projSvc := gh.NewProjectService(as.ghClient, owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "In progress"); err != nil {
@@ -4560,7 +4647,7 @@ func (as *AutonomousScheduler) moveIssueToInProgress(repo string, issue int, rea
 // safer state: "In progress", never asserting a PR exists on an unconfirmed
 // query. See #281.
 func (as *AutonomousScheduler) sidelineHalt(repo string, issue int, reason string) {
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 	openPRs, ok := as.openPRMergeStatesForRepo(ctx, repo)
 	if ok {
@@ -4871,7 +4958,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 // from Backlog → Ready on the project board. This ensures the autonomous
 // scheduler can pick them up on the next scan cycle.
 func (as *AutonomousScheduler) promoteUnblockedToReady(completedRepo string, completedIssue int) {
-	ctx, cancel := context.WithTimeout(context.Background(), boardRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(as.backgroundContext(), boardRecoveryTimeout)
 	defer cancel()
 
 	// Reuse the cached graph if it's less than 30s old — a pipeline completion
@@ -5934,7 +6021,7 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 			log.Printf("[refinement] Refining issue #%d (%s) — %d of %d unrefined",
 				candidate.Number, candidate.Title, i+1, len(candidates))
 
-			go as.refineIssue(ctx, owner, repo, candidate)
+			as.goTracked(func() { as.refineIssue(ctx, owner, repo, candidate) })
 			dispatched++
 		}
 

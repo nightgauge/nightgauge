@@ -56,6 +56,7 @@ func newRestartHaltScheduler(t *testing.T, root string) *AutonomousScheduler {
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired by NewAutonomousScheduler")
 	}
+	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
 	return as
 }
 
@@ -720,6 +721,7 @@ func TestGracefulShutdownPreservesSafetyTrip(t *testing.T) {
 	for _, num := range []int{100, 101, 102} {
 		addRunning(as, "octocat/acme", num, "issue")
 		as.onPipelineComplete("octocat/acme", num, false, false, "subagent_crash", "stage failed")
+		as.drainBackground()
 	}
 	if as.state.Status != "safety_tripped" {
 		t.Fatalf("precondition: status = %q, want safety_tripped", as.state.Status)

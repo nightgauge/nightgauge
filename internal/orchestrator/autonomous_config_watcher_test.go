@@ -183,7 +183,12 @@ autonomous:
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go WatchAutonomousConfig(ctx, reloader, tmp)
+
+	done := make(chan struct{})
+	go func() {
+		WatchAutonomousConfig(ctx, reloader, tmp)
+		close(done)
+	}()
 
 	// Bump mtime; the watcher must observe the change but skip FilterRepos.
 	time.Sleep(100 * time.Millisecond)
@@ -197,5 +202,14 @@ autonomous:
 
 	if reloader.callCount() != 0 {
 		t.Fatalf("expected FilterRepos to be skipped while scheduler stopped, got %d calls", reloader.callCount())
+	}
+
+	// Join the watcher before the test's configReloadInterval restore cleanup
+	// runs — the watcher reads that var at startup and on every tick.
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not exit on context cancel")
 	}
 }

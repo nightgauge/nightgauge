@@ -23,6 +23,7 @@ func newAttentionProducerScheduler(t *testing.T) *AutonomousScheduler {
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired by NewAutonomousScheduler")
 	}
+	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
 	return as
 }
 
