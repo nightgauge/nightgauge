@@ -274,6 +274,13 @@ export function getRunsTabStyles(): string {
       white-space: nowrap;
     }
 
+    /* A run with no branch recorded (#397) — an explicit label, not a blank
+       cell that reads like a rendering bug. */
+    .runs-branch-undetermined {
+      font-family: var(--vscode-font-family);
+      font-style: italic;
+    }
+
     /* Outcome badge colors */
     .runs-outcome-badge {
       display: inline-block;
@@ -486,6 +493,35 @@ function getRunsStagesHtml(stages: RunsStageEntry[]): string {
   `;
 }
 
+/**
+ * Render a run's branch cell.
+ *
+ * This cell renders a `RunsEntry`, which comes from the hosted platform
+ * (`platform.getAnalyticsRuns` → the analytics runs feed), NOT from the local
+ * history record. The branch the platform holds for a run is the one carried on
+ * the `stage_started` event, sourced from the runtime — and that value is
+ * legitimately empty whenever no branch had been determined when the stage
+ * started (the wire omits an empty branch entirely). So an empty value here is
+ * an observation, not a verdict: hence the neutral "no branch recorded"
+ * tooltip.
+ *
+ * Interpolating "" printed a blank cell, which reads as a rendering bug rather
+ * than as information; the label makes the absence legible.
+ *
+ * The LOCAL record's branch — the field #397 is actually about — has no
+ * rendering surface at all today: `PipelineRunSummary.branch` is imported and
+ * then displayed nowhere. Giving it one is filed separately.
+ *
+ * Whitespace counts as absent: a " " branch would render as the same blank
+ * cell this function exists to eliminate.
+ */
+function getRunsBranchCellHtml(branch: string | undefined): string {
+  if (!branch || !branch.trim()) {
+    return `<span class="runs-branch runs-branch-undetermined" title="No branch recorded for this run">(branch not determined)</span>`;
+  }
+  return `<span class="runs-branch" title="${escapeHtml(branch)}">${escapeHtml(branch)}</span>`;
+}
+
 function getRunsTableHtml(entries: RunsEntry[]): string {
   if (entries.length === 0) {
     return `
@@ -512,7 +548,7 @@ function getRunsTableHtml(entries: RunsEntry[]): string {
           <td><span class="runs-timestamp" title="${escapeHtml(entry.started_at)}">${escapeHtml(relTime)}</span></td>
           <td>#${entry.issue_number}</td>
           <td title="${escapeHtml(entry.title)}">${escapeHtml(entry.title.length > 60 ? entry.title.substring(0, 60) + "…" : entry.title)}</td>
-          <td><span class="runs-branch" title="${escapeHtml(entry.branch)}">${escapeHtml(entry.branch)}</span></td>
+          <td>${getRunsBranchCellHtml(entry.branch)}</td>
           <td><span class="runs-outcome-badge ${badgeClass}">${escapeHtml(entry.outcome)}</span></td>
           <td>${escapeHtml(durationStr)}</td>
           <td>${costStr}</td>

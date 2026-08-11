@@ -4383,6 +4383,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       white-space: nowrap;
     }
 
+    /* A run with no branch recorded (#397) — an explicit label, not a blank
+       cell that reads like a rendering bug. */
+    .runs-branch-undetermined {
+      font-family: var(--vscode-font-family);
+      font-style: italic;
+    }
+
     /* Outcome badge colors */
     .runs-outcome-badge {
       display: inline-block;
@@ -11004,6 +11011,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    /* A run with no branch recorded (#397) — an explicit label, not a blank
+       cell that reads like a rendering bug. */
+    .runs-branch-undetermined {
+      font-family: var(--vscode-font-family);
+      font-style: italic;
     }
 
     /* Outcome badge colors */
@@ -17676,6 +17690,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       white-space: nowrap;
     }
 
+    /* A run with no branch recorded (#397) — an explicit label, not a blank
+       cell that reads like a rendering bug. */
+    .runs-branch-undetermined {
+      font-family: var(--vscode-font-family);
+      font-style: italic;
+    }
+
     /* Outcome badge colors */
     .runs-outcome-badge {
       display: inline-block;
@@ -24191,6 +24212,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    /* A run with no branch recorded (#397) — an explicit label, not a blank
+       cell that reads like a rendering bug. */
+    .runs-branch-undetermined {
+      font-family: var(--vscode-font-family);
+      font-style: italic;
     }
 
     /* Outcome badge colors */
