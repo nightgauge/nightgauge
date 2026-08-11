@@ -470,7 +470,18 @@ export const ExecutionHistoryRunRecordSchema = z.object({
   record_type: z.literal("run"),
   issue_number: z.number().int().positive(),
   title: z.string(),
-  branch: z.string(),
+  /**
+   * The branch the run executed on, or "" when none could be determined (#397).
+   *
+   * `.default("")` rather than a bare `z.string()`: the output type is still
+   * `string`, but a record that omits the key is normalized instead of
+   * REJECTED. Rejection is not a smaller failure than a wrong branch — it drops
+   * the entire record to the lenient raw-cast fallback in
+   * executionHistoryReader, which skips the #3228 cost_source backfill. Our Go
+   * writer always emits the key (no omitempty on V2RunRecord.Branch); this
+   * covers every other producer.
+   */
+  branch: z.string().default(""),
   base_branch: z.string(),
   execution_mode: z.enum(["automatic", "manual"]),
   started_at: z.string(),
@@ -540,7 +551,12 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
    */
   repo: z.string().optional(),
   title: z.string(),
-  branch: z.string(),
+  /**
+   * The branch the run executed on, or "" when none could be determined (#397).
+   * See the V1 schema's note above for why this is `.default("")` and not a
+   * bare `z.string()`. V3 extends this object and does not redeclare the field.
+   */
+  branch: z.string().default(""),
   base_branch: z.string(),
   execution_mode: z.enum(["automatic", "manual"]),
   started_at: z.string(),

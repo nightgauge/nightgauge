@@ -1,6 +1,10 @@
 # Normalize line endings
 * text=auto
 
+# Captured evidence — the fixture's whole justification is that the file holds
+# the exact byte sequence the Go writer emitted, so no EOL normalization (#397).
+packages/nightgauge-vscode/tests/fixtures/undetermined-branch/*.jsonl -text
+
 # Generated files — collapse in PR diffs
 api/generated/**                linguist-generated=true
 packages/nightgauge-vscode/src/services/IpcClient.generated.ts linguist-generated=true

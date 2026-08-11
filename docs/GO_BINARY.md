@@ -4917,6 +4917,39 @@ ADR 017 closes that consequence three ways: the force-clear gains an explicit
 its own claimed snapshot. Paused snapshots stay exempt, so the pause-restore
 prompt is unaffected.
 
+#### Branch Identity (Issue #397)
+
+The `branch` key on a history record is **always present**. `""` means "no
+branch could be determined for this run"; a non-empty value means a branch that
+actually resolved. Nothing fabricates one.
+
+Two writers used to emit a synthetic `feat/{issue}` when nothing named a
+branch — `state.HistoryWriter.BuildV2Record` (every completed run) and
+`orchestrator.SynthesizeOrchestratorCrashRecord` (every crash record with a
+positive issue number). Both are gone: a record that knew nothing was
+byte-indistinguishable from one that knew, so the value was unfalsifiable. #299
+fixed the resolution (worktree-first lookup); #397 removed the fallback that hid
+what was left.
+
+The contract lives in the **bytes**, so `V2RunRecord.Branch` and
+`V2IndexEntry.Branch` carry no `omitempty`: an absent key means a pre-#397
+record or a foreign producer, which is a different fact from "undetermined".
+Both TypeScript readers tolerate either shape (the V1/V2/V3 schemas use
+`z.string().default("")`, `DashboardState` coerces with a `typeof` check) — that
+tolerance is why the writer must keep the two apart, not a licence to merge
+them. The scheduler still logs which run failed to resolve a branch, since the
+empty value on disk names no issue.
+
+Records written before #397 may carry a synthetic `feat/{issue}` and cannot be
+distinguished after the fact; no migration is offered.
+
+- Pinned by `TestScheduler_RecordV2History_UnresolvedBranch_KeyPresentEmptyMeansUndetermined`
+  and `TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch`
+  (`internal/orchestrator/`).
+- Real captured records live in
+  `packages/nightgauge-vscode/tests/fixtures/undetermined-branch/`, regenerated
+  by `scripts/capture-undetermined-branch-fixture.sh`.
+
 ### Modernize — Assessment Aggregation
 
 #### modernize aggregate-findings

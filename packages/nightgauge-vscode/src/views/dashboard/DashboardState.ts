@@ -2490,8 +2490,21 @@ export class DashboardState {
    * @returns true if the record was imported, false if skipped
    */
   private importParsedRunRecord(parsed: Record<string, unknown>): boolean {
-    // Basic shape validation
-    if (!parsed.issue_number || !parsed.title || !parsed.branch || !parsed.stages) {
+    // Basic shape validation.
+    //
+    // `branch` is deliberately NOT in this guard (#397). It is not a shape
+    // signal: a run whose branch could not be determined records `""`, and Go
+    // stopped fabricating a `feat/{N}` placeholder to keep this truthiness test
+    // happy — the guard is why that fabrication existed.
+    //
+    // Scope of the fix: this method runs only in the LEGACY no-TelemetryStore
+    // configuration (`backfillFromPipelineArtifacts` delegates to
+    // `loadFromTelemetryStore` whenever a store is present, which is what
+    // bootstrap constructs). On that legacy path requiring `branch` dropped the
+    // WHOLE record — every stage, token and cost of a real run — over one
+    // unknown field. The live pre-#397 dropper was the strict SCHEMA in
+    // executionHistoryReader, fixed by `z.string().default("")`.
+    if (!parsed.issue_number || !parsed.title || !parsed.stages) {
       return false;
     }
 
@@ -2618,7 +2631,10 @@ export class DashboardState {
     const run: PipelineRunSummary = {
       issueNumber: issueNumber,
       title: parsed.title as string,
-      branch: parsed.branch as string,
+      // "" means "no branch was determined" (#397). The cast this replaced
+      // could also produce `undefined` for a record missing the key, which is
+      // the one value PipelineRunSummary.branch is typed not to hold.
+      branch: typeof parsed.branch === "string" ? parsed.branch : "",
       startedAt,
       completedAt,
       status: runStatus,

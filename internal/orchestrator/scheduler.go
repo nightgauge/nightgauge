@@ -6131,16 +6131,19 @@ func (s *Scheduler) recordV2History(
 	// consults the live runtime and the worktree the stages ran in before the
 	// workspace root. The bare root lookup answered "" for every
 	// worktree-isolated run, and BuildV2Record then substituted a synthetic
-	// `feat/{N}` — a value no reader can tell apart from a real branch.
+	// `feat/{N}` — a value no reader could tell apart from a real branch. #397
+	// deleted that substitution; BuildV2Record now records what resolved, or
+	// nothing.
 	branch := resolveFeatureBranch(snap, workspaceRoot, item.Number)
 	if branch == "" {
-		// BuildV2Record refuses to write an empty branch (the TS readers drop
-		// such records outright) and substitutes `feat/{N}`. That placeholder is
-		// indistinguishable from a real branch to every consumer, so the
-		// fabrication has to be announced here — the only place that still knows
-		// nothing resolved (#299).
+		// The record will carry `"branch": ""` — key present, value empty, which
+		// is the record's own way of saying "undetermined" (#397). Announcing it
+		// here is still worth a line: this is the only place that knows WHICH run
+		// failed to resolve, and a run that reaches history without a branch is a
+		// resolution gap worth seeing in the log rather than only on disk.
 		log.Printf("#%d: no feature branch could be determined from any source — the history record "+
-			"will carry BuildV2Record's synthetic placeholder, not a real branch (#299)", item.Number)
+			"will carry an EMPTY branch, which is how a record says \"undetermined\"; nothing is "+
+			"fabricated in its place (#299, #397)", item.Number)
 	}
 
 	issueType := state.ExtractTypeFromLabels(item.Labels)

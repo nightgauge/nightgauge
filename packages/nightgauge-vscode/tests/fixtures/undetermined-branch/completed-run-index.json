@@ -1,0 +1,25 @@
+{
+  "schema_version": "1",
+  "updated_at": "2026-08-10T19:21:37-06:00",
+  "total_runs": 1,
+  "entries": [
+    {
+      "issue_number": 812,
+      "run_id": "019fee69-2a79-7e90-806c-13d8792fa3d1",
+      "title": "Undetermined branch for the whole run",
+      "outcome": "complete",
+      "cost_usd": 0.44299999999999995,
+      "total_input_tokens": 55000,
+      "total_output_tokens": 8300,
+      "total_cache_read_tokens": 19800,
+      "total_cache_creation_tokens": 0,
+      "duration_ms": 48,
+      "stage_count": 2,
+      "started_at": "2026-08-10T19:21:37-06:00",
+      "recorded_at": "2026-08-10T19:21:37-06:00",
+      "size": null,
+      "type": null,
+      "branch": ""
+    }
+  ]
+}

@@ -423,29 +423,39 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 	})
 }
 
-// TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent documents the
-// constraint that blocked #299 decision C (omit the key when no branch was
-// determined, so key-present always means a real branch).
+// TestScheduler_RecordV2History_UnresolvedBranch_KeyPresentEmptyMeansUndetermined
+// pins the whole record contract for a run whose branch never resolved:
 //
-// Two readers depend on the key being present AND truthy, so omitting it would
-// trade a silent-wrong-value defect for a silently-dropped-record defect:
+//	the `branch` key is ALWAYS present, and "" is what it says when nothing
+//	resolved. A non-empty value therefore means a branch that actually existed.
 //
-//   - packages/nightgauge-vscode/src/views/dashboard/DashboardState.ts
-//     importParsedRunRecord() rejects the record outright:
-//     `if (!parsed.issue_number || !parsed.title || !parsed.branch || !parsed.stages) return false;`
-//   - packages/nightgauge-vscode/src/schemas/executionHistory.ts declares
-//     `branch: z.string()` (required) on the V1/V2/V3 record schemas; an absent
-//     key fails ExecutionHistoryRunRecordV2Schema.safeParse in
-//     executionHistoryReader.ts, dropping the record to the lenient raw-cast
-//     fallback that skips the #3228 cost_source normalization.
+// Both halves matter, and they fail in opposite directions:
 //
-// So the field stays required, and this test guards that: the key is always
-// emitted, and when nothing resolves the value is BuildV2Record's synthetic
-// `feat/{N}` placeholder. Note what that means and why the lookup fix matters:
-// the placeholder cannot signal "no branch" to a reader, so the ONLY defense
-// against a record that misreports its branch is resolving the branch
-// correctly in the first place.
-func TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent(t *testing.T) {
+//   - OMIT the key and "undetermined" stops being expressible. The on-disk
+//     contract is key-always-present, so an absent key means a DIFFERENT thing
+//     — a pre-#397 record, a foreign producer, or a writer violating this
+//     contract — and omitempty would collapse that distinction into the one
+//     value ("") that is supposed to mean something specific. Note what this
+//     reason is NOT: both TypeScript readers tolerate an absent key as of #397
+//     (`branch: z.string().default("")` on the V1/V2 schemas in
+//     packages/nightgauge-vscode/src/schemas/executionHistory.ts, V3 extends
+//     V2; and DashboardState.importParsedRunRecord's
+//     `typeof parsed.branch === "string" ? parsed.branch : ""` coercion), which
+//     is precisely why the WRITER has to keep the two shapes apart. Every
+//     non-zod consumer — jq, a human reading the JSONL, the index surface, the
+//     byte-verbatim fixtures — depends on the same distinction. That is why the
+//     json tags below are asserted to have no omitempty.
+//   - FABRICATE a value (`feat/{N}`, what BuildV2Record and the
+//     orchestrator-crash synthesizer both did before #397) and every reader is
+//     told a branch existed. Nothing downstream can tell that apart from a real
+//     branch — not the dashboard, not the analytics upload, not a human reading
+//     the JSONL — so a run that knew nothing looked exactly like a run that
+//     knew. #299 fixed the RESOLUTION (worktree-first lookup); #397 removed the
+//     fabrication that made an unresolved branch unfalsifiable.
+//
+// The log line is asserted too: "" on disk is honest but silent about WHICH run
+// could not name its branch, and that is a resolution gap worth seeing.
+func TestScheduler_RecordV2History_UnresolvedBranch_KeyPresentEmptyMeansUndetermined(t *testing.T) {
 	const repo = "nightgauge/nightgauge"
 	root := t.TempDir()
 
@@ -458,44 +468,59 @@ func TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent(t *testing.
 		rec = recordHistoryForWorktreeRun(t, root, snap, types.BoardItem{Number: 301, Repo: repo, Title: "t"})
 	})
 
-	// Because the placeholder is indistinguishable from a real branch on disk,
-	// the fabrication must at least be announced in the run's log — otherwise
-	// the record carries a value nothing in the system can identify as fake.
-	const wantFabricationLog = "#301: no feature branch could be determined from any source — the history " +
-		"record will carry BuildV2Record's synthetic placeholder, not a real branch (#299)"
-	if !strings.Contains(out, wantFabricationLog) {
-		t.Errorf("the history record fabricated a branch SILENTLY.\nwant substring: %q\nlog was:\n%s",
-			wantFabricationLog, out)
+	// An empty branch on disk names no issue number, so the run log is the only
+	// place that says WHICH run failed to resolve one.
+	const wantUndeterminedLog = "#301: no feature branch could be determined from any source — the history " +
+		"record will carry an EMPTY branch, which is how a record says \"undetermined\"; nothing is " +
+		"fabricated in its place (#299, #397)"
+	if !strings.Contains(out, wantUndeterminedLog) {
+		t.Errorf("the history record recorded an undetermined branch SILENTLY.\nwant substring: %q\nlog was:\n%s",
+			wantUndeterminedLog, out)
 	}
 
-	// The `branch` json tag must stay exactly that — no omitempty. The
-	// constraint test below catches the fabrication+omitempty COMBINATION, but
-	// if the fabrication is ever removed (it should be — see #299's follow-up)
-	// an omitempty added at the same time would silently drop the key for the
-	// two TS readers named above: DashboardState.importParsedRunRecord's
-	// truthiness guard and executionHistory.ts's `branch: z.string()`.
-	branchField, ok := reflect.TypeOf(state.V2RunRecord{}).FieldByName("Branch")
-	if !ok {
-		t.Fatalf("V2RunRecord has no Branch field — the readers named above key off `branch`")
-	}
-	if got := branchField.Tag.Get("json"); got != "branch" {
-		t.Errorf("V2RunRecord.Branch json tag = %q, want exactly %q (internal/state/history.go): any "+
-			"omitempty here drops the key, and both TS readers reject a record without it", got, "branch")
+	// The `branch` json tag must stay exactly that — no omitempty — on BOTH
+	// surfaces that carry it. With the fabrication gone the value is ""
+	// precisely in this case, so an omitempty added to either would start
+	// DROPPING the key on exactly the records this test covers. The index entry
+	// is the surface with no zod safety net at all: HistoryIndexEntry is a plain
+	// TypeScript interface, so an absent key reaches
+	// DashboardState.indexEntryToRunSummary and
+	// LocalAuditFallbackService.entryToAuditLogEntry as `undefined` on a field
+	// typed `string`.
+	for _, surface := range []struct {
+		name string
+		typ  reflect.Type
+	}{
+		{"state.V2RunRecord", reflect.TypeOf(state.V2RunRecord{})},
+		{"state.V2IndexEntry", reflect.TypeOf(state.V2IndexEntry{})},
+	} {
+		branchField, ok := surface.typ.FieldByName("Branch")
+		if !ok {
+			t.Fatalf("%s has no Branch field — the readers named above key off `branch`", surface.name)
+		}
+		if got := branchField.Tag.Get("json"); got != "branch" {
+			t.Errorf("%s.Branch json tag = %q, want exactly %q (internal/state/history.go): any "+
+				"omitempty here drops the key on every undetermined-branch record", surface.name, got, "branch")
+		}
 	}
 
-	if rec.Branch != "feat/301" {
-		t.Errorf("unresolved branch recorded as %q, want the synthetic placeholder %q "+
-			"(BuildV2Record must keep the field non-empty for the readers named above)", rec.Branch, "feat/301")
+	if rec.Branch != "" {
+		t.Errorf("unresolved branch recorded as %q, want %q — nothing named a branch for this run, and a "+
+			"non-empty value is indistinguishable from one that really existed (#397)", rec.Branch, "")
 	}
 
-	// The key itself must never be omitted — DashboardState's truthiness guard
-	// drops the whole record when it is.
+	// Assert on the serialized BYTES, not the decoded map: only the raw line can
+	// show key-present-and-empty as a single fact. A decoded map reports the
+	// same `""` whether the key was written empty or omitted entirely.
+	line := readRawHistoryLineText(t, root, 301)
+	if !strings.Contains(line, `"branch":""`) {
+		t.Errorf("history record did not serialize `\"branch\":\"\"` (key present, value empty — the "+
+			"undetermined marker).\nline was:\n%s", line)
+	}
 	raw := readRawHistoryLine(t, root, 301)
 	if _, ok := raw["branch"]; !ok {
-		t.Errorf("history record omitted the `branch` key; DashboardState.importParsedRunRecord drops such records entirely")
-	}
-	if got, _ := raw["branch"].(string); got == "" {
-		t.Errorf("history record serialized an empty `branch`; the same reader treats \"\" as falsy and drops the record")
+		t.Errorf("history record omitted the `branch` key; on disk an absent key means a record from " +
+			"before this contract or from another producer, not \"undetermined\"")
 	}
 }
 
@@ -503,6 +528,20 @@ func TestScheduler_RecordV2History_UnresolvedBranch_KeyAlwaysPresent(t *testing.
 // object, so a test can assert on key PRESENCE rather than on the decoded
 // struct (which cannot distinguish an absent key from an empty string).
 func readRawHistoryLine(t *testing.T, workspaceRoot string, issueNumber int) map[string]any {
+	t.Helper()
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(readRawHistoryLineText(t, workspaceRoot, issueNumber)), &raw); err != nil {
+		t.Fatalf("decode raw history line for #%d: %v", issueNumber, err)
+	}
+	return raw
+}
+
+// readRawHistoryLineText returns today's history record for an issue as the
+// verbatim JSONL line the writer emitted. Decoding loses the one distinction
+// this file's contract turns on — a key written empty versus a key omitted —
+// so assertions about key presence combined with an empty value must read the
+// bytes.
+func readRawHistoryLineText(t *testing.T, workspaceRoot string, issueNumber int) string {
 	t.Helper()
 	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
 	entries, err := os.ReadDir(dir)
@@ -526,10 +565,10 @@ func readRawHistoryLine(t *testing.T, workspaceRoot string, issueNumber int) map
 				continue
 			}
 			if n, ok := raw["issue_number"].(float64); ok && int(n) == issueNumber {
-				return raw
+				return string(line)
 			}
 		}
 	}
 	t.Fatalf("no raw history line for #%d", issueNumber)
-	return nil
+	return ""
 }
