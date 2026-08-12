@@ -714,8 +714,15 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.cacheTimes.delete(cacheKey);
       this.inFlightRequests.delete(cacheKey);
     }
-    // counts changed — force fresh fetch on next getAggregatedStatusCounts()
-    this.boardCountsCache = null;
+    // Counts changed — force a fresh fetch on next getAggregatedStatusCounts(),
+    // but keep the last-known-good counts as the stale-if-error fallback
+    // (matches softInvalidate's documented discipline: invalidate cache
+    // timestamps without discarding stale data). This fires on every
+    // pipeline status move, so it is the MOST common invalidation path —
+    // nulling boardCountsCache here (instead of just expiring it) reopened
+    // the #485 "zeros" symptom on that path: invalidate → tree re-renders →
+    // getAggregatedStatusCounts finds no cache → checkRateLimit gates → `{}`
+    // → every tab shows 0.
     this.boardCountsCacheTime = 0;
     this._onStatusChanged.fire({ repoSlug, statuses });
   }
@@ -795,6 +802,16 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return { ...this.boardCountsCache };
     }
 
+    // Check rate limit before making API calls — same gate the board-fetch
+    // path (fetchIssuesForStatus / fetchAllItemsInternal) uses, so the
+    // warning/pause state stays consistent regardless of which path tripped
+    // it. Serve the last successful counts (even past TTL) instead of
+    // spending quota or falling back to zeros.
+    const canProceed = await this.checkRateLimit();
+    if (!canProceed) {
+      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
+    }
+
     try {
       // Uses board.counts IPC method — a single GraphQL query with aliases
       // that returns only totalCount per status. No item data fetched.
@@ -809,7 +826,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return { ...counts };
     } catch (err) {
       log(`getAggregatedStatusCounts failed: ${err}`);
-      return {};
+      // Stale-if-error: never bypass the cache with zeros. A transient fetch
+      // error still leaves the last-known-good counts to fall back to; only
+      // a successful fetch is allowed to replace the cache.
+      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
     }
   }
 
