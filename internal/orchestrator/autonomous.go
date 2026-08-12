@@ -6018,6 +6018,19 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 	// Scan each repo for unrefined issues
 	const refinementEmptyTTL = 5 * time.Minute
 	for _, rc := range as.repos {
+		// Cycle-level quota short-circuit (#488). The refinement semaphore is
+		// SCHEDULER-WIDE — one channel shared by every repo — so once it is
+		// saturated, no repo scanned later in this cycle can dispatch anything.
+		// Stop scanning here rather than letting repos 1..N-1 each pay a
+		// paginated GraphQL list call every cycle just to refuse: that is the
+		// GitHub API budget class epic #482 addressed. Guarding on c > 0 keeps
+		// a nil or zero-capacity channel (len == cap == 0) from reading as
+		// saturation. Deliberately unlogged — a long refinement would otherwise
+		// print this line on every cycle.
+		if c := cap(as.refinementSem); c > 0 && len(as.refinementSem) == c {
+			break // semaphore exhausted — end this cycle's scanning before spending API calls (#488)
+		}
+
 		owner := rc.Owner
 		repo := rc.Name
 		fullRepo := fmt.Sprintf("%s/%s", owner, repo)
@@ -6114,7 +6127,14 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 			default:
 			}
 			if !acquired {
-				// All slots full — stop dispatching this cycle
+				// Refusal stops THIS REPO's dispatching for the rest of the
+				// cycle — the `break` leaves the candidate loop, not the repo
+				// loop (#488). The semaphore itself is scheduler-wide, so a
+				// slot freed mid-cycle can still be won by a later repo, but
+				// only if the cycle-level exhaustion check at the top of the
+				// repo loop still passed when that repo was scanned; when the
+				// semaphore is already saturated at scan time, that check — not
+				// this break — is what stops workspace-wide scanning.
 				log.Printf("[refinement] %s: all %d refinement slots occupied", fullRepo, as.config.RefinementMaxConcurrent)
 				break
 			}
