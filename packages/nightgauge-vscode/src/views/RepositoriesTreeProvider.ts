@@ -46,6 +46,10 @@ import {
 import type { SequentialRepoConfigService } from "../utils/sequentialRepoConfig";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import { AutonomousActivityState } from "../utils/autonomousActivityState";
+import {
+  PollingVisibilityGate,
+  ensureWindowFocusTracking,
+} from "../services/AttentionSweepService";
 
 const execAsync = promisify(exec);
 
@@ -185,6 +189,10 @@ export class RepositoriesTreeProvider
   /** Debounce timer for coalescing rapid refreshAll() calls */
   private refreshDebounceTimer: NodeJS.Timeout | null = null;
   private static readonly REFRESH_DEBOUNCE_MS = 500;
+
+  /** Key this provider registers under in the shared PollingVisibilityGate
+   * (#484). One Repositories view exists per window, so a fixed key suffices. */
+  private static readonly VISIBILITY_GATE_KEY = "repositoriesView";
 
   /** Debounce timer for queue.changed — coalesces burst dispatches into one refresh */
   private queueChangedDebounceTimer: NodeJS.Timeout | null = null;
@@ -421,6 +429,19 @@ export class RepositoriesTreeProvider
       this.disposables.push(autonomousSub);
     }
 
+    // #484 — join the shared idle-state polling gate (window-focus half).
+    ensureWindowFocusTracking();
+    // When a view becomes visible again (or the window regains focus) after
+    // being idle, fire one coalesced refresh instead of waiting for the
+    // next IPC-driven event. Respects the user's explicit auto-refresh
+    // pause (`setAutoRefreshEnabled(false)`) — visibility regain is not a
+    // reason to override that opt-out.
+    this.disposables.push(
+      PollingVisibilityGate.instance.onDidBecomeAllowed(() => {
+        if (this.autoRefreshEnabled) this.refreshAll();
+      })
+    );
+
     // Prime enabled_repos from disk so the initial render shows correct
     // checkbox state without waiting for a config event.
     this.reloadEnabledRepos();
@@ -482,8 +503,14 @@ export class RepositoriesTreeProvider
     const ipc = IpcClient.getInstance();
     const subs = [
       ipc.on("ipc.ready", (_data) => {
-        // ipc.ready fires once at connection — always refresh so the tree
-        // renders initial board counts even when auto-refresh is paused.
+        // ipc.ready fires once at connection. Pre-#484 this refreshed
+        // unconditionally "even when auto-refresh is paused" — but a window
+        // that's neither visible nor recently focused is exactly the case
+        // #484 exists to stop paying for. Respect the same idle-state gate
+        // as every other convenience poller here: when nobody's watching,
+        // skip it — the coalesced refresh on regained visibility (or the
+        // next demand-driven render) catches the tree up instead.
+        if (!PollingVisibilityGate.instance.isPollingAllowed()) return;
         this.refreshAll();
       }),
       ipc.on("queue.changed", (data) => {
@@ -532,6 +559,33 @@ export class RepositoriesTreeProvider
   setTreeView(treeView: vscode.TreeView<BaseTreeItem>): void {
     this.treeView = treeView;
     this.updateViewTitle();
+    this.registerViewVisibility(treeView);
+  }
+
+  /**
+   * #484 — feed this view's live visibility into the shared
+   * PollingVisibilityGate. Defensive against test doubles that don't stub
+   * `visible` / `onDidChangeVisibility` (existing tests pass a bare
+   * `{ title }` object) — those are simply not registered, which is safe:
+   * the gate still falls back to window-focus state.
+   */
+  private registerViewVisibility(treeView: vscode.TreeView<BaseTreeItem>): void {
+    const withVisibility = treeView as unknown as {
+      visible?: boolean;
+      onDidChangeVisibility?: (listener: (e: { visible: boolean }) => void) => vscode.Disposable;
+    };
+    if (typeof withVisibility.onDidChangeVisibility !== "function") return;
+    const key = RepositoriesTreeProvider.VISIBILITY_GATE_KEY;
+    PollingVisibilityGate.instance.setViewVisible(key, withVisibility.visible ?? true);
+    // A bare `vi.fn()` test double returns `undefined` when called rather
+    // than a real Disposable — only track it when there's something to
+    // dispose (mirrors the same guard in ProjectBoardTreeProvider).
+    const sub = withVisibility.onDidChangeVisibility((e) => {
+      PollingVisibilityGate.instance.setViewVisible(key, e.visible);
+    });
+    if (sub && typeof sub.dispose === "function") {
+      this.disposables.push(sub);
+    }
   }
 
   /**
@@ -1810,6 +1864,12 @@ export class RepositoriesTreeProvider
       clearTimeout(timer);
     }
     this.targetedRefreshTimers.clear();
+    // #484 — a disposed view must stop counting as "visible" in the shared
+    // gate, or a stale entry would keep polling allowed forever.
+    PollingVisibilityGate.instance.setViewVisible(
+      RepositoriesTreeProvider.VISIBILITY_GATE_KEY,
+      false
+    );
     this._onDidChangeTreeData.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();

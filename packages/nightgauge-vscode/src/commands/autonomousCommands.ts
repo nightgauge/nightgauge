@@ -294,6 +294,20 @@ function nextWatchdogIntervalMs(): number {
   return Math.min(ms, WATCHDOG_MAX_INTERVAL_MS);
 }
 
+// #484 AC3 — this file's two GitHub-touching timers (the stall watchdog
+// below, and the liveness probe further down) are deliberately NOT gated by
+// the shared PollingVisibilityGate / view-visibility signal that
+// AttentionSweepService.ts, ProjectBoardTreeProvider.ts, and
+// RepositoriesTreeProvider.ts now consult for their idle-state convenience
+// polling. Both timers here exist ONLY while autonomous is actively
+// dispatching or recovering — started in the `autonomous.statusChanged`
+// "running" handler below, and deliberately kept alive through "paused" /
+// "safety_tripped" (see the case in that handler) so a rate-limit or outage
+// recovery is still detected. That lifecycle already IS "an active pipeline
+// run needs monitoring": stopping it because a window is minimized would
+// silently blind the stall watchdog mid-run, which is exactly what #484's
+// acceptance criteria forbid. So: no gate call here, by design, not by
+// omission — visibility/focus state is irrelevant to whether this ticks.
 function scheduleNextWatchdog(logger: Logger): void {
   if (stallWatchdogTimer === null && stallWatchdogConsecutiveFailures < 0) return; // stopped
   const interval = nextWatchdogIntervalMs();

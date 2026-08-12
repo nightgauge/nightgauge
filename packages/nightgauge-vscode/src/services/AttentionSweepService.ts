@@ -36,7 +36,8 @@ import type { Logger } from "../utils/logger";
 
 /** What asked for a sweep. Echoed to the daemon log so a surprising burst of
  * forge traffic can be traced back to its trigger. */
-export type SweepTrigger = "activation" | "view-refresh" | "timer" | "run-terminated" | "manual";
+export type SweepTrigger =
+  "activation" | "view-refresh" | "timer" | "run-terminated" | "manual" | "visibility-regained";
 
 /** The IPC slice this service needs — narrow so tests need no real client. */
 export interface AttentionSweepIpc {
@@ -128,6 +129,174 @@ export function readSweepConfig(): AttentionSweepConfig {
   return { enabled, intervalMs, minGapMs: SWEEP_MIN_GAP_MS };
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Shared idle-state polling gate (Issue #484)
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Mirrors the AutonomousActivityState pattern (#360 — "don't poll GitHub in
+// the background when there is no work to serve"), but keyed on a different
+// signal: a timer-driven GitHub call is only worth paying for when a
+// Nightgauge view is actually visible or the window was recently focused —
+// regardless of whether autonomous mode happens to be on. One shared
+// concept (`PollingVisibilityGate.isPollingAllowed()`), consulted by every
+// *idle-state convenience* poller: this file's periodic sweep,
+// ProjectBoardTreeProvider's auto-refresh timer, and RepositoriesTreeProvider's
+// `ipc.ready` handler. It is deliberately NOT consulted by active-run
+// *monitoring* — the autonomous stall watchdog / liveness probe in
+// autonomousCommands.ts — which must keep running whether or not any window
+// is visible so a stall is never missed mid-run; see that file's
+// `scheduleNextWatchdog` doc comment for the exemption's rationale.
+
+/** Grace period after losing window focus during which polling remains
+ * allowed — avoids flapping the gate closed/open on a brief alt-tab. */
+export const WINDOW_FOCUS_GRACE_MS = 60_000;
+
+/**
+ * PollingVisibilityGate — shared "is anything watching right now" signal.
+ *
+ * Tracks two independent inputs:
+ *   - Zero or more tracked views' visibility, keyed by an arbitrary id so N
+ *     views can register/unregister without one hidden view masking another
+ *     that's still visible.
+ *   - The VS Code window's live focus state, with a short grace window so a
+ *     brief alt-tab doesn't suspend and immediately resume polling.
+ *
+ * `isPollingAllowed()` is true when either input says "someone's looking".
+ * Mirrors AutonomousActivityState's singleton + `resetForTests()` shape.
+ */
+export class PollingVisibilityGate {
+  private static _instance: PollingVisibilityGate | null = null;
+
+  private readonly visibleKeys = new Set<string>();
+  private windowFocused = true;
+  private lastFocusedAt: number;
+  private readonly listeners = new Set<() => void>();
+  private clock: () => number = Date.now;
+
+  private constructor() {
+    this.lastFocusedAt = this.clock();
+  }
+
+  static get instance(): PollingVisibilityGate {
+    if (!PollingVisibilityGate._instance) {
+      PollingVisibilityGate._instance = new PollingVisibilityGate();
+    }
+    return PollingVisibilityGate._instance;
+  }
+
+  /** Test-only — drop the singleton so each test starts from a clean state. */
+  static resetForTests(): void {
+    PollingVisibilityGate._instance = null;
+  }
+
+  /** Test-only clock override, mirrors AttentionSweepService's own `now` DI. */
+  _setClockForTests(clock: () => number): void {
+    this.clock = clock;
+    this.lastFocusedAt = clock();
+  }
+
+  /**
+   * Register (or update) whether a tracked view is currently visible, keyed
+   * by an arbitrary id. Fires the "became allowed" listeners when this
+   * transitions the gate from closed to open (a view just became visible).
+   */
+  setViewVisible(key: string, visible: boolean): void {
+    const wasAllowed = this.isPollingAllowed();
+    if (visible) {
+      this.visibleKeys.add(key);
+    } else {
+      this.visibleKeys.delete(key);
+    }
+    this.notifyIfNewlyAllowed(wasAllowed);
+  }
+
+  /** Update the live window-focus signal. */
+  setWindowFocused(focused: boolean): void {
+    const wasAllowed = this.isPollingAllowed();
+    this.windowFocused = focused;
+    if (focused) {
+      this.lastFocusedAt = this.clock();
+    }
+    this.notifyIfNewlyAllowed(wasAllowed);
+  }
+
+  private notifyIfNewlyAllowed(wasAllowed: boolean): void {
+    if (wasAllowed || !this.isPollingAllowed()) return;
+    for (const listener of [...this.listeners]) listener();
+  }
+
+  /**
+   * True when some tracked view is visible, or the window was focused within
+   * the grace window. Pure visibility/focus signal — does not consider
+   * autonomous activity; combine with `AutonomousActivityState.isActive()`
+   * via `isBackgroundPollingAllowed()` below for the full idle-poll gate.
+   */
+  isPollingAllowed(): boolean {
+    if (this.visibleKeys.size > 0) return true;
+    if (this.windowFocused) return true;
+    return this.clock() - this.lastFocusedAt < WINDOW_FOCUS_GRACE_MS;
+  }
+
+  /**
+   * Subscribe to "gate just opened" transitions — used to fire a single
+   * coalesced refresh when a view becomes visible or the window regains
+   * focus after being idle. Returns a disposable.
+   */
+  onDidBecomeAllowed(listener: () => void): { dispose(): void } {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  }
+
+  dispose(): void {
+    this.listeners.clear();
+  }
+}
+
+let windowFocusTrackingDisposable: { dispose(): void } | null = null;
+
+/**
+ * Wire vscode.window's live focus state into the shared gate. Idempotent —
+ * safe to call from every consumer's constructor/start(); only the first
+ * call actually subscribes, so N provider instances cost one listener.
+ *
+ * Defensive against older/minimal `vscode` mocks in tests that don't stub
+ * `window.state` / `window.onDidChangeWindowState` — falls back to treating
+ * the window as focused (the safe, never-over-suppress default) rather than
+ * throwing.
+ */
+export function ensureWindowFocusTracking(): void {
+  if (windowFocusTrackingDisposable) return;
+  windowFocusTrackingDisposable = { dispose: () => {} };
+  // Minimal `vscode` test mocks (this file's own included) sometimes stub
+  // only the specific named exports a suite needs, and vitest's mock proxy
+  // throws on an unlisted property rather than returning undefined — so
+  // `vscode.window` itself can throw, not just its members. try/catch keeps
+  // that a no-op (falls back to "focused", the never-over-suppress default)
+  // instead of an unrelated test suite failing on an internal implementation
+  // detail of this gate.
+  try {
+    const w = vscode.window as unknown as {
+      state?: { focused: boolean };
+      onDidChangeWindowState?: (listener: (e: { focused: boolean }) => void) => { dispose(): void };
+    };
+    PollingVisibilityGate.instance.setWindowFocused(w.state?.focused ?? true);
+    if (typeof w.onDidChangeWindowState === "function") {
+      windowFocusTrackingDisposable = w.onDidChangeWindowState((e) => {
+        PollingVisibilityGate.instance.setWindowFocused(e.focused);
+      });
+    }
+  } catch {
+    PollingVisibilityGate.instance.setWindowFocused(true);
+  }
+}
+
+/** Test-only — undo `ensureWindowFocusTracking()`'s idempotent guard so the
+ * next call re-subscribes against a fresh mock. */
+export function _resetWindowFocusTrackingForTests(): void {
+  windowFocusTrackingDisposable?.dispose();
+  windowFocusTrackingDisposable = null;
+}
+
 export class AttentionSweepService implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -167,9 +336,30 @@ export class AttentionSweepService implements vscode.Disposable {
       this.disposables.push(this.deps.ipc.on(event, () => void this.sweep("run-terminated")));
     }
 
+    // #484 — start (or join) the shared idle-state polling gate so the
+    // timer below can skip ticks with nobody watching.
+    ensureWindowFocusTracking();
+
     // Trigger 3: the conservative timer, running only while this window lives.
     if (config.intervalMs > 0) {
-      this.timer = setInterval(() => void this.sweep("timer"), config.intervalMs);
+      this.timer = setInterval(() => {
+        if (!PollingVisibilityGate.instance.isPollingAllowed()) {
+          this.deps.logger.debug("Attention sweep timer skipped — hidden and unfocused", {});
+          return;
+        }
+        void this.sweep("timer");
+      }, config.intervalMs);
+
+      // #484 AC2 — when the gate reopens (a view becomes visible again, or
+      // the window regains focus), fire one coalesced sweep instead of
+      // waiting out the rest of the interval. `sweep()`'s own minGap
+      // throttle still applies, so a burst of near-simultaneous transitions
+      // collapses to at most one call.
+      this.disposables.push(
+        PollingVisibilityGate.instance.onDidBecomeAllowed(
+          () => void this.sweep("visibility-regained")
+        )
+      );
     }
 
     // Trigger 1: activation.

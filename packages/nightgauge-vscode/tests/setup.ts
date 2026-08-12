@@ -220,6 +220,12 @@ vi.mock("vscode", () => ({
     showWarningMessage: vi.fn(() => Promise.resolve(undefined)),
     showInformationMessage: vi.fn(() => Promise.resolve(undefined)),
     onDidChangeActiveTextEditor: vi.fn(() => ({ dispose: vi.fn() })),
+    // Window focus state (#484) — defaults to focused so tests that don't
+    // care about visibility gating see unchanged (always-allowed) behavior.
+    // Tests exercising the gate override `state.focused` and/or trigger
+    // `onDidChangeWindowState` directly.
+    state: { focused: true },
+    onDidChangeWindowState: vi.fn(() => ({ dispose: vi.fn() })),
     // Terminal API — used by the Codex interactive TUI path (#4024).
     terminals: [],
     createTerminal: vi.fn(() => ({
