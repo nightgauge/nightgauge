@@ -19,23 +19,6 @@ portable across Claude Code, OpenAI Codex, GitHub Copilot, Cursor, Kiro, and
 other AI coding assistants. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for product layers and design.
 
-### Key Files
-
-- **packages/nightgauge-vscode/** - VSCode extension (PRIMARY product)
-- **cmd/nightgauge/** - Go CLI binary entry point
-- **internal/** - Go packages (deterministic layer — hooks, GitHub,
-  intelligence)
-- **packages/nightgauge-sdk/** - SDK for programmatic access
-- **skills/** - Pipeline stage definitions (portable)
-- **claude-plugins/** - Claude Code CLI wrappers (thin shell → Go binary)
-- **standards/** - Universal coding standards and security requirements
-- **[docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)** - Git workflow and
-  pre-submission validation
-- **[docs/GO_BINARY.md](docs/GO_BINARY.md)** - Go binary architecture and CLI
-  reference
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** - Contributing guide (skills, plugins,
-  extension, SDK)
-
 ## Key Terminology
 
 | Term              | Definition                                                     | Location          |
@@ -52,44 +35,6 @@ Add the `auto-process` label to any issue (or check "Immediately actionable" in
 the issue template) and the autonomous refinement scan will rewrite it with
 structured acceptance criteria, then route it through the full pipeline. See
 [docs/AUTONOMOUS_ORCHESTRATOR.md](docs/AUTONOMOUS_ORCHESTRATOR.md) for details.
-
-## Technology Stack
-
-- **Go** (`cmd/nightgauge/`, `internal/`) — deterministic layer: hooks,
-  forge/GitHub operations, intelligence, gates
-- **TypeScript** (`packages/`) — VSCode extension (primary product) and SDK
-- **Markdown / YAML / JSON** (`skills/`, `claude-plugins/`, `configs/`,
-  `standards/`) — portable skills, Claude Code wrappers, tool configs,
-  standards
-
-## Repository Structure
-
-```text
-nightgauge/
-├── cmd/nightgauge/             # Go CLI binary entry point
-├── internal/                   # Go packages (deterministic layer)
-├── packages/
-│   ├── nightgauge-vscode/      # VSCode extension (PRIMARY product)
-│   └── nightgauge-sdk/         # SDK for programmatic access
-├── skills/                     # Universal Agent Skills (see skills/README.md
-│                               # for the full catalog)
-├── claude-plugins/             # Claude Code-specific wrappers
-│   ├── smart-setup/            # /smart-setup command
-│   ├── docs/                   # /update-docs command
-│   └── nightgauge/             # Issue-to-PR pipeline commands
-├── configs/                    # Tool-specific configurations
-│   ├── claude/                 # Claude Code team settings
-│   ├── codex/                  # OpenAI Codex workspace configs
-│   ├── copilot/                # GitHub Copilot instructions
-│   ├── cursor/                 # Cursor IDE rules
-│   └── kiro/                   # Kiro IDE steering files
-├── standards/                  # Universal standards (all tools)
-│   ├── AGENTS_TEMPLATE.md      # Base AGENTS.md template
-│   ├── code-standards.md       # Company coding standards
-│   └── security.md             # Security requirements
-├── docs/                       # Architecture, workflow, and runbook docs
-└── scripts/                    # CI, validation, and maintenance scripts
-```
 
 ## Critical Rules
 
@@ -243,21 +188,6 @@ requirements.
 4. **ALWAYS use parameterized queries** - Prevent SQL injection attacks
 5. **NEVER commit secrets to git** - Use .gitignore and pre-commit hooks
 
-### Code Review Checklist
-
-Input validation on external data, no hardcoded secrets, parameterized DB
-queries, auth checks on every request, authorization for resource access,
-sensitive data encrypted, no internals in error messages, no sensitive data in
-logs, dependencies up to date.
-
-Before submitting code:
-
-- [ ] No hardcoded secrets or credentials
-- [ ] All user input is validated and sanitized
-- [ ] Parameterized queries used for database access
-- [ ] Sensitive data is not logged
-- [ ] Error messages don't expose internal details
-
 ## Public Core Boundary & Content Hygiene (CRITICAL)
 
 This repository is the Apache-2.0 local core and is maintained as a
@@ -314,50 +244,9 @@ ADR, or committing documentation, read
 
 ## Key Patterns
 
-### Universal Skills (Primary)
-
-Skills in `skills/` follow the agentskills.io specification:
-
-```text
-skills/<skill-name>/
-└── SKILL.md                    # Required: skill with YAML frontmatter
-```
-
-**SKILL.md frontmatter**:
-
-```yaml
----
-name: skill-name
-description: Brief description. Include when to use it.
-license: Apache-2.0
-metadata:
-  author: nightgauge
-  version: "1.0.0"
-  source: https://github.com/nightgauge/nightgauge
-allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
----
-```
-
-### Claude Plugins (Claude Code Only)
-
-Plugins in `claude-plugins/` provide `/slash` command access:
-
-```text
-claude-plugins/<plugin-name>/
-├── .claude-plugin/
-│   └── plugin.json             # Required: name, version, description, author
-└── commands/
-    └── <command>.md            # Required: command with YAML frontmatter
-```
-
-### Standards Documents
-
-Standards in `standards/` should:
-
-- Be tool-agnostic (work with any AI assistant)
-- Include both good and bad examples
-- Explain the "why" behind rules
-- Link to authoritative external sources
+Skill file layout and SKILL.md frontmatter, plugin directory structure, and
+standards-document conventions are specified in
+[skills/README.md](./skills/README.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What to Avoid
 
