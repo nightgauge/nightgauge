@@ -4,6 +4,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // The result event's shape is the one from testdata/claude_stream_real_capture.jsonl:
@@ -33,6 +36,10 @@ func TestParseStreamLineResult(t *testing.T) {
 	}
 	if acc.CacheCreated != 100 {
 		t.Errorf("cache created = %d", acc.CacheCreated)
+	}
+	cache5m, cache1h := acc.CacheCreationByTTL()
+	if cache5m != 100 || cache1h != 0 {
+		t.Errorf("cache creation split = (%d, %d), want unsplit fallback (100, 0)", cache5m, cache1h)
 	}
 	if acc.CacheRead != 50 {
 		t.Errorf("cache read = %d", acc.CacheRead)
@@ -208,11 +215,54 @@ func TestParseStreamRealCaptureComplete(t *testing.T) {
 	if acc.CacheCreated != captureResultCacheC {
 		t.Errorf("cache created = %d, want %d", acc.CacheCreated, captureResultCacheC)
 	}
+	cache5m, cache1h := acc.CacheCreationByTTL()
+	if cache5m != 0 || cache1h != captureResultCacheC {
+		t.Errorf("cache creation split = (%d, %d), want (0, %d) from real capture", cache5m, cache1h, captureResultCacheC)
+	}
 	if acc.CacheRead != captureResultCacheR {
 		t.Errorf("cache read = %d, want %d", acc.CacheRead, captureResultCacheR)
 	}
 	if tracker.ServedModel != "claude-haiku-4-5-20251001" {
 		t.Errorf("served model = %q", tracker.ServedModel)
+	}
+}
+
+// Regression for #390: the real capture's nonzero cache writes must survive
+// the durable Go history boundary. Before the fix, CompleteStage priced these
+// counts but StageResult discarded them, so both per-stage and run totals were
+// permanently zero.
+func TestRealCaptureCacheCreationReachesHistory(t *testing.T) {
+	lines, _ := realCaptureLines(t)
+	acc := &TokenAccumulator{}
+	for _, line := range lines {
+		acc.ParseStreamLine(line)
+	}
+	result := runResultFromAccumulator("", "", acc, &ServedModelTracker{})
+	if result.CacheReadTokens != captureResultCacheR || result.CacheCreationTokens != captureResultCacheC {
+		t.Fatalf("native RunResult cache counts = (read %d, create %d), want (%d, %d)",
+			result.CacheReadTokens, result.CacheCreationTokens, captureResultCacheR, captureResultCacheC)
+	}
+	if result.CacheCreation5mTokens != 0 || result.CacheCreation1hTokens != captureResultCacheC {
+		t.Fatalf("native RunResult cache creation split = (%d, %d), want (0, %d)",
+			result.CacheCreation5mTokens, result.CacheCreation1hTokens, captureResultCacheC)
+	}
+
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 390, "item", "run")
+	runtime.BeginStage(state.StageFeatureDev)
+	recordRunResultTokenCounts(runtime, string(state.StageFeatureDev), result)
+	// Mirrors ExecutionManagerRunner's unchanged projection: only input/output
+	// reach this call directly; the manager's one-shot handoff supplies cache.
+	runtime.CompleteStageWithCost(0, result.InputTokens, result.OutputTokens, 0, 0.01)
+
+	record := state.NewHistoryWriter(t.TempDir()).BuildV2Record(
+		runtime.Snapshot(), true, "", state.V2RunInput{}, time.Now(),
+	)
+	stage := record.Tokens.PerStage[string(state.StageFeatureDev)]
+	if stage.CacheCreation != captureResultCacheC {
+		t.Errorf("per-stage cache creation = %d, want %d from real capture", stage.CacheCreation, captureResultCacheC)
+	}
+	if record.Tokens.TotalCacheCreation != captureResultCacheC {
+		t.Errorf("total cache creation = %d, want %d from real capture", record.Tokens.TotalCacheCreation, captureResultCacheC)
 	}
 }
 

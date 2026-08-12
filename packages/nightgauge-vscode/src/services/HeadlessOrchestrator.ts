@@ -12532,6 +12532,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     };
 
@@ -12751,6 +12753,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             outputTokens: usage.outputTokens - prevUsage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens - prevUsage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens - prevUsage.cacheCreationTokens,
+            cacheCreation5mTokens:
+              (usage.cacheCreation5mTokens ?? 0) - prevUsage.cacheCreation5mTokens,
+            cacheCreation1hTokens:
+              (usage.cacheCreation1hTokens ?? 0) - prevUsage.cacheCreation1hTokens,
             costUsd: usage.costUsd - prevUsage.costUsd,
           };
           prevUsage = {
@@ -12758,6 +12764,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             outputTokens: usage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens,
+            cacheCreation5mTokens: usage.cacheCreation5mTokens ?? 0,
+            cacheCreation1hTokens: usage.cacheCreation1hTokens ?? 0,
             costUsd: usage.costUsd,
           };
 
@@ -12776,6 +12784,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 outputTokens: delta.outputTokens,
                 cacheReadTokens: delta.cacheReadTokens,
                 cacheCreationTokens: delta.cacheCreationTokens,
+                cacheCreation5mTokens: delta.cacheCreation5mTokens,
+                cacheCreation1hTokens: delta.cacheCreation1hTokens,
                 costUsd: delta.costUsd,
                 // Issue #3228: forward the resolution-step label so per-stage
                 // history records can attribute billed cost vs. computed cost.

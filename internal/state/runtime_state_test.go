@@ -166,6 +166,42 @@ func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
 	if sr.CacheRead != counts.CacheRead {
 		t.Errorf("CacheRead=%d, want %d", sr.CacheRead, counts.CacheRead)
 	}
+	if sr.CacheCreation != counts.CacheCreation5m+counts.CacheCreation1h {
+		t.Errorf("CacheCreation=%d, want %d", sr.CacheCreation, counts.CacheCreation5m+counts.CacheCreation1h)
+	}
+}
+
+// #390: executor-side token observations must survive the legacy scheduler
+// completion signature exactly once. The scheduler can keep calling
+// CompleteStageWithCost without cache creation arguments; the stage-keyed
+// handoff supplies the omitted pools and is consumed on first completion.
+func TestStageTokenCountHandoffIsConsumedOnce(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 390, "item-1", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageTokenCounts(StageFeatureDev, tokens.TokenCounts{
+		CacheRead:       29622,
+		CacheCreation1h: 3308,
+	})
+	rs.CompleteStageWithCost(0, 18, 236, 29622, 0.01)
+
+	if got := rs.CompletedStages[0].CacheCreation; got != 3308 {
+		t.Fatalf("CacheCreation=%d, want 3308 from executor handoff", got)
+	}
+
+	// A new occurrence for the same stage must not inherit the old handoff.
+	rs.BeginStage(StageFeatureDev)
+	rs.CompleteStageWithCost(0, 1, 2, 0, 0.001)
+	if got := rs.CompletedStages[1].CacheCreation; got != 0 {
+		t.Errorf("second occurrence CacheCreation=%d, want 0 after one-shot consume", got)
+	}
+
+	// Callers that already have only a combined total can pass it directly;
+	// the variadic tail keeps legacy scheduler call sites source-compatible.
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStageWithCost(0, 3, 4, 0, 0.002, 500)
+	if got := rs.CompletedStages[2].CacheCreation; got != 500 {
+		t.Errorf("direct CompleteStageWithCost CacheCreation=%d, want 500", got)
+	}
 }
 
 // #230: a stage completing twice for the same occurrence (same Stage + the

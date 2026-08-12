@@ -87,6 +87,8 @@ describe("codex stage token capture (real SDK-CLI transcript)", () => {
       outputTokens: 5,
       cacheReadTokens: 7296,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0.013419,
       costSource: "computed",
     });
@@ -125,6 +127,8 @@ describe("codex stage token capture (real SDK-CLI transcript)", () => {
       outputTokens: 120,
       cacheReadTokens: 900,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     });
   });
@@ -138,6 +142,8 @@ describe("codex stage token capture (real SDK-CLI transcript)", () => {
       outputTokens: 5,
       cacheReadTokens: 7296,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     });
   });

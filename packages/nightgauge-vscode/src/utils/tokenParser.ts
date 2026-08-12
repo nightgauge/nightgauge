@@ -29,6 +29,10 @@ export interface ParsedTokenUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  /** Cache-write tokens billed at Anthropic's 5-minute TTL. */
+  cacheCreation5mTokens?: number;
+  /** Cache-write tokens billed at Anthropic's 1-hour TTL. */
+  cacheCreation1hTokens?: number;
   costUsd: number;
   /**
    * How `costUsd` was resolved (Issue #3228). Populated by `TokenAccumulator`
@@ -47,6 +51,50 @@ export interface ParsedTokenUsage {
    * remain summable.
    */
   costCumulative?: boolean;
+}
+
+/**
+ * Reconcile the optional cache-write TTL split with its flat total. Older
+ * adapters expose only the flat count; any unclassified remainder belongs to
+ * the cheaper 5-minute pool so computed cost remains a conservative floor.
+ */
+function cacheCreationByTTL(usage: {
+  cacheCreationTokens?: number;
+  cacheCreation5mTokens?: number;
+  cacheCreation1hTokens?: number;
+}): { fiveMinute: number; oneHour: number } {
+  let fiveMinute = Math.max(0, usage.cacheCreation5mTokens ?? 0);
+  const oneHour = Math.max(0, usage.cacheCreation1hTokens ?? 0);
+  const remainder = Math.max(0, (usage.cacheCreationTokens ?? 0) - fiveMinute - oneHour);
+  fiveMinute += remainder;
+  return { fiveMinute, oneHour };
+}
+
+interface CacheCreationWireUsage {
+  cache_creation_input_tokens?: number;
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number;
+    ephemeral_1h_input_tokens?: number;
+  };
+}
+
+function parsedCacheCreation(rawUsage?: CacheCreationWireUsage): {
+  total: number;
+  fiveMinute: number;
+  oneHour: number;
+} {
+  const flat = Math.max(0, rawUsage?.cache_creation_input_tokens ?? 0);
+  const nested = rawUsage?.cache_creation;
+  const split = cacheCreationByTTL({
+    cacheCreationTokens: flat,
+    cacheCreation5mTokens: nested?.ephemeral_5m_input_tokens ?? 0,
+    cacheCreation1hTokens: nested?.ephemeral_1h_input_tokens ?? 0,
+  });
+  return {
+    total: Math.max(flat, split.fiveMinute + split.oneHour),
+    fiveMinute: split.fiveMinute,
+    oneHour: split.oneHour,
+  };
 }
 
 /**
@@ -241,11 +289,23 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
     // event is a cumulative progress snapshot; a terminal event is the
     // authoritative stage total and must flow through the additive usage path.
     if (parsed.kind === "agent" && parsed.usage && typeof parsed.usage === "object") {
+      const workflowCacheCreation = cacheCreationByTTL({
+        cacheCreationTokens: parsed.usage.cacheCreationTokens ?? 0,
+        cacheCreation5mTokens: parsed.usage.cacheCreation5mTokens,
+        cacheCreation1hTokens: parsed.usage.cacheCreation1hTokens,
+      });
+      const workflowCacheCreationTotal =
+        workflowCacheCreation.fiveMinute + workflowCacheCreation.oneHour;
       const workflowUsage: ParsedTokenUsage = {
         inputTokens: parsed.usage.inputTokens ?? 0,
         outputTokens: parsed.usage.outputTokens ?? 0,
         cacheReadTokens: parsed.usage.cacheReadTokens ?? 0,
-        cacheCreationTokens: parsed.usage.cacheCreationTokens ?? 0,
+        cacheCreationTokens: Math.max(
+          parsed.usage.cacheCreationTokens ?? 0,
+          workflowCacheCreationTotal
+        ),
+        cacheCreation5mTokens: workflowCacheCreation.fiveMinute,
+        cacheCreation1hTokens: workflowCacheCreation.oneHour,
         costUsd: parsed.usage.costUsd ?? 0,
       };
       const terminal = parsed.status === "succeeded" || parsed.status === "failed";
@@ -278,6 +338,7 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
     // Note: Claude CLI outputs usage directly on the message, not under .result
     if (parsed.type === "result") {
       const usage = parsed.usage;
+      const cacheCreation = parsedCacheCreation(usage);
       return {
         type: "result",
         usage: usage
@@ -285,7 +346,9 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
               inputTokens: usage.input_tokens ?? 0,
               outputTokens: usage.output_tokens ?? 0,
               cacheReadTokens: usage.cache_read_input_tokens ?? 0,
-              cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
+              cacheCreationTokens: cacheCreation.total,
+              cacheCreation5mTokens: cacheCreation.fiveMinute,
+              cacheCreation1hTokens: cacheCreation.oneHour,
               costUsd: (() => {
                 const cost = parsed.total_cost_usd ?? 0;
                 if (cost === 0 && (usage.input_tokens > 0 || usage.output_tokens > 0)) {
@@ -308,13 +371,21 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
 
     // Handle Nightgauge SDK token events from Codex adapter JSON output
     if (parsed.type === "token:usage") {
+      const cacheCreation = cacheCreationByTTL({
+        cacheCreationTokens: parsed.cacheCreationTokens ?? 0,
+        cacheCreation5mTokens: parsed.cacheCreation5mTokens,
+        cacheCreation1hTokens: parsed.cacheCreation1hTokens,
+      });
+      const cacheCreationTotal = cacheCreation.fiveMinute + cacheCreation.oneHour;
       return {
         type: "token:usage",
         usage: {
           inputTokens: parsed.inputTokens ?? 0,
           outputTokens: parsed.outputTokens ?? 0,
           cacheReadTokens: parsed.cacheReadTokens ?? 0,
-          cacheCreationTokens: parsed.cacheCreationTokens ?? 0,
+          cacheCreationTokens: Math.max(parsed.cacheCreationTokens ?? 0, cacheCreationTotal),
+          cacheCreation5mTokens: cacheCreation.fiveMinute,
+          cacheCreation1hTokens: cacheCreation.oneHour,
           costUsd: parsed.costUsd ?? 0,
         },
       };
@@ -454,13 +525,16 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       // because assistant messages carry no total_cost_usd; the estimator
       // prices it from the pricing table. See the ParsedStreamMessage field doc.
       const rawUsage = parsed.message?.usage;
+      const cacheCreation = parsedCacheCreation(rawUsage);
       const incrementalUsage: ParsedTokenUsage | undefined =
         rawUsage && typeof rawUsage === "object"
           ? {
               inputTokens: rawUsage.input_tokens ?? 0,
               outputTokens: rawUsage.output_tokens ?? 0,
               cacheReadTokens: rawUsage.cache_read_input_tokens ?? 0,
-              cacheCreationTokens: rawUsage.cache_creation_input_tokens ?? 0,
+              cacheCreationTokens: cacheCreation.total,
+              cacheCreation5mTokens: cacheCreation.fiveMinute,
+              cacheCreation1hTokens: cacheCreation.oneHour,
               costUsd: 0,
             }
           : undefined;
@@ -574,6 +648,8 @@ export function toTokenUsageUpdate(usage: ParsedTokenUsage): TokenUsageUpdate {
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadTokens,
     cacheCreationTokens: usage.cacheCreationTokens,
+    cacheCreation5mTokens: cacheCreationByTTL(usage).fiveMinute,
+    cacheCreation1hTokens: cacheCreationByTTL(usage).oneHour,
     costUsd: usage.costUsd,
     costSource: usage.costSource,
   };
@@ -601,6 +677,8 @@ export class TokenAccumulator {
     outputTokens: 0,
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
+    cacheCreation5mTokens: 0,
+    cacheCreation1hTokens: 0,
     costUsd: 0,
   };
   private adapter?: ExecutionAdapter;
@@ -630,10 +708,15 @@ export class TokenAccumulator {
    * Add token usage from a new message
    */
   add(usage: ParsedTokenUsage): void {
+    const cacheCreation = cacheCreationByTTL(usage);
     this.accumulated.inputTokens += usage.inputTokens;
     this.accumulated.outputTokens += usage.outputTokens;
     this.accumulated.cacheReadTokens += usage.cacheReadTokens;
     this.accumulated.cacheCreationTokens += usage.cacheCreationTokens;
+    this.accumulated.cacheCreation5mTokens =
+      (this.accumulated.cacheCreation5mTokens ?? 0) + cacheCreation.fiveMinute;
+    this.accumulated.cacheCreation1hTokens =
+      (this.accumulated.cacheCreation1hTokens ?? 0) + cacheCreation.oneHour;
     if (usage.costCumulative) {
       // Session-cumulative cost (#256): book the delta since the previous
       // envelope. A decrease means the underlying session was replaced, so
@@ -695,14 +778,8 @@ export class TokenAccumulator {
         input: this.accumulated.inputTokens,
         output: this.accumulated.outputTokens,
         cache_read: this.accumulated.cacheReadTokens,
-        // `cacheCreationTokens` is a single UNSPLIT total — the stream parser
-        // does not yet carry the CLI's per-TTL `cache_creation.{ephemeral_5m,
-        // ephemeral_1h}` split (#390). Per the #358 floor convention it books
-        // into the 5m slot, the CHEAPER tier, so the estimate is a floor and
-        // never an overstatement. On captured Claude traffic the writes are
-        // 1h-heavy, so that floor under-prices the cache-creation pool by
-        // 37.5% (1.25x vs 2.0x base input) until #390 plumbs the split.
-        cache_creation_5m: this.accumulated.cacheCreationTokens,
+        cache_creation_5m: this.accumulated.cacheCreation5mTokens ?? 0,
+        cache_creation_1h: this.accumulated.cacheCreation1hTokens ?? 0,
       },
       this.addedNative ? this.accumulated.costUsd : undefined
     );
@@ -732,6 +809,8 @@ export class TokenAccumulator {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     };
     this.addedNative = false;
@@ -790,6 +869,8 @@ export class LiveStageEstimator {
   private latestInput = 0;
   private latestCacheRead = 0;
   private latestCacheCreation = 0;
+  private latestCacheCreation5m = 0;
+  private latestCacheCreation1h = 0;
   private summedOutput = 0;
   private observed = false;
   private adapter?: ExecutionAdapter;
@@ -815,9 +896,12 @@ export class LiveStageEstimator {
    * latest-wins (growing-context snapshot); output accumulates per turn.
    */
   observe(usage: ParsedTokenUsage): void {
+    const cacheCreation = cacheCreationByTTL(usage);
     this.latestInput = usage.inputTokens;
     this.latestCacheRead = usage.cacheReadTokens;
     this.latestCacheCreation = usage.cacheCreationTokens;
+    this.latestCacheCreation5m = cacheCreation.fiveMinute;
+    this.latestCacheCreation1h = cacheCreation.oneHour;
     this.summedOutput += usage.outputTokens;
     this.observed = true;
   }
@@ -838,6 +922,8 @@ export class LiveStageEstimator {
       outputTokens: this.summedOutput,
       cacheReadTokens: this.latestCacheRead,
       cacheCreationTokens: this.latestCacheCreation,
+      cacheCreation5mTokens: this.latestCacheCreation5m,
+      cacheCreation1hTokens: this.latestCacheCreation1h,
       costUsd: 0,
     };
     if (!this.adapter || !this.model) {
@@ -845,13 +931,14 @@ export class LiveStageEstimator {
     }
     // No native cost on assistant messages — always registry-computed. This is
     // the ONE surface the Go scheduler never re-prices, so an unpriced pool
-    // here is simply lost. Unsplit cache creation books to the 5m slot per the
-    // #358 floor convention (see TokenAccumulator.getTotal for why).
+    // here is simply lost. The parser preserves the CLI's TTL split; an older
+    // unsplit source has already been conservatively assigned to 5m.
     const result = computeStageCost(this.adapter, this.model, {
       input: base.inputTokens,
       output: base.outputTokens,
       cache_read: base.cacheReadTokens,
-      cache_creation_5m: base.cacheCreationTokens,
+      cache_creation_5m: base.cacheCreation5mTokens ?? 0,
+      cache_creation_1h: base.cacheCreation1hTokens ?? 0,
     });
     return { ...base, costUsd: result.cost_usd, costSource: result.source };
   }
@@ -935,6 +1022,9 @@ export function sumTokenUsage(
     outputTokens: earlier.outputTokens + later.outputTokens,
     cacheReadTokens: earlier.cacheReadTokens + later.cacheReadTokens,
     cacheCreationTokens: earlier.cacheCreationTokens + later.cacheCreationTokens,
+    cacheCreation5mTokens:
+      cacheCreationByTTL(earlier).fiveMinute + cacheCreationByTTL(later).fiveMinute,
+    cacheCreation1hTokens: cacheCreationByTTL(earlier).oneHour + cacheCreationByTTL(later).oneHour,
     costUsd: earlier.costUsd + later.costUsd,
     costSource: later.costSource ?? earlier.costSource,
   };

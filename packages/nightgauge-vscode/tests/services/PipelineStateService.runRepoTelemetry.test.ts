@@ -103,6 +103,73 @@ describe("PipelineStateService — run repo + completion telemetry", () => {
     expect(complete?.params.adapter).toBe("claude");
   });
 
+  it("completeStage forwards the cache-write TTL split (#390)", async () => {
+    const svc = await makeService(390);
+    svc.initEmpty();
+    await svc.updateTokens({
+      stage: "feature-dev",
+      inputTokens: 18,
+      outputTokens: 236,
+      cacheReadTokens: 29622,
+      cacheCreationTokens: 3308,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 3308,
+      costUsd: 0.01,
+    });
+
+    await svc.completeStage("feature-dev");
+
+    const complete = callsTo("pipeline.notifyStageTransition").find(
+      (c) => c.params.status === "complete"
+    );
+    expect(complete?.params).toMatchObject({
+      cacheCreationTokens: 3308,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 3308,
+    });
+  });
+
+  it("sends only the unbooked retry delta after a failed attempt (#390)", async () => {
+    const svc = await makeService(390);
+    svc.initEmpty();
+    await svc.updateTokens({
+      stage: "feature-dev",
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheCreationTokens: 100,
+      cacheCreation1hTokens: 100,
+      costUsd: 0.01,
+    });
+    await svc.failStage("feature-dev", "retryable");
+
+    await svc.updateTokens({
+      stage: "feature-dev",
+      inputTokens: 5,
+      outputTokens: 8,
+      cacheCreationTokens: 50,
+      cacheCreation1hTokens: 50,
+      costUsd: 0.005,
+    });
+    await svc.completeStage("feature-dev");
+
+    const terminals = callsTo("pipeline.notifyStageTransition").filter(
+      (c) => c.params.status === "failed" || c.params.status === "complete"
+    );
+    expect(terminals).toHaveLength(2);
+    expect(terminals[0].params).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheCreationTokens: 100,
+      cacheCreation1hTokens: 100,
+    });
+    expect(terminals[1].params).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 8,
+      cacheCreationTokens: 50,
+      cacheCreation1hTokens: 50,
+    });
+  });
+
   it("completeStage omits model/adapter keys when no attribution is passed (#268)", async () => {
     const svc = await makeService(268);
 

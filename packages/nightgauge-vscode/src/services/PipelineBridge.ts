@@ -247,6 +247,8 @@ export class PipelineBridge {
       outputTokens: 0,
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     };
 
@@ -329,9 +331,17 @@ export class PipelineBridge {
             outputTokens: usage.outputTokens - prevTokenUsage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens - prevTokenUsage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens - prevTokenUsage.cacheCreationTokens,
+            cacheCreation5mTokens:
+              (usage.cacheCreation5mTokens ?? 0) - prevTokenUsage.cacheCreation5mTokens,
+            cacheCreation1hTokens:
+              (usage.cacheCreation1hTokens ?? 0) - prevTokenUsage.cacheCreation1hTokens,
             costUsd: usage.costUsd - prevTokenUsage.costUsd,
           };
-          prevTokenUsage = { ...usage };
+          prevTokenUsage = {
+            ...usage,
+            cacheCreation5mTokens: usage.cacheCreation5mTokens ?? 0,
+            cacheCreation1hTokens: usage.cacheCreation1hTokens ?? 0,
+          };
 
           // Only forward when there's an actual delta — avoids noise when
           // SkillRunner's fallback path re-emits an unchanged total.
@@ -349,6 +359,8 @@ export class PipelineBridge {
                 outputTokens: delta.outputTokens,
                 cacheReadTokens: delta.cacheReadTokens,
                 cacheCreationTokens: delta.cacheCreationTokens,
+                cacheCreation5mTokens: delta.cacheCreation5mTokens,
+                cacheCreation1hTokens: delta.cacheCreation1hTokens,
                 costUsd: delta.costUsd,
                 stage,
                 issueNumber: ipcParams.issueNumber,
@@ -535,6 +547,8 @@ export class PipelineBridge {
         elapsedMs: result.elapsedMs,
         idleMsAtExit: result.idleMsAtExit,
         cacheCreationTokens: result.cacheCreationTokens,
+        cacheCreation5mTokens: result.cacheCreation5mTokens,
+        cacheCreation1hTokens: result.cacheCreation1hTokens,
         lastBashCommand: result.lastBashCommand,
         lastBashExit: result.lastBashExit,
         recentBash: result.recentBash,

@@ -112,6 +112,29 @@ describe("PipelineStateService.failStage — model attribution", () => {
     });
   });
 
+  it("threads the failed stage's cache-write TTL split (#390)", async () => {
+    const svc = await makeService(390);
+    svc.initEmpty();
+    await svc.updateTokens({
+      stage: "feature-dev",
+      inputTokens: 18,
+      outputTokens: 236,
+      cacheReadTokens: 29622,
+      cacheCreationTokens: 3308,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 3308,
+      costUsd: 0.01,
+    });
+
+    await svc.failStage("feature-dev", "stage failed");
+
+    expect(lastFailedTransition()).toMatchObject({
+      cacheCreationTokens: 3308,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 3308,
+    });
+  });
+
   it("omits model/adapter from the wire when attribution is absent (Go ignores empties)", async () => {
     const svc = await makeService(701);
     await svc.initializePipeline(701, "No attribution", "feat/701");

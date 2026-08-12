@@ -2767,15 +2767,22 @@ func (s *Server) registerMethods() {
 			// scheduler path (scheduler.go): prefer the CLI-authoritative
 			// total_cost_usd when present, otherwise fall back to token-derived
 			// cost. exitCode stays 0 — the notify path has no subprocess exit code.
+			cacheCreation5m, cacheCreation1h := tokens.NormalizeCacheCreation(
+				p.CacheCreationTokens,
+				p.CacheCreation5mTokens,
+				p.CacheCreation1hTokens,
+			)
+			rt.RecordStageTokenCounts(stage, tokens.TokenCounts{
+				CacheRead:       p.CacheReadTokens,
+				CacheCreation5m: cacheCreation5m,
+				CacheCreation1h: cacheCreation1h,
+			})
 			if p.CostUsd > 0 {
-				rt.CompleteStageWithCost(0, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
+				rt.CompleteStageWithCost(0, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, p.CacheCreationTokens)
 			} else {
-				// No CacheCreation5m/1h: PipelineNotifyStageTransitionParams
-				// carries no cache-creation count, so this fallback prices the
-				// three pools it actually has. Plumbing the count (and its
-				// 5m/1h split) through the notify wire is #390.
 				rt.CompleteStage(0, tokens.TokenCounts{
 					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
+					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
 				}, p.Model)
 			}
 			// NOTE: Do NOT delete the runtime here on IsComplete().
@@ -2818,12 +2825,23 @@ func (s *Server) registerMethods() {
 			// place, a stage in both maps is the legitimate backtrack case
 			// (completed earlier, re-run later, failed) and the latest attempt
 			// must win.
+			cacheCreation5m, cacheCreation1h := tokens.NormalizeCacheCreation(
+				p.CacheCreationTokens,
+				p.CacheCreation5mTokens,
+				p.CacheCreation1hTokens,
+			)
+			rt.RecordStageTokenCounts(stage, tokens.TokenCounts{
+				CacheRead:       p.CacheReadTokens,
+				CacheCreation5m: cacheCreation5m,
+				CacheCreation1h: cacheCreation1h,
+			})
 			if p.CostUsd > 0 {
-				rt.CompleteStageWithCost(1, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
-			} else if p.InputTokens > 0 || p.OutputTokens > 0 {
-				// No CacheCreation5m/1h — see the "complete" branch above (#390).
+				rt.CompleteStageWithCost(1, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, p.CacheCreationTokens)
+			} else if p.InputTokens > 0 || p.OutputTokens > 0 || p.CacheReadTokens > 0 ||
+				p.CacheCreationTokens > 0 || p.CacheCreation5mTokens > 0 || p.CacheCreation1hTokens > 0 {
 				rt.CompleteStage(1, tokens.TokenCounts{
 					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
+					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
 				}, p.Model)
 			}
 			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)

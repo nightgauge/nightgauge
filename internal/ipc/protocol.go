@@ -903,10 +903,15 @@ type PipelineNotifyStageTransitionParams struct {
 	// so runtime-{issue}-{runId}.json and platform telemetry reported 0 in / 0 out / $0.
 	// InputTokens excludes cache reads (CacheReadTokens is a separate field);
 	// CompleteStageWithCost combines them, matching the scheduler path.
-	InputTokens     int     `json:"inputTokens,omitempty"`
-	OutputTokens    int     `json:"outputTokens,omitempty"`
-	CacheReadTokens int     `json:"cacheReadTokens,omitempty"`
-	CostUsd         float64 `json:"costUsd,omitempty"`
+	InputTokens     int `json:"inputTokens,omitempty"`
+	OutputTokens    int `json:"outputTokens,omitempty"`
+	CacheReadTokens int `json:"cacheReadTokens,omitempty"`
+	// CacheCreationTokens is the combined cache-write count. The TTL fields
+	// preserve Anthropic's billing split; an omitted split is attributed to 5m.
+	CacheCreationTokens   int     `json:"cacheCreationTokens,omitempty"`
+	CacheCreation5mTokens int     `json:"cacheCreation5mTokens,omitempty"`
+	CacheCreation1hTokens int     `json:"cacheCreation1hTokens,omitempty"`
+	CostUsd               float64 `json:"costUsd,omitempty"`
 	// Model is the model that ACTUALLY served the stage per the CLI stream
 	// (skillRunner servedModel / modelDecision, #91). Threaded here (#268) so
 	// the notify handler records it as the runtime's per-stage StageModel and

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -125,6 +126,19 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		exitCode := result.ExitCode
 		if !result.Success && exitCode == 0 {
 			exitCode = 1 // Ensure non-zero exit on failure
+		}
+
+		if params.Runtime != nil {
+			cacheCreation5m, cacheCreation1h := tokens.NormalizeCacheCreation(
+				result.CacheCreationTokens,
+				result.CacheCreation5mTokens,
+				result.CacheCreation1hTokens,
+			)
+			params.Runtime.RecordStageTokenCounts(params.Stage, tokens.TokenCounts{
+				CacheRead:       result.CacheReadTokens,
+				CacheCreation5m: cacheCreation5m,
+				CacheCreation1h: cacheCreation1h,
+			})
 		}
 
 		// Evaluate model escalation when stage fails.

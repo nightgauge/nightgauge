@@ -139,6 +139,10 @@ type StageResultParams struct {
 	// stage. Mirrors the existing CacheReadTokens shape so the daily
 	// exit-record carries a complete usage snapshot. (#3605)
 	CacheCreationTokens int `json:"cacheCreationTokens,omitempty"`
+	// CacheCreation5mTokens and CacheCreation1hTokens preserve the Anthropic
+	// billing TTL split. Older clients may send only CacheCreationTokens.
+	CacheCreation5mTokens int `json:"cacheCreation5mTokens,omitempty"`
+	CacheCreation1hTokens int `json:"cacheCreation1hTokens,omitempty"`
 	// LastBashCommand is the most recent `Bash` tool_use input, truncated
 	// to 500 chars by the TS side before forwarding. (#3605)
 	LastBashCommand string `json:"lastBashCommand,omitempty"`

@@ -720,11 +720,12 @@ func (hw *HistoryWriter) seedSeenLocked(c *dirCoordinator) {
 // ensures interim records (written after a partial pipeline) show correct
 // accumulated totals instead of reading from global accumulators that may not
 // yet reflect all completed stages.
-func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead int, costUSD float64) {
+func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead, cacheCreation int, costUSD float64) {
 	for _, t := range perStageTokens {
 		input += t.Input + t.CacheRead // Input is non-cached; combined matches StageResult.InputTokens semantics
 		output += t.Output
 		cacheRead += t.CacheRead
+		cacheCreation += t.CacheCreation
 		costUSD += t.CostUSD
 	}
 	return
@@ -846,7 +847,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		acc.Input += sr.InputTokens - sr.CacheRead // actual non-cached input tokens
 		acc.Output += sr.OutputTokens
 		acc.CacheRead += sr.CacheRead
-		acc.CacheCreation = 0 // not tracked per stage — only available at run level via execution stream
+		acc.CacheCreation += sr.CacheCreation
 		acc.CostUSD += sr.CostUSD
 		acc.Adapter = stageAdapter
 
@@ -905,7 +906,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 						Input:         sr.InputTokens - sr.CacheRead,
 						Output:        sr.OutputTokens,
 						CacheRead:     sr.CacheRead,
-						CacheCreation: 0,
+						CacheCreation: sr.CacheCreation,
 						CostUSD:       sr.CostUSD,
 						CacheHitRate:  cacheHitRate,
 						Adapter:       stageAdapter,
@@ -1002,7 +1003,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	// Compute token totals from per-stage data rather than global accumulators.
 	// This ensures interim records (written mid-pipeline after N completed stages)
 	// always reflect the correct accumulated values for those N stages.
-	accInput, accOutput, accCacheRead, accCostUSD := computeAccumulatedTokens(perStageTokens)
+	accInput, accOutput, accCacheRead, accCacheCreation, accCostUSD := computeAccumulatedTokens(perStageTokens)
 
 	// Bump schema_version to "3" when V3-only fields are populated (Issue #3001).
 	schemaVersion := "2"
@@ -1034,11 +1035,12 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		Type:   typePtr,
 		Stages: stages,
 		Tokens: V2Tokens{
-			TotalInput:       accInput,
-			TotalOutput:      accOutput,
-			TotalCacheRead:   accCacheRead,
-			EstimatedCostUSD: accCostUSD,
-			PerStage:         perStageTokens,
+			TotalInput:         accInput,
+			TotalOutput:        accOutput,
+			TotalCacheRead:     accCacheRead,
+			TotalCacheCreation: accCacheCreation,
+			EstimatedCostUSD:   accCostUSD,
+			PerStage:           perStageTokens,
 		},
 		Files: V2Files{},
 		Routing: V2Routing{

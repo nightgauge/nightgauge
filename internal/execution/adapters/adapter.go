@@ -77,6 +77,13 @@ type RunResult struct {
 	Stderr       string
 	InputTokens  int
 	OutputTokens int
+	// CacheReadTokens and cache-creation fields preserve every billable token
+	// pool observed in the adapter stream. CacheCreationTokens is the combined
+	// total; the TTL fields carry the pricing split when available.
+	CacheReadTokens       int
+	CacheCreationTokens   int
+	CacheCreation5mTokens int
+	CacheCreation1hTokens int
 	// PremiumRequests is the copilot billable unit parsed from its stats footer
 	// (#52). Zero for token-metered adapters (claude/codex/gemini), which report
 	// InputTokens/OutputTokens instead.

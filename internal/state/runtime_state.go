@@ -251,6 +251,12 @@ type RuntimeState struct {
 	// survives the stage never completing normally.
 	TerminatingStageTokens map[string]StageResult `json:"terminatingStageTokens,omitempty"`
 
+	// pendingStageTokenCounts is a transient handoff from executors to the
+	// scheduler's existing completion calls. It is deliberately unexported and
+	// unsnapshotted: a count is consumed once by the matching stage completion,
+	// so it cannot survive a restart and be booked twice.
+	pendingStageTokenCounts map[PipelineStage]tokens.TokenCounts
+
 	// sealed is the IN-MEMORY half of the terminal latch (ADR-017 Decision 5,
 	// claim step 4). Set by SealAndRemove once the terminal-stamped snapshot has
 	// been written and removed; from then on every Persist returns ErrRunSealed
@@ -318,14 +324,15 @@ var EscalationReasons = []string{
 
 // StageResult records the outcome of a completed stage.
 type StageResult struct {
-	Stage        PipelineStage `json:"stage"`
-	StartedAt    time.Time     `json:"startedAt"`
-	Duration     time.Duration `json:"duration"`
-	ExitCode     int           `json:"exitCode"`
-	InputTokens  int           `json:"inputTokens"` // combined: actual input + cache read
-	OutputTokens int           `json:"outputTokens"`
-	CacheRead    int           `json:"cacheRead"` // cache read tokens (subset of InputTokens)
-	CostUSD      float64       `json:"costUsd"`
+	Stage         PipelineStage `json:"stage"`
+	StartedAt     time.Time     `json:"startedAt"`
+	Duration      time.Duration `json:"duration"`
+	ExitCode      int           `json:"exitCode"`
+	InputTokens   int           `json:"inputTokens"` // combined: actual input + cache read
+	OutputTokens  int           `json:"outputTokens"`
+	CacheRead     int           `json:"cacheRead"` // cache read tokens (subset of InputTokens)
+	CacheCreation int           `json:"cacheCreation"`
+	CostUSD       float64       `json:"costUsd"`
 }
 
 // NewRuntimeState creates a new runtime state for a pipeline execution.
@@ -561,8 +568,8 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 //
 // counts carries every billable pool (#358): taking input/output alone here
 // while the caller's other cost path prices cache would produce two different
-// costs for one stage. Cache-creation feeds PRICING only — it is deliberately
-// not stored on StageResult; recording that count is #390's scope.
+// costs for one stage. Cache creation is also persisted on StageResult so the
+// history writer can retain it per stage and in run totals (#390).
 //
 // counts.Input is NON-cached input (what CalculateCost prices at the base
 // rate), but StageResult.InputTokens is the COMBINED count with CacheRead as a
@@ -570,22 +577,94 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // divide by it for the cache-hit rate. So the recorded input adds CacheRead
 // back in, exactly as CompleteStageWithCost does.
 func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, model string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
+	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
 	cost := tokens.CalculateCost(model, counts)
-	rs.completeStageInternal(exitCode, counts.Input+counts.CacheRead, counts.Output, counts.CacheRead, cost)
+	rs.completeStageInternalLocked(
+		exitCode,
+		counts.Input+counts.CacheRead,
+		counts.Output,
+		counts.CacheRead,
+		counts.CacheCreation5m+counts.CacheCreation1h,
+		cost,
+	)
 }
 
 // CompleteStageWithCost records stage completion using the actual cost from
 // Claude CLI (total_cost_usd) instead of recalculating from token counts.
 // This is more accurate because it accounts for cache_read tokens at their
-// lower per-token rate.
-func (rs *RuntimeState) CompleteStageWithCost(exitCode, inputTokens, outputTokens, cacheReadTokens int, actualCostUsd float64) {
-	rs.completeStageInternal(exitCode, inputTokens+cacheReadTokens, outputTokens, cacheReadTokens, actualCostUsd)
-}
-
-func (rs *RuntimeState) completeStageInternal(exitCode, inputTokens, outputTokens, cacheReadTokens int, cost float64) {
+// lower per-token rate. cacheCreationTokens accepts the optional flat cache
+// creation total from completion paths that do not carry the TTL split.
+func (rs *RuntimeState) CompleteStageWithCost(exitCode, inputTokens, outputTokens, cacheReadTokens int, actualCostUsd float64, cacheCreationTokens ...int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
+	counts := tokens.TokenCounts{
+		Input:     inputTokens,
+		Output:    outputTokens,
+		CacheRead: cacheReadTokens,
+	}
+	if len(cacheCreationTokens) > 0 && cacheCreationTokens[0] > 0 {
+		// A legacy unsplit total is conservatively attributed to the cheaper
+		// 5-minute tier. Executor handoffs with an explicit split merge below.
+		counts.CacheCreation5m = cacheCreationTokens[0]
+	}
+	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
+	rs.completeStageInternalLocked(
+		exitCode,
+		counts.Input+counts.CacheRead,
+		counts.Output,
+		counts.CacheRead,
+		counts.CacheCreation5m+counts.CacheCreation1h,
+		actualCostUsd,
+	)
+}
+
+// RecordStageTokenCounts stages executor-observed cache pools for the matching
+// completion call. Repeated observations merge by per-pool max so overlapping
+// sources cannot double-count the same stream snapshot.
+func (rs *RuntimeState) RecordStageTokenCounts(stage PipelineStage, counts tokens.TokenCounts) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.pendingStageTokenCounts == nil {
+		rs.pendingStageTokenCounts = make(map[PipelineStage]tokens.TokenCounts)
+	}
+	current := rs.pendingStageTokenCounts[stage]
+	current.CacheRead = max(current.CacheRead, counts.CacheRead)
+	current.CacheCreation5m = max(current.CacheCreation5m, counts.CacheCreation5m)
+	current.CacheCreation1h = max(current.CacheCreation1h, counts.CacheCreation1h)
+	rs.pendingStageTokenCounts[stage] = current
+}
+
+// consumeCurrentStageTokenCountsLocked merges and consumes the current stage's
+// executor handoff. The caller holds rs.mu through the matching stage booking,
+// so a concurrent duplicate completion cannot win the idempotency race after
+// this method has removed the pending counts.
+func (rs *RuntimeState) consumeCurrentStageTokenCountsLocked(direct tokens.TokenCounts) tokens.TokenCounts {
+	pending := rs.pendingStageTokenCounts[rs.Stage]
+	delete(rs.pendingStageTokenCounts, rs.Stage)
+	direct.CacheRead = max(direct.CacheRead, pending.CacheRead)
+
+	// The scheduler's calculated-cost path carries the same creation tokens as
+	// one UNSPLIT 5m total, while the executor handoff carries their real TTL
+	// split. Per-pool max would therefore book the same tokens twice. Prefer the
+	// richer pending split and assign only a larger direct total's remainder to
+	// 5m; with no handoff, preserve the direct counts as-is.
+	pendingCreation := pending.CacheCreation5m + pending.CacheCreation1h
+	if pendingCreation > 0 {
+		directCreation := direct.CacheCreation5m + direct.CacheCreation1h
+		direct.CacheCreation5m = pending.CacheCreation5m + max(0, directCreation-pendingCreation)
+		direct.CacheCreation1h = pending.CacheCreation1h
+	}
+	return direct
+}
+
+// completeStageInternalLocked appends one completed occurrence. The caller
+// holds rs.mu so pending-token consumption and the idempotency decision are one
+// atomic transaction.
+func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64) {
 	// Idempotency guard (#230): if this exact stage occurrence was already
 	// completed — same Stage AND the same BeginStage-stamped StageStart — skip
 	// it so a residual double-complete yields exactly one completedStages entry
@@ -646,14 +725,15 @@ func (rs *RuntimeState) completeStageInternal(exitCode, inputTokens, outputToken
 	}
 
 	result := StageResult{
-		Stage:        rs.Stage,
-		StartedAt:    rs.StageStart,
-		Duration:     time.Since(rs.StageStart),
-		ExitCode:     exitCode,
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		CacheRead:    cacheReadTokens,
-		CostUSD:      cost,
+		Stage:         rs.Stage,
+		StartedAt:     rs.StageStart,
+		Duration:      time.Since(rs.StageStart),
+		ExitCode:      exitCode,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		CacheRead:     cacheReadTokens,
+		CacheCreation: cacheCreationTokens,
+		CostUSD:       cost,
 	}
 	rs.CompletedStages = append(rs.CompletedStages, result)
 	rs.InputTokens += inputTokens

@@ -60,12 +60,8 @@ import type { ExecutionAdapter } from "../config/schema";
  * (#358). A caller that knows only a single combined cache-creation count MUST
  * book it into {@link cache_creation_5m}: that is the cheaper tier, so the
  * estimate is a floor rather than an overstatement. This is the documented
- * #358 floor convention, and it is what every caller in the extension does
- * today because the CLI's per-tier split is not yet plumbed end to end (#390).
- * Splitting the field here — rather than waiting for #390 — is what makes the
- * 1h rate reachable at all: the moment #390 populates
- * {@link cache_creation_1h}, this path prices it correctly with no further
- * change.
+ * #358 floor convention. Claude's stream parser supplies the real split;
+ * adapters or historical records that expose only a flat total use the floor.
  */
 export interface StageCostTokens {
   input: number;
@@ -73,7 +69,7 @@ export interface StageCostTokens {
   cache_read?: number;
   /** Cache writes bought with a 5-minute TTL. Unsplit counts go here (#358). */
   cache_creation_5m?: number;
-  /** Cache writes bought with a 1-hour TTL. Populated once #390 lands. */
+  /** Cache writes bought with a 1-hour TTL. */
   cache_creation_1h?: number;
 }
 
@@ -146,8 +142,8 @@ function computeFromRegistry(
  * estimate, which makes a native-vs-computed drift comparison meaningless.
  *
  * The stage supplied cache-write tokens with no TTL split (everything in the
- * 5m slot per the #358 floor convention, because #390 has not plumbed the real
- * split yet) AND the model prices the two write tiers differently. On such a
+ * 5m slot per the #358 floor convention) AND the model prices the two write
+ * tiers differently. On such a
  * model the computed number is guaranteed to sit below native by up to 37.5%
  * of the write pool — captured Claude traffic is 1h-heavy — so the >5% warn
  * would fire on essentially every real Claude stage and point triage at
@@ -155,8 +151,7 @@ function computeFromRegistry(
  * warn nobody reads.
  *
  * The condition is deliberately written against the ABSENCE of a 1h count, so
- * the warn re-arms itself the moment #390 supplies the split — there is no
- * flag to remember to remove.
+ * parsed split traffic still gets the ordinary registry-drift check.
  *
  * Only called from the branch where `computeFromRegistry` already returned a
  * value, so `model` is an exact registry id (`isKnownModel` gated) and this
@@ -208,8 +203,7 @@ export function computeStageCost(
             `[computeStageCost] Computed cost for ${adapter}/${model} is the #358 unsplit ` +
               `cache-write floor (all writes booked at the 5m rate), so it reads ` +
               `${(deltaPct * 100).toFixed(1)}% below native=$${native.toFixed(6)} ` +
-              `(computed=$${computed.toFixed(6)}). Not a rate-card drift — the drift warn ` +
-              `re-arms once #390 plumbs the per-TTL split.`
+              `(computed=$${computed.toFixed(6)}). Not a rate-card drift.`
           );
         } else {
           console.warn(

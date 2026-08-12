@@ -655,6 +655,8 @@ export function registerRunStageCommand(
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        cacheCreation5mTokens: 0,
+        cacheCreation1hTokens: 0,
         costUsd: 0,
       };
 
@@ -759,9 +761,17 @@ export function registerRunStageCommand(
             outputTokens: usage.outputTokens - prevUsage.outputTokens,
             cacheReadTokens: usage.cacheReadTokens - prevUsage.cacheReadTokens,
             cacheCreationTokens: usage.cacheCreationTokens - prevUsage.cacheCreationTokens,
+            cacheCreation5mTokens:
+              (usage.cacheCreation5mTokens ?? 0) - prevUsage.cacheCreation5mTokens,
+            cacheCreation1hTokens:
+              (usage.cacheCreation1hTokens ?? 0) - prevUsage.cacheCreation1hTokens,
             costUsd: usage.costUsd - prevUsage.costUsd,
           };
-          prevUsage = { ...usage };
+          prevUsage = {
+            ...usage,
+            cacheCreation5mTokens: usage.cacheCreation5mTokens ?? 0,
+            cacheCreation1hTokens: usage.cacheCreation1hTokens ?? 0,
+          };
 
           if (pipelineStateService) {
             pipelineStateService
@@ -770,6 +780,8 @@ export function registerRunStageCommand(
                 outputTokens: delta.outputTokens,
                 cacheReadTokens: delta.cacheReadTokens,
                 cacheCreationTokens: delta.cacheCreationTokens,
+                cacheCreation5mTokens: delta.cacheCreation5mTokens,
+                cacheCreation1hTokens: delta.cacheCreation1hTokens,
                 costUsd: delta.costUsd,
                 stage,
               })

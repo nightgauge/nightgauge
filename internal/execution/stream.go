@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 )
 
 // StreamEvent represents a single NDJSON event from Claude's stream-json output.
@@ -68,10 +70,19 @@ type StreamMessage struct {
 
 // TokenUsage holds token count data from Claude's output.
 type TokenUsage struct {
-	InputTokens        int `json:"input_tokens"`
-	OutputTokens       int `json:"output_tokens"`
-	CacheCreationInput int `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInput     int `json:"cache_read_input_tokens,omitempty"`
+	InputTokens        int                `json:"input_tokens"`
+	OutputTokens       int                `json:"output_tokens"`
+	CacheCreationInput int                `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInput     int                `json:"cache_read_input_tokens,omitempty"`
+	CacheCreation      CacheCreationUsage `json:"cache_creation,omitempty"`
+}
+
+// CacheCreationUsage is Anthropic's cache-write breakdown by billing TTL.
+// The flat CacheCreationInput count remains the authoritative total; older
+// adapters may omit this nested split.
+type CacheCreationUsage struct {
+	Ephemeral5mInput int `json:"ephemeral_5m_input_tokens,omitempty"`
+	Ephemeral1hInput int `json:"ephemeral_1h_input_tokens,omitempty"`
 }
 
 // ContentBlock represents a content block in the stream.
@@ -87,7 +98,12 @@ type TokenAccumulator struct {
 	InputTokens  int
 	OutputTokens int
 	CacheCreated int
-	CacheRead    int
+	// CacheCreated5m and CacheCreated1h preserve Anthropic's billable TTL
+	// split. Call CacheCreationByTTL to reconcile an omitted/partial split
+	// against CacheCreated before pricing or forwarding it.
+	CacheCreated5m int
+	CacheCreated1h int
+	CacheRead      int
 	// PremiumRequests is the copilot billing unit. The GitHub Copilot CLI is
 	// subscription-based and emits no token counts — its measurable consumption
 	// is the premium-request count from its stats footer (#52). Zero for
@@ -167,6 +183,8 @@ func (acc *TokenAccumulator) addResultUsage(usage *TokenUsage) {
 	acc.resultTotal.InputTokens += usage.InputTokens
 	acc.resultTotal.OutputTokens += usage.OutputTokens
 	acc.resultTotal.CacheCreationInput += usage.CacheCreationInput
+	acc.resultTotal.CacheCreation.Ephemeral5mInput += usage.CacheCreation.Ephemeral5mInput
+	acc.resultTotal.CacheCreation.Ephemeral1hInput += usage.CacheCreation.Ephemeral1hInput
 	acc.resultTotal.CacheReadInput += usage.CacheReadInput
 	acc.updateFromUsage(&acc.resultTotal)
 }
@@ -186,6 +204,12 @@ func (acc *TokenAccumulator) addTurnUsage(id string, usage *TokenUsage) {
 	acc.turnTotal.InputTokens += raiseMax(&turn.InputTokens, usage.InputTokens)
 	acc.turnTotal.OutputTokens += raiseMax(&turn.OutputTokens, usage.OutputTokens)
 	acc.turnTotal.CacheCreationInput += raiseMax(&turn.CacheCreationInput, usage.CacheCreationInput)
+	acc.turnTotal.CacheCreation.Ephemeral5mInput += raiseMax(
+		&turn.CacheCreation.Ephemeral5mInput, usage.CacheCreation.Ephemeral5mInput,
+	)
+	acc.turnTotal.CacheCreation.Ephemeral1hInput += raiseMax(
+		&turn.CacheCreation.Ephemeral1hInput, usage.CacheCreation.Ephemeral1hInput,
+	)
 	acc.turnTotal.CacheReadInput += raiseMax(&turn.CacheReadInput, usage.CacheReadInput)
 	acc.turns[id] = turn
 	acc.updateFromUsage(&acc.turnTotal)
@@ -211,7 +235,18 @@ func (acc *TokenAccumulator) updateFromUsage(usage *TokenUsage) {
 	raiseMax(&acc.InputTokens, usage.InputTokens)
 	raiseMax(&acc.OutputTokens, usage.OutputTokens)
 	raiseMax(&acc.CacheCreated, usage.CacheCreationInput)
+	raiseMax(&acc.CacheCreated5m, usage.CacheCreation.Ephemeral5mInput)
+	raiseMax(&acc.CacheCreated1h, usage.CacheCreation.Ephemeral1hInput)
 	raiseMax(&acc.CacheRead, usage.CacheReadInput)
+}
+
+// CacheCreationByTTL returns the cache-write total split into its billing
+// pools. When the CLI supplies only a flat total (or a partial nested split),
+// the unclassified remainder is assigned to the cheaper 5-minute tier. That
+// preserves every observed token while keeping computed cost a conservative
+// floor rather than inventing the more expensive 1-hour attribution.
+func (acc *TokenAccumulator) CacheCreationByTTL() (fiveMinute, oneHour int) {
+	return tokens.NormalizeCacheCreation(acc.CacheCreated, acc.CacheCreated5m, acc.CacheCreated1h)
 }
 
 // Total returns the total token count (input + output).
