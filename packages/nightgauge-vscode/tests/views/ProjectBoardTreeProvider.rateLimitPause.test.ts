@@ -17,6 +17,19 @@ import type {
 import type { IWorkItemProvider } from "../../src/services/types/WorkItemProvider";
 import { setMockUIConfig, resetMockConfigBridge } from "../setup";
 import { AutonomousActivityState } from "../../src/utils/autonomousActivityState";
+import { PollingVisibilityGate } from "../../src/services/AttentionSweepService";
+
+/** A mock TreeView whose `visible` is fixed at construction — sufficient for
+ * tests that only care about the timer ticking, not visibility toggling
+ * (#484 review round: the timer's gate is now isViewVisible(key) AND
+ * isWindowActive(), so a test proving the timer runs needs a visible tab). */
+function createVisibleMockTreeView(): vscode.TreeView<never> {
+  return {
+    title: "",
+    visible: true,
+    onDidChangeVisibility: () => ({ dispose: () => {} }),
+  } as unknown as vscode.TreeView<never>;
+}
 
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
@@ -97,6 +110,7 @@ describe("ProjectBoardTreeProvider rate-limit auto-refresh pause", () => {
     // exercise the timer; the pause logic under test is orthogonal to gating.
     AutonomousActivityState.resetForTests();
     AutonomousActivityState.instance.setStatus("running");
+    PollingVisibilityGate.resetForTests();
     setMockUIConfig({
       project_board: { group_by_epic: false, default_epic_collapsed: false },
       ready_items: {
@@ -124,12 +138,14 @@ describe("ProjectBoardTreeProvider rate-limit auto-refresh pause", () => {
     instance?.dispose();
     instance = null;
     AutonomousActivityState.resetForTests();
+    PollingVisibilityGate.resetForTests();
     vi.useRealTimers();
   });
 
   it("skips the refresh tick while rate-limit is exhausted, then resumes after resetAt", () => {
     const { provider, fireRateLimit, clearCache } = createFakeProvider();
     instance = new ProjectBoardTreeProvider(provider, "ready");
+    instance.setTreeView(createVisibleMockTreeView());
 
     // Baseline: advance one interval with healthy quota → refresh() ran once
     // and called clearCache.
@@ -154,6 +170,7 @@ describe("ProjectBoardTreeProvider rate-limit auto-refresh pause", () => {
   it("treats a low (non-zero) reading as pause-worthy", () => {
     const { provider, fireRateLimit, clearCache } = createFakeProvider();
     instance = new ProjectBoardTreeProvider(provider, "ready");
+    instance.setTreeView(createVisibleMockTreeView());
 
     vi.advanceTimersByTime(60_000);
     const baseline = clearCache.mock.calls.length;
@@ -174,6 +191,7 @@ describe("ProjectBoardTreeProvider rate-limit auto-refresh pause", () => {
   it("clears the pause when a healthy reading arrives", () => {
     const { provider, fireRateLimit, clearCache } = createFakeProvider();
     instance = new ProjectBoardTreeProvider(provider, "ready");
+    instance.setTreeView(createVisibleMockTreeView());
 
     vi.advanceTimersByTime(60_000);
     const baseline = clearCache.mock.calls.length;

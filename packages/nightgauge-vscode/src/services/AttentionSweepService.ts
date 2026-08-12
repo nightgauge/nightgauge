@@ -134,25 +134,51 @@ export function readSweepConfig(): AttentionSweepConfig {
 // ─────────────────────────────────────────────────────────────────────────
 //
 // Mirrors the AutonomousActivityState pattern (#360 — "don't poll GitHub in
-// the background when there is no work to serve"), but keyed on a different
-// signal: a timer-driven GitHub call is only worth paying for when a
-// Nightgauge view is actually visible or the window was recently focused —
-// regardless of whether autonomous mode happens to be on. One shared
-// concept (`PollingVisibilityGate.isPollingAllowed()`), consulted by every
-// *idle-state convenience* poller: this file's periodic sweep,
-// ProjectBoardTreeProvider's auto-refresh timer, and RepositoriesTreeProvider's
-// `ipc.ready` handler. It is deliberately NOT consulted by active-run
-// *monitoring* — the autonomous stall watchdog / liveness probe in
-// autonomousCommands.ts — which must keep running whether or not any window
-// is visible so a stall is never missed mid-run; see that file's
-// `scheduleNextWatchdog` doc comment for the exemption's rationale.
+// the background when there is no work to serve"), but keyed on visibility
+// and window focus rather than autonomous status. Two independent, EXPLICIT
+// predicates — not one combined OR — so each consumer composes the
+// semantics that actually fit it (#484 review round, DESIGN RULING):
+//
+//   - isWindowActive() — the window is focused, or was focused within the
+//     last WINDOW_FOCUS_GRACE_MS (avoids flapping on a brief alt-tab).
+//   - isViewVisible(key) — the tracked view registered under `key` is
+//     currently visible, independent of every other key.
+//
+// Consumers compose their OWN predicate from these two:
+//   - This file's periodic sweep timer: isWindowActive() ALONE. The
+//     attention inbox (activity-bar badge) is a legitimate thing to keep
+//     warm while the operator is actively working, even with every
+//     Nightgauge tree view collapsed — so view visibility is irrelevant to
+//     this consumer. Only a genuinely idle window (unfocused past grace)
+//     suspends it.
+//   - ProjectBoardTreeProvider's and RepositoriesTreeProvider's timer /
+//     ipc.ready convenience polling: isViewVisible(own key) AND
+//     isWindowActive(). A tree nobody can see is not worth a GitHub call
+//     even while the operator is focused on some other pane — no reader, no
+//     poll — and a tree left open overnight still suspends once the focus
+//     grace lapses.
+//
+// Deliberately NOT consulted by active-run *monitoring* — the autonomous
+// stall watchdog / liveness probe in autonomousCommands.ts — which must keep
+// running whether or not any window is visible so a stall is never missed
+// mid-run; see that file's `scheduleNextWatchdog` doc comment for the
+// exemption's rationale. Also not consulted by the event-driven sweep
+// triggers (activation, pipeline.complete/error below) — those model
+// "something just happened", not ambient polling, so they always run.
 
 /** Grace period after losing window focus during which polling remains
  * allowed — avoids flapping the gate closed/open on a brief alt-tab. */
 export const WINDOW_FOCUS_GRACE_MS = 60_000;
 
+/** One consumer's registration: its own composite predicate plus the
+ * callback to fire on that predicate's false→true edge. */
+interface GateSubscription {
+  predicate: () => boolean;
+  listener: () => void;
+}
+
 /**
- * PollingVisibilityGate — shared "is anything watching right now" signal.
+ * PollingVisibilityGate — shared "who might be watching right now" signal.
  *
  * Tracks two independent inputs:
  *   - Zero or more tracked views' visibility, keyed by an arbitrary id so N
@@ -161,8 +187,10 @@ export const WINDOW_FOCUS_GRACE_MS = 60_000;
  *   - The VS Code window's live focus state, with a short grace window so a
  *     brief alt-tab doesn't suspend and immediately resume polling.
  *
- * `isPollingAllowed()` is true when either input says "someone's looking".
- * Mirrors AutonomousActivityState's singleton + `resetForTests()` shape.
+ * Exposes each input as its OWN predicate (`isWindowActive()`,
+ * `isViewVisible(key)`) rather than one combined "is polling allowed"
+ * verdict — see the module doc comment above for why. Mirrors
+ * AutonomousActivityState's singleton + `resetForTests()` shape.
  */
 export class PollingVisibilityGate {
   private static _instance: PollingVisibilityGate | null = null;
@@ -170,11 +198,21 @@ export class PollingVisibilityGate {
   private readonly visibleKeys = new Set<string>();
   private windowFocused = true;
   private lastFocusedAt: number;
-  private readonly listeners = new Set<() => void>();
-  private clock: () => number = Date.now;
+  private readonly subscriptions = new Set<GateSubscription>();
+
+  /**
+   * The window-focus subscription wiring, owned by `ensureWindowFocusTracking()`
+   * below. Lives on the instance (not a module global) so `resetForTests()`
+   * can tear down gate state AND focus-tracking wiring together as ONE
+   * unified reset (#484 review round, SF-3) — a suite that only reset the
+   * gate used to leave a fresh singleton primed from a stale subscription.
+   * Public only so the sibling `ensureWindowFocusTracking()` function below
+   * can read/write it; treat it as internal to this module.
+   */
+  focusTracking: { dispose(): void } | null = null;
 
   private constructor() {
-    this.lastFocusedAt = this.clock();
+    this.lastFocusedAt = Date.now();
   }
 
   static get instance(): PollingVisibilityGate {
@@ -184,80 +222,124 @@ export class PollingVisibilityGate {
     return PollingVisibilityGate._instance;
   }
 
-  /** Test-only — drop the singleton so each test starts from a clean state. */
+  /** Test-only — drop the singleton AND dispose its window-focus
+   * subscription, so each test starts from one genuinely clean state
+   * instead of two independently-reset halves (#484 review round, SF-3). */
   static resetForTests(): void {
+    PollingVisibilityGate._instance?.focusTracking?.dispose();
     PollingVisibilityGate._instance = null;
-  }
-
-  /** Test-only clock override, mirrors AttentionSweepService's own `now` DI. */
-  _setClockForTests(clock: () => number): void {
-    this.clock = clock;
-    this.lastFocusedAt = clock();
   }
 
   /**
    * Register (or update) whether a tracked view is currently visible, keyed
-   * by an arbitrary id. Fires the "became allowed" listeners when this
-   * transitions the gate from closed to open (a view just became visible).
+   * by an arbitrary id.
    */
   setViewVisible(key: string, visible: boolean): void {
-    const wasAllowed = this.isPollingAllowed();
-    if (visible) {
-      this.visibleKeys.add(key);
-    } else {
-      this.visibleKeys.delete(key);
-    }
-    this.notifyIfNewlyAllowed(wasAllowed);
+    this.withEdgeDetection(() => {
+      if (visible) {
+        this.visibleKeys.add(key);
+      } else {
+        this.visibleKeys.delete(key);
+      }
+    });
   }
 
   /** Update the live window-focus signal. */
   setWindowFocused(focused: boolean): void {
-    const wasAllowed = this.isPollingAllowed();
-    this.windowFocused = focused;
-    if (focused) {
-      this.lastFocusedAt = this.clock();
+    this.withEdgeDetection(() => {
+      const wasFocused = this.windowFocused;
+      this.windowFocused = focused;
+      // `lastFocusedAt` means "the last instant the window WAS focused" —
+      // stamp on gain AND on the focused→unfocused edge (guarded by
+      // `wasFocused` so repeated blur notifications can't extend the grace),
+      // so the grace window measures time since focus was LOST, not since
+      // it was gained (#484 review round, MF-1).
+      if (focused || wasFocused) {
+        this.lastFocusedAt = Date.now();
+      }
+    });
+  }
+
+  /**
+   * Snapshot every registered subscription's predicate BEFORE applying
+   * `mutate`, then re-evaluate each AFTER and fire the ones that crossed
+   * false→true. The snapshot is taken fresh against the live clock on every
+   * call (not cached across calls) so a predicate that changed purely from
+   * TIME passing — the focus grace silently expiring with no gate call in
+   * between — is still detected correctly the next time anything touches
+   * the gate, exactly as if the expiry itself were an event.
+   */
+  private withEdgeDetection(mutate: () => void): void {
+    const before = new Map<GateSubscription, boolean>();
+    for (const sub of this.subscriptions) {
+      before.set(sub, this.safeEval(sub.predicate));
     }
-    this.notifyIfNewlyAllowed(wasAllowed);
+    mutate();
+    for (const sub of [...this.subscriptions]) {
+      const wasAllowed = before.get(sub) ?? false;
+      const isAllowed = this.safeEval(sub.predicate);
+      if (isAllowed && !wasAllowed) {
+        try {
+          sub.listener();
+        } catch {
+          // A consumer that cannot service its own coalesced refresh must
+          // not suppress the others' — this gate is shared state, not a
+          // call chain (#484 review round, SF-1).
+        }
+      }
+    }
   }
 
-  private notifyIfNewlyAllowed(wasAllowed: boolean): void {
-    if (wasAllowed || !this.isPollingAllowed()) return;
-    for (const listener of [...this.listeners]) listener();
+  private safeEval(predicate: () => boolean): boolean {
+    try {
+      return predicate();
+    } catch {
+      return false;
+    }
+  }
+
+  /** True when the window is focused, or was focused within the grace
+   * window. Says nothing about view visibility — see the module doc comment
+   * for which consumers combine this with `isViewVisible()` and which don't. */
+  isWindowActive(): boolean {
+    return this.windowFocused || Date.now() - this.lastFocusedAt < WINDOW_FOCUS_GRACE_MS;
+  }
+
+  /** True when the view registered under `key` is currently visible. False
+   * for a key that was never registered at all. */
+  isViewVisible(key: string): boolean {
+    return this.visibleKeys.has(key);
   }
 
   /**
-   * True when some tracked view is visible, or the window was focused within
-   * the grace window. Pure visibility/focus signal — does not consider
-   * autonomous activity; combine with `AutonomousActivityState.isActive()`
-   * via `isBackgroundPollingAllowed()` below for the full idle-poll gate.
+   * Subscribe to a per-consumer "became allowed" edge: `predicate` is
+   * re-evaluated on every gate mutation, and `listener` fires exactly once
+   * per false→true transition of THAT predicate — not any other consumer's.
+   * Different consumers pass different composite predicates (a tree
+   * poller's `isViewVisible(key) && isWindowActive()` vs. the sweep timer's
+   * `isWindowActive()` alone) and edge independently off the same
+   * underlying state changes (#484 review round — DESIGN RULING). Returns a
+   * disposable.
    */
-  isPollingAllowed(): boolean {
-    if (this.visibleKeys.size > 0) return true;
-    if (this.windowFocused) return true;
-    return this.clock() - this.lastFocusedAt < WINDOW_FOCUS_GRACE_MS;
-  }
-
-  /**
-   * Subscribe to "gate just opened" transitions — used to fire a single
-   * coalesced refresh when a view becomes visible or the window regains
-   * focus after being idle. Returns a disposable.
-   */
-  onDidBecomeAllowed(listener: () => void): { dispose(): void } {
-    this.listeners.add(listener);
-    return { dispose: () => this.listeners.delete(listener) };
-  }
-
-  dispose(): void {
-    this.listeners.clear();
+  onDidBecomeAllowed(predicate: () => boolean, listener: () => void): { dispose(): void } {
+    const sub: GateSubscription = { predicate, listener };
+    this.subscriptions.add(sub);
+    return {
+      dispose: () => {
+        this.subscriptions.delete(sub);
+      },
+    };
   }
 }
-
-let windowFocusTrackingDisposable: { dispose(): void } | null = null;
 
 /**
  * Wire vscode.window's live focus state into the shared gate. Idempotent —
  * safe to call from every consumer's constructor/start(); only the first
  * call actually subscribes, so N provider instances cost one listener.
+ * Deliberately never disposed in production — the subscription lives for
+ * the extension host's lifetime, matching the gate singleton's own lifetime
+ * (mirrors AutonomousActivityState). Only `resetForTests()`'s unified reset
+ * tears it down, for test isolation (#484 review round, SF-6).
  *
  * Defensive against older/minimal `vscode` mocks in tests that don't stub
  * `window.state` / `window.onDidChangeWindowState` — falls back to treating
@@ -265,8 +347,9 @@ let windowFocusTrackingDisposable: { dispose(): void } | null = null;
  * throwing.
  */
 export function ensureWindowFocusTracking(): void {
-  if (windowFocusTrackingDisposable) return;
-  windowFocusTrackingDisposable = { dispose: () => {} };
+  const gate = PollingVisibilityGate.instance;
+  if (gate.focusTracking) return;
+  gate.focusTracking = { dispose: () => {} };
   // Minimal `vscode` test mocks (this file's own included) sometimes stub
   // only the specific named exports a suite needs, and vitest's mock proxy
   // throws on an unlisted property rather than returning undefined — so
@@ -279,22 +362,15 @@ export function ensureWindowFocusTracking(): void {
       state?: { focused: boolean };
       onDidChangeWindowState?: (listener: (e: { focused: boolean }) => void) => { dispose(): void };
     };
-    PollingVisibilityGate.instance.setWindowFocused(w.state?.focused ?? true);
+    gate.setWindowFocused(w.state?.focused ?? true);
     if (typeof w.onDidChangeWindowState === "function") {
-      windowFocusTrackingDisposable = w.onDidChangeWindowState((e) => {
-        PollingVisibilityGate.instance.setWindowFocused(e.focused);
+      gate.focusTracking = w.onDidChangeWindowState((e) => {
+        gate.setWindowFocused(e.focused);
       });
     }
   } catch {
-    PollingVisibilityGate.instance.setWindowFocused(true);
+    gate.setWindowFocused(true);
   }
-}
-
-/** Test-only — undo `ensureWindowFocusTracking()`'s idempotent guard so the
- * next call re-subscribes against a fresh mock. */
-export function _resetWindowFocusTrackingForTests(): void {
-  windowFocusTrackingDisposable?.dispose();
-  windowFocusTrackingDisposable = null;
 }
 
 export class AttentionSweepService implements vscode.Disposable {
@@ -343,20 +419,26 @@ export class AttentionSweepService implements vscode.Disposable {
     // Trigger 3: the conservative timer, running only while this window lives.
     if (config.intervalMs > 0) {
       this.timer = setInterval(() => {
-        if (!PollingVisibilityGate.instance.isPollingAllowed()) {
-          this.deps.logger.debug("Attention sweep timer skipped — hidden and unfocused", {});
+        // #484 — this consumer's own predicate is isWindowActive() ALONE
+        // (no isViewVisible check): the attention inbox stays warm while
+        // the operator is working even with every tree view collapsed. See
+        // the gate's module doc comment for the per-consumer rationale.
+        if (!PollingVisibilityGate.instance.isWindowActive()) {
+          this.deps.logger.debug("Attention sweep timer skipped — window inactive", {});
           return;
         }
         void this.sweep("timer");
       }, config.intervalMs);
 
-      // #484 AC2 — when the gate reopens (a view becomes visible again, or
-      // the window regains focus), fire one coalesced sweep instead of
-      // waiting out the rest of the interval. `sweep()`'s own minGap
-      // throttle still applies, so a burst of near-simultaneous transitions
-      // collapses to at most one call.
+      // #484 AC2 — when this consumer's own predicate (isWindowActive())
+      // transitions closed→open — the window regains focus after being
+      // idle past the grace — fire one coalesced sweep instead of waiting
+      // out the rest of the interval. `sweep()`'s own minGap throttle still
+      // applies, so a burst of near-simultaneous transitions collapses to
+      // at most one call.
       this.disposables.push(
         PollingVisibilityGate.instance.onDidBecomeAllowed(
+          () => PollingVisibilityGate.instance.isWindowActive(),
           () => void this.sweep("visibility-regained")
         )
       );

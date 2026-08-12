@@ -188,7 +188,7 @@ describe("autonomous stall watchdog ignores the visibility gate (#484 AC3)", () 
     // window unfocused, and well past WINDOW_FOCUS_GRACE_MS.
     PollingVisibilityGate.instance.setWindowFocused(false);
     vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
-    expect(PollingVisibilityGate.instance.isPollingAllowed()).toBe(false);
+    expect(PollingVisibilityGate.instance.isWindowActive()).toBe(false);
 
     registerAutonomousCommands(mockLogger, mockStatusBar, null);
     const handler = getStatusChangedHandler();
@@ -205,7 +205,7 @@ describe("autonomous stall watchdog ignores the visibility gate (#484 AC3)", () 
 
     expect(mockIpc.boardList).toHaveBeenCalledTimes(4);
     // The gate genuinely never reopened during this — not an accidental regain.
-    expect(PollingVisibilityGate.instance.isPollingAllowed()).toBe(false);
+    expect(PollingVisibilityGate.instance.isWindowActive()).toBe(false);
   });
 
   it("makes the identical number of boardList() calls whether the gate is open or closed — the watchdog never consults it", async () => {
@@ -229,7 +229,7 @@ describe("autonomous stall watchdog ignores the visibility gate (#484 AC3)", () 
     PollingVisibilityGate.instance.setViewVisible("repositoriesView", false);
     PollingVisibilityGate.instance.setWindowFocused(false);
     vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
-    expect(PollingVisibilityGate.instance.isPollingAllowed()).toBe(false);
+    expect(PollingVisibilityGate.instance.isWindowActive()).toBe(false);
     const callsWhileHidden = await runFourTicks();
 
     expect(callsWhileHidden).toBe(callsWhileVisible);

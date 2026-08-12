@@ -194,6 +194,18 @@ export class RepositoriesTreeProvider
    * (#484). One Repositories view exists per window, so a fixed key suffices. */
   private static readonly VISIBILITY_GATE_KEY = "repositoriesView";
 
+  /**
+   * #484 MF-4 — set when a daemon-restart `ipc.ready` lands while the gate
+   * is closed. A daemon restart invalidates every cached tree entry, so
+   * that refresh must not be dropped, only deferred: this flag is consumed
+   * at the next reopen edge, which replays exactly one `refreshAll()`
+   * REGARDLESS of the user's auto-refresh pause. The pause governs
+   * periodic/convenience refresh — it was never meant to swallow a
+   * reconnect catch-up (pre-#484 `ipc.ready` refreshed unconditionally,
+   * "even when auto-refresh is paused").
+   */
+  private pendingIpcReadyRefresh = false;
+
   /** Debounce timer for queue.changed — coalesces burst dispatches into one refresh */
   private queueChangedDebounceTimer: NodeJS.Timeout | null = null;
   private static readonly QUEUE_CHANGED_DEBOUNCE_MS = 5000;
@@ -431,15 +443,29 @@ export class RepositoriesTreeProvider
 
     // #484 — join the shared idle-state polling gate (window-focus half).
     ensureWindowFocusTracking();
-    // When a view becomes visible again (or the window regains focus) after
-    // being idle, fire one coalesced refresh instead of waiting for the
-    // next IPC-driven event. Respects the user's explicit auto-refresh
-    // pause (`setAutoRefreshEnabled(false)`) — visibility regain is not a
-    // reason to override that opt-out.
+    // When THIS view's own composite predicate (isViewVisible(own key) AND
+    // isWindowActive()) transitions closed→open, fire one coalesced refresh
+    // instead of waiting for the next IPC-driven event. Respects the user's
+    // explicit auto-refresh pause (`setAutoRefreshEnabled(false)`) —
+    // visibility regain alone is not a reason to override that opt-out —
+    // UNLESS a daemon-restart `ipc.ready` was deferred while the gate was
+    // closed (MF-4 below): that handshake outranks the pause because every
+    // cached tree entry is stale, not merely "convenient to skip".
     this.disposables.push(
-      PollingVisibilityGate.instance.onDidBecomeAllowed(() => {
-        if (this.autoRefreshEnabled) this.refreshAll();
-      })
+      PollingVisibilityGate.instance.onDidBecomeAllowed(
+        () =>
+          PollingVisibilityGate.instance.isViewVisible(
+            RepositoriesTreeProvider.VISIBILITY_GATE_KEY
+          ) && PollingVisibilityGate.instance.isWindowActive(),
+        () => {
+          if (this.pendingIpcReadyRefresh) {
+            this.pendingIpcReadyRefresh = false;
+            this.refreshAll();
+            return;
+          }
+          if (this.autoRefreshEnabled) this.refreshAll();
+        }
+      )
     );
 
     // Prime enabled_repos from disk so the initial render shows correct
@@ -503,14 +529,26 @@ export class RepositoriesTreeProvider
     const ipc = IpcClient.getInstance();
     const subs = [
       ipc.on("ipc.ready", (_data) => {
-        // ipc.ready fires once at connection. Pre-#484 this refreshed
-        // unconditionally "even when auto-refresh is paused" — but a window
+        // ipc.ready fires once per connection — including every daemon
+        // restart reconnect, not just extension activation. A window
         // that's neither visible nor recently focused is exactly the case
-        // #484 exists to stop paying for. Respect the same idle-state gate
-        // as every other convenience poller here: when nobody's watching,
-        // skip it — the coalesced refresh on regained visibility (or the
-        // next demand-driven render) catches the tree up instead.
-        if (!PollingVisibilityGate.instance.isPollingAllowed()) return;
+        // #484 exists to stop paying for immediately, so respect the same
+        // composite predicate every other tree-poller convenience refresh
+        // here uses. But a daemon restart invalidates every cached tree
+        // entry, so the refresh itself must not be DROPPED, only deferred:
+        // set the pending flag and let the reopen listener replay it
+        // exactly once, even past the user's auto-refresh pause (#484
+        // review round, MF-4 — pre-#484 this refreshed unconditionally,
+        // "even when auto-refresh is paused"; a silently-dropped reconnect
+        // catch-up regressed that guarantee).
+        const key = RepositoriesTreeProvider.VISIBILITY_GATE_KEY;
+        if (
+          !PollingVisibilityGate.instance.isViewVisible(key) ||
+          !PollingVisibilityGate.instance.isWindowActive()
+        ) {
+          this.pendingIpcReadyRefresh = true;
+          return;
+        }
         this.refreshAll();
       }),
       ipc.on("queue.changed", (data) => {

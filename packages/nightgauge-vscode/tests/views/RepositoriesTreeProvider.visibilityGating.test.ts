@@ -7,13 +7,20 @@
  * other two idle-state pollers use, plus the coalesced-refresh-on-regained-
  * visibility behavior (AC2) and dispose() cleanup for this view's own
  * registration.
+ *
+ * Review round (#484 fixups) — this view's composite predicate is
+ * isViewVisible(own key) AND isWindowActive() (DESIGN RULING): window focus
+ * regain ALONE, with the view still hidden, must NOT fire the reopen
+ * refresh (MF-3/AC1). MF-4 adds a pending-reconnect-catchup flag so a gated
+ * `ipc.ready` is replayed — not dropped — at the next reopen edge, even past
+ * the user's auto-refresh pause. MF-5 rewrites the pause-toggle test so it
+ * genuinely exercises that reopen edge.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as vscode from "vscode";
 import { RepositoriesTreeProvider } from "../../src/views/RepositoriesTreeProvider";
 import {
   PollingVisibilityGate,
-  _resetWindowFocusTrackingForTests,
   WINDOW_FOCUS_GRACE_MS,
 } from "../../src/services/AttentionSweepService";
 import type { WorkspaceManager } from "../../src/services/WorkspaceManager";
@@ -195,6 +202,8 @@ function createMockTreeView(initialVisible: boolean): {
   };
 }
 
+const KEY = "repositoriesView";
+
 describe("RepositoriesTreeProvider visibility gate (#484)", () => {
   let provider: RepositoriesTreeProvider | null = null;
 
@@ -202,7 +211,6 @@ describe("RepositoriesTreeProvider visibility gate (#484)", () => {
     vi.useFakeTimers();
     eventHandlers.clear();
     PollingVisibilityGate.resetForTests();
-    _resetWindowFocusTrackingForTests();
     windowState = { focused: false };
     windowStateListeners.clear();
   });
@@ -211,7 +219,6 @@ describe("RepositoriesTreeProvider visibility gate (#484)", () => {
     provider?.dispose();
     provider = null;
     PollingVisibilityGate.resetForTests();
-    _resetWindowFocusTrackingForTests();
     vi.useRealTimers();
   });
 
@@ -241,7 +248,29 @@ describe("RepositoriesTreeProvider visibility gate (#484)", () => {
     expect(fired).toHaveBeenCalledTimes(1);
   });
 
-  it("AC2: fires one coalesced refresh when the view regains visibility, respecting the debounce once", () => {
+  it("AC1/MF-3: window focus regain ALONE (view still hidden) does not fire the reopen refresh — AND semantics, not OR", () => {
+    provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
+    const { treeView } = createMockTreeView(false); // view stays hidden throughout
+    provider.setTreeView(treeView);
+    const fired = vi.fn();
+    provider.onDidChangeTreeData(fired);
+    fired.mockClear();
+
+    vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
+    emitIpc("ipc.ready");
+    vi.advanceTimersByTime(1000);
+    expect(fired).not.toHaveBeenCalled();
+
+    // Window regains focus, but the view is STILL hidden — under the
+    // per-consumer AND predicate (isViewVisible(key) && isWindowActive()), a
+    // tree poller must not treat "the window is active" alone as a reader.
+    fireWindowFocusChange(true);
+    emitIpc("ipc.ready");
+    vi.advanceTimersByTime(1000);
+    expect(fired).not.toHaveBeenCalled();
+  });
+
+  it("AC2: fires one coalesced refresh when the view AND window reopen together, respecting the debounce once", () => {
     provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
     const { treeView, fireVisibility } = createMockTreeView(false);
     provider.setTreeView(treeView);
@@ -251,16 +280,17 @@ describe("RepositoriesTreeProvider visibility gate (#484)", () => {
     vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
     emitIpc("ipc.ready");
     vi.advanceTimersByTime(1000);
-    expect(fired).not.toHaveBeenCalled(); // hidden — suppressed per AC4
+    expect(fired).not.toHaveBeenCalled(); // hidden AND unfocused — suppressed per AC1/AC4
 
     fireVisibility(true);
+    fireWindowFocusChange(true); // crosses BOTH halves of this consumer's composite predicate
     // refreshAll() is itself debounced (REFRESH_DEBOUNCE_MS) — the coalesced
     // call still goes through that same path, so advance past it.
     vi.advanceTimersByTime(1000);
     expect(fired).toHaveBeenCalledTimes(1);
   });
 
-  it("does not refresh on regained visibility when the user explicitly paused auto-refresh", () => {
+  it("MF-5: does not refresh on regained visibility when the user explicitly paused auto-refresh (plain edge, no pending ipc.ready)", () => {
     provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
     provider.setAutoRefreshEnabled(false);
     const { treeView, fireVisibility } = createMockTreeView(false);
@@ -269,38 +299,84 @@ describe("RepositoriesTreeProvider visibility gate (#484)", () => {
     provider.onDidChangeTreeData(fired);
     fired.mockClear(); // setTreeView()'s updateViewTitle() doesn't fire tree-data, but be explicit
 
-    fireVisibility(true);
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
+    expect(PollingVisibilityGate.instance.isWindowActive()).toBe(false);
+    expect(PollingVisibilityGate.instance.isViewVisible(KEY)).toBe(false);
 
+    fireVisibility(true);
+    fireWindowFocusChange(true); // crosses the reopen listener's composite predicate false→true
+
+    vi.advanceTimersByTime(1000);
     expect(fired).not.toHaveBeenCalled();
+  });
+
+  it("MF-4: a gated ipc.ready is replayed exactly once at the next reopen edge, even while auto-refresh is paused", () => {
+    provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
+    provider.setAutoRefreshEnabled(false);
+    const { treeView, fireVisibility } = createMockTreeView(false);
+    provider.setTreeView(treeView);
+    const fired = vi.fn();
+    provider.onDidChangeTreeData(fired);
+    fired.mockClear();
+
+    // Gate closed: view hidden, window unfocused past grace.
+    vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
+    emitIpc("ipc.ready");
+    vi.advanceTimersByTime(1000);
+    expect(fired).not.toHaveBeenCalled(); // deferred, not dropped
+
+    // Reopen edge — the deferred ipc.ready outranks the pause toggle because
+    // a daemon restart invalidates every cached tree entry.
+    fireVisibility(true);
+    fireWindowFocusChange(true);
+    vi.advanceTimersByTime(1000);
+    expect(fired).toHaveBeenCalledTimes(1);
   });
 
   it("unregisters this view's visibility on dispose", () => {
     provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
     const { treeView } = createMockTreeView(true);
     provider.setTreeView(treeView);
-    expect(PollingVisibilityGate.instance.isPollingAllowed()).toBe(true);
+    expect(PollingVisibilityGate.instance.isViewVisible(KEY)).toBe(true);
 
     provider.dispose();
     provider = null;
-    vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
 
-    expect(PollingVisibilityGate.instance.isPollingAllowed()).toBe(false);
+    expect(PollingVisibilityGate.instance.isViewVisible(KEY)).toBe(false);
   });
 
-  it("respects window focus regain too — not just view visibility", () => {
+  it("SF-4: stops firing the reopen listener after dispose (no leaked gate listener)", () => {
     provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
-    const fired = vi.fn();
-    provider.onDidChangeTreeData(fired);
+    const { treeView } = createMockTreeView(true);
+    provider.setTreeView(treeView);
+    const refreshSpy = vi.spyOn(provider, "refreshAll");
 
+    provider.dispose();
+    provider = null;
+    refreshSpy.mockClear();
+
+    // Manually re-touch the SAME gate key post-dispose (simulating some
+    // other code path) and cross a fresh false→true edge — a disposed
+    // provider must not still be listening.
+    PollingVisibilityGate.instance.setViewVisible(KEY, false);
+    PollingVisibilityGate.instance.setWindowFocused(false);
     vi.advanceTimersByTime(WINDOW_FOCUS_GRACE_MS + 1);
-    emitIpc("ipc.ready");
-    vi.advanceTimersByTime(1000);
-    expect(fired).not.toHaveBeenCalled();
+    PollingVisibilityGate.instance.setViewVisible(KEY, true);
+    PollingVisibilityGate.instance.setWindowFocused(true);
 
-    fireWindowFocusChange(true);
-    emitIpc("ipc.ready");
-    vi.advanceTimersByTime(1000);
-    expect(fired).toHaveBeenCalledTimes(1);
+    expect(refreshSpy).not.toHaveBeenCalled();
+  });
+
+  it("SF-4: disposes the per-view visibility subscription on dispose (no leaked onDidChangeVisibility listener)", () => {
+    provider = new RepositoriesTreeProvider(createMockWorkspaceManager());
+    const { treeView, fireVisibility } = createMockTreeView(false);
+    provider.setTreeView(treeView);
+
+    provider.dispose();
+    provider = null;
+    expect(PollingVisibilityGate.instance.isViewVisible(KEY)).toBe(false);
+
+    fireVisibility(true); // if the subscription leaked, this would re-open the key
+    expect(PollingVisibilityGate.instance.isViewVisible(KEY)).toBe(false);
   });
 });

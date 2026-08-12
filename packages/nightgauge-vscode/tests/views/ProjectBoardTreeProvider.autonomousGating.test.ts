@@ -12,6 +12,19 @@ import type { ReadyIssue, SortBy, SortDirection } from "../../src/services/Proje
 import type { IWorkItemProvider } from "../../src/services/types/WorkItemProvider";
 import { setMockUIConfig, resetMockConfigBridge } from "../setup";
 import { AutonomousActivityState } from "../../src/utils/autonomousActivityState";
+import { PollingVisibilityGate } from "../../src/services/AttentionSweepService";
+
+/** A mock TreeView whose `visible` is fixed at construction — sufficient for
+ * tests that only care about the timer ticking, not visibility toggling
+ * (#484 review round: the timer's gate is now isViewVisible(key) AND
+ * isWindowActive(), so a test proving the timer runs needs a visible tab). */
+function createVisibleMockTreeView(): vscode.TreeView<never> {
+  return {
+    title: "",
+    visible: true,
+    onDidChangeVisibility: () => ({ dispose: () => {} }),
+  } as unknown as vscode.TreeView<never>;
+}
 
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: {
@@ -84,12 +97,14 @@ describe("ProjectBoardTreeProvider autonomous gate (#360)", () => {
       dispose: vi.fn(),
     } as never);
     AutonomousActivityState.resetForTests();
+    PollingVisibilityGate.resetForTests();
   });
 
   afterEach(() => {
     instance?.dispose();
     instance = null;
     AutonomousActivityState.resetForTests();
+    PollingVisibilityGate.resetForTests();
     vi.useRealTimers();
   });
 
@@ -98,6 +113,7 @@ describe("ProjectBoardTreeProvider autonomous gate (#360)", () => {
     // the timer must not fire — no background board fetch on an idle workspace.
     const { provider, clearCache } = createFakeProvider();
     instance = new ProjectBoardTreeProvider(provider, "ready");
+    instance.setTreeView(createVisibleMockTreeView());
 
     vi.advanceTimersByTime(5 * 60_000);
     expect(clearCache).not.toHaveBeenCalled();
@@ -107,6 +123,10 @@ describe("ProjectBoardTreeProvider autonomous gate (#360)", () => {
     AutonomousActivityState.instance.setStatus("running");
     const { provider, clearCache } = createFakeProvider();
     instance = new ProjectBoardTreeProvider(provider, "ready");
+    // #484 — the timer's gate also requires this tab to be visible; register
+    // it so this test isolates the #360 autonomous-active condition it's
+    // actually about, rather than being confounded by the newer gate.
+    instance.setTreeView(createVisibleMockTreeView());
 
     vi.advanceTimersByTime(60_000);
     expect(clearCache).toHaveBeenCalledTimes(1);

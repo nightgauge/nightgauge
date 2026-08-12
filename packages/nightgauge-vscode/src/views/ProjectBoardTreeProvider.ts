@@ -185,11 +185,33 @@ export class ProjectBoardTreeProvider
 
     // #484 — join the shared idle-state polling gate (window-focus half).
     ensureWindowFocusTracking();
-    // When a view becomes visible again (or the window regains focus) after
-    // being idle, fire one coalesced refresh instead of waiting out the rest
-    // of the auto-refresh interval — same "catch up once, then resume normal
-    // cadence" shape as the AutonomousActivityState subscription above.
-    this.disposables.push(PollingVisibilityGate.instance.onDidBecomeAllowed(() => this.refresh()));
+    // When THIS tab's own composite predicate (isViewVisible(own key) AND
+    // isWindowActive()) transitions closed→open, fire one coalesced refresh
+    // instead of waiting out the rest of the auto-refresh interval — same
+    // "catch up once, then resume normal cadence" shape as the
+    // AutonomousActivityState subscription above. Guarded with the SAME
+    // conditions the timer itself honours below (autoRefreshEnabled,
+    // interval > 0, autonomous active, the #2834 rate-limit pause) so a
+    // visibility regain cannot bypass a throttle the timer would have
+    // respected (#484 review round, MF-2). Routed through the shared static
+    // `debouncedStageRefresh()` rather than calling `this.refresh()`
+    // directly, so N provider instances edging open on the same underlying
+    // gate transition still produce exactly one board refresh, not N
+    // concurrent cache clears.
+    this.disposables.push(
+      PollingVisibilityGate.instance.onDidBecomeAllowed(
+        () =>
+          PollingVisibilityGate.instance.isViewVisible(this.visibilityGateKey()) &&
+          PollingVisibilityGate.instance.isWindowActive(),
+        () => {
+          if (!this.autoRefreshEnabled || this.autoRefreshInterval <= 0) return;
+          if (!AutonomousActivityState.instance.isActive()) return;
+          if (this.autoRefreshPausedUntilMs > 0 && Date.now() < this.autoRefreshPausedUntilMs)
+            return;
+          ProjectBoardTreeProvider.debouncedStageRefresh();
+        }
+      )
+    );
   }
 
   /**
@@ -474,14 +496,19 @@ export class ProjectBoardTreeProvider
         // #484 — idle-state convenience refresh only, not stall detection
         // (that's the autonomous stall watchdog in autonomousCommands.ts,
         // unconditionally exempt from this gate by design — see that
-        // file's `scheduleNextWatchdog` doc comment). Skip the tick when
-        // no tab of this provider is visible AND the window hasn't been
-        // focused recently: an autonomous run may still be active (the
+        // file's `scheduleNextWatchdog` doc comment). Skip the tick unless
+        // THIS tab is visible AND the window has been focused recently —
+        // both, not either: an autonomous run may still be active (the
         // outer `isActive()` guard above is what started this timer at
-        // all), but board-count polling nobody can see is still waste —
-        // it resumes via the coalesced refresh on regained visibility
-        // (constructor subscription) or the next visible/focused tick.
-        if (!PollingVisibilityGate.instance.isPollingAllowed()) {
+        // all), but board-count polling nobody can see is still waste, and
+        // a focused window with this tab collapsed is not a reader either.
+        // Resumes via the coalesced refresh on regained visibility
+        // (constructor subscription) or the next visible+focused tick.
+        const key = this.visibilityGateKey();
+        if (
+          !PollingVisibilityGate.instance.isViewVisible(key) ||
+          !PollingVisibilityGate.instance.isWindowActive()
+        ) {
           return;
         }
         // Skip this tick if the GitHub rate-limit tracker told us to hold
