@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { parsePRFromGHCLI, hasInReviewLabel } from "../../src/utils/prDetection";
+import {
+  parsePRFromGHCLI,
+  hasInReviewLabel,
+  parseOpenPRList,
+  findPRForIssueInList,
+} from "../../src/utils/prDetection";
 
 describe("prDetection", () => {
   describe("parsePRFromGHCLI", () => {
@@ -156,6 +161,116 @@ describe("prDetection", () => {
       // This will be true because it contains 'status:in-review' substring
       // which is acceptable for this heuristic
       expect(result).toBe(false);
+    });
+  });
+
+  // #483 — batched, cached open-PR listing that replaces the per-issue
+  // `gh pr list --search` shell-out in the stall watchdog.
+  describe("parseOpenPRList", () => {
+    it("parses valid gh pr list output including body", () => {
+      const output = JSON.stringify([
+        {
+          number: 701,
+          url: "https://github.com/org/repo/pull/701",
+          title: "fix",
+          body: "Closes #201",
+        },
+      ]);
+
+      const result = parseOpenPRList(output);
+
+      expect(result).toEqual([
+        {
+          number: 701,
+          url: "https://github.com/org/repo/pull/701",
+          title: "fix",
+          body: "Closes #201",
+        },
+      ]);
+    });
+
+    it("returns an empty array for an empty list", () => {
+      expect(parseOpenPRList(JSON.stringify([]))).toEqual([]);
+    });
+
+    it("returns an empty array for malformed JSON", () => {
+      expect(parseOpenPRList("not valid json")).toEqual([]);
+    });
+
+    it("drops entries missing required fields but keeps valid ones", () => {
+      const output = JSON.stringify([
+        { title: "no number or url" },
+        { number: 701, url: "https://github.com/org/repo/pull/701" },
+      ]);
+
+      const result = parseOpenPRList(output);
+
+      expect(result).toEqual([
+        {
+          number: 701,
+          url: "https://github.com/org/repo/pull/701",
+          title: undefined,
+          body: undefined,
+        },
+      ]);
+    });
+
+    it("returns an empty array when the payload is not an array", () => {
+      expect(parseOpenPRList(JSON.stringify({ number: 1 }))).toEqual([]);
+    });
+  });
+
+  describe("findPRForIssueInList", () => {
+    const prs = [
+      {
+        number: 701,
+        url: "https://github.com/org/repo/pull/701",
+        title: "fix: issue 201",
+        body: "Closes #201",
+      },
+      {
+        number: 702,
+        url: "https://github.com/org/repo/pull/702",
+        title: "chore: unrelated",
+        body: "no issue reference here",
+      },
+    ];
+
+    it("matches a PR whose body references #<issueNumber>", () => {
+      const result = findPRForIssueInList(201, prs);
+      expect(result).toEqual({
+        number: 701,
+        url: "https://github.com/org/repo/pull/701",
+        title: "fix: issue 201",
+      });
+    });
+
+    it("returns null when no PR references the issue", () => {
+      expect(findPRForIssueInList(999, prs)).toBeNull();
+    });
+
+    it("matches via title when body doesn't reference the issue", () => {
+      const titleOnly = [
+        { number: 703, url: "https://github.com/org/repo/pull/703", title: "fix #55", body: "" },
+      ];
+      expect(findPRForIssueInList(55, titleOnly)?.number).toBe(703);
+    });
+
+    it("does not match a longer issue number as a substring (word boundary)", () => {
+      // #201 must not match a PR that only references #2010.
+      const longer = [
+        {
+          number: 704,
+          url: "https://github.com/org/repo/pull/704",
+          title: "",
+          body: "Closes #2010",
+        },
+      ];
+      expect(findPRForIssueInList(201, longer)).toBeNull();
+    });
+
+    it("returns null for an empty PR list", () => {
+      expect(findPRForIssueInList(201, [])).toBeNull();
     });
   });
 });
