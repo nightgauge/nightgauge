@@ -222,11 +222,29 @@ acceptance criteria, labels, and sizing before dispatch.
 
 **Concurrency control:**
 
-- A channel-based semaphore limits concurrent refinements (default: 1, max: 3)
-- Semaphore acquisition is non-blocking — if all slots are full, remaining
-  candidates wait for the next cycle
+- A channel-based semaphore limits concurrent refinements (default: 1, max: 3).
+  It is **workspace-global**: one channel shared by every configured repo, not
+  a per-repo budget.
+- Two gates enforce it (#488). At the **top of each repo's scan**, an exhausted
+  semaphore ends the cycle's scanning entirely — later repos are not listed at
+  all, so a saturated workspace spends no GitHub API quota refusing. Inside a
+  repo, a **refused candidate acquisition** logs once and ends that repo's
+  dispatching for the cycle.
+- Consequence: a slot freed mid-cycle can still be won by a later repo, but only
+  if the exhaustion check passed when that repo was scanned. When the semaphore
+  is saturated at scan time, remaining repos wait for the next cycle (at most
+  one `refinement_interval` of delay). Repo order therefore decides ties every
+  cycle; rotating that order is tracked as separate follow-up work.
+- The cap bounds **in-flight dispatches**, not completed refinements. In
+  IPC/VSCode mode the slot is released at handoff — `refineIssue` returns
+  shortly after `onRefinementDispatch` hands the issue to the extension — so the
+  practical ceiling is roughly `refinement_max_concurrent` issues handed off per
+  `refinement_interval`, regardless of how long the extension then takes.
+  Holding the slot until the extension reports completion is a separate design
+  question, tracked as follow-up work.
 - Refinement has its own rate limiter (default: 10/hour) separate from the
-  dispatch rate limiter
+  dispatch rate limiter. A refused candidate is not counted against it — only an
+  acquired slot records a refinement start.
 
 **Configuration:**
 
