@@ -795,6 +795,16 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return { ...this.boardCountsCache };
     }
 
+    // Check rate limit before making API calls — same gate the board-fetch
+    // path (fetchIssuesForStatus / fetchAllItemsInternal) uses, so the
+    // warning/pause state stays consistent regardless of which path tripped
+    // it. Serve the last successful counts (even past TTL) instead of
+    // spending quota or falling back to zeros.
+    const canProceed = await this.checkRateLimit();
+    if (!canProceed) {
+      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
+    }
+
     try {
       // Uses board.counts IPC method — a single GraphQL query with aliases
       // that returns only totalCount per status. No item data fetched.
@@ -809,7 +819,10 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       return { ...counts };
     } catch (err) {
       log(`getAggregatedStatusCounts failed: ${err}`);
-      return {};
+      // Stale-if-error: never bypass the cache with zeros. A transient fetch
+      // error still leaves the last-known-good counts to fall back to; only
+      // a successful fetch is allowed to replace the cache.
+      return this.boardCountsCache ? { ...this.boardCountsCache } : {};
     }
   }
 
