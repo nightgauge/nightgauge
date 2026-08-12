@@ -407,7 +407,68 @@ func (c *Client) installHeaderInterceptor() {
 	c.http.Transport = &rateLimitHeaderTransport{
 		base:   base,
 		client: c,
+		etags:  newETagCache(etagCacheMaxEntries),
 	}
+}
+
+// etagCacheMaxEntries bounds how many distinct GET URLs the client's ETag
+// cache remembers (Issue #486). Recurring polls (attention sweep: repo
+// metadata, required checks, check runs, open PR lists) touch a small,
+// stable set of URLs per repo — a few hundred entries covers many repos with
+// headroom, without letting a long-running process (VSCode extension host,
+// daemon) grow this unbounded. Oldest entries are evicted first once the
+// limit is reached.
+const etagCacheMaxEntries = 256
+
+// etagCacheMaxBodyBytes bounds the size of any single cached response body.
+// The REST GETs the pipeline polls (repo metadata, check runs, PR lists) are
+// small JSON payloads; a response larger than this is simply never cached —
+// the endpoint always pays full request price on every call, which is the
+// documented fallback for responses that don't fit the cache, not an error.
+const etagCacheMaxBodyBytes = 1 << 20 // 1 MiB
+
+// etagCacheEntry is one cached GET response (ETag + body) keyed by request URL.
+type etagCacheEntry struct {
+	etag string
+	body []byte
+}
+
+// etagCache is a small, size-bounded cache mapping a request URL to the last
+// ETag/body pair observed for it (Issue #486), scoped to one
+// rateLimitHeaderTransport (one Client). Eviction is FIFO by insertion order
+// once entryLimit entries are held — simple and sufficient: the pipeline's
+// poll set (a handful of REST endpoints per repo per sweep) is small and
+// stable, so eviction pressure in practice is near zero.
+type etagCache struct {
+	mu      sync.Mutex
+	entries map[string]*etagCacheEntry
+	order   []string // insertion order, oldest first
+	limit   int
+}
+
+func newETagCache(limit int) *etagCache {
+	return &etagCache{entries: make(map[string]*etagCacheEntry), limit: limit}
+}
+
+func (c *etagCache) get(url string) (*etagCacheEntry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[url]
+	return e, ok
+}
+
+func (c *etagCache) set(url, etag string, body []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.entries[url]; !exists {
+		if c.limit > 0 && len(c.order) >= c.limit {
+			oldest := c.order[0]
+			c.order = c.order[1:]
+			delete(c.entries, oldest)
+		}
+		c.order = append(c.order, url)
+	}
+	c.entries[url] = &etagCacheEntry{etag: etag, body: body}
 }
 
 // rateLimitHeaderTransport intercepts HTTP responses to extract GitHub's
@@ -415,16 +476,77 @@ func (c *Client) installHeaderInterceptor() {
 // short-circuit requests — gating happens in query/mutate before the call is
 // dispatched, not at the transport layer (which would race with concurrent
 // in-flight calls).
+//
+// It also implements conditional GET (Issue #486): repeat GETs to the same
+// URL carry If-None-Match from etags, and a 304 response is served from the
+// cached body instead of being surfaced as a (near-always empty) 304 to the
+// caller. Endpoints that never return an ETag are simply never cached — the
+// next GET to that URL pays full price again, silently, no error.
 type rateLimitHeaderTransport struct {
 	base   http.RoundTripper
 	client *Client
+	etags  *etagCache
 }
 
 func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Conditional GET: attach If-None-Match when we've cached a prior
+	// response for this exact URL. GET-only — mutating verbs (POST/PATCH)
+	// are never conditionally cached, and GitHub does not issue meaningful
+	// ETags for them here.
+	var cacheKey string
+	var cached *etagCacheEntry
+	if t.etags != nil && req.Method == http.MethodGet {
+		cacheKey = req.URL.String()
+		if e, ok := t.etags.get(cacheKey); ok {
+			cached = e
+			req = req.Clone(req.Context())
+			req.Header.Set("If-None-Match", e.etag)
+		}
+	}
+
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil {
 		return resp, err
 	}
+
+	if cacheKey != "" {
+		switch {
+		case resp.StatusCode == http.StatusNotModified && cached != nil:
+			// The server confirmed our cached copy is still current. Serve
+			// the cached body in place of the (normally empty) 304 body.
+			// The X-RateLimit-* headers on THIS response are GitHub's own
+			// accounting for a conditional hit; they are harvested below
+			// exactly like any other response, so a 304 never receives an
+			// extra local decrement on top of what GitHub itself reports.
+			if resp.Body != nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			resp.StatusCode = http.StatusOK
+			resp.Status = "200 OK"
+			resp.ContentLength = int64(len(cached.body))
+			resp.Body = io.NopCloser(bytes.NewReader(cached.body))
+		case resp.StatusCode == http.StatusOK:
+			if etag := resp.Header.Get("ETag"); etag != "" {
+				body, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if readErr != nil {
+					return nil, readErr
+				}
+				if len(body) <= etagCacheMaxBodyBytes {
+					// Also replaces any existing (now-stale) cache entry for
+					// this URL — changed upstream data always wins.
+					t.etags.set(cacheKey, etag, body)
+				}
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				resp.ContentLength = int64(len(body))
+			}
+			// No ETag on the response: this endpoint doesn't support
+			// conditional requests. Nothing to cache — the next GET to the
+			// same URL just pays full price again, silently.
+		}
+	}
+
 	// Only act on GitHub API responses. Header names are case-insensitive
 	// per RFC 7230; net/http canonicalizes on Get.
 	remaining := resp.Header.Get("X-RateLimit-Remaining")
