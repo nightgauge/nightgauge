@@ -130,6 +130,7 @@ vi.mock("../../src/utils/incrediConfig", async () => {
     // result they assert.
     getGeminiModel: vi.fn(() => "gemini-2.5-flash"),
     getGeminiAuthMethod: vi.fn(() => "api-key"),
+    getCopilotModel: vi.fn(() => "configured-copilot-model"),
   };
 });
 
@@ -147,6 +148,7 @@ import { killAllActiveProcesses } from "../../src/utils/skillRunner";
 import { Logger } from "../../src/utils/logger";
 import {
   getDefaultModel,
+  getGeminiModel,
   getPerformanceMode,
   getStageEffort,
   getSuperchargeCodexModel,
@@ -397,6 +399,45 @@ describe("IPC path: Maximum-mode adapter mapping survives Go resolution (#340)",
   });
 });
 
+describe("IPC path: non-Maximum adapter mapping honors the dispatched band (#387)", () => {
+  it("spawns Gemini on the provider id for an escalated wire band", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    vi.mocked(getPerformanceMode).mockReturnValue("elevated");
+
+    await dispatch(params({ model: "opus" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+  });
+
+  it("spawns Gemini on the provider id for a sticky downgraded wire band", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
+    vi.mocked(getPerformanceMode).mockReturnValue("elevated");
+    vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
+
+    await dispatch(params({ model: "haiku" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
+  });
+
+  it("spawns Copilot on the provider id for an escalated wire band", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "copilot";
+    vi.mocked(getPerformanceMode).mockReturnValue("elevated");
+
+    await dispatch(params({ model: "opus" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("claude-sonnet-4.5");
+  });
+
+  it("spawns Copilot on the provider id for a sticky downgraded wire band", async () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "copilot";
+    vi.mocked(getPerformanceMode).mockReturnValue("elevated");
+
+    await dispatch(params({ model: "haiku" }));
+
+    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("gpt-4o-mini");
+  });
+});
+
 // ── The wire field's VOCABULARY ────────────────────────────────────────────
 //
 // `RunStageParams.model` is a bare `string`, and two lookups downstream are
@@ -483,19 +524,13 @@ describe("IPC path: servedModel is the model the adapter process was launched wi
     expect((await result).servedModel).toBe("gpt-5.4");
   });
 
-  it("reports the Gemini model the adapter launched when no mode mapping applies", async () => {
+  it("reports the Gemini provider id produced by last-mile band translation", async () => {
     process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "gemini";
 
-    // Dispatch the opus band: if mode mapping (wrongly) applied here it would
-    // yield gemini-2.5-pro, so asserting the configured gemini-2.5-flash
-    // proves the pass-through. (Dispatching sonnet would not discriminate —
-    // the sonnet band's mapped target IS the configured model.)
     const { result, proc } = await dispatch(params({ model: "opus" }));
     finish(proc);
 
-    // The orchestrator asked for the opus band; the adapter launched its
-    // configured model. History must name the latter.
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
-    expect((await result).servedModel).toBe("gemini-2.5-flash");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+    expect((await result).servedModel).toBe("gemini-2.5-pro");
   });
 });

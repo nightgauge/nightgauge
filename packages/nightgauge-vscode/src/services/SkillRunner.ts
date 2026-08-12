@@ -47,9 +47,9 @@ export interface RunStageParams {
    * can change the tier: post-failure escalation, sticky model-unavailable
    * downgrades (#42), the `model_routing.minimum_model` floor (#366), the
    * pr-create large-diff escalation, the feature-validate haiku gate and the
-   * pr-merge haiku floor (#197). It is passed straight through as the
-   * `modelOverride` so the CLI spawns on it; the extension runs no model
-   * resolution of its own on this path.
+   * pr-merge haiku floor (#197). It is passed through as the authoritative
+   * `modelOverride`; the extension performs only adapter-specific last-mile
+   * translation before spawn and runs no routing of its own on this path.
    */
   model: string;
   maxTokens?: number;

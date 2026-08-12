@@ -79,12 +79,12 @@ func OutcomeModelBand(model string) string {
 //
 // The naive normalization is wrong for every non-Claude adapter, and wrong in
 // the direction that manufactures misses. Go dispatches a BAND ("opus"); the
-// extension translates it at the last mile — `resolveCodexPipelineModel` on
-// every codex dispatch (opus → gpt-5.6-sol), and `getModeStageAdapterModel` on
-// a gemini/copilot dispatch whose tier the MODE PINNED, which since #19 means
-// Maximum alone (opus → gemini-2.5-pro) — and reports the concrete id back,
-// which the scheduler re-records as the stage's model. Those ids are MULTI-BAND
-// — gpt-5.6-sol serves [opus, fable], gemini-2.5-pro serves [opus, fable] — so
+// extension translates it at the last mile — `resolveCodexPipelineModel` for
+// codex and the registry-backed `getAdapterModelForBand` for gemini/
+// gemini-sdk/copilot in every performance mode — and reports the concrete id
+// back, which the scheduler re-records as the stage's model. Those ids are
+// MULTI-BAND — gpt-5.6-sol serves [opus, fable], gemini-2.5-pro serves
+// [opus, fable] — so
 // a strongest-band collapse reads "fable" for a run the router predicted "opus"
 // and the adapter served exactly as asked. Every such run would book a routing
 // MISS, feeding the calibration loop with systematic garbage.
@@ -95,21 +95,13 @@ func OutcomeModelBand(model string) string {
 // any other (unregistered) records "" — an honest unknown, excluded — rather
 // than a value guaranteed to compare unequal.
 //
-// This function does NOT assume the adapter was asked for the dispatched band,
-// and its callers sit on both sides of the translation gap. On the Go-executor
-// path (Scheduler.recordOutcome, the `nightgauge run` dispatch),
-// internal/execution/adapters translates the band for codex/gemini/gemini-sdk/
-// copilot in EVERY mode, so a gemini run asked for opus serves gemini-2.5-pro
-// and books a HIT. On extension-dispatched (IPC) runs outside Maximum mode,
-// gemini/copilot/lm-studio launch their CONFIGURED model and ignore the wire
-// tier (docs/PIPELINE_EXECUTION.md § Who Resolves the Model), so `served`
-// there is a fact about the workspace's config rather than about the run — and
-// it is scored honestly on that basis: the shipped gemini default
-// `gemini-2.5-flash` serves [haiku, sonnet], so an opus-predicted feature-dev
-// records "sonnet" and books a real MISS. Both are correct readings of the
-// corpus's question ("did the run serve the band the router predicted?"), not
-// defects in this helper — the defect the extension-side reading reports is
-// the translation gap, and that has its own issue.
+// This function does NOT assume translation succeeded. Both the Go executor
+// and extension dispatch paths translate recognized bands for codex/gemini/
+// gemini-sdk/copilot in every mode, so a gemini run asked for opus normally
+// serves gemini-2.5-pro and books a HIT. A provider fallback can still serve a
+// weaker registered model and correctly book a MISS. Local adapters are the
+// deliberate exception: lm-studio has no registry tier hierarchy and launches
+// its configured model, which records an honest band or unknown on that basis.
 //
 // The comparison and the recording therefore happen in ONE space each, on
 // purpose: divergence is judged in the concrete-id space where the adapter
