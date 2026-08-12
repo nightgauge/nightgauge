@@ -8,46 +8,38 @@
  * discovered at least one repository, but folders[0] didn't resolve to a git
  * root, must still construct the runner.
  *
- * `resolveAgentRunnerRoot` is exported from bootstrap/services.ts, but that
- * file has a very large import graph (100+ service modules, most importing
- * `vscode`) that isn't practical to mock for a focused unit test — the same
- * constraint documented in tests/bootstrap/goHistoryBridge.test.ts. Following
- * that file's established pattern, this test reimplements the pure gating
- * logic in isolation. Keep this mirror in sync with
- * `resolveAgentRunnerRoot` in src/bootstrap/services.ts.
+ * Like tests/bootstrap/terminalFunnelTarget.test.ts (#302), this file imports
+ * the real `resolveAgentRunnerRoot` exported from bootstrap/services.ts rather
+ * than reimplementing it. The point of the guard is what the SHIPPED code does
+ * when `incrediRoot` is null, and a reimplementation cannot witness a
+ * regression in shipped code: this file previously carried its own copy of the
+ * one-line fallback, so gutting `resolveAgentRunnerRoot` to `return null` left
+ * every case here green while the multi-root workspace it exists for silently
+ * lost its runner.
  *
  * @see Issue #4117 — Agent runner gated on a single incrediRoot
+ * @see Issue #404 — mirror tests replaced by imports of the real symbol
  */
 
 import { describe, it, expect, vi } from "vitest";
 
-// ---------------------------------------------------------------------------
-// Mirrors resolveAgentRunnerRoot() from src/bootstrap/services.ts
-// ---------------------------------------------------------------------------
-
-interface RepoLike {
-  path: string;
-}
-
-interface WorkspaceManagerLike {
-  getAllRepositories(): RepoLike[];
-}
-
-function resolveAgentRunnerRoot(
-  incrediRootValue: string | null,
-  workspaceManagerValue: WorkspaceManagerLike | null
-): string | null {
-  return incrediRootValue ?? workspaceManagerValue?.getAllRepositories()[0]?.path ?? null;
-}
+import { resolveAgentRunnerRoot } from "../../src/bootstrap/services";
+import type { WorkspaceManager } from "../../src/services/WorkspaceManager";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeWorkspaceManager(repos: RepoLike[]): WorkspaceManagerLike {
+/**
+ * A WorkspaceManager stub carrying only the one method the function under test
+ * calls. Cast rather than shimmed: the real type is the contract, and adding an
+ * exported shim interface to src to serve a test would be the same
+ * test-shaped-code-in-ship problem from the other direction.
+ */
+function makeWorkspaceManager(repos: Array<{ path: string }>): WorkspaceManager {
   return {
     getAllRepositories: vi.fn().mockReturnValue(repos),
-  };
+  } as unknown as WorkspaceManager;
 }
 
 // ---------------------------------------------------------------------------
