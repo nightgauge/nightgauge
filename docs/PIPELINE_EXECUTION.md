@@ -315,28 +315,6 @@ fallback, is **not** on that list: it is mirrored by `workspaceDefaultModel`
 model for every reasoning stage on the IPC path — `services/SkillRunner.ts`
 passed no issue metadata, so Step 2 never fired and Step 3 always won.
 
-And a fourth consequence, of the translation gap above rather than of a missing
-table — scoped to the **extension's dispatch paths** (IPC and
-HeadlessOrchestrator): **there, a `gemini`, `gemini-sdk`, `copilot` or
-`lm-studio` workspace outside Maximum mode ignores everything this resolver
-decides.** The tier, the `minimum_model` floor, the post-failure escalation
-ladder and the sticky #42 downgrade all reach the extension, which then spawns
-the adapter's configured model regardless — so a failed stage re-runs on the
-same model, and the corpus's `actualModel` is a function of static config
-rather than of the run (see [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md)). The
-Go executor does **not** share the gap: on the `nightgauge run` path (the
-second row of the resolver table above), `internal/execution/adapters`
-translates the dispatched band for `codex`, `gemini`, `gemini-sdk` and
-`copilot` in every mode (`resolveGeminiModel`, `resolveCopilotModel`), and
-`lm-studio`/`ollama` receive the band verbatim — autonomous runs honor Go's
-routing on every adapter. The extension-side gap is accepted for now rather
-than hidden: Claude and Codex are the adapters the pipeline is operated on, the
-band → provider-id maps already exist (`getModeStageAdapterModel`), and wiring
-them onto the non-Maximum path is a behavior change for every existing
-gemini/copilot workspace — it gets its own issue rather than riding along with
-the ownership change. Until then, an extension operator who wants Go's routing
-to bind should run `codex` or `claude`, or pin the adapter's model to match.
-
 And the reverse, stated for the same reason: two **post-base** mechanisms exist
 only in `resolveDispatchModel`, so the two resolvers deliberately disagree
 where they fire — the `feature-validate` haiku gate (#3041: haiku shortcuts
@@ -392,20 +370,25 @@ neither:
   back as `servedModel`, so run history attributes — and prices — the model that
   ran rather than the tier that was asked for.
 
-  **On the extension's dispatch paths, exactly one adapter translates the
-  dispatched band today: `codex`.** `utils/skillRunner.ts` runs
-  `resolveCodexPipelineModel(model)` on the wire value unconditionally, so a
-  codex run honors every tier Go resolved. `gemini` / `gemini-sdk`, `copilot`
-  and `lm-studio` consult the dispatched band only through `modePinnedTier`,
-  which is true for **Maximum** alone (the only mode whose `MODE_PROFILES`
-  entry still pins a stage). In every other mode they launch their own
-  configured model — `getGeminiModel` / `getCopilotModel` /
-  `getLmStudioModel` — and `lm-studio` cannot honor a tier alias at all, by
-  design (#3214: it logs the mismatch and demotes the decision's source). The
-  Go executor's adapters (`internal/execution/adapters`, the `nightgauge run`
-  path) are not subject to this rule: they translate the band for `codex`,
-  `gemini`, `gemini-sdk` and `copilot` in every mode, and pass it verbatim to
-  `lm-studio`/`ollama`.
+  On both extension dispatch paths, `codex`, `gemini`, `gemini-sdk` and
+  `copilot` translate every recognized dispatched band in every performance
+  mode. Codex uses `resolveCodexPipelineModel`; the other adapters use the
+  registry-backed `getAdapterModelForBand`, which is the same mapping primitive
+  that `getModeStageAdapterModel` uses for Maximum-mode pins. This is a
+  last-mile translation, not a second routing decision: escalation, floors and
+  sticky downgrades have already selected the band.
+
+  If an adapter has no registry mapping for a recognized band, the extension
+  launches its configured adapter model and records the source as `config`
+  rather than passing an unsupported alias. `lm-studio` remains the deliberate
+  exception (#3214): local model catalogs have no registry tier hierarchy, so
+  every band takes that fallback and the loaded local model serves the run.
+  The agentic-adapter gate currently bars `gemini-sdk` and `lm-studio` from
+  pipeline-stage execution (#57); their mapping/fallback rules still govern
+  extension surfaces where those adapters are eligible.
+  The Go executor's adapters (`internal/execution/adapters`, the
+  `nightgauge run` path) use the same remote-provider mappings; local adapters
+  likewise do not invent a tier hierarchy.
 
   `servedModel` therefore carries a CONCRETE id, deliberately, and the two
   questions asked about it live in one space each. "Did the process run what the

@@ -214,6 +214,7 @@ export {
   type StageProfile as PerformanceStageProfile,
   type PipelineProfile as PerformancePipelineProfile,
   getModeStageProfile,
+  getAdapterModelForBand,
   getModeStageAdapterModel,
   isPerformanceMode,
 } from "./modeProfiles";

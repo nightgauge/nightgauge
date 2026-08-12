@@ -57,6 +57,12 @@ export interface StageProfile {
   codexModel?: string;
 }
 
+/** Result of translating a registry band for one execution adapter. */
+export interface AdapterModelMapping {
+  model: string;
+  mismatch: boolean;
+}
+
 /**
  * Performance-mode routing envelope (Issue #19).
  *
@@ -295,11 +301,28 @@ export function getModeStageAdapterModel(
   mode: PerformanceMode,
   stage: PipelineStage,
   adapter: ExecutionAdapter
-): { model: string; mismatch: boolean } | undefined {
+): AdapterModelMapping | undefined {
   if (adapter === "claude") return undefined;
   const profile = getModeStageProfile(mode, stage);
   if (!profile?.model) return undefined;
-  const resolved = resolveModelForAdapter(adapter, profile.model);
+  return getAdapterModelForBand(profile.model, adapter);
+}
+
+/**
+ * Translate an authoritative registry band to the concrete model id an
+ * adapter launches. This is the shared last-mile mapping for dispatched bands
+ * and performance-mode stage pins.
+ *
+ * Local adapters deliberately have no registry hierarchy. They return a
+ * mismatch so the dispatcher can retain the configured local model instead of
+ * leaking a tier alias to the process.
+ */
+export function getAdapterModelForBand(
+  band: DefaultModel,
+  adapter: ExecutionAdapter
+): AdapterModelMapping | undefined {
+  if (adapter === "claude") return undefined;
+  const resolved = resolveModelForAdapter(adapter, band);
   if (resolved) return { model: resolved.id, mismatch: false };
-  return { model: profile.model, mismatch: true };
+  return { model: band, mismatch: true };
 }

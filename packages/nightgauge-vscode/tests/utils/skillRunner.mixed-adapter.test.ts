@@ -225,7 +225,7 @@ allowed-tools: Read Write Edit Bash
     expect(args).toEqual(expect.arrayContaining(["stage", "feature-dev", "42"]));
   });
 
-  it("AC #3 — gemini stage env carries NIGHTGAUGE_ADAPTER=gemini and gemini config", () => {
+  it("AC #3 — gemini stage env carries the adapter and dispatched-band model", () => {
     const proc = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(proc);
     runStageSkillHeadless("feature-dev", 42, {});
@@ -235,7 +235,7 @@ allowed-tools: Read Write Edit Bash
       expect.objectContaining({
         NIGHTGAUGE_ADAPTER: "gemini",
         NIGHTGAUGE_OUTPUT_FORMAT: "json",
-        NIGHTGAUGE_GEMINI_MODEL: "gemini-2.5-pro",
+        NIGHTGAUGE_GEMINI_MODEL: "gemini-2.5-flash",
       })
     );
   });

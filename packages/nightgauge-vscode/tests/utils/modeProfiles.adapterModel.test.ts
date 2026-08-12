@@ -8,7 +8,7 @@
  * `ADAPTER_MODEL_TABLES` (#56).
  */
 import { describe, it, expect } from "vitest";
-import { getModeStageAdapterModel } from "../../src/utils/modeProfiles";
+import { getAdapterModelForBand, getModeStageAdapterModel } from "../../src/utils/modeProfiles";
 import type { ExecutionAdapter } from "../../src/utils/resolvers/modelResolver";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { resolveModelForAdapter } from "@nightgauge/sdk";
@@ -148,6 +148,30 @@ describe("getModeStageAdapterModel (Issue #3214, #19)", () => {
       mismatch: true,
     });
     expect(getModeStageAdapterModel("maximum", "pr-create", "ollama")).toEqual({
+      model: "opus",
+      mismatch: true,
+    });
+  });
+});
+
+describe("getAdapterModelForBand (Issue #387)", () => {
+  it("maps every dispatched band for remote execution adapters", () => {
+    expect(getAdapterModelForBand("opus", "gemini")).toEqual({
+      model: "gemini-2.5-pro",
+      mismatch: false,
+    });
+    expect(getAdapterModelForBand("haiku", "gemini-sdk")).toEqual({
+      model: "gemini-2.5-flash",
+      mismatch: false,
+    });
+    expect(getAdapterModelForBand("sonnet", "copilot")).toEqual({
+      model: "gpt-4o",
+      mismatch: false,
+    });
+  });
+
+  it("keeps configured local models as the explicit tier-mapping exception", () => {
+    expect(getAdapterModelForBand("opus", "lm-studio")).toEqual({
       model: "opus",
       mismatch: true,
     });

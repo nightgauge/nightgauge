@@ -511,8 +511,8 @@ describe("copilotEnv — spawn env", () => {
     );
   });
 
-  it("does not set NIGHTGAUGE_COPILOT_MODEL when not configured", () => {
-    // No env var set and no config file
+  it("sets NIGHTGAUGE_COPILOT_MODEL from the dispatched band when not configured", () => {
+    // No env var set and no config file: the default Sonnet band maps to gpt-4o.
     const mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess);
 
@@ -522,8 +522,8 @@ describe("copilotEnv — spawn env", () => {
       expect.any(String),
       expect.any(Array),
       expect.objectContaining({
-        env: expect.not.objectContaining({
-          NIGHTGAUGE_COPILOT_MODEL: expect.any(String),
+        env: expect.objectContaining({
+          NIGHTGAUGE_COPILOT_MODEL: "gpt-4o",
         }),
       })
     );

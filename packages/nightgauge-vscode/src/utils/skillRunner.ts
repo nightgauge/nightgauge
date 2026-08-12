@@ -147,7 +147,7 @@ import {
   getRoutedTierEnvelope,
   type ModeEnvelope,
   getModeStageProfile,
-  getModeStageAdapterModel,
+  getAdapterModelForBand,
   getGitHubUser,
   getGitHubAuthToken,
   getGitHubAuthTokens,
@@ -3502,16 +3502,11 @@ export function runStageSkillHeadless(
 
   // Did the active performance mode pin this tier? (#340)
   //
-  // The adapter translation tables below ask this by testing
-  // `modelDecision.source === "performance-mode"` — a proxy that held only
-  // while `resolveModel` was the sole resolver. On the IPC path the Go
-  // scheduler resolves the tier (source `go-scheduler`), applying the same pin
-  // itself through `routing.ModeStagePin` in `stageBaseModel`
-  // (internal/orchestrator/dispatch_routing.go), so the proxy reads false and a
-  // Maximum-mode Codex/Gemini/Copilot run would silently fall back to the
-  // adapter's configured default model. The question these tables actually need
-  // answered is about the MODE and the TIER, not about which layer spoke — so
-  // each site ORs this in.
+  // The Maximum-mode Codex override used to test only
+  // `modelDecision.source === "performance-mode"` — a proxy that held while
+  // `resolveModel` was the sole resolver. On the IPC path Go applies the same
+  // pin but labels the source `go-scheduler`, so the override also needs to ask
+  // whether the active mode pinned the requested tier.
   //
   // It reads MODE_PROFILES rather than the mode NAME, so it answers for the one
   // mode that pins (`maximum`) and stays false for the envelope modes, whose
@@ -3531,11 +3526,18 @@ export function runStageSkillHeadless(
     return pinned === (modelTierBand(requestedModel) ?? requestedModel);
   })();
 
+  // Adapter CLIs launch concrete provider ids, while both orchestrators make
+  // routing decisions in registry bands. Normalize concrete-but-known inputs
+  // too because the HeadlessOrchestrator and operator overrides can supply
+  // either spelling. Unknown/local ids have no band and therefore fall back to
+  // the adapter's configured model below.
+  const requestedBand = modelTierBand(requestedModel);
+
   // Record the resolved model up-front, before the CLI spawns (#367), so a
   // stage killed before completion still attributes its true model rather than
-  // 'unknown'. Fires once here for every adapter; for codex/copilot the model
-  // may be perf-mode-remapped just before spawn, but that later value is
-  // reconciled by the Go handler's latest-wins recording at completion.
+  // 'unknown'. Fires once here for every adapter; non-Claude adapters may be
+  // translated just before spawn, but that later value is reconciled by the Go
+  // handler's latest-wins recording at completion.
   //
   // Only the HeadlessOrchestrator supplies this callback, and that is
   // deliberate (#340). Its implementation calls
@@ -3862,24 +3864,23 @@ export function runStageSkillHeadless(
   // Gemini configuration env vars (Issue #1056)
   // API key flows via process.env.GEMINI_API_KEY (set at extension activation from SecretStorage).
   // Model is resolved from config and passed explicitly.
-  // Performance-mode wiring (Issue #3214): when the active mode supplies a
-  // tier override for this stage, translate haiku|sonnet|opus to the
-  // adapter-specific id and stamp modelDecision.model so run history reports
-  // the actual model that ran (mirrors the Codex precedent at line 1755).
+  // Every dispatched registry band is translated to the provider id before
+  // spawn (#387). The same registry mapping backs the Maximum-mode path
+  // (#3214); a future band without a provider mapping falls back to the
+  // configured model instead of leaking the alias to the CLI.
   const geminiEnv: Record<string, string> = {};
   if (adapter === "gemini" || adapter === "gemini-sdk") {
-    const perfMapping =
-      modelDecision.source === "performance-mode" || modePinnedTier
-        ? getModeStageAdapterModel(getPerformanceMode(workspaceRoot), stage, adapter)
-        : undefined;
+    const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let geminiModel: string;
     let modelSourceLabel = "";
-    if (perfMapping && !perfMapping.mismatch) {
-      geminiModel = perfMapping.model;
-      modelDecision.model = perfMapping.model;
-      modelSourceLabel = " (performance-mode)";
+    if (bandMapping && !bandMapping.mismatch) {
+      geminiModel = bandMapping.model;
+      modelDecision.model = bandMapping.model;
+      modelSourceLabel = " (dispatched band)";
     } else {
       geminiModel = getGeminiModel(workspaceRoot);
+      modelDecision.model = geminiModel;
+      modelDecision.source = "config";
     }
     geminiEnv.NIGHTGAUGE_GEMINI_MODEL = geminiModel;
     callbacks?.onStderr?.(`[skillRunner] Gemini model: ${geminiModel}${modelSourceLabel}\n`);
@@ -3942,23 +3943,22 @@ export function runStageSkillHeadless(
   }
 
   // Copilot model and GitHub auth configuration (Issue #1946)
-  // Performance-mode wiring (Issue #3214): mode profile takes precedence over
-  // the configured copilot model when active; falls back to getCopilotModel
-  // otherwise. Mismatch is impossible for copilot — every tier maps.
+  // The dispatched registry band takes precedence over the configured model
+  // (#387). A missing provider mapping falls back to configuration; every
+  // current Copilot band maps through the shared registry.
   const copilotEnv: Record<string, string> = {};
   if (adapter === "copilot") {
-    const perfMapping =
-      modelDecision.source === "performance-mode" || modePinnedTier
-        ? getModeStageAdapterModel(getPerformanceMode(workspaceRoot), stage, adapter)
-        : undefined;
+    const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
     let copilotModel: string | undefined;
     let modelSourceLabel = "";
-    if (perfMapping && !perfMapping.mismatch) {
-      copilotModel = perfMapping.model;
-      modelDecision.model = perfMapping.model;
-      modelSourceLabel = " (performance-mode)";
+    if (bandMapping && !bandMapping.mismatch) {
+      copilotModel = bandMapping.model;
+      modelDecision.model = bandMapping.model;
+      modelSourceLabel = " (dispatched band)";
     } else {
       copilotModel = getCopilotModel(workspaceRoot);
+      if (copilotModel) modelDecision.model = copilotModel;
+      modelDecision.source = "config";
     }
     if (copilotModel) {
       copilotEnv.NIGHTGAUGE_COPILOT_MODEL = copilotModel;
@@ -3986,27 +3986,21 @@ export function runStageSkillHeadless(
   }
 
   // LM Studio model and server configuration (Issue #2057)
-  // Performance-mode wiring (Issue #3214): LM Studio cannot honor canonical
-  // tier aliases — the served model is whatever is loaded locally. When the
-  // mode profile names a tier, log an info-level mismatch and demote
-  // modelDecision.source from "performance-mode" to "config" so the run
-  // history (executionHistoryWriter.ts:482) stays honest. AC #3.
+  // LM Studio remains the deliberate exception (#3214, #387): it has no
+  // registry tier hierarchy, so the served model is whatever is loaded
+  // locally. Record the mismatch for every dispatched band and demote the
+  // source to config so history stays honest.
   const lmStudioEnv: Record<string, string> = {};
   if (adapter === "lm-studio") {
-    if (modelDecision.source === "performance-mode" || modePinnedTier) {
-      const perfMapping = getModeStageAdapterModel(
-        getPerformanceMode(workspaceRoot),
-        stage,
-        adapter
+    const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
+    if (bandMapping?.mismatch) {
+      callbacks?.onStderr?.(
+        `[skillRunner] LM Studio cannot honor dispatched tier "${bandMapping.model}" — using configured local model.\n`
       );
-      if (perfMapping?.mismatch) {
-        callbacks?.onStderr?.(
-          `[skillRunner] LM Studio cannot honor performance-mode tier "${perfMapping.model}" — using configured local model.\n`
-        );
-        modelDecision.source = "config";
-      }
     }
     const lmStudioModel = getLmStudioModel(workspaceRoot);
+    modelDecision.model = lmStudioModel;
+    modelDecision.source = "config";
     lmStudioEnv.NIGHTGAUGE_LM_STUDIO_MODEL = lmStudioModel;
     callbacks?.onStderr?.(`[skillRunner] LM Studio model: ${lmStudioModel || "(unconfigured)"}\n`);
 
@@ -4186,11 +4180,10 @@ export function runStageSkillHeadless(
   // `heavyCodexOverride ?? modelDecision.model` and — unlike gemini and copilot
   // — never stamps the result back, so a Maximum-mode / supercharge run spawns
   // `NIGHTGAUGE_CODEX_MODEL=<override>` while `modelDecision.model` still holds
-  // the tier translation. And for gemini/copilot/lm-studio with no mode mapping
-  // in play, `modelDecision.model` stays the orchestrator's BAND while the
-  // adapter launches its configured local/default model. Reporting either as
-  // the served model attributes run history, cost and telemetry to a model that
-  // never ran; `scheduler.go` re-records the stage on this value.
+  // the tier translation. Provider preflight may also canonicalize an adapter
+  // env after the decision is recorded. Reporting the final env value keeps
+  // run history, cost and telemetry tied to the process that actually ran;
+  // `scheduler.go` re-records the stage on this value.
   //
   // Claude takes `--model` directly and sets no model env, so it is the
   // decision itself.

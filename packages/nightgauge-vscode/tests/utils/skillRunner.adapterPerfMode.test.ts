@@ -239,16 +239,13 @@ describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
     vi.mocked(spawn).mockReturnValue(createMockChildProcess());
   });
 
-  // Issue #19: efficiency is now an envelope (no per-stage pin), so — like
-  // elevated — it falls through to the configured adapter model rather than a
-  // translated tier. Only Maximum (still pinned) stamps a translated id.
-  it("efficiency (envelope) falls through to getGeminiModel — no pin translation", () => {
+  it("efficiency translates its resolved band for Gemini", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("efficiency");
     vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
   });
 
   it("maximum maps feature-dev → gemini-2.5-pro via NIGHTGAUGE_GEMINI_MODEL", () => {
@@ -259,26 +256,23 @@ describe("gemini adapter — performance-mode wiring (Issue #3214)", () => {
     expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
   });
 
-  it("elevated falls through to getGeminiModel — no override applied", () => {
+  it("elevated translates its resolved band for Gemini", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("elevated");
     vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
   });
 
-  it("explicit pipeline.stage_models keeps precedence — no perf-mode mapping", () => {
-    // When stage_models is set under elevated mode, source = "config" and the
-    // adapter dispatch must NOT translate it via the perf-mode table.
+  it("translates an explicit pipeline.stage_models band", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("elevated");
     vi.mocked(getStageModel).mockReturnValue("haiku");
     vi.mocked(getGeminiModel).mockReturnValue("gemini-2.5-pro");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    // The configured fallback is used; the alias "haiku" is not leaked.
-    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-pro");
+    expect(lastSpawnEnv().NIGHTGAUGE_GEMINI_MODEL).toBe("gemini-2.5-flash");
   });
 
   it("repeated dispatches quiesce operator diagnostics before Vitest teardown", () => {
@@ -331,13 +325,13 @@ describe("copilot adapter — performance-mode wiring (Issue #3214)", () => {
     vi.mocked(spawn).mockReturnValue(createMockChildProcess());
   });
 
-  it("efficiency (envelope) falls through to getCopilotModel — no pin translation", () => {
+  it("efficiency translates its resolved band for Copilot", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("efficiency");
     vi.mocked(getCopilotModel).mockReturnValue("configured-copilot-model");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("configured-copilot-model");
+    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("gpt-4o");
   });
 
   it("maximum maps feature-dev → claude-sonnet-4.5", () => {
@@ -348,22 +342,22 @@ describe("copilot adapter — performance-mode wiring (Issue #3214)", () => {
     expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("claude-sonnet-4.5");
   });
 
-  it("efficiency (envelope) falls through to getCopilotModel for issue-pickup", () => {
+  it("efficiency translates the issue-pickup band for Copilot", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("efficiency");
     vi.mocked(getCopilotModel).mockReturnValue("configured-copilot-model");
 
     runStageSkillHeadless("issue-pickup", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("configured-copilot-model");
+    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("gpt-4o-mini");
   });
 
-  it("elevated falls through to getCopilotModel — no override applied", () => {
+  it("elevated translates its resolved band for Copilot", () => {
     vi.mocked(getPerformanceMode).mockReturnValue("elevated");
     vi.mocked(getCopilotModel).mockReturnValue("configured-copilot-model");
 
     runStageSkillHeadless("feature-dev", 42, {});
 
-    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("configured-copilot-model");
+    expect(lastSpawnEnv().NIGHTGAUGE_COPILOT_MODEL).toBe("gpt-4o");
   });
 });
 
