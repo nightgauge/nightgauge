@@ -22,10 +22,13 @@
  * - deferred — the board is not returned to Ready and the blocker-close
  *   requeue never fires.
  *
- * Unlike the mirror-style tests in this directory, this one imports the real
- * `resolveTerminalFunnelTarget` from bootstrap/services.ts — the whole point
- * of the guard is what the shipped code does when the slug is unusable, and a
- * reimplementation cannot witness that.
+ * This test imports the real `resolveTerminalFunnelTarget` from
+ * bootstrap/services.ts — the whole point of the guard is what the shipped
+ * code does when the slug is unusable, and a reimplementation cannot witness
+ * that. #404 made this the directory's rule: no test here reimplements shipped
+ * logic; tests either import the real symbol or, when the fix is a deletion,
+ * assert against the source (the *Removed.test.ts pins). See docs/TESTING.md
+ * § Testing Anti-Patterns, "Mirror Tests".
  *
  * @see Issue #302 — four small silent-no-op guards
  */

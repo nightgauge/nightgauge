@@ -18,14 +18,19 @@
  *
  * The `onIssueCleared` handler that used to host this writer is registered
  * inline inside the (VSCode-API-dependent) `registerServices()` bootstrap in
- * services.ts, which is impractical to instantiate in a unit test — there is
- * no existing test harness for the bootstrap's callback wiring (see
- * tests/bootstrap/goHistoryBridge.test.ts, which takes the same approach of
- * testing the inline handler's logic out of band rather than invoking
- * `registerServices()`). Since there is no runnable logic left to replicate
- * (the fix is a deletion), this test instead asserts — by reading the
- * handler's own source — that the pr-merge completion cleanup path no
- * longer appends any history record outside the Go authoritative path.
+ * services.ts: invoking it in a unit test would mean standing up the whole
+ * extension activation surface, and no harness exists for the bootstrap's
+ * callback wiring. That constraint on its own does NOT license re-deriving
+ * the handler's logic in the test file — a reimplementation cannot witness a
+ * regression in shipped code (#404). It does not have to here: because the
+ * fix is a deletion there is no runnable logic left to exercise, so this file
+ * asserts against the handler's own source text that the pr-merge completion
+ * cleanup path no longer appends any history record outside the Go
+ * authoritative path. That is the resurrection-pin form shared with
+ * tests/bootstrap/duplicateRunRecordWritersRemoved.test.ts and
+ * tests/bootstrap/staleSlotScannerRemoved.test.ts. When the subject is
+ * runnable the directory's rule is the other one — import the real symbol;
+ * see docs/TESTING.md § Testing Anti-Patterns, "Mirror Tests".
  */
 
 import { describe, it, expect } from "vitest";

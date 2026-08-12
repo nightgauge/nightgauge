@@ -563,6 +563,42 @@ it("should handle missing fields with defaults", () => {
 });
 ```
 
+### 7. Mirror Tests (reimplementing the subject inside the test file)
+
+**Problem:** The test file carries its own copy of the logic it claims to
+guard, so it asserts against the copy and never touches shipped code. It stays
+green through any regression in the real function — including the deletion of
+the fix it was written for.
+
+```typescript
+// ❌ BAD: local reimplementation asserted against
+function resolveAgentRunnerRoot(root: string | null, wm: WorkspaceManager | null) {
+  return root ?? wm?.getAllRepositories()[0]?.path ?? null; // a copy, not the ship
+}
+expect(resolveAgentRunnerRoot(null, wm)).toBe("/workspace/repo-a");
+
+// ✅ GOOD: import the real symbol
+import { resolveAgentRunnerRoot } from "../../src/bootstrap/services";
+expect(resolveAgentRunnerRoot(null, wm)).toBe("/workspace/repo-a");
+```
+
+**Falsifiability test:** gut the shipped function (e.g. make it `return null`)
+and run the file. If it stays green, the file is a mirror.
+
+**When the subject is not importable**, exactly two alternatives are
+sanctioned:
+
+1. **Export it.** Lift the logic out of the inline closure into a named export
+   and import it — this is what #404 did for `resolveAgentRunnerRoot` and
+   `resolveTerminalFunnelTarget` in `bootstrap/services.ts`.
+2. **Assert against the source text**, when the fix is a _deletion_ and there
+   is no runnable logic left to exercise — the resurrection-pin idiom of
+   `packages/nightgauge-vscode/tests/bootstrap/*Removed.test.ts`. A source pin
+   is also the right tool for a call site that no behavioral case can reach.
+
+Reimplementing is never the third option: "the bootstrap is impractical to
+instantiate" explains the difficulty, it does not make a copy a guard.
+
 ---
 
 ## Good Testing Patterns
