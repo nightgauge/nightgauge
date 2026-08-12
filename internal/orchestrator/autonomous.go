@@ -6097,11 +6097,23 @@ func (as *AutonomousScheduler) runRefinementCycle(ctx context.Context) {
 				continue
 			}
 
-			// Try to acquire the refinement semaphore (non-blocking)
+			// Try to acquire the refinement semaphore (non-blocking).
+			//
+			// The acquisition GATES the dispatch (#488): everything below —
+			// RecordRefinementStart, the dispatch log, the goTracked spawn,
+			// dispatched++ — may only run for a candidate that actually holds a
+			// slot. A `break` inside the select would bind to the SELECT, not to
+			// this loop, so a refusal used to fall straight through into a
+			// dispatch holding nothing; refineIssue's unconditional
+			// `<-as.refinementSem` release then parked forever on the empty
+			// channel and drainBackground's join never returned.
+			acquired := false
 			select {
 			case as.refinementSem <- struct{}{}:
-				// Acquired slot
+				acquired = true
 			default:
+			}
+			if !acquired {
 				// All slots full — stop dispatching this cycle
 				log.Printf("[refinement] %s: all %d refinement slots occupied", fullRepo, as.config.RefinementMaxConcurrent)
 				break
