@@ -243,6 +243,9 @@ describe("PipelineStateService — updateTokens (HeadlessOrchestrator path)", ()
       inputTokens: 20000,
       outputTokens: 3000,
       cacheReadTokens: 15000,
+      cacheCreationTokens: 3308,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 3308,
       costUsd: 0.15,
     });
 
@@ -252,12 +255,14 @@ describe("PipelineStateService — updateTokens (HeadlessOrchestrator path)", ()
       output: 3000,
       cost_usd: 0.15,
       cache_read: 15000,
-      cache_creation: 0,
+      cache_creation: 3308,
+      cache_creation_5m: 0,
+      cache_creation_1h: 3308,
     });
     // total_input is COMBINED (input + cache_read): 20000 + 15000 = 35000.
     expect(state!.tokens!.total_input).toBe(35000);
     expect(state!.tokens!.total_output).toBe(3000);
-    expect(state!.tokens!.total_cache_creation).toBe(0);
+    expect(state!.tokens!.total_cache_creation).toBe(3308);
     expect(state!.tokens!.estimated_cost_usd).toBe(0.15);
   });
 
@@ -358,6 +363,12 @@ describe("PipelineStateService — pipeline.complete merges with stage.complete 
       model: "claude-sonnet-4-6",
     });
 
+    // The extension token stream can retain the provider's TTL split, while
+    // the Go pipeline.complete notification carries no cache fields at all.
+    const stageState = await svc.getState();
+    stageState!.tokens!.per_stage!["feature-dev"].cache_creation_5m = 100000;
+    stageState!.tokens!.per_stage!["feature-dev"].cache_creation_1h = 250000;
+
     // pipeline.complete fires with Go's data (no cache fields in per_stage)
     fireIpcEvent("pipeline.complete", {
       issueNumber: 300,
@@ -374,6 +385,8 @@ describe("PipelineStateService — pipeline.complete merges with stage.complete 
     expect(dev).toBeTruthy();
     expect(dev!.cache_read).toBe(11000000);
     expect(dev!.cache_creation).toBe(350000);
+    expect(dev!.cache_creation_5m).toBe(100000);
+    expect(dev!.cache_creation_1h).toBe(250000);
 
     // total_input/total_output must fall back to stage.complete accumulated values (not 0).
     // total_input is COMBINED (input + cache_read): 500 + 11000000 = 11000500.

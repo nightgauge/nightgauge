@@ -230,6 +230,19 @@ type TokenCounts struct {
 	CacheCreation1h int
 }
 
+// NormalizeCacheCreation reconciles an optional TTL split with its flat
+// cache-write total. Explicit split counts are preserved; any unclassified
+// remainder is assigned to the cheaper 5-minute tier so no observed tokens are
+// lost and computed cost remains a conservative floor.
+func NormalizeCacheCreation(total, fiveMinute, oneHour int) (int, int) {
+	fiveMinute = max(fiveMinute, 0)
+	oneHour = max(oneHour, 0)
+	if remainder := total - fiveMinute - oneHour; remainder > 0 {
+		fiveMinute += remainder
+	}
+	return fiveMinute, oneHour
+}
+
 // CalculateCost returns the USD cost for the given model and token counts.
 //
 // Rates come from the single-source model registry (internal/models, canonical
@@ -248,12 +261,11 @@ type TokenCounts struct {
 // unknown-model shape.
 //
 // CONVENTION for unsplit cache-creation totals: a caller that knows only a
-// single combined cache-creation count (most of the pipeline today, because
-// the tier split is not yet plumbed end to end — see #390) must put it in
-// CacheCreation5m. That is the cheaper tier, so the resulting estimate is a
-// floor rather than an overstatement. The gap is not academic: on captured
-// Claude CLI traffic the writes are 1h-heavy, so the floor under-prices the
-// cache-creation pool by ~1.6x on 1h-heavy stages until #390 plumbs the split.
+// single combined cache-creation count must put it in CacheCreation5m. That is
+// the cheaper tier, so the resulting estimate is a floor rather than an
+// overstatement. Claude's stream parser supplies the real split; this
+// convention remains for adapters and historical inputs that expose only a
+// flat total.
 func CalculateCost(model string, t TokenCounts) float64 {
 	d, ok := models.Get(model)
 	if !ok {

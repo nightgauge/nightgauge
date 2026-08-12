@@ -101,6 +101,8 @@ export interface StageResult {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+  cacheCreation5mTokens: number;
+  cacheCreation1hTokens: number;
   costUsd: number;
   feedbackFile?: string;
   durationMs: number;
@@ -219,6 +221,8 @@ export interface SkillRunnerCallbacks {
     outputTokens: number;
     cacheReadTokens: number;
     cacheCreationTokens: number;
+    cacheCreation5mTokens?: number;
+    cacheCreation1hTokens?: number;
     costUsd: number;
   }) => void;
   /**
@@ -235,6 +239,8 @@ export interface SkillRunnerCallbacks {
       outputTokens: number;
       cacheReadTokens: number;
       cacheCreationTokens: number;
+      cacheCreation5mTokens?: number;
+      cacheCreation1hTokens?: number;
       costUsd: number;
     }
   ) => void;
@@ -319,6 +325,8 @@ export class SkillRunner {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        cacheCreation5mTokens: 0,
+        cacheCreation1hTokens: 0,
         costUsd: 0,
         durationMs: Date.now() - startTime,
         errorText,
@@ -494,6 +502,8 @@ export class SkillRunner {
               outputTokens: result.tokenUsage?.outputTokens ?? 0,
               cacheReadTokens: result.tokenUsage?.cacheReadTokens ?? 0,
               cacheCreationTokens: result.tokenUsage?.cacheCreationTokens ?? 0,
+              cacheCreation5mTokens: result.tokenUsage?.cacheCreation5mTokens ?? 0,
+              cacheCreation1hTokens: result.tokenUsage?.cacheCreation1hTokens ?? 0,
               costUsd: result.tokenUsage?.costUsd ?? 0,
               durationMs,
               promptDetected: result.promptDetected,

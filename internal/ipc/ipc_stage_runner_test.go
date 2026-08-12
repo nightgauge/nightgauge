@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -140,6 +141,8 @@ func TestDeliverStageResult_ReturnsFalseWhenChannelFull(t *testing.T) {
 func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 	var buf bytes.Buffer
 	runner := newTestStageRunner(&buf)
+	runtime := state.NewRuntimeState("nightgauge/nightgauge", 42, "item", testRunID)
+	runtime.BeginStage(state.StageFeatureDev)
 
 	params := orchestrator.StageRunParams{
 		Stage:       state.PipelineStage("feature-dev"),
@@ -151,6 +154,7 @@ func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 		OutputFile:  "/tmp/out.json",
 		TargetRepo:  "/workspace/repo",
 		RunID:       testRunID,
+		Runtime:     runtime,
 	}
 
 	// Run RunStage in a goroutine since it blocks until result is delivered
@@ -172,13 +176,16 @@ func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 
 	// Deliver the result (simulates TypeScript sending pipeline.stageResult)
 	delivered := runner.DeliverStageResult(StageResultParams{
-		Stage:        "feature-dev",
-		IssueNumber:  42,
-		Success:      true,
-		ExitCode:     0,
-		InputTokens:  2000,
-		OutputTokens: 800,
-		FeedbackFile: "/tmp/feedback.json",
+		Stage:                 "feature-dev",
+		IssueNumber:           42,
+		Success:               true,
+		ExitCode:              0,
+		InputTokens:           2000,
+		OutputTokens:          800,
+		CacheReadTokens:       1200,
+		CacheCreationTokens:   3308,
+		CacheCreation1hTokens: 3308,
+		FeedbackFile:          "/tmp/feedback.json",
 	})
 	if !delivered {
 		t.Fatal("DeliverStageResult returned false, expected pending channel")
@@ -201,6 +208,22 @@ func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 		}
 		if res.result.FeedbackFile != "/tmp/feedback.json" {
 			t.Errorf("FeedbackFile = %q, want /tmp/feedback.json", res.result.FeedbackFile)
+		}
+		// Mirrors scheduler.go's existing calculated-cost call: the result's
+		// unsplit total is placed in 5m while the IPC handoff carries the real
+		// 1h split. Completion must prefer the split without double-counting.
+		runtime.CompleteStage(
+			res.result.ExitCode,
+			tokens.TokenCounts{
+				Input:           res.result.InputTokens,
+				Output:          res.result.OutputTokens,
+				CacheRead:       res.result.CacheReadTokens,
+				CacheCreation5m: res.result.CacheCreationTokens,
+			},
+			"claude-haiku-4-5-20251001",
+		)
+		if got := runtime.CompletedStages[0].CacheCreation; got != 3308 {
+			t.Errorf("history handoff CacheCreation = %d, want 3308", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RunStage did not return within 2 seconds")

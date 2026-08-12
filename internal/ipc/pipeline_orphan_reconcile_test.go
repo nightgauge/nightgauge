@@ -308,7 +308,7 @@ func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"running","runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"complete","inputTokens":1000,"outputTokens":500,"cacheReadTokens":200,"costUsd":5.03,"runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"complete","inputTokens":1000,"outputTokens":500,"cacheReadTokens":200,"cacheCreationTokens":3308,"cacheCreation5mTokens":0,"cacheCreation1hTokens":3308,"costUsd":5.03,"runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
@@ -326,6 +326,9 @@ func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
 	}
 	if sr.CacheRead != 200 {
 		t.Errorf("stage CacheRead = %d, want 200", sr.CacheRead)
+	}
+	if sr.CacheCreation != 3308 {
+		t.Errorf("stage CacheCreation = %d, want 3308", sr.CacheCreation)
 	}
 	if sr.CostUSD != 5.03 {
 		t.Errorf("stage CostUSD = %v, want 5.03", sr.CostUSD)
@@ -354,7 +357,7 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"running","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"complete","inputTokens":800,"outputTokens":300,"model":"sonnet","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"complete","inputTokens":800,"outputTokens":300,"cacheCreationTokens":3308,"cacheCreation1hTokens":3308,"model":"claude-haiku-4-5-20251001","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(complete): %v", err)
 	}
 
@@ -368,6 +371,9 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 	}
 	if sr.OutputTokens != 300 {
 		t.Errorf("stage OutputTokens = %d, want 300", sr.OutputTokens)
+	}
+	if sr.CacheCreation != 3308 {
+		t.Errorf("stage CacheCreation = %d, want 3308", sr.CacheCreation)
 	}
 	if rt.InputTokens != 800 || rt.OutputTokens != 300 {
 		t.Errorf("totals = (%d,%d), want (800,300)", rt.InputTokens, rt.OutputTokens)

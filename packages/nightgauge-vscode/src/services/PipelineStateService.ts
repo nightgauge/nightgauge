@@ -228,6 +228,8 @@ export interface TokenUsageUpdate {
   stage?: string;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  cacheCreation5mTokens?: number;
+  cacheCreation1hTokens?: number;
   costUsd?: number;
   /** Issue number for per-slot token routing (Issue #2815) */
   issueNumber?: number;
@@ -246,6 +248,8 @@ export interface PipelineStageTokens {
   cost_usd?: number;
   cache_read?: number;
   cache_creation?: number;
+  cache_creation_5m?: number;
+  cache_creation_1h?: number;
   model?: string;
   /**
    * Resolution step that produced `cost_usd` (Issue #3228).
@@ -291,6 +295,16 @@ export interface PipelineStateTokens {
   per_stage?: Record<string, PipelineStageTokens>;
   /** Cumulative issue-level totals across all completed stages. Never reset mid-stage. */
   per_issue?: PipelineIssueTokens;
+}
+
+interface BookedStageUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  cacheCreation5m: number;
+  cacheCreation1h: number;
+  costUsd: number;
 }
 
 export interface PipelineState {
@@ -474,6 +488,11 @@ export class PipelineStateService implements vscode.Disposable {
   private workspaceRoot: string;
   private issueNumber: number | null;
   private _lastState: PipelineState | null = null;
+  // Cumulative per-stage usage already accepted by Go. Headless retries keep
+  // accumulating in tokens.per_stage, so terminal transitions send only the
+  // unbooked delta; otherwise a failed attempt plus its successful retry would
+  // book the first attempt twice in RuntimeState history.
+  private readonly bookedStageUsage = new Map<string, BookedStageUsage>();
   private disposables: vscode.Disposable[] = [];
   /**
    * Target repo ("owner/name") for the active run, installed by
@@ -789,6 +808,7 @@ export class PipelineStateService implements vscode.Disposable {
     this.runId = runId;
     this.runRepo = repo ?? "";
     this.issueNumber = issueNumber;
+    this.bookedStageUsage.clear();
   }
 
   /**
@@ -991,13 +1011,45 @@ export class PipelineStateService implements vscode.Disposable {
     }
   }
 
+  private currentStageUsage(stage: string): BookedStageUsage {
+    const usage = this._lastState?.tokens?.per_stage?.[stage];
+    return {
+      input: usage?.input ?? 0,
+      output: usage?.output ?? 0,
+      cacheRead: usage?.cache_read ?? 0,
+      cacheCreation: usage?.cache_creation ?? 0,
+      cacheCreation5m: usage?.cache_creation_5m ?? 0,
+      cacheCreation1h: usage?.cache_creation_1h ?? 0,
+      costUsd: usage?.cost_usd ?? 0,
+    };
+  }
+
+  private unbookedStageUsage(stage: string): BookedStageUsage {
+    const current = this.currentStageUsage(stage);
+    const booked = this.bookedStageUsage.get(stage);
+    if (!booked) return current;
+    return {
+      input: Math.max(0, current.input - booked.input),
+      output: Math.max(0, current.output - booked.output),
+      cacheRead: Math.max(0, current.cacheRead - booked.cacheRead),
+      cacheCreation: Math.max(0, current.cacheCreation - booked.cacheCreation),
+      cacheCreation5m: Math.max(0, current.cacheCreation5m - booked.cacheCreation5m),
+      cacheCreation1h: Math.max(0, current.cacheCreation1h - booked.cacheCreation1h),
+      costUsd: Math.max(0, current.costUsd - booked.costUsd),
+    };
+  }
+
+  private markStageUsageBooked(stage: string): void {
+    this.bookedStageUsage.set(stage, this.currentStageUsage(stage));
+  }
+
   async completeStage(stage: string, attribution?: StageAttribution): Promise<void> {
     // Thread the per-stage usage accumulated during streaming (#227) so the Go
     // notify handler stops recording hardcoded zeros. `per_stage` is populated
     // by updateTokens() as the CLI streams, so by completion it holds the
     // stage total. input excludes cache reads (cacheReadTokens is separate);
     // the Go side (CompleteStageWithCost) combines them, matching the scheduler.
-    const usage = this._lastState?.tokens?.per_stage?.[stage];
+    const usage = this.unbookedStageUsage(stage);
     // Thread the served model + executing adapter (#268) so the Go notify
     // handler records them as the runtime's per-stage StageModel/StageAdapter.
     // BuildV2Record then attributes the V2 record's per-stage ModelSelection
@@ -1015,10 +1067,13 @@ export class PipelineStateService implements vscode.Disposable {
           issueNumber: this.issueNumber ?? 0,
           stage,
           status: "complete",
-          inputTokens: usage?.input ?? 0,
-          outputTokens: usage?.output ?? 0,
-          cacheReadTokens: usage?.cache_read ?? 0,
-          costUsd: usage?.cost_usd ?? 0,
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          cacheReadTokens: usage.cacheRead,
+          cacheCreationTokens: usage.cacheCreation,
+          cacheCreation5mTokens: usage.cacheCreation5m,
+          cacheCreation1hTokens: usage.cacheCreation1h,
+          costUsd: usage.costUsd,
           ...(attribution?.model ? { model: attribution.model } : {}),
           ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
           // A finished child must not vouch for the run (ADR-017 §7.2): the
@@ -1027,6 +1082,7 @@ export class PipelineStateService implements vscode.Disposable {
           stagePid: 0,
           runId,
         } satisfies NotifyStageTransitionParams);
+        this.markStageUsageBooked(stage);
         return;
       } catch (err) {
         handleIpcRejection({
@@ -1064,6 +1120,7 @@ export class PipelineStateService implements vscode.Disposable {
     // result.servedModel ?? result.modelDecision?.model (the exact value handed
     // to `--model`), so an early kill still attributes to 'fable'.
     const runId = this.wireIdentityOrSkip("pipeline.notifyStageTransition", stage);
+    const usage = this.unbookedStageUsage(stage);
     if (runId !== null) {
       try {
         await this.ipc.call("pipeline.notifyStageTransition", {
@@ -1072,12 +1129,20 @@ export class PipelineStateService implements vscode.Disposable {
           stage,
           status: "failed",
           error,
+          inputTokens: usage.input,
+          outputTokens: usage.output,
+          cacheReadTokens: usage.cacheRead,
+          cacheCreationTokens: usage.cacheCreation,
+          cacheCreation5mTokens: usage.cacheCreation5m,
+          cacheCreation1hTokens: usage.cacheCreation1h,
+          costUsd: usage.costUsd,
           ...(attribution?.model ? { model: attribution.model } : {}),
           ...(attribution?.adapter ? { adapter: attribution.adapter } : {}),
           // Terminal transition — see completeStage (ADR-017 §7.2).
           stagePid: 0,
           runId,
         } satisfies NotifyStageTransitionParams);
+        this.markStageUsageBooked(stage);
         return;
       } catch (err) {
         handleIpcRejection({
@@ -1324,6 +1389,7 @@ export class PipelineStateService implements vscode.Disposable {
 
   async clearPipeline(): Promise<void> {
     this._lastState = null;
+    this.bookedStageUsage.clear();
     // Clearing the pipeline ends the run this service was speaking for
     // (ADR-017 Decision 10) — otherwise the next dispatch of the same issue
     // hits the not-ambient refusal against a run nobody is executing. Reads
@@ -1625,6 +1691,18 @@ export class PipelineStateService implements vscode.Disposable {
         cost_usd: (existing?.cost_usd ?? 0) + (update.costUsd ?? 0),
         cache_read: (existing?.cache_read ?? 0) + (update.cacheReadTokens ?? 0),
         cache_creation: (existing?.cache_creation ?? 0) + (update.cacheCreationTokens ?? 0),
+        ...(update.cacheCreation5mTokens !== undefined || existing?.cache_creation_5m !== undefined
+          ? {
+              cache_creation_5m:
+                (existing?.cache_creation_5m ?? 0) + (update.cacheCreation5mTokens ?? 0),
+            }
+          : {}),
+        ...(update.cacheCreation1hTokens !== undefined || existing?.cache_creation_1h !== undefined
+          ? {
+              cache_creation_1h:
+                (existing?.cache_creation_1h ?? 0) + (update.cacheCreation1hTokens ?? 0),
+            }
+          : {}),
         // Issue #3228: stamp the cost_source label. Last write wins per stage —
         // within a single stage all chunks resolve via the same accumulator,
         // so they all carry the same source value.
@@ -2296,12 +2374,19 @@ export class PipelineStateService implements vscode.Disposable {
             if (!this._lastState.tokens.per_stage) {
               this._lastState.tokens.per_stage = {};
             }
+            const existingStageTokens = this._lastState.tokens.per_stage[d.stage];
             this._lastState.tokens.per_stage[d.stage] = {
               input: d.inputTokens ?? 0,
               output: d.outputTokens ?? 0,
               cost_usd: d.costUsd ?? 0,
               cache_read: d.cacheReadTokens ?? 0,
               cache_creation: d.cacheCreationTokens ?? 0,
+              ...(existingStageTokens?.cache_creation_5m !== undefined
+                ? { cache_creation_5m: existingStageTokens.cache_creation_5m }
+                : {}),
+              ...(existingStageTokens?.cache_creation_1h !== undefined
+                ? { cache_creation_1h: existingStageTokens.cache_creation_1h }
+                : {}),
               ...(d.model ? { model: d.model } : {}),
             };
             // Update totals
@@ -2531,6 +2616,12 @@ export class PipelineStateService implements vscode.Disposable {
             cost_usd: s.costUsd ?? 0,
             cache_read: existing?.cache_read ?? 0,
             cache_creation: existing?.cache_creation ?? 0,
+            ...(existing?.cache_creation_5m !== undefined
+              ? { cache_creation_5m: existing.cache_creation_5m }
+              : {}),
+            ...(existing?.cache_creation_1h !== undefined
+              ? { cache_creation_1h: existing.cache_creation_1h }
+              : {}),
           };
         }
 

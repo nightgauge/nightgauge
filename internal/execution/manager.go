@@ -17,6 +17,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -371,14 +372,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	delete(m.running, execKey)
 	m.mu.Unlock()
 
-	result := &adapters.RunResult{
-		Stdout:          string(stdoutBuf),
-		Stderr:          string(stderrBuf),
-		InputTokens:     tokenAcc.InputTokens,
-		OutputTokens:    tokenAcc.OutputTokens,
-		PremiumRequests: tokenAcc.PremiumRequests,
-		ServedModel:     modelTracker.ServedModel,
-	}
+	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
+	// The scheduler's legacy runner projection intentionally remains untouched:
+	// stage-keyed runtime handoff lets its existing CompleteStage call consume
+	// the cache pools without widening or editing scheduler.go.
+	recordRunResultTokenCounts(opts.Runtime, opts.Stage, result)
 	if fb := modelTracker.Fallback; fb != nil {
 		result.RefusalFallbackFrom = fb.OriginalModel
 		result.RefusalFallbackTo = fb.FallbackModel
@@ -398,6 +396,33 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	return result, nil
+}
+
+func runResultFromAccumulator(stdout, stderr string, tokenAcc *TokenAccumulator, modelTracker *ServedModelTracker) *adapters.RunResult {
+	cacheCreation5m, cacheCreation1h := tokenAcc.CacheCreationByTTL()
+	return &adapters.RunResult{
+		Stdout:                stdout,
+		Stderr:                stderr,
+		InputTokens:           tokenAcc.InputTokens,
+		OutputTokens:          tokenAcc.OutputTokens,
+		CacheReadTokens:       tokenAcc.CacheRead,
+		CacheCreationTokens:   cacheCreation5m + cacheCreation1h,
+		CacheCreation5mTokens: cacheCreation5m,
+		CacheCreation1hTokens: cacheCreation1h,
+		PremiumRequests:       tokenAcc.PremiumRequests,
+		ServedModel:           modelTracker.ServedModel,
+	}
+}
+
+func recordRunResultTokenCounts(runtime *state.RuntimeState, stage string, result *adapters.RunResult) {
+	if runtime == nil || result == nil {
+		return
+	}
+	runtime.RecordStageTokenCounts(state.PipelineStage(stage), tokens.TokenCounts{
+		CacheRead:       result.CacheReadTokens,
+		CacheCreation5m: result.CacheCreation5mTokens,
+		CacheCreation1h: result.CacheCreation1hTokens,
+	})
 }
 
 // StopExecution gracefully stops a running execution.

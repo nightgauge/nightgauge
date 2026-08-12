@@ -45,6 +45,9 @@ export interface NotifyStageTransitionParams {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+  cacheCreation5mTokens?: number;
+  cacheCreation1hTokens?: number;
   costUsd?: number;
   model?: string;
   adapter?: string;

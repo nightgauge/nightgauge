@@ -136,7 +136,9 @@ describe("computeStageCost", () => {
       const msg = String(debug.mock.calls[0][0]);
       expect(msg).toContain("#358");
       expect(msg).toContain("floor");
-      expect(msg).toContain("#390");
+      // #390 lands the Claude split but the floor remains intentional for
+      // providers and historical records that expose only a flat total.
+      expect(msg).not.toContain("#390");
     });
 
     it("DOES warn on the same drift once the split is known", () => {

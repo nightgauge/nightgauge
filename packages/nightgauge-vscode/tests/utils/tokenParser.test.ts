@@ -8,6 +8,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   parseStreamJsonLine,
   toTokenUsageUpdate,
@@ -100,6 +102,8 @@ describe("parseStreamJsonLine", () => {
       outputTokens: 13602,
       cacheReadTokens: 1766400,
       cacheCreationTokens: 0,
+      cacheCreation5mTokens: 0,
+      cacheCreation1hTokens: 0,
       costUsd: 0,
     });
   });
@@ -147,8 +151,32 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 500,
         cacheReadTokens: 200,
         cacheCreationTokens: 100,
+        cacheCreation5mTokens: 100,
+        cacheCreation1hTokens: 0,
         costUsd: 0.0234,
         costCumulative: true,
+      });
+    });
+
+    it("preserves the cache-write TTL split from the real Claude capture (#390)", () => {
+      const capture = readFileSync(
+        resolve(
+          process.cwd(),
+          "../../internal/execution/testdata/claude_stream_real_capture.jsonl"
+        ),
+        "utf8"
+      );
+      const terminalLine = capture
+        .trim()
+        .split("\n")
+        .find((line) => line.includes('"type":"result"'));
+      expect(terminalLine).toBeDefined();
+
+      const usage = parseStreamJsonLine(terminalLine as string)?.usage;
+      expect(usage).toMatchObject({
+        cacheCreationTokens: 3308,
+        cacheCreation5mTokens: 0,
+        cacheCreation1hTokens: 3308,
       });
     });
 
@@ -219,6 +247,8 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 0,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        cacheCreation5mTokens: 0,
+        cacheCreation1hTokens: 0,
         costUsd: 0,
         costCumulative: true,
       });
@@ -255,6 +285,8 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 450,
         cacheReadTokens: 50,
         cacheCreationTokens: 25,
+        cacheCreation5mTokens: 25,
+        cacheCreation1hTokens: 0,
         costUsd: 0.0185,
       });
 
@@ -267,6 +299,8 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 450,
         cacheReadTokens: 50,
         cacheCreationTokens: 25,
+        cacheCreation5mTokens: 25,
+        cacheCreation1hTokens: 0,
         costUsd: 0.0185,
       });
     });
@@ -285,6 +319,8 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 450,
         cacheReadTokens: 0,
         cacheCreationTokens: 0,
+        cacheCreation5mTokens: 0,
+        cacheCreation1hTokens: 0,
         costUsd: 0,
       });
     });
@@ -578,6 +614,8 @@ describe("parseStreamJsonLine", () => {
         outputTokens: 80,
         cacheReadTokens: 300,
         cacheCreationTokens: 40,
+        cacheCreation5mTokens: 40,
+        cacheCreation1hTokens: 0,
         costUsd: 0,
       });
       // Critically: the authoritative `usage` field stays undefined so the
@@ -1122,7 +1160,10 @@ describe("toTokenUsageUpdate", () => {
       outputTokens: 500,
       cacheReadTokens: 200,
       cacheCreationTokens: 100,
+      cacheCreation5mTokens: 100,
+      cacheCreation1hTokens: 0,
       costUsd: 0.05,
+      costSource: undefined,
     };
 
     const result = toTokenUsageUpdate(usage);
@@ -1132,7 +1173,10 @@ describe("toTokenUsageUpdate", () => {
       outputTokens: 500,
       cacheReadTokens: 200,
       cacheCreationTokens: 100,
+      cacheCreation5mTokens: 100,
+      cacheCreation1hTokens: 0,
       costUsd: 0.05,
+      costSource: undefined,
     });
   });
 
@@ -2168,6 +2212,8 @@ describe("sumTokenUsage (#109)", () => {
       outputTokens: 100,
       cacheReadTokens: 440,
       cacheCreationTokens: 20,
+      cacheCreation5mTokens: 20,
+      cacheCreation1hTokens: 0,
       costUsd: 2.0,
       costSource: "native",
     });

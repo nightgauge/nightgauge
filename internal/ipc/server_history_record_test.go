@@ -426,7 +426,7 @@ func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"running","runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(dev running): %v", err)
 	}
-	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"failed","error":"stage gate failed","inputTokens":90000,"outputTokens":8000,"costUsd":13.32,"runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":293,"stage":"feature-dev","status":"failed","error":"stage gate failed","inputTokens":90000,"outputTokens":8000,"cacheCreationTokens":3308,"cacheCreation1hTokens":3308,"costUsd":13.32,"runId":"01900125-0000-7000-8000-000000000293"}`)); err != nil {
 		t.Fatalf("notifyStageTransition(dev failed): %v", err)
 	}
 
@@ -464,6 +464,12 @@ func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
 	}
 	if got := dev.CostUSD; got < 13.32-0.001 || got > 13.32+0.001 {
 		t.Errorf("feature-dev per-stage CostUSD = %.4f, want 13.32 (booked exactly once)", got)
+	}
+	if got := dev.CacheCreation; got != 3308 {
+		t.Errorf("feature-dev per-stage CacheCreation = %d, want 3308", got)
+	}
+	if got := rec.Tokens.TotalCacheCreation; got != 3308 {
+		t.Errorf("total CacheCreation = %d, want 3308", got)
 	}
 	if detail, ok := rec.Stages["feature-dev"]; !ok || detail.Status != "failed" {
 		t.Errorf("feature-dev stage detail = %+v, want status failed (cost booking must not flip the stage to complete)", detail)
