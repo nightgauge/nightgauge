@@ -31,6 +31,10 @@ import { ConfigBridge } from "../services/ConfigBridge";
 import { getReadyItemsSettings } from "../config/readyItemsSettings";
 import { getProjectBoardSettings } from "../config/projectBoardSettings";
 import { AutonomousActivityState } from "../utils/autonomousActivityState";
+import {
+  PollingVisibilityGate,
+  ensureWindowFocusTracking,
+} from "../services/AttentionSweepService";
 
 /**
  * Action tree item for displaying messages/actions in the tree
@@ -178,6 +182,36 @@ export class ProjectBoardTreeProvider
     if (autonomousSub) {
       this.disposables.push(autonomousSub);
     }
+
+    // #484 — join the shared idle-state polling gate (window-focus half).
+    ensureWindowFocusTracking();
+    // When THIS tab's own composite predicate (isViewVisible(own key) AND
+    // isWindowActive()) transitions closed→open, fire one coalesced refresh
+    // instead of waiting out the rest of the auto-refresh interval — same
+    // "catch up once, then resume normal cadence" shape as the
+    // AutonomousActivityState subscription above. Guarded with the SAME
+    // conditions the timer itself honours below (autoRefreshEnabled,
+    // interval > 0, autonomous active, the #2834 rate-limit pause) so a
+    // visibility regain cannot bypass a throttle the timer would have
+    // respected (#484 review round, MF-2). Routed through the shared static
+    // `debouncedStageRefresh()` rather than calling `this.refresh()`
+    // directly, so N provider instances edging open on the same underlying
+    // gate transition still produce exactly one board refresh, not N
+    // concurrent cache clears.
+    this.disposables.push(
+      PollingVisibilityGate.instance.onDidBecomeAllowed(
+        () =>
+          PollingVisibilityGate.instance.isViewVisible(this.visibilityGateKey()) &&
+          PollingVisibilityGate.instance.isWindowActive(),
+        () => {
+          if (!this.autoRefreshEnabled || this.autoRefreshInterval <= 0) return;
+          if (!AutonomousActivityState.instance.isActive()) return;
+          if (this.autoRefreshPausedUntilMs > 0 && Date.now() < this.autoRefreshPausedUntilMs)
+            return;
+          ProjectBoardTreeProvider.debouncedStageRefresh();
+        }
+      )
+    );
   }
 
   /**
@@ -242,6 +276,37 @@ export class ProjectBoardTreeProvider
   setTreeView(treeView: vscode.TreeView<BaseTreeItem>): void {
     this.treeView = treeView;
     this.updateViewTitle();
+    this.registerViewVisibility(treeView);
+  }
+
+  /**
+   * #484 — feed this view's live visibility into the shared
+   * PollingVisibilityGate. Defensive against test doubles that don't stub
+   * `visible` / `onDidChangeVisibility` (several existing tests pass a bare
+   * `{ title }` object) — those are simply not registered, which is safe:
+   * the gate still falls back to window-focus state.
+   */
+  private registerViewVisibility(treeView: vscode.TreeView<BaseTreeItem>): void {
+    const withVisibility = treeView as unknown as {
+      visible?: boolean;
+      onDidChangeVisibility?: (listener: (e: { visible: boolean }) => void) => vscode.Disposable;
+    };
+    if (typeof withVisibility.onDidChangeVisibility !== "function") return;
+    const key = this.visibilityGateKey();
+    PollingVisibilityGate.instance.setViewVisible(key, withVisibility.visible ?? true);
+    // A bare `vi.fn()` test double (several existing tests use one) returns
+    // `undefined` when called rather than a real Disposable — only track it
+    // when there's something to dispose.
+    const sub = withVisibility.onDidChangeVisibility((e) => {
+      PollingVisibilityGate.instance.setViewVisible(key, e.visible);
+    });
+    if (sub && typeof sub.dispose === "function") {
+      this.disposables.push(sub);
+    }
+  }
+
+  private visibilityGateKey(): string {
+    return `projectBoard:${this.tabId}`;
   }
 
   /**
@@ -428,6 +493,24 @@ export class ProjectBoardTreeProvider
       AutonomousActivityState.instance.isActive()
     ) {
       this.autoRefreshTimer = setInterval(() => {
+        // #484 — idle-state convenience refresh only, not stall detection
+        // (that's the autonomous stall watchdog in autonomousCommands.ts,
+        // unconditionally exempt from this gate by design — see that
+        // file's `scheduleNextWatchdog` doc comment). Skip the tick unless
+        // THIS tab is visible AND the window has been focused recently —
+        // both, not either: an autonomous run may still be active (the
+        // outer `isActive()` guard above is what started this timer at
+        // all), but board-count polling nobody can see is still waste, and
+        // a focused window with this tab collapsed is not a reader either.
+        // Resumes via the coalesced refresh on regained visibility
+        // (constructor subscription) or the next visible+focused tick.
+        const key = this.visibilityGateKey();
+        if (
+          !PollingVisibilityGate.instance.isViewVisible(key) ||
+          !PollingVisibilityGate.instance.isWindowActive()
+        ) {
+          return;
+        }
         // Skip this tick if the GitHub rate-limit tracker told us to hold
         // off until the quota window resets. The pause naturally clears
         // itself the first time this check runs past autoRefreshPausedUntilMs.
@@ -1033,6 +1116,10 @@ export class ProjectBoardTreeProvider
       clearTimeout(ProjectBoardTreeProvider.stageRefreshTimer);
       ProjectBoardTreeProvider.stageRefreshTimer = null;
     }
+    // #484 — a disposed provider's tab must stop counting as "visible" in
+    // the shared gate, or a stale entry would keep polling allowed forever
+    // for every other consumer.
+    PollingVisibilityGate.instance.setViewVisible(this.visibilityGateKey(), false);
     this._onDidChangeTreeData.dispose();
     for (const disposable of this.disposables) {
       disposable.dispose();
