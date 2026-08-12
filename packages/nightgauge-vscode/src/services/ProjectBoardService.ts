@@ -714,8 +714,15 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       this.cacheTimes.delete(cacheKey);
       this.inFlightRequests.delete(cacheKey);
     }
-    // counts changed — force fresh fetch on next getAggregatedStatusCounts()
-    this.boardCountsCache = null;
+    // Counts changed — force a fresh fetch on next getAggregatedStatusCounts(),
+    // but keep the last-known-good counts as the stale-if-error fallback
+    // (matches softInvalidate's documented discipline: invalidate cache
+    // timestamps without discarding stale data). This fires on every
+    // pipeline status move, so it is the MOST common invalidation path —
+    // nulling boardCountsCache here (instead of just expiring it) reopened
+    // the #485 "zeros" symptom on that path: invalidate → tree re-renders →
+    // getAggregatedStatusCounts finds no cache → checkRateLimit gates → `{}`
+    // → every tab shows 0.
     this.boardCountsCacheTime = 0;
     this._onStatusChanged.fire({ repoSlug, statuses });
   }

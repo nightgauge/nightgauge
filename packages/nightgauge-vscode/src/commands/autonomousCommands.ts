@@ -29,6 +29,7 @@ import {
   getOpenPRsForRepo,
   findPRForIssueInList,
   invalidateOpenPRsCache,
+  clearOpenPRsCache,
   PR_MAPPING_CACHE_TTL_MS,
   type PRInfo,
 } from "../utils/prDetection";
@@ -324,6 +325,11 @@ function stopAutonomousStallWatchdog(): void {
   alertedStalls.clear();
   emptyBoardLastSeenAt.clear();
   watchdogPRCache.clear();
+  // #483 — the per-issue cache above and prDetection.ts's repo-level
+  // open-PR snapshot must go stale together, not just on the TTL: without
+  // this, a stop→restart within the TTL window would serve a pre-stop
+  // snapshot to every issue that misses the (now-cleared) per-issue cache.
+  clearOpenPRsCache();
   stopLivenessProbe();
   // #3296 — clear the network-outage breaker too so a fresh autonomous
   // start begins with a clean counter (no carryover from a prior outage).
@@ -717,6 +723,14 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
     // alertedStalls pruning) — used below to prune watchdogPRCache so
     // entries for issues no longer In Progress don't linger forever.
     const seenPRCacheKeys = new Set<string>();
+    // #483 should-fix — repos whose open-PR snapshot needs invalidating
+    // because THIS sweep is about to cause a PR event (re-running pr-merge).
+    // Collected here and applied once after the repo loop below instead of
+    // inline, so a second/third stalled issue in the SAME repo during the
+    // SAME tick doesn't blow the invalidated cache back open mid-sweep and
+    // force a second `gh pr list` call — that would break the ≤1-list-call
+    // -per-repo-per-tick budget guarantee for the rest of this tick.
+    const reposToInvalidate = new Set<string>();
     // Single clock reading for the whole sweep: every issue in the same repo
     // that misses its per-issue cache this tick shares one
     // getOpenPRsForRepo() call (its own TTL check compares against this same
@@ -768,6 +782,15 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
           pr = cached.pr;
         } else {
           const openPRs = await getOpenPRsForRepo(repo.workspaceRoot, repo.owner, repo.repo, now);
+          // #483 must-fix — a failed fetch with no usable snapshot returns
+          // null (see getOpenPRsForRepo's JSDoc). Bail out WITHOUT writing
+          // to watchdogPRCache: caching `{ prInfo: null, pr: null }` here
+          // would stamp a transient failure as a fresh "no PR" fact for the
+          // full TTL, blinding the watchdog to a real stall for up to 5
+          // minutes after the failure clears. seenPRCacheKeys.add(cacheKey)
+          // above already ran, so the prune loop below still treats this
+          // issue as seen and won't drop a still-valid prior entry for it.
+          if (openPRs === null) continue;
           prInfo = findPRForIssueInList(item.number, openPRs);
           pr = prInfo
             ? ((await ipc.prView(repo.owner, repo.repo, prInfo.number)) as WatchdogPRView)
@@ -807,10 +830,13 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
             "Dismiss"
           );
           // #483 — the watchdog is itself about to change this PR's state
-          // (re-running pr-merge) — a pipeline PR event it causes. Invalidate
-          // both caches so the next tick reflects the merge attempt instead
-          // of replaying this now-stale snapshot.
-          invalidateOpenPRsCache(repo.owner, repo.repo);
+          // (re-running pr-merge) — a pipeline PR event it causes. The repo
+          // snapshot is queued for invalidation (applied once after the repo
+          // loop, below — see reposToInvalidate) so the next tick reflects
+          // the merge attempt instead of replaying this now-stale snapshot;
+          // the per-issue entry is deleted immediately since that costs
+          // nothing extra this tick.
+          reposToInvalidate.add(`${repo.owner}/${repo.repo}`);
           watchdogPRCache.delete(cacheKey);
           await rerunPrMerge(repo.workspaceRoot, prInfo.number, logger, true);
           continue;
@@ -822,11 +848,22 @@ async function runAutonomousStallWatchdog(logger: Logger): Promise<void> {
           "Dismiss"
         );
         if (action === "Re-run pr-merge") {
-          invalidateOpenPRsCache(repo.owner, repo.repo);
+          reposToInvalidate.add(`${repo.owner}/${repo.repo}`);
           watchdogPRCache.delete(cacheKey);
           await rerunPrMerge(repo.workspaceRoot, prInfo.number, logger, false);
         }
       }
+    }
+
+    // #483 should-fix — apply queued repo-snapshot invalidations ONCE, after
+    // every repo's item loop has finished, not inline. Invalidating inline
+    // (the previous shape) meant a second stalled issue in the same repo
+    // during the same tick would find an empty repoPRListCache and issue a
+    // SECOND `gh pr list` shell-out this tick — silently breaking the
+    // ≤1-list-call-per-repo-per-tick budget guarantee #483 exists for.
+    for (const slug of reposToInvalidate) {
+      const [owner, name] = slug.split("/");
+      invalidateOpenPRsCache(owner, name);
     }
 
     for (const key of Array.from(alertedStalls.keys())) {
@@ -2066,6 +2103,7 @@ export function resetWatchdogStateForTest(): void {
   livenessStatusDisposable = null;
   alertedStalls.clear();
   watchdogPRCache.clear();
+  clearOpenPRsCache();
   _enabledReposConfigService = null;
 }
 
@@ -2088,4 +2126,15 @@ export function setEnabledReposConfigServiceForTest(
  */
 export async function _runStallWatchdogTickForTest(logger: Logger): Promise<void> {
   await runAutonomousStallWatchdog(logger);
+}
+
+/**
+ * Invoke the real stopAutonomousStallWatchdog() path directly. Exported for
+ * use in tests only — not part of the public extension API. Distinct from
+ * resetWatchdogStateForTest() (which is between-test hygiene): this lets a
+ * test pin the actual stop→restart behavior operators trigger, including
+ * both cache clears stop is responsible for (Issue #483 should-fix).
+ */
+export function _stopWatchdogForTest(): void {
+  stopAutonomousStallWatchdog();
 }

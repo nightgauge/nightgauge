@@ -1,7 +1,9 @@
 package github
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -194,18 +196,21 @@ func TestETagCache_ConditionalGETLifecycle(t *testing.T) {
 
 // TestETagCache_NoETagFallsBackSilently verifies that a GET endpoint which
 // never returns an ETag is never cached: every call dispatches a full
-// request, and no If-None-Match header is ever sent — the documented
-// silent-fallback behavior for endpoints without ETag support (Issue #486).
+// request, no If-None-Match header is ever PRESENT (not merely empty — the
+// distinction matters because a mutant that caches under an empty ETag would
+// still make Header.Get return "" while actually sending the header), and no
+// entry is ever created for it (Issue #486; kills mutant M5, which caches
+// every 200 regardless of whether it carried an ETag).
 func TestETagCache_NoETagFallsBackSilently(t *testing.T) {
 	var (
-		mu       sync.Mutex
-		requests int
-		inms     []string
+		mu        sync.Mutex
+		requests  int
+		inmCounts []int // len(r.Header.Values("If-None-Match")) per request: 0 = header absent
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		requests++
-		inms = append(inms, r.Header.Get("If-None-Match"))
+		inmCounts = append(inmCounts, len(r.Header.Values("If-None-Match")))
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -231,10 +236,18 @@ func TestETagCache_NoETagFallsBackSilently(t *testing.T) {
 	if requests != 3 {
 		t.Fatalf("expected 3 full requests (no caching without ETag), got %d", requests)
 	}
-	for i, v := range inms {
-		if v != "" {
-			t.Fatalf("request %d sent If-None-Match %q but server never issued an ETag", i, v)
+	for i, n := range inmCounts {
+		if n != 0 {
+			t.Fatalf("request %d sent an If-None-Match header (present, count=%d) but server never issued an ETag", i, n)
 		}
+	}
+
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	if n := len(rt.etags.entries); n != 0 {
+		t.Fatalf("an ETag-less endpoint must never be cached, got %d entries: %v", n, rt.etags.order)
 	}
 }
 
@@ -361,5 +374,426 @@ func TestETagCache_BoundedEviction(t *testing.T) {
 	wantETag := `"/d-etag"`
 	if dReqs[1] != wantETag {
 		t.Fatalf("still-cached entry /d must send If-None-Match %q on re-fetch, got %q", wantETag, dReqs[1])
+	}
+}
+
+// TestETagCache_OversizedBodyStreamsWithoutFullBuffering verifies the
+// transport bounds its OWN read at etagCacheMaxBodyBytes+1 bytes instead of
+// buffering an entire oversized response before deciding not to cache it
+// (Issue #486 must-fix): the caller still receives every byte of an
+// oversized ETag'd response, byte-for-byte, the response is never cached,
+// and a second GET to the same URL sends no If-None-Match. This is what lets
+// a caller with its own bounded reader (e.g. CIService.fetchLogContent's
+// io.LimitReader over a multi-hundred-MB CI log archive) actually bound its
+// memory use instead of the transport reading the whole archive first.
+func TestETagCache_OversizedBodyStreamsWithoutFullBuffering(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), etagCacheMaxBodyBytes+1024)
+	var (
+		mu   sync.Mutex
+		inms []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inms = append(inms, r.Header.Get("If-None-Match"))
+		mu.Unlock()
+		w.Header().Set("ETag", `"big-etag"`)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClientWithURL("test-token", srv.URL+"/graphql")
+	ctx := context.Background()
+
+	got, err := c.restGet(ctx, "/repos/o/r/big")
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if len(got) != len(body) || !bytes.Equal(got, body) {
+		t.Fatalf("caller received %d bytes (want %d, byte-for-byte)", len(got), len(body))
+	}
+
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	if n := len(rt.etags.entries); n != 0 {
+		t.Fatalf("an oversized response must never be cached, got %d entries", n)
+	}
+
+	if _, err := c.restGet(ctx, "/repos/o/r/big"); err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(inms) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(inms))
+	}
+	if inms[1] != "" {
+		t.Fatalf("second GET to an oversized, never-cached response must send no If-None-Match, got %q", inms[1])
+	}
+}
+
+// TestETagCache_304ReplayRestoresRepresentationHeaders verifies a 304 replay
+// restores the cached 200's representation headers (Issue #486 must-fix): a
+// header the 304 never echoes (e.g. Link, Content-Type — a 304 is only
+// obliged to echo a handful of headers per RFC 9110 §15.4.5) survives the
+// replay from the cached 200, while a header the 304 DOES carry (Date) wins
+// over the cached value — proving this is an absent-only restore, not a
+// blind overwrite (a blind overwrite would push a stale value over a fresh
+// one, which for X-RateLimit-* would corrupt the rate-limit tracker).
+func TestETagCache_304ReplayRestoresRepresentationHeaders(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		hit bool
+	)
+	const etag = `"scopes-etag"`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Header.Get("If-None-Match") == etag {
+			hit = true
+			w.Header().Set("ETag", etag)
+			w.Header().Set("Date", "Wed, 01 Jan 2026 00:00:00 GMT")
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", `<https://api.github.com/repos/o/r?page=2>; rel="next"`)
+		w.Header().Set("Date", "Tue, 31 Dec 2025 00:00:00 GMT")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClientWithURL("test-token", srv.URL+"/graphql")
+	ctx := context.Background()
+
+	req1, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/repos/o/r/headers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp1, err := c.http.Do(req1)
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	resp1.Body.Close()
+	if got := resp1.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("first fetch Content-Type = %q", got)
+	}
+	if got := resp1.Header.Get("Link"); got == "" {
+		t.Fatal("first fetch missing Link header")
+	}
+	if got := resp1.Header.Get("Date"); got != "Tue, 31 Dec 2025 00:00:00 GMT" {
+		t.Fatalf("first fetch Date = %q", got)
+	}
+
+	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/repos/o/r/headers", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp2, err := c.http.Do(req2)
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	resp2.Body.Close()
+
+	mu.Lock()
+	gotHit := hit
+	mu.Unlock()
+	if !gotHit {
+		t.Fatal("expected a 304 on the second fetch")
+	}
+	if resp2.StatusCode != http.StatusOK {
+		t.Fatalf("replayed status = %d, want 200", resp2.StatusCode)
+	}
+	if got := resp2.Header.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("replayed Content-Type = %q, want it restored from the cached 200", got)
+	}
+	if got := resp2.Header.Get("Link"); got == "" {
+		t.Fatal("replayed response missing Link header restored from the cached 200")
+	}
+	if got := resp2.Header.Get("Date"); got != "Wed, 01 Jan 2026 00:00:00 GMT" {
+		t.Fatalf("replayed Date = %q, want the 304's OWN Date to win over the cached 200's Date", got)
+	}
+}
+
+// TestETagCache_NonGETNeverConditional pins the GET-only guard (Issue #486
+// should-fix): a non-GET request (a REST POST) must never be conditionally
+// cached even when the server returns an ETag on every response — dropping
+// the method guard would let unrelated POST bodies collide on one cache key,
+// since every GraphQL POST in this package targets the identical /graphql
+// URL.
+func TestETagCache_NonGETNeverConditional(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		methods  []string
+		inmCount []int
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		inmCount = append(inmCount, len(r.Header.Values("If-None-Match")))
+		mu.Unlock()
+		w.Header().Set("ETag", `"post-etag"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClientWithURL("test-token", srv.URL+"/graphql")
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		if _, err := c.restPost(ctx, "/repos/o/r/thing", map[string]any{"a": 1}); err != nil {
+			t.Fatalf("post %d: %v", i, err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(methods) != 2 {
+		t.Fatalf("expected 2 POST requests, got %d", len(methods))
+	}
+	for i, m := range methods {
+		if m != http.MethodPost {
+			t.Fatalf("request %d method = %q, want POST", i, m)
+		}
+		if inmCount[i] != 0 {
+			t.Fatalf("request %d sent an If-None-Match header on a POST, count=%d", i, inmCount[i])
+		}
+	}
+
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	if n := len(rt.etags.entries); n != 0 {
+		t.Fatalf("a POST response must never be cached, got %d entries", n)
+	}
+}
+
+// TestETagCache_RedirectTargetHostNeverCached verifies the ETag layer is
+// scoped to the client's own API host (Issue #486 should-fix): a GET that
+// 302-redirects to a different host — mirroring GitHub's Actions-logs ->
+// blob-storage redirect — never sends If-None-Match to that other host and
+// never occupies a cache slot for it, even though the redirected response
+// itself carries an ETag.
+func TestETagCache_RedirectTargetHostNeverCached(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		inms []string
+	)
+	blob := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inms = append(inms, r.Header.Get("If-None-Match"))
+		mu.Unlock()
+		w.Header().Set("ETag", `"blob-etag"`)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("blob-content"))
+	}))
+	t.Cleanup(blob.Close)
+
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, blob.URL+"/download", http.StatusFound)
+	}))
+	t.Cleanup(api.Close)
+
+	c := NewClientWithURL("test-token", api.URL+"/graphql")
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, api.URL+"/repos/o/r/logs", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			t.Fatalf("fetch %d: %v", i, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if string(body) != "blob-content" {
+			t.Fatalf("fetch %d body = %q", i, body)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(inms) != 2 {
+		t.Fatalf("expected 2 requests to the redirect target, got %d", len(inms))
+	}
+	for i, v := range inms {
+		if v != "" {
+			t.Fatalf("redirect-target request %d sent If-None-Match %q — a different host must never be cached", i, v)
+		}
+	}
+
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	if n := len(rt.etags.entries); n != 0 {
+		t.Fatalf("a different-host response must never be cached, got %d entries: %v", n, rt.etags.order)
+	}
+}
+
+// TestETagCache_LRUEvictsLeastRecentlyUsed verifies eviction promotes on
+// both get and set-refresh (Issue #486 should-fix, FIFO -> LRU): re-reading
+// the OLDEST entry before inserting one more must save it from eviction, and
+// the entry that was never re-read (the genuinely least-recently-used one)
+// is evicted instead. This fails under FIFO-by-insertion-order and passes
+// only under LRU.
+func TestETagCache_LRUEvictsLeastRecentlyUsed(t *testing.T) {
+	var mu sync.Mutex
+	inmByPath := map[string][]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inmByPath[r.URL.Path] = append(inmByPath[r.URL.Path], r.Header.Get("If-None-Match"))
+		mu.Unlock()
+		etag := `"` + r.URL.Path + `-etag"`
+		if r.Header.Get("If-None-Match") == etag {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"path":"` + r.URL.Path + `"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClientWithURL("test-token", srv.URL+"/graphql")
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	rt.etags = newETagCache(3)
+
+	ctx := context.Background()
+	// Prime 3 URLs to the limit: insertion order is now [/a, /b, /c].
+	for _, p := range []string{"/a", "/b", "/c"} {
+		if _, err := c.restGet(ctx, p); err != nil {
+			t.Fatalf("prime %s: %v", p, err)
+		}
+	}
+
+	// Re-read the OLDEST entry (/a). Under LRU this promotes it to the
+	// most-recently-used end; under FIFO this has no effect on order.
+	if _, err := c.restGet(ctx, "/a"); err != nil {
+		t.Fatalf("re-read /a: %v", err)
+	}
+
+	// Insert one more distinct URL, forcing an eviction.
+	if _, err := c.restGet(ctx, "/e"); err != nil {
+		t.Fatalf("insert /e: %v", err)
+	}
+
+	// /a was just re-read: it must survive (a repeat GET still carries a
+	// cached If-None-Match — this is the 3rd request to /a).
+	if _, err := c.restGet(ctx, "/a"); err != nil {
+		t.Fatalf("re-fetch /a: %v", err)
+	}
+	mu.Lock()
+	aReqs := append([]string(nil), inmByPath["/a"]...)
+	mu.Unlock()
+	if len(aReqs) != 3 {
+		t.Fatalf("expected 3 requests to /a (prime, re-read, re-fetch), got %d: %v", len(aReqs), aReqs)
+	}
+	if aReqs[2] == "" {
+		t.Fatal("/a must still be cached after being re-read (LRU-promoted) — expected a non-empty If-None-Match on the 3rd request")
+	}
+
+	// /b was never re-read: it is the genuinely least-recently-used entry
+	// and must have been evicted to make room for /e.
+	if _, err := c.restGet(ctx, "/b"); err != nil {
+		t.Fatalf("re-fetch /b: %v", err)
+	}
+	mu.Lock()
+	bReqs := append([]string(nil), inmByPath["/b"]...)
+	mu.Unlock()
+	if len(bReqs) != 2 {
+		t.Fatalf("expected 2 requests to /b (prime, re-fetch), got %d: %v", len(bReqs), bReqs)
+	}
+	if bReqs[1] != "" {
+		t.Fatalf("/b (least-recently-used) must have been evicted, got non-empty If-None-Match %q", bReqs[1])
+	}
+}
+
+// TestETagCache_ByteBudgetEvictsIndependentlyOfEntryCount verifies the cache
+// also evicts under byte pressure, independent of the entry-count cap (Issue
+// #486 should-fix): a small byteLimit forces eviction after 2 entries even
+// though the entry-count cap is a generous 10.
+func TestETagCache_ByteBudgetEvictsIndependentlyOfEntryCount(t *testing.T) {
+	var mu sync.Mutex
+	inmByPath := map[string][]string{}
+	payload := `{"padding":"01234567890123456789012345678901234"}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inmByPath[r.URL.Path] = append(inmByPath[r.URL.Path], r.Header.Get("If-None-Match"))
+		mu.Unlock()
+		etag := `"` + r.URL.Path + `-etag"`
+		if r.Header.Get("If-None-Match") == etag {
+			w.Header().Set("ETag", etag)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(payload))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClientWithURL("test-token", srv.URL+"/graphql")
+	rt, ok := c.http.Transport.(*rateLimitHeaderTransport)
+	if !ok {
+		t.Fatal("expected rateLimitHeaderTransport on the http client")
+	}
+	rt.etags = newETagCache(10)            // entry-count cap is generous...
+	rt.etags.byteLimit = len(payload) + 20 // ...but the byte budget isn't: room for ~1 entry.
+
+	ctx := context.Background()
+	if _, err := c.restGet(ctx, "/x"); err != nil {
+		t.Fatalf("prime /x: %v", err)
+	}
+	if _, err := c.restGet(ctx, "/y"); err != nil {
+		t.Fatalf("prime /y: %v", err)
+	}
+
+	if got := len(rt.etags.entries); got != 1 {
+		t.Fatalf("expected byte budget to bound the cache at 1 entry (well under the 10-entry cap), got %d: %v", got, rt.etags.order)
+	}
+
+	// /y is the most recent insertion and must still be cached. Checked via
+	// a conditional-hit re-fetch (304, no set() call) BEFORE touching /x
+	// below — re-fetching the evicted /x re-inserts it and would itself
+	// evict /y under this tiny byte budget, so order matters here.
+	if _, err := c.restGet(ctx, "/y"); err != nil {
+		t.Fatalf("re-fetch /y: %v", err)
+	}
+	mu.Lock()
+	yReqs := append([]string(nil), inmByPath["/y"]...)
+	mu.Unlock()
+	wantETag := `"/y-etag"`
+	if len(yReqs) != 2 || yReqs[1] != wantETag {
+		t.Fatalf("expected /y still cached (If-None-Match %q on re-fetch), got %v", wantETag, yReqs)
+	}
+
+	// /x was evicted for byte pressure: a re-fetch must not carry
+	// If-None-Match.
+	if _, err := c.restGet(ctx, "/x"); err != nil {
+		t.Fatalf("re-fetch /x: %v", err)
+	}
+	mu.Lock()
+	xReqs := append([]string(nil), inmByPath["/x"]...)
+	mu.Unlock()
+	if len(xReqs) != 2 || xReqs[1] != "" {
+		t.Fatalf("expected /x evicted under byte pressure (no If-None-Match on re-fetch), got %v", xReqs)
 	}
 }

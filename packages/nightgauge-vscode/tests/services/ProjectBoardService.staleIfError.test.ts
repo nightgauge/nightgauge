@@ -142,4 +142,57 @@ describe("ProjectBoardService — stale-if-error counts (#485)", () => {
 
     expect(result).toEqual(SEEDED_COUNTS); // stale cache, never {}
   });
+
+  // #485 should-fix — invalidateStatusCache() is the MOST common
+  // invalidation path (fires on every pipeline status move). Before this
+  // fix it nulled boardCountsCache outright, so a post-invalidation failed
+  // fetch had no stale data left to fall back to — reopening the exact
+  // "zeros" symptom #485 was filed for, just reached via a different path
+  // than the TTL-expiry cases above.
+  it("invalidateStatusCache expires the counts cache without discarding it — a post-invalidation failed fetch still serves stale data", async () => {
+    mockBoardCounts.mockResolvedValueOnce(SEEDED_COUNTS);
+    const seeded = await service.getAggregatedStatusCounts();
+    expect(seeded).toEqual(SEEDED_COUNTS);
+
+    service.invalidateStatusCache("test-org/test-repo", ["ready"]);
+
+    // Quota is exhausted immediately after invalidation — the counts path
+    // must not proceed to board.counts, and the fallback must be the
+    // seeded counts, not {}.
+    const resetAt = Math.floor(Date.now() / 1000) + 600;
+    mockGithubRateLimit.mockResolvedValueOnce({ remaining: 0, limit: 5000, resetAt });
+
+    const result = await service.getAggregatedStatusCounts();
+
+    expect(result).toEqual(SEEDED_COUNTS); // never {}, even right after invalidation
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1); // no live call while exhausted
+  });
+
+  // #485 — pins the spread-copy on both return paths: a caller mutating the
+  // object it received back must never corrupt boardCountsCache for the
+  // NEXT caller within the same TTL window.
+  it("returns a copy of the cached counts on the TTL-hit path — mutating the result must not corrupt boardCountsCache", async () => {
+    // Seed the cache. This call goes through the fetch-success path (a
+    // DIFFERENT return statement from the one under test below), so its
+    // result is not useful for pinning the TTL-hit branch specifically.
+    mockBoardCounts.mockResolvedValueOnce(SEEDED_COUNTS);
+    await service.getAggregatedStatusCounts();
+
+    // This call — still within TTL — is served by the cache-hit branch
+    // (`if (this.boardCountsCache && ... ) return { ...this.boardCountsCache };`).
+    // Under a naive fix that returns `this.boardCountsCache` directly (no
+    // copy), `first` IS the cache object, and mutating it corrupts the
+    // cache for every subsequent reader.
+    const first = await service.getAggregatedStatusCounts();
+    expect(first).toEqual(SEEDED_COUNTS);
+    (first as Record<string, number>).Ready = 999;
+
+    // A THIRD call, still within TTL, hits the exact same cache-hit branch
+    // again. If `first` above was a copy, boardCountsCache is untouched and
+    // this returns Ready: 3. If `first` was the cache object itself, this
+    // observes the mutation and returns Ready: 999.
+    const second = await service.getAggregatedStatusCounts();
+    expect(second.Ready).toBe(3);
+    expect(mockBoardCounts).toHaveBeenCalledTimes(1); // all three calls served from cache/one fetch
+  });
 });

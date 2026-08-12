@@ -180,8 +180,13 @@ export function parseOpenPRList(output: string): OpenPRRecord[] {
  * multiple issues, or from a later tick with unchanged state) return the
  * cached snapshot and make no GitHub call at all.
  *
- * On a failed fetch, the previous snapshot (if any) is kept and returned
- * rather than caching an empty result that would mask real open PRs.
+ * On a failed fetch, or a zero-exit call whose stdout doesn't actually parse
+ * as a PR list, the previous snapshot is served (if any) but is NOT written
+ * back into the cache — the caller receives `null` to signal "unknown, not
+ * fetched", distinguishable from `[]` ("fetched fine, repo genuinely has no
+ * open PRs"). Callers MUST NOT persist a derived mapping (e.g. into a
+ * downstream per-issue cache) when the result is `null` — that would stamp a
+ * transient failure as a fresh, trusted fact for a full TTL window.
  *
  * @param workspaceRoot - Workspace root directory for git operations
  * @param owner - Repository owner
@@ -193,7 +198,7 @@ export async function getOpenPRsForRepo(
   owner: string,
   repo: string,
   now: number = Date.now()
-): Promise<OpenPRRecord[]> {
+): Promise<OpenPRRecord[] | null> {
   const key = repoCacheKey(owner, repo);
   const cached = repoPRListCache.get(key);
   if (cached && now - cached.fetchedAt < PR_MAPPING_CACHE_TTL_MS) {
@@ -209,30 +214,68 @@ export async function getOpenPRsForRepo(
       }
     );
     const prs = parseOpenPRList(stdout);
+    const trimmed = stdout.trim();
+    if (prs.length === 0 && trimmed !== "" && trimmed !== "[]") {
+      // Zero-exit but the stdout didn't actually parse into a PR list (e.g.
+      // gh printed a warning/partial line instead of JSON). This is NOT a
+      // genuine "no open PRs" result — treat it the same as a fetch failure:
+      // serve the last-known snapshot if we have one, else signal unknown.
+      return cached?.prs ?? null;
+    }
     repoPRListCache.set(key, { prs, fetchedAt: now });
     return prs;
   } catch {
-    // Graceful degradation — gh CLI not available, network issues, etc.
-    // Serve the last-known snapshot rather than caching (and thus trusting)
-    // an empty result.
-    return cached?.prs ?? [];
+    // Fetch failed — gh CLI not available, network issue, timeout, etc.
+    // Serve the last-known snapshot if we have one; otherwise signal
+    // "unknown" (null) rather than caching (and thus trusting) an empty
+    // result that would mask real open PRs.
+    return cached?.prs ?? null;
   }
 }
 
 /**
- * Find the PR associated with an issue from an open-PR snapshot, by looking
- * for a `#<issueNumber>` reference (word-boundary — "#48" does not match
- * "#483") in the PR's title or body. Mirrors the pipeline's own PR
- * convention of a `Closes #<N>` body line (see docs/PR_CREATE_STAGE.md),
- * evaluated locally instead of via a per-issue GitHub search query.
+ * Find the PR associated with an issue from an open-PR snapshot.
+ *
+ * Recognizes two forms of issue reference, both word-boundary anchored so
+ * "#2010"/".../issues/2010" never match issue 201 as a substring: the
+ * `#<issueNumber>` shorthand, and a GitHub issue URL
+ * (`.../issues/<issueNumber>`) — the form GitHub's own UI and many bots
+ * insert, which the old per-issue `--search` query used to catch but a bare
+ * `#N` regex does not.
+ *
+ * Resolution is ranked, not first-match, to avoid binding an issue to an
+ * unrelated PR that merely name-drops it (this repo's own PR titles
+ * routinely cross-reference other issues):
+ *   1. A PR with a closing keyword (close/closes/closed, fix/fixes/fixed,
+ *      resolve/resolves/resolved) immediately preceding the reference wins —
+ *      mirrors the pipeline's own `Closes #<N>` convention (see
+ *      docs/PR_CREATE_STAGE.md). An intervening URL prefix is allowed (e.g.
+ *      "Fixes https://github.com/org/repo/issues/201").
+ *   2. If no closing reference exists, fall back to a bare mention — but
+ *      ONLY when exactly one open PR mentions the issue. Two or more bare
+ *      mentions are ambiguous and resolve to `null` (refuse to guess; the
+ *      caller treats `null` as "no PR", which is always the safe default —
+ *      it never mutates anything).
  *
  * @param issueNumber - Issue number to match
  * @param prs - Open-PR snapshot from getOpenPRsForRepo()
- * @returns First matching PR, or null if none reference the issue
+ * @returns The resolved PR, or null if none (or too many, ambiguously) reference the issue
  */
 export function findPRForIssueInList(issueNumber: number, prs: OpenPRRecord[]): PRInfo | null {
-  const pattern = new RegExp(`#${issueNumber}\\b`);
-  const match = prs.find((pr) => pattern.test(pr.title ?? "") || pattern.test(pr.body ?? ""));
+  const linkRef = String.raw`(?:#|/issues/)${issueNumber}\b`;
+  const closing = new RegExp(
+    `\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s*:?\\s+\\S*${linkRef}`,
+    "i"
+  );
+  const bare = new RegExp(linkRef);
+  const text = (pr: OpenPRRecord): string => `${pr.title ?? ""}\n${pr.body ?? ""}`;
+
+  const closers = prs.filter((pr) => closing.test(text(pr)));
+  let match: OpenPRRecord | null = closers[0] ?? null;
+  if (!match) {
+    const mentions = prs.filter((pr) => bare.test(text(pr)));
+    match = mentions.length === 1 ? mentions[0] : null;
+  }
   if (!match) return null;
   return { number: match.number, url: match.url, title: match.title };
 }
@@ -252,9 +295,12 @@ export function invalidateOpenPRsCache(owner: string, repo: string): void {
 }
 
 /**
- * Reset all cached open-PR snapshots. Exported for use in tests only — not
- * part of the public extension API.
+ * Clear every cached open-PR snapshot for every repo. Called both from
+ * `stopAutonomousStallWatchdog()` (so a stop→restart cycle within the TTL
+ * window never acts on a pre-stop repo-wide snapshot — the per-issue
+ * watchdog cache and this repo-level cache must go stale together, not just
+ * on the TTL) and from tests, which want a clean slate between cases.
  */
-export function _resetOpenPRsCacheForTests(): void {
+export function clearOpenPRsCache(): void {
   repoPRListCache.clear();
 }

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -404,10 +405,21 @@ func (c *Client) installHeaderInterceptor() {
 	if _, already := base.(*rateLimitHeaderTransport); already {
 		return
 	}
+	// Scope the ETag layer to this client's own API host (Issue #486
+	// should-fix): captured once here from graphqlURL so it works for GHES
+	// too. A parse failure leaves apiHost empty, which disables caching
+	// entirely (fail closed) rather than caching every host the shared
+	// http.Client happens to talk to — including signed, single-use
+	// redirect targets like the Actions log blob-storage host.
+	var apiHost string
+	if u, err := url.Parse(c.graphqlURL); err == nil {
+		apiHost = u.Host
+	}
 	c.http.Transport = &rateLimitHeaderTransport{
-		base:   base,
-		client: c,
-		etags:  newETagCache(etagCacheMaxEntries),
+		base:    base,
+		client:  c,
+		etags:   newETagCache(etagCacheMaxEntries),
+		apiHost: apiHost,
 	}
 }
 
@@ -425,50 +437,102 @@ const etagCacheMaxEntries = 256
 // small JSON payloads; a response larger than this is simply never cached —
 // the endpoint always pays full request price on every call, which is the
 // documented fallback for responses that don't fit the cache, not an error.
+// The READ is bounded too, not just the cache decision: the transport only
+// ever buffers etagCacheMaxBodyBytes+1 bytes to decide whether a body fits,
+// then hands the caller a stream splicing that buffered prefix back in front
+// of the still-open remainder (see prefixedBody) — an oversized response is
+// never fully read into memory by this layer, so a caller bounding its own
+// read (e.g. CIService.fetchLogContent's io.LimitReader over a multi-hundred
+// MB CI log archive) still gets the memory behavior it asked for.
 const etagCacheMaxBodyBytes = 1 << 20 // 1 MiB
 
-// etagCacheEntry is one cached GET response (ETag + body) keyed by request URL.
+// etagCacheMaxBytes bounds the cache's total retained body bytes across all
+// entries, independent of the entry-count cap (Issue #486 should-fix).
+// Without it, a long-running process (VSCode extension host, `nightgauge
+// serve` daemon) could retain up to etagCacheMaxEntries * etagCacheMaxBodyBytes
+// (256 MiB) even though the typical cached payload is far smaller. Eviction
+// (see etagCache.set) removes least-recently-used entries until both this
+// budget and the entry-count cap are satisfied.
+const etagCacheMaxBytes = 32 << 20 // 32 MiB
+
+// etagCacheEntry is one cached GET response (ETag + body + representation
+// headers) keyed by request URL. header is a deep copy of the 200 response's
+// header set, restored on a later 304 replay (Issue #486 must-fix): a 304 is
+// only obliged to echo a handful of headers (RFC 9110 §15.4.5), so anything
+// else — e.g. X-OAuth-Scopes — would otherwise silently vanish from a
+// replayed response.
 type etagCacheEntry struct {
-	etag string
-	body []byte
+	etag   string
+	body   []byte
+	header http.Header
 }
 
-// etagCache is a small, size-bounded cache mapping a request URL to the last
-// ETag/body pair observed for it (Issue #486), scoped to one
-// rateLimitHeaderTransport (one Client). Eviction is FIFO by insertion order
-// once entryLimit entries are held — simple and sufficient: the pipeline's
-// poll set (a handful of REST endpoints per repo per sweep) is small and
-// stable, so eviction pressure in practice is near zero.
+// etagCache is a small, size- and byte-bounded cache mapping a request URL to
+// the last ETag/body/header set observed for it (Issue #486), scoped to one
+// rateLimitHeaderTransport (one Client). Eviction is LRU: both `get` and
+// `set` (on a refresh of an existing key) promote the entry to the
+// most-recently-used end of order, so a URL that is polled every sweep stays
+// resident while one-shot URLs (a redirect target, a per-branch/per-SHA
+// endpoint) age out first — instead of FIFO-by-first-insertion, which would
+// let a single cold one-shot URL evict a hot, repeatedly-polled entry.
 type etagCache struct {
-	mu      sync.Mutex
-	entries map[string]*etagCacheEntry
-	order   []string // insertion order, oldest first
-	limit   int
+	mu        sync.Mutex
+	entries   map[string]*etagCacheEntry
+	order     []string // least-recently-used first, most-recently-used last
+	limit     int
+	byteLimit int
+	bytes     int // sum of len(entry.body) across all entries
 }
 
 func newETagCache(limit int) *etagCache {
-	return &etagCache{entries: make(map[string]*etagCacheEntry), limit: limit}
+	return &etagCache{entries: make(map[string]*etagCacheEntry), limit: limit, byteLimit: etagCacheMaxBytes}
 }
 
 func (c *etagCache) get(url string) (*etagCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[url]
+	if ok {
+		c.promote(url)
+	}
 	return e, ok
 }
 
-func (c *etagCache) set(url, etag string, body []byte) {
+// promote moves url to the most-recently-used (tail) end of order. Callers
+// must hold c.mu. A linear scan is fine at this cache's bounded (hundreds of
+// entries) size.
+func (c *etagCache) promote(url string) {
+	for i, k := range c.order {
+		if k == url {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			c.order = append(c.order, url)
+			return
+		}
+	}
+}
+
+func (c *etagCache) set(url, etag string, body []byte, header http.Header) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.entries[url]; !exists {
-		if c.limit > 0 && len(c.order) >= c.limit {
-			oldest := c.order[0]
-			c.order = c.order[1:]
-			delete(c.entries, oldest)
-		}
+	if existing, exists := c.entries[url]; exists {
+		c.bytes -= len(existing.body)
+		c.promote(url)
+	} else {
 		c.order = append(c.order, url)
 	}
-	c.entries[url] = &etagCacheEntry{etag: etag, body: body}
+	c.entries[url] = &etagCacheEntry{etag: etag, body: body, header: header}
+	c.bytes += len(body)
+
+	// Evict least-recently-used entries until both the byte budget and the
+	// entry-count cap are satisfied.
+	for len(c.order) > 0 && ((c.byteLimit > 0 && c.bytes > c.byteLimit) || (c.limit > 0 && len(c.order) > c.limit)) {
+		oldest := c.order[0]
+		c.order = c.order[1:]
+		if e, ok := c.entries[oldest]; ok {
+			c.bytes -= len(e.body)
+			delete(c.entries, oldest)
+		}
+	}
 }
 
 // rateLimitHeaderTransport intercepts HTTP responses to extract GitHub's
@@ -481,21 +545,41 @@ func (c *etagCache) set(url, etag string, body []byte) {
 // URL carry If-None-Match from etags, and a 304 response is served from the
 // cached body instead of being surfaced as a (near-always empty) 304 to the
 // caller. Endpoints that never return an ETag are simply never cached — the
-// next GET to that URL pays full price again, silently, no error.
+// next GET to that URL pays full price again, silently, no error. The cache
+// is scoped to apiHost (Issue #486 should-fix): a GET to any other host —
+// e.g. the Actions blob-storage host GitHub 302-redirects log downloads to —
+// skips the ETag layer entirely, so a signed, single-use redirect target
+// never occupies a cache slot or gets an If-None-Match it can't honor.
 type rateLimitHeaderTransport struct {
-	base   http.RoundTripper
-	client *Client
-	etags  *etagCache
+	base    http.RoundTripper
+	client  *Client
+	etags   *etagCache
+	apiHost string
 }
+
+// prefixedBody splices an already-read prefix back in front of the
+// still-open remainder of a response body, so a caller that bounds its own
+// read (e.g. CIService.fetchLogContent's io.LimitReader) receives exactly
+// the bytes it would have without the ETag layer in front of it. The
+// transport never buffers more than etagCacheMaxBodyBytes+1 bytes to make
+// the cache/no-cache decision — everything past that stays unread until (and
+// unless) the caller asks for it.
+type prefixedBody struct {
+	r io.Reader
+	c io.Closer
+}
+
+func (b *prefixedBody) Read(p []byte) (int, error) { return b.r.Read(p) }
+func (b *prefixedBody) Close() error               { return b.c.Close() }
 
 func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Conditional GET: attach If-None-Match when we've cached a prior
 	// response for this exact URL. GET-only — mutating verbs (POST/PATCH)
 	// are never conditionally cached, and GitHub does not issue meaningful
-	// ETags for them here.
+	// ETags for them here. Host-scoped — see the apiHost doc on the struct.
 	var cacheKey string
 	var cached *etagCacheEntry
-	if t.etags != nil && req.Method == http.MethodGet {
+	if t.etags != nil && req.Method == http.MethodGet && t.apiHost != "" && req.URL.Host == t.apiHost {
 		cacheKey = req.URL.String()
 		if e, ok := t.etags.get(cacheKey); ok {
 			cached = e
@@ -514,10 +598,24 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 		case resp.StatusCode == http.StatusNotModified && cached != nil:
 			// The server confirmed our cached copy is still current. Serve
 			// the cached body in place of the (normally empty) 304 body.
-			// The X-RateLimit-* headers on THIS response are GitHub's own
-			// accounting for a conditional hit; they are harvested below
-			// exactly like any other response, so a 304 never receives an
-			// extra local decrement on top of what GitHub itself reports.
+			// Restore the cached 200's representation headers first, then
+			// let every header THIS 304 actually carries win — Date, ETag,
+			// and (critically) X-RateLimit-* must come from the 304, not the
+			// stale cached 200, or the harvest below would feed a stale
+			// `remaining` into the tracker and corrupt the gate. A 304 is
+			// only obliged to echo a handful of headers (RFC 9110 §15.4.5),
+			// so anything else the original 200 carried (e.g. X-OAuth-Scopes)
+			// would otherwise silently vanish from the replayed response.
+			// Framing headers are skipped: the replayed body is the decoded
+			// cached body, not whatever the empty 304 body was framed as.
+			for k, vv := range cached.header {
+				if k == "Content-Length" || k == "Content-Encoding" || k == "Transfer-Encoding" {
+					continue
+				}
+				if len(resp.Header.Values(k)) == 0 {
+					resp.Header[k] = append([]string(nil), vv...)
+				}
+			}
 			if resp.Body != nil {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
@@ -528,18 +626,30 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 			resp.Body = io.NopCloser(bytes.NewReader(cached.body))
 		case resp.StatusCode == http.StatusOK:
 			if etag := resp.Header.Get("ETag"); etag != "" {
-				body, readErr := io.ReadAll(resp.Body)
-				resp.Body.Close()
+				orig := resp.Body
+				head, readErr := io.ReadAll(io.LimitReader(orig, etagCacheMaxBodyBytes+1))
 				if readErr != nil {
+					orig.Close()
 					return nil, readErr
 				}
-				if len(body) <= etagCacheMaxBodyBytes {
+				if len(head) > etagCacheMaxBodyBytes {
+					// Too large to cache: splice the buffered prefix back in
+					// front of the still-open stream so the caller receives
+					// every byte, and never buffer (or read) the remainder.
+					// ContentLength is left exactly as the server reported
+					// it. Nothing is cached — the stale entry (if any) for
+					// this URL is left in place, since the server always
+					// answers 200 here (ETags won't match a body we never
+					// stored), so it's never wrongly served from cache.
+					resp.Body = &prefixedBody{r: io.MultiReader(bytes.NewReader(head), orig), c: orig}
+				} else {
+					orig.Close()
 					// Also replaces any existing (now-stale) cache entry for
 					// this URL — changed upstream data always wins.
-					t.etags.set(cacheKey, etag, body)
+					t.etags.set(cacheKey, etag, head, resp.Header.Clone())
+					resp.Body = io.NopCloser(bytes.NewReader(head))
+					resp.ContentLength = int64(len(head))
 				}
-				resp.Body = io.NopCloser(bytes.NewReader(body))
-				resp.ContentLength = int64(len(body))
 			}
 			// No ETag on the response: this endpoint doesn't support
 			// conditional requests. Nothing to cache — the next GET to the

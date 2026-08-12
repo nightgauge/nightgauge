@@ -29,13 +29,15 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { exec } from "child_process";
+import * as vscode from "vscode";
 import {
   disposeAutonomousOutputChannel,
   resetWatchdogStateForTest,
   _runStallWatchdogTickForTest,
+  _stopWatchdogForTest,
 } from "../../src/commands/autonomousCommands";
 import { IpcClient } from "../../src/services/IpcClient";
-import { _resetOpenPRsCacheForTests } from "../../src/utils/prDetection";
+import { clearOpenPRsCache } from "../../src/utils/prDetection";
 import type { Logger } from "../../src/utils/logger";
 
 // ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ describe("stall watchdog PR↔issue mapping cache (#483)", () => {
     vi.setSystemTime(new Date("2026-08-11T12:00:00.000Z"));
     disposeAutonomousOutputChannel();
     resetWatchdogStateForTest();
-    _resetOpenPRsCacheForTests();
+    clearOpenPRsCache();
 
     mockLogger = createMockLogger();
 
@@ -205,7 +207,7 @@ describe("stall watchdog PR↔issue mapping cache (#483)", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     resetWatchdogStateForTest();
-    _resetOpenPRsCacheForTests();
+    clearOpenPRsCache();
   });
 
   /** Count only the `gh pr list` invocations among all `exec` calls. */
@@ -253,6 +255,278 @@ describe("stall watchdog PR↔issue mapping cache (#483)", () => {
 
     // 6 minutes later — past PR_MAPPING_CACHE_TTL_MS (5 min).
     vi.setSystemTime(new Date("2026-08-11T12:06:00.000Z"));
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    expect(prListShellCalls()).toHaveLength(2);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(4);
+  });
+
+  // Additional pin (review-round fixup): exact `<` vs `<=` behavior at the
+  // TTL boundary itself, not past it. A `<=` mutant would treat this tick as
+  // still-fresh and make zero further calls.
+  it("treats the cache as expired exactly AT the TTL boundary (not just past it)", async () => {
+    await _runStallWatchdogTickForTest(mockLogger);
+    expect(prListShellCalls()).toHaveLength(1);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+
+    // Exactly PR_MAPPING_CACHE_TTL_MS (5 min) later — the boundary itself.
+    vi.setSystemTime(new Date("2026-08-11T12:05:00.000Z"));
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    expect(prListShellCalls()).toHaveLength(2);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(4);
+  });
+
+  // #483 must-fix — a failed gh pr list must never be negative-cached. Before
+  // this fix, tick 1's failure with no prior snapshot got mapped to
+  // `{ prInfo: null, pr: null }` and cached for the full TTL, blinding the
+  // watchdog to a real stall for up to 5 minutes after the failure cleared.
+  it("a failed gh pr list is not negative-cached — tick 2 retries instead of serving a poisoned 'no PR' result", async () => {
+    // Tick 1: BOTH issues' getOpenPRsForRepo() calls must fail. A single
+    // failure only fails the FIRST issue's attempt — since a failed fetch
+    // deliberately does NOT populate the repo-level cache (that's the fix
+    // under test), the second issue's cache lookup is an independent miss
+    // and retries too, so two `gh pr list` shell-outs happen this tick and
+    // both must fail to exercise "the whole tick's fetch failed".
+    const failOnce = () =>
+      (exec as any).mockImplementationOnce((_cmd: string, optsOrCb: unknown, cb?: unknown) => {
+        const callback = (typeof optsOrCb === "function" ? optsOrCb : cb) as (
+          err: unknown,
+          result: { stdout: string; stderr: string }
+        ) => void;
+        callback(new Error("gh: command timed out"), { stdout: "", stderr: "" });
+      });
+    failOnce();
+    failOnce();
+
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    expect(prListShellCalls()).toHaveLength(2);
+    // Both issues bailed on the null result WITHOUT calling prView or
+    // caching a "no PR" mapping.
+    expect(mockIpc.prView).toHaveBeenCalledTimes(0);
+
+    // Tick 2 — 2 minutes later, well inside the TTL that would have kept a
+    // poisoned cache entry alive under the pre-fix behavior. The default
+    // mock implementation (successful) is used since tick 1 consumed both
+    // queued `mockImplementationOnce` failures. Only ONE more shell-out is
+    // needed this tick: the first issue's fetch populates the repo-level
+    // cache, so the second issue's lookup is served from it within the
+    // same tick.
+    vi.setSystemTime(new Date("2026-08-11T12:02:00.000Z"));
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    // A fresh gh pr list call AND a prView per issue — proving tick 1's
+    // failure left no cached "no PR" entries behind for either issue.
+    expect(prListShellCalls()).toHaveLength(3);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #483 should-fix coverage — the stall/alert/invalidation branch and the
+// watchdogPRCache prune loop had zero test coverage: the shared fixture
+// above deliberately pins prView to checkStatus "PENDING" so
+// detectAutonomousStall never returns stalled and autonomousCommands.ts's
+// alert/invalidation code (lines ~797-849) never executes. These describe
+// blocks drive that branch for real. Kills mutants T10 (delete the
+// invalidation calls) and T11 (delete the prune loop).
+// ---------------------------------------------------------------------------
+
+describe("stall detection -> invalidation (Issue #483 should-fix, kills mutant T10)", () => {
+  let mockLogger: Logger;
+  let mockIpc: any;
+
+  /** One in-progress issue, updated long enough ago to exceed the (env-forced) 5-minute stall threshold. */
+  const staleBoardItem = {
+    id: "i1",
+    number: 201,
+    title: "Issue 201",
+    state: "OPEN",
+    status: "In Progress",
+    priority: "",
+    size: "",
+    labels: [],
+    assignees: [],
+    repo: "nightgauge",
+    url: "https://github.com/nightgauge/nightgauge/issues/201",
+    updatedAt: new Date("2026-08-11T09:00:00.000Z").toISOString(), // 3h before fake "now"
+    isPR: false,
+    isEpic: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00.000Z"));
+    disposeAutonomousOutputChannel();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+
+    // Force autoRedispatchStalled=true and a low threshold so the single
+    // stale board item above trips detectAutonomousStall deterministically,
+    // without depending on config.yaml contents.
+    process.env.NIGHTGAUGE_AUTONOMOUS_STALL_ESCALATION_ENABLED = "true";
+    process.env.NIGHTGAUGE_AUTONOMOUS_STALL_DETECTION_MINUTES = "5";
+    process.env.NIGHTGAUGE_AUTONOMOUS_AUTO_REDISPATCH_STALLED = "true";
+
+    mockLogger = createMockLogger();
+    mockIpc = {
+      configGetProjectConfig: vi.fn(async () => ({ projectNumber: 1, ownerType: undefined })),
+      boardList: vi.fn(async () => [staleBoardItem]),
+      prView: vi.fn(async () => ({
+        state: "OPEN",
+        checkStatus: "SUCCESS",
+        mergeable: "MERGEABLE",
+      })),
+      autonomousStatus: vi.fn(async () => ({ status: "stopped" })),
+    };
+    (IpcClient.getInstance as any).mockReturnValue(mockIpc);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+    delete process.env.NIGHTGAUGE_AUTONOMOUS_STALL_ESCALATION_ENABLED;
+    delete process.env.NIGHTGAUGE_AUTONOMOUS_STALL_DETECTION_MINUTES;
+    delete process.env.NIGHTGAUGE_AUTONOMOUS_AUTO_REDISPATCH_STALLED;
+  });
+
+  function prListShellCalls(): unknown[][] {
+    return (exec as any).mock.calls.filter((c: unknown[]) => String(c[0]).startsWith("gh pr list"));
+  }
+
+  it("auto-redispatches a stalled issue, then re-fetches on the NEXT tick despite being inside the TTL", async () => {
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    // Confirms the stall/alert/rerun branch actually executed.
+    expect(vscode.window.createTerminal).toHaveBeenCalledTimes(1);
+    expect(prListShellCalls()).toHaveLength(1);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(1);
+
+    // Tick 2 — 2 minutes later, well inside PR_MAPPING_CACHE_TTL_MS (5 min).
+    // Without invalidateOpenPRsCache()/watchdogPRCache.delete() on the
+    // redispatch path (mutant T10), this tick would serve the cached
+    // (now-stale) mapping and make ZERO further calls.
+    vi.setSystemTime(new Date("2026-08-11T12:02:00.000Z"));
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    expect(prListShellCalls()).toHaveLength(2);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("watchdogPRCache prune loop (Issue #483 should-fix, kills mutant T11)", () => {
+  let mockLogger: Logger;
+  let mockIpc: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00.000Z"));
+    disposeAutonomousOutputChannel();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+
+    mockLogger = createMockLogger();
+    mockIpc = {
+      configGetProjectConfig: vi.fn(async () => ({ projectNumber: 1, ownerType: undefined })),
+      boardList: vi.fn(async () => boardItems),
+      prView: vi.fn(async () => ({
+        state: "OPEN",
+        checkStatus: "PENDING",
+        mergeable: "UNKNOWN",
+      })),
+      autonomousStatus: vi.fn(async () => ({ status: "stopped" })),
+    };
+    (IpcClient.getInstance as any).mockReturnValue(mockIpc);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+  });
+
+  it("prunes entries for issues no longer seen In Progress, so a later reappearance costs a fresh prView", async () => {
+    // Tick 1: both issues 201 + 202 in progress.
+    await _runStallWatchdogTickForTest(mockLogger);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+
+    // Tick 2 — 1 minute later, inside the TTL — boardList now reports ONLY
+    // issue 201 (202 left "In Progress", e.g. merged/closed elsewhere).
+    vi.setSystemTime(new Date("2026-08-11T12:01:00.000Z"));
+    mockIpc.boardList = vi.fn(async () => [boardItems[0]]);
+    await _runStallWatchdogTickForTest(mockLogger);
+    // 201 still cached (inside TTL) — zero new prView calls this tick; 202's
+    // entry is pruned at the end of this tick since it wasn't seen.
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+
+    // Tick 3 — 2 minutes later still (well inside the 5-min TTL from tick
+    // 1's original fetch) — 202 reappears.
+    vi.setSystemTime(new Date("2026-08-11T12:03:00.000Z"));
+    mockIpc.boardList = vi.fn(async () => boardItems);
+    await _runStallWatchdogTickForTest(mockLogger);
+
+    // 202's entry was pruned on tick 2, so despite still being inside the
+    // TTL window since it was ORIGINALLY cached, it costs a fresh prView.
+    // Without the prune loop (mutant T11), this stays at 2 — proving the
+    // loop actually ran.
+    expect(mockIpc.prView).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("stop -> restart cache clearing (Issue #483 should-fix)", () => {
+  let mockLogger: Logger;
+  let mockIpc: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00.000Z"));
+    disposeAutonomousOutputChannel();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+
+    mockLogger = createMockLogger();
+    mockIpc = {
+      configGetProjectConfig: vi.fn(async () => ({ projectNumber: 1, ownerType: undefined })),
+      boardList: vi.fn(async () => boardItems),
+      prView: vi.fn(async () => ({
+        state: "OPEN",
+        checkStatus: "PENDING",
+        mergeable: "UNKNOWN",
+      })),
+      autonomousStatus: vi.fn(async () => ({ status: "stopped" })),
+    };
+    (IpcClient.getInstance as any).mockReturnValue(mockIpc);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    resetWatchdogStateForTest();
+    clearOpenPRsCache();
+  });
+
+  function prListShellCalls(): unknown[][] {
+    return (exec as any).mock.calls.filter((c: unknown[]) => String(c[0]).startsWith("gh pr list"));
+  }
+
+  it("clears the repo-level open-PR snapshot on stop, so a restart within the TTL still issues a fresh gh pr list", async () => {
+    await _runStallWatchdogTickForTest(mockLogger);
+    expect(prListShellCalls()).toHaveLength(1);
+    expect(mockIpc.prView).toHaveBeenCalledTimes(2);
+
+    _stopWatchdogForTest();
+
+    // Still well inside PR_MAPPING_CACHE_TTL_MS (5 min) — the only thing
+    // that should force a refetch here is the stop-time cache clear, not
+    // TTL expiry.
+    vi.setSystemTime(new Date("2026-08-11T12:01:00.000Z"));
     await _runStallWatchdogTickForTest(mockLogger);
 
     expect(prListShellCalls()).toHaveLength(2);
