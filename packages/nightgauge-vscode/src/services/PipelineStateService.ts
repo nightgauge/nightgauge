@@ -190,32 +190,6 @@ export type ExtendedStageState = {
   };
   /** Performance mode active at this stage's start (Issue #3215). */
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
-  /**
-   * Adapter that executed this stage (Issue #3224).
-   *
-   * Populated by the per-stage adapter resolver (Issue #3221). Until that
-   * lands, the field is left undefined and the history writer falls back to
-   * the run-level default adapter passed via `BuildRunRecordOptions`.
-   */
-  adapter?: import("../config/schema").ExecutionAdapter;
-  /**
-   * Source step that produced the resolved adapter (Issue #3223).
-   *
-   * Mirrors `model_selection.source` so analytics can distinguish per-stage
-   * env / stage-config / fallback / global routing. Populated by
-   * `HeadlessOrchestrator.onStageComplete` from `result.adapterDecision.source`
-   * when the SkillRunner reports it. Absent on stages run before #3223.
-   */
-  adapter_source?: import("../utils/resolvers/adapterResolver").AdapterSource;
-  /**
-   * Adapters tried at stage start when fallback walked (Issue #3231).
-   *
-   * Populated by `setStageAdapter` from `AdapterDecision.adapterFallbackChainUsed`
-   * when the walker attempted at least one fallback candidate. Length 1 is
-   * never persisted (primary-success is implicit on `adapter`). The history
-   * writer mirrors this onto `HistoryStageTokenUsageSchema.adapter_fallback_chain_used`.
-   */
-  adapter_fallback_chain_used?: Array<import("../config/schema").ExecutionAdapter>;
   auto_retry_count?: number;
   is_retrying?: boolean;
   next_retry_at?: string;
@@ -1807,27 +1781,6 @@ export class PipelineStateService implements vscode.Disposable {
   // outcome writer back here.
   async setLabels(_labels: string[]): Promise<void> {}
   async setStageModelSelection(_stage: string, _selection: ModelStageSelection): Promise<void> {}
-  async setStageAdapter(
-    stage: string,
-    decision: import("../utils/resolvers/adapterResolver").AdapterDecision
-  ): Promise<void> {
-    if (this._lastState?.stages[stage]) {
-      this._lastState.stages[stage].adapter = decision.adapter as
-        import("../config/schema").ExecutionAdapter | undefined;
-      this._lastState.stages[stage].adapter_source = decision.source;
-      // Issue #3231 — persist the fallback audit trail when the walker
-      // attempted at least one fallback candidate (length ≥ 2). The
-      // length-1 case is the common primary-success path; omitting keeps
-      // state.json terse and preserves pre-#3231 record shapes.
-      if (decision.adapterFallbackChainUsed && decision.adapterFallbackChainUsed.length >= 2) {
-        this._lastState.stages[stage].adapter_fallback_chain_used =
-          decision.adapterFallbackChainUsed as Array<import("../config/schema").ExecutionAdapter>;
-      } else {
-        delete this._lastState.stages[stage].adapter_fallback_chain_used;
-      }
-      this._onStateChanged.fire(this._lastState);
-    }
-  }
   recordToolCall(
     _stageOrRecord: string | ToolCallRecordedEvent,
     _toolName?: string,

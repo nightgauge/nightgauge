@@ -11,22 +11,6 @@
 import { z } from "zod";
 
 /**
- * Local copy of the adapter enum, inlined to avoid a circular import
- * (`config/schema.ts` imports `PipelineStageSchema` from this file). MUST
- * stay in sync with `ExecutionAdapterSchema` in `../config/schema.ts` and
- * `VALID_ADAPTERS` in `../utils/resolvers/modelResolver.ts`.
- */
-const StageAdapterSchema = z.enum([
-  "claude",
-  "codex",
-  "gemini",
-  "gemini-sdk",
-  "lm-studio",
-  "ollama",
-  "copilot",
-]);
-
-/**
  * Pipeline stage names
  */
 export const PipelineStageSchema = z.enum([
@@ -217,31 +201,6 @@ export const StageStateSchema = z.object({
   // `pipeline.notifyStageTransition` and lands on the Go runtime snapshot
   // (`RuntimeState.SetStageChild`), where the orphan ladder probes it —
   // internal/ipc/pipeline_orphan_reconcile.go, ADR-017 §7.2 arm 3.
-  /**
-   * Adapter that ran this stage (Issue #3221, formalised on schema in #3231).
-   *
-   * Augmented at runtime today by `PipelineStateService.setStageAdapter` and
-   * persisted on `state.json`. Declared here so persisted-state reads pass
-   * Zod validation without a custom schema repair pass.
-   */
-  adapter: StageAdapterSchema.optional(),
-  /**
-   * Source step that produced the resolved adapter (Issue #3223, formalised
-   * on schema in #3231). Mirrors `model_selection.source` for adapter
-   * routing attribution.
-   */
-  adapter_source: z
-    .enum(["env", "stage-config", "global-config", "auto-router", "fallback", "default"])
-    .optional(),
-  /**
-   * Adapters tried at stage start when fallback walked (Issue #3231).
-   *
-   * Length 1 (or absent) — no fallback was needed. Length ≥ 2 — primary
-   * failed prereq, candidates were attempted in order. Last entry equals
-   * `adapter` on success; on full-chain failure this lists every candidate
-   * tried (the `[stage:no-adapter-available]` envelope's `adapters_tried`).
-   */
-  adapter_fallback_chain_used: z.array(StageAdapterSchema).optional(),
 });
 export type StageState = z.infer<typeof StageStateSchema>;
 

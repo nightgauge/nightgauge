@@ -163,27 +163,16 @@ import {
 } from "../utils/budgetIntelligence";
 import { ExecutionHistoryReader } from "../utils/executionHistoryReader";
 import { analyzeChange } from "../utils/changeAnalyzer";
-import type { StallEvent } from "../schemas/stallEvents";
-import type { ToolCallRecord } from "../schemas/executionHistory";
 import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 import { PostPipelineAnalyzer, type PostPipelineAnalysisResult } from "./PostPipelineAnalyzer";
 import { HealthActionService } from "./HealthActionService";
 import { AutoRetroService } from "./AutoRetroService";
 import { checkPipelineAlerts } from "../utils/pipelineAlertChecker";
-import { sanitizeToolCallArgs } from "../utils/toolCallSanitizer";
 import {
   checkCostCapTightness,
   getCostCapWarningMultiplier,
   getStageCostWarnMultiplier,
 } from "../utils/resolvers/monitoringResolver";
-
-/**
- * Defensive cap on per-stage stall event retention. A stuck stage that
- * re-enters stall detection across retries/backtracks could otherwise
- * accumulate unbounded events — we only need a representative tail for
- * the history record.
- */
-const MAX_STALL_EVENTS_PER_STAGE = 50;
 
 /**
  * First-output watchdog (#252): a stage that produces NO session output at all
@@ -231,13 +220,6 @@ function promiseWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: st
   });
 }
 
-/**
- * Orphan threshold for `pendingToolCalls` entries — tool_use blocks that
- * never received a matching tool_result. Anything older than this at the
- * end of a stage is swept out of the map so it doesn't leak into the next
- * stage.
- */
-const PENDING_TOOL_CALL_MAX_AGE_MS = 15 * 60 * 1000; // 15 minutes
 import {
   PhaseTimeoutManager,
   DEFAULT_PHASE_TIMEOUT_CONFIG,
@@ -763,8 +745,8 @@ export function reconcileBookkeepingFromDiskState(
     s != null && (s.status === "complete" || s.status === "skipped" || s.status === "deferred");
 
   // Only reconcile when state.json reports every canonical stage terminal —
-  // matches ExecutionHistoryWriter.buildRunRecord's outcome="complete"
-  // condition (defense-in-depth, see #2994). If even one stage is still
+  // matches the terminal-stage invariant used by the authoritative history
+  // writer (defense-in-depth, see #2994). If even one stage is still
   // running/pending/failed on disk, fall through with no changes so the
   // existing failure/pause/abort handling stays authoritative.
   const allTerminalOnDisk = stageOrder.every((stage) => isTerminal(stagesOnDisk[stage]));
@@ -970,68 +952,18 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   /** Whether the last pipeline run's cost exceeded the anomaly threshold (Issue #1335) */
   private _lastCostAnomalyExceeded = false;
 
-  /** Accumulated tool call records for JSONL persistence (Issue #1004) */
-  private accumulatedToolCalls: ToolCallRecord[] = [];
-
-  /**
-   * Zod schema validation errors captured per stage during the current run.
-   * Populated when a context file fails validation; passed to the execution
-   * history writer so SkillAmendmentDetector can surface recurring patterns.
-   */
-  private stageValidationErrors = new Map<
-    string,
-    Array<{
-      path: string;
-      code: string;
-      message: string;
-      received?: string;
-      expected?: string[];
-    }>
-  >();
-
-  /**
-   * Tracks context schema repair attempts per stage during the current run.
-   * Used for execution history recording and to prevent duplicate repairs.
-   * @see Issue #2552 - Pipeline context schema self-correction
-   */
-  private stageRepairAttempts = new Map<
-    string,
-    { attempted: boolean; succeeded: boolean; attempts_count: number }
-  >();
-
-  /**
-   * Stall events accumulated per stage during the current run (Issue #2652).
-   * Populated from SkillRunResult.stallEvents in the onComplete callback;
-   * passed to ExecutionHistoryWriter.buildRunRecord() at pipeline-finish.
-   */
-  private stageStallEvents = new Map<string, StallEvent[]>();
-
   /**
    * Execution-path decision per stage for the current run (Issue #297). The
    * deterministic-first pr-create/pr-merge hooks record whether the stage was
    * completed deterministically (`path: "deterministic"`) or fell through to
    * the LLM skill (`path: "llm"`, with the machine-readable `puntReason`).
-   * Passed to ExecutionHistoryWriter.buildRunRecord() so `execution_path` +
-   * `punt_reason` land on the history stage record — the TS-path counterpart of
-   * Go's RecordExecutionPath / RecordStagePuntReason. Without this the legacy
-   * HeadlessOrchestrator path recorded NEITHER field (the schema allowed
-   * execution_path but the writer never populated it), so every worktree-mode
-   * dogfood run's pr-stage decision was unobservable.
+   * Passed through `pipeline.notifyComplete` so Go's authoritative history
+   * writer can persist `execution_path` + `punt_reason` on each stage record.
    */
   private stageExecutionPaths = new Map<
     string,
     { path: "deterministic" | "llm"; puntReason?: string }
   >();
-
-  /**
-   * True when the current runPipeline call is a resume of a previously-failed
-   * pipeline run. Set at the start of runPipeline, read in runBookendStage
-   * (pipeline-finish) to tag the execution history record (Issue #1261).
-   */
-  private currentRunIsRecovery = false;
-
-  /** Pending tool calls awaiting result for duration/result backfill (Issue #1031) */
-  private pendingToolCalls: Map<string, { index: number; startTime: number }> = new Map();
 
   /** Tracks whether pr-create validation retry has been attempted per issue (Issue #1139) */
   private prCreateRetryAttempted: Set<number> = new Set();
@@ -2032,9 +1964,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   /**
    * Validate that a stage wrote its expected output context file.
    *
-   * Delegates to ContextAssembler.validateStageContextOutput() and merges
-   * validation error details into this.stageValidationErrors and
-   * this.stageRepairAttempts for execution history recording.
+   * Delegates to ContextAssembler.validateStageContextOutput().
    *
    * @returns null if validation passed or not applicable; Error if validation failed
    * @see Issue #637 - Context file handoff validation
@@ -2054,23 +1984,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       issueNumber,
       repairConfig
     );
-
-    // Merge validation errors into HO's map for SkillAmendmentDetector
-    if (result.validationErrors && result.validationErrors.length > 0) {
-      this.stageValidationErrors.set(stage, [
-        ...(this.stageValidationErrors.get(stage) ?? []),
-        ...result.validationErrors,
-      ]);
-    }
-    if (result.repairAttempt?.succeeded) {
-      // Clear errors when repair succeeded
-      this.stageValidationErrors.delete(stage);
-    }
-
-    // Merge repair attempt into HO's map
-    if (result.repairAttempt) {
-      this.stageRepairAttempts.set(stage, result.repairAttempt);
-    }
 
     return result.error;
   }
@@ -4702,19 +4615,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         const issues = result.error.issues
           .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
           .join("\n");
-
-        // Capture errors against the stage that WROTE this file (prereq.stage)
-        const captured = result.error.issues.map((i) => ({
-          path: i.path.join("."),
-          code: i.code,
-          message: i.message,
-          received: "received" in i ? String((i as { received: unknown }).received) : undefined,
-          expected: "options" in i ? (i as { options: unknown[] }).options.map(String) : undefined,
-        }));
-        this.stageValidationErrors.set(prereq.stage, [
-          ...(this.stageValidationErrors.get(prereq.stage) ?? []),
-          ...captured,
-        ]);
 
         // Schema mismatches are warn-only — the file exists and is valid JSON.
         // LLM agents produce field-name variations that don't affect the next
@@ -8644,10 +8544,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.abortController = new AbortController();
     this.completedStageSet.clear(); // Reset duplicate-prevention tracker (#698)
     this.cachedIssueMetadata = null; // Clear stale metadata from previous run (#732)
-    this.accumulatedToolCalls = []; // Reset tool call accumulator (#1004)
-    this.pendingToolCalls.clear(); // Reset pending tool call tracker (#1031)
-    this.stageValidationErrors.clear(); // Reset skill amendment error accumulator
-    this.stageRepairAttempts.clear(); // Reset context repair tracker (#2552)
     this.stageExecutionPaths.clear(); // Reset execution-path decision tracker (#297)
 
     // Sync contextAssembler per-run state (Issue #2770 — Part 3)
@@ -8656,7 +8552,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.contextAssembler.setRepoOverride(this.repoOverride);
     this.contextAssembler.setRoutingConfig(this.config.routing ?? {});
     this.contextAssembler.setForceFullPipeline(this.config.forceFullPipeline);
-    this.stageStallEvents.clear(); // Reset stall event accumulator (#2652)
     this.backtrackCount = 0; // Reset backtrack engine state (#1342)
     this.traversedEdges.clear(); // Reset oscillation guard (#1342)
     this.stageEscalationCounts.clear(); // Reset escalation engine (#1343)
@@ -8709,23 +8604,19 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // process.env so all descendant subprocesses inherit it.
     await this.ensureGitHubTokenInProcessEnv(this.pinnedWorkspaceRoot);
 
-    // Detect if this call is a resume of a previously-failed run (Issue #1261).
-    // A resume is identified by having at least one already-complete stage in
-    // state before any new stages execute. This flag is stored on the instance
-    // so runBookendStage (pipeline-finish) can read it when writing the history
-    // record. Recovery-run costs are excluded from the Cost Trend component.
-    this.currentRunIsRecovery = false;
+    // Detect whether state belongs to a resumed run before restoring persisted
+    // backtrack/escalation counters (Issues #1261, #1342, #1343).
     if (this.stateService) {
       const existingState = await this.stateService.getState();
       if (existingState?.stages) {
-        this.currentRunIsRecovery = Object.values(existingState.stages).some(
+        const isRecovery = Object.values(existingState.stages).some(
           (s) => s?.status === "complete" || s?.status === "skipped"
         );
 
         // Restore backtrack/escalation state from state.json on resume so
         // oscillation detection and escalation limits survive across restarts.
         // @see Issue #1342, #1343
-        if (this.currentRunIsRecovery) {
+        if (isRecovery) {
           this.backtrackCount = existingState.backtrack_count ?? 0;
           // Reconstruct traversed edges from backtrack history
           for (const bt of existingState.backtracks ?? []) {
@@ -11535,7 +11426,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     //   - In-memory bookkeeping disagrees with disk state
     //   - State.json shows every STAGE_ORDER entry as terminal (complete |
     //     skipped | deferred), which is the same condition
-    //     ExecutionHistoryWriter.buildRunRecord uses to classify outcome as
+    //     the authoritative history writer uses to classify outcome as
     //     "complete" (defense-in-depth, see #2994)
     //
     // It NEVER overrides a real failure — a non-undefined `failedStage` skips
@@ -11833,9 +11724,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // authoritative writer for the extension/HeadlessOrchestrator path, for
         // both success and failure. The legacy TS bookend write that lived here
         // was deleted (#313): it raced that writer, wrote to a different repo
-        // root, and — because buildRunRecord derived outcome from `state.stages`
-        // that had already been cleared at pipeline-finish — stamped a bogus
-        // outcome="cancelled" record next to the authoritative "complete" one.
+        // root, and — because the deleted TS builder derived outcome from
+        // `state.stages` that had already been cleared at pipeline-finish —
+        // stamped a bogus outcome="cancelled" record next to the authoritative
+        // "complete" one.
         // This block now only fans out telemetry + alerting, which are distinct
         // sinks and do not touch the run-record JSONL.
         const state = await this.stateService?.getState();
@@ -13595,7 +13487,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                 this.logger.warn("Failed to notify stage progress", { stage, err });
               });
           },
-          onToolCall: (toolName, toolInput, toolUseId) => {
+          onToolCall: (toolName, toolInput) => {
             // Bridge tool call events to PipelineCallbacks (Issue #639)
             // This routes tool_use blocks from stream-json → PipelineCallbacks.onToolCall
             // → pickupIssue.ts → PipelineStateService.recordToolCall → Dashboard
@@ -13614,40 +13506,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               target,
               args: input as Record<string, unknown> | undefined,
             });
-
-            // Accumulate tool call for JSONL persistence (Issue #1004)
-            const callIndex = this.accumulatedToolCalls.length;
-            this.accumulatedToolCalls.push({
-              tool: toolName,
-              target: target || undefined,
-              stage,
-              timestamp: new Date().toISOString(),
-              args: sanitizeToolCallArgs(input),
-              caller: "direct" as const,
-            });
-
-            // Track pending tool call for duration/result backfill (Issue #1031)
-            if (toolUseId) {
-              this.pendingToolCalls.set(toolUseId, {
-                index: callIndex,
-                startTime: Date.now(),
-              });
-            }
-          },
-          onToolResult: (toolUseId, result, isError) => {
-            // Backfill duration_ms, result, and error on the matching tool call (Issue #1031)
-            const pending = this.pendingToolCalls.get(toolUseId);
-            if (pending) {
-              const record = this.accumulatedToolCalls[pending.index];
-              if (record) {
-                record.duration_ms = Date.now() - pending.startTime;
-                record.result = result.length > 200 ? result.substring(0, 200) : result;
-                if (isError) {
-                  record.error = record.result;
-                }
-              }
-              this.pendingToolCalls.delete(toolUseId);
-            }
           },
           onStallWarningClear: () => {
             this.eventDispatcher.onStallWarningClear(stage);
@@ -13702,32 +13560,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             exitTelemetry.stderrTail = result.stderrTail;
             if (result.tokenUsage) {
               exitTelemetry.tokenUsage = result.tokenUsage;
-            }
-
-            // Collect stall events from this stage for history recording (Issue #2652).
-            // Cap the per-stage array — a pathologically stuck stage can emit
-            // stall events unboundedly across retries/backtracks, and we only
-            // need a representative sample in the history record.
-            if (result.stallEvents && result.stallEvents.length > 0) {
-              const existing = this.stageStallEvents.get(stage) ?? [];
-              const combined = [...existing, ...result.stallEvents];
-              const capped =
-                combined.length > MAX_STALL_EVENTS_PER_STAGE
-                  ? combined.slice(-MAX_STALL_EVENTS_PER_STAGE)
-                  : combined;
-              this.stageStallEvents.set(stage, capped);
-            }
-
-            // Sweep orphaned pendingToolCalls — entries for tool_use blocks
-            // that never got a matching tool_result (Claude crash mid-call,
-            // process SIGKILLed, etc). Each entry holds a closure into the
-            // accumulatedToolCalls array, so leaking them pins records
-            // indefinitely.
-            const sweepCutoff = Date.now() - PENDING_TOOL_CALL_MAX_AGE_MS;
-            for (const [toolUseId, pending] of this.pendingToolCalls) {
-              if (pending.startTime < sweepCutoff) {
-                this.pendingToolCalls.delete(toolUseId);
-              }
             }
 
             // Clean up phase timeout timers and subscriptions (Issue #1187)
@@ -14194,13 +14026,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
                       mode: result.modelDecision.mode,
                       effort: result.modelDecision.effort,
                     });
-                  }
-                  // Persist per-stage adapter + source (Issue #3223). Mirrors
-                  // the model-selection persistence above; the history writer
-                  // pulls these into `HistoryStageTokenUsageSchema.adapter` and
-                  // `.adapter_source`.
-                  if (result.adapterDecision) {
-                    await this.stateService.setStageAdapter(stage, result.adapterDecision);
                   }
                   // Persist escalated_from for escalation history (Issue #1343)
                   // Note: setStageModelSelection does not accept escalated_from yet;

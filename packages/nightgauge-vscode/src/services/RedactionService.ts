@@ -10,21 +10,11 @@
  * hard-guarantee unit test and is stripped at runtime as
  * defense-in-depth.
  *
- * Semantics differ intentionally from the in-process
- * `utils/toolCallSanitizer.ts`:
- *
- * | Surface         | Sanitizer                 | Match style         | Action on match                  |
- * | --------------- | ------------------------- | ------------------- | -------------------------------- |
- * | In-process      | `toolCallSanitizer`       | substring (token in name) | replace value with `[REDACTED]` |
- * | Network upload  | `RedactionService` (this) | anchored (canonical names only) | drop the field entirely |
- *
- * The drop-field semantics (vs redact-value) is the stricter rule
- * appropriate for the network surface — if the field is present in the
- * upload, it is not a known sensitive name. See ADR-001 in
+ * The drop-field semantics ensure that if a sensitive field is present in an
+ * upload, it is not merely masked but removed. See ADR-001 in
  * `.nightgauge/knowledge/features/3326-build-pii-redaction-layer-for-telemetry-uploads/decisions.md`.
  *
  * @see Issue #3326 - Build PII redaction layer for telemetry uploads
- * @see utils/toolCallSanitizer.ts — sister sanitizer for the in-process retention surface
  */
 
 import type { AnalyticsEvent } from "../platform/types.js";
@@ -39,14 +29,13 @@ const SECRET_KEY_PATTERN = /^(api_?key|token|password|ssh_?key|secret|credential
 /** Prefix that marks a debug-only field for unconditional removal. */
 const DEBUG_FIELD_PREFIX = "_debug_";
 
-/** Default per-string truncation cap. Mirrors `toolCallSanitizer.MAX_ARG_VALUE_LENGTH`. */
+/** Default per-string truncation cap. */
 const DEFAULT_MAX_STRING_LENGTH = 200;
 
 /**
- * Recursion depth limit measured in nested-container levels. Slightly higher
- * than `toolCallSanitizer` to fit realistic per-stage telemetry payload shapes
- * (which can include nested stage→model→token structures) while still bounding
- * pathological nesting.
+ * Recursion depth limit measured in nested-container levels. This fits
+ * realistic per-stage telemetry payload shapes (including nested
+ * stage→model→token structures) while still bounding pathological nesting.
  */
 const MAX_DEPTH = 8;
 

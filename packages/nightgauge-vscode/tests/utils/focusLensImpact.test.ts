@@ -4,7 +4,6 @@
  * Unit tests for focus lens impact measurement (Issue #2460).
  *
  * Covers:
- * - focus_lens_active field persisted in run records
  * - focus_lens_active included in index entries
  * - getFocusLensComparison() A/B comparison logic
  */
@@ -57,88 +56,42 @@ describe("Focus Lens Impact Measurement (#2460)", () => {
     vi.restoreAllMocks();
   });
 
-  // Helper to create a minimal pipeline state
-  function createState(overrides: { started_at?: string } = {}) {
+  function makeRunRecord(
+    overrides: Partial<ExecutionHistoryRunRecordV2> = {}
+  ): ExecutionHistoryRunRecordV2 {
     return {
+      schema_version: "2",
+      record_type: "run",
       issue_number: 42,
-      title: "Test issue",
+      title: "Test",
       branch: "feat/42-test",
       base_branch: "main",
-      execution_mode: "automatic" as const,
-      started_at: overrides.started_at ?? "2026-03-01T10:00:00.000Z",
+      execution_mode: "automatic",
+      started_at: "2026-03-01T10:00:00.000Z",
+      completed_at: "2026-03-01T10:30:00.000Z",
+      total_duration_ms: 1_800_000,
+      outcome: "complete",
       stages: {
-        "issue-pickup": {
-          status: "complete",
-          started_at: "2026-03-01T10:00:00.000Z",
-          completed_at: "2026-03-01T10:05:00.000Z",
-          duration_ms: 300000,
-        },
-        "feature-dev": {
-          status: "complete",
-          started_at: "2026-03-01T10:05:00.000Z",
-          completed_at: "2026-03-01T10:20:00.000Z",
-          duration_ms: 900000,
-        },
+        "issue-pickup": { status: "complete" },
+        "feature-dev": { status: "complete" },
       },
       tokens: {
-        total_input: 10000,
-        total_output: 5000,
-        total_cache_read: 2000,
-        total_cache_creation: 1000,
+        total_input: 10_000,
+        total_output: 5_000,
+        total_cache_read: 2_000,
+        total_cache_creation: 1_000,
         estimated_cost_usd: 0.1,
       },
+      files: { read_count: 5, written_count: 2 },
+      routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
+      recorded_at: "2026-03-01T10:30:00.000Z",
+      ...overrides,
     };
   }
 
-  describe("buildRunRecord() with focus_lens_active", () => {
-    it("includes focus_lens_active when provided", () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createState(), undefined, undefined, {
-        files: { read_count: 0, written_count: 0 },
-        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
-        focus_lens_active: {
-          lens: "quality",
-          set_at: "2026-03-01T09:00:00.000Z",
-          set_by: "cli",
-        },
-      });
-
-      expect(record.focus_lens_active).toEqual({
-        lens: "quality",
-        set_at: "2026-03-01T09:00:00.000Z",
-        set_by: "cli",
-      });
-    });
-
-    it("omits focus_lens_active when not provided", () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createState(), undefined, undefined, {
-        files: { read_count: 0, written_count: 0 },
-        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
-      });
-
-      expect(record.focus_lens_active).toBeUndefined();
-    });
-
-    it("persists all focus_lens_active subfields", () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createState(), undefined, undefined, {
-        files: { read_count: 0, written_count: 0 },
-        routing: { complexity_score: 3, path: "standard", skip_stages: [] },
-        focus_lens_active: {
-          lens: "security",
-          set_by: "vscode",
-        },
-      });
-
-      expect(record.focus_lens_active?.lens).toBe("security");
-      expect(record.focus_lens_active?.set_by).toBe("vscode");
-      expect(record.focus_lens_active?.set_at).toBeUndefined();
-    });
-  });
-
   describe("buildIndexEntry() with focus_lens_active", () => {
     it("includes focus_lens_active lens name in index entry", () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createState(), undefined, undefined, {
-        files: { read_count: 0, written_count: 0 },
-        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
+      const record = makeRunRecord({
         focus_lens_active: { lens: "features" },
       });
 
@@ -147,10 +100,7 @@ describe("Focus Lens Impact Measurement (#2460)", () => {
     });
 
     it("omits focus_lens_active from index entry when no lens was active", () => {
-      const record = ExecutionHistoryWriter.buildRunRecord(createState(), undefined, undefined, {
-        files: { read_count: 0, written_count: 0 },
-        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
-      });
+      const record = makeRunRecord();
 
       const entry: HistoryIndexEntry = ExecutionHistoryWriter.buildIndexEntry(record);
       expect(entry.focus_lens_active).toBeUndefined();
@@ -158,39 +108,6 @@ describe("Focus Lens Impact Measurement (#2460)", () => {
   });
 
   describe("getFocusLensComparison()", () => {
-    function makeRunRecord(
-      overrides: Partial<ExecutionHistoryRunRecordV2>
-    ): ExecutionHistoryRunRecordV2 {
-      return {
-        schema_version: "2",
-        record_type: "run",
-        issue_number: 42,
-        title: "Test",
-        branch: "feat/42-test",
-        base_branch: "main",
-        execution_mode: "automatic",
-        started_at: "2026-03-01T10:00:00.000Z",
-        completed_at: "2026-03-01T10:30:00.000Z",
-        total_duration_ms: 1800000,
-        outcome: "complete",
-        stages: {
-          "issue-pickup": { status: "complete" },
-          "feature-dev": { status: "complete" },
-        },
-        tokens: {
-          total_input: 10000,
-          total_output: 5000,
-          total_cache_read: 2000,
-          total_cache_creation: 1000,
-          estimated_cost_usd: 0.1,
-        },
-        files: { read_count: 5, written_count: 2 },
-        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
-        recorded_at: "2026-03-01T10:30:00.000Z",
-        ...overrides,
-      };
-    }
-
     it("returns null when fewer than 2 run records exist", async () => {
       vi.mocked(fs.readdir).mockResolvedValue(["2026-03-01.jsonl"] as unknown as any);
       const singleRecord = makeRunRecord({});

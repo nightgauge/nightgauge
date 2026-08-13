@@ -270,6 +270,52 @@ describe("TelemetryStore", () => {
       expect(result.entries[1].issue_number).toBe(41);
     });
 
+    it.each(["skeleton-first", "full-first"])(
+      "keeps the richest duplicate run_id record regardless of order (%s)",
+      async (order) => {
+        vi.mocked(fs.readdir).mockResolvedValue(["2026-02-13.jsonl"] as any);
+        const skeleton = buildRunRecordLine({ run_id: "same-run", stages: {} });
+        const full = buildRunRecordLine({ run_id: "same-run" });
+        const records = order === "skeleton-first" ? [skeleton, full] : [full, skeleton];
+        vi.mocked(fs.readFile).mockResolvedValue(`${records.join("\n")}\n`);
+        vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+        vi.mocked(fs.writeFile).mockResolvedValue(undefined);
+        vi.mocked(fs.rename).mockResolvedValue(undefined);
+
+        const result = await store.rebuildIndex();
+
+        expect(result.total_runs).toBe(1);
+        expect(result.entries[0].run_id).toBe("same-run");
+        expect(result.entries[0].stage_count).toBe(6);
+      }
+    );
+
+    it.each(["skeleton-first", "full-first"])(
+      "normalizes legacy start instants and keeps the richest record (%s)",
+      async (order) => {
+        vi.mocked(fs.readdir).mockResolvedValue(["2026-02-13.jsonl"] as any);
+        const skeleton = buildRunRecordLine({
+          run_id: undefined,
+          started_at: "2026-02-13T10:00:00.900Z",
+          stages: {},
+        });
+        const full = buildRunRecordLine({
+          run_id: undefined,
+          started_at: "2026-02-13T10:00:00Z",
+        });
+        const records = order === "skeleton-first" ? [skeleton, full] : [full, skeleton];
+        vi.mocked(fs.readFile).mockResolvedValue(`${records.join("\n")}\n`);
+        vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+        vi.mocked(fs.writeFile).mockResolvedValue(undefined);
+        vi.mocked(fs.rename).mockResolvedValue(undefined);
+
+        const result = await store.rebuildIndex();
+
+        expect(result.total_runs).toBe(1);
+        expect(result.entries[0].stage_count).toBe(6);
+      }
+    );
+
     it("should write index atomically", async () => {
       vi.mocked(fs.readdir).mockResolvedValue([] as any);
       vi.mocked(fs.mkdir).mockResolvedValue(undefined);
@@ -363,50 +409,6 @@ describe("TelemetryStore", () => {
       const result = await store.getRunRecord(999);
 
       expect(result).toBeUndefined();
-    });
-  });
-
-  describe("appendRunRecord()", () => {
-    it("should delegate to ExecutionHistoryWriter and invalidate cache", async () => {
-      const appendSpy = vi.spyOn(ExecutionHistoryWriter, "appendRecord").mockResolvedValue(true);
-
-      const record = JSON.parse(buildRunRecordLine());
-
-      // Prime the cache
-      const index = buildIndex([]);
-      vi.mocked(fs.readFile).mockResolvedValueOnce(JSON.stringify(index));
-      vi.mocked(fs.readdir).mockResolvedValue([] as any);
-      vi.mocked(fs.stat).mockResolvedValue({
-        mtimeMs: new Date(index.updated_at).getTime() - 1000,
-      } as any);
-      await store.getIndex();
-
-      // Append should invalidate cache
-      await store.appendRunRecord(record);
-
-      expect(appendSpy).toHaveBeenCalledWith(workspaceRoot, record);
-
-      // Next getIndex call should re-read from disk (cache invalidated)
-      vi.mocked(fs.readFile).mockResolvedValueOnce(JSON.stringify(index));
-      await store.getIndex();
-      // readFile called: once for initial index + once for re-read after invalidation
-      expect(fs.readFile).toHaveBeenCalledTimes(2);
-    });
-
-    it("inherits ExecutionHistoryWriter's #307 identity guard — it is not a raw append (Issue #319 audit)", async () => {
-      // TelemetryStore.appendRunRecord() must enforce the same
-      // idempotency/identity contract as ExecutionHistoryWriter.appendRecord
-      // (post-#316): a run record with a present-but-empty repo/run_id is
-      // proof of the cross-contamination bug and must never be written,
-      // regardless of which entry point it comes in through. This exercises
-      // the REAL appendRecord (no spy) to prove the guard fires through the
-      // delegation, not just when called directly.
-      const record = JSON.parse(buildRunRecordLine({ repo: null, run_id: null }));
-
-      const written = await store.appendRunRecord(record);
-
-      expect(written).toBe(false);
-      expect(fs.appendFile).not.toHaveBeenCalled();
     });
   });
 

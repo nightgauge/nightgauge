@@ -6,130 +6,17 @@
  * @see Issue #1009 - Track context handoff file sizes
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { ExecutionHistoryWriter } from "../../src/utils/executionHistoryWriter";
-import { ExecutionHistoryRunRecordV2Schema } from "../../src/schemas/executionHistory";
+import { describe, it, expect } from "vitest";
 import { validatePipelineState } from "../../src/schemas/pipelineState";
+import { HistoryStageDetailSchema } from "../../src/schemas/executionHistory";
 import { PipelineConfigSchema } from "../../src/config/schema";
 
-// Mock vscode
-vi.mock("vscode", () => ({
-  workspace: {
-    workspaceFolders: [{ uri: { fsPath: "/test/workspace" } }],
-    createFileSystemWatcher: vi.fn(() => ({
-      onDidChange: vi.fn(),
-      onDidCreate: vi.fn(),
-      onDidDelete: vi.fn(),
-      dispose: vi.fn(),
-    })),
-  },
-  RelativePattern: vi.fn(),
-  EventEmitter: vi.fn(() => ({
-    event: vi.fn(),
-    fire: vi.fn(),
-    dispose: vi.fn(),
-  })),
-  window: {
-    createOutputChannel: vi.fn(() => ({
-      appendLine: vi.fn(),
-      show: vi.fn(),
-      clear: vi.fn(),
-      dispose: vi.fn(),
-    })),
-  },
-}));
-
-// Mock node:fs/promises for appendRecord
-vi.mock("node:fs/promises", () => ({
-  mkdir: vi.fn().mockResolvedValue(undefined),
-  appendFile: vi.fn().mockResolvedValue(undefined),
-  readFile: vi.fn().mockRejectedValue({ code: "ENOENT" }),
-  writeFile: vi.fn().mockResolvedValue(undefined),
-  rename: vi.fn().mockResolvedValue(undefined),
-}));
-
 describe("Context File Size Measurement (Issue #1009)", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  describe("buildRunRecord includes context_file_size_bytes", () => {
-    it("should include context_file_size_bytes when present in stage state", () => {
-      const state = createMockPipelineState({
-        stages: {
-          "pipeline-start": { status: "complete" },
-          "issue-pickup": {
-            status: "complete",
-            context_file_size_bytes: 4096,
-          },
-          "feature-planning": {
-            status: "complete",
-            context_file_size_bytes: 8192,
-          },
-          "feature-dev": {
-            status: "complete",
-            context_file_size_bytes: 2048,
-          },
-          "feature-validate": { status: "complete" },
-          "pr-create": { status: "complete" },
-          "pr-merge": { status: "complete" },
-          "pipeline-finish": { status: "complete" },
-        },
-      });
-
-      const record = ExecutionHistoryWriter.buildRunRecord(state);
-
-      expect(record.stages["issue-pickup"]?.context_file_size_bytes).toBe(4096);
-      expect(record.stages["feature-planning"]?.context_file_size_bytes).toBe(8192);
-      expect(record.stages["feature-dev"]?.context_file_size_bytes).toBe(2048);
-    });
-
-    it("should omit context_file_size_bytes when not present (backward compat)", () => {
-      const state = createMockPipelineState();
-      const record = ExecutionHistoryWriter.buildRunRecord(state);
-
-      // All stages should not have context_file_size_bytes
-      for (const stageDetail of Object.values(record.stages)) {
-        expect(stageDetail.context_file_size_bytes).toBeUndefined();
-      }
-    });
-  });
-
-  describe("HistoryStageDetailSchema accepts context_file_size_bytes", () => {
-    it("should validate a record with context_file_size_bytes", () => {
-      const state = createMockPipelineState({
-        stages: {
-          "pipeline-start": { status: "complete" },
-          "issue-pickup": {
-            status: "complete",
-            context_file_size_bytes: 102400,
-          },
-          "feature-planning": { status: "complete" },
-          "feature-dev": { status: "complete" },
-          "feature-validate": { status: "complete" },
-          "pr-create": { status: "complete" },
-          "pr-merge": { status: "complete" },
-          "pipeline-finish": { status: "complete" },
-        },
-      });
-
-      const record = ExecutionHistoryWriter.buildRunRecord(state);
-
-      const result = ExecutionHistoryRunRecordV2Schema.safeParse(record);
-      expect(result.success).toBe(true);
-    });
-
-    it("should validate a record without context_file_size_bytes", () => {
-      const state = createMockPipelineState();
-      const record = ExecutionHistoryWriter.buildRunRecord(state);
-
-      const result = ExecutionHistoryRunRecordV2Schema.safeParse(record);
-      expect(result.success).toBe(true);
-    });
+  it("preserves context_file_size_bytes in persisted stage details", () => {
+    expect(
+      HistoryStageDetailSchema.parse({ status: "complete", context_file_size_bytes: 102_400 })
+        .context_file_size_bytes
+    ).toBe(102_400);
   });
 
   describe("Pipeline state schema accepts context_file_size_bytes", () => {

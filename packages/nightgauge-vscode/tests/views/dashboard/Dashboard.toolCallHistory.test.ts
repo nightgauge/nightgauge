@@ -1,12 +1,8 @@
 /**
  * Dashboard.toolCallHistory.test.ts
  *
- * Tests for Issue #2578: tool_calls must be written to JSONL when the backup
- * history record is written on pipeline completion.
- *
- * Before the fix, writeBackupHistoryRecord() called buildRunRecord() without
- * the tool_calls option, leaving the JSONL record empty. This caused the
- * Pipeline tab's tool call log to always appear empty for completed runs.
+ * Tests the post-completion load path for historical run records that already
+ * contain tool_calls (Issue #2578).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -216,7 +212,6 @@ vi.mock("vscode", () => ({
 }));
 
 import { Dashboard } from "../../../src/views/dashboard/Dashboard";
-import { ExecutionHistoryWriter } from "../../../src/utils/executionHistoryWriter";
 
 function allCompleteState(issueNumber: number) {
   return {
@@ -259,12 +254,9 @@ function allCompleteState(issueNumber: number) {
  * runs are in flight — the mechanism behind runs accumulating hundreds of
  * duplicate records.
  *
- * KNOWN REGRESSION: it was also the ONLY writer of `tool_calls` into history
- * (the Go authoritative record has no tool-call field). Per-run tool calls are
- * therefore no longer persisted, and the read path below now only ever finds
- * them on records written before this change. Restoring the feature means
- * threading tool calls into the Go record, not reviving a second writer —
- * tracked separately.
+ * Tool calls now flow through the bounded SkillRunner `ToolCallLog`,
+ * `pipeline.stageResult`, and Go's authoritative `BuildV2Record`. The read path
+ * below hydrates that single record after completion.
  */
 describe("Dashboard - post-completion tool call auto-load (Issue #2578)", () => {
   let dashboard: Dashboard;

@@ -260,7 +260,7 @@ allowed-tools: Read Write Edit Bash
     expect(getMcpToolsConfig).toHaveBeenNthCalledWith(2, "/test/workspace", "feature-dev");
   });
 
-  it("AC #5 — onComplete reports adapter + adapter_source per stage", () => {
+  it("AC #5 — onComplete reports the resolved adapter and source per stage", () => {
     const planProc = createMockChildProcess();
     const devProc = createMockChildProcess();
     vi.mocked(spawn).mockReturnValueOnce(planProc).mockReturnValueOnce(devProc);
