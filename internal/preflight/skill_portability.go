@@ -61,10 +61,8 @@ const (
 	// (internal/orchestrator/gates, #55).
 	CheckStopHook = "hooks_frontmatter"
 
-	// CheckTruncatedBinaryCascade flags a binary-discovery cascade that lost
-	// rungs relative to the canonical PREFLIGHT.md block — a file that starts
-	// the cascade (BINARY="${NIGHTGAUGE_BIN…) but never reaches the final
-	// ~/go/bin fallback drifted from the contract (#55, spike #33 D5).
+	// CheckTruncatedBinaryCascade flags a fenced bash binary-discovery block
+	// that lost any rung from the canonical PREFLIGHT.md cascade (#55, #365).
 	CheckTruncatedBinaryCascade = "truncated_binary_cascade"
 )
 
@@ -88,12 +86,22 @@ var vscodeExtensionPathRE = regexp.MustCompile(`(?i)\.vscode/extensions/nightgau
 // occurrences were the Claude-only Stop-hook completion gates removed in #55.
 var stopHookRE = regexp.MustCompile(`^hooks:\s*$`)
 
-// cascadeStartRE / cascadeFinalRungRE detect the PREFLIGHT binary-discovery
-// cascade and its mandatory final rung. Any file that opens the cascade must
-// also carry the ~/go/bin fallback, or it has drifted from PREFLIGHT.md.
+// Cascade checks are block-scoped: a complete cascade elsewhere in the same
+// Markdown file must not hide a truncated sibling (#365). The five rungs are
+// the provider-neutral discovery contract from PREFLIGHT.md.
 var (
-	cascadeStartRE     = regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)
-	cascadeFinalRungRE = regexp.MustCompile(`go/bin/nightgauge`)
+	cascadeStartRE  = regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)
+	bashFenceOpenRE = regexp.MustCompile("(?i)^\\s*([`~]{3,})\\s*(bash|sh|shell)\\s*$")
+	cascadeRungs    = []struct {
+		name    string
+		pattern *regexp.Regexp
+	}{
+		{name: "NIGHTGAUGE_BIN", pattern: regexp.MustCompile(`BINARY="\$\{NIGHTGAUGE_BIN`)},
+		{name: "PATH", pattern: regexp.MustCompile(`command -v nightgauge`)},
+		{name: "repo bin", pattern: regexp.MustCompile(`git rev-parse --show-toplevel`)},
+		{name: "canonical repo bin", pattern: regexp.MustCompile(`git rev-parse --git-common-dir`)},
+		{name: "go bin", pattern: regexp.MustCompile(`go/bin/nightgauge`)},
+	}
 )
 
 // RunSkillPortabilityCheck walks every Markdown file under skills/ rooted at
@@ -170,8 +178,6 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 			rel = path
 		}
 		lines := strings.Split(string(data), "\n")
-		fileHasFinalRung := cascadeFinalRungRE.Match(data)
-		cascadeFlagged := false
 		for i, line := range lines {
 			if vscodeExtensionPathRE.MatchString(line) {
 				result.Findings = append(result.Findings, finding(rel, i+1, CheckVSCodeBinaryPath, line))
@@ -179,14 +185,96 @@ func RunSkillPortabilityCheck(_ context.Context, opts SkillPortabilityOptions) (
 			if stopHookRE.MatchString(line) && strings.HasSuffix(path, "SKILL.md") {
 				result.Findings = append(result.Findings, finding(rel, i+1, CheckStopHook, line))
 			}
-			if !cascadeFlagged && !fileHasFinalRung && cascadeStartRE.MatchString(line) {
-				cascadeFlagged = true // one finding per file is enough
-				result.Findings = append(result.Findings, finding(rel, i+1, CheckTruncatedBinaryCascade, line))
+		}
+		for _, block := range fencedBashBlocks(lines) {
+			body := strings.Join(block.lines, "\n")
+			startOffset := firstMatchingLine(block.lines, cascadeStartRE)
+			if startOffset < 0 {
+				continue
 			}
+			var missing []string
+			for _, rung := range cascadeRungs {
+				if !rung.pattern.MatchString(body) {
+					missing = append(missing, rung.name)
+				}
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			line := block.lines[startOffset]
+			match := fmt.Sprintf("%s [bash block line %d missing: %s]", strings.TrimSpace(line), block.openLine, strings.Join(missing, ", "))
+			result.Findings = append(result.Findings, finding(rel, block.openLine+startOffset+1, CheckTruncatedBinaryCascade, match))
 		}
 	}
 
 	return result, nil
+}
+
+type fencedBashBlock struct {
+	openLine int // 1-based fence line
+	lines    []string
+}
+
+// fencedBashBlocks extracts bash/sh/shell Markdown fences with their original
+// line coordinates. Unclosed blocks extend to EOF so a malformed document
+// cannot make a truncated cascade disappear from the gate.
+func fencedBashBlocks(lines []string) []fencedBashBlock {
+	var blocks []fencedBashBlock
+	for i := 0; i < len(lines); i++ {
+		match := bashFenceOpenRE.FindStringSubmatch(lines[i])
+		if len(match) == 0 || !uniformFence(match[1]) {
+			continue
+		}
+		marker := match[1]
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			if closesFence(lines[j], marker[0], len(marker)) {
+				end = j
+				break
+			}
+		}
+		blocks = append(blocks, fencedBashBlock{openLine: i + 1, lines: lines[i+1 : end]})
+		if end < len(lines) {
+			i = end
+		} else {
+			break
+		}
+	}
+	return blocks
+}
+
+func uniformFence(marker string) bool {
+	if marker == "" {
+		return false
+	}
+	for i := 1; i < len(marker); i++ {
+		if marker[i] != marker[0] {
+			return false
+		}
+	}
+	return true
+}
+
+func closesFence(line string, marker byte, minLen int) bool {
+	trimmed := strings.TrimSpace(line)
+	if len(trimmed) < minLen {
+		return false
+	}
+	for i := range len(trimmed) {
+		if trimmed[i] != marker {
+			return false
+		}
+	}
+	return true
+}
+
+func firstMatchingLine(lines []string, pattern *regexp.Regexp) int {
+	for i, line := range lines {
+		if pattern.MatchString(line) {
+			return i
+		}
+	}
+	return -1
 }
 
 // finding builds a SkillPortabilityFinding with the match line trimmed to a

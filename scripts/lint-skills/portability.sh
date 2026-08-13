@@ -58,14 +58,59 @@ if [ -n "$hook_hits" ]; then
 fi
 
 # A binary-discovery cascade that lost rungs drifted from PREFLIGHT.md (#55).
-# Any file starting the cascade must also carry the final ~/go/bin fallback.
+# Check EACH fenced bash block: a complete cascade elsewhere in the same file
+# must not hide a truncated sibling (#365).
+cascade_hits=""
 while IFS= read -r f; do
   [ -z "$f" ] && continue
-  if ! grep -q 'go/bin/nightgauge' "$f"; then
-    fail=1
-    echo "lint-skills: ERROR — truncated binary-discovery cascade (missing ~/go/bin rung) in $f (#55)" >&2
+  hits=$(awk -v file="$f" '
+    function reset_block() {
+      started = 0; start_line = 0
+      env_rung = 0; path_rung = 0; repo_rung = 0; canonical_rung = 0; go_rung = 0
+    }
+    function report_block(    missing, sep) {
+      if (!started) return
+      missing = ""; sep = ""
+      if (!env_rung)       { missing = missing sep "NIGHTGAUGE_BIN"; sep = ", " }
+      if (!path_rung)      { missing = missing sep "PATH"; sep = ", " }
+      if (!repo_rung)      { missing = missing sep "repo bin"; sep = ", " }
+      if (!canonical_rung) { missing = missing sep "canonical repo bin"; sep = ", " }
+      if (!go_rung)        { missing = missing sep "go bin" }
+      if (missing != "") printf "%s:%d: truncated binary-discovery bash block (missing: %s)\n", file, start_line, missing
+    }
+    BEGIN { in_bash = 0; fence = ""; reset_block() }
+    tolower($0) ~ /^[[:space:]]*```+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ {
+      in_bash = 1; fence = "```"; reset_block(); next
+    }
+    tolower($0) ~ /^[[:space:]]*~~~+[[:space:]]*(bash|sh|shell)[[:space:]]*$/ {
+      in_bash = 1; fence = "~~~"; reset_block(); next
+    }
+    in_bash && /^[[:space:]]*```+[[:space:]]*$/ && fence == "```" {
+      report_block(); in_bash = 0; fence = ""; next
+    }
+    in_bash && /^[[:space:]]*~~~+[[:space:]]*$/ && fence == "~~~" {
+      report_block(); in_bash = 0; fence = ""; next
+    }
+    in_bash {
+      if (index($0, "BINARY=\"${NIGHTGAUGE_BIN")) { started = 1; env_rung = 1; if (!start_line) start_line = NR }
+      if (index($0, "command -v nightgauge")) path_rung = 1
+      if (index($0, "git rev-parse --show-toplevel")) repo_rung = 1
+      if (index($0, "git rev-parse --git-common-dir")) canonical_rung = 1
+      if (index($0, "go/bin/nightgauge")) go_rung = 1
+    }
+    END { if (in_bash) report_block() }
+  ' "$f")
+  if [ -n "$hits" ]; then
+    cascade_hits="${cascade_hits}${cascade_hits:+
+}${hits}"
   fi
-done < <(grep -rl 'BINARY="${NIGHTGAUGE_BIN' skills/ --include='*.md' 2>/dev/null || true)
+done < <(find skills -type f -name '*.md' ! -path '*/.claude/*' 2>/dev/null)
+
+if [ -n "$cascade_hits" ]; then
+  fail=1
+  echo "lint-skills: ERROR — truncated binary-discovery cascade(s):" >&2
+  printf '%s\n' "$cascade_hits" >&2
+fi
 
 if [ "$fail" -eq 0 ]; then
   echo "lint-skills: all skills pass portability checks (paths, hooks, cascade) ✓"
