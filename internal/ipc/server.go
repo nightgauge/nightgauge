@@ -3158,6 +3158,17 @@ func (s *Server) registerMethods() {
 			// corpus field, leaving one field with two meanings and no
 			// discriminator (#304).
 			input.ComplexityScore = cls.ComplexityScore
+			if snap.Branch == "" {
+				// Mirror the scheduler path: the persisted empty value is the
+				// honest "undetermined" state, but the resolution gap must also
+				// be visible at the only boundary that knows which run wrote it.
+				log.Printf(
+					"notifyComplete: #%d: no feature branch could be determined from any source — the history record "+
+						"will carry an EMPTY branch, which is how a record says \"undetermined\"; nothing is "+
+						"fabricated in its place (#299, #397)",
+					p.IssueNumber,
+				)
+			}
 			if cls.ComplexityScore <= 0 {
 				log.Printf(
 					"notifyComplete: #%d has no routing.complexity_score — no issue context reached this handler, so the run records no routing prediction at all (#304)",

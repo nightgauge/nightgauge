@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +95,54 @@ func TestNotifyComplete_WritesSuccessRunRecord(t *testing.T) {
 	}
 	if rec.SchemaVersion != "2" {
 		t.Errorf("SchemaVersion = %q, want %q for a successful run", rec.SchemaVersion, "2")
+	}
+}
+
+// #449: the extension path must announce the same undetermined-branch record
+// the scheduler path does. An empty branch is honest persisted state (#397),
+// but silently producing it hides a branch-resolution gap from operators.
+func TestNotifyComplete_AnnouncesUndeterminedBranch(t *testing.T) {
+	dir := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":449,"stage":"feature-dev","status":"running","runId":"019001c1-0000-7000-8000-000000000449"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(running): %v", err)
+	}
+
+	logs := captureLog(t, func() {
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":449,"success":true,"totalDurationMs":1000,"runId":"019001c1-0000-7000-8000-000000000449"}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	const wantUndeterminedLog = "notifyComplete: #449: no feature branch could be determined from any source — the history record " +
+		"will carry an EMPTY branch, which is how a record says \"undetermined\"; nothing is " +
+		"fabricated in its place (#299, #397)"
+	if !strings.Contains(logs, wantUndeterminedLog) {
+		t.Fatalf("notifyComplete log omitted undetermined-branch announcement:\nwant substring: %q\nlog was:\n%s", wantUndeterminedLog, logs)
+	}
+}
+
+func TestNotifyComplete_DoesNotAnnounceResolvedBranch(t *testing.T) {
+	dir := t.TempDir()
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+
+	transition := s.methods["pipeline.notifyStageTransition"]
+	complete := s.methods["pipeline.notifyComplete"]
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":449,"stage":"feature-dev","status":"running","branch":"fix/449-announce-undetermined-ipc-branch","runId":"019001c1-0001-7000-8000-000000000449"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(running): %v", err)
+	}
+
+	logs := captureLog(t, func() {
+		if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":449,"success":true,"totalDurationMs":1000,"runId":"019001c1-0001-7000-8000-000000000449"}`)); err != nil {
+			t.Fatalf("notifyComplete: %v", err)
+		}
+	})
+
+	if strings.Contains(logs, "no feature branch could be determined from any source") {
+		t.Fatalf("notifyComplete announced an undetermined branch for a resolved run:\n%s", logs)
 	}
 }
 
