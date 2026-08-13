@@ -121,10 +121,13 @@ here_, and carries:
   the verb is `version`; there is no `--version` flag. The exec lives in
   `doctor` (on demand) and deliberately **not** in `guard.sh`, which runs on
   every tool call.
+- when an earlier cascade step wins and the recorded bundle is runnable, that
+  bundle's binary path and version from a second bounded exec. A mismatch
+  reports both paths, both complete version strings, and the winning step.
 - the extension-bundle inventory — how many bundle directories are on disk,
   which one VSCode **records** as installed, and whether that recorded bundle
-  is the one in use — **even when an earlier step wins**, so running `doctor`
-  from inside a checkout still tells you what other repos will use. The
+  is the step-5 selection — **even when an earlier step wins**, so running
+  `doctor` from inside a checkout still tells you what other repos will use. The
   inventory is also carried on the not-found path, where "2 bundle dir(s) on
   disk, none runnable" is a different problem from "nothing installed".
 
@@ -135,13 +138,14 @@ so it cannot be a hard-required check. An extension-only install (binary
 resolvable via step 5 but never on `PATH`) reports
 `checks.binary.ok == true`, not a false "not found".
 
-Two distinct warning-level outcomes exist and they are not interchangeable:
+Three distinct warning-level outcomes exist and they are not interchangeable:
 
-| Outcome          | `ok`    | `install_instructions` | Meaning                                                                                        |
-| ---------------- | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
-| unresolved       | `false` | populated              | no step matched — installing something is the fix                                              |
-| diverging bundle | `false` | **empty**              | step 5 resolved a bundle VSCode's install record does not confirm — installing changes nothing |
-| resolved         | `true`  | empty                  | normal                                                                                         |
+| Outcome             | `ok`    | `install_instructions` | Meaning                                                                                        |
+| ------------------- | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| unresolved          | `false` | populated              | no step matched — installing something is the fix                                              |
+| diverging bundle    | `false` | **empty**              | step 5 resolved a bundle VSCode's install record does not confirm — installing changes nothing |
+| cross-step mismatch | `false` | **empty**              | an earlier step and the recorded bundle report different binary versions                       |
+| resolved            | `true`  | empty                  | normal                                                                                         |
 
 A diverging bundle names the **recorded** version, the **resolved** version and
 the resolved path in `checks.binary.error`, matching the `[stale-binary]` line
@@ -150,6 +154,12 @@ alongside that error. This is the outcome an operator is actually
 investigating, so the resolving step and the resolved binary's own version (the
 two facts that answer "is this really an old build?") are reported here, not
 only on healthy machines.
+
+A cross-step mismatch is also warning-only and never enters `failed_checks`.
+Matching versions, no usable install record, or no runnable recorded bundle
+produce no cross-step finding. The comparison uses complete command output
+rather than trying to order versions; a different build is actionable even
+when version ordering would be ambiguous.
 
 #### The install record is the selection authority (#356)
 

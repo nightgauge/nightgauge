@@ -2861,6 +2861,15 @@ keeps its full `detail` (resolved path, resolving step, the binary's own
 version, the inventory) alongside the error — see
 [docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#what-the-binary-check-reports-356).
 
+When an earlier cascade step wins and the recorded extension bundle is
+runnable, `doctor` also executes that bundle's `version` command and compares
+the two complete version strings. A mismatch is a warning-only finding that
+names both versions, both binary paths, and the winning cascade step. Matching
+versions, an absent/ambiguous install record, and an unusable recorded bundle
+produce no cross-step finding. This second exec deliberately remains exclusive
+to the on-demand doctor command; `guard.sh` runs on every tool call and does not
+pay for it.
+
 ##### Things that were tried and are wrong
 
 - **Compare the binary's build stamp to the plugin version.** The bundle dir
@@ -3369,7 +3378,7 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 
 | Check key     | What it verifies                                | Required?  |
 | ------------- | ----------------------------------------------- | ---------- |
-| `binary`      | `nightgauge` reachable via PATH            | warning    |
+| `binary`      | hook-resolved binary exists; recorded binary agrees when comparable | warning    |
 | `gh`          | `gh` CLI reachable via PATH                     | warning    |
 | `github_auth` | GitHub token valid and authenticated            | required   |
 | `api_user`    | `GET /user` returns non-empty login             | required   |

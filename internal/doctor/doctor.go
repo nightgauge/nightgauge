@@ -428,8 +428,28 @@ func checkBinary() (CheckItem, bool) {
 	}
 
 	detail := fmt.Sprintf("hooks resolve %s from this directory (via %s)", resolved.Path, resolved.Step)
-	if version := binaryVersion(resolved.Path); version != "" {
-		detail += fmt.Sprintf("; reports version %s", version)
+	resolvedVersion := binaryVersion(resolved.Path)
+	if resolvedVersion != "" {
+		detail += fmt.Sprintf("; reports version %s", resolvedVersion)
+	}
+
+	// An earlier cascade step can resolve successfully while silently running
+	// a different build from the extension VS Code records. Doctor is on-demand,
+	// so it can afford the second exec that guard.sh must not pay on every tool
+	// call. RecordedUsed guarantees SelectedPath is the runnable recorded binary,
+	// rather than an unrecorded fallback.
+	var crossStepWarning string
+	if scan := resolved.Bundles; scan.RecordedUsed && scan.SelectedPath != "" && scan.SelectedPath != resolved.Path {
+		recordedVersion := binaryVersion(scan.SelectedPath)
+		if recordedVersion != "" {
+			detail += fmt.Sprintf("; recorded VSCode bundle binary %s reports version %s", scan.SelectedPath, recordedVersion)
+			if resolvedVersion != "" && resolvedVersion != recordedVersion {
+				crossStepWarning = fmt.Sprintf(
+					"stale binary: hooks resolve %s via %s, reporting version %s; the recorded VSCode extension bundle binary %s reports version %s",
+					resolved.Path, resolved.Step, resolvedVersion, scan.SelectedPath, recordedVersion,
+				)
+			}
+		}
 	}
 	detail += bundleInventory(resolved.Bundles)
 
@@ -439,6 +459,9 @@ func checkBinary() (CheckItem, bool) {
 		// an old build?", and this is precisely the outcome an operator is
 		// investigating (AC3 — report on EVERY outcome).
 		return CheckItem{OK: false, Detail: detail, Error: divergenceMessage(resolved)}, true
+	}
+	if crossStepWarning != "" {
+		return CheckItem{OK: false, Detail: detail, Error: crossStepWarning}, true
 	}
 
 	return CheckItem{OK: true, Detail: detail}, true
