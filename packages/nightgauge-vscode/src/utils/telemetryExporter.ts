@@ -24,7 +24,7 @@ export type ExportFormat = "json" | "csv-runs" | "csv-stages";
  * Escape a CSV field per RFC 4180.
  * Double-quotes fields containing commas, double quotes, or newlines.
  */
-function escapeCsvField(value: string): string {
+export function escapeCsvField(value: string): string {
   if (value.includes(",") || value.includes('"') || value.includes("\n") || value.includes("\r")) {
     return `"${value.replace(/"/g, '""')}"`;
   }

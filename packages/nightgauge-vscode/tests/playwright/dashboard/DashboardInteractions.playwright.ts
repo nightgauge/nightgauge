@@ -46,6 +46,16 @@ async function getMessages(page: Page): Promise<unknown[]> {
 // ---------------------------------------------------------------------------
 
 test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
+  test("Pipeline tab visibly marks an undetermined local branch", async ({ page }) => {
+    await openDashboard(page);
+    await page.click('[data-tab="pipeline"]');
+
+    const branch = page.locator(".progress-branch-undetermined");
+    await expect(branch).toBeVisible();
+    await expect(branch).toHaveText("Branch: (branch not determined)");
+    await expect(branch).toHaveAttribute("title", "No branch recorded for this run");
+  });
+
   // -------------------------------------------------------------------------
   // 1. Header controls
   // -------------------------------------------------------------------------

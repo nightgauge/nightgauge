@@ -953,9 +953,22 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
     .progress-info {
       display: flex;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs) var(--spacing-sm);
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: var(--spacing-sm);
+    }
+
+    .progress-branch {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-branch-undetermined {
+      font-style: italic;
     }
 
     .stage-indicators {
@@ -5418,6 +5431,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       </div>
       <div class="progress-info">
         <span class="progress-percent">0%</span>
+        <span class="progress-branch" title="feat/42-add-feature-x">Branch: feat/42-add-feature-x</span>
         <span class="progress-stage">
           Completed
         </span>
@@ -7583,9 +7597,22 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     .progress-info {
       display: flex;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs) var(--spacing-sm);
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: var(--spacing-sm);
+    }
+
+    .progress-branch {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-branch-undetermined {
+      font-style: italic;
     }
 
     .stage-indicators {
@@ -12048,6 +12075,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       </div>
       <div class="progress-info">
         <span class="progress-percent">0%</span>
+        <span class="progress-branch" title="feat/42-add-feature-x">Branch: feat/42-add-feature-x</span>
         <span class="progress-stage">
           Completed
         </span>
@@ -14260,9 +14288,22 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
     .progress-info {
       display: flex;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs) var(--spacing-sm);
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: var(--spacing-sm);
+    }
+
+    .progress-branch {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-branch-undetermined {
+      font-style: italic;
     }
 
     .stage-indicators {
@@ -20784,9 +20825,22 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     .progress-info {
       display: flex;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs) var(--spacing-sm);
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: var(--spacing-sm);
+    }
+
+    .progress-branch {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-branch-undetermined {
+      font-style: italic;
     }
 
     .stage-indicators {
@@ -25249,6 +25303,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       </div>
       <div class="progress-info">
         <span class="progress-percent">0%</span>
+        <span class="progress-branch" title="feat/42-add-feature-x">Branch: feat/42-add-feature-x</span>
         <span class="progress-stage">
           Completed
         </span>

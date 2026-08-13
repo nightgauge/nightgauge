@@ -318,9 +318,22 @@ export function getPipelineTabStyles(): string {
     .progress-info {
       display: flex;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--spacing-xs) var(--spacing-sm);
       font-size: 0.85em;
       color: var(--vscode-descriptionForeground);
       margin-bottom: var(--spacing-sm);
+    }
+
+    .progress-branch {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-branch-undetermined {
+      font-style: italic;
     }
 
     .stage-indicators {

@@ -36,6 +36,17 @@ export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (char) => htmlEntities[char] || char);
 }
 
+/** Shared user-facing label for an absent or whitespace-only run branch. */
+export const UNDETERMINED_BRANCH_LABEL = "(branch not determined)";
+
+/**
+ * Present a run branch without turning the honest empty-string sentinel into a
+ * blank UI or CSV field (#397, #450).
+ */
+export function getBranchDisplayText(branch: string | null | undefined): string {
+  return branch?.trim() ? branch : UNDETERMINED_BRANCH_LABEL;
+}
+
 /**
  * Format stage name for display
  */
@@ -223,6 +234,10 @@ export function getProgressBarHtml(
       ? `<span class="retry-depth" title="Backtrack attempts">↩ Retry ${backtrackCount}</span>`
       : "";
 
+  const hasRecordedBranch = Boolean(run.branch?.trim());
+  const branchText = getBranchDisplayText(run.branch);
+  const branchHtml = `<span class="progress-branch${hasRecordedBranch ? "" : " progress-branch-undetermined"}" title="${hasRecordedBranch ? escapeHtml(branchText) : "No branch recorded for this run"}">Branch: ${escapeHtml(branchText)}</span>`;
+
   return `
     <div class="progress-section">
       <div class="progress-header">
@@ -239,6 +254,7 @@ export function getProgressBarHtml(
       </div>
       <div class="progress-info">
         <span class="progress-percent">${progressPercent}%</span>
+        ${branchHtml}
         <span class="progress-stage">
           ${run.currentStage ? `Stage: ${formatStageName(run.currentStage)} (${currentStageIndex + 1}/${run.stages.length})` : "Completed"}
         </span>

@@ -19,13 +19,19 @@ import type * as vscode from "vscode";
 // Hoisted mocks — must be available in vi.mock factories
 // ---------------------------------------------------------------------------
 
-const { mockGetTokenInstance, mockTokenRetrieve, mockHealthFetchAndCache, mockRunsFetchAndCache } =
-  vi.hoisted(() => ({
-    mockGetTokenInstance: vi.fn(),
-    mockTokenRetrieve: vi.fn<[string], Promise<string | null>>(),
-    mockHealthFetchAndCache: vi.fn(),
-    mockRunsFetchAndCache: vi.fn(),
-  }));
+const {
+  mockGetTokenInstance,
+  mockTokenRetrieve,
+  mockHealthFetchAndCache,
+  mockRunsFetchAndCache,
+  mockOpenTextDocument,
+} = vi.hoisted(() => ({
+  mockGetTokenInstance: vi.fn(),
+  mockTokenRetrieve: vi.fn<[string], Promise<string | null>>(),
+  mockHealthFetchAndCache: vi.fn(),
+  mockRunsFetchAndCache: vi.fn(),
+  mockOpenTextDocument: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -173,6 +179,7 @@ vi.mock("vscode", () => ({
     showWarningMessage: vi.fn(),
     showInformationMessage: vi.fn(),
     showSaveDialog: vi.fn(),
+    showTextDocument: vi.fn(),
     createOutputChannel: vi.fn(() => ({
       appendLine: vi.fn(),
       show: vi.fn(),
@@ -181,6 +188,7 @@ vi.mock("vscode", () => ({
     })),
   },
   workspace: {
+    openTextDocument: mockOpenTextDocument,
     getConfiguration: vi.fn(() => ({
       get: vi.fn().mockReturnValue(undefined),
     })),
@@ -385,5 +393,38 @@ describe("Dashboard.refreshRunsData", () => {
     expect(runsData.entries).toHaveLength(1);
     expect(runsData.entries[0].issue_number).toBe(42);
     expect(runsData.entries[0].outcome).toBe("productive");
+  });
+
+  it("exports an explicit undetermined marker and escapes branch CSV fields (#450)", async () => {
+    const document = { uri: { fsPath: "/tmp/runs.csv" } };
+    mockOpenTextDocument.mockResolvedValue(document);
+    (dashboard as any).runsData = {
+      entries: [
+        {
+          issue_number: 450,
+          title: 'Undetermined, "branch"',
+          branch: "",
+          outcome: "complete",
+          duration_ms: 1000,
+          total_cost_usd: "0.01",
+          started_at: "2026-08-12T10:00:00Z",
+        },
+        {
+          issue_number: 451,
+          title: "Resolved branch",
+          branch: "fix/450,branch",
+          outcome: "complete",
+          duration_ms: 2000,
+          total_cost_usd: "0.02",
+          started_at: "2026-08-12T11:00:00Z",
+        },
+      ],
+    };
+
+    await (dashboard as any).exportRunsCsv({});
+
+    const [{ content }] = mockOpenTextDocument.mock.calls[0];
+    expect(content).toContain('"Undetermined, ""branch""",(branch not determined)');
+    expect(content).toContain('Resolved branch,"fix/450,branch"');
   });
 });
