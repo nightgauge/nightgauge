@@ -20,6 +20,7 @@ import {
   ExecutionHistoryRunRecordV2Schema,
   ExecutionOutcomeRecordV2Schema,
   type ExecutionHistoryRunRecordV2,
+  type ExecutionHistoryRunRecordV3,
   type ExecutionHistoryRecord,
   type HistoryStageDetail,
   type ToolCallRecord,
@@ -831,7 +832,9 @@ export class ExecutionHistoryWriter {
    * Used by both inline index updates (after appendRecord) and
    * TelemetryStore.rebuildIndex() for full index reconstruction.
    */
-  static buildIndexEntry(record: ExecutionHistoryRunRecordV2): HistoryIndexEntry {
+  static buildIndexEntry(
+    record: ExecutionHistoryRunRecordV2 | ExecutionHistoryRunRecordV3
+  ): HistoryIndexEntry {
     const stageCount = Object.values(record.stages).filter(
       (s) => s.status === "complete" || s.status === "skipped"
     ).length;

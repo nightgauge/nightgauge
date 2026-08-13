@@ -6,12 +6,13 @@
  * - "run": Complete pipeline run record (written at pipeline-finish)
  * - "outcome": PR merge/close outcome (appended after pr-merge)
  *
- * Two schema versions:
+ * Three run-record schema versions:
  * - v1: Original schema (Issue #649)
  * - v2: Extended with tool_calls, outcome_type, required files/routing (Issue #1011)
+ * - v3: Extended with terminal failure preservation (Issue #3001)
  *
- * The writer always produces v2 records. The reader accepts both v1 and v2,
- * normalizing v1 records to v2 shape with defaults.
+ * Writers produce v2 or v3 run records. The reader accepts v1, v2, and v3,
+ * normalizing only v1 records to the v2 field set with defaults.
  *
  * @see Issue #649 - Execution History Persistence
  * @see Issue #1011 - Telemetry Schema v2
@@ -779,11 +780,11 @@ export const AnyOutcomeRecordSchema = z.union([
 export type AnyOutcomeRecord = z.infer<typeof AnyOutcomeRecordSchema>;
 
 /**
- * Any valid execution history record (run or outcome, v1 or v2)
+ * Any valid execution history record (v1, v2, or v3 run; v1 or v2 outcome)
  *
  * Uses z.union instead of z.discriminatedUnion because we have two
- * discriminator dimensions (record_type + schema_version). The reader
- * tries v2 first, falls back to v1.
+ * discriminator dimensions (record_type + schema_version). Run readers
+ * dispatch by version and retain this ordering for general schema consumers.
  */
 export const ExecutionHistoryRecordSchema = z.union([
   ExecutionHistoryRunRecordV3Schema,

@@ -316,6 +316,64 @@ describe("ExecutionHistoryReader", () => {
       }
     });
 
+    it("should strictly parse v3 records before applying reader normalization", async () => {
+      const v3RunLine = JSON.stringify({
+        schema_version: "3",
+        record_type: "run",
+        issue_number: 459,
+        title: "Read V3 execution history",
+        base_branch: "main",
+        execution_mode: "automatic",
+        started_at: "2026-08-12T10:00:00.000Z",
+        completed_at: "2026-08-12T10:01:00.000Z",
+        total_duration_ms: 60000,
+        outcome: "failed",
+        terminal_failure_kind: "validation_error",
+        stages: {
+          "feature-validate": {
+            status: "failed",
+            started_at: "2026-08-12T10:00:00.000Z",
+            completed_at: "2026-08-12T10:01:00.000Z",
+            duration_ms: 60000,
+          },
+        },
+        tokens: {
+          total_input: 100,
+          total_output: 50,
+          total_cache_read: 0,
+          total_cache_creation: 0,
+          estimated_cost_usd: 0.01,
+          per_stage: {
+            "feature-validate": {
+              input: 100,
+              output: 50,
+              cache_read: 0,
+              cache_creation: 0,
+              cost_usd: 0.01,
+            },
+          },
+        },
+        files: { read_count: 1, written_count: 0 },
+        routing: { complexity_score: 2, path: "trivial", skip_stages: [] },
+        recorded_at: "2026-08-12T10:01:00.000Z",
+      });
+      vi.mocked(fs.readFile).mockResolvedValue(v3RunLine + "\n");
+
+      const records = await ExecutionHistoryReader.parseJsonlFile("/test/history/v3.jsonl");
+
+      expect(records).toHaveLength(1);
+      const run = records[0];
+      expect(run.record_type).toBe("run");
+      if (run.record_type === "run") {
+        expect(run.schema_version).toBe("3");
+        expect(run.branch).toBe("");
+        expect("terminal_failure_kind" in run && run.terminal_failure_kind).toBe(
+          "validation_error"
+        );
+        expect(run.tokens.per_stage?.["feature-validate"]?.cost_source).toBe("native");
+      }
+    });
+
     it("should handle mixed v1 and v2 records", async () => {
       const v2RunLine = JSON.stringify({
         schema_version: "2",

@@ -4,8 +4,8 @@
  * Static utility class for reading and querying JSONL history files.
  * Gracefully handles missing files and malformed lines.
  *
- * Reads both v1 and v2 records, normalizing v1 run records to v2 shape
- * with sensible defaults so consumers always work with the v2 type.
+ * Reads v1, v2, and v3 records, normalizing v1 run records to the v2 field
+ * set with sensible defaults.
  *
  * @see Issue #649 - Execution History Persistence
  * @see Issue #1011 - Telemetry Schema v2 (forward-compatible reads)
@@ -19,18 +19,20 @@ import {
   ExecutionHistoryRecordSchema,
   ExecutionHistoryRunRecordSchema,
   ExecutionHistoryRunRecordV2Schema,
+  ExecutionHistoryRunRecordV3Schema,
   type ExecutionHistoryRecord,
   type ExecutionHistoryRunRecord,
   type ExecutionHistoryRunRecordV2,
+  type ExecutionHistoryRunRecordV3,
 } from "../schemas/executionHistory";
 
 import { ExecutionHistoryWriter } from "./executionHistoryWriter";
 
 /**
- * Normalized run record type — always the v2 shape.
- * Consumers that import this type are guaranteed the v2 field set.
+ * Normalized run record type — always the v2 field set, with the original v2
+ * or v3 schema discriminator preserved.
  */
-export type NormalizedRunRecord = ExecutionHistoryRunRecordV2;
+export type NormalizedRunRecord = ExecutionHistoryRunRecordV2 | ExecutionHistoryRunRecordV3;
 
 /**
  * A/B comparison of pipeline runs with vs without an active focus lens (Issue #2460).
@@ -113,6 +115,18 @@ function normalizePerStageCostSource(
     }
   }
   return out;
+}
+
+function normalizeParsedRunRecord<
+  T extends ExecutionHistoryRunRecordV2 | ExecutionHistoryRunRecordV3,
+>(record: T): T {
+  return {
+    ...record,
+    tokens: {
+      ...record.tokens,
+      per_stage: normalizePerStageCostSource(record.tokens.per_stage),
+    },
+  };
 }
 
 /**
@@ -432,8 +446,8 @@ export class ExecutionHistoryReader {
   /**
    * Parse a single JSONL file. Skips malformed lines with a warning.
    *
-   * For run records: tries v2 schema first, falls back to v1 + normalize.
-   * This ensures all returned run records have the v2 shape.
+   * For run records: dispatches by schema version, preserving strict v3 and v2
+   * records and normalizing v1 records to the v2 field set.
    * Outcome records are accepted as either v1 or v2 via the union schema.
    *
    * Results are memoized per `{path, mtimeMs, size}` — unchanged files
@@ -442,7 +456,7 @@ export class ExecutionHistoryReader {
    * file typically ever has a cache miss on subsequent reads.
    *
    * @param filePath - Absolute path to the JSONL file
-   * @returns Array of validated records (run records normalized to v2)
+   * @returns Array of validated records (v1 run records normalized to v2)
    */
   static async parseJsonlFile(filePath: string): Promise<ExecutionHistoryRecord[]> {
     // Fast path: if the file's mtime+size match a prior parse, reuse it.
@@ -511,8 +525,8 @@ export class ExecutionHistoryReader {
       try {
         const parsed = JSON.parse(trimmed);
 
-        // For run records, try v2 first then v1 with normalization.
-        // If both strict parses fail, accept the raw object if it has
+        // For run records, dispatch on the schema version. If strict parsing
+        // fails, accept the raw object if it has
         // the minimum required fields. Issue #2252: strict validation
         // caused rebuildIndex to silently drop valid-enough records,
         // leaving the dashboard with stale data.
@@ -525,24 +539,30 @@ export class ExecutionHistoryReader {
             continue;
           }
 
-          const v2Result = ExecutionHistoryRunRecordV2Schema.safeParse(parsed);
-          if (v2Result.success) {
-            // Issue #3228: backfill cost_source on per-stage records that
-            // lack the field (every record emitted before #3228).
-            records.push({
-              ...v2Result.data,
-              tokens: {
-                ...v2Result.data.tokens,
-                per_stage: normalizePerStageCostSource(v2Result.data.tokens.per_stage),
-              },
-            });
-            continue;
-          }
-
-          const v1Result = ExecutionHistoryRunRecordSchema.safeParse(parsed);
-          if (v1Result.success) {
-            records.push(normalizeRunRecordToV2(v1Result.data));
-            continue;
+          let strictParseError: string;
+          if (parsed.schema_version === "3") {
+            const result = ExecutionHistoryRunRecordV3Schema.safeParse(parsed);
+            if (result.success) {
+              records.push(normalizeParsedRunRecord(result.data));
+              continue;
+            }
+            strictParseError = result.error.message;
+          } else if (parsed.schema_version === "2") {
+            const result = ExecutionHistoryRunRecordV2Schema.safeParse(parsed);
+            if (result.success) {
+              records.push(normalizeParsedRunRecord(result.data));
+              continue;
+            }
+            strictParseError = result.error.message;
+          } else if (parsed.schema_version === "1") {
+            const result = ExecutionHistoryRunRecordSchema.safeParse(parsed);
+            if (result.success) {
+              records.push(normalizeRunRecordToV2(result.data));
+              continue;
+            }
+            strictParseError = result.error.message;
+          } else {
+            strictParseError = `Unsupported schema_version: ${String(parsed.schema_version)}`;
           }
 
           // Lenient fallback: accept record if it has essential fields.
@@ -558,7 +578,7 @@ export class ExecutionHistoryReader {
           }
 
           console.warn(
-            `[Nightgauge] Skipping malformed history line in ${path.basename(filePath)}: ${v1Result.error.message}`
+            `[Nightgauge] Skipping malformed history line in ${path.basename(filePath)}: ${strictParseError}`
           );
           continue;
         }
