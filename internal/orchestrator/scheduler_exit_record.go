@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -62,6 +64,9 @@ func (s *Scheduler) writeStageExitRecord(
 		// Tests sometimes drive the scheduler without a workspace root.
 		// Skip the write rather than scribbling into CWD.
 		return
+	}
+	if stage == state.StagePRCreate && runtime != nil {
+		captureSchedulerActualSize(workspaceRoot, item.Number, runtime)
 	}
 
 	success := stageErr == nil && exitCode == 0
@@ -173,6 +178,34 @@ func (s *Scheduler) writeStageExitRecord(
 	if err := diagnostics.WriteStageExitRecord(workspaceRoot, rec); err != nil {
 		log.Printf("#%d: failed to write stage-exit diagnostic record for %s: %v",
 			item.Number, stage, err)
+	}
+}
+
+// captureSchedulerActualSize snapshots the branch diff at the last safe
+// pre-merge seam. The terminal writer cannot recompute this after pr-merge:
+// the successful branch has already landed and would appear to be a zero-line
+// change. Best-effort by design — measurement failure never changes the stage
+// result and leaves the pointer absent rather than inventing a default.
+func captureSchedulerActualSize(workspaceRoot string, issueNumber int, runtime *state.RuntimeState) {
+	snap := runtime.Snapshot()
+	diffRoot := workspaceRoot
+	if snap.WorktreeDir != "" {
+		diffRoot = snap.WorktreeDir
+	}
+	base := actualsize.ResolveBaseBranch(issueNumber, diffRoot, workspaceRoot)
+	lines, err := actualsize.MeasureLines(diffRoot, base)
+	if err != nil {
+		log.Printf("#%d: pre-merge actual-size measurement unavailable at pr-create exit: %v", issueNumber, err)
+		return
+	}
+	runtime.SetActualLinesChanged(lines)
+	// Persist again because the ordinary stage snapshot is written immediately
+	// before writeStageExitRecord. This second atomic write is what makes the
+	// measurement visible to Recorder.Record and crash recovery.
+	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	if err := runtime.Persist(stateDir); err != nil {
+		log.Printf("#%d: pre-merge actual-size measurement captured (%d lines) but runtime persistence failed: %v",
+			issueNumber, lines, err)
 	}
 }
 

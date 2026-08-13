@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -195,15 +196,15 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	if !isSizeBucket(o.PredictedSize) {
 		t.Errorf("PredictedSize = %q — not a small|medium|large bucket; the size:* vocabulary (XS|S|M|L|XL) can never equal the bucket vocabulary the other writer uses, so calibration would report a measured 0%% forever", o.PredictedSize)
 	}
-	// ActualSize: no lines-changed measurement reaches this boundary, so the
-	// honest value is ABSENT. It must never be re-derived from the issue's
-	// size:* label — that is one of the same pre-run inputs PredictedSize comes
-	// from, so the "accuracy" would measure the scoring arithmetic. This run is
-	// exactly the case that exposed it: size:M + priority:critical scores 5, so
-	// the label-derived version books a MISS ("medium" vs "small") for a run the
-	// router sized correctly.
+	// This fixture never emits a pr-create stage exit, so ActualSize must stay
+	// ABSENT. It must never be re-derived from the issue's size:* label — that is
+	// one of the same pre-run inputs PredictedSize comes from, so the "accuracy"
+	// would measure the scoring arithmetic. This run is exactly the case that
+	// exposed it: size:M + priority:critical scores 5, so the label-derived
+	// version books a MISS ("medium" vs "small") for a run the router sized
+	// correctly.
 	if o.ActualSize != "" {
-		t.Errorf("ActualSize = %q, want empty — nothing here measures how big the change actually was, and rebucketing the size:* label makes the pair circular (#304)", o.ActualSize)
+		t.Errorf("ActualSize = %q, want empty — this run never reached the pr-create measurement seam, and rebucketing the size:* label makes the pair circular (#304)", o.ActualSize)
 	}
 	if o.DurationMs <= 0 {
 		t.Errorf("DurationMs = %d, want > 0", o.DurationMs)
@@ -242,6 +243,68 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 	}
 	if got := records[0].OutcomePrediction.ActualModel; got != o.ActualModel {
 		t.Errorf("RunRecord.OutcomePrediction.ActualModel = %q, outcome says %q — the two sinks disagree", got, o.ActualModel)
+	}
+}
+
+// TestNotifyComplete_UsesPreMergeLinesCapturedAtPRCreate pins the extension
+// writer's half of #369. diagnostics.recordStageExit is the last shared Go
+// seam before pr-merge, so it captures the still-live branch diff onto the run
+// snapshot; notifyComplete must carry that independent measurement into both
+// the learning corpus and the V2 run record.
+func TestNotifyComplete_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
+	dir := initTempGitRepo(t)
+	for _, args := range [][]string{
+		{"git", "-C", dir, "branch", "-M", "main"},
+		{"git", "-C", dir, "checkout", "-b", "fix/369-measure"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# test\none\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeCapturedIssueContext(t, dir, 369)
+
+	const runID = "01900130-0000-7000-8000-000000000369"
+	s := NewServer(nil, WithWorkspaceRoot(dir))
+	transition := s.methods["pipeline.notifyStageTransition"]
+	stageExit := s.methods["diagnostics.recordStageExit"]
+	complete := s.methods["pipeline.notifyComplete"]
+
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":369,"stage":"feature-dev","status":"running","model":"claude-sonnet-5","adapter":"claude","runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(running): %v", err)
+	}
+	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":369,"stage":"feature-dev","status":"complete","model":"claude-sonnet-5","adapter":"claude","runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyStageTransition(complete): %v", err)
+	}
+	exitRaw, err := json.Marshal(RecordStageExitParams{
+		Repo: "nightgauge/acmeapp", IssueNumber: 369, Stage: "pr-create",
+		Success: true, RunID: runID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stageExit(t.Context(), exitRaw); err != nil {
+		t.Fatalf("diagnostics.recordStageExit(pr-create): %v", err)
+	}
+	if _, err := complete(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":369,"success":true,"totalDurationMs":1000,"runId":"`+runID+`"}`)); err != nil {
+		t.Fatalf("notifyComplete: %v", err)
+	}
+
+	outcomes, exists := readOutcomes(t, dir)
+	if !exists || len(outcomes) != 1 {
+		t.Fatalf("outcomes = %v, exists=%v; want exactly one", outcomes, exists)
+	}
+	if outcomes[0].ActualSize != "small" {
+		t.Errorf("ActualSize = %q, want small from the measured 3-line pre-merge diff", outcomes[0].ActualSize)
+	}
+	records := readHistoryRecords(t, dir)
+	if len(records) != 1 || records[0].OutcomePrediction == nil {
+		t.Fatalf("run records = %+v, want one record with outcome_prediction", records)
+	}
+	if got := records[0].OutcomePrediction.ActualSize; got != outcomes[0].ActualSize {
+		t.Errorf("RunRecord actual_size = %q, outcome actualSize = %q", got, outcomes[0].ActualSize)
 	}
 }
 

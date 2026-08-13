@@ -244,11 +244,10 @@ const calibrationRecentWindow = 10
 // label hygiene as if it were routing error (#304).
 //
 // Both pairs are checked, because both are routing predictions and either can
-// be the measurable one. Today only the model pair ever is: no writer records
-// actualSize (deferred follow-up — see docs/SELF_IMPROVEMENT_LOOP.md § Outcome
-// Recording), so the size branch yields nothing on every real corpus. That is
-// reported as no-data in the evidence rather than left to look like a measured
-// contribution of zero.
+// be the measurable one. Current writers capture actualSize only for runs that
+// reach pr-create; older and pre-pr-create rows can still yield no size pair.
+// That is reported as no-data in the evidence rather than left to look like a
+// measured contribution of zero.
 func (o outcomeRecord) routingComparisons() []routingPair {
 	var out []routingPair
 	if o.PredictedSize != "" && o.ActualSize != "" {
@@ -341,14 +340,14 @@ func analyzeCalibration(root string, since time.Time) LoopResult {
 	sizePairs := countKind(pairs, pairKindSize)
 	modelPairs := countKind(pairs, pairKindModel)
 	// Which pair produced the number. Without this the published accuracy is a
-	// blend of two quantities under one label — and the size pair, which no
-	// writer can measure today, is indistinguishable from a pair that was
-	// measured and happened to contribute nothing.
+	// blend of two quantities under one label — and an absent size pair is
+	// indistinguishable from a pair that was measured and happened to
+	// contribute nothing without these explicit counts.
 	pairEvidence := func(e map[string]string) map[string]string {
 		e["sizePairsMeasured"] = itoa(sizePairs)
 		e["modelPairsMeasured"] = itoa(modelPairs)
 		if sizePairs == 0 {
-			e["sizeCalibration"] = "no-data — no writer records actualSize yet, so predicted size is never scored"
+			e["sizeCalibration"] = "no-data — this period has no row with both predictedSize and measured actualSize"
 		}
 		return e
 	}

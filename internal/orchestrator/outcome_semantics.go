@@ -254,24 +254,16 @@ func OutcomePredictedSize(boardSize string, labels []string, complexityScore int
 	return SizeBucketForScore(complexityScore)
 }
 
-// NOTE ON THE ACTUAL SIZE — there is deliberately no helper here, because
-// neither writer can honestly produce one.
+// NOTE ON THE ACTUAL SIZE — its shared implementation lives in
+// internal/intelligence/actualsize, below the orchestrator import boundary.
+// Both dispatch paths capture insertions+deletions against the PR base at
+// pr-create exit, while the branch still exists, and persist the raw count on
+// RuntimeState. Terminal writers bucket that measurement through the same
+// XS/S/M/L/XL thresholds as github.OutcomeService and then through the
+// SizeBucketForScore-compatible small/medium/large vocabulary. Runs that never
+// reach pr-create leave the measurement EMPTY.
 //
-// The corpus's actualSize means "how big the change the run produced turned out
-// to be": the codebase's own non-circular definition is
-// OutcomeService.getActualSizeBucket (internal/github/outcome.go), which buckets
-// by lines ACTUALLY changed and is fed from the merged PR's line count by
-// `nightgauge outcome record`.
-//
-// Nothing at either terminal recording boundary carries that measurement. The
-// V2 run record has file COUNTS (files.read_count / files.written_count), never
-// line counts, and computing a diff at terminal time is not a substitute: on the
-// success path pr-merge has already landed the branch, so `git diff <base>`
-// reports ~0 and would book every merged run as "small" — a confidently wrong
-// measurement, which is worse than an absent one.
-//
-// So both writers leave actualSize EMPTY and every consumer excludes the pair
-// from its denominator. What must never come back is the label-derived
+// What must never come back is the label-derived
 // substitute the round-2 review caught: bucketing the issue's own size:* label
 // makes actual a second reading of the SAME pre-run inputs the prediction came
 // from (complexity_score = fib_round(SIZE_MAP[size] × PRIORITY_MULT[priority])),

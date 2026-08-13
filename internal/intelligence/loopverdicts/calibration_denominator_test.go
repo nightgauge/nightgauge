@@ -210,10 +210,10 @@ func TestCalibration_RecentWindowIsTenComparisonsOnceTheCorpusAllows(t *testing.
 	}
 }
 
-// The size pair has no writer (deferred follow-up), so it must be reported as
-// no-data rather than silently contributing nothing to a number labelled as if
-// it covered size.
-func TestCalibration_SizePairReportsNoDataWhenNothingWritesActualSize(t *testing.T) {
+// A period can still have no measured size rows (legacy corpus or runs that
+// never reached pr-create), so it must be reported as no-data rather than
+// silently contributing nothing to a number labelled as if it covered size.
+func TestCalibration_SizePairReportsNoDataWhenPeriodHasNoActualSize(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
 	now := time.Now().UTC()

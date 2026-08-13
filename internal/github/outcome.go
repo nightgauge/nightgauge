@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
 	"gopkg.in/yaml.v3"
 )
 
@@ -353,25 +354,16 @@ func (s *OutcomeService) findExistingOutcome(model *complexityModel, issueNumber
 }
 
 func (s *OutcomeService) getActualSizeBucket(lines int, model *complexityModel) string {
-	// Use size_calibration expected_lines as thresholds (upper bound per bucket)
-	thresholds := map[string]int{
-		"XS": 75,
-		"S":  250,
-		"M":  750,
-		"L":  1750,
-	}
-	// Override with model's expected_lines if available
+	// Use the same shared line bucketer as the terminal learning writers. The
+	// model supplies learned upper-bound overrides; absent entries fall back to
+	// the canonical defaults in actualsize.
+	thresholds := make(map[string]int, len(model.SizeCalibration))
 	for size, cal := range model.SizeCalibration {
 		if cal.ExpectedLines > 0 {
 			thresholds[size] = cal.ExpectedLines
 		}
 	}
-	for _, size := range sizeOrder[:len(sizeOrder)-1] {
-		if lines <= thresholds[size] {
-			return size
-		}
-	}
-	return "XL"
+	return actualsize.FiveBucket(lines, thresholds)
 }
 
 func (s *OutcomeService) isPredictionCorrect(predicted, actual string) bool {

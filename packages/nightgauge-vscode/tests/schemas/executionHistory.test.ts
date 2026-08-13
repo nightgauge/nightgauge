@@ -365,6 +365,25 @@ describe("ExecutionHistory Schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("preserves a measured pre-merge size and outcome bucket (#369)", () => {
+      const record = {
+        ...validV2RunRecord,
+        actual_lines_changed: 0,
+        outcome_prediction: {
+          predicted_size: "small",
+          actual_size: "small",
+          predicted_model: "sonnet",
+          actual_model: "sonnet",
+        },
+      };
+      const result = ExecutionHistoryRunRecordV2Schema.safeParse(record);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.actual_lines_changed).toBe(0);
+        expect(result.data.outcome_prediction?.actual_size).toBe("small");
+      }
+    });
+
     it("should validate a v2 run record with all optional fields present", () => {
       const record = {
         ...validV2RunRecord,

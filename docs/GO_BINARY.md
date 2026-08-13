@@ -2987,16 +2987,14 @@ treats "main is red" as proof on its own. Window default: 7 days
 that pair — and `tuning` then reports `skipped` instead of adjusting a parameter
 toward its target from a substituted `0.0` (#304).
 
-**`learn tune` currently tunes nothing, on any corpus, by construction.**
-`size_accuracy` is its only tuning target and no writer in the tree records
-`actualSize`, so `sizeSamples` is always 0 and the command always emits
-`{"param":"size_accuracy","measurableToday":false,"skipped":…}` and writes no
-entry to the `tuning-audit.jsonl` that `learn audit` reads. The measurement that
-would close this (lines changed, bucketed by
-`github.OutcomeService.getActualSizeBucket`) is computed **pre-merge** at
-`pr-create` dispatch and is deliberately not threaded through to terminal
-recording yet — tracked as a follow-up. `modelAccuracy` is measurable and is
-reported, but is not a tuning target. See
+`size_accuracy` is the command's tuning target. Current writers capture the
+non-circular insertion+deletion count **pre-merge** at `pr-create` exit, bucket
+it through the `github.OutcomeService.getActualSizeBucket` thresholds, and write
+`actualSize` to the learning corpus. A corpus with measured predicted/actual
+rows is tuned and appended to `tuning-audit.jsonl`; a corpus containing only
+legacy rows, pre-`pr-create` failures, or rows without a size prediction emits
+`{"param":"size_accuracy","measurableToday":true,"skipped":…}` instead.
+`modelAccuracy` remains report-only. See
 [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 
 ```bash

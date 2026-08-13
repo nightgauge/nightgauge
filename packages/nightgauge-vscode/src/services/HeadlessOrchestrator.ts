@@ -6541,7 +6541,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         issueNumber,
         stage,
         success,
-        this.auditCorrelationId ?? undefined,
+        // ADR-017: the diagnostics record belongs to the same run as every
+        // pipeline.* transition. The audit correlation UUID is deliberately a
+        // different identity and must never cross the IPC wire.
+        this.stateService?.getRunId() ?? undefined,
         new Date(stageStartTime).toISOString(),
         model || undefined,
         // `null` means the subprocess died on a signal, so no exit code ever
