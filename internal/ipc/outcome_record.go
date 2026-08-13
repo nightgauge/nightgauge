@@ -97,9 +97,9 @@ func learningOutcomeFor(
 		// written in two vocabularies reports a *measured* 0% forever, and a
 		// fabricated half is counted as a measurement of nothing.
 		//
-		// ActualSize is deliberately unset: no lines-changed measurement reaches
-		// this boundary, and the size:* label is one of the same pre-run inputs
-		// the prediction is derived from.
+		// ActualSize comes from the pre-merge line count captured on RuntimeState
+		// at pr-create exit and projected onto the built run record. It is absent
+		// when that stage never ran; it is never re-derived from the size:* input.
 		//
 		// The size input goes in RAW, through the same resolver the scheduler
 		// uses (board Size field → size:* label → absent). The board term is
@@ -108,6 +108,7 @@ func learningOutcomeFor(
 		// Passing a pre-resolved label instead is how the two writers ended up
 		// keying one corpus field's presence on two different sources.
 		PredictedSize:   orchestrator.OutcomePredictedSize("", cls.Labels, cls.ComplexityScore),
+		ActualSize:      measuredActualSize(record),
 		PredictedModel:  orchestrator.OutcomeModelBand(cls.PredictedModel),
 		ActualModel:     servedDevModel(record, snap, cls.PredictedModel),
 		Success:         success,
@@ -119,6 +120,13 @@ func learningOutcomeFor(
 		FailedStage:     failedStageFor(record, snap, success),
 		CompletedAt:     completedAtFor(record, now),
 	}, outcomeRecord
+}
+
+func measuredActualSize(record state.V2RunRecord) string {
+	if record.OutcomePrediction == nil {
+		return ""
+	}
+	return record.OutcomePrediction.ActualSize
 }
 
 // outcomePredictionFrom projects the outcome's predicted-vs-actual routing

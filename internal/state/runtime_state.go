@@ -88,6 +88,10 @@ type RuntimeState struct {
 	// gets the real class even after the worktree is archived (#4129). Empty
 	// until a content-producing stage has run.
 	AuthoritativeChangeClass string `json:"authoritativeChangeClass,omitempty"`
+	// ActualLinesChanged is the pre-merge insertion+deletion count captured
+	// when pr-create exits. Pointer semantics distinguish a measured zero-line
+	// diff from a run that never reached the measurement point (#369).
+	ActualLinesChanged *int `json:"actualLinesChanged,omitempty"`
 
 	// Token/cost metrics (accumulated across stages)
 	InputTokens  int     `json:"inputTokens"`
@@ -787,6 +791,18 @@ func (rs *RuntimeState) SetAuthoritativeChangeClass(class string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	rs.AuthoritativeChangeClass = class
+}
+
+// SetActualLinesChanged records the pre-merge diff measurement on the runtime
+// so terminal writers never have to recompute it after pr-merge. Negative
+// values are invalid and leave the prior measurement untouched.
+func (rs *RuntimeState) SetActualLinesChanged(lines int) {
+	if lines < 0 {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.ActualLinesChanged = &lines
 }
 
 // SetWorktree stamps the run's worktree as soon as it is provisioned — BEFORE
@@ -1707,6 +1723,10 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		TerminalOutcome: rs.TerminalOutcome,
 		Abandoned:       rs.Abandoned,
 		AbandonedReason: rs.AbandonedReason,
+	}
+	if rs.ActualLinesChanged != nil {
+		lines := *rs.ActualLinesChanged
+		snap.ActualLinesChanged = &lines
 	}
 	if rs.TerminalAt != nil {
 		at := *rs.TerminalAt

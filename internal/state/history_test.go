@@ -431,6 +431,31 @@ func TestBuildV2Record_ZeroStagesNoTokens(t *testing.T) {
 	}
 }
 
+func TestBuildV2Record_ActualSizeDistinguishesMeasuredZeroFromAbsent(t *testing.T) {
+	root := t.TempDir()
+	hw := NewHistoryWriter(root)
+	now := time.Now()
+
+	absent := NewRuntimeState("nightgauge/nightgauge", 368, "item-368", testRunID())
+	absentRecord := hw.BuildV2Record(absent, false, "pre-pr-create failure", V2RunInput{}, now)
+	if absentRecord.ActualLinesChanged != nil {
+		t.Fatalf("pre-pr-create record ActualLinesChanged = %v, want absent", absentRecord.ActualLinesChanged)
+	}
+	if absentRecord.OutcomePrediction != nil {
+		t.Fatalf("pre-pr-create record OutcomePrediction = %+v, want absent", absentRecord.OutcomePrediction)
+	}
+
+	measured := NewRuntimeState("nightgauge/nightgauge", 369, "item-369", testRunID())
+	measured.SetActualLinesChanged(0)
+	measuredRecord := hw.BuildV2Record(measured, true, "", V2RunInput{}, now)
+	if measuredRecord.ActualLinesChanged == nil || *measuredRecord.ActualLinesChanged != 0 {
+		t.Fatalf("measured ActualLinesChanged = %v, want pointer to zero", measuredRecord.ActualLinesChanged)
+	}
+	if measuredRecord.OutcomePrediction == nil || measuredRecord.OutcomePrediction.ActualSize != "small" {
+		t.Fatalf("measured OutcomePrediction = %+v, want actual_size small", measuredRecord.OutcomePrediction)
+	}
+}
+
 // TestBuildV2Record_TotalCacheReadPopulated verifies that TotalCacheRead is
 // populated from stage data (previously always 0).
 func TestBuildV2Record_TotalCacheReadPopulated(t *testing.T) {

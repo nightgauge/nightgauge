@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 func TestRecorder_RecordAndLoad(t *testing.T) {
@@ -56,6 +58,43 @@ func TestRecorder_RecordAndLoad(t *testing.T) {
 	}
 	if loaded[1].Success {
 		t.Error("second outcome should be failure")
+	}
+}
+
+func TestRecorder_AttributesActualSizeToMatchingConcurrentRun(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	completedAt := time.Now().UTC()
+
+	target := state.NewRuntimeState("acme/widget", 369, "item-old", "01900130-0000-7000-8000-000000000369")
+	target.StartedAt = completedAt.Add(-10 * time.Minute)
+	target.InputTokens, target.OutputTokens, target.TotalCostUSD = 111, 22, 0.369
+	target.SetActualLinesChanged(1000) // default L -> learning medium
+	if err := target.Persist(stateDir); err != nil {
+		t.Fatalf("persist target: %v", err)
+	}
+
+	newerOtherRun := state.NewRuntimeState("acme/widget", 369, "item-new", "01900130-0000-7000-8000-000000000370")
+	newerOtherRun.StartedAt = completedAt.Add(-time.Minute)
+	newerOtherRun.InputTokens, newerOtherRun.OutputTokens, newerOtherRun.TotalCostUSD = 333, 44, 0.111
+	newerOtherRun.SetActualLinesChanged(10) // small; choosing latest would be wrong
+	if err := newerOtherRun.Persist(stateDir); err != nil {
+		t.Fatalf("persist concurrent run: %v", err)
+	}
+
+	r := NewRecorder(root)
+	if err := r.Record(Outcome{
+		IssueNumber: 369, Repo: "acme/widget", DurationMs: int64((10 * time.Minute) / time.Millisecond),
+		InputTokens: 111, OutputTokens: 22, CostUSD: 0.369, CompletedAt: completedAt,
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	loaded, err := r.LoadAll()
+	if err != nil || len(loaded) != 1 {
+		t.Fatalf("LoadAll = %v, %v; want one row", loaded, err)
+	}
+	if loaded[0].ActualSize != "medium" {
+		t.Errorf("ActualSize = %q, want medium from the matching run; latest issue snapshot belonged to another run", loaded[0].ActualSize)
 	}
 }
 

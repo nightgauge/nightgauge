@@ -13,14 +13,76 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
+
+// TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate pins the autonomous
+// writer's half of #369. The diff is created before pr-create exits and the
+// terminal outcome is recorded while it is still available. A terminal-time
+// diff would be circularly late: successful pr-merge runs have already landed
+// on main by then and would all look like zero-line changes.
+func TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
+	root := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", ".")
+	runGit("commit", "-m", "base")
+	runGit("checkout", "-b", "fix/369-measure")
+	if err := os.WriteFile(filepath.Join(root, "change.txt"), []byte("base\none\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Scheduler{recordOutcomes: true}
+	item := types.BoardItem{Number: 369, Repo: "acme/widget", Size: types.SizeM}
+	runtime := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
+	runtime.BeginStage(state.StagePRCreate)
+	s.writeStageExitRecord(item, state.StagePRCreate, runtime,
+		&StageRunResult{ExitCode: 0}, 0, nil, 0, "haiku",
+		0, 0, 0, time.Now().Add(-time.Second), root, "OPEN", "small")
+
+	prediction := s.recordOutcome(item, runtime.Snapshot(), true, 3, "sonnet", root)
+	got := readCorpus(t, root)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 outcome, got %d", len(got))
+	}
+	if got[0].ActualSize != "small" {
+		t.Errorf("ActualSize = %q, want small from the measured 3-line pre-merge diff", got[0].ActualSize)
+	}
+	if prediction == nil {
+		t.Fatal("recordOutcome returned nil prediction")
+	}
+	hw := state.NewHistoryWriter(root)
+	record := hw.BuildV2Record(runtime.Snapshot(), true, "", state.V2RunInput{
+		Title: "measure actual size", BaseBranch: "main", ComplexityScore: 3,
+	}, time.Now())
+	record.OutcomePrediction = prediction // scheduler recordV2History ordering
+	if err := hw.WriteV2Record(record, time.Now()); err != nil {
+		t.Fatalf("WriteV2Record: %v", err)
+	}
+	if prediction.ActualSize != "small" {
+		t.Errorf("V2 OutcomePrediction.ActualSize = %q, want small", prediction.ActualSize)
+	}
+}
 
 func readCorpus(t *testing.T, root string) []learning.Outcome {
 	t.Helper()
@@ -140,11 +202,10 @@ func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T
 			if got[0].PredictedSize != tc.wantPredicted {
 				t.Errorf("PredictedSize = %q, want %q", got[0].PredictedSize, tc.wantPredicted)
 			}
-			// ACTUAL size is always absent at this boundary: nothing here
-			// measures how big the change turned out to be, and rebucketing the
-			// issue's own size:* label makes the pair a function of the same
-			// pre-run inputs the prediction came from — a "measurement" no
-			// routing improvement could move (#304 round 2).
+			// This table does not drive a pr-create exit, so ACTUAL size stays
+			// absent. Rebucketing the issue's own size:* label would make the
+			// pair a function of the same pre-run inputs the prediction came from
+			// — a "measurement" no routing improvement could move (#304 round 2).
 			if got[0].ActualSize != "" {
 				t.Errorf("ActualSize = %q, want empty — the size:* label is an INPUT to the prediction, not a measurement of the run", got[0].ActualSize)
 			}

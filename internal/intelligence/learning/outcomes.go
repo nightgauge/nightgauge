@@ -5,10 +5,14 @@ package learning
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // Outcome records the result of a pipeline run for calibration.
@@ -34,11 +38,11 @@ type Outcome struct {
 	// the same small|medium|large vocabulary, bucketed from lines ACTUALLY
 	// changed (the definition in github.OutcomeService.getActualSizeBucket).
 	//
-	// No terminal recording boundary carries that measurement today, so both
-	// writers leave it empty and every consumer excludes the pair. It is NOT
-	// the issue's size:* label rebucketed: that is one of the same pre-run
-	// inputs PredictedSize is derived from, so the comparison would measure the
-	// scoring arithmetic rather than the run.
+	// The pr-create stage-exit seam captures this measurement before merge and
+	// persists it on RuntimeState. Runs that never reach that seam leave it
+	// empty. It is NOT the issue's size:* label rebucketed: that is one of the
+	// same pre-run inputs PredictedSize is derived from, so the comparison would
+	// measure the scoring arithmetic rather than the run.
 	ActualSize string `json:"actualSize,omitempty"`
 	// PredictedModel is the router's pickup recommendation for the
 	// implementation stage, as a registry band (haiku|sonnet|opus|fable) — and
@@ -82,20 +86,36 @@ type Outcome struct {
 
 // Recorder persists outcomes to a JSONL file for calibration.
 type Recorder struct {
-	mu       sync.Mutex
-	filePath string
+	mu            sync.Mutex
+	workspaceRoot string
+	filePath      string
 }
 
 // NewRecorder creates an outcome recorder at the workspace root.
 func NewRecorder(workspaceRoot string) *Recorder {
 	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
-	return &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
+	return &Recorder{
+		workspaceRoot: workspaceRoot,
+		filePath:      filepath.Join(dir, "outcomes.jsonl"),
+	}
 }
 
 // Record appends an outcome to the JSONL file.
 func (r *Recorder) Record(outcome Outcome) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// The autonomous scheduler's terminal call site predates #369 and receives
+	// no line-count argument. Read the same persisted RuntimeState snapshot its
+	// V2 writer uses, where the pr-create stage-exit seam stored the pre-merge
+	// measurement. The extension writer already supplies ActualSize from its
+	// built V2 record, so this is a no-op there. Match the scheduler snapshot by
+	// its terminal metrics rather than taking "the latest snapshot for issue":
+	// ADR-017 permits concurrent runs of one issue, and cross-run attribution is
+	// worse than an absent measurement. Missing/ambiguous matches stay absent.
+	if outcome.ActualSize == "" && outcome.IssueNumber > 0 && r.workspaceRoot != "" {
+		outcome.ActualSize = r.actualSizeFromRuntime(outcome)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(r.filePath), 0755); err != nil {
 		return fmt.Errorf("create outcome dir: %w", err)
@@ -116,6 +136,56 @@ func (r *Recorder) Record(outcome Outcome) error {
 		return fmt.Errorf("write outcome: %w", err)
 	}
 	return nil
+}
+
+// actualSizeFromRuntime resolves the scheduler-owned run snapshot that
+// produced outcome. Outcome predates run_id, so use the fields constructed from
+// that same snapshot: repo, token/cost totals and elapsed time. Refuse an
+// ambiguous tie. Five seconds tolerates the small gap between recordOutcome's
+// TotalDuration and CompletedAt calls without allowing an unrelated run.
+func (r *Recorder) actualSizeFromRuntime(outcome Outcome) string {
+	if outcome.CompletedAt.IsZero() {
+		return ""
+	}
+	stateDir := filepath.Join(r.workspaceRoot, ".nightgauge", "pipeline")
+	runtimes, err := state.FindPersistedStatesForIssue(stateDir, outcome.IssueNumber)
+	if err != nil {
+		return ""
+	}
+
+	const maxDurationDelta = 5 * time.Second
+	bestDelta := maxDurationDelta + 1
+	var best *state.RuntimeState
+	ambiguous := false
+	for _, runtime := range runtimes {
+		if runtime == nil || runtime.ActualLinesChanged == nil ||
+			(outcome.Repo != "" && runtime.Repo != "" && outcome.Repo != runtime.Repo) ||
+			runtime.InputTokens != outcome.InputTokens || runtime.OutputTokens != outcome.OutputTokens ||
+			math.Abs(runtime.TotalCostUSD-outcome.CostUSD) > 1e-9 {
+			continue
+		}
+		duration := outcome.CompletedAt.Sub(runtime.StartedAt)
+		if duration < 0 {
+			continue
+		}
+		delta := duration - time.Duration(outcome.DurationMs)*time.Millisecond
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta > maxDurationDelta {
+			continue
+		}
+		switch {
+		case delta < bestDelta:
+			best, bestDelta, ambiguous = runtime, delta, false
+		case delta == bestDelta:
+			ambiguous = true
+		}
+	}
+	if best == nil || ambiguous {
+		return ""
+	}
+	return actualsize.LearningBucket(r.workspaceRoot, *best.ActualLinesChanged)
 }
 
 // LoadAll reads all recorded outcomes.

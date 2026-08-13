@@ -711,3 +711,27 @@ func TestSetWorktree_WritesOnlyTheWorktree(t *testing.T) {
 		t.Errorf("PID = %d after a re-stamp, want 4242 — SetWorktree must not clear a recorded child", pid)
 	}
 }
+
+func TestActualLinesChanged_PreservesMeasuredZeroAcrossSnapshotAndDisk(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 369, "item-369", testRunID())
+	if rs.Snapshot().ActualLinesChanged != nil {
+		t.Fatal("new runtime has an actual-lines measurement before pr-create")
+	}
+	rs.SetActualLinesChanged(0)
+	snap := rs.Snapshot()
+	if snap.ActualLinesChanged == nil || *snap.ActualLinesChanged != 0 {
+		t.Fatalf("snapshot ActualLinesChanged = %v, want pointer to measured zero", snap.ActualLinesChanged)
+	}
+
+	dir := t.TempDir()
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	loaded, err := LoadPersistedState(dir, rs.RunID)
+	if err != nil {
+		t.Fatalf("LoadPersistedState: %v", err)
+	}
+	if loaded.ActualLinesChanged == nil || *loaded.ActualLinesChanged != 0 {
+		t.Fatalf("loaded ActualLinesChanged = %v, want pointer to measured zero", loaded.ActualLinesChanged)
+	}
+}

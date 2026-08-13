@@ -100,7 +100,7 @@ mapping against the prediction instead. See
 | Field            | Meaning                                                                                                                                                | Absent when                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
 | `predictedSize`  | `SizeBucketForScore(routing.complexity_score)`                                                                                                         | the issue carried no size input (see below), or is unscored                    |
-| `actualSize`     | how big the change turned out to be, bucketed from lines **changed**                                                                                   | **always, today** — no terminal boundary carries a lines-changed measurement   |
+| `actualSize`     | how big the change turned out to be, bucketed from lines **changed** captured at `pr-create` exit                                                      | the run never reached `pr-create`, or the pre-merge diff could not be measured |
 | `predictedModel` | `routing.pickup_recommendation.dev_model` as a registry band (`OutcomeModelBand`)                                                                      | the router made no recommendation, or the recommendation has no registry band  |
 | `actualModel`    | the band the **`feature-dev`** stage served — the adapter mapping inverted against the prediction (`OutcomeActualBand`), not a strongest-band collapse | that stage never ran, reported no model, or served an id with no registry band |
 
@@ -118,12 +118,10 @@ other — one corpus field, two presence rules, no discriminator.
 not symmetric. `issue-{N}.json` carries `labels` and `routing`, never the board
 `Size` field, so the extension writer's board term is always empty and a
 board-sized, unlabelled issue records no size prediction there. That is an input
-the extension path does not receive, not a second definition — and it is inert
-while `actualSize` is unwritten (`predictedSize` never enters a denominator). It
-must be closed before a lines-changed measurement is threaded in, or the size
-denominator would silently include autonomous rows and exclude extension rows
-for the same issues. Tracked as a follow-up alongside the `actualSize` work
-below.
+the extension path does not receive, not a second definition. The both-halves
+denominator guard keeps such a row out of size accuracy even though it now
+carries `actualSize`; closing the input gap would increase coverage without
+changing the meaning of any measured pair.
 
 **Why `predictedSize` needs a size input at all.** Complexity scores are clamped
 to `[1,8]` and default to the `M` base score for an issue with no size term, so
@@ -131,33 +129,22 @@ to `[1,8]` and default to the `M` base score for an issue with no size term, so
 code, and ~95% of real issues (measured on this repo's own history) would record
 a fabricated `"small"` through it. Absence is derived from the missing input.
 
-**Why `actualSize` is empty — and what that costs today.** The non-circular
-definition already exists: `github.OutcomeService.getActualSizeBucket` buckets by
-lines actually changed. Nothing at either **terminal recording boundary** carries
-that number — the run record has file _counts_ (`files.read_count` /
-`files.written_count`), never line counts, and a diff computed at terminal time
-is not a substitute, because on the success path `pr-merge` has already landed
-the branch and `git diff <base>` reports ~0, which would book every merged run
-`small`.
+**Why `actualSize` is captured before merge.** The non-circular definition is
+`github.OutcomeService.getActualSizeBucket`: bucket insertions+deletions actually
+changed against the PR base. A diff computed at terminal time is invalid because
+successful `pr-merge` runs have already landed and would appear to be ~0 lines.
+Both dispatch paths therefore capture the diff at `pr-create` exit, persist the
+raw count on `RuntimeState`, and project its `SizeBucketForScore`-compatible
+`small|medium|large` bucket into both the V2 run record and learning corpus.
+Pointer semantics preserve a measured zero while runs that never reach
+`pr-create` stay absent.
 
-The measurement does exist earlier in the run, **pre-merge**: the pipeline
-already computes insertions+deletions vs the base at `pr-create` dispatch
-(`getDiffLineCount` in `internal/orchestrator/scheduler.go`, and its twin in
-`packages/nightgauge-vscode/src/utils/skillRunner.ts`), and the codebase has the
-precedent of stashing a post-dev diff-derived value on the runtime for the
-terminal writer to read (`RuntimeState.AuthoritativeChangeClass`). Threading that
-value through to terminal recording is **deliberately deferred** — it is a
-change to what both writers capture mid-run, not to what they record — and is
-tracked as a follow-up.
-
-**Operational consequence, stated plainly:** until that lands, `nightgauge learn
-tune` tunes nothing on any corpus. `size_accuracy` is its only tuning target,
-`actualSize` has no writer, so the command always reports `skipped` with the
-reason above and writes no entry to `tuning-audit.jsonl`. The calibration loop
-verdict likewise publishes `sizePairsMeasured: 0` and an explicit
-`sizeCalibration: no-data` note, so the number it reports is not mistaken for
-size/complexity accuracy. `modelAccuracy` **is** measurable and is reported —
-it is simply not a tuning target.
+**Operational consequence:** `nightgauge learn tune` tunes `size_accuracy` when
+the corpus contains at least one row with both halves. A legacy-only corpus, or a
+period containing only pre-`pr-create` failures / rows without a size prediction,
+still reports `skipped` and writes no `tuning-audit.jsonl` entry. The calibration
+loop likewise reports `sizeCalibration: no-data` only when its selected period
+contains zero measured size pairs.
 
 What must never come back is bucketing the issue's own size term for the actual
 half: that is one of the same inputs `complexity_score` is computed from

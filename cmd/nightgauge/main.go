@@ -5363,26 +5363,18 @@ func learnTuneCmd() *cobra.Command {
 			// parameter in proportion to how many issues lacked a size label
 			// (#304). Say so instead, and leave the parameter alone.
 			//
-			// The skip is UNCONDITIONAL today and the output says so outright.
-			// size_accuracy is this command's only tuning target, and no writer
-			// in the tree records actualSize: both terminal recording boundaries
-			// leave it empty because neither carries a lines-changed measurement
-			// (the pipeline computes one PRE-merge, at pr-create dispatch, and it
-			// is deliberately not threaded through to terminal recording yet —
-			// tracked as a follow-up). So `learn tune` cannot tune anything on
-			// any corpus the current code produces. A command that quietly no-ops
-			// while printing a calibration report reads as if it tuned; this one
-			// has to state the reason and the scope every time it runs.
+			// Current writers capture actualSize at pr-create exit. A corpus can
+			// still contain no measurable size pair (older rows, runs that failed
+			// before pr-create, or rows without a size prediction); say that the
+			// DATA is absent without claiming the target has no writer.
 			if report.SizeAccuracy == nil {
 				output["tuning"] = map[string]interface{}{
 					"param":           "size_accuracy",
-					"measurableToday": false,
-					"skipped": "size_accuracy is UNMEASURABLE: no writer in the pipeline records actualSize, " +
-						"so the corpus can never contain a predicted-vs-actual size pair and this command " +
-						"tunes nothing on any corpus the current code produces. The non-circular measurement " +
-						"(lines changed, bucketed by github.OutcomeService.getActualSizeBucket) is computed " +
-						"pre-merge at pr-create dispatch and is deliberately not threaded to terminal recording " +
-						"yet — tracked as a follow-up. See docs/SELF_IMPROVEMENT_LOOP.md § Outcome Recording.",
+					"measurableToday": true,
+					"skipped": "this corpus has no row with both predictedSize and measured actualSize; " +
+						"current writers capture actualSize from the pre-merge diff at pr-create exit, " +
+						"while older rows and runs that never reached pr-create remain absent. " +
+						"See docs/SELF_IMPROVEMENT_LOOP.md § Outcome Recording.",
 					"measuredAlternate": "modelAccuracy (reported above; not a tuning target)",
 				}
 				return printJSON(output)

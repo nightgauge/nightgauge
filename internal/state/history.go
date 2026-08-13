@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/history"
+	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
 )
 
 // v2RunBodyMax bounds V2RunRecord.Body (#183) — matches the platform's
@@ -119,6 +120,10 @@ type V2RunRecord struct {
 	IsRecovery        bool                     `json:"is_recovery,omitempty"`
 	GateResults       []GateResult             `json:"gate_results,omitempty"`
 	OutcomePrediction *OutcomePrediction       `json:"outcome_prediction,omitempty"`
+	// ActualLinesChanged is captured before pr-merge and is absent when the run
+	// never reached pr-create. It is the non-circular source for
+	// OutcomePrediction.ActualSize (#369).
+	ActualLinesChanged *int `json:"actual_lines_changed,omitempty"`
 	// TerminalFailureKind names what aborted the run (Issue #3001 / V3 only).
 	// Absent for successful runs. One of: stall_kill, budget_exceeded,
 	// validation_error, subagent_crash, orchestrator_crash. Independent of
@@ -395,10 +400,10 @@ type OutcomePrediction struct {
 	// platform mapper for why the two cannot be conflated.
 	//
 	// ActualSize is how big the change turned out to be, from lines actually
-	// changed. Nothing at the terminal recording boundary carries that
-	// measurement, so it is currently always empty — and it is emphatically NOT
-	// the issue's size:* label rebucketed, which would make it a second reading
-	// of one of the inputs PredictedSize is computed from.
+	// changed and captured at pr-create exit. It is empty when the run never
+	// reached that pre-merge seam — and it is emphatically NOT the issue's
+	// size:* label rebucketed, which would make it a second reading of one of the
+	// inputs PredictedSize is computed from.
 	PredictedSize string `json:"predicted_size"`
 	ActualSize    string `json:"actual_size,omitempty"`
 	// PredictedModel / ActualModel: registry model bands
@@ -607,13 +612,15 @@ func recordRichness(rec V2RunRecord) int {
 
 // HistoryWriter appends execution records to JSONL files.
 type HistoryWriter struct {
-	dir string
+	root string
+	dir  string
 }
 
 // NewHistoryWriter creates a history writer for the given workspace root.
 func NewHistoryWriter(workspaceRoot string) *HistoryWriter {
 	return &HistoryWriter{
-		dir: filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history"),
+		root: workspaceRoot,
+		dir:  filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history"),
 	}
 }
 
@@ -661,6 +668,20 @@ func (hw *HistoryWriter) WriteV2Record(record V2RunRecord, now time.Time) error 
 // that key is replaced. A skeleton (empty stages) therefore never appends or
 // overwrites once any real record exists.
 func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error {
+	// recordV2History attaches the scheduler's prediction after BuildV2Record,
+	// while the extension path derives it before WriteV2Record. Hydrate at the
+	// shared final writer so both paths carry the captured measurement. The
+	// pointer mutation is also visible to callers that push this same record to
+	// telemetry after the local write.
+	if record.ActualLinesChanged != nil {
+		if record.OutcomePrediction == nil {
+			record.OutcomePrediction = &OutcomePrediction{}
+		}
+		if record.OutcomePrediction.ActualSize == "" {
+			record.OutcomePrediction.ActualSize = actualsize.LearningBucket(hw.root, *record.ActualLinesChanged)
+		}
+	}
+
 	c := coordinatorFor(hw.dir)
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1055,6 +1076,13 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		PerformanceMode:     dominantPerformanceMode(stages),
 		RecordedAt:          now.Format(time.RFC3339),
 		ToolCalls:           input.ToolCalls,
+	}
+	if snap.ActualLinesChanged != nil {
+		lines := *snap.ActualLinesChanged
+		rec.ActualLinesChanged = &lines
+		rec.OutcomePrediction = &OutcomePrediction{
+			ActualSize: actualsize.LearningBucket(hw.root, lines),
+		}
 	}
 	// Set the canonical tries-until-green only when the run actually retried,
 	// escalated, or looped — a clean run omits it (readers default to 1). #4172.

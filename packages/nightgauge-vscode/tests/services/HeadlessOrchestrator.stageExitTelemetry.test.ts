@@ -47,6 +47,7 @@ vi.mock("../../src/utils/skillRunner", () => ({
 const ARG = {
   stage: 2,
   success: 3,
+  runId: 4,
   exitCode: 7,
   idleMsAtExit: 11,
   inputTokens: 12,
@@ -80,7 +81,10 @@ type RecordStageExitDiagnostic = (
 ) => Promise<void>;
 
 function makeOrch(): { recordStageExitDiagnostic: RecordStageExitDiagnostic } {
-  const orch = new HeadlessOrchestrator(null as never, makeLogger(), {
+  const stateService = {
+    getRunId: vi.fn().mockReturnValue("01900130-0000-7000-8000-000000000369"),
+  };
+  const orch = new HeadlessOrchestrator(stateService as never, makeLogger(), {
     contextFileWaitMs: 0,
   } as never);
   vi.spyOn(
@@ -123,6 +127,7 @@ describe("HeadlessOrchestrator.recordStageExitDiagnostic — token/cost forwardi
     const args = recordStageExit.mock.calls[0];
     expect(args[ARG.stage]).toBe("feature-planning");
     expect(args[ARG.success]).toBe(true);
+    expect(args[ARG.runId]).toBe("01900130-0000-7000-8000-000000000369");
     // A real exit 0 must survive as 0 — Go stores it in a *int so "clean exit"
     // stays distinguishable from "never observed".
     expect(args[ARG.exitCode]).toBe(0);

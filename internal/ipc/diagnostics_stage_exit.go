@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
+	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 // makeDiagnosticsRecordStageExitHandler builds the IPC handler for
@@ -35,12 +38,68 @@ func makeDiagnosticsRecordStageExitHandler(srv *Server) Handler {
 		if root == "" {
 			return nil, fmt.Errorf("no workspace root configured")
 		}
+		if p.Stage == string(state.StagePRCreate) {
+			captureIPCActualSize(srv, root, p)
+		}
 		rec := buildStageExitRecordFromIPC(p)
 		if err := diagnostics.WriteStageExitRecord(root, rec); err != nil {
 			return nil, fmt.Errorf("write stage-exit record: %w", err)
 		}
 		return &RecordStageExitResult{Recorded: true}, nil
 	}
+}
+
+// captureIPCActualSize mirrors captureSchedulerActualSize for extension-owned
+// runs. It resolves only an already-live runtime; a diagnostic must never
+// adopt or fabricate a run merely to attach telemetry.
+func captureIPCActualSize(srv *Server, repoRoot string, p RecordStageExitParams) {
+	runtime := runtimeForStageExit(srv, p)
+	if runtime == nil {
+		log.Printf("diagnostics.recordStageExit: #%d pr-create exit has no matching live runtime; actualSize remains absent", p.IssueNumber)
+		return
+	}
+	snap := runtime.Snapshot()
+	diffRoot := repoRoot
+	if snap.WorktreeDir != "" {
+		diffRoot = snap.WorktreeDir
+	}
+	base := actualsize.ResolveBaseBranch(p.IssueNumber, diffRoot, repoRoot)
+	lines, err := actualsize.MeasureLines(diffRoot, base)
+	if err != nil {
+		log.Printf("diagnostics.recordStageExit: #%d pre-merge actual-size measurement unavailable: %v", p.IssueNumber, err)
+		return
+	}
+	runtime.SetActualLinesChanged(lines)
+	repo := snap.Repo
+	if repo == "" {
+		repo = p.Repo
+	}
+	if stateDir := srv.pipelineStateDir(repo); stateDir != "" {
+		if err := runtime.Persist(stateDir); err != nil {
+			log.Printf("diagnostics.recordStageExit: #%d captured %d changed lines but runtime persistence failed: %v",
+				p.IssueNumber, lines, err)
+		}
+	}
+}
+
+func runtimeForStageExit(srv *Server, p RecordStageExitParams) *state.RuntimeState {
+	if p.RunID != "" {
+		srv.runtimesMu.Lock()
+		entry := srv.activeRuntimes[p.RunID]
+		if entry == nil || entry.rs == nil || entry.issue != p.IssueNumber ||
+			(p.Repo != "" && entry.repo != "" && entry.repo != p.Repo) || entry.terminal || entry.abandoned {
+			srv.runtimesMu.Unlock()
+			return nil
+		}
+		runtime := entry.rs
+		srv.runtimesMu.Unlock()
+		return runtime
+	}
+	current, _ := srv.currentRunForIssue(p.Repo, p.IssueNumber)
+	if current == nil {
+		return nil
+	}
+	return current.rs
 }
 
 // buildStageExitRecordFromIPC translates the TS-side RecordStageExitParams

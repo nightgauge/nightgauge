@@ -601,6 +601,27 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
     skip_stages: z.array(z.string()),
   }),
 
+  /**
+   * Insertions + deletions captured against the PR base at pr-create exit
+   * (#369). Optional because legacy records and runs that never reached the
+   * pre-merge measurement seam have no honest value. Zero is a measured value.
+   */
+  actual_lines_changed: z.number().int().min(0).optional(),
+
+  /**
+   * Predicted-vs-actual routing pairs mirrored from outcomes.jsonl (#304,
+   * #369). Empty/absent halves are unknown and excluded from calibration
+   * denominators; actual_size is derived only from actual_lines_changed.
+   */
+  outcome_prediction: z
+    .object({
+      predicted_size: z.string(),
+      actual_size: z.string().optional(),
+      predicted_model: z.string(),
+      actual_model: z.string().optional(),
+    })
+    .optional(),
+
   /** Batch metadata for batched pipeline runs (Issue #805) */
   batch: BatchMetadataSchema.optional(),
 
