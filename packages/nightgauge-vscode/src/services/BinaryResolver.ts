@@ -115,8 +115,8 @@ export class BinaryResolver {
       getExtensionPath: () => {
         const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
         // Self-heal past a garbage-collected extension dir (auto-update): if the
-        // running extensionPath was removed, resolve to the newest surviving
-        // sibling version so the bundled binary still resolves (#3883).
+        // running extensionPath was removed, resolve to VS Code's recorded
+        // sibling bundle so the binary still resolves (#3883, #360).
         return resolveExtensionBundleRoot(ext?.extensionPath);
       },
       platform: process.platform,

@@ -2315,7 +2315,7 @@ export function resolveSkillRoots(): string[] {
   // Skills bundled inside the extension's dist/. This is how standalone repos
   // (customers) find pipeline skills without the nightgauge source repo as a
   // workspace sibling. Self-heal past a garbage-collected extension dir
-  // (auto-update GC): resolve to the newest surviving sibling version (#3883).
+  // (auto-update GC): resolve to VS Code's recorded sibling bundle (#3883, #360).
   const ext = vscode.extensions.getExtension("nightgauge.nightgauge-vscode");
   const bundleRoot = resolveExtensionBundleRoot(ext?.extensionPath);
   if (bundleRoot) {
