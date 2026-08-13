@@ -214,6 +214,11 @@ same states are queryable on demand via `nightgauge doctor`
 (`checks.binary`). No automatic consumer exists today; a VSCode panel that
 surfaces the log is possible future work.
 
+The append runs inside a group whose stderr is already redirected before the
+inner file append is attempted. Bash reports an output-redirection failure
+before a simple command's own later `2>/dev/null` takes effect, so the outer
+group is required to keep an unwritable log path silent too.
+
 **An UNHEALTHY machine is bounded too.** `[stale-binary]` reports a _standing_
 condition — a leftover bundle directory survives days, a lost exec bit never
 heals itself — while `hooks.json` fires 2-3 guard.sh-sourcing wrappers per tool

@@ -2807,11 +2807,14 @@ selection **plus** a `[stale-binary]` line, rather than to silence.
 
 **Reading the record — one bounded fork, measured.** Both sides run the same
 extraction: find the ONE `"relativeLocation"` whose value is a plain
-`nightgauge.nightgauge-vscode-…` directory name (whitespace tolerated around
-the colon), and treat zero or several matches as "no record". `guard.sh` uses a
-single `grep -o -E`; `binary_resolve.go` uses the identical regular expression.
-`guard.sh` reads the record only when step 4 is reached AND the glob already
-matched a bundle, so a machine without the extension pays nothing.
+`nightgauge.nightgauge-vscode-…` directory name (POSIX whitespace, including a
+bare carriage return, is tolerated around the colon), and treat zero or several
+matches as "no record". `guard.sh` uses one byte-oriented
+`LC_ALL=C grep -a -o -E`; `binary_resolve.go` mirrors that regular expression.
+This keeps NUL-containing and invalid-UTF-8 indexes deterministic under both C
+and UTF-8 caller locales. `guard.sh` reads the record only when step 4 is
+reached AND the glob already matched a bundle, so a machine without the
+extension pays nothing.
 
 The Go side deliberately does **not** decode the JSON, and the shell side
 deliberately does **not** avoid the fork. Both were tried:

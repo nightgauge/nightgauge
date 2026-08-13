@@ -137,8 +137,11 @@ func TestRunDoctor_RecordedDowngradeIsHealthy(t *testing.T) {
 	if !strings.Contains(check.Detail, recorded) {
 		t.Errorf("Detail must name the recorded bundle %q, got %q", recorded, check.Detail)
 	}
-	if !strings.Contains(check.Detail, "in use") {
-		t.Errorf("Detail must report that the recorded bundle is the one in use, got %q", check.Detail)
+	if !strings.Contains(check.Detail, "step-4 selection") {
+		t.Errorf("Detail must identify the recorded bundle as the step-4 selection, got %q", check.Detail)
+	}
+	if strings.Contains(check.Detail, "in use") {
+		t.Errorf("Detail must not claim the recorded bundle is in use without regard to the winning cascade step, got %q", check.Detail)
 	}
 }
 
@@ -180,6 +183,9 @@ func TestRunDoctor_BinaryDetailNamesBundleInventoryFromRepo(t *testing.T) {
 	}
 	if !strings.Contains(check.Detail, strings.TrimPrefix(layout.RecordedRelativeLocation, bundleDirPrefix)) {
 		t.Errorf("Detail must name the recorded-installed bundle even when an earlier step wins, got %q", check.Detail)
+	}
+	if strings.Contains(check.Detail, "in use") {
+		t.Errorf("Detail must not claim the recorded bundle is in use when %s wins, got %q", StepRepoBin, check.Detail)
 	}
 }
 

@@ -125,7 +125,7 @@ _log_to_side_channel() {
   local log_dir
   log_dir="$(dirname "$NIGHTGAUGE_HOOK_LOG")"
   mkdir -p "$log_dir" 2>/dev/null || return 0
-  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$NIGHTGAUGE_HOOK_LOG" 2>/dev/null || true
+  { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$message" >> "$NIGHTGAUGE_HOOK_LOG"; } 2>/dev/null || true
 }
 
 # _ng_message_already_last succeeds when the LAST line of the side-channel log
@@ -178,10 +178,12 @@ _ng_message_already_last() {
 # So the fork this used to avoid is the cheap half of the trade by two orders
 # of magnitude, and it is FLAT in file size where the builtin scan is not — and
 # hooks.json fires 2-3 guard.sh-sourcing wrappers per tool call, so every number
-# above is paid several times over per tool call. `grep -o -E` is in BSD and GNU
-# userland alike; stderr is redirected because #3262 forbids ANY stderr write on
-# the default silent path, and a grep failure degrades to "no record", which is
-# the safe fallback.
+# above is paid several times over per tool call. `grep -a -o -E` is in BSD and
+# GNU userland alike. `-a` makes NUL-containing input an explicit text scan, and
+# `LC_ALL=C` makes invalid bytes and `[[:space:]]` deterministic regardless of
+# the caller's locale. Stderr is redirected because #3262 forbids ANY stderr
+# write on the default silent path, and a grep failure degrades to "no record",
+# which is the safe fallback.
 # Written to the macOS system bash floor (3.2.57): no arrays, no `mapfile`, no
 # `${var,,}`, no `[[ =~ ]]`.
 #
@@ -206,7 +208,7 @@ _ng_read_recorded_bundle_dir() {
 
   # Whitespace is tolerated around the colon; the value is bounded by the
   # closing quote, so nothing past the recorded directory name can be captured.
-  _ng_scan_matches="$(grep -o -E '"relativeLocation"[[:space:]]*:[[:space:]]*"nightgauge\.nightgauge-vscode-[^"]*"' "$_ng_index_file" 2>/dev/null || true)"
+  _ng_scan_matches="$(LC_ALL=C grep -a -o -E '"relativeLocation"[[:space:]]*:[[:space:]]*"nightgauge\.nightgauge-vscode-[^"]*"' "$_ng_index_file" 2>/dev/null || true)"
 
   # Command substitution strips trailing newlines, so exactly one match is a
   # string with no embedded newline — the match itself cannot contain one,

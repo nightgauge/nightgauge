@@ -207,11 +207,12 @@ func ScanVSCodeBundles(home string) VSCodeBundleScan {
 
 // recordedLocationPattern extracts a nightgauge `relativeLocation` value from
 // the RAW text of extensions.json. It is the exact expression guard.sh hands
-// to `grep -o -E`, deliberately so: whitespace is tolerated around the colon,
-// the value is bounded by the closing quote, and — because grep is
-// line-oriented — neither the whitespace runs nor the value may cross a
-// newline. Any drift between the two spellings is a parity break (#277).
-var recordedLocationPattern = regexp.MustCompile(`"relativeLocation"[ \t\f\v]*:[ \t\f\v]*"` + regexp.QuoteMeta(bundleDirPrefix) + `[^"\n]*"`)
+// to `LC_ALL=C grep -a -o -E`, deliberately so: whitespace is tolerated around
+// the colon (including a bare carriage return), the value is bounded by the
+// closing quote, and — because grep is line-oriented — neither the whitespace
+// runs nor the value may cross a newline. Any drift between the two spellings
+// is a parity break (#277).
+var recordedLocationPattern = regexp.MustCompile(`"relativeLocation"[ \t\f\v\r]*:[ \t\f\v\r]*"` + regexp.QuoteMeta(bundleDirPrefix) + `[^"\n]*"`)
 
 // scanRecordedBundleDir applies guard.sh's extraction to raw file bytes: take
 // the ONE nightgauge relativeLocation in the text, require it to be a plain
