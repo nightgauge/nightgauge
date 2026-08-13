@@ -164,7 +164,7 @@ func TestRunDoctor_BinaryDetailNamesBundleInventoryFromRepo(t *testing.T) {
 	repo := realPath(t, t.TempDir())
 	runGit(t, repo, "init")
 	repoBin := filepath.Join(repo, "bin", "nightgauge")
-	writeFakeBinary(t, repoBin)
+	writeVersionBinary(t, repoBin, strings.TrimPrefix(layout.RecordedRelativeLocation, bundleDirPrefix))
 	t.Chdir(repo)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
@@ -187,6 +187,125 @@ func TestRunDoctor_BinaryDetailNamesBundleInventoryFromRepo(t *testing.T) {
 	if strings.Contains(check.Detail, "in use") {
 		t.Errorf("Detail must not claim the recorded bundle is in use when %s wins, got %q", StepRepoBin, check.Detail)
 	}
+}
+
+func TestRunDoctor_CrossStepVersionMismatchWarns(t *testing.T) {
+	repoBin, recordedBin := setupCrossStepVersionBinaries(
+		t,
+		"nightgauge v0.1.0-12-g11111111",
+		"nightgauge v0.2.0-34-g22222222",
+		true,
+	)
+
+	result := RunDoctor(context.Background(), nil, nil, nil)
+	check := result.Checks["binary"]
+	if check.OK {
+		t.Fatalf("expected a cross-step version mismatch warning, got OK with detail %q", check.Detail)
+	}
+	for _, want := range []string{
+		"nightgauge v0.1.0-12-g11111111",
+		"nightgauge v0.2.0-34-g22222222",
+		repoBin,
+		recordedBin,
+		string(StepRepoBin),
+	} {
+		if !strings.Contains(check.Error, want) {
+			t.Errorf("cross-step warning must name %q, got %q", want, check.Error)
+		}
+	}
+	if !containsString(result.Warnings, check.Error) {
+		t.Errorf("cross-step finding must be present in Warnings, got %v", result.Warnings)
+	}
+	if containsString(result.FailedChecks, "binary") {
+		t.Errorf("cross-step staleness must stay warning-only, got FailedChecks %v", result.FailedChecks)
+	}
+}
+
+func TestRunDoctor_CrossStepMatchingVersionsAreHealthy(t *testing.T) {
+	const version = "nightgauge v0.2.0-34-g22222222"
+	repoBin, recordedBin := setupCrossStepVersionBinaries(t, version, version, true)
+
+	result := RunDoctor(context.Background(), nil, nil, nil)
+	check := result.Checks["binary"]
+	if !check.OK {
+		t.Fatalf("matching cross-step versions must be healthy, got %q", check.Error)
+	}
+	for _, want := range []string{repoBin, recordedBin, version, string(StepRepoBin)} {
+		if !strings.Contains(check.Detail, want) {
+			t.Errorf("matching comparison detail must name %q, got %q", want, check.Detail)
+		}
+	}
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, repoBin) || strings.Contains(warning, recordedBin) {
+			t.Errorf("matching versions must not emit a binary warning, got %q", warning)
+		}
+	}
+}
+
+func TestRunDoctor_CrossStepComparisonRequiresInstallRecord(t *testing.T) {
+	_, unrecordedBin := setupCrossStepVersionBinaries(
+		t,
+		"nightgauge v0.1.0-12-g11111111",
+		"nightgauge v0.2.0-34-g22222222",
+		false,
+	)
+
+	result := RunDoctor(context.Background(), nil, nil, nil)
+	check := result.Checks["binary"]
+	if !check.OK {
+		t.Fatalf("an unrecorded bundle must not drive cross-step staleness, got %q", check.Error)
+	}
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning, unrecordedBin) {
+			t.Errorf("an unrecorded bundle must not emit a comparison warning, got %q", warning)
+		}
+	}
+}
+
+func setupCrossStepVersionBinaries(
+	t *testing.T,
+	resolvedVersion string,
+	bundleVersion string,
+	recordBundle bool,
+) (string, string) {
+	t.Helper()
+	if gitBinPath == "" {
+		t.Skip("git not available")
+	}
+	isolateCascade(t)
+
+	home := os.Getenv("HOME")
+	bundleDir := bundleDirPrefix + "0.2.0-darwin-arm64"
+	bundleBin := installBundle(t, home, bundleDir, true)
+	writeVersionBinary(t, bundleBin, bundleVersion)
+	if recordBundle {
+		writeExtensionsIndex(t, home, bundleDir)
+	}
+
+	repo := realPath(t, t.TempDir())
+	runGit(t, repo, "init")
+	repoBin := filepath.Join(repo, "bin", "nightgauge")
+	writeVersionBinary(t, repoBin, resolvedVersion)
+	t.Chdir(repo)
+	return repoBin, bundleBin
+}
+
+func writeVersionBinary(t *testing.T, path, version string) {
+	t.Helper()
+	writeFakeBinary(t, path)
+	body := "#!/bin/sh\nprintf '%s\\n' \"" + version + "\"\n"
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write version binary %s: %v", path, err)
+	}
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestRunDoctor_NotFoundKeepsBundleInventory: with bundles installed but every
