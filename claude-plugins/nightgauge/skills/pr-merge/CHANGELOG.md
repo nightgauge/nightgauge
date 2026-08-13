@@ -35,6 +35,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Batch-only merge instructions now load on demand** (#367). Phase 0.5 keeps
+  its existing marker and behavior, but runs the cheap `dev-batch-{E}.json`
+  probe inline before reading `_includes/batch-detection.md`. The common
+  single-issue path now skips that 124-line procedure entirely; batch runs
+  still load and follow the same multi-issue merge contract.
 - **Unresolvable rebase conflicts now re-dispatch feature-dev instead of discarding the branch** (#4072, epic #4067). Step 6.1.5 captures the conflicting files + both sides into `conflict-context-{N}.json` **before** `git rebase --abort`, emits a `CONFLICT_RESOLUTION_NEEDED` feedback signal targeting feature-dev, and keeps the branch. The deterministic `conflict-recovery-loop` recovery action rewinds the pipeline to feature-dev, which checks out the same PR branch and resolves the conflict (bounded by `pipeline.recovery.conflict_recovery.max_dev_redispatch`), then escalates with the specific files if resolution genuinely fails. Replaces the old blind fresh-branch restart (`conflict-restart-{N}.json` + remote-branch delete) that threw away all dev work.
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 

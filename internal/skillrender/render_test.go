@@ -3,6 +3,7 @@ package skillrender
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -756,5 +757,106 @@ func TestDeadIncludeFixture_SameStageRendersCleanNow(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "## Batch Mode") {
 		t.Error("expected the expanded batch contract in the live pr-merge render")
+	}
+}
+
+// TestPRMergeBatchDetailReadIsConditional guards #367's context-cost
+// regression: the 124-line batch procedure must stay out of the common
+// single-issue path, without moving or renumbering Phase 0.5.
+func TestPRMergeBatchDetailReadIsConditional(t *testing.T) {
+	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	content := string(data)
+	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
+	phaseStart := strings.Index(content, marker)
+	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
+	if phaseStart < 0 || phaseEnd < phaseStart {
+		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
+	}
+	phase := content[phaseStart:phaseEnd]
+
+	wantInOrder := []string{
+		`[ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]`,
+		`BATCH_CONTEXT_FOUND=$BATCH_DEV`,
+		"Only when the probe prints `BATCH_CONTEXT_FOUND=...`",
+		"skills/nightgauge-pr-merge/_includes/batch-detection.md",
+		"Do not read the file when the probe prints `SINGLE_ISSUE`",
+	}
+	last := -1
+	for _, want := range wantInOrder {
+		idx := strings.Index(phase, want)
+		if idx < 0 {
+			t.Errorf("Phase 0.5 missing conditional-read contract %q", want)
+			continue
+		}
+		if idx <= last {
+			t.Errorf("Phase 0.5 contract %q is out of order", want)
+		}
+		last = idx
+	}
+
+	unconditional := "> **Read `skills/nightgauge-pr-merge/_includes/batch-detection.md` now"
+	if strings.Contains(phase, unconditional) {
+		t.Errorf("single-issue path still carries the unconditional batch-detail read: %q", unconditional)
+	}
+}
+
+func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
+	path := filepath.Join("..", "..", "skills", "nightgauge-pr-merge", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	content := string(data)
+	marker := `printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'`
+	phaseStart := strings.Index(content, marker)
+	phaseEnd := strings.Index(content, "### Phase 1: Validate Environment")
+	if phaseStart < 0 || phaseEnd < phaseStart {
+		t.Fatalf("Phase 0.5 boundaries changed (marker=%d next phase=%d)", phaseStart, phaseEnd)
+	}
+	phase := content[phaseStart:phaseEnd]
+	open := strings.Index(phase, "```bash\n")
+	if open < 0 {
+		t.Fatal("Phase 0.5 has no inline bash probe")
+	}
+	probeStart := open + len("```bash\n")
+	close := strings.Index(phase[probeStart:], "\n```")
+	if close < 0 {
+		t.Fatal("Phase 0.5 bash probe has no closing fence")
+	}
+	probe := phase[probeStart : probeStart+close]
+
+	repo := t.TempDir()
+	initCmd := exec.Command("git", "init", "-q", "-b", "fix/367-test")
+	initCmd.Dir = repo
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("initialize probe repo: %v\n%s", err, out)
+	}
+	runProbe := func() string {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", probe)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run Phase 0.5 probe: %v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	if got := runProbe(); got != "SINGLE_ISSUE" {
+		t.Fatalf("probe without a batch file = %q, want SINGLE_ISSUE", got)
+	}
+	batchPath := filepath.Join(repo, ".nightgauge", "pipeline", "dev-batch-367.json")
+	if err := os.MkdirAll(filepath.Dir(batchPath), 0o755); err != nil {
+		t.Fatalf("create pipeline directory: %v", err)
+	}
+	if err := os.WriteFile(batchPath, []byte(`{"issue_numbers":[367]}`), 0o644); err != nil {
+		t.Fatalf("write batch fixture: %v", err)
+	}
+	if got := runProbe(); got != "BATCH_CONTEXT_FOUND=.nightgauge/pipeline/dev-batch-367.json" {
+		t.Fatalf("probe with a batch file = %q, want the batch context signal", got)
 	}
 }
