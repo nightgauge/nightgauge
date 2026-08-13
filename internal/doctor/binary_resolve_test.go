@@ -22,8 +22,9 @@ import (
 // would let a bash-4ism in guard.sh (arrays, `mapfile`, `${var,,}`) pass CI and
 // break every macOS hook silently.
 var (
-	gitBinPath  string
-	bashBinPath string
+	gitBinPath    string
+	bashBinPath   string
+	localeBinPath string
 	// testdataDir is absolute: every test here chdirs into a scratch
 	// directory via isolateCascade, so a relative "testdata/..." path stops
 	// resolving the moment the cascade is isolated.
@@ -35,6 +36,7 @@ func init() {
 		testdataDir = filepath.Join(wd, "testdata")
 	}
 	gitBinPath, _ = exec.LookPath("git")
+	localeBinPath, _ = exec.LookPath("locale")
 	if _, err := os.Stat("/bin/bash"); err == nil {
 		bashBinPath = "/bin/bash"
 	} else {
@@ -501,6 +503,11 @@ func TestReadRecordedBundleDir(t *testing.T) {
 			want:    "nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64",
 		},
 		{
+			name:    "bare carriage return whitespace",
+			content: "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]",
+			want:    "nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64",
+		},
+		{
 			name:    "pretty printed",
 			content: "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge-vscode\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-vscode-0.9.9\"\n  }\n]",
 			want:    "nightgauge.nightgauge-vscode-0.9.9",
@@ -855,6 +862,9 @@ func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 	}{
 		{"single entry", `[{"identifier":{"id":"a.b"},"relativeLocation":"a.b-1.0.0"},{"identifier":{"id":"nightgauge.nightgauge-vscode"},"relativeLocation":"nightgauge.nightgauge-vscode-0.1.5"}]`},
 		{"whitespace around colon", "[{\"relativeLocation\"\t:   \"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]"},
+		{"bare CR whitespace", "[{\"relativeLocation\"\r:\r\"nightgauge.nightgauge-vscode-0.2.0-rc.23-darwin-arm64\"}]"},
+		{"NUL before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\x00[{\"relativeLocation\":\"nightgauge.nightgauge-vscode-0.2.0\"}]"},
+		{"invalid UTF-8 before record", "[{\"relativeLocation\":\"other.ext-1.0.0\"}]\xff[{\"relativeLocation\":\"nightgauge.nightgauge-vscode-0.2.0\"}]"},
 		{"pretty printed", "[\n  {\n    \"identifier\": { \"id\": \"nightgauge.nightgauge-vscode\" },\n    \"relativeLocation\": \"nightgauge.nightgauge-vscode-0.9.9\"\n  }\n]"},
 		{"no trailing newline", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.5.0"}]`},
 		{"two nightgauge entries", `[{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.1"},{"relativeLocation":"nightgauge.nightgauge-vscode-0.1.2"}]`},
@@ -883,14 +893,19 @@ func TestGuardShParity_RecordedBundleDir(t *testing.T) {
 		// cannot be reconciled by decoding on one side.
 		{"relativeLocation nested inside another object", `[{"metadata":{"relativeLocation":"nightgauge.nightgauge-vscode-9.9"}}]`},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			home := t.TempDir()
-			writeExtensionsIndexRaw(t, home, tc.content)
-			want := readRecordedBundleDir(home)
-			got := guardShRecordedDir(t, guardPath, home)
-			if got != want {
-				t.Errorf("record parser disagreement: guard.sh %q, Go %q", got, want)
+	locales := []string{"C", availableUTF8Locale(t)}
+	for _, locale := range locales {
+		t.Run(locale, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					home := t.TempDir()
+					writeExtensionsIndexRaw(t, home, tc.content)
+					want := readRecordedBundleDir(home)
+					got := guardShRecordedDirAtLocale(t, guardPath, home, locale)
+					if got != want {
+						t.Errorf("record parser disagreement under LC_ALL=%s: guard.sh %q, Go %q", locale, got, want)
+					}
+				})
 			}
 		})
 	}
@@ -978,6 +993,11 @@ func guardShResolve(t *testing.T, guardPath string) string {
 // exit takes the whole shell with it — nothing after `source` would run.
 func guardShRecordedDir(t *testing.T, guardPath, home string) string {
 	t.Helper()
+	return guardShRecordedDirAtLocale(t, guardPath, home, "C")
+}
+
+func guardShRecordedDirAtLocale(t *testing.T, guardPath, home, locale string) string {
+	t.Helper()
 	stub := filepath.Join(t.TempDir(), "nightgauge")
 	writeFakeBinary(t, stub)
 
@@ -990,7 +1010,7 @@ printf '%s' "$_ng_recorded_dir"`
 	cmd.Env = []string{
 		"HOME=" + t.TempDir(),
 		"PATH=/usr/bin:/bin",
-		"LC_ALL=C",
+		"LC_ALL=" + locale,
 		"NIGHTGAUGE_BIN=" + stub,
 		"NIGHTGAUGE_HOOK_BLOCKING=false",
 		"NIGHTGAUGE_HOOK_LOG=" + filepath.Join(t.TempDir(), "hook-warnings.log"),
@@ -1002,6 +1022,59 @@ printf '%s' "$_ng_recorded_dir"`
 		t.Fatalf("guard.sh record parse failed: %v (stderr: %s)", err, stderr.String())
 	}
 	return stdout.String()
+}
+
+func availableUTF8Locale(t *testing.T) string {
+	t.Helper()
+	if localeBinPath == "" {
+		t.Fatal("locale command not available; parity requires C and UTF-8 locale coverage")
+	}
+	out, err := exec.Command(localeBinPath, "-a").Output()
+	if err != nil {
+		t.Fatalf("list available locales: %v", err)
+	}
+	for _, locale := range strings.Fields(string(out)) {
+		normalized := strings.ToLower(locale)
+		if strings.Contains(normalized, "utf-8") || strings.Contains(normalized, "utf8") {
+			return locale
+		}
+	}
+	t.Fatal("no UTF-8 locale available; parity requires C and UTF-8 locale coverage")
+	return ""
+}
+
+func TestGuardShSideChannelSwallowsUnwritableLog(t *testing.T) {
+	if bashBinPath == "" {
+		t.Skip("bash not available")
+	}
+	guardPath := guardShPath(t)
+	stub := filepath.Join(t.TempDir(), "nightgauge")
+	writeFakeBinary(t, stub)
+
+	// A directory is reliably unwritable as an append target, even when the
+	// test process itself has elevated filesystem permissions.
+	unwritableLog := t.TempDir()
+	cmd := exec.Command(bashBinPath, "-c", `source "$1"; NIGHTGAUGE_HOOK_LOG="$2"; _log_to_side_channel "test message"`, "guard.sh", guardPath, unwritableLog)
+	cmd.Dir = t.TempDir()
+	cmd.Env = []string{
+		"HOME=" + t.TempDir(),
+		"PATH=/usr/bin:/bin",
+		"LC_ALL=C",
+		"NIGHTGAUGE_BIN=" + stub,
+		"NIGHTGAUGE_HOOK_BLOCKING=false",
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("guard.sh side-channel write failed: %v (stderr: %s)", err, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("silent side-channel write emitted stdout: %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("silent side-channel write emitted stderr: %q", stderr.String())
+	}
 }
 
 // --- captured VSCode fixtures (#356) ---------------------------------------

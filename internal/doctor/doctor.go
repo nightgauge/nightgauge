@@ -462,9 +462,9 @@ func bundleInventory(scan VSCodeBundleScan) string {
 	case scan.RecordedVersion == "":
 		out += ", no usable VSCode install record"
 	case scan.RecordedUsed:
-		out += fmt.Sprintf(", VSCode records %s as installed (in use)", scan.RecordedVersion)
+		out += fmt.Sprintf(", VSCode records %s as installed (step-4 selection)", scan.RecordedVersion)
 	default:
-		out += fmt.Sprintf(", VSCode records %s as installed (NOT in use)", scan.RecordedVersion)
+		out += fmt.Sprintf(", VSCode records %s as installed (not step-4 selection)", scan.RecordedVersion)
 	}
 	return out
 }
