@@ -37,9 +37,13 @@ import path from "node:path";
 
 const SERVICES_PATH = path.resolve(__dirname, "../../src/bootstrap/services.ts");
 const DASHBOARD_PATH = path.resolve(__dirname, "../../src/views/dashboard/Dashboard.ts");
+const WRITER_PATH = path.resolve(__dirname, "../../src/utils/executionHistoryWriter.ts");
+const TELEMETRY_STORE_PATH = path.resolve(__dirname, "../../src/services/TelemetryStore.ts");
 
 const servicesSource = readFileSync(SERVICES_PATH, "utf-8");
 const dashboardSource = readFileSync(DASHBOARD_PATH, "utf-8");
+const writerSource = readFileSync(WRITER_PATH, "utf-8");
+const telemetryStoreSource = readFileSync(TELEMETRY_STORE_PATH, "utf-8");
 
 /**
  * Extracts the body of the `ipc.on("pipeline.complete", ...)` handler in the
@@ -96,16 +100,22 @@ describe("run-record producers — duplicates removed (Issue #141)", () => {
   });
 
   it("leaves exactly zero run-record producers in the extension sources", () => {
-    // TelemetryStore.appendRunRecord may still exist as an API, but nothing in
-    // the run-completion paths may call it.
     for (const [name, source] of [
       ["services.ts", servicesSource],
       ["Dashboard.ts", dashboardSource],
+      ["TelemetryStore.ts", telemetryStoreSource],
+      ["executionHistoryWriter.ts", writerSource],
     ] as const) {
       expect(
         source.includes("appendRunRecord"),
         `${name} must not write run records — the Go scheduler is the authoritative writer`
       ).toBe(false);
     }
+  });
+
+  it("deletes the unused TypeScript run-record writer surface (Issue #451)", () => {
+    expect(writerSource).not.toContain("static buildRunRecord(");
+    expect(writerSource).not.toContain("static async appendRecord(");
+    expect(telemetryStoreSource).not.toContain("appendRunRecord(");
   });
 });

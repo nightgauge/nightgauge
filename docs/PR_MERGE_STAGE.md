@@ -157,10 +157,10 @@ is present **only** when `execution_path == "llm"` and a deterministic hook
 actually ran and punted (absent on deterministic successes and on stages with no
 deterministic hook). This closes the diagnosis gap that made #288 take forensic
 session-log archaeology: the history JSONL now answers **why** the expensive path
-ran. Both producers write the identical wire shape — Go via
-`RuntimeState.RecordExecutionPath` / `RecordStagePuntReason` → `BuildV2Record`;
-the TS `HeadlessOrchestrator` via its per-stage execution-path map →
-`ExecutionHistoryWriter.buildRunRecord`.
+ran. The Go runtime is the sole history producer: native Go paths call
+`RuntimeState.RecordExecutionPath` / `RecordStagePuntReason`, while the TS
+`HeadlessOrchestrator` sends its per-stage execution-path map through
+`pipeline.notifyComplete`; both inputs converge on Go's `BuildV2Record`.
 
 > **Root cause of #297 — which orchestrator actually runs.** The Go
 > deterministic-first hooks (`tryDeterministicPRMerge`/`tryDeterministicPRCreate`,

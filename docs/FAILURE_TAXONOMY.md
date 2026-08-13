@@ -145,8 +145,8 @@ of 70.
 
 ## Implementation
 
-The classifier lives in the SDK layer so it is importable from both the VSCode
-extension writer and any future SDK-internal callers:
+The classifier lives in the SDK analysis layer so every reliability consumer
+uses the same fallback when a history record has no explicit category:
 
 ```
 packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts
@@ -155,16 +155,14 @@ packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts
 ### Data Flow
 
 ```
-Pipeline stage fails
-     ↓
-executionHistoryWriter.buildRunRecord()
-     ↓ classifyFailureCategory(stageState.error, stageName)
-stage record written to JSONL with failure_category field
+Go runtime writes the authoritative history record
+     ↓ optional failure_category on the failed stage
+VSCode history reader
      ↓
 PostPipelineAnalyzer.adaptRecords()
-     ↓ maps failure_category → ExecutionHistoryRecord
+     ↓ maps the persisted category when present
 analyzeReliability()
-     ↓ uses failure_category for weighted scoring
+     ↓ uses failure_category or the SDK classifier fallback
 Reliability health score
 ```
 

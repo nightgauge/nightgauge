@@ -100,7 +100,7 @@ import {
   registerQuickstartCommands,
   maybeShowGettingStartedOnActivate,
 } from "../commands/quickstart";
-import { ExecutionHistoryWriter, type IssueMetadataInput } from "../utils/executionHistoryWriter";
+import { ExecutionHistoryWriter } from "../utils/executionHistoryWriter";
 import { TelemetryStore } from "../services/TelemetryStore";
 import { TelemetryService } from "../services/TelemetryService";
 import { TelemetryConsentService } from "../services/TelemetryConsentService";

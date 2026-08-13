@@ -187,27 +187,10 @@ export function detectTestRunner(workspaceRoot: string): TestRunner {
 // Return types
 // ---------------------------------------------------------------------------
 
-/** Structured validation error entry for SkillAmendmentDetector */
-export interface ValidationError {
-  path: string;
-  code: string;
-  message: string;
-  received?: string;
-  expected?: string[];
-}
-
 /** Result returned by validateStageContextOutput() */
 export interface ValidationResult {
   /** null means validation passed (or stage has no output schema) */
   error: Error | null;
-  /** Zod field-level errors captured for SkillAmendmentDetector */
-  validationErrors?: ValidationError[];
-  /** Schema repair attempt metadata */
-  repairAttempt?: {
-    attempted: boolean;
-    succeeded: boolean;
-    attempts_count: number;
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -432,15 +415,6 @@ export class ContextAssembler {
             .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
             .join("\n");
 
-          const validationErrors: ValidationError[] = result.error.issues.map((i) => ({
-            path: i.path.join("."),
-            code: i.code,
-            message: i.message,
-            received: "received" in i ? String((i as { received: unknown }).received) : undefined,
-            expected:
-              "options" in i ? (i as { options: unknown[] }).options.map(String) : undefined,
-          }));
-
           // Attempt schema repair if configured
           const existingRepair = this.stageRepairAttempts.get(stage);
           const currentAttempts = existingRepair?.attempts_count ?? 0;
@@ -476,7 +450,7 @@ export class ContextAssembler {
                 issueNumber,
                 attempt: currentAttempts + 1,
               });
-              return { error: null, repairAttempt };
+              return { error: null };
             } else {
               this.logger.warn(
                 "Context schema repair: failed — falling through to warn-and-continue",
@@ -493,7 +467,7 @@ export class ContextAssembler {
                 contextPath,
                 issues: `\n${issues}`,
               });
-              return { error: null, validationErrors, repairAttempt };
+              return { error: null };
             }
           } else {
             this.logger.warn("Context file has schema mismatches (non-fatal, continuing)", {
@@ -502,7 +476,7 @@ export class ContextAssembler {
               contextPath,
               issues: `\n${issues}`,
             });
-            return { error: null, validationErrors };
+            return { error: null };
           }
         }
 
@@ -549,16 +523,6 @@ export class ContextAssembler {
     return {
       error: new Error(missingContextMsg),
     };
-  }
-
-  /**
-   * Get the cached repair attempt state for a stage (used by HeadlessOrchestrator
-   * to merge into its own stageRepairAttempts map).
-   */
-  getRepairAttempt(
-    stage: string
-  ): { attempted: boolean; succeeded: boolean; attempts_count: number } | undefined {
-    return this.stageRepairAttempts.get(stage);
   }
 
   // ---------------------------------------------------------------------------

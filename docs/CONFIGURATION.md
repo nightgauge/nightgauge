@@ -4661,9 +4661,9 @@ Resolution precedence (highest → lowest):
 6. Hardcoded default (`claude` — the Go/SDK layers map it to their headless/
    SDK flavor)
 
-The resolved adapter and the source step that produced it are recorded on
-each per-stage history entry as `adapter` and `adapter_source` for analytics
-attribution.
+The resolved adapter is recorded on each per-stage history entry for analytics
+attribution. The resolver source is included in extension diagnostics but is
+not part of the persisted history contract.
 
 ```yaml
 ui:

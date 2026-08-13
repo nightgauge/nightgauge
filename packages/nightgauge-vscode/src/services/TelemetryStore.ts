@@ -7,7 +7,7 @@
  *
  * Design decisions:
  * - Plain class (no VSCode API dependency) — testable without mocks
- * - In-memory cache for index (invalidated on write)
+ * - In-memory cache for index (invalidated when history changes)
  * - Index rebuilt from JSONL if missing or corrupt
  * - Staleness detected by comparing index updated_at vs latest JSONL mtime
  *
@@ -24,7 +24,6 @@ import {
   type HistoryIndex,
   type HistoryIndexEntry,
 } from "../utils/executionHistoryWriter";
-import type { ExecutionHistoryRecord } from "../schemas/executionHistory";
 
 export type { HistoryIndex, HistoryIndexEntry };
 
@@ -142,19 +141,6 @@ export class TelemetryStore {
   }
 
   /**
-   * Append a run record to JSONL and update the index.
-   * Delegates to ExecutionHistoryWriter (which handles both JSONL append and index update).
-   */
-  async appendRunRecord(record: ExecutionHistoryRecord): Promise<boolean> {
-    const written = await ExecutionHistoryWriter.appendRecord(this.workspaceRoot, record);
-    // Invalidate cache so next read picks up the new entry
-    if (written) {
-      this.indexCache = null;
-    }
-    return written;
-  }
-
-  /**
    * Delete old JSONL files beyond retention period.
    */
   async cleanupOldFiles(retentionDays?: number): Promise<{ deleted: string[] }> {
@@ -177,9 +163,8 @@ export class TelemetryStore {
    * Check if the index is stale by comparing updated_at vs latest JSONL mtime
    * and verifying entry count matches the number of JSONL files on disk.
    *
-   * The entry-count check catches the case where updateIndex() created a
-   * fresh index with only 1 entry (because the old index was missing) —
-   * the timestamp matches but most records are absent.
+   * The entry-count check catches an incomplete index whose timestamp is
+   * current but whose contents omit older JSONL files.
    */
   private async isIndexStale(index: HistoryIndex): Promise<boolean> {
     try {

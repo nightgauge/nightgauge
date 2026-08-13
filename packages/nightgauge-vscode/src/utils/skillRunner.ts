@@ -264,9 +264,9 @@ export interface SkillRunResult {
    * Adapter decision for this stage (Issue #3223).
    *
    * Records the resolved adapter and the precedence step that produced it
-   * (env / stage-config / global-config / fallback / default), so the
-   * orchestrator can persist per-stage adapter provenance into history records
-   * (`HistoryStageTokenUsageSchema.adapter_source`). Populated by
+   * (env / stage-config / global-config / fallback / default). The
+   * orchestrator passes the executing adapter to Go at stage completion;
+   * the full decision remains available to completion callbacks. Populated by
    * `runStageSkillHeadless` from `resolveStageAdapter` and any fallback hop.
    */
   adapterDecision?: AdapterDecision;
@@ -579,17 +579,8 @@ export interface SkillRunCallbacks {
    * Used for recording tool calls to PipelineStateService → Dashboard
    * @param toolName - The name of the tool being invoked
    * @param toolInput - The parsed input/arguments for the tool
-   * @param toolUseId - The unique ID for this tool use (for matching tool_result) (Issue #1031)
    */
-  onToolCall?: (toolName: string, toolInput: unknown, toolUseId?: string) => void;
-  /**
-   * Called when a tool_result is detected in stream-json output (Issue #1031)
-   * Used for backfilling duration_ms, result, and error on tool call records
-   * @param toolUseId - The tool_use_id that this result corresponds to
-   * @param result - The tool result content (truncated)
-   * @param isError - Whether the tool call resulted in an error
-   */
-  onToolResult?: (toolUseId: string, result: string, isError: boolean) => void;
+  onToolCall?: (toolName: string, toolInput: unknown) => void;
   /**
    * Called when a stage completes after a stall warning was shown (Issue #797)
    * Used to auto-remove stall warning entries from the output window
@@ -5763,8 +5754,8 @@ export function runStageSkillHeadless(
     toolCallLog.observeToolUse(name, input, id);
 
     callbacks?.onToolUse?.(name, input, id);
-    // Dashboard tool-call recording (#639, #1031).
-    callbacks?.onToolCall?.(name, input, id);
+    // Dashboard tool-call recording (#639).
+    callbacks?.onToolCall?.(name, input);
 
     return false;
   };
@@ -5991,14 +5982,10 @@ export function runStageSkillHeadless(
       }
       if (aborted) return;
 
-      // Detect tool_result in user messages for telemetry backfill (Issue #1031)
+      // Detect tool_result in user messages for stage-exit diagnostics and the
+      // Go-authoritative tool-call log.
       if (parsed?.toolResult) {
         lastToolResultId = parsed.toolResult.toolUseId; // track for stall diagnostic (#3484)
-        callbacks?.onToolResult?.(
-          parsed.toolResult.toolUseId,
-          parsed.toolResult.content,
-          parsed.toolResult.isError
-        );
 
         // Stage-exit diagnostic capture (Issue #3605): bind this result to the
         // Bash tool_use that produced it. We don't have the literal exit code

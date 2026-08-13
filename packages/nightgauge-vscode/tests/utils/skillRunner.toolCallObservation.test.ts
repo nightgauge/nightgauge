@@ -253,10 +253,10 @@ describe("skillRunner — tool call observation across delivery shapes (#169)", 
     });
   });
 
-  // ─────────────────── Dashboard tool-call feed (#639, #1031) ────────────────
+  // ─────────────────── Dashboard tool-call feed (#639) ──────────────────────
 
   describe("dashboard tool-call feed", () => {
-    it("records tool calls delivered in an assistant message, with their ids", () => {
+    it("records tool calls delivered in an assistant message", () => {
       const onToolCall = vi.fn();
       runStageSkillHeadless("feature-dev", 42, { onToolCall });
 
@@ -266,18 +266,8 @@ describe("skillRunner — tool call observation across delivery shapes (#169)", 
       ]);
 
       expect(onToolCall).toHaveBeenCalledTimes(2);
-      expect(onToolCall).toHaveBeenNthCalledWith(
-        1,
-        "Bash",
-        { command: "go test ./..." },
-        "toolu_bash1"
-      );
-      expect(onToolCall).toHaveBeenNthCalledWith(
-        2,
-        "Read",
-        { file_path: "/src/a.ts" },
-        "toolu_read1"
-      );
+      expect(onToolCall).toHaveBeenNthCalledWith(1, "Bash", { command: "go test ./..." });
+      expect(onToolCall).toHaveBeenNthCalledWith(2, "Read", { file_path: "/src/a.ts" });
     });
 
     it("drives onToolUse from the assistant-message shape too", () => {
@@ -355,7 +345,7 @@ describe("skillRunner — tool call observation across delivery shapes (#169)", 
       emitAssistantToolUse([{ name: "Read", input: { file_path: "/b" } }]);
 
       expect(onToolCall).toHaveBeenCalledTimes(2);
-      expect(onToolCall).toHaveBeenNthCalledWith(1, "Read", { file_path: "/a" }, undefined);
+      expect(onToolCall).toHaveBeenNthCalledWith(1, "Read", { file_path: "/a" });
     });
   });
 

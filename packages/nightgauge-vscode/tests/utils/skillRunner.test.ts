@@ -1289,8 +1289,8 @@ describe("skillRunner - Token Usage", () => {
 
   // Issue #3223 — per-stage adapter dispatch. The headless dispatcher must
   // honor `resolveStageAdapter` instead of the global lookup, and must report
-  // `adapterDecision` on the onComplete callback so the orchestrator can
-  // persist `adapter_source` into history records.
+  // `adapterDecision` on the onComplete callback so the orchestrator can send
+  // the executing adapter to Go at stage completion.
   it("should honor NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_<STAGE> env override", () => {
     process.env.NIGHTGAUGE_PIPELINE_STAGE_ADAPTER_FEATURE_DEV = "codex";
     runStageSkillHeadless("feature-dev", 42, {});
