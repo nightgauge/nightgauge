@@ -5,7 +5,7 @@ description: Wait for PR reviews, address feedback, and merge. Completes the Iss
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.16.0"
+  version: "1.17.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku
@@ -103,7 +103,7 @@ attempt to populate that section itself; leave the placeholder from
 ## Supporting files (load on demand)
 
 - `skills/nightgauge-pr-merge/_includes/context-bootstrap.md` — read in Phase 0 (stage start + context reconstruction)
-- `skills/nightgauge-pr-merge/_includes/batch-detection.md` — read in Phase 0.5 (batch PR detection, multi-issue close, batch context cleanup)
+- `skills/nightgauge-pr-merge/_includes/batch-detection.md` — read conditionally in Phase 0.5 only when the batch context file exists (multi-issue close, batch context cleanup)
 - `skills/nightgauge-pr-merge/_includes/validate-environment.md` — read in Phase 1 (verify branch, PR state, pre-CI Go build check)
 - `skills/nightgauge-pr-merge/_includes/reviews.md` — read in Phase 3 (fetch & parse review feedback, CI status)
 - `skills/nightgauge-pr-merge/_includes/merge.md` — read in Phase 6 (ruleset pre-check, conflict resolution, merge gate, execute merge)
@@ -200,17 +200,27 @@ context file from GitHub if it is missing.
 printf '<!-- phase:start name="batch-detection" index=1 total=14 stage="pr-merge" -->\n'
 ```
 
-**PURPOSE**: Decide whether this PR closes one issue or a batch. A batch run
-carries one shared branch and one PR for a whole epic, so `pr-merge` must close
-every issue in the batch and remove the batch context files the run produced —
-it is the terminal stage, and nothing downstream reads them.
+**PURPOSE**: Decide cheaply whether this PR closes one issue or a batch before
+loading the batch-only procedure. A batch run carries one shared branch and one
+PR for a whole epic; the common single-issue path needs none of that detail.
 
-> **Read `skills/nightgauge-pr-merge/_includes/batch-detection.md` now and follow its instructions before continuing this phase.**
+Run this file probe first. It derives the epic key locally because `$BRANCH` is
+not assigned until Phase 1 and each Bash call is a fresh shell.
 
-**Single-issue path**: when `.nightgauge/pipeline/dev-batch-{E}.json` does not
-exist — the common case — continue to Phase 1 unchanged. The epic key is
-derived from git inside that phase, not inherited: `$BRANCH` is not assigned
-until Phase 1, and each Bash call is a fresh shell regardless.
+```bash
+BRANCH=$(git branch --show-current)
+[ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
+EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
+BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=$BATCH_DEV"; else echo "SINGLE_ISSUE"; fi
+```
+
+**Only when the probe prints `BATCH_CONTEXT_FOUND=...`**: read
+`skills/nightgauge-pr-merge/_includes/batch-detection.md` now and follow its
+instructions before continuing this phase.
+
+**Do not read the file when the probe prints `SINGLE_ISSUE`**. Continue to
+Phase 1 unchanged.
 
 ---
 
