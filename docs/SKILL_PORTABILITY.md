@@ -9,8 +9,9 @@ and the guard that enforces it. Introduced by #4029.
 > resolve the binary via the shared PREFLIGHT cascade, and treat
 > `model:` frontmatter, phase markers, and Claude-only tool directives as
 > advisory/no-op under non-Claude adapters. The
-> `nightgauge preflight skill-portability` gate fails CI on the one
-> mechanically-detectable violation (a VSCode-extension binary path).
+> `nightgauge preflight skill-portability` gate fails CI on mechanically
+> detectable violations: VSCode-extension paths, Claude-only completion hooks,
+> and incomplete binary-discovery cascades.
 
 ### Audited core skills (#4029)
 
@@ -109,8 +110,9 @@ No adapter guard is needed. See `packages/nightgauge-sdk/src/events/phaseRegistr
 **Audit status (#4029, widened by #55 / spike #33 D1):** the six core skills
 carry MORE Claude-Code-specific directives than the original audit recorded —
 the full set is below, each with its off-Claude behavior. The portability gate
-asserts two things mechanically (no VSCode-extension paths; no `hooks:`
-frontmatter — see §5); everything else is documented degradation, so a future
+asserts three things mechanically (no VSCode-extension paths; no `hooks:`
+frontmatter; every fenced bash resolver block carries all five PREFLIGHT rungs
+— see §5); everything else is documented degradation, so a future
 skill adding a genuinely Claude-only, non-degrading directive still needs
 authoring care.
 
@@ -157,14 +159,16 @@ authoring care.
 
 ## 5. Validation
 
-| Tier                    | What                                                                                                                             | Where                                                                                               | CI?                                                |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Deterministic gate      | No `.vscode/extensions` binary paths; no `hooks:` frontmatter (#55); no truncated binary-discovery cascades (#55) in `skills/**` | `nightgauge preflight skill-portability` (Go) + `scripts/lint-skills/portability.sh` (shell mirror) | ✅ `.github/workflows/lint.yml`                    |
-| Live cross-adapter eval | Behavioral parity of the 6 core skills across adapters                                                                           | `docs/SKILL_EVALUATION.md` (live mode)                                                              | ❌ requires adapter binaries + auth — run manually |
+| Tier                    | What                                                                                                                                      | Where                                                                                               | CI?                                                |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Deterministic gate      | No `.vscode/extensions` paths; no `hooks:` frontmatter; every fenced bash resolver block contains all five PREFLIGHT cascade rungs (#365) | `nightgauge preflight skill-portability` (Go) + `scripts/lint-skills/portability.sh` (shell mirror) | ✅ `.github/workflows/lint.yml`                    |
+| Live cross-adapter eval | Behavioral parity of the 6 core skills across adapters                                                                                    | `docs/SKILL_EVALUATION.md` (live mode)                                                              | ❌ requires adapter binaries + auth — run manually |
 
 The deterministic gate is the regression guard: it fails the moment any skill
 reintroduces a VSCode-extension path, a Claude-only `hooks:` completion gate,
-or a binary-discovery cascade that drifted from PREFLIGHT.md. The live multi-adapter eval (running the
+or a fenced resolver block that drifted from PREFLIGHT.md. Cascade checks are
+block-scoped: a complete block elsewhere in the same file cannot hide a
+truncated sibling. The live multi-adapter eval (running the
 skills against real Codex/Gemini binaries) cannot run in CI because it needs
 authenticated adapter binaries — it is documented as a manual/opt-in step in
 [SKILL_EVALUATION.md](SKILL_EVALUATION.md).
