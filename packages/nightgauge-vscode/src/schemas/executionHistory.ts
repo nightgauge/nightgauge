@@ -12,7 +12,8 @@
  * - v3: Extended with terminal failure preservation (Issue #3001)
  *
  * Writers produce v2 or v3 run records. The reader accepts v1, v2, and v3,
- * normalizing only v1 records to the v2 field set with defaults.
+ * normalizing v1 records to the v2 field set and canonicalizing historical
+ * field vocabulary shared by all versions.
  *
  * @see Issue #649 - Execution History Persistence
  * @see Issue #1011 - Telemetry Schema v2
@@ -22,6 +23,7 @@
 import { z } from "zod";
 import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 import {
+  PipelineExecutionModeSchema,
   PipelineStageSchema,
   StageExecutionModeSchema,
   ProactiveEscalationRecordSchema,
@@ -445,6 +447,19 @@ const TokensSchema = z.object({
   ptc_metrics: PTCMetricsSchema.optional(),
 });
 
+/**
+ * Canonical pipeline-run mode stored in parsed execution history.
+ *
+ * The retired TypeScript history writer copied the stage mode `"headless"`
+ * into this pipeline-level field. At that level it meant the same thing as
+ * `"automatic"`; accepting it as input and normalizing it here keeps the
+ * current output vocabulary aligned with PipelineExecutionModeSchema rather
+ * than exposing a third pipeline mode to every history consumer (#460).
+ */
+const ExecutionHistoryPipelineModeSchema = z
+  .union([PipelineExecutionModeSchema, z.literal("headless")])
+  .transform((mode) => (mode === "headless" ? "automatic" : mode));
+
 // ============================================================================
 // V1 Run Record Schema
 // ============================================================================
@@ -470,7 +485,7 @@ export const ExecutionHistoryRunRecordSchema = z.object({
    */
   branch: z.string().default(""),
   base_branch: z.string(),
-  execution_mode: z.enum(["automatic", "manual"]),
+  execution_mode: ExecutionHistoryPipelineModeSchema,
   started_at: z.string(),
   completed_at: z.string(),
   total_duration_ms: z.number().int().min(0),
@@ -545,7 +560,7 @@ export const ExecutionHistoryRunRecordV2Schema = z.object({
    */
   branch: z.string().default(""),
   base_branch: z.string(),
-  execution_mode: z.enum(["automatic", "manual"]),
+  execution_mode: ExecutionHistoryPipelineModeSchema,
   started_at: z.string(),
   completed_at: z.string(),
   total_duration_ms: z.number().int().min(0),

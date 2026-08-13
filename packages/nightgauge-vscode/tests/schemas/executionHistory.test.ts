@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import {
   ExecutionHistoryRunRecordSchema,
   ExecutionHistoryRunRecordV2Schema,
+  ExecutionHistoryRunRecordV3Schema,
   ExecutionOutcomeRecordSchema,
   ExecutionOutcomeRecordV2Schema,
   ExecutionHistoryRecordSchema,
@@ -363,6 +364,45 @@ describe("ExecutionHistory Schemas", () => {
     it("should validate a complete v2 run record with required files and routing", () => {
       const result = ExecutionHistoryRunRecordV2Schema.safeParse(validV2RunRecord);
       expect(result.success).toBe(true);
+    });
+
+    it.each([
+      ["v1", ExecutionHistoryRunRecordSchema, "1"],
+      ["v2", ExecutionHistoryRunRecordV2Schema, "2"],
+      ["v3", ExecutionHistoryRunRecordV3Schema, "3"],
+    ])("normalizes legacy headless execution mode in %s records (#460)", (_, schema, version) => {
+      const result = schema.safeParse({
+        ...validV2RunRecord,
+        schema_version: version,
+        execution_mode: "headless",
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.execution_mode).toBe("automatic");
+      }
+    });
+
+    it.each(["automatic", "manual"] as const)(
+      "preserves canonical %s pipeline mode (#460)",
+      (executionMode) => {
+        const result = ExecutionHistoryRunRecordV2Schema.safeParse({
+          ...validV2RunRecord,
+          execution_mode: executionMode,
+        });
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.data.execution_mode).toBe(executionMode);
+        }
+      }
+    );
+
+    it("rejects the stage-only interactive mode (#460)", () => {
+      const interactiveResult = ExecutionHistoryRunRecordV2Schema.safeParse({
+        ...validV2RunRecord,
+        execution_mode: "interactive",
+      });
+      expect(interactiveResult.success).toBe(false);
     });
 
     it("preserves a measured pre-merge size and outcome bucket (#369)", () => {

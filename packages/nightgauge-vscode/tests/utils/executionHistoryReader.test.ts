@@ -323,7 +323,7 @@ describe("ExecutionHistoryReader", () => {
         issue_number: 459,
         title: "Read V3 execution history",
         base_branch: "main",
-        execution_mode: "automatic",
+        execution_mode: "headless",
         started_at: "2026-08-12T10:00:00.000Z",
         completed_at: "2026-08-12T10:01:00.000Z",
         total_duration_ms: 60000,
@@ -367,6 +367,7 @@ describe("ExecutionHistoryReader", () => {
       if (run.record_type === "run") {
         expect(run.schema_version).toBe("3");
         expect(run.branch).toBe("");
+        expect(run.execution_mode).toBe("automatic");
         expect("terminal_failure_kind" in run && run.terminal_failure_kind).toBe(
           "validation_error"
         );
