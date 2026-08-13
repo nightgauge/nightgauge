@@ -11,7 +11,12 @@
  * @see Issue #3319 — Add Runs Tab to Pipeline Dashboard
  */
 
-import { escapeHtml, formatRelativeTime, formatDuration } from "../DashboardComponents";
+import {
+  escapeHtml,
+  formatRelativeTime,
+  formatDuration,
+  getBranchDisplayText,
+} from "../DashboardComponents";
 import type { RunsListData } from "../DashboardState";
 import type { RunsEntry, RunsStageEntry } from "../../../services/IpcClientBase";
 
@@ -508,16 +513,15 @@ function getRunsStagesHtml(stages: RunsStageEntry[]): string {
  * Interpolating "" printed a blank cell, which reads as a rendering bug rather
  * than as information; the label makes the absence legible.
  *
- * The LOCAL record's branch — the field #397 is actually about — has no
- * rendering surface at all today: `PipelineRunSummary.branch` is imported and
- * then displayed nowhere. Giving it one is filed separately.
+ * The local record uses the same label in the Pipeline tab's run-detail card
+ * (#450), so an absent branch has one vocabulary on both dashboard feeds.
  *
  * Whitespace counts as absent: a " " branch would render as the same blank
  * cell this function exists to eliminate.
  */
 function getRunsBranchCellHtml(branch: string | undefined): string {
   if (!branch || !branch.trim()) {
-    return `<span class="runs-branch runs-branch-undetermined" title="No branch recorded for this run">(branch not determined)</span>`;
+    return `<span class="runs-branch runs-branch-undetermined" title="No branch recorded for this run">${getBranchDisplayText(branch)}</span>`;
   }
   return `<span class="runs-branch" title="${escapeHtml(branch)}">${escapeHtml(branch)}</span>`;
 }

@@ -56,7 +56,7 @@ const now = new Date();
 const mockCurrentRun = {
   issueNumber: 42,
   title: "Add Playwright-based interactive testing",
-  branch: "feat/42-playwright-testing",
+  branch: "",
   startedAt: new Date(now.getTime() - 300_000),
   status: "running" as const,
   currentStage: "feature-dev" as any,

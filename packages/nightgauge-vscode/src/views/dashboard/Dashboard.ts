@@ -77,8 +77,10 @@ import {
   exportAsJson,
   exportAsCsvRuns,
   exportAsCsvStages,
+  escapeCsvField,
   type ExportFormat,
 } from "../../utils/telemetryExporter";
+import { getBranchDisplayText } from "./DashboardComponents";
 import { AuditLogService, getDefaultAuditFilters } from "../../services/AuditLogService";
 import { resolvePlatformBaseUrl } from "../../config/schema";
 import { ConfigBridge } from "../../services/ConfigBridge";
@@ -3377,12 +3379,14 @@ export class Dashboard implements vscode.Disposable {
       [
         e.started_at,
         e.issue_number,
-        `"${e.title.replace(/"/g, '""')}"`,
-        e.branch,
+        e.title,
+        getBranchDisplayText(e.branch),
         e.outcome,
         e.duration_ms,
         e.total_cost_usd,
-      ].join(",")
+      ]
+        .map((value) => escapeCsvField(String(value)))
+        .join(",")
     );
     const csv = [header, ...rows].join("\n");
 

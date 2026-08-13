@@ -66,6 +66,34 @@ describe("Pipeline tab blank fix (Issue #1842)", () => {
     expect(html).not.toContain("Current Pipeline Run");
   });
 
+  it("renders an explicit undetermined branch in the local run detail (#450)", () => {
+    const html = getDashboardHtml(
+      mockWebview,
+      null,
+      [createRun({ branch: "" })],
+      emptyAggregates,
+      timeSavingsConfig
+    );
+
+    expect(html).toContain(
+      '<span class="progress-branch progress-branch-undetermined" title="No branch recorded for this run">Branch: (branch not determined)</span>'
+    );
+  });
+
+  it("renders and escapes a resolved branch in the local run detail (#450)", () => {
+    const html = getDashboardHtml(
+      mockWebview,
+      null,
+      [createRun({ branch: 'fix/450-<branch>&"' })],
+      emptyAggregates,
+      timeSavingsConfig
+    );
+
+    expect(html).toContain(
+      '<span class="progress-branch" title="fix/450-&lt;branch&gt;&amp;&quot;">Branch: fix/450-&lt;branch&gt;&amp;&quot;</span>'
+    );
+  });
+
   it("shows explicit empty state when currentRun is null and history is empty", () => {
     const html = getDashboardHtml(mockWebview, null, [], emptyAggregates, timeSavingsConfig);
 
