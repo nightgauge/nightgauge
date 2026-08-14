@@ -99,7 +99,8 @@ export function summarizeGrokStream(stdout: string): GrokStreamSummary {
   const trimmed = stdout.trim();
   if (!trimmed) return summary;
 
-  const lines = trimmed.startsWith("{") && !trimmed.includes("\n") ? [trimmed] : trimmed.split("\n");
+  const lines =
+    trimmed.startsWith("{") && !trimmed.includes("\n") ? [trimmed] : trimmed.split("\n");
 
   for (const rawLine of lines) {
     const line = rawLine.trim();

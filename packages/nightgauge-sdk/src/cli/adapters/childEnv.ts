@@ -83,6 +83,9 @@ const PROVIDER_ALLOW = new Set<string>([
   "GOOGLE_API_KEY",
   "GOOGLE_GENAI_USE_VERTEXAI",
   "GOOGLE_APPLICATION_CREDENTIALS",
+  // xAI / Grok Build
+  "XAI_API_KEY",
+  "GROK_HOME",
 ]);
 
 /**

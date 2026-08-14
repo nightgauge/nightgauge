@@ -2601,7 +2601,7 @@ export function validateAdapterPrerequisites(
     return (
       `The ${adapter} adapter is chat-completion-only (no agentic tool loop): ` +
       `pipeline stages cannot edit files, run shell commands, or call gh through it. ` +
-      'Switch to an agentic adapter (claude, codex, gemini, copilot) via "Nightgauge: Switch Execution Adapter".'
+      'Switch to an agentic adapter (claude, codex, gemini, copilot, grok) via "Nightgauge: Switch Execution Adapter".'
     );
   }
 

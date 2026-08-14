@@ -4614,14 +4614,14 @@ their descriptions.
 
 Core VSCode extension settings for authentication and paths.
 
-| Option           | Type   | Default                  | Description                                                                                   |
-| ---------------- | ------ | ------------------------ | --------------------------------------------------------------------------------------------- |
+| Option           | Type   | Default                  | Description                                                                                                        |
+| ---------------- | ------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental), grok (experimental) |
-| `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                 |
-| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                              |
-| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                 |
-| `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                          |
-| `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                              |
+| `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                                      |
+| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                                                   |
+| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                                      |
+| `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                                               |
+| `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                                                   |
 
 > **Backend Setup**: For detailed setup instructions including IAM policies,
 > service accounts, and credential configuration for Bedrock, Vertex, and

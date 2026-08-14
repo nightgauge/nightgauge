@@ -5,9 +5,7 @@
     {
       "id": "claude-opus-5",
       "provider": "anthropic",
-      "tiers": [
-        "opus"
-      ],
+      "tiers": ["opus"],
       "display_name": "Opus 5",
       "concrete_version": "claude-opus-5",
       "rates": {
@@ -17,13 +15,7 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -40,9 +32,7 @@
     {
       "id": "claude-opus-4-8",
       "provider": "anthropic",
-      "tiers": [
-        "opus"
-      ],
+      "tiers": ["opus"],
       "display_name": "Opus 4.8",
       "concrete_version": "claude-opus-4-8",
       "rates": {
@@ -52,12 +42,7 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 200000,
       "deprecated": true,
       "replacement": "claude-opus-5",
@@ -74,9 +59,7 @@
     {
       "id": "claude-sonnet-5",
       "provider": "anthropic",
-      "tiers": [
-        "sonnet"
-      ],
+      "tiers": ["sonnet"],
       "display_name": "Sonnet 5",
       "concrete_version": "claude-sonnet-5",
       "rates": {
@@ -86,13 +69,7 @@
         "cache_creation_5m": 3.75,
         "cache_creation_1h": 6.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -107,9 +84,7 @@
     {
       "id": "claude-haiku-4-5-20251001",
       "provider": "anthropic",
-      "tiers": [
-        "haiku"
-      ],
+      "tiers": ["haiku"],
       "display_name": "Haiku 4.5",
       "concrete_version": "claude-haiku-4-5-20251001",
       "rates": {
@@ -129,9 +104,7 @@
     {
       "id": "claude-fable-5",
       "provider": "anthropic",
-      "tiers": [
-        "fable"
-      ],
+      "tiers": ["fable"],
       "display_name": "Fable 5",
       "concrete_version": "claude-fable-5",
       "rates": {
@@ -141,13 +114,7 @@
         "cache_creation_5m": 12.5,
         "cache_creation_1h": 20.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
       "behavior": {
         "thinking_default": "on",
@@ -159,9 +126,7 @@
     {
       "id": "claude-sonnet-4-6",
       "provider": "anthropic",
-      "tiers": [
-        "sonnet"
-      ],
+      "tiers": ["sonnet"],
       "display_name": "Sonnet 4.6",
       "concrete_version": "claude-sonnet-4-6",
       "rates": {
@@ -171,20 +136,14 @@
         "cache_creation_5m": 3.75,
         "cache_creation_1h": 6.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
     {
       "id": "claude-opus-4-7",
       "provider": "anthropic",
-      "tiers": [
-        "opus"
-      ],
+      "tiers": ["opus"],
       "display_name": "Opus 4.7",
       "concrete_version": "claude-opus-4-7",
       "rates": {
@@ -194,20 +153,14 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
     {
       "id": "claude-opus-4-6",
       "provider": "anthropic",
-      "tiers": [
-        "opus"
-      ],
+      "tiers": ["opus"],
       "display_name": "Opus 4.6",
       "concrete_version": "claude-opus-4-6",
       "rates": {
@@ -217,21 +170,14 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
     },
     {
       "id": "gpt-5.6-sol",
       "provider": "openai",
-      "tiers": [
-        "opus",
-        "fable"
-      ],
+      "tiers": ["opus", "fable"],
       "display_name": "GPT-5.6 Sol",
       "concrete_version": "gpt-5.6-sol",
       "rates": {
@@ -240,21 +186,14 @@
         "cache_read": 0.5,
         "cache_creation_5m": 6.25
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000,
       "recommended": true
     },
     {
       "id": "gpt-5.6-terra",
       "provider": "openai",
-      "tiers": [
-        "sonnet"
-      ],
+      "tiers": ["sonnet"],
       "display_name": "GPT-5.6 Terra",
       "concrete_version": "gpt-5.6-terra",
       "rates": {
@@ -263,20 +202,13 @@
         "cache_read": 0.2,
         "cache_creation_5m": 2.5
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000
     },
     {
       "id": "gpt-5.6-luna",
       "provider": "openai",
-      "tiers": [
-        "haiku"
-      ],
+      "tiers": ["haiku"],
       "display_name": "GPT-5.6 Luna",
       "concrete_version": "gpt-5.6-luna",
       "rates": {
@@ -285,12 +217,7 @@
         "cache_read": 0.02,
         "cache_creation_5m": 0.25
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000
     },
     {
@@ -303,11 +230,7 @@
         "output": 30.0,
         "cache_read": 0.5
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -320,11 +243,7 @@
         "output": 15.0,
         "cache_read": 0.25
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -337,11 +256,7 @@
         "output": 4.5,
         "cache_read": 0.075
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
     },
     {
@@ -353,11 +268,7 @@
         "input": 0.0,
         "output": 0.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "research_preview": true
     },
@@ -371,11 +282,7 @@
         "output": 14.0,
         "cache_read": 0.175
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.4"
@@ -390,11 +297,7 @@
         "output": 14.0,
         "cache_read": 0.175
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.5"
@@ -408,11 +311,7 @@
         "input": 0.25,
         "output": 2.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
       "replacement": "gpt-5.4-mini"
@@ -420,10 +319,7 @@
     {
       "id": "gemini-2.5-pro",
       "provider": "google",
-      "tiers": [
-        "opus",
-        "fable"
-      ],
+      "tiers": ["opus", "fable"],
       "display_name": "Gemini 2.5 Pro",
       "concrete_version": "gemini-2.5-pro",
       "rates": {
@@ -431,21 +327,14 @@
         "output": 10.0,
         "cache_read": 0.125
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576,
       "recommended": true
     },
     {
       "id": "gemini-2.5-flash",
       "provider": "google",
-      "tiers": [
-        "haiku",
-        "sonnet"
-      ],
+      "tiers": ["haiku", "sonnet"],
       "display_name": "Gemini 2.5 Flash",
       "concrete_version": "gemini-2.5-flash",
       "rates": {
@@ -453,11 +342,7 @@
         "output": 2.5,
         "cache_read": 0.03
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576
     },
     {
@@ -470,80 +355,53 @@
         "output": 0.4,
         "cache_read": 0.025
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576,
       "deprecated": true
     },
     {
       "id": "gpt-4o-mini",
       "provider": "copilot",
-      "tiers": [
-        "haiku"
-      ],
+      "tiers": ["haiku"],
       "display_name": "GPT-4o mini (Copilot)",
       "concrete_version": "gpt-4o-mini",
       "rates": {
         "input": 0.0,
         "output": 0.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 128000
     },
     {
       "id": "gpt-4o",
       "provider": "copilot",
-      "tiers": [
-        "sonnet"
-      ],
+      "tiers": ["sonnet"],
       "display_name": "GPT-4o (Copilot)",
       "concrete_version": "gpt-4o",
       "rates": {
         "input": 0.0,
         "output": 0.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 128000
     },
     {
       "id": "claude-sonnet-4.5",
       "provider": "copilot",
-      "tiers": [
-        "opus",
-        "fable"
-      ],
+      "tiers": ["opus", "fable"],
       "display_name": "Claude Sonnet 4.5 (Copilot)",
       "concrete_version": "claude-sonnet-4.5",
       "rates": {
         "input": 0.0,
         "output": 0.0
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000
     },
     {
       "id": "grok-4.6",
       "provider": "xai",
-      "tiers": [
-        "sonnet",
-        "opus",
-        "fable"
-      ],
+      "tiers": ["sonnet", "opus", "fable"],
       "display_name": "Grok 4.6",
       "concrete_version": "grok-4.6",
       "rates": {
@@ -551,13 +409,7 @@
         "output": 6.0,
         "cache_read": 0.5
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 500000,
       "recommended": true,
       "behavior": {
@@ -580,13 +432,7 @@
         "output": 6.0,
         "cache_read": 0.3
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 500000,
       "behavior": {
         "thinking_default": "on",
@@ -596,9 +442,7 @@
     {
       "id": "grok-build-0.1",
       "provider": "xai",
-      "tiers": [
-        "haiku"
-      ],
+      "tiers": ["haiku"],
       "display_name": "Grok Build 0.1",
       "concrete_version": "grok-build-0.1",
       "rates": {
@@ -606,13 +450,7 @@
         "output": 2.0,
         "cache_read": 0.2
       },
-      "supported_efforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 256000,
       "behavior": {
         "thinking_default": "on",
@@ -633,10 +471,7 @@
         "input": 2.0,
         "output": 8.0
       },
-      "supported_efforts": [
-        "medium",
-        "high"
-      ],
+      "supported_efforts": ["medium", "high"],
       "context_window": 128000
     }
   ]

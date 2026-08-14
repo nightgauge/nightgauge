@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isGrokAuthMessage,
-  isGrokQuotaMessage,
-  summarizeGrokStream,
-} from "../grokStream.js";
+import { isGrokAuthMessage, isGrokQuotaMessage, summarizeGrokStream } from "../grokStream.js";
 import { grokCliEffortFlag, mapGrokEffortToNightgauge } from "../grokEffort.js";
 
 describe("grok stream summary", () => {
@@ -33,9 +29,7 @@ describe("grok stream summary", () => {
   });
 
   it("flags quota and auth failures", () => {
-    const quota = summarizeGrokStream(
-      `{"type":"error","message":"weekly usage pool exhausted"}`
-    );
+    const quota = summarizeGrokStream(`{"type":"error","message":"weekly usage pool exhausted"}`);
     expect(quota.isQuotaExhausted).toBe(true);
     expect(quota.hasExplicitFailure).toBe(true);
     const auth = summarizeGrokStream(`{"type":"error","message":"please run grok login"}`);

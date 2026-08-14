@@ -256,22 +256,22 @@ test -f ~/.grok/auth.json && echo "session present"
 
 **Troubleshooting:**
 
-| Problem             | Solution                                              |
-| ------------------- | ----------------------------------------------------- |
-| Not authenticated   | `grok login` or set `XAI_API_KEY`                     |
-| CLI not found       | Install Grok Build or set `NIGHTGAUGE_GROK_CLI_COMMAND` |
+| Problem              | Solution                                                    |
+| -------------------- | ----------------------------------------------------------- |
+| Not authenticated    | `grok login` or set `XAI_API_KEY`                           |
+| CLI not found        | Install Grok Build or set `NIGHTGAUGE_GROK_CLI_COMMAND`     |
 | Usage pool exhausted | Wait for the weekly reset; classified as quota, not a crash |
 
 **Environment Variables:**
 
-| Variable                        | Description              |
-| ------------------------------- | ------------------------ |
-| `NIGHTGAUGE_GROK_CLI_COMMAND`   | Override CLI binary path |
-| `NIGHTGAUGE_GROK_CLI_ARGS`      | Override default flags   |
-| `NIGHTGAUGE_GROK_MODEL`         | Concrete model override  |
-| `NIGHTGAUGE_GROK_EFFORT`        | `--effort` value         |
-| `XAI_API_KEY`                   | API-key fallback         |
-| `GROK_HOME`                     | Override `~/.grok`       |
+| Variable                      | Description              |
+| ----------------------------- | ------------------------ |
+| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path |
+| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags   |
+| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override  |
+| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` value         |
+| `XAI_API_KEY`                 | API-key fallback         |
+| `GROK_HOME`                   | Override `~/.grok`       |
 
 ---
 

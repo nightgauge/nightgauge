@@ -33,14 +33,7 @@ export type AuthProvider = "max" | "bedrock" | "vertex";
  * @see Issue #627
  */
 export type ExecutionAdapter =
-  | "claude"
-  | "codex"
-  | "gemini"
-  | "gemini-sdk"
-  | "lm-studio"
-  | "ollama"
-  | "copilot"
-  | "grok";
+  "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot" | "grok";
 
 /**
  * Model selection options

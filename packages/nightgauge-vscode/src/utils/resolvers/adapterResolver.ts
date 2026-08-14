@@ -318,7 +318,7 @@ function getStageAdapterFromYaml(
 
       if (inStageAdapters) {
         const match = trimmed.match(
-          /^([a-z][-a-z]*):\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot)['"]?(?:\s+#.*)?$/
+          /^([a-z][-a-z]*):\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
         );
         if (match && match[1] === stage) {
           const adapter = match[2];
@@ -417,7 +417,7 @@ export function readAdapterFallbackChainFromYaml(workspaceRoot?: string): Execut
 
       if (inFallbackChain) {
         const match = trimmed.match(
-          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot)['"]?(?:\s+#.*)?$/
+          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
         );
         if (match) {
           const adapter = match[1];
@@ -518,7 +518,7 @@ export function readStageAdapterFallbackFromYaml(
 
       if (inThisStage) {
         const match = trimmed.match(
-          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot)['"]?(?:\s+#.*)?$/
+          /^-\s+['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
         );
         if (match) {
           const adapter = match[1];
