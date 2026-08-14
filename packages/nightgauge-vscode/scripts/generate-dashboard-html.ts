@@ -58,7 +58,8 @@ const mockCurrentRun = {
   title: "Add Playwright-based interactive testing",
   branch: "",
   startedAt: new Date(now.getTime() - 300_000),
-  status: "running" as const,
+  status: "failed" as const,
+  terminalFailureKind: "orchestrator_crash" as const,
   currentStage: "feature-dev" as any,
   stages: [
     {
@@ -77,7 +78,7 @@ const mockCurrentRun = {
     },
     {
       stage: "feature-dev" as any,
-      status: "running" as const,
+      status: "failed" as const,
       startedAt: new Date(now.getTime() - 200_000),
     },
     { stage: "feature-validate" as any, status: "pending" as const },
@@ -125,13 +126,15 @@ const mockCurrentRun = {
 
 const mockHistory = [
   {
+    runId: "run-orchestrator-crash-41",
     issueNumber: 41,
-    title: "Fix dashboard CSP nonce policy for inline event handlers",
-    branch: "fix/41-csp-nonce",
+    title: "Recovered orchestrator crash",
+    branch: "",
     startedAt: new Date(now.getTime() - 3_600_000),
     completedAt: new Date(now.getTime() - 3_000_000),
-    status: "complete" as const,
-    stages: [],
+    status: "failed" as const,
+    terminalFailureKind: "orchestrator_crash" as const,
+    stages: mockCurrentRun.stages,
     usage: {
       inputTokens: 9_800,
       outputTokens: 2_100,
@@ -140,7 +143,7 @@ const mockHistory = [
       costUsd: 0.0211,
       durationMs: 600_000,
     },
-    toolCalls: [],
+    toolCalls: mockCurrentRun.toolCalls,
     timeSavedMs: 540_000,
   },
   {
@@ -390,7 +393,7 @@ const mockHistoryPagination = {
 // 5. Generate real HTML using getDashboardHtml()
 let html = getDashboardHtml(
   mockWebview,
-  mockCurrentRun as any,
+  null,
   mockHistory as any,
   mockAggregates as any,
   mockTimeSavingsConfig,
@@ -419,7 +422,29 @@ html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, "");
 // 7. Remove nonce attributes from script tags (nonce enforcement not active without CSP)
 html = html.replace(/ nonce="[^"]*"/g, "");
 
-// 8. Inject acquireVsCodeApi mock BEFORE closing </head>
+// 8. file:// has no VS Code host supplying theme variables. Give visual
+// verification representative contrast so visibility means perceptibility,
+// not merely a non-empty white-on-white DOM box.
+html = html.replace(
+  "<style>",
+  `<style>
+    :root {
+      --vscode-foreground: #cccccc;
+      --vscode-editor-background: #1e1e1e;
+      --vscode-editorWidget-background: #252526;
+      --vscode-panel-border: #454545;
+      --vscode-charts-red: #f14c4c;
+      --vscode-charts-green: #89d185;
+      --vscode-charts-blue: #75beff;
+      --vscode-charts-yellow: #cca700;
+      --vscode-descriptionForeground: #9d9d9d;
+      --vscode-textLink-foreground: #4daafc;
+    }
+    body { background: var(--vscode-editor-background); color: var(--vscode-foreground); }
+  `
+);
+
+// 9. Inject acquireVsCodeApi mock BEFORE closing </head>
 const apiMock = `<script>
   window.__vscodeMessages = [];
   window.acquireVsCodeApi = function() {
@@ -432,7 +457,7 @@ const apiMock = `<script>
 </script>`;
 html = html.replace("</head>", apiMock + "\n</head>");
 
-// 9. Write output
+// 10. Write output
 const OUTPUT_PATH = "/tmp/dashboard-test.html";
 writeFileSync(OUTPUT_PATH, html, "utf8");
 console.log(`Dashboard HTML written to ${OUTPUT_PATH}`);

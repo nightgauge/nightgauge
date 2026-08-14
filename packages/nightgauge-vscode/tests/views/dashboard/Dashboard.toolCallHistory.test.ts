@@ -325,7 +325,8 @@ describe("Dashboard - post-completion tool call auto-load (Issue #2578)", () => 
     dashboardState.startRun(2578, "Fix tool call history", "feat/2578");
 
     // Fire stateChanged with all stages complete
-    mockEventHandlers.stateChanged.forEach((handler) => handler(allCompleteState(2578)));
+    const completedState = allCompleteState(2578);
+    mockEventHandlers.stateChanged.forEach((handler) => handler(completedState));
 
     // Before 500ms: getRunRecord should not have been called yet
     expect(mockGetRunRecord).not.toHaveBeenCalled();
@@ -333,8 +334,11 @@ describe("Dashboard - post-completion tool call auto-load (Issue #2578)", () => 
     // Advance past the 500ms delay
     await vi.runAllTimersAsync();
 
-    // Now getRunRecord should have been called for issue 2578
-    expect(mockGetRunRecord).toHaveBeenCalledWith(2578);
+    // The persisted start time disambiguates retries even before a run_id is available.
+    expect(mockGetRunRecord).toHaveBeenCalledWith(2578, {
+      runId: undefined,
+      startedAt: completedState.started_at,
+    });
   });
 
   it("does not trigger handleLoadRunDetails when pipeline completes with failure", async () => {
@@ -392,5 +396,34 @@ describe("Dashboard - post-completion tool call auto-load (Issue #2578)", () => 
     expect(run!.toolCalls).toHaveLength(2);
     expect(run!.toolCalls[0].tool).toBe("Bash");
     expect(run!.toolCalls[1].tool).toBe("Edit");
+  });
+
+  it("loads tool calls into the exact retry selected for a shared issue", async () => {
+    const dashboardState = dashboard.getState();
+    dashboardState.startRun(447, "Crashed attempt", "fix/447");
+    dashboardState.completeRun();
+    dashboardState.startRun(447, "Successful retry", "fix/447");
+    dashboardState.completeRun();
+
+    const [retry, crash] = dashboardState.getHistory();
+    retry.runId = "retry-447";
+    crash.runId = "crash-447";
+    const getRunRecord = vi.fn().mockResolvedValue({
+      tool_calls: [
+        {
+          tool: "Read",
+          target: "crash.log",
+          timestamp: "2026-08-11T00:39:37Z",
+        },
+      ],
+    });
+    vi.spyOn(dashboardState, "getTelemetryStore").mockReturnValue({ getRunRecord } as any);
+    const identity = { runId: crash.runId, startedAt: crash.startedAt.toISOString() };
+
+    await (dashboard as any).handleLoadRunDetails(447, identity);
+
+    expect(getRunRecord).toHaveBeenCalledWith(447, identity);
+    expect(crash.toolCalls).toHaveLength(1);
+    expect(retry.toolCalls).toEqual([]);
   });
 });

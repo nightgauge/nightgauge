@@ -10,9 +10,16 @@ import {
   formatTimestamp,
   formatRelativeTime,
   getProgressBarHtml,
+  getStatusBadge,
 } from "../DashboardComponents";
-import type { PipelineRunSummary, ToolCallEntry, HistoryPaginationInfo } from "../DashboardState";
+import type {
+  PipelineRunSummary,
+  ToolCallEntry,
+  HistoryPaginationInfo,
+  HistoricalRunIdentity,
+} from "../DashboardState";
 import type { BacktrackRecord, ModelEscalationRecord } from "../../../schemas/pipelineState";
+import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../../../utils/orchestratorCrashRecord";
 
 /**
  * Render a single backtrack event as an HTML row (Issue #1349)
@@ -62,11 +69,13 @@ export function getFeedbackEventsHtml(
  * @param autoLoad - When true, render a data-auto-load-issue marker instead of the manual
  *                   "Load Tool Calls" button (Issue #1842). Used for the auto-displayed most
  *                   recent run in the Pipeline tab.
+ * @param historicalIdentity - Persisted identity that distinguishes retries of the same issue.
  */
 export function getToolCallsHtml(
   toolCalls: ToolCallEntry[],
   historicalIssueNumber?: number,
-  autoLoad?: boolean
+  autoLoad?: boolean,
+  historicalIdentity?: HistoricalRunIdentity
 ): string {
   if (toolCalls.length === 0) {
     // For historical runs, load tool calls on-demand (Issue #1032)
@@ -74,7 +83,7 @@ export function getToolCallsHtml(
       if (autoLoad) {
         // Auto-load: render a marker div; the webview JS fires loadRunDetails on page load (Issue #1842)
         return `
-          <div class="tool-calls-section" data-auto-load-issue="${historicalIssueNumber}">
+          <div class="tool-calls-section" data-auto-load-issue="${historicalIssueNumber}"${getRunIdentityAttributes(historicalIdentity)}>
             <div class="section-header">
               <h3>Tool Calls</h3>
             </div>
@@ -91,7 +100,7 @@ export function getToolCallsHtml(
             <h3>Tool Calls</h3>
           </div>
           <div class="empty-state" id="tool-calls-load-container">
-            <button class="load-tool-calls-btn" data-action="load-tool-calls" data-issue="${historicalIssueNumber}">
+            <button class="load-tool-calls-btn" data-action="load-tool-calls" data-issue="${historicalIssueNumber}"${getRunIdentityAttributes(historicalIdentity)}>
               Load Tool Calls
             </button>
             <p class="tool-calls-hint">Tool calls are loaded on-demand from execution history.</p>
@@ -149,6 +158,14 @@ export function getToolCallsHtml(
   `;
 }
 
+function getRunIdentityAttributes(identity?: HistoricalRunIdentity): string {
+  const runId = identity?.runId ? ` data-run-id="${escapeHtml(identity.runId)}"` : "";
+  const startedAt = identity?.startedAt
+    ? ` data-started-at="${escapeHtml(identity.startedAt)}"`
+    : "";
+  return `${runId}${startedAt}`;
+}
+
 /**
  * Generate pipeline history HTML
  *
@@ -185,14 +202,23 @@ export function getHistoryHtml(
         ${history
           .map(
             (run) => `
-          <div class="history-item" data-issue="${run.issueNumber}" data-action="select-history-run">
+          <div class="history-item" data-issue="${run.issueNumber}"${getRunIdentityAttributes({ runId: run.runId, startedAt: run.startedAt.toISOString() })} data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#${run.issueNumber}</span>
               <span class="history-title">${escapeHtml(run.title.substring(0, 30))}${run.title.length > 30 ? "..." : ""}</span>
+              ${
+                run.status === "failed"
+                  ? getStatusBadge(
+                      run.terminalFailureKind === ORCHESTRATOR_CRASH_TERMINAL_KIND
+                        ? ORCHESTRATOR_CRASH_TERMINAL_KIND
+                        : "failed"
+                    )
+                  : ""
+              }
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
-                ${run.stages.map((s) => `<span class="history-dot ${s.status === "complete" ? "complete" : s.status === "skipped" ? "skipped" : "pending"}"></span>`).join("")}
+                ${run.stages.map((s) => `<span class="history-dot ${s.status === "complete" ? "complete" : s.status === "failed" ? "failed" : s.status === "skipped" ? "skipped" : "pending"}"></span>`).join("")}
               </div>
               <span class="history-cost">$${run.usage.costUsd.toFixed(2)}</span>
               <span class="history-time">${formatRelativeTime(run.startedAt)}</span>
@@ -569,6 +595,10 @@ export function getPipelineTabStyles(): string {
 
     .history-dot.complete {
       background: var(--vscode-charts-green);
+    }
+
+    .history-dot.failed {
+      background: var(--vscode-charts-red);
     }
 
     .history-dot.skipped {

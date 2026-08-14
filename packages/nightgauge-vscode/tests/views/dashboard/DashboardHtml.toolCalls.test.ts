@@ -30,6 +30,7 @@ function createToolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
 
 function createRun(toolCalls: ToolCallEntry[]): PipelineRunSummary {
   return {
+    runId: "run-1",
     issueNumber: 1,
     title: "Test run",
     branch: "feat/1-test",
@@ -169,11 +170,16 @@ describe("Tool call lazy rendering (Issue #716)", () => {
 
 describe("Historical tool call on-demand loading (Issue #1032)", () => {
   it("should show load button when historicalIssueNumber is provided and toolCalls are empty", () => {
-    const html = getToolCallsHtml([], 42);
+    const html = getToolCallsHtml([], 42, false, {
+      runId: "run-42",
+      startedAt: "2025-06-01T12:00:00.000Z",
+    });
 
     expect(html).toContain("Load Tool Calls");
     expect(html).toContain('data-action="load-tool-calls"');
     expect(html).toContain('data-issue="42"');
+    expect(html).toContain('data-run-id="run-42"');
+    expect(html).toContain('data-started-at="2025-06-01T12:00:00.000Z"');
     expect(html).toContain("tool-calls-load-container");
   });
 

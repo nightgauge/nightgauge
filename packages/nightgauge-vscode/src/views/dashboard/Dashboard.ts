@@ -8,7 +8,7 @@
  */
 
 import * as vscode from "vscode";
-import { DashboardState, type ToolCallEntry } from "./DashboardState";
+import { DashboardState, type ToolCallEntry, type HistoricalRunIdentity } from "./DashboardState";
 import {
   getDashboardHtml,
   getPipelineProgressSectionHtml,
@@ -117,8 +117,8 @@ import { getDefaultRunsFilters, getDefaultRunsPagination } from "./DashboardStat
  */
 type WebViewMessage =
   | { type: "refresh" }
-  | { type: "export"; format: "json" | "csv"; target: "current" | number }
-  | { type: "selectRun"; issueNumber: number }
+  | { type: "export"; format: "json" | "csv"; target: "current" | HistoricalRunTarget }
+  | ({ type: "selectRun"; issueNumber: number } & HistoricalRunIdentity)
   | { type: "setScope"; scope: "session" | "all" }
   | {
       type: "firewallFilter";
@@ -151,7 +151,7 @@ type WebViewMessage =
       dateRange: "last7" | "last30" | "all";
     }
   | { type: "executeCommand"; command: string }
-  | { type: "loadRunDetails"; issueNumber: number }
+  | ({ type: "loadRunDetails"; issueNumber: number } & HistoricalRunIdentity)
   | { type: "resetUsageCounter" }
   | { type: "selectTab"; tab: string }
   | { type: "auditFilter"; filters: AuditFilterState }
@@ -197,6 +197,8 @@ type WebViewMessage =
   | { type: "retryRunsTab" }
   | { type: "retryTrendsTab" }
   | { type: "retryComplianceTab" };
+
+type HistoricalRunTarget = HistoricalRunIdentity & { issueNumber: number };
 
 /**
  * Dashboard class manages the WebView panel for pipeline metrics
@@ -301,6 +303,19 @@ export class Dashboard implements vscode.Disposable {
   private selectedRunIssueNumber: number | null = null;
   /** Platform runId (UUID) for the selected run — used to filter SSE pipeline events (#3714) */
   private selectedRunId: string | null = null;
+  /** Persisted start time fallback for history records without a runId. */
+  private selectedRunStartedAt: string | null = null;
+
+  /** Identity for the selected history run; undefined when neither discriminator is known. */
+  private selectedRunIdentity(): HistoricalRunIdentity | undefined {
+    if (this.selectedRunId) {
+      return { runId: this.selectedRunId, startedAt: this.selectedRunStartedAt ?? undefined };
+    }
+    if (this.selectedRunStartedAt) {
+      return { startedAt: this.selectedRunStartedAt };
+    }
+    return undefined;
+  }
   /** Debounce timer for updatePanel to coalesce rapid-fire calls */
   private updatePanelTimer: ReturnType<typeof setTimeout> | undefined;
   /** Periodic tick that refreshes the Overview Pipeline Slots cards (elapsed time) */
@@ -1041,7 +1056,7 @@ export class Dashboard implements vscode.Disposable {
    * a backfill to import the completed run from disk artifacts (Issue #639).
    */
   private syncFromPipelineState(pipelineState: PipelineState): void {
-    const currentRun = this.state.getCurrentRun();
+    let currentRun = this.state.getCurrentRun();
 
     // Check if pipeline is finished: every canonical stage must be accounted
     // for — present in state.stages with a terminal status, or listed in
@@ -1094,6 +1109,19 @@ export class Dashboard implements vscode.Disposable {
           }
         }
       }
+
+      currentRun = this.state.getCurrentRun();
+    }
+
+    // Dashboard startRun() is sometimes called before the authoritative state
+    // arrives and uses the local clock. Bind the summary to the persisted start
+    // instant before any exact history lookup so retries of one issue remain
+    // distinguishable even when no run_id is available in PipelineState.
+    if (currentRun) {
+      const authoritativeStartedAt = new Date(pipelineState.started_at);
+      if (!Number.isNaN(authoritativeStartedAt.getTime())) {
+        currentRun.startedAt = authoritativeStartedAt;
+      }
     }
 
     // Sync feedback events from authoritative pipeline state (Issue #1349)
@@ -1121,7 +1149,10 @@ export class Dashboard implements vscode.Disposable {
         // Delay gives the JSONL backup write time to flush to disk.
         if (currentRun?.issueNumber) {
           setTimeout(() => {
-            this.handleLoadRunDetails(currentRun.issueNumber);
+            this.handleLoadRunDetails(currentRun.issueNumber, {
+              runId: currentRun.runId,
+              startedAt: currentRun.startedAt.toISOString(),
+            });
           }, Dashboard.TOOL_CALL_PRELOAD_DELAY_MS);
         }
       }
@@ -1674,11 +1705,11 @@ export class Dashboard implements vscode.Disposable {
         break;
 
       case "selectRun":
-        this.handleSelectRun(message.issueNumber);
+        this.handleSelectRun(message.issueNumber, message);
         break;
 
       case "loadRunDetails":
-        await this.handleLoadRunDetails(message.issueNumber);
+        await this.handleLoadRunDetails(message.issueNumber, message);
         break;
 
       case "setScope":
@@ -2115,11 +2146,14 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Handle export request
    */
-  private async handleExport(format: "json" | "csv", target: "current" | number): Promise<void> {
+  private async handleExport(
+    format: "json" | "csv",
+    target: "current" | HistoricalRunTarget
+  ): Promise<void> {
     // Get the run to export
     let run = this.state.getCurrentRun();
-    if (target !== "current" && typeof target === "number") {
-      run = this.state.getHistoryRun(target) || null;
+    if (target !== "current") {
+      run = this.state.getHistoryRun(target.issueNumber, target) || null;
     }
 
     if (!run) {
@@ -2134,7 +2168,7 @@ export class Dashboard implements vscode.Disposable {
     if (target !== "current" && this.workspaceRoot) {
       const store = this.state.getTelemetryStore();
       if (store) {
-        const fullRecord = await store.getRunRecord(run.issueNumber);
+        const fullRecord = await store.getRunRecord(run.issueNumber, target);
         if (fullRecord?.tokens?.per_stage) {
           const perStage = fullRecord.tokens.per_stage;
           const startedAt = run.startedAt;
@@ -2249,11 +2283,12 @@ export class Dashboard implements vscode.Disposable {
    * Handle history run selection — updates Analytics tab to show selected run's data.
    * @see Issue #2580 - Fix Analytics tab always showing most recent run
    */
-  private handleSelectRun(issueNumber: number): void {
-    const run = this.state.getHistoryRun(issueNumber);
+  private handleSelectRun(issueNumber: number, identity?: HistoricalRunIdentity): void {
+    const run = this.state.getHistoryRun(issueNumber, identity);
     if (run) {
       this.selectedRunIssueNumber = issueNumber;
-      this.selectedRunId = this.state.getRunIdForIssue(issueNumber);
+      this.selectedRunId = run.runId ?? null;
+      this.selectedRunStartedAt = run.startedAt.toISOString();
       this.refreshCostSummary().then(() => {
         this.updatePanel("msg:selectRun");
       });
@@ -2263,7 +2298,10 @@ export class Dashboard implements vscode.Disposable {
   /**
    * Load full run details (tool calls) on-demand from JSONL (Issue #1032).
    */
-  private async handleLoadRunDetails(issueNumber: number): Promise<void> {
+  private async handleLoadRunDetails(
+    issueNumber: number,
+    identity?: HistoricalRunIdentity
+  ): Promise<void> {
     const store = this.state.getTelemetryStore();
     if (!store) {
       this.logger.warn("handleLoadRunDetails: TelemetryStore not available");
@@ -2271,7 +2309,7 @@ export class Dashboard implements vscode.Disposable {
     }
 
     try {
-      const record = await store.getRunRecord(issueNumber);
+      const record = await store.getRunRecord(issueNumber, identity);
       const toolCalls: ToolCallEntry[] = (record?.tool_calls ?? []).map((tc) => ({
         tool: tc.tool,
         target: tc.target ?? "",
@@ -2282,7 +2320,7 @@ export class Dashboard implements vscode.Disposable {
         error: tc.error,
       }));
 
-      this.state.updateRunToolCalls(issueNumber, toolCalls);
+      this.state.updateRunToolCalls(issueNumber, toolCalls, identity);
 
       // Send incremental update to replace the tool calls section
       if (this.panel) {
@@ -2295,6 +2333,7 @@ export class Dashboard implements vscode.Disposable {
     } catch (error) {
       this.logger.warn("handleLoadRunDetails: failed to load", {
         issueNumber,
+        identity,
         error,
       });
     }
@@ -2369,7 +2408,7 @@ export class Dashboard implements vscode.Disposable {
    */
   private async refreshRunDetailSnapshot(): Promise<void> {
     if (this.selectedRunIssueNumber === null) return;
-    await this.handleLoadRunDetails(this.selectedRunIssueNumber);
+    await this.handleLoadRunDetails(this.selectedRunIssueNumber, this.selectedRunIdentity());
   }
 
   /**
@@ -2671,7 +2710,7 @@ export class Dashboard implements vscode.Disposable {
     try {
       const selectedRun =
         this.selectedRunIssueNumber !== null
-          ? this.state.getHistoryRun(this.selectedRunIssueNumber)
+          ? this.state.getHistoryRun(this.selectedRunIssueNumber, this.selectedRunIdentity())
           : undefined;
       this.costSummary = await this.state.getPipelineCostSummary(
         selectedRun,

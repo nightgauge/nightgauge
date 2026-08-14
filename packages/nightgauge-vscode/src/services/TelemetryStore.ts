@@ -9,7 +9,9 @@
  * - Plain class (no VSCode API dependency) — testable without mocks
  * - In-memory cache for index (invalidated when history changes)
  * - Index rebuilt from JSONL if missing or corrupt
- * - Staleness detected by comparing index updated_at vs latest JSONL mtime
+ * - Missing, corrupt, stale, or older-schema indexes rebuild from JSONL
+ * - Zero-token records are hidden unless their terminal marker positively
+ *   identifies a synthesized orchestrator crash (#447)
  *
  * @see Issue #1007 - Make JSONL the canonical data source
  * @see docs/ARCHITECTURE.md for service patterns
@@ -19,11 +21,17 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { ExecutionHistoryReader, type NormalizedRunRecord } from "../utils/executionHistoryReader";
+import { isOrchestratorCrashRecord } from "../utils/orchestratorCrashRecord";
 import {
   ExecutionHistoryWriter,
+  HISTORY_INDEX_SCHEMA_VERSION,
   type HistoryIndex,
   type HistoryIndexEntry,
 } from "../utils/executionHistoryWriter";
+
+/** Exact persisted identity; at least one discriminator is always required. */
+export type RunRecordIdentity =
+  { runId: string; startedAt?: string } | { runId?: string; startedAt: string };
 
 export type { HistoryIndex, HistoryIndexEntry };
 
@@ -45,7 +53,7 @@ export class TelemetryStore {
     try {
       const content = await fs.readFile(indexPath, "utf-8");
       const parsed = JSON.parse(content) as HistoryIndex;
-      if (parsed.schema_version && Array.isArray(parsed.entries)) {
+      if (parsed.schema_version === HISTORY_INDEX_SCHEMA_VERSION && Array.isArray(parsed.entries)) {
         // Check staleness: compare index updated_at vs latest JSONL mtime
         const isStale = await this.isIndexStale(parsed);
         if (!isStale) {
@@ -80,7 +88,7 @@ export class TelemetryStore {
     entries.sort((a, b) => b.started_at.localeCompare(a.started_at));
 
     const index: HistoryIndex = {
-      schema_version: "1",
+      schema_version: HISTORY_INDEX_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       total_runs: entries.length,
       entries,
@@ -93,7 +101,8 @@ export class TelemetryStore {
 
   /**
    * Get all run summaries from the index, filtering out ghost/orchestration
-   * entries created by concurrent pipeline coordinators.
+   * entries created by concurrent pipeline coordinators while retaining
+   * positively identified orchestrator crashes.
    *
    * Ghost records are identified by having zero cost AND zero total tokens —
    * they represent orchestration overhead, not actual pipeline work.
@@ -119,12 +128,22 @@ export class TelemetryStore {
   }
 
   /**
-   * Get a full run record from JSONL by issue number.
-   * Used for on-demand detail loading when a user expands a run.
+   * Get a full run record from JSONL, optionally matching a persisted run identity.
+   * Identity is required when retries can share an issue number; legacy callers
+   * without one retain the issue-wide richest-record selection.
    */
-  async getRunRecord(issueNumber: number): Promise<NormalizedRunRecord | undefined> {
+  async getRunRecord(
+    issueNumber: number,
+    identity?: RunRecordIdentity
+  ): Promise<NormalizedRunRecord | undefined> {
     const records = await ExecutionHistoryReader.readForIssue(this.workspaceRoot, issueNumber);
-    const runRecords = records.filter((r) => r.record_type === "run") as NormalizedRunRecord[];
+    let runRecords = records.filter((r) => r.record_type === "run") as NormalizedRunRecord[];
+    if (identity?.runId) {
+      runRecords = runRecords.filter((r) => r.run_id === identity.runId);
+    } else if (identity?.startedAt) {
+      const targetStart = Date.parse(identity.startedAt);
+      runRecords = runRecords.filter((r) => Date.parse(r.started_at) === targetStart);
+    }
     if (runRecords.length === 0) return undefined;
     // Prefer the record with per-stage token data — when the Go scheduler writes
     // a zero-token "complete" ghost after a cancelled run that already has real
@@ -249,9 +268,13 @@ export class TelemetryStore {
  * - A concurrent batch coordinator records orchestration overhead
  *
  * Ghost records are characterized by zero cost AND zero total tokens,
- * meaning no actual LLM work was performed in that run.
+ * meaning no actual LLM work was performed in that run. Synthesized
+ * orchestrator crashes share that shape but are real terminal failures, so
+ * their producer-owned terminal marker exempts them (#447).
  */
 export function isGhostEntry(entry: HistoryIndexEntry): boolean {
+  if (isOrchestratorCrashRecord(entry)) return false;
+
   const totalTokens =
     (entry.total_input_tokens ?? 0) +
     (entry.total_output_tokens ?? 0) +

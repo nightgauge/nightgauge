@@ -9,6 +9,7 @@
 
 import type { PipelineRunSummary } from "./DashboardState";
 import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipelineState";
+import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../../utils/orchestratorCrashRecord";
 
 /**
  * Generate nonce for script security
@@ -189,17 +190,30 @@ export function truncateText(text: string, maxLength: number): string {
 /**
  * Get status indicator HTML
  */
-export function getStatusBadge(status: string): string {
+type StatusBadgeKind =
+  | "running"
+  | "complete"
+  | "failed"
+  | "cancelled"
+  | "pending"
+  | "skipped"
+  | typeof ORCHESTRATOR_CRASH_TERMINAL_KIND;
+
+export function getStatusBadge(status: StatusBadgeKind): string {
   const statusColors: Record<string, string> = {
     running: "var(--vscode-charts-blue)",
     complete: "var(--vscode-charts-green)",
     failed: "var(--vscode-charts-red)",
+    [ORCHESTRATOR_CRASH_TERMINAL_KIND]: "var(--vscode-charts-red)",
     cancelled: "var(--vscode-charts-yellow)",
     pending: "var(--vscode-descriptionForeground)",
     skipped: "var(--vscode-descriptionForeground)",
   };
   const color = statusColors[status] || "var(--vscode-descriptionForeground)";
-  const label = status.charAt(0).toUpperCase() + status.slice(1);
+  const label =
+    status === ORCHESTRATOR_CRASH_TERMINAL_KIND
+      ? "Orchestrator crash"
+      : status.charAt(0).toUpperCase() + status.slice(1);
   return `<span class="status-badge" style="background: ${color};">${label}</span>`;
 }
 
@@ -246,7 +260,11 @@ export function getProgressBarHtml(
         </div>
         <div class="progress-badges">
           ${routingBadge}
-          ${getStatusBadge(run.status)}
+          ${getStatusBadge(
+            run.terminalFailureKind === ORCHESTRATOR_CRASH_TERMINAL_KIND
+              ? ORCHESTRATOR_CRASH_TERMINAL_KIND
+              : run.status
+          )}
         </div>
       </div>
       <div class="progress-bar-container">
@@ -256,7 +274,15 @@ export function getProgressBarHtml(
         <span class="progress-percent">${progressPercent}%</span>
         ${branchHtml}
         <span class="progress-stage">
-          ${run.currentStage ? `Stage: ${formatStageName(run.currentStage)} (${currentStageIndex + 1}/${run.stages.length})` : "Completed"}
+          ${
+            run.currentStage
+              ? `Stage: ${formatStageName(run.currentStage)} (${currentStageIndex + 1}/${run.stages.length})`
+              : run.status === "failed"
+                ? "Failed"
+                : run.status === "cancelled"
+                  ? "Cancelled"
+                  : "Completed"
+          }
         </span>
         ${run.routing?.skippedStages.length ? `<span class="skipped-count">${run.routing.skippedStages.length} stage(s) skipped</span>` : ""}
         ${retryDepthHtml}

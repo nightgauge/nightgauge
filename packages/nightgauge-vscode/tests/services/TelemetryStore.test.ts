@@ -8,10 +8,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as fs from "node:fs/promises";
 import { TelemetryStore, isGhostEntry } from "../../src/services/TelemetryStore";
 import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
-import { ExecutionHistoryWriter } from "../../src/utils/executionHistoryWriter";
+import {
+  ExecutionHistoryWriter,
+  HISTORY_INDEX_SCHEMA_VERSION,
+} from "../../src/utils/executionHistoryWriter";
 import type { HistoryIndex } from "../../src/utils/executionHistoryWriter";
 
 // Mock node:fs/promises
@@ -24,10 +29,19 @@ describe("TelemetryStore", () => {
 
   let store: TelemetryStore;
 
+  it("pins the TypeScript history-index projection to schema v2", () => {
+    expect(HISTORY_INDEX_SCHEMA_VERSION).toBe("2");
+    const goHistorySource = readFileSync(
+      join(__dirname, "..", "..", "..", "..", "internal", "state", "history.go"),
+      "utf-8"
+    );
+    expect(goHistorySource).toMatch(/const historyIndexSchemaVersion = "2"/);
+  });
+
   /** Build a valid index for tests */
   function buildIndex(entries: HistoryIndex["entries"] = []): HistoryIndex {
     return {
-      schema_version: "1",
+      schema_version: HISTORY_INDEX_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       total_runs: entries.length,
       entries,
@@ -657,6 +671,27 @@ describe("isGhostEntry()", () => {
     // Missing token fields default to 0, so this is a ghost
     expect(isGhostEntry(minimal)).toBe(true);
   });
+
+  it("should NOT flag a zero-token orchestrator crash (#447)", () => {
+    const crash = {
+      issue_number: 397,
+      title: "Crash mid-stage",
+      outcome: "failed" as const,
+      terminal_failure_kind: "orchestrator_crash" as const,
+      cost_usd: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      duration_ms: 2_520_890,
+      stage_count: 0,
+      started_at: "2026-08-11T00:39:37Z",
+      recorded_at: "2026-08-11T01:21:37Z",
+      branch: "",
+    };
+
+    expect(isGhostEntry(crash)).toBe(false);
+  });
 });
 
 describe("TelemetryStore ghost filtering", () => {
@@ -707,7 +742,7 @@ describe("TelemetryStore ghost filtering", () => {
       },
     ];
     const index: HistoryIndex = {
-      schema_version: "1",
+      schema_version: HISTORY_INDEX_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       total_runs: entries.length,
       entries,
@@ -770,7 +805,7 @@ describe("TelemetryStore ghost filtering", () => {
       },
     ];
     const index: HistoryIndex = {
-      schema_version: "1",
+      schema_version: HISTORY_INDEX_SCHEMA_VERSION,
       updated_at: new Date().toISOString(),
       total_runs: entries.length,
       entries,

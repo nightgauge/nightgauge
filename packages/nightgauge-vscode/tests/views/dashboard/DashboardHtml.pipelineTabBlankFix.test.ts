@@ -28,6 +28,7 @@ const timeSavingsConfig: TimeSavingsConfig = {
 
 function createRun(overrides: Partial<PipelineRunSummary> = {}): PipelineRunSummary {
   return {
+    runId: "run-42",
     issueNumber: 42,
     title: "Test pipeline run",
     branch: "feat/42-test",
@@ -141,9 +142,14 @@ describe("Pipeline tab blank fix (Issue #1842)", () => {
   });
 
   it("getToolCallsHtml with autoLoad=true renders data-auto-load-issue instead of button", () => {
-    const html = getToolCallsHtml([], 42, true);
+    const html = getToolCallsHtml([], 42, true, {
+      runId: "run-42",
+      startedAt: "2025-06-01T12:00:00.000Z",
+    });
 
     expect(html).toContain('data-auto-load-issue="42"');
+    expect(html).toContain('data-run-id="run-42"');
+    expect(html).toContain('data-started-at="2025-06-01T12:00:00.000Z"');
     expect(html).not.toContain("Load Tool Calls");
     expect(html).toContain("tool-calls-load-container");
   });

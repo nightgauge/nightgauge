@@ -1310,6 +1310,32 @@ describe("Dashboard - Analytics Run Selection (Issue #2580)", () => {
     expect((dashboard as any).selectedRunIssueNumber).toBeNull();
   });
 
+  it("selects the exact retry when two history runs share an issue number", async () => {
+    const dashboardState = dashboard.getState();
+    dashboardState.startRun(42, "Crashed attempt", "fix/42");
+    await dashboardState.completeRun();
+    dashboardState.startRun(42, "Successful retry", "fix/42");
+    await dashboardState.completeRun();
+    const [retry, crash] = dashboardState.getHistory();
+    retry.runId = "retry-42";
+    crash.runId = "crash-42";
+
+    dashboard.show();
+    const vscodeModule = vi.mocked(await import("vscode"));
+    const panel = vscodeModule.window.createWebviewPanel.mock.results[0]?.value;
+    const messageHandler = panel?.webview?.onDidReceiveMessage?.mock?.calls[0]?.[0];
+
+    messageHandler({
+      type: "selectRun",
+      issueNumber: 42,
+      runId: crash.runId,
+      startedAt: crash.startedAt.toISOString(),
+    });
+
+    expect((dashboard as any).selectedRunId).toBe("crash-42");
+    expect((dashboard as any).selectedRunStartedAt).toBe(crash.startedAt.toISOString());
+  });
+
   it("should pass selected run to getPipelineCostSummary during refreshCostSummary", async () => {
     const dashboardState = dashboard.getState();
 

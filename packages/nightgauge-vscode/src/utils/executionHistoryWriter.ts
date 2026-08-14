@@ -20,7 +20,14 @@ import {
   type ExecutionHistoryRunRecordV2,
   type ExecutionHistoryRunRecordV3,
   type ExecutionHistoryRecord,
+  type TerminalFailureKind,
 } from "../schemas/executionHistory";
+
+/**
+ * Index v2 adds terminal_failure_kind so zero-token orchestrator crashes stay
+ * positively identifiable after the full record is projected to a summary.
+ */
+export const HISTORY_INDEX_SCHEMA_VERSION = "2";
 
 /**
  * Idempotency key for a run record (Issue #313): the stable run_id when present
@@ -96,6 +103,8 @@ export interface HistoryIndexEntry {
     | "skill-no-op"
     | "blocked"
     | "deferred";
+  /** What aborted a failed V3 run; retained for crash-vs-phantom identity (#447). */
+  terminal_failure_kind?: TerminalFailureKind;
   /** True when this run resumed a previously-failed pipeline (Issue #1261) */
   is_recovery?: boolean;
   /**
@@ -115,6 +124,8 @@ export interface HistoryIndexEntry {
   total_cache_creation_tokens: number;
   duration_ms: number;
   stage_count: number;
+  /** Total stage-detail count, including failed stages (restart dedupe). Always written on v2 indexes. */
+  record_richness?: number;
   started_at: string;
   recorded_at: string;
   labels?: string[];
@@ -127,7 +138,7 @@ export interface HistoryIndexEntry {
  * History index structure — stored at history/index.json (Issue #1007)
  */
 export interface HistoryIndex {
-  schema_version: string;
+  schema_version: typeof HISTORY_INDEX_SCHEMA_VERSION;
   updated_at: string;
   total_runs: number;
   entries: HistoryIndexEntry[];
@@ -244,6 +255,8 @@ export class ExecutionHistoryWriter {
       title: record.title,
       outcome: record.outcome,
       outcome_type: record.outcome_type,
+      terminal_failure_kind:
+        record.schema_version === "3" ? record.terminal_failure_kind : undefined,
       is_recovery: record.is_recovery,
       is_supercharge: record.is_supercharge,
       performance_mode: record.performance_mode,
@@ -255,6 +268,7 @@ export class ExecutionHistoryWriter {
       total_cache_creation_tokens: record.tokens.total_cache_creation,
       duration_ms: record.total_duration_ms,
       stage_count: stageCount,
+      record_richness: Object.keys(record.stages).length,
       started_at: record.started_at,
       recorded_at: record.recorded_at,
       labels: record.labels,

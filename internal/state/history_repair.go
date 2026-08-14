@@ -286,7 +286,7 @@ func RepairHistory(workspaceRoot string, apply bool) (*RepairReport, error) {
 		// The index is a projection of the JSONL, so it must be rebuilt from
 		// the repaired files or it keeps pointing at discarded records.
 		hw := &HistoryWriter{dir: dir}
-		idx := V2Index{SchemaVersion: "1", Entries: hw.rebuildIndexEntriesFromJSONL()}
+		idx := V2Index{SchemaVersion: historyIndexSchemaVersion, Entries: hw.rebuildIndexEntriesFromJSONL()}
 		idx.TotalRuns = len(idx.Entries)
 		idx.UpdatedAt = time.Now().Format(time.RFC3339)
 		if err := writeIndexAtomic(filepath.Join(dir, "index.json"), idx); err != nil {
