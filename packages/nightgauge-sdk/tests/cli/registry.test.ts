@@ -36,7 +36,7 @@ function createMockAdapter(name: IncrediAdapter, overrides?: Partial<ICliAdapter
 // ---------------------------------------------------------------------------
 
 describe("AdapterRegistry registration", () => {
-  it("should support registering and retrieving all 8 adapter names", () => {
+  it("should support registering and retrieving all adapter names", () => {
     const registry = new AdapterRegistry();
     const names: IncrediAdapter[] = [
       "claude-sdk",
@@ -47,13 +47,14 @@ describe("AdapterRegistry registration", () => {
       "lm-studio",
       "ollama",
       "copilot",
+      "grok",
     ];
 
     for (const name of names) {
       registry.register(createMockAdapter(name));
     }
 
-    expect(registry.getNames()).toHaveLength(8);
+    expect(registry.getNames()).toHaveLength(9);
     for (const name of names) {
       expect(registry.has(name)).toBe(true);
       expect(registry.get(name).name).toBe(name);
@@ -146,10 +147,11 @@ describe("defaultRegistry completeness", () => {
     "lm-studio",
     "ollama",
     "copilot",
+    "grok",
   ];
 
-  it("contains exactly 8 adapters", () => {
-    expect(defaultRegistry.getAll()).toHaveLength(8);
+  it("contains exactly the registered adapters", () => {
+    expect(defaultRegistry.getAll()).toHaveLength(9);
   });
 
   it("has() returns true for every IncrediAdapter name", () => {
@@ -230,7 +232,7 @@ describe("multi-tool adapter lookup", () => {
     }
 
     // Verify the matrix has entries for all adapters
-    expect(Object.keys(matrix)).toHaveLength(8);
+    expect(Object.keys(matrix)).toHaveLength(9);
 
     // Claude adapters offload to native workflows; everything else fans out.
     expect(matrix["claude-sdk"]).toBe("native-workflow");

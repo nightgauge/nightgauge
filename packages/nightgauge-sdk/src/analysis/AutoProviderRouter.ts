@@ -70,6 +70,7 @@ const ADAPTER_CONTEXT_WINDOW_TOKENS: Record<RouterExecutionAdapter, number> = {
   "lm-studio": 32_000,
   ollama: 32_000,
   copilot: 64_000,
+  grok: 500_000,
 };
 
 /**
@@ -110,6 +111,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.4,
     ollama: 0.4,
     copilot: 0.65,
+    grok: 0.8,
   },
   planning: {
     "claude-sdk": 0.9,
@@ -120,6 +122,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.45,
     ollama: 0.45,
     copilot: 0.7,
+    grok: 0.82,
   },
   dev: {
     "claude-sdk": 0.95,
@@ -130,6 +133,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.55,
     ollama: 0.55,
     copilot: 0.75,
+    grok: 0.84,
   },
   validate: {
     "claude-sdk": 0.9,
@@ -140,6 +144,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.5,
     ollama: 0.5,
     copilot: 0.7,
+    grok: 0.8,
   },
   lightweight: {
     // For lightweight stages capability matters less — flat scores keep cost
@@ -152,6 +157,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.65,
     ollama: 0.65,
     copilot: 0.7,
+    grok: 0.7,
   },
   merge: {
     "claude-sdk": 0.88,
@@ -162,6 +168,7 @@ const CAPABILITY_MATRIX: Record<RouterStageCategory, Record<RouterExecutionAdapt
     "lm-studio": 0.5,
     ollama: 0.5,
     copilot: 0.7,
+    grok: 0.78,
   },
 };
 

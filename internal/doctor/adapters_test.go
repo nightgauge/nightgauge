@@ -363,11 +363,14 @@ func TestAdapterSpecConstants(t *testing.T) {
 	if adapterSpecs["gemini"].minVersion != "0.29.0" {
 		t.Errorf("gemini minVersion drifted from SDK MIN_KNOWN_VERSION 0.29.0: %q", adapterSpecs["gemini"].minVersion)
 	}
+	if adapterSpecs["grok"].minVersion != "1.0.0" {
+		t.Errorf("grok minVersion drifted from SDK GROK_MIN_KNOWN_VERSION 1.0.0: %q", adapterSpecs["grok"].minVersion)
+	}
 	if !adapterSpecs["codex"].mcp {
 		t.Error("codex must be flagged as MCP-provisioning")
 	}
-	if len(AllAdapterNames()) != 8 {
-		t.Errorf("expected 8 adapters in AllAdapterNames, got %d", len(AllAdapterNames()))
+	if len(AllAdapterNames()) != 9 {
+		t.Errorf("expected 9 adapters in AllAdapterNames, got %d", len(AllAdapterNames()))
 	}
 }
 

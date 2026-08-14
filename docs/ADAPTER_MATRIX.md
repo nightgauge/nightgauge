@@ -32,6 +32,7 @@ loop capable of editing files, running commands, and calling `gh`.
 | codex           |             ✓             | **Beta**; live six-stage matrix pending         |
 | gemini          |             ✓             | **Experimental**; live six-stage matrix pending |
 | copilot         |             ✓             | **Experimental**; live six-stage matrix pending |
+| grok            |             ✓             | **Experimental**; live six-stage matrix pending |
 | gemini-sdk      |             ✗             | Chat-completion-only                            |
 | ollama          |             ✗             | Chat-completion-only                            |
 | lm-studio       |             ✗             | Chat-completion-only                            |
@@ -65,6 +66,7 @@ pipeline dispatch.
 | lm-studio       |      ✗      |       ✗        |     ✗†      |       ✓        | None (local HTTP server)                       | N/A (HTTP)      |
 | ollama          |      ✗      |       ✗        |     ✗†      |       ✓        | None (local HTTP server)                       | N/A (HTTP)      |
 | copilot         |      ✗      |       ✗        |      ✗      |       ⚠️       | Token env vars / `copilot auth status`         | Unknown         |
+| grok            |      ✗      |   ✓ (opt-in)   |      ✓      |       ✓        | `grok login` / `XAI_API_KEY`                   | 1.0.0           |
 
 † HTTP-based adapters (lm-studio, ollama) stream internally via SSE but produce SDKMessage objects,
 not raw NDJSON CLI output. See [Gap #3](#gap-3-lm-studio--ollama-streamjson-capability-semantics).
@@ -84,6 +86,7 @@ The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC 
 | lm-studio       |         ✗         |         ✓          | Not in Go registry                                                                      |
 | ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                        |
 | copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                           |
+| grok            |         ✓         |         ✓          | Experimental; live six-stage matrix pending (#528)                                      |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports

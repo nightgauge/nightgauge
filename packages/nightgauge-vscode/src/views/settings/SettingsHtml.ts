@@ -106,6 +106,7 @@ export const STAGE_ADAPTER_OPTIONS: ReadonlyArray<{ value: string; label: string
   { value: "codex", label: "Codex (Beta)" },
   { value: "gemini", label: "Gemini CLI (Experimental)" },
   { value: "copilot", label: "GitHub Copilot CLI (Experimental)" },
+  { value: "grok", label: "Grok Build CLI (Experimental)" },
 ];
 
 /**
@@ -1315,6 +1316,7 @@ function getCoreSectionHtml(
           { value: "lm-studio", label: "LM Studio" },
           { value: "ollama", label: "Ollama" },
           { value: "copilot", label: "GitHub Copilot CLI" },
+          { value: "grok", label: "Grok Build CLI" },
         ],
         disabled,
         g("ui.core.adapter"),

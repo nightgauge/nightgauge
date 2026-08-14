@@ -789,7 +789,7 @@ func TestRegistryNames(t *testing.T) {
 	registry := NewRegistry()
 	names := registry.Names()
 
-	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "lm-studio", "ollama"}
+	expected := []string{"claude-headless", "claude-sdk", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama"}
 	if len(names) != len(expected) {
 		t.Fatalf("Names() = %v, want %v", names, expected)
 	}
@@ -804,8 +804,8 @@ func TestRegistryList(t *testing.T) {
 	registry := NewRegistry()
 	infos := registry.List()
 
-	if len(infos) != 8 {
-		t.Fatalf("List() returned %d items, want 8", len(infos))
+	if len(infos) != 9 {
+		t.Fatalf("List() returned %d items, want 9", len(infos))
 	}
 
 	// Verify each info has the expected fields
@@ -1008,8 +1008,8 @@ func TestRunIDEnvVar_AllAdapters(t *testing.T) {
 
 	registry := NewRegistry()
 	names := registry.Names()
-	if len(names) != 8 {
-		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 8 — "+
+	if len(names) != 9 {
+		t.Fatalf("registry has %d adapters (%v), the run-identity contract was written against 9 — "+
 			"if an adapter was added, confirm it exports NIGHTGAUGE_RUN_ID and update this count",
 			len(names), names)
 	}

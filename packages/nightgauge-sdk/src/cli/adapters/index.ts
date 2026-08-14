@@ -18,6 +18,9 @@ export { GeminiAdapter } from "./GeminiAdapter.js";
 export { GeminiSdkAdapter } from "./GeminiSdkAdapter.js";
 export { LmStudioAdapter } from "./LmStudioAdapter.js";
 export { CopilotCliAdapter } from "./CopilotCliAdapter.js";
+export { GrokAdapter, GROK_MIN_KNOWN_VERSION } from "./GrokAdapter.js";
+export { summarizeGrokStream, isGrokQuotaMessage, isGrokAuthMessage } from "./grokStream.js";
+export { mapGrokEffortToNightgauge, grokCliEffortFlag, GROK_CLI_EFFORTS } from "./grokEffort.js";
 export { AdapterRegistry, defaultRegistry, isAgenticAdapter } from "./AdapterRegistry.js";
 
 // Canonical Codex model registry — single source of truth for Codex model ids,
@@ -42,6 +45,7 @@ export {
   resolveAndValidateModel,
   ADAPTER_MODEL_POLICY,
   GEMINI_MODELS,
+  GROK_MODELS,
 } from "./modelPreflight.js";
 export type { ModelValidationResult, AdapterModelPolicy, ModelSetKind } from "./modelPreflight.js";
 

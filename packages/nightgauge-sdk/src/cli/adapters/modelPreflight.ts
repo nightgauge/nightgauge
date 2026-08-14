@@ -82,6 +82,24 @@ function isValidGeminiModel(id: string): boolean {
   return GEMINI_MODELS.includes(id);
 }
 
+export const GROK_MODELS: readonly string[] = MODEL_REGISTRY.filter(
+  (m) => m.provider === "xai" && !m.deprecated
+)
+  .sort((a, b) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
+  .map((m) => m.id);
+
+function resolveGrokModel(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  const trimmed = model.trim();
+  if (!trimmed) return undefined;
+  if (isTierKeyword(trimmed)) return getModelDescriptor(trimmed, "xai")?.id ?? trimmed;
+  return trimmed;
+}
+
+function isValidGrokModel(id: string): boolean {
+  return GROK_MODELS.includes(id);
+}
+
 // ---------------------------------------------------------------------------
 // Copilot open-set tier resolution
 // ---------------------------------------------------------------------------
@@ -203,6 +221,15 @@ export const ADAPTER_MODEL_POLICY: Record<IncrediAdapter, AdapterModelPolicy> = 
     displayName: "Copilot",
     envVar: "NIGHTGAUGE_COPILOT_MODEL",
     resolve: resolveCopilotModel,
+  },
+  grok: {
+    kind: "closed",
+    displayName: "Grok",
+    envVar: "NIGHTGAUGE_GROK_MODEL",
+    docsUrl: "https://docs.x.ai/build/overview",
+    resolve: resolveGrokModel,
+    validIds: () => [...GROK_MODELS],
+    isValid: isValidGrokModel,
   },
 };
 

@@ -578,6 +578,66 @@ func (acc *TokenAccumulator) ParseCopilotStreamLine(line string) (*StreamEvent, 
 	return event, tokenUpdated
 }
 
+// grokUsagePayload is the usage object on streaming-json `usage` / `end` lines.
+type grokUsagePayload struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	ReasoningTokens          int `json:"reasoning_tokens"`
+}
+
+type grokStreamEvent struct {
+	Type              string            `json:"type"`
+	Data              string            `json:"data,omitempty"`
+	Text              string            `json:"text,omitempty"`
+	Message           string            `json:"message,omitempty"`
+	SessionID         string            `json:"sessionId,omitempty"`
+	SessionIDSnake    string            `json:"session_id,omitempty"`
+	Usage             *grokUsagePayload `json:"usage,omitempty"`
+	UsageIsIncomplete bool              `json:"usage_is_incomplete,omitempty"`
+	CostIsPartial     bool              `json:"cost_is_partial,omitempty"`
+	Model             string            `json:"model,omitempty"`
+}
+
+// ParseGrokStreamLine parses one Grok Build streaming-json line (#526).
+func (acc *TokenAccumulator) ParseGrokStreamLine(line string) (*StreamEvent, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || line[0] != '{' {
+		return nil, false
+	}
+	var ev grokStreamEvent
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		return nil, false
+	}
+
+	event := &StreamEvent{Type: ev.Type}
+	if ev.SessionID != "" {
+		event.SessionID = ev.SessionID
+	} else if ev.SessionIDSnake != "" {
+		event.SessionID = ev.SessionIDSnake
+	}
+	if ev.Model != "" {
+		event.Model = ev.Model
+	}
+
+	tokenUpdated := false
+	if ev.Usage != nil {
+		acc.InputTokens = ev.Usage.InputTokens
+		acc.OutputTokens = ev.Usage.OutputTokens + ev.Usage.ReasoningTokens
+		acc.CacheRead = ev.Usage.CacheReadInputTokens
+		acc.CacheCreated = ev.Usage.CacheCreationInputTokens
+		tokenUpdated = true
+		event.Usage = &TokenUsage{
+			InputTokens:        ev.Usage.InputTokens,
+			OutputTokens:       ev.Usage.OutputTokens + ev.Usage.ReasoningTokens,
+			CacheReadInput:     ev.Usage.CacheReadInputTokens,
+			CacheCreationInput: ev.Usage.CacheCreationInputTokens,
+		}
+	}
+	return event, tokenUpdated
+}
+
 // AdapterStreamFormat identifies which stream parser to use.
 type AdapterStreamFormat string
 
@@ -586,6 +646,7 @@ const (
 	StreamFormatCodex   AdapterStreamFormat = "codex"
 	StreamFormatGemini  AdapterStreamFormat = "gemini"
 	StreamFormatCopilot AdapterStreamFormat = "copilot"
+	StreamFormatGrok    AdapterStreamFormat = "grok"
 )
 
 // ParseLine dispatches to the correct stream parser based on adapter format.
@@ -597,6 +658,8 @@ func (acc *TokenAccumulator) ParseLine(format AdapterStreamFormat, line string) 
 		return acc.ParseGeminiStreamLine(line)
 	case StreamFormatCopilot:
 		return acc.ParseCopilotStreamLine(line)
+	case StreamFormatGrok:
+		return acc.ParseGrokStreamLine(line)
 	default:
 		return acc.ParseStreamLine(line)
 	}
@@ -611,6 +674,8 @@ func StreamFormatForAdapter(adapterName string) AdapterStreamFormat {
 		return StreamFormatGemini
 	case strings.HasPrefix(adapterName, "copilot"):
 		return StreamFormatCopilot
+	case adapterName == "grok" || strings.HasPrefix(adapterName, "grok-"):
+		return StreamFormatGrok
 	default:
 		return StreamFormatClaude
 	}

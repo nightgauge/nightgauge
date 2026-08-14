@@ -85,6 +85,20 @@ Validates presence of `ANTHROPIC_API_KEY` environment variable.
 **Fix:** `codex login`
 **Docs:** https://docs.openai.com/codex
 
+### Grok Build (`grok`)
+
+1. Verify `grok` binary is installed (`grok --version`)
+2. Prefer SuperGrok / grok.com session: `grok login`
+3. Or set `XAI_API_KEY` (fallback when no session is active)
+
+**Error scenarios:**
+
+- `BINARY_NOT_FOUND` — `grok` not in PATH
+- `AUTH_MISSING` — no `~/.grok/auth.json` and no `XAI_API_KEY`
+
+**Fix:** `grok login` or `export XAI_API_KEY=xai-...`
+**Docs:** https://docs.x.ai/build/overview
+
 ### Gemini CLI (`gemini`)
 
 1. Verify `gemini` binary is installed

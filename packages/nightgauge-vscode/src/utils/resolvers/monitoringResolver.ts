@@ -1051,6 +1051,7 @@ export const DEFAULT_COST_CAP_PROVIDER_SCALE: Record<ExecutionAdapter, number> =
   gemini: 0.4,
   "gemini-sdk": 0.4,
   copilot: 0.2,
+  grok: 0.6,
   "lm-studio": 0.0,
   ollama: 0.0,
 };

@@ -19,6 +19,7 @@ work; use chat-only adapters for evaluation, judging, or summarization.
 | OpenAI models                | **Codex**           | Cloud AI (CLI) |
 | Google agentic pipeline      | **Gemini CLI**      | Experimental   |
 | GitHub agentic pipeline      | **Copilot**         | Experimental   |
+| xAI Grok Build CLI           | **Grok**            | Experimental   |
 | Google API evaluation        | **Gemini SDK**      | Chat-only      |
 | Privacy / offline evaluation | **Ollama**          | Chat-only      |
 | GUI-based local evaluation   | **LM Studio**       | Chat-only      |
@@ -214,6 +215,63 @@ claude auth status
 | ------------------------------- | ------------------------------ |
 | `NIGHTGAUGE_CLAUDE_CLI_COMMAND` | Override CLI binary path       |
 | `NIGHTGAUGE_CLAUDE_CLI_ARGS`    | Override default CLI arguments |
+
+### Grok Build
+
+Uses the `grok` CLI in headless mode (`-p` / `--prompt-file`). Authenticates
+via SuperGrok / grok.com OAuth (`grok login`) or `XAI_API_KEY`.
+
+**Prerequisites:**
+
+- Grok Build CLI installed (`curl -fsSL https://x.ai/cli/install.sh | bash`)
+- `grok login` **or** `XAI_API_KEY`
+
+**Quick Start:**
+
+```bash
+grok login
+```
+
+```yaml
+# .nightgauge/config.yaml
+ui:
+  core:
+    adapter: grok
+```
+
+**Verification:**
+
+```bash
+grok --version
+test -f ~/.grok/auth.json && echo "session present"
+```
+
+**Known Limitations:**
+
+- Headless ignores piped stdin — Nightgauge uses `--prompt-file`
+- No `--max-budget-usd`; Nightgauge enforces budget itself
+- Subscription usage shares a weekly pool with other Grok products
+- Dollar cost is often unstamped on the subscription path; tokens still record
+- Experimental until a live six-stage matrix lands (#528)
+
+**Troubleshooting:**
+
+| Problem              | Solution                                                    |
+| -------------------- | ----------------------------------------------------------- |
+| Not authenticated    | `grok login` or set `XAI_API_KEY`                           |
+| CLI not found        | Install Grok Build or set `NIGHTGAUGE_GROK_CLI_COMMAND`     |
+| Usage pool exhausted | Wait for the weekly reset; classified as quota, not a crash |
+
+**Environment Variables:**
+
+| Variable                      | Description              |
+| ----------------------------- | ------------------------ |
+| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path |
+| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags   |
+| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override  |
+| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` value         |
+| `XAI_API_KEY`                 | API-key fallback         |
+| `GROK_HOME`                   | Override `~/.grok`       |
 
 ---
 

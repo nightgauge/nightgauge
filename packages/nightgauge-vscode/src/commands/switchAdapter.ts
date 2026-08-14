@@ -57,6 +57,15 @@ export function registerSwitchAdapterCommand(logger: Logger): vscode.Disposable 
               : "Experimental agentic pipeline adapter",
           value: "copilot",
         },
+        {
+          label: "Grok Build",
+          detail: "Experimental; requires the grok CLI and SuperGrok login or XAI_API_KEY",
+          description:
+            current === "grok"
+              ? "Current adapter (experimental)"
+              : "Experimental agentic pipeline adapter",
+          value: "grok",
+        },
       ],
       {
         title: "Nightgauge: Switch Execution Adapter",

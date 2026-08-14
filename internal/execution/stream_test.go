@@ -745,6 +745,21 @@ func TestParseCopilotStreamLineEmpty(t *testing.T) {
 	}
 }
 
+func TestParseGrokStreamLineUsage(t *testing.T) {
+	acc := &TokenAccumulator{}
+	line := `{"type":"end","sessionId":"s1","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":1,"reasoning_tokens":3}}`
+	ev, updated := acc.ParseGrokStreamLine(line)
+	if !updated {
+		t.Fatal("expected token update")
+	}
+	if ev == nil || ev.SessionID != "s1" {
+		t.Fatalf("event = %+v", ev)
+	}
+	if acc.InputTokens != 10 || acc.OutputTokens != 7 || acc.CacheRead != 2 || acc.CacheCreated != 1 {
+		t.Fatalf("tokens = in=%d out=%d read=%d write=%d", acc.InputTokens, acc.OutputTokens, acc.CacheRead, acc.CacheCreated)
+	}
+}
+
 func TestStreamFormatForAdapter(t *testing.T) {
 	tests := []struct {
 		adapter  string
@@ -757,6 +772,7 @@ func TestStreamFormatForAdapter(t *testing.T) {
 		{"gemini", StreamFormatGemini},
 		{"gemini-sdk", StreamFormatGemini},
 		{"copilot", StreamFormatCopilot},
+		{"grok", StreamFormatGrok},
 		{"unknown", StreamFormatClaude}, // default
 	}
 

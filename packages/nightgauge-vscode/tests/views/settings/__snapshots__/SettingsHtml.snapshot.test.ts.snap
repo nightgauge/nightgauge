@@ -1044,7 +1044,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 disabled>
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option>
         </select>
       </div>
     </div>
@@ -1073,7 +1073,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="issue-pickup"
                   aria-label="Execution adapter for Issue Pickup"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.issue-pickup"
                   class="select-input stage-model-select"
@@ -1113,7 +1113,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="feature-planning"
                   aria-label="Execution adapter for Feature Planning"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-planning"
                   class="select-input stage-model-select"
@@ -1153,7 +1153,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="feature-dev"
                   aria-label="Execution adapter for Feature Dev"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-dev"
                   class="select-input stage-model-select"
@@ -1193,7 +1193,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="feature-validate"
                   aria-label="Execution adapter for Feature Validate"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-validate"
                   class="select-input stage-model-select"
@@ -1233,7 +1233,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="pr-create"
                   aria-label="Execution adapter for PR Create"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-create"
                   class="select-input stage-model-select"
@@ -1273,7 +1273,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                   data-stage="pr-merge"
                   aria-label="Execution adapter for PR Merge"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-merge"
                   class="select-input stage-model-select"
@@ -5122,7 +5122,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option>
         </select>
       </div>
     </div>
@@ -5151,7 +5151,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="issue-pickup"
                   aria-label="Execution adapter for Issue Pickup"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.issue-pickup"
                   class="select-input stage-model-select"
@@ -5191,7 +5191,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="feature-planning"
                   aria-label="Execution adapter for Feature Planning"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-planning"
                   class="select-input stage-model-select"
@@ -5231,7 +5231,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="feature-dev"
                   aria-label="Execution adapter for Feature Dev"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-dev"
                   class="select-input stage-model-select"
@@ -5271,7 +5271,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="feature-validate"
                   aria-label="Execution adapter for Feature Validate"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-validate"
                   class="select-input stage-model-select"
@@ -5311,7 +5311,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="pr-create"
                   aria-label="Execution adapter for PR Create"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-create"
                   class="select-input stage-model-select"
@@ -5351,7 +5351,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                   data-stage="pr-merge"
                   aria-label="Execution adapter for PR Merge"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-merge"
                   class="select-input stage-model-select"
@@ -9200,7 +9200,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option>
         </select>
       </div>
     </div>
@@ -9229,7 +9229,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="issue-pickup"
                   aria-label="Execution adapter for Issue Pickup"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.issue-pickup"
                   class="select-input stage-model-select"
@@ -9269,7 +9269,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="feature-planning"
                   aria-label="Execution adapter for Feature Planning"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-planning"
                   class="select-input stage-model-select"
@@ -9309,7 +9309,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="feature-dev"
                   aria-label="Execution adapter for Feature Dev"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-dev"
                   class="select-input stage-model-select"
@@ -9349,7 +9349,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="feature-validate"
                   aria-label="Execution adapter for Feature Validate"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-validate"
                   class="select-input stage-model-select"
@@ -9389,7 +9389,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="pr-create"
                   aria-label="Execution adapter for PR Create"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-create"
                   class="select-input stage-model-select"
@@ -9429,7 +9429,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                   data-stage="pr-merge"
                   aria-label="Execution adapter for PR Merge"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-merge"
                   class="select-input stage-model-select"
@@ -13296,7 +13296,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="ui.core.adapter"
                 disabled>
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option>
         </select>
       </div>
     </div>
@@ -13325,7 +13325,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="issue-pickup"
                   aria-label="Execution adapter for Issue Pickup"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.issue-pickup"
                   class="select-input stage-model-select"
@@ -13365,7 +13365,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="feature-planning"
                   aria-label="Execution adapter for Feature Planning"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-planning"
                   class="select-input stage-model-select"
@@ -13405,7 +13405,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="feature-dev"
                   aria-label="Execution adapter for Feature Dev"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-dev"
                   class="select-input stage-model-select"
@@ -13445,7 +13445,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="feature-validate"
                   aria-label="Execution adapter for Feature Validate"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-validate"
                   class="select-input stage-model-select"
@@ -13485,7 +13485,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="pr-create"
                   aria-label="Execution adapter for PR Create"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-create"
                   class="select-input stage-model-select"
@@ -13525,7 +13525,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                   data-stage="pr-merge"
                   aria-label="Execution adapter for PR Merge"
                   disabled>
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-merge"
                   class="select-input stage-model-select"
@@ -17374,7 +17374,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.adapter"
                 >
-          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option>
+          <option value="claude" selected>Claude</option><option value="codex" >Codex</option><option value="gemini" >Gemini CLI</option><option value="gemini-sdk" >Gemini SDK</option><option value="lm-studio" >LM Studio</option><option value="ollama" >Ollama</option><option value="copilot" >GitHub Copilot CLI</option><option value="grok" >Grok Build CLI</option>
         </select>
       </div>
     </div>
@@ -17403,7 +17403,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="issue-pickup"
                   aria-label="Execution adapter for Issue Pickup"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.issue-pickup"
                   class="select-input stage-model-select"
@@ -17443,7 +17443,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="feature-planning"
                   aria-label="Execution adapter for Feature Planning"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-planning"
                   class="select-input stage-model-select"
@@ -17483,7 +17483,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="feature-dev"
                   aria-label="Execution adapter for Feature Dev"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-dev"
                   class="select-input stage-model-select"
@@ -17523,7 +17523,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="feature-validate"
                   aria-label="Execution adapter for Feature Validate"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.feature-validate"
                   class="select-input stage-model-select"
@@ -17563,7 +17563,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="pr-create"
                   aria-label="Execution adapter for PR Create"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-create"
                   class="select-input stage-model-select"
@@ -17603,7 +17603,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                   data-stage="pr-merge"
                   aria-label="Execution adapter for PR Merge"
                   >
-            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option>
+            <option value="" selected>(Use global default)</option><option value="claude" >Claude</option><option value="codex" >Codex (Beta)</option><option value="gemini" >Gemini CLI (Experimental)</option><option value="copilot" >GitHub Copilot CLI (Experimental)</option><option value="grok" >Grok Build CLI (Experimental)</option>
           </select>
           <select id="pipeline.stage_models.pr-merge"
                   class="select-input stage-model-select"

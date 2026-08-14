@@ -1292,13 +1292,15 @@
             "claude",
             "codex",
             "gemini",
-            "copilot"
+            "copilot",
+            "grok"
           ],
           "enumDescriptions": [
             "Claude Code CLI (default)",
             "OpenAI Codex CLI (beta agentic adapter)",
             "Gemini CLI (experimental agentic adapter)",
-            "GitHub Copilot CLI (experimental agentic adapter)"
+            "GitHub Copilot CLI (experimental agentic adapter)",
+            "Grok Build CLI (experimental agentic adapter)"
           ],
           "default": "claude",
           "description": "Execution adapter for pipeline stages"

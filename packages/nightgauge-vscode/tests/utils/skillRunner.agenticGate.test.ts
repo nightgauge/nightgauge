@@ -40,7 +40,7 @@ describe("validateAdapterPrerequisites — agentic truth-gate (#57)", () => {
   });
 
   it("passes agentic adapters through to their normal prerequisite checks", () => {
-    for (const adapter of ["claude", "codex", "gemini", "copilot"] as ExecutionAdapter[]) {
+    for (const adapter of ["claude", "codex", "gemini", "copilot", "grok"] as ExecutionAdapter[]) {
       const err = validateAdapterPrerequisites(adapter, "/test/workspace", "headless");
       expect(err === null || !err.includes("chat-completion-only"), adapter).toBe(true);
     }

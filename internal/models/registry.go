@@ -198,9 +198,10 @@ func Resolve(provider, idOrTier string) (ModelDescriptor, bool) {
 }
 
 // ProviderForAdapter maps an execution adapter name (claude, claude-sdk,
-// claude-headless, codex, gemini, gemini-sdk, copilot, ollama, lm-studio) to
-// its registry provider. Unknown adapters map to "other", which has no tier
-// bands. Mirrors providerForAdapter in the SDK modelRegistry.ts.
+// claude-headless, codex, gemini, gemini-sdk, grok, grok-headless, copilot,
+// ollama, lm-studio) to its registry provider. Unknown adapters map to
+// "other", which has no tier bands. Mirrors providerForAdapter in the SDK
+// modelRegistry.ts.
 func ProviderForAdapter(adapter string) string {
 	switch {
 	case adapter == "claude" || strings.HasPrefix(adapter, "claude-"):
@@ -209,6 +210,8 @@ func ProviderForAdapter(adapter string) string {
 		return "openai"
 	case adapter == "gemini" || adapter == "gemini-sdk":
 		return "google"
+	case adapter == "grok" || strings.HasPrefix(adapter, "grok-"):
+		return "xai"
 	case adapter == "copilot", adapter == "ollama", adapter == "lm-studio":
 		return adapter
 	default:

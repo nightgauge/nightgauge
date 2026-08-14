@@ -14,6 +14,7 @@ import { GeminiSdkAdapter } from "../../src/cli/adapters/GeminiSdkAdapter.js";
 import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
 import { OllamaAdapter } from "../../src/cli/adapters/OllamaAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
+import { GrokAdapter } from "../../src/cli/adapters/GrokAdapter.js";
 import type {
   ICliAdapter,
   IncrediAdapter,
@@ -120,6 +121,17 @@ const ADAPTER_TABLE: AdapterTestCase[] = [
       name: "copilot",
       displayName: "GitHub Copilot",
       cliCommand: "copilot",
+      requiresDirectApiKey: false,
+      agentic: true,
+      orchestrationCapability: "sdk-fanout",
+    },
+  },
+  {
+    adapter: new GrokAdapter(),
+    expected: {
+      name: "grok",
+      displayName: "Grok",
+      cliCommand: "grok",
       requiresDirectApiKey: false,
       agentic: true,
       orchestrationCapability: "sdk-fanout",

@@ -74,5 +74,6 @@ describe("toIncrediAdapter", () => {
 
   it("maps copilot → copilot (identity)", () => {
     expect(toIncrediAdapter("copilot", {})).toBe("copilot");
+    expect(toIncrediAdapter("grok", {})).toBe("grok");
   });
 });

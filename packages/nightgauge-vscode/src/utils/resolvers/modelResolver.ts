@@ -329,7 +329,7 @@ export function getCostBudget(workspaceRoot?: string): number | undefined {
 
 /** Execution adapter type for stage orchestration backend. */
 export type ExecutionAdapter =
-  "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot";
+  "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot" | "grok";
 
 /** Default execution adapter (Claude CLI). */
 export const DEFAULT_EXECUTION_ADAPTER: ExecutionAdapter = "claude";
@@ -423,7 +423,7 @@ export function readAdapterFromFile(filePath: string): ExecutionAdapter | null {
 
       if (inCore) {
         const match = trimmed.match(
-          /^adapter:\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|copilot)['"]?(?:\s+#.*)?$/
+          /^adapter:\s*['"]?(claude|codex|gemini|gemini-sdk|lm-studio|ollama|copilot|grok)['"]?(?:\s+#.*)?$/
         );
         if (match) {
           return match[1] as ExecutionAdapter;

@@ -70,6 +70,7 @@ export const AdapterEnumSchema = z.enum([
   "lm-studio",
   "ollama",
   "copilot",
+  "grok",
 ]);
 export type AdapterEnum = z.infer<typeof AdapterEnumSchema>;
 
@@ -1733,6 +1734,7 @@ export const ExecutionAdapterSchema = z.enum([
   "lm-studio",
   "ollama",
   "copilot",
+  "grok",
 ]);
 export type ExecutionAdapter = z.infer<typeof ExecutionAdapterSchema>;
 

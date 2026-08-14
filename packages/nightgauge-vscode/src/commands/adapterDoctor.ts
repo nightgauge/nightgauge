@@ -74,6 +74,7 @@ const SDK_ADAPTER_DISPLAY: Record<string, string> = {
   ollama: "Ollama",
   "lm-studio": "LM Studio",
   copilot: "GitHub Copilot",
+  grok: "Grok",
 };
 
 function displayName(sdkAdapter: string): string {

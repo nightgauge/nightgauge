@@ -1,8 +1,8 @@
 # Skill Portability (Cross-Adapter)
 
 Pipeline skills are portable Markdown specs that must run **without modification**
-under every execution adapter — Claude (headless + SDK), Codex, Gemini, Copilot,
-ollama, lm-studio, Cursor. This document is the contract that keeps them portable
+under every execution adapter — Claude (headless + SDK), Codex, Gemini, Grok,
+Copilot, ollama, lm-studio, Cursor. This document is the contract that keeps them portable
 and the guard that enforces it. Introduced by #4029.
 
 > TL;DR for skill authors: never hardcode a `~/.vscode/extensions/...` path,
