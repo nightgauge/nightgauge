@@ -76,6 +76,32 @@ ports. An adapter with its model env set but no listening server now reports
 `ok: false` with remediation — previously it could report healthy with no
 server running at all.
 
+### Local-model catalog membership (`http` kind, #520)
+
+Reachability alone is not readiness. After the server answers, doctor parses
+the OpenAI-compatible catalog (`{"object":"list","data":[{"id":"<model>"},
+...]}` — confirmed against LM Studio `GET /v1/models`) and checks that the
+resolved model id is present.
+
+Model resolution: `NIGHTGAUGE_LM_STUDIO_MODEL` / `NIGHTGAUGE_OLLAMA_MODEL`
+first, then the machine-tier key (`lm_studio.model` / `ollama.model` in
+`~/.nightgauge/config.yaml`). The workspace `lm_studio` block is not read
+(#3338). There is no default model.
+
+JSON fields on the adapter row:
+
+| Field      | When set                                         | Meaning                                                             |
+| ---------- | ------------------------------------------------ | ------------------------------------------------------------------- |
+| `model`    | a model id was resolved                          | the id doctor will look up in the catalog                           |
+| `model_ok` | catalog was evaluated, or no model is configured | `true` when the id is in `data[].id`; `false` when missing or unset |
+
+`ok` is `false` when the model is unconfigured or absent from the catalog,
+even if `installed` and `server_reachable` stay `true`. Remediation names
+the configured id and a pull command (`lms get <model>` / `ollama pull
+<model>`). When no model is configured the remediation states that the
+adapter requires `model` and has no default. The healthy path (`model` in
+the catalog) still reports `ok: true`.
+
 ### Binary self-check cascade (#277)
 
 The `binary` check in the default (non-adapter) `nightgauge doctor` output

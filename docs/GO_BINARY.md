@@ -3614,7 +3614,7 @@ Per adapter the doctor reports:
 | ------ | -------------------------------- | ------------------------- | -------------------------------------- |
 | `cli`  | claude, codex, gemini, copilot   | binary on PATH            | `version`, `version_ok`, `min_version` |
 | `sdk`  | claude-sdk, gemini-sdk           | API-key env set           | —                                      |
-| `http` | ollama, lm-studio                | local-model env set       | —                                      |
+| `http` | ollama, lm-studio                | model configured (env or machine-tier) | `server_url`, `server_reachable`, `model`, `model_ok` |
 
 For `codex`, an `mcp` sub-object reports whether `$CODEX_HOME/config.toml` exists
 and whether the nightgauge MCP managed block is present.

@@ -9993,10 +9993,16 @@ func renderAdapterDetail(a doctor.AdapterHealth) string {
 		}
 		return "API key not set"
 	case "http":
-		if a.Installed {
-			return "local model configured"
+		if !a.Installed {
+			return "local model not configured"
 		}
-		return "local model env not set"
+		if a.ModelOK != nil && !*a.ModelOK {
+			return "configured model not in catalog"
+		}
+		if !a.ServerReachable {
+			return "local server unreachable"
+		}
+		return "local model configured"
 	default:
 		if a.OK {
 			return "ready"

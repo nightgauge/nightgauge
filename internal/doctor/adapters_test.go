@@ -2,24 +2,31 @@ package doctor
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // fakeProbe builds an adapterProbe whose side effects are driven by in-memory
 // maps so adapter health can be tested without real CLIs or filesystem.
 type fakeProbe struct {
-	paths      map[string]string // binary -> resolved path ("" / absent => not found)
-	versions   map[string]string // path -> `--version` combined output
-	verErrs    map[string]error  // path -> error from the version spawn
-	env        map[string]string
-	files      map[string][]byte // absolute path -> file content
-	codex      string
-	serverErr  error // kindHTTP reachability probe result (nil = reachable)
-	noServer   bool  // when true, the probe reports unreachable
-	probedURLs []string
+	paths           map[string]string // binary -> resolved path ("" / absent => not found)
+	versions        map[string]string // path -> `--version` combined output
+	verErrs         map[string]error  // path -> error from the version spawn
+	env             map[string]string
+	files           map[string][]byte // absolute path -> file content
+	codex           string
+	serverErr       error // kindHTTP transport error (non-nil = unreachable)
+	noServer        bool  // when true, the probe reports unreachable
+	catalog         []string
+	catalogParseErr bool
+	machineModels   map[string]string // canonical adapter -> machine-tier model
+	probedURLs      []string
 }
 
 func (f fakeProbe) toProbe() adapterProbe {
@@ -40,11 +47,21 @@ func (f fakeProbe) toProbe() adapterProbe {
 			return nil, os.ErrNotExist
 		},
 		getenv: func(k string) string { return f.env[k] },
-		httpReachable: func(baseURL string) error {
-			if f.noServer {
-				return errors.New("connection refused")
+		httpProbe: func(baseURL string) localServerProbeResult {
+			if f.noServer || f.serverErr != nil {
+				return localServerProbeResult{}
 			}
-			return f.serverErr
+			return localServerProbeResult{
+				reachable: true,
+				ids:       f.catalog,
+				parseErr:  f.catalogParseErr,
+			}
+		},
+		machineModel: func(adapter string) string {
+			if f.machineModels == nil {
+				return ""
+			}
+			return f.machineModels[adapter]
 		},
 		codexHome: f.codex,
 	}
@@ -162,17 +179,22 @@ func TestCheckAdapter_SdkApiKey(t *testing.T) {
 
 func TestCheckAdapter_HttpLocalModelEnv(t *testing.T) {
 	// ollama/lm-studio run THROUGH the claude CLI bridge, so readiness requires
-	// the model env, the claude binary on PATH, AND a reachable server (#57).
+	// the model env, the claude binary on PATH, a reachable server (#57), and
+	// the resolved model present in the /models catalog (#520).
 	ready := fakeProbe{
-		env:   map[string]string{"NIGHTGAUGE_OLLAMA_MODEL": "llama3.2"},
-		paths: map[string]string{"claude": "/opt/claude"},
+		env:     map[string]string{"NIGHTGAUGE_OLLAMA_MODEL": "llama3.2"},
+		paths:   map[string]string{"claude": "/opt/claude"},
+		catalog: []string{"llama3.2"},
 	}
 	h := checkAdapter("ollama", ready.toProbe())
 	if !h.OK || h.Kind != "http" {
-		t.Fatalf("expected ollama OK/http when model env set + claude bridge present + server up, got %+v", h)
+		t.Fatalf("expected ollama OK/http when model env set + claude bridge present + server up + model in catalog, got %+v", h)
 	}
 	if !h.ServerReachable || h.ServerURL != "http://localhost:11434/v1" {
 		t.Errorf("expected reachable default server URL, got %+v", h)
+	}
+	if h.Model != "llama3.2" || h.ModelOK == nil || !*h.ModelOK {
+		t.Errorf("expected model llama3.2 present in catalog, got %+v", h)
 	}
 
 	unset := fakeProbe{env: map[string]string{}, paths: map[string]string{"claude": "/opt/claude"}}
@@ -180,8 +202,13 @@ func TestCheckAdapter_HttpLocalModelEnv(t *testing.T) {
 	if h2.OK {
 		t.Error("expected lm-studio !OK when model env unset")
 	}
-	if h2.Remediation == "" {
-		t.Error("expected remediation for unset local model env")
+	if h2.ModelOK == nil || *h2.ModelOK {
+		t.Errorf("expected model_ok=false when unconfigured, got %+v", h2)
+	}
+	if !strings.Contains(h2.Remediation, "no default") ||
+		!strings.Contains(h2.Remediation, "NIGHTGAUGE_LM_STUDIO_MODEL") ||
+		!strings.Contains(h2.Remediation, "lm_studio.model") {
+		t.Errorf("expected unconfigured remediation to name env, config key, and no-default, got %q", h2.Remediation)
 	}
 }
 
@@ -396,6 +423,9 @@ func TestCheckAdapter_HttpServerUnreachable(t *testing.T) {
 	if h.ServerReachable {
 		t.Error("expected ServerReachable=false")
 	}
+	if h.ModelOK != nil {
+		t.Errorf("expected model_ok omitted when catalog cannot be evaluated, got %+v", h.ModelOK)
+	}
 	if !strings.Contains(h.Remediation, "http://localhost:11434/v1") ||
 		!strings.Contains(h.Remediation, "NIGHTGAUGE_OLLAMA_BASE_URL") {
 		t.Errorf("expected remediation naming the URL and override env, got %q", h.Remediation)
@@ -409,7 +439,8 @@ func TestCheckAdapter_HttpBaseURLOverride(t *testing.T) {
 			"NIGHTGAUGE_LM_STUDIO_MODEL":    "qwen3-coder",
 			"NIGHTGAUGE_LM_STUDIO_BASE_URL": "http://10.0.0.5:9999/v1",
 		},
-		paths: map[string]string{"claude": "/opt/claude"},
+		paths:   map[string]string{"claude": "/opt/claude"},
+		catalog: []string{"qwen3-coder"},
 	}
 	h := checkAdapter("lm-studio", fp.toProbe())
 	if h.ServerURL != "http://10.0.0.5:9999/v1" {
@@ -417,5 +448,199 @@ func TestCheckAdapter_HttpBaseURLOverride(t *testing.T) {
 	}
 	if !h.OK {
 		t.Errorf("expected OK with override reachable, got %+v", h)
+	}
+}
+
+// TestCheckAdapter_HttpModelCatalogPresentAbsentUnconfigured is the #520
+// contract: stubbed /models catalog — present stays OK, absent degrades with
+// a named remediation, unconfigured reports the missing model explicitly.
+func TestCheckAdapter_HttpModelCatalogPresentAbsentUnconfigured(t *testing.T) {
+	t.Run("present", func(t *testing.T) {
+		fp := fakeProbe{
+			env:     map[string]string{"NIGHTGAUGE_LM_STUDIO_MODEL": "qwen/qwen3-coder-30b"},
+			paths:   map[string]string{"claude": "/opt/claude"},
+			catalog: []string{"qwen/qwen3-coder-30b", "text-embedding-nomic-embed-text-v1.5"},
+		}
+		h := checkAdapter("lm-studio", fp.toProbe())
+		if !h.OK || h.ModelOK == nil || !*h.ModelOK {
+			t.Fatalf("expected OK + model_ok when catalog contains the model, got %+v", h)
+		}
+		if h.Remediation != "" {
+			t.Errorf("expected no remediation on the healthy path, got %q", h.Remediation)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		fp := fakeProbe{
+			env:     map[string]string{"NIGHTGAUGE_LM_STUDIO_MODEL": "google/gemma-4-26b-a4b"},
+			paths:   map[string]string{"claude": "/opt/claude"},
+			catalog: []string{"qwen/qwen3-coder-30b"},
+		}
+		h := checkAdapter("lm-studio", fp.toProbe())
+		if h.OK {
+			t.Fatal("expected !OK when configured model is absent from the catalog")
+		}
+		if !h.Installed || !h.ServerReachable {
+			t.Errorf("expected installed+reachable to stay true, got %+v", h)
+		}
+		if h.Model != "google/gemma-4-26b-a4b" || h.ModelOK == nil || *h.ModelOK {
+			t.Errorf("expected model_ok=false naming the configured model, got %+v", h)
+		}
+		if !strings.Contains(h.Remediation, "google/gemma-4-26b-a4b") ||
+			!strings.Contains(h.Remediation, "lms get google/gemma-4-26b-a4b") {
+			t.Errorf("expected remediation naming the model and lms get hint, got %q", h.Remediation)
+		}
+	})
+
+	t.Run("unconfigured", func(t *testing.T) {
+		fp := fakeProbe{
+			env:     map[string]string{},
+			paths:   map[string]string{"claude": "/opt/claude"},
+			catalog: []string{"qwen/qwen3-coder-30b"},
+		}
+		h := checkAdapter("lm-studio", fp.toProbe())
+		if h.OK || h.Installed {
+			t.Fatalf("expected !OK/!installed when no model is configured, got %+v", h)
+		}
+		if h.Model != "" || h.ModelOK == nil || *h.ModelOK {
+			t.Errorf("expected empty model and model_ok=false, got %+v", h)
+		}
+		if !strings.Contains(h.Remediation, "no default") {
+			t.Errorf("expected explicit no-default wording, got %q", h.Remediation)
+		}
+	})
+
+	t.Run("ollama absent uses ollama pull", func(t *testing.T) {
+		fp := fakeProbe{
+			env:     map[string]string{"NIGHTGAUGE_OLLAMA_MODEL": "llama3.2"},
+			paths:   map[string]string{"claude": "/opt/claude"},
+			catalog: []string{"mistral"},
+		}
+		h := checkAdapter("ollama", fp.toProbe())
+		if h.OK || h.ModelOK == nil || *h.ModelOK {
+			t.Fatalf("expected ollama !OK when model missing from catalog, got %+v", h)
+		}
+		if !strings.Contains(h.Remediation, "ollama pull llama3.2") {
+			t.Errorf("expected ollama pull hint, got %q", h.Remediation)
+		}
+	})
+}
+
+func TestCheckAdapter_HttpMachineTierModelFallback(t *testing.T) {
+	fp := fakeProbe{
+		env:           map[string]string{},
+		paths:         map[string]string{"claude": "/opt/claude"},
+		catalog:       []string{"qwen/qwen3-coder-30b"},
+		machineModels: map[string]string{"lm-studio": "qwen/qwen3-coder-30b"},
+	}
+	h := checkAdapter("lm-studio", fp.toProbe())
+	if !h.OK || h.Model != "qwen/qwen3-coder-30b" {
+		t.Fatalf("expected machine-tier model to satisfy readiness, got %+v", h)
+	}
+
+	envWins := fakeProbe{
+		env:           map[string]string{"NIGHTGAUGE_LM_STUDIO_MODEL": "env-model"},
+		paths:         map[string]string{"claude": "/opt/claude"},
+		catalog:       []string{"env-model"},
+		machineModels: map[string]string{"lm-studio": "machine-model"},
+	}
+	h2 := checkAdapter("lm-studio", envWins.toProbe())
+	if h2.Model != "env-model" || !h2.OK {
+		t.Fatalf("expected env to win over machine-tier, got %+v", h2)
+	}
+}
+
+func TestCheckAdapter_HttpCatalogParseError(t *testing.T) {
+	fp := fakeProbe{
+		env:             map[string]string{"NIGHTGAUGE_LM_STUDIO_MODEL": "qwen/qwen3-coder-30b"},
+		paths:           map[string]string{"claude": "/opt/claude"},
+		catalogParseErr: true,
+	}
+	h := checkAdapter("lm-studio", fp.toProbe())
+	if h.OK || h.ModelOK == nil || *h.ModelOK {
+		t.Fatalf("expected !OK/model_ok=false when catalog parse fails, got %+v", h)
+	}
+	if !h.ServerReachable {
+		t.Error("expected reachable even when the catalog cannot be parsed")
+	}
+	if !strings.Contains(h.Remediation, "could not be parsed") {
+		t.Errorf("expected parse-failure remediation, got %q", h.Remediation)
+	}
+}
+
+func TestParseOpenAIModelIDs_ObservedLMStudioShape(t *testing.T) {
+	// Exact envelope observed 2026-08-14 from GET http://127.0.0.1:1234/v1/models.
+	body := []byte(`{
+  "data": [
+    {
+      "id": "qwen/qwen3-coder-30b",
+      "object": "model",
+      "owned_by": "organization_owner"
+    },
+    {
+      "id": "text-embedding-nomic-embed-text-v1.5",
+      "object": "model",
+      "owned_by": "organization_owner"
+    }
+  ],
+  "object": "list"
+}`)
+	ids, ok := parseOpenAIModelIDs(body)
+	if !ok {
+		t.Fatal("expected observed LM Studio /models body to parse")
+	}
+	if len(ids) != 2 || ids[0] != "qwen/qwen3-coder-30b" || ids[1] != "text-embedding-nomic-embed-text-v1.5" {
+		t.Fatalf("unexpected ids: %v", ids)
+	}
+
+	if _, ok := parseOpenAIModelIDs([]byte(`not-json`)); ok {
+		t.Error("expected unparseable body to fail")
+	}
+	ids, ok = parseOpenAIModelIDs([]byte(`{"data":[]}`))
+	if !ok || len(ids) != 0 {
+		t.Errorf("empty catalog must parse as success with no ids, got ok=%v ids=%v", ok, ids)
+	}
+	ids, ok = parseOpenAIModelIDs([]byte(`{"models":[{"id":"alt"}]}`))
+	if !ok || len(ids) != 1 || ids[0] != "alt" {
+		t.Errorf("models[] fallback: ok=%v ids=%v", ok, ids)
+	}
+}
+
+func TestProbeLocalServer_ParsesCatalog(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"qwen/qwen3-coder-30b","object":"model"}]}`))
+	}))
+	defer srv.Close()
+
+	got := probeLocalServer(srv.URL + "/v1")
+	if !got.reachable || got.parseErr {
+		t.Fatalf("expected reachable parsed catalog, got %+v", got)
+	}
+	if !catalogContains(got.ids, "qwen/qwen3-coder-30b") {
+		t.Errorf("expected catalog to contain qwen/qwen3-coder-30b, got %v", got.ids)
+	}
+}
+
+func TestReadMachineHTTPModel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("lm_studio:\n  model: qwen/qwen3-coder-30b\nollama:\n  model: llama3.2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restore := config.SwapMachineConfigPathForTest(func() (string, error) { return path, nil })
+	defer restore()
+
+	if got := readMachineHTTPModel("lm-studio"); got != "qwen/qwen3-coder-30b" {
+		t.Errorf("lm-studio machine model = %q", got)
+	}
+	if got := readMachineHTTPModel("ollama"); got != "llama3.2" {
+		t.Errorf("ollama machine model = %q", got)
+	}
+	if got := readMachineHTTPModel("codex"); got != "" {
+		t.Errorf("non-http adapter must not resolve a machine model, got %q", got)
 	}
 }
