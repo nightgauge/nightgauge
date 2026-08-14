@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -9,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/config"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // AdapterHealth is the deterministic, per-adapter section of the doctor report
@@ -26,7 +31,7 @@ type AdapterHealth struct {
 	Adapter         string            `json:"adapter"`           // requested name (e.g. "codex", "claude")
 	Kind            string            `json:"kind"`              // "cli" | "sdk" | "http"
 	Binary          string            `json:"binary,omitempty"`  // CLI binary name (cli kind)
-	Installed       bool              `json:"installed"`         // cli: on PATH; sdk: api key set; http: model env set
+	Installed       bool              `json:"installed"`         // cli: on PATH; sdk: api key set; http: model configured + bridge present
 	Path            string            `json:"path,omitempty"`    // resolved binary path (cli kind)
 	Version         string            `json:"version,omitempty"` // parsed semver from `<bin> --version`
 	VersionOK       bool              `json:"version_ok"`        // version >= MinVersion (true when no floor)
@@ -34,6 +39,8 @@ type AdapterHealth struct {
 	Mcp             *AdapterMcpHealth `json:"mcp,omitempty"`        // codex only
 	ServerURL       string            `json:"server_url,omitempty"` // http kind: resolved local server base URL
 	ServerReachable bool              `json:"server_reachable"`     // http kind: base URL answered the probe (#57)
+	Model           string            `json:"model,omitempty"`      // http kind: resolved model id (env, else machine-tier config)
+	ModelOK         *bool             `json:"model_ok,omitempty"`   // http kind: configured model is in the /models catalog
 	OK              bool              `json:"ok"`                   // adapter is usable for its kind's primary requirement
 	Remediation     string            `json:"remediation,omitempty"`
 }
@@ -73,6 +80,8 @@ type adapterSpec struct {
 	minVersion     string      // "" when no floor is enforced
 	apiKeyEnvs     []string    // kindSDK: any one present satisfies "configured"
 	modelEnv       string      // kindHTTP: env var carrying the required local model id
+	modelConfigKey string      // kindHTTP: machine-tier dotted key (e.g. lm_studio.model)
+	pullHint       string      // kindHTTP: remediation command prefix (e.g. "lms get")
 	bridgeBinary   string      // kindHTTP: CLI the adapter spawns through (mirrors registry.adapterBinary)
 	baseURLEnv     string      // kindHTTP: env var overriding the local server base URL
 	defaultBaseURL string      // kindHTTP: base URL when the env override is unset
@@ -88,8 +97,8 @@ var adapterSpecs = map[string]adapterSpec{
 	"codex":           {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true},
 	"gemini":          {binary: "gemini", kind: kindCLI, minVersion: "0.29.0"},
 	"gemini-sdk":      {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
-	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
-	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
+	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
+	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
 	"copilot":         {binary: "copilot", kind: kindCLI},
 	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0"},
 }
@@ -133,12 +142,13 @@ func normalizeAdapterName(name string) string {
 // adapterProbe bundles the side-effecting dependencies so tests can inject
 // fakes for binary lookup, the `--version` spawn, and filesystem reads.
 type adapterProbe struct {
-	lookPath      func(string) (string, error)
-	runVersion    func(path string) (string, error) // combined output of `<path> --version`
-	readFile      func(string) ([]byte, error)
-	getenv        func(string) string
-	httpReachable func(baseURL string) error // kindHTTP: local-server reachability probe (#57)
-	codexHome     string                     // resolved $CODEX_HOME (or ~/.codex); injectable for tests
+	lookPath     func(string) (string, error)
+	runVersion   func(path string) (string, error) // combined output of `<path> --version`
+	readFile     func(string) ([]byte, error)
+	getenv       func(string) string
+	httpProbe    func(baseURL string) localServerProbeResult // kindHTTP: reachability + /models catalog (#520)
+	machineModel func(adapter string) string                 // kindHTTP: machine-tier model fallback
+	codexHome    string                                      // resolved $CODEX_HOME (or ~/.codex); injectable for tests
 }
 
 func defaultAdapterProbe() adapterProbe {
@@ -148,10 +158,11 @@ func defaultAdapterProbe() adapterProbe {
 			out, err := exec.Command(path, "--version").CombinedOutput()
 			return string(out), err
 		},
-		readFile:      os.ReadFile,
-		getenv:        os.Getenv,
-		httpReachable: probeLocalServer,
-		codexHome:     resolveCodexHome(),
+		readFile:     os.ReadFile,
+		getenv:       os.Getenv,
+		httpProbe:    probeLocalServer,
+		machineModel: readMachineHTTPModel,
+		codexHome:    resolveCodexHome(),
 	}
 }
 
@@ -229,11 +240,18 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 	case kindHTTP:
 		// ollama / lm-studio do NOT run standalone — the execution registry routes
 		// them THROUGH a CLI bridge (claude); see internal/execution/adapters
-		// adapterBinary(). So readiness requires the local-model env, the bridge
-		// binary on PATH, AND a reachable local server (#57 — previously the
-		// adapter could report healthy with no server running at all).
+		// adapterBinary(). Readiness requires a configured model (env, else
+		// machine-tier config), the bridge binary on PATH, a reachable local
+		// server (#57), AND the resolved model id present in GET /models (#520).
 		h.VersionOK = true // no CLI version floor for local servers
-		modelSet := strings.TrimSpace(probe.getenv(spec.modelEnv)) != ""
+		model := strings.TrimSpace(probe.getenv(spec.modelEnv))
+		if model == "" && probe.machineModel != nil {
+			model = strings.TrimSpace(probe.machineModel(canonical))
+		}
+		if model != "" {
+			h.Model = model
+		}
+		modelSet := model != ""
 		bridgeOK := true
 		if spec.bridgeBinary != "" {
 			if _, err := probe.lookPath(spec.bridgeBinary); err != nil {
@@ -245,20 +263,41 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 			baseURL = spec.defaultBaseURL
 		}
 		h.ServerURL = baseURL
-		if probe.httpReachable != nil {
-			h.ServerReachable = probe.httpReachable(baseURL) == nil
+		var probeRes localServerProbeResult
+		if probe.httpProbe != nil {
+			probeRes = probe.httpProbe(baseURL)
 		}
+		h.ServerReachable = probeRes.reachable
 		h.Installed = modelSet && bridgeOK
-		h.OK = h.Installed && h.ServerReachable
+
+		modelOK := false
+		switch {
+		case !modelSet:
+			h.ModelOK = boolPtr(false)
+		case probeRes.reachable && !probeRes.parseErr:
+			modelOK = catalogContains(probeRes.ids, model)
+			h.ModelOK = boolPtr(modelOK)
+		case probeRes.reachable && probeRes.parseErr:
+			h.ModelOK = boolPtr(false)
+		}
+		h.OK = h.Installed && h.ServerReachable && modelOK
 		switch {
 		case !modelSet && !bridgeOK:
-			h.Remediation = "Set " + spec.modelEnv + ", start the local server, and install the " + spec.bridgeBinary + " CLI bridge (must be on PATH)."
+			h.Remediation = "Set " + spec.modelEnv + " or " + spec.modelConfigKey +
+				" in ~/.nightgauge/config.yaml (this adapter requires model; there is no default), " +
+				"start the local server, and install the " + spec.bridgeBinary + " CLI bridge (must be on PATH)."
 		case !modelSet:
-			h.Remediation = "Set " + spec.modelEnv + " and start the local server."
+			h.Remediation = "Set " + spec.modelEnv + " or " + spec.modelConfigKey +
+				" in ~/.nightgauge/config.yaml (this adapter requires model; there is no default)."
 		case !bridgeOK:
 			h.Remediation = "Install the " + spec.bridgeBinary + " CLI bridge that " + canonical + " runs through (must be on PATH)."
 		case !h.ServerReachable:
 			h.Remediation = "Local server unreachable at " + baseURL + ": start it, or point " + spec.baseURLEnv + " at the right address."
+		case probeRes.parseErr:
+			h.Remediation = "Local server at " + baseURL + " is reachable but its /models catalog could not be parsed; cannot verify configured model " + model + "."
+		case !modelOK:
+			h.Remediation = "Configured model " + model + " is not in the server catalog at " + baseURL +
+				". Download it with: " + spec.pullHint + " " + model
 		}
 	}
 
@@ -376,17 +415,159 @@ func dottedParts(v string) []int {
 	return out
 }
 
+// localServerProbeResult is the kindHTTP /models probe: reachability plus the
+// parsed catalog. Reachability is independent of parse success — a listener
+// that returns HTML still counts as up (#57); catalog membership is #520.
+type localServerProbeResult struct {
+	reachable bool
+	ids       []string
+	parseErr  bool
+}
+
+// maxModelsBody bounds the /models response so a pathological payload cannot
+// stall or balloon doctor. Observed LM Studio catalogs are a few KB.
+const maxModelsBody = 1 << 20
+
 // probeLocalServer answers whether an OpenAI-compatible local server
-// (ollama / LM Studio) is reachable at baseURL. Any HTTP response counts as
-// reachable — even an error status proves a listener is up; only transport
-// failures (connection refused, timeout, DNS) fail the probe. Bounded so a
-// black-holed address cannot stall the doctor.
-func probeLocalServer(baseURL string) error {
+// (ollama / LM Studio) is reachable at baseURL and, when it is, parses the
+// GET /models catalog. Any HTTP response counts as reachable — even an error
+// status proves a listener is up; only transport failures (connection refused,
+// timeout, DNS) fail the probe. Bounded so a black-holed address cannot stall
+// the doctor.
+func probeLocalServer(baseURL string) localServerProbeResult {
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(strings.TrimRight(baseURL, "/") + "/models")
 	if err != nil {
-		return err
+		return localServerProbeResult{}
 	}
-	_ = resp.Body.Close()
-	return nil
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxModelsBody+1))
+	out := localServerProbeResult{reachable: true}
+	if err != nil || len(body) > maxModelsBody {
+		out.parseErr = true
+		return out
+	}
+	ids, ok := parseOpenAIModelIDs(body)
+	if !ok {
+		out.parseErr = true
+		return out
+	}
+	out.ids = ids
+	return out
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func catalogContains(ids []string, model string) bool {
+	for _, id := range ids {
+		if id == model {
+			return true
+		}
+	}
+	return false
+}
+
+// parseOpenAIModelIDs extracts model ids from an OpenAI-compatible /models
+// body: {"object":"list","data":[{"id":"<model>"}, ...]}. Observed LM Studio
+// (2026-08-14, GET http://127.0.0.1:1234/v1/models) matches this shape exactly.
+// A top-level array or a "models" array is accepted as a defensive fallback
+// (same variants LmStudioService already handles) so a minor envelope change
+// does not silently pass the catalog check.
+func parseOpenAIModelIDs(body []byte) ([]string, bool) {
+	var top any
+	if err := json.Unmarshal(body, &top); err != nil {
+		return nil, false
+	}
+	var items []any
+	switch v := top.(type) {
+	case map[string]any:
+		switch {
+		case isJSONArray(v["data"]):
+			items = v["data"].([]any)
+		case isJSONArray(v["models"]):
+			items = v["models"].([]any)
+		default:
+			return nil, false
+		}
+	case []any:
+		items = v
+	default:
+		return nil, false
+	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		switch m := item.(type) {
+		case map[string]any:
+			id, ok := m["id"].(string)
+			id = strings.TrimSpace(id)
+			if ok && id != "" {
+				ids = append(ids, id)
+			}
+		case string:
+			id := strings.TrimSpace(m)
+			if id != "" {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids, true
+}
+
+func isJSONArray(v any) bool {
+	_, ok := v.([]any)
+	return ok
+}
+
+// readMachineHTTPModel returns the machine-tier model id for an HTTP adapter
+// (lm_studio.model / ollama.model in ~/.nightgauge/config.yaml). Workspace
+// lm_studio is deprecated (#3338) and is not consulted. Fail-open: a missing
+// or unreadable file is treated as "no machine-tier model".
+func readMachineHTTPModel(adapter string) string {
+	key := ""
+	switch adapter {
+	case "lm-studio":
+		key = "lm_studio.model"
+	case "ollama":
+		key = "ollama.model"
+	default:
+		return ""
+	}
+	path, err := config.MachineConfigPath()
+	if err != nil || strings.TrimSpace(path) == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return yamlDottedString(data, key)
+}
+
+func yamlDottedString(data []byte, dotted string) string {
+	var root any
+	if err := yaml.Unmarshal(data, &root); err != nil {
+		return ""
+	}
+	cur := root
+	for _, part := range strings.Split(dotted, ".") {
+		m, ok := asStringMap(cur)
+		if !ok {
+			return ""
+		}
+		next, ok := m[part]
+		if !ok {
+			return ""
+		}
+		cur = next
+	}
+	s, ok := cur.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(s)
+}
+
+func asStringMap(v any) (map[string]any, bool) {
+	m, ok := v.(map[string]any)
+	return m, ok
 }

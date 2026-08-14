@@ -51,6 +51,10 @@ export interface GoAdapterHealth {
   version_ok: boolean;
   min_version?: string;
   mcp?: { config_path: string; config_present: boolean; managed_block: boolean };
+  server_url?: string;
+  server_reachable?: boolean;
+  model?: string;
+  model_ok?: boolean;
   ok: boolean;
   remediation?: string;
 }
@@ -219,7 +223,11 @@ export function mergeAdapterRows(
     const versionOk = binaryResolved ? (g?.version_ok ?? true) : true;
 
     // Readiness:
-    //  - Go present → it checked install/version; combine with the auth verdict.
+    //  - Go present → honor Go's own ok bit (install/version for CLI/SDK;
+    //    plus server reachability and catalog membership for HTTP, #520)
+    //    and combine with the auth verdict. Do not recompute from installed
+    //    + version_ok alone — that papered over model_ok / server_reachable
+    //    failures while installed stayed true.
     //  - Go absent + local HTTP adapter → its auth probe is a no-op, so we cannot
     //    confirm the model env / claude bridge; do NOT claim ready.
     //  - Go absent + CLI/SDK adapter → the auth probe IS a real signal (a CLI
@@ -227,7 +235,7 @@ export function mergeAdapterRows(
     //    their API key in validateAuth), so auth alone is a sound readiness proxy.
     let ok: boolean;
     if (binaryResolved) {
-      ok = installed && versionOk && authOk;
+      ok = (g?.ok ?? (installed && versionOk)) && authOk;
     } else if (LOCAL_HTTP_ADAPTERS.has(a)) {
       ok = false;
       remediations.push(
