@@ -16,6 +16,7 @@ import { GeminiAdapter } from "../../src/cli/adapters/GeminiAdapter.js";
 import { GeminiSdkAdapter } from "../../src/cli/adapters/GeminiSdkAdapter.js";
 import { LmStudioAdapter } from "../../src/cli/adapters/LmStudioAdapter.js";
 import { CopilotCliAdapter } from "../../src/cli/adapters/CopilotCliAdapter.js";
+import { GrokAdapter } from "../../src/cli/adapters/GrokAdapter.js";
 import type { ICliAdapter } from "../../src/cli/adapters/ICliAdapter.js";
 import { AdapterError } from "../../src/cli/adapters/errors.js";
 import type { PreflightCommandRunner } from "../../src/cli/codexPreflight.js";
@@ -50,6 +51,7 @@ function allAdapters(): ICliAdapter[] {
     new GeminiSdkAdapter(),
     new LmStudioAdapter(),
     new CopilotCliAdapter(),
+    new GrokAdapter(),
   ];
 }
 
@@ -75,7 +77,9 @@ describe("adapter constructors", () => {
       "gemini",
       "gemini-sdk",
       "lm-studio",
+      "ollama",
       "copilot",
+      "grok",
     ]);
 
     for (const adapter of allAdapters()) {
@@ -86,7 +90,7 @@ describe("adapter constructors", () => {
   it("all 7 adapters produce distinct names", () => {
     const adapters = allAdapters();
     const names = new Set(adapters.map((a) => a.name));
-    expect(names.size).toBe(7);
+    expect(names.size).toBe(8);
   });
 });
 
@@ -241,6 +245,7 @@ describe("createQueryFunction contract", () => {
       new CodexAdapter(),
       new GeminiAdapter(),
       new CopilotCliAdapter(),
+      new GrokAdapter(),
     ];
 
     for (const adapter of cliAdapters) {
@@ -262,15 +267,16 @@ describe("multi-tool requiresDirectApiKey partitioning", () => {
     expect(apiKeyAdapters.map((a) => a.name).sort()).toEqual(["claude-sdk", "gemini-sdk"]);
   });
 
-  it("exactly 5 adapters do NOT require a direct API key", () => {
+  it("exactly 6 adapters do NOT require a direct API key", () => {
     const adapters = allAdapters();
     const noApiKeyAdapters = adapters.filter((a) => !a.requiresDirectApiKey());
-    expect(noApiKeyAdapters).toHaveLength(5);
+    expect(noApiKeyAdapters).toHaveLength(6);
     expect(noApiKeyAdapters.map((a) => a.name).sort()).toEqual([
       "claude-headless",
       "codex",
       "copilot",
       "gemini",
+      "grok",
       "lm-studio",
     ]);
   });

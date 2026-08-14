@@ -57,6 +57,7 @@ const SUGGESTED_FIX: Record<IncrediAdapter, string> = {
   ollama: "Start the Ollama server (`ollama serve`) and pull a model (`ollama pull llama3.2`).",
   copilot:
     "Set COPILOT_GITHUB_TOKEN, or run `gh auth login` then `gh extension install github/gh-copilot`.",
+  grok: "Run `grok login`, or set XAI_API_KEY (install via `curl -fsSL https://x.ai/cli/install.sh | bash`).",
 };
 
 function suggestedFixFor(adapter: IncrediAdapter): string {

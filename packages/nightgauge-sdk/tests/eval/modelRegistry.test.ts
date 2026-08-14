@@ -158,6 +158,8 @@ describe("model registry — adapter resolution (#56)", () => {
     expect(providerForAdapter("codex")).toBe("openai");
     expect(providerForAdapter("gemini")).toBe("google");
     expect(providerForAdapter("gemini-sdk")).toBe("google");
+    expect(providerForAdapter("grok")).toBe("xai");
+    expect(providerForAdapter("grok-headless")).toBe("xai");
     expect(providerForAdapter("copilot")).toBe("copilot");
     expect(providerForAdapter("ollama")).toBe("ollama");
     expect(providerForAdapter("lm-studio")).toBe("lm-studio");
@@ -169,6 +171,10 @@ describe("model registry — adapter resolution (#56)", () => {
     expect(resolveModelForAdapter("gemini", "fable")?.id).toBe("gemini-2.5-pro");
     expect(resolveModelForAdapter("gemini-sdk", "haiku")?.id).toBe("gemini-2.5-flash");
     expect(resolveModelForAdapter("copilot", "haiku")?.id).toBe("gpt-4o-mini");
+    expect(resolveModelForAdapter("grok", "haiku")?.id).toBe("grok-build-0.1");
+    expect(resolveModelForAdapter("grok", "sonnet")?.id).toBe("grok-4.6");
+    expect(resolveModelForAdapter("grok", "opus")?.id).toBe("grok-4.6");
+    expect(resolveModelForAdapter("grok", "fable")?.id).toBe("grok-4.6");
   });
 
   it("local adapters have no tier hierarchy — every tier misses", () => {

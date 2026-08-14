@@ -37,11 +37,14 @@ func NewRegistry() *Registry {
 			"ollama":          func() SkillRunner { return NewOllamaAdapter() },
 			"lm-studio":       func() SkillRunner { return NewLmStudioAdapter() },
 			"copilot":         func() SkillRunner { return NewCopilotAdapter() },
+			"grok":            func() SkillRunner { return NewGrokAdapter() },
 		},
 		aliases: map[string]string{
 			"claude":          "claude-headless",
 			"gemini-headless": "gemini",
 			"lmstudio":        "lm-studio",
+			"grok-headless":   "grok",
+			"xai":             "grok",
 		},
 	}
 	return r
@@ -166,6 +169,8 @@ func adapterBinary(name string) string {
 		return "claude" // LM Studio uses the claude CLI as SDK bridge
 	case name == "copilot":
 		return "copilot"
+	case name == "grok" || strings.HasPrefix(name, "grok"):
+		return "grok"
 	default:
 		return name
 	}
@@ -190,6 +195,8 @@ func adapterDisplayName(name string) string {
 		return "LM Studio"
 	case "copilot":
 		return "GitHub Copilot"
+	case "grok":
+		return "Grok"
 	default:
 		return name
 	}

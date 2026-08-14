@@ -15,6 +15,7 @@ import { GeminiSdkAdapter } from "./GeminiSdkAdapter.js";
 import { LmStudioAdapter } from "./LmStudioAdapter.js";
 import { OllamaAdapter } from "./OllamaAdapter.js";
 import { CopilotCliAdapter } from "./CopilotCliAdapter.js";
+import { GrokAdapter } from "./GrokAdapter.js";
 
 /**
  * Registry that maps adapter names to their implementations.
@@ -66,6 +67,7 @@ function createDefaultRegistry(): AdapterRegistry {
   registry.register(new LmStudioAdapter());
   registry.register(new OllamaAdapter()); // Issue #2591
   registry.register(new CopilotCliAdapter());
+  registry.register(new GrokAdapter());
   return registry;
 }
 

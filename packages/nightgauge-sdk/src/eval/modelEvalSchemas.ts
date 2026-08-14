@@ -46,6 +46,7 @@ export const PROVIDERS = [
   "anthropic",
   "openai",
   "google",
+  "xai",
   "copilot",
   "ollama",
   "lm-studio",

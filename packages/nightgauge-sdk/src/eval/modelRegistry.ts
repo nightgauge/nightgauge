@@ -95,13 +95,14 @@ export function activeModels(): ModelDescriptor[] {
 /**
  * Map an execution adapter name (any layer's vocabulary: `claude`,
  * `claude-sdk`, `claude-headless`, `codex`, `gemini`, `gemini-sdk`,
- * `copilot`, `ollama`, `lm-studio`) to its registry provider. Unknown
- * adapters map to `other`, which has no tier bands.
+ * `grok`, `grok-headless`, `copilot`, `ollama`, `lm-studio`) to its
+ * registry provider. Unknown adapters map to `other`, which has no tier bands.
  */
 export function providerForAdapter(adapter: string): Provider {
   if (adapter === "claude" || adapter.startsWith("claude-")) return "anthropic";
   if (adapter === "codex") return "openai";
   if (adapter === "gemini" || adapter === "gemini-sdk") return "google";
+  if (adapter === "grok" || adapter.startsWith("grok-")) return "xai";
   if (adapter === "copilot") return "copilot";
   if (adapter === "ollama") return "ollama";
   if (adapter === "lm-studio") return "lm-studio";

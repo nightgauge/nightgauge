@@ -174,6 +174,10 @@ func TestResolveProviderTierBands(t *testing.T) {
 		{"copilot", "haiku", "gpt-4o-mini"},
 		{"copilot", "sonnet", "gpt-4o"},
 		{"copilot", "opus", "claude-sonnet-4.5"},
+		{"xai", "haiku", "grok-build-0.1"},
+		{"xai", "sonnet", "grok-4.6"},
+		{"xai", "opus", "grok-4.6"},
+		{"xai", "fable", "grok-4.6"},
 		{"anthropic", "sonnet", "claude-sonnet-5"},
 	}
 	for _, c := range cases {
@@ -234,6 +238,8 @@ func TestProviderForAdapter(t *testing.T) {
 		"gemini":          "google",
 		"gemini-sdk":      "google",
 		"copilot":         "copilot",
+		"grok":            "xai",
+		"grok-headless":   "xai",
 		"ollama":          "ollama",
 		"lm-studio":       "lm-studio",
 		"mystery":         "other",

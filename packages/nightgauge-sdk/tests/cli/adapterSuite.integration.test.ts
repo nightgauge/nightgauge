@@ -21,7 +21,7 @@ import { AdapterError } from "../../src/cli/adapters/errors.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** All 8 canonical adapter names registered in defaultRegistry. */
+/** All canonical adapter names registered in defaultRegistry. */
 const ALL_ADAPTER_NAMES: IncrediAdapter[] = [
   "claude-sdk",
   "claude-headless",
@@ -31,6 +31,7 @@ const ALL_ADAPTER_NAMES: IncrediAdapter[] = [
   "lm-studio",
   "ollama",
   "copilot",
+  "grok",
 ];
 
 /** Retrieve all registered adapters from defaultRegistry. */
@@ -77,9 +78,9 @@ const ALL_AUTH_ENV_KEYS = [
 // ---------------------------------------------------------------------------
 
 describe("defaultRegistry: registration", () => {
-  it("contains all 8 built-in adapters", () => {
+  it("contains all built-in adapters", () => {
     const names = defaultRegistry.getNames();
-    expect(names).toHaveLength(8);
+    expect(names).toHaveLength(9);
     for (const name of ALL_ADAPTER_NAMES) {
       expect(names, `missing adapter '${name}'`).toContain(name);
     }

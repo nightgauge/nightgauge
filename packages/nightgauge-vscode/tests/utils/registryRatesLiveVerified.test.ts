@@ -35,6 +35,7 @@ const VERIFIED_ON = "2026-08-09";
 const OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_PROMPT_CACHING = "https://developers.openai.com/api/docs/guides/prompt-caching";
 const GOOGLE_PRICING = "https://ai.google.dev/gemini-api/docs/pricing";
+const XAI_MODELS = "https://docs.x.ai/developers/models";
 
 /** The five per-1M pools the schema can express. */
 const POOLS = ["input", "output", "cache_read", "cache_creation_5m", "cache_creation_1h"] as const;
@@ -181,6 +182,35 @@ const VERIFIED_RATES: readonly VerifiedEntry[] = [
     absenceNote:
       "no cache_creation_*: Google bills cache STORAGE per Mtok-hour, a dimension this schema has no field for",
   },
+
+  // ── xAI (Grok Build) ──────────────────────────────────────────────────────
+  // <200k-prompt-token sticker. The vendor also publishes a 2x rate at/above
+  // 200k; this schema has no threshold, so the registry records the standard
+  // column only (documented in $schema_note). No cache-write fee is listed.
+  {
+    id: "grok-4.6",
+    source: XAI_MODELS,
+    row: "Text API, <200k prompt tokens (read 2026-08-14)",
+    rates: { input: 2.0, output: 6.0, cache_read: 0.5 },
+    absenceNote:
+      "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
+  },
+  {
+    id: "grok-4.5",
+    source: XAI_MODELS,
+    row: "Text API, <200k prompt tokens (read 2026-08-14)",
+    rates: { input: 2.0, output: 6.0, cache_read: 0.3 },
+    absenceNote:
+      "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
+  },
+  {
+    id: "grok-build-0.1",
+    source: XAI_MODELS,
+    row: "Text API, <200k prompt tokens (read 2026-08-14)",
+    rates: { input: 1.0, output: 2.0, cache_read: 0.2 },
+    absenceNote:
+      "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
+  },
 ] as const;
 
 function describeRate(v: number | undefined): string {
@@ -292,17 +322,18 @@ describe("registry rates match their live-verified vendor figures", () => {
     }
   });
 
-  it("every openai/google registry entry is cited in this table", () => {
-    // Adding a priced OpenAI or Google model without citing where its numbers
-    // came from is the drift this guard exists to prevent, so a new entry fails
-    // here until it is transcribed with a source URL.
+  it("every openai/google/xai registry entry is cited in this table", () => {
+    // Adding a priced OpenAI, Google, or xAI model without citing where its
+    // numbers came from is the drift this guard exists to prevent.
     const cited = new Set(VERIFIED_RATES.map((e) => e.id));
     const uncited = MODEL_REGISTRY.filter(
-      (m) => (m.provider === "openai" || m.provider === "google") && !cited.has(m.id)
+      (m) =>
+        (m.provider === "openai" || m.provider === "google" || m.provider === "xai") &&
+        !cited.has(m.id)
     ).map((m) => m.id);
     expect(
       uncited,
-      `these openai/google entries carry rates with no citation: ${uncited.join(", ")}`
+      `these openai/google/xai entries carry rates with no citation: ${uncited.join(", ")}`
     ).toEqual([]);
   });
 

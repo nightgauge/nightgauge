@@ -2631,6 +2631,22 @@ export function validateAdapterPrerequisites(
     return null;
   }
 
+  if (adapter === "grok") {
+    if (mode === "interactive") {
+      return (
+        "Grok adapter supports headless execution only. " +
+        'Use "Nightgauge: Run Stage" (headless) or switch adapter back to Claude for interactive mode.'
+      );
+    }
+    if (!commandExists("grok")) {
+      return (
+        "Grok adapter selected, but `grok` CLI is not available in PATH. " +
+        "Install Grok Build (`curl -fsSL https://x.ai/cli/install.sh | bash`) or switch adapter."
+      );
+    }
+    return null;
+  }
+
   if (adapter === "gemini-sdk") {
     if (mode === "interactive") {
       return (
@@ -3881,6 +3897,24 @@ export function runStageSkillHeadless(
     callbacks?.onStderr?.(`[skillRunner] Gemini auth method: ${geminiAuthMethod}\n`);
   }
 
+  const grokEnv: Record<string, string> = {};
+  if (adapter === "grok") {
+    const bandMapping = requestedBand ? getAdapterModelForBand(requestedBand, adapter) : undefined;
+    let grokModel: string | undefined;
+    let modelSourceLabel = "";
+    if (bandMapping && !bandMapping.mismatch) {
+      grokModel = bandMapping.model;
+      modelDecision.model = bandMapping.model;
+      modelSourceLabel = " (dispatched band)";
+    }
+    if (grokModel) {
+      grokEnv.NIGHTGAUGE_GROK_MODEL = grokModel;
+      callbacks?.onStderr?.(`[skillRunner] Grok model: ${grokModel}${modelSourceLabel}\n`);
+    } else {
+      callbacks?.onStderr?.("[skillRunner] Grok model: (CLI default / registry)\n");
+    }
+  }
+
   // Codex model configuration (Issue #1656)
   const codexEnv: Record<string, string> = {};
   if (adapter === "codex") {
@@ -4236,6 +4270,7 @@ export function runStageSkillHeadless(
     ...autoAcceptEnv, // Merge auto-accept config
     ...ptcEnv, // Merge PTC tool definitions (Issue #1066)
     ...geminiEnv, // Merge Gemini config env vars (Issue #1056)
+    ...grokEnv,
     ...codexEnv, // Merge Codex model config env vars (Issue #1656)
     ...copilotEnv, // Merge Copilot model + auth env vars (Issue #1946)
     ...lmStudioEnv, // Merge LM Studio config env vars (Issue #2057)

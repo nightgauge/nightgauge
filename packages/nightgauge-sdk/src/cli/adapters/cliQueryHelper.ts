@@ -27,6 +27,8 @@ import {
   type GeminiStreamJsonUsage,
   type CopilotOutputSummary,
 } from "../adapterQuery.js";
+import { summarizeGrokStream } from "./grokStream.js";
+import { writeFile } from "node:fs/promises";
 
 interface CommandResult {
   code: number;
@@ -95,7 +97,7 @@ export function parseCliArgs(value: string | undefined, fallback: string[]): str
  *   array and sends empty stdin. Used by Gemini CLI which accepts prompts as
  *   positional arguments (`gemini "prompt" --output-format stream-json`).
  */
-export type PromptDelivery = "stdin" | "positional";
+export type PromptDelivery = "stdin" | "positional" | "prompt-file";
 
 /**
  * Select the Codex output text from either the --output-last-message file
@@ -138,6 +140,7 @@ export function createCliQueryFn(options: {
     // For Codex: inject --output-last-message to capture the final agent message
     // directly from a temp file, avoiding JSONL extraction for the primary output.
     let outputLastMessagePath: string | undefined;
+    let promptFilePath: string | undefined;
     let baseArgs = options.args;
     if (options.adapter === "codex") {
       outputLastMessagePath = join(tmpdir(), `codex-output-${randomUUID()}.txt`);
@@ -210,12 +213,24 @@ export function createCliQueryFn(options: {
         options.adapter === "codex"
           ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools)
           : baseArgs;
-      finalArgs =
-        delivery === "positional" ? [queryOptions.prompt, ...effectiveBaseArgs] : effectiveBaseArgs;
-      stdinPrompt = delivery === "positional" ? "" : queryOptions.prompt;
+      if (delivery === "positional") {
+        finalArgs = [queryOptions.prompt, ...effectiveBaseArgs];
+        stdinPrompt = "";
+      } else if (delivery === "prompt-file") {
+        promptFilePath = join(tmpdir(), `nightgauge-grok-prompt-${randomUUID()}.txt`);
+        await writeFile(promptFilePath, queryOptions.prompt, "utf-8");
+        finalArgs = ["--prompt-file", promptFilePath, ...effectiveBaseArgs];
+        stdinPrompt = "";
+      } else {
+        finalArgs = effectiveBaseArgs;
+        stdinPrompt = queryOptions.prompt;
+      }
     }
 
     const result = await runCliCommand(options.command, finalArgs, stdinPrompt, cwd, env);
+    if (promptFilePath) {
+      unlink(promptFilePath).catch(() => {});
+    }
 
     // Read and clean up the --output-last-message temp file (Codex only)
     let outputFileContent: string | undefined;
@@ -245,6 +260,15 @@ export function createCliQueryFn(options: {
     // copilot (Session ID footer line). @see Issue #1659, #52
     let sessionId: string | undefined;
     let copilotSummary: CopilotOutputSummary | undefined;
+    let grokUsage:
+      | {
+          input_tokens: number;
+          output_tokens: number;
+          cache_read_input_tokens: number;
+          cache_creation_input_tokens: number;
+        }
+      | undefined;
+    let grokCostUsd: number | undefined;
     if (options.adapter === "codex") {
       // Always parse JSONL for failure detection signals; use file output as
       // primary source for displayText when available.
@@ -268,6 +292,30 @@ export function createCliQueryFn(options: {
       if (summary.hasExplicitFailure) {
         throw new Error(
           `gemini runner reported stage failure: ${summary.failureReason ?? "unknown failure"}`
+        );
+      }
+    } else if (options.adapter === "grok") {
+      const grok = summarizeGrokStream(result.stdout + "\n" + result.stderr);
+      output = grok.displayText.trim();
+      sessionId = grok.sessionId;
+      grokUsage = {
+        input_tokens: grok.usage.input_tokens,
+        output_tokens: grok.usage.output_tokens + grok.usage.reasoning_tokens,
+        cache_read_input_tokens: grok.usage.cache_read_input_tokens,
+        cache_creation_input_tokens: grok.usage.cache_creation_input_tokens,
+      };
+      grokCostUsd = grok.totalCostUsd;
+      if (grok.isQuotaExhausted) {
+        throw new Error(
+          `[rate-limit-quota-exhausted] grok usage pool exhausted: ${grok.failureReason ?? "quota"}`
+        );
+      }
+      if (grok.isAuthFailure) {
+        throw new Error(`grok authentication failed: ${grok.failureReason ?? "not authenticated"}`);
+      }
+      if (grok.hasExplicitFailure) {
+        throw new Error(
+          `grok runner reported stage failure: ${grok.failureReason ?? "unknown failure"}`
         );
       }
     } else if (options.adapter === "copilot") {
@@ -297,13 +345,14 @@ export function createCliQueryFn(options: {
       type: "result",
       usage: geminiUsage ??
         codexUsage ??
+        grokUsage ??
         copilotSummary?.usage ?? {
           input_tokens: 0,
           output_tokens: 0,
           cache_read_input_tokens: 0,
           cache_creation_input_tokens: 0,
         },
-      total_cost_usd: copilotSummary?.estimatedCostUsd ?? 0,
+      total_cost_usd: grokCostUsd ?? copilotSummary?.estimatedCostUsd ?? 0,
       // Propagate model name for Copilot when available
       ...(copilotSummary?.usage?.model !== undefined && {
         model: copilotSummary.usage.model,

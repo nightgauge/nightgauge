@@ -850,6 +850,8 @@ export function toIncrediAdapter(
       return "ollama";
     case "copilot":
       return "copilot";
+    case "grok":
+      return "grok";
   }
 }
 

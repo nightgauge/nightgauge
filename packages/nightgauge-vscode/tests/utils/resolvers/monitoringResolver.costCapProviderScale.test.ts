@@ -118,7 +118,7 @@ describe("DEFAULT_COST_CAP_PROVIDER_SCALE table", () => {
 
   it("covers every ExecutionAdapter union member — drift guard", () => {
     expect(Object.keys(DEFAULT_COST_CAP_PROVIDER_SCALE).sort()).toEqual(
-      ["claude", "codex", "copilot", "gemini", "gemini-sdk", "lm-studio", "ollama"].sort()
+      ["claude", "codex", "copilot", "gemini", "gemini-sdk", "grok", "lm-studio", "ollama"].sort()
     );
   });
 });

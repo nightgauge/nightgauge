@@ -32,6 +32,9 @@ const ADAPTER_ALIASES: Record<string, IncrediAdapter> = {
   copilot: "copilot",
   github: "copilot",
   gh: "copilot",
+  grok: "grok",
+  "grok-headless": "grok",
+  xai: "grok",
 };
 
 /** Options for {@link resolveAdapter}'s config-aware rungs (#54). */
@@ -146,4 +149,8 @@ export function isLmStudioAdapterEnabled(env: NodeJS.ProcessEnv = process.env): 
 
 export function isCopilotAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return resolveAdapter(env) === "copilot";
+}
+
+export function isGrokAdapterEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveAdapter(env) === "grok";
 }

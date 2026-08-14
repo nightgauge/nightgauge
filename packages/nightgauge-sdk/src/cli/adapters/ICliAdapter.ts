@@ -36,7 +36,8 @@ export type IncrediAdapter =
   | "gemini-sdk"
   | "lm-studio" // Issue #2058 — LM Studio local inference
   | "ollama" // Issue #2591 — Ollama local LLM inference
-  | "copilot"; // Issue #1941 epic / #1942 implementation — GitHub Copilot CLI adapter
+  | "copilot" // Issue #1941 epic / #1942 implementation — GitHub Copilot CLI adapter
+  | "grok"; // Issue #522 / #524 — Grok Build CLI adapter
 
 /**
  * Options passed to createQueryFunction.

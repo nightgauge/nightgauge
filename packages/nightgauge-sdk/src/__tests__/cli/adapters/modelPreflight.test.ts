@@ -150,6 +150,7 @@ describe("ADAPTER_MODEL_POLICY invariant", () => {
       "lm-studio",
       "ollama",
       "copilot",
+      "grok",
     ];
     // The Record<IncrediAdapter, …> type guards this at compile time; assert at
     // runtime too so adding a union member forces a policy entry (a new adapter

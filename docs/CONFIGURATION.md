@@ -4616,7 +4616,7 @@ Core VSCode extension settings for authentication and paths.
 
 | Option           | Type   | Default                  | Description                                                                                   |
 | ---------------- | ------ | ------------------------ | --------------------------------------------------------------------------------------------- |
-| `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental) |
+| `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental), grok (experimental) |
 | `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                 |
 | `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                              |
 | `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                 |

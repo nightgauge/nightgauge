@@ -91,6 +91,7 @@ var adapterSpecs = map[string]adapterSpec{
 	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
 	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
 	"copilot":         {binary: "copilot", kind: kindCLI},
+	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0"},
 }
 
 // adapterAliases maps user-facing aliases to the canonical adapterSpecs key,
@@ -99,6 +100,8 @@ var adapterAliases = map[string]string{
 	"claude":          "claude-headless",
 	"gemini-headless": "gemini",
 	"lmstudio":        "lm-studio",
+	"grok-headless":   "grok",
+	"xai":             "grok",
 }
 
 // AllAdapterNames returns every canonical adapter the doctor can health-check,
@@ -110,6 +113,7 @@ func AllAdapterNames() []string {
 		"codex",
 		"gemini",
 		"copilot",
+		"grok",
 		"claude-sdk",
 		"gemini-sdk",
 		"ollama",
