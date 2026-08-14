@@ -11,7 +11,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { PipelineStage, TotalUsage, EpicEstimate } from "@nightgauge/sdk";
+import type { PipelineStage, TotalUsage, EpicEstimate, TerminalFailureKind } from "@nightgauge/sdk";
 import type { RoutingPath, SkippableStage } from "../../utils/changeAnalyzer";
 import type { CrossRepoEpicProgress } from "./EpicDashboard";
 import type { FirewallFilterState, FirewallAggregates } from "./FirewallTypes";
@@ -19,12 +19,20 @@ import { DEFAULT_FIREWALL_FILTERS } from "./FirewallTypes";
 import type { ProjectBoardData, ProjectBoardWidgetConfig } from "./ProjectBoardTypes";
 import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipelineState";
 import { DEFAULT_PROJECT_BOARD_CONFIG } from "./ProjectBoardTypes";
-import type { TelemetryStore, HistoryIndexEntry } from "../../services/TelemetryStore";
+import type {
+  TelemetryStore,
+  HistoryIndexEntry,
+  RunRecordIdentity,
+} from "../../services/TelemetryStore";
 import type { IssueCostAggregation } from "../../utils/executionHistoryReader";
 import type { HealthWidgetData } from "./HealthWidgetTypes";
 import type { CostSummary, CostHistoryEntry } from "./CostSummaryCalculator";
 import type { PipelineCostEstimate, AutoModelSelectorConfig } from "@nightgauge/sdk";
 import type { HealthCheckReport } from "../../types/pipelineHealth";
+import {
+  isOrchestratorCrashRecord,
+  ORCHESTRATOR_CRASH_TERMINAL_KIND,
+} from "../../utils/orchestratorCrashRecord";
 
 /**
  * Time savings configuration (user-configurable via VS Code settings)
@@ -573,12 +581,16 @@ export interface CurrentPhaseInfo {
  * Summary of a pipeline run for history display
  */
 export interface PipelineRunSummary {
+  /** Stable persisted run identity; absent on legacy records. */
+  runId?: string;
   issueNumber: number;
   title: string;
   branch: string;
   startedAt: Date;
   completedAt?: Date;
   status: PipelineRunStatus;
+  /** Producer-owned reason a V3 run terminated, when present. */
+  terminalFailureKind?: TerminalFailureKind;
   stages: StageProgress[];
   currentStage?: PipelineStage;
   usage: TotalUsage;
@@ -607,16 +619,21 @@ export interface PipelineRunSummary {
   performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
 }
 
+/** Persisted identity used to disambiguate retries of the same issue. */
+export type HistoricalRunIdentity = RunRecordIdentity;
+
 /**
  * Serializable version of PipelineRunSummary for storage
  */
 interface SerializedPipelineRun {
+  runId?: string;
   issueNumber: number;
   title: string;
   branch: string;
   startedAt: string;
   completedAt?: string;
   status: PipelineRunStatus;
+  terminalFailureKind?: TerminalFailureKind;
   stages: {
     stage: PipelineStage;
     status: StageRunStatus;
@@ -1101,15 +1118,19 @@ export class DashboardState {
     }
 
     const run: PipelineRunSummary = {
+      runId: entry.run_id,
       issueNumber: entry.issue_number,
       title: entry.title,
       branch: entry.branch,
       startedAt: new Date(entry.started_at),
       completedAt: entry.recorded_at ? new Date(entry.recorded_at) : undefined,
       status,
+      terminalFailureKind: entry.terminal_failure_kind,
       stages: ALL_STAGES.map((stage) => ({
         stage,
-        status: "complete" as StageRunStatus,
+        status: (entry.terminal_failure_kind === ORCHESTRATOR_CRASH_TERMINAL_KIND
+          ? "pending"
+          : "complete") as StageRunStatus,
       })),
       usage: {
         inputTokens: entry.total_input_tokens ?? 0,
@@ -1150,7 +1171,10 @@ export class DashboardState {
   private async preloadMostRecentToolCalls(run: PipelineRunSummary): Promise<void> {
     if (!this.telemetryStore) return;
     try {
-      const record = await this.telemetryStore.getRunRecord(run.issueNumber);
+      const record = await this.telemetryStore.getRunRecord(run.issueNumber, {
+        runId: run.runId,
+        startedAt: run.startedAt.toISOString(),
+      });
       if (record?.tool_calls && record.tool_calls.length > 0) {
         run.toolCalls = record.tool_calls.map((tc) => ({
           tool: tc.tool,
@@ -1191,12 +1215,14 @@ export class DashboardState {
    */
   private serializeRun(run: PipelineRunSummary): SerializedPipelineRun {
     return {
+      runId: run.runId,
       issueNumber: run.issueNumber,
       title: run.title,
       branch: run.branch,
       startedAt: run.startedAt.toISOString(),
       completedAt: run.completedAt?.toISOString(),
       status: run.status,
+      terminalFailureKind: run.terminalFailureKind,
       stages: run.stages.map((stage) => ({
         stage: stage.stage,
         status: stage.status,
@@ -1239,12 +1265,14 @@ export class DashboardState {
    */
   private deserializeRun(run: SerializedPipelineRun): PipelineRunSummary {
     return {
+      runId: run.runId,
       issueNumber: run.issueNumber,
       title: run.title,
       branch: run.branch,
       startedAt: new Date(run.startedAt),
       completedAt: run.completedAt ? new Date(run.completedAt) : undefined,
       status: run.status,
+      terminalFailureKind: run.terminalFailureKind,
       stages: run.stages.map((stage) => ({
         stage: stage.stage,
         status: stage.status,
@@ -1593,28 +1621,32 @@ export class DashboardState {
   }
 
   /**
-   * Get a specific run from history by issue number
+   * Get a specific history run, using persisted identity to distinguish retries.
    */
-  getHistoryRun(issueNumber: number): PipelineRunSummary | undefined {
-    return this.history.find((run) => run.issueNumber === issueNumber);
-  }
-
-  /**
-   * Resolve the platform runId (UUID) for a given issue number using cached runs data.
-   * Returns null when the RunsEntry cache lacks a run_id field — callers fall back
-   * to issueNumber-based matching for SSE pipeline event filtering (#3714).
-   */
-  getRunIdForIssue(_issueNumber: number): string | null {
-    // RunsEntry (IpcClientBase) does not expose run_id; matching degrades to issueNumber.
-    return null;
+  getHistoryRun(
+    issueNumber: number,
+    identity?: HistoricalRunIdentity
+  ): PipelineRunSummary | undefined {
+    return this.history.find((run) => {
+      if (run.issueNumber !== issueNumber) return false;
+      if (identity?.runId) return run.runId === identity.runId;
+      if (identity?.startedAt) {
+        return run.startedAt.getTime() === new Date(identity.startedAt).getTime();
+      }
+      return true;
+    });
   }
 
   /**
    * Update tool calls for a historical run after on-demand loading (Issue #1032).
    * Returns true if the run was found and updated.
    */
-  updateRunToolCalls(issueNumber: number, toolCalls: ToolCallEntry[]): boolean {
-    const run = this.history.find((r) => r.issueNumber === issueNumber);
+  updateRunToolCalls(
+    issueNumber: number,
+    toolCalls: ToolCallEntry[],
+    identity?: HistoricalRunIdentity
+  ): boolean {
+    const run = this.getHistoryRun(issueNumber, identity);
     if (!run) return false;
     run.toolCalls = toolCalls;
     return true;
@@ -2573,9 +2605,12 @@ export class DashboardState {
     );
     const hasAnyComplete = stageEntries.some((s) => s.status === "complete");
     const hasAnyRunning = stageEntries.some((s) => s.status === "running");
+    const isOrchestratorCrash = isOrchestratorCrashRecord(parsed);
 
     // Import runs that have completed work OR are currently in-progress (Issue #639)
-    if (!hasAnyComplete && !hasAnyRunning) return false;
+    // Synthesized orchestrator crashes are real terminal failures even though
+    // their one failed stage overlaps the phantom backup-write shape (#447).
+    if (!isOrchestratorCrash && !hasAnyComplete && !hasAnyRunning) return false;
 
     // Use outcome field from JSONL records if available, otherwise derive
     let runStatus: PipelineRunStatus = "running";
@@ -2638,6 +2673,7 @@ export class DashboardState {
       startedAt,
       completedAt,
       status: runStatus,
+      terminalFailureKind: isOrchestratorCrash ? ORCHESTRATOR_CRASH_TERMINAL_KIND : undefined,
       stages: stageEntries,
       usage: totalUsage,
       toolCalls: [],
@@ -3425,7 +3461,10 @@ export class DashboardState {
   private async hydrateRunTokenData(run: PipelineRunSummary): Promise<void> {
     if (!this.telemetryStore) return;
     try {
-      const record = await this.telemetryStore.getRunRecord(run.issueNumber);
+      const record = await this.telemetryStore.getRunRecord(run.issueNumber, {
+        runId: run.runId,
+        startedAt: run.startedAt.toISOString(),
+      });
       if (!record) return;
 
       const perStage = record.tokens?.per_stage as
@@ -3447,12 +3486,20 @@ export class DashboardState {
         | Record<
             string,
             {
+              status?: StageRunStatus;
               duration_ms?: number;
               performance_mode?: "efficiency" | "elevated" | "maximum" | "frontier";
               execution_path?: "deterministic" | "llm";
             }
           >
         | undefined;
+
+      // Index summaries have no stage states. Reset the placeholder timeline
+      // before applying the matching full record so absent stages stay pending
+      // instead of looking complete, especially on failed/crashed runs.
+      for (const stageProgress of run.stages) {
+        stageProgress.status = "pending";
+      }
 
       // Run-level performance_mode (Issue #3218) — surface for the mode-mismatch
       // advisory and the per-mode rollup when stage-level data is absent.
@@ -3482,6 +3529,9 @@ export class DashboardState {
         // Hydrate duration from stages record (Issue #2577)
         // stages is Record<stageName, StageDetail>, keyed by stage name
         const stageRecord = stageRecords?.[stageProgress.stage];
+        if (stageRecord?.status) {
+          stageProgress.status = stageRecord.status;
+        }
         if (stageRecord?.duration_ms !== undefined) {
           stageProgress.durationMs = stageRecord.duration_ms;
         }

@@ -102,6 +102,76 @@ func TestIdempotency_DuplicateRunIDDropped(t *testing.T) {
 	}
 }
 
+func TestIndexV1RebuildRetainsOrchestratorCrashIdentity(t *testing.T) {
+	dir := t.TempDir()
+	hw := NewHistoryWriter(dir)
+	crash := makeRunRec("run-crash", 447, "2026-07-19T08:00:00Z")
+	crash.SchemaVersion = "3"
+	crash.Outcome = "failed"
+	crash.TerminalFailureKind = "orchestrator_crash"
+	crash.Stages = map[string]V2StageDetail{
+		"feature-dev": {Status: "failed"},
+	}
+
+	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(crash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line = append(line, '\n')
+	if err := os.WriteFile(filepath.Join(historyDir, fixedNow.Format("2006-01-02")+".jsonl"), line, 0644); err != nil {
+		t.Fatal(err)
+	}
+	legacy := V2Index{
+		SchemaVersion: "1",
+		TotalRuns:     1,
+		Entries: []V2IndexEntry{{
+			IssueNumber: crash.IssueNumber,
+			RunID:       crash.RunID,
+			Outcome:     crash.Outcome,
+			StartedAt:   crash.StartedAt,
+			RecordedAt:  crash.RecordedAt,
+		}},
+	}
+	legacyBytes, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(historyDir, "index.json"), legacyBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a fresh process whose coordinator has not been seeded, then
+	// re-emit the existing crash. The schema upgrade must not append a second
+	// physical line before rebuilding the index.
+	dirCoordinatorsMu.Lock()
+	delete(dirCoordinators, historyDir)
+	dirCoordinatorsMu.Unlock()
+	if err := hw.WriteV2Record(crash, fixedNow); err != nil {
+		t.Fatal(err)
+	}
+	if lines := rawDailyLines(t, dir); len(lines) != 1 {
+		t.Fatalf("daily JSONL lines after v1 index restart = %d, want 1", len(lines))
+	}
+
+	idx := readIndexFile(t, dir)
+	if idx.SchemaVersion != "2" {
+		t.Fatalf("index schema_version = %q, want 2", idx.SchemaVersion)
+	}
+	for _, entry := range idx.Entries {
+		if entry.RunID == crash.RunID {
+			if entry.TerminalFailureKind != "orchestrator_crash" {
+				t.Fatalf("rebuilt crash terminal_failure_kind = %q, want orchestrator_crash", entry.TerminalFailureKind)
+			}
+			return
+		}
+	}
+	t.Fatal("rebuilt index lost the existing orchestrator-crash entry")
+}
+
 // TestIdempotency_SkeletonAfterFullDropped: once a full record exists, a
 // later skeleton (empty stages) for the same run never appends or overwrites.
 func TestIdempotency_SkeletonAfterFullDropped(t *testing.T) {

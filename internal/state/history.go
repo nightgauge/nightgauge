@@ -437,23 +437,31 @@ type V2IndexEntry struct {
 	Title       string `json:"title"`
 	Outcome     string `json:"outcome"`
 	OutcomeType string `json:"outcome_type,omitempty"`
-	IsRecovery  bool   `json:"is_recovery,omitempty"`
+	// TerminalFailureKind retains the producer-owned V3 marker in the summary
+	// index. Without it a zero-token orchestrator crash is indistinguishable
+	// from the phantom backup-write population to dashboard readers (#447).
+	TerminalFailureKind string `json:"terminal_failure_kind,omitempty"`
+	IsRecovery          bool   `json:"is_recovery,omitempty"`
 	// PerformanceMode is the dominant performance mode for this run (Issue #3218).
 	// Derived from per-stage PerformanceMode values — the most common non-empty
 	// value wins; "elevated" breaks ties over "efficiency". Absent on pre-fix records.
-	PerformanceMode        string   `json:"performance_mode,omitempty"`
-	CostUSD                float64  `json:"cost_usd"`
-	TotalInputTokens       int      `json:"total_input_tokens"`
-	TotalOutputTokens      int      `json:"total_output_tokens"`
-	TotalCacheReadTokens   int      `json:"total_cache_read_tokens"`
-	TotalCacheCreateTokens int      `json:"total_cache_creation_tokens"`
-	DurationMs             int64    `json:"duration_ms"`
-	StageCount             int      `json:"stage_count"`
-	StartedAt              string   `json:"started_at"`
-	RecordedAt             string   `json:"recorded_at"`
-	Labels                 []string `json:"labels,omitempty"`
-	Size                   *string  `json:"size"`
-	Type                   *string  `json:"type"`
+	PerformanceMode        string  `json:"performance_mode,omitempty"`
+	CostUSD                float64 `json:"cost_usd"`
+	TotalInputTokens       int     `json:"total_input_tokens"`
+	TotalOutputTokens      int     `json:"total_output_tokens"`
+	TotalCacheReadTokens   int     `json:"total_cache_read_tokens"`
+	TotalCacheCreateTokens int     `json:"total_cache_creation_tokens"`
+	DurationMs             int64   `json:"duration_ms"`
+	StageCount             int     `json:"stage_count"`
+	// RecordRichness is the total number of stage details, including failed
+	// stages. StageCount counts only complete/skipped stages and is zero for a
+	// one-stage orchestrator crash, so it cannot protect restart idempotency.
+	RecordRichness int      `json:"record_richness"`
+	StartedAt      string   `json:"started_at"`
+	RecordedAt     string   `json:"recorded_at"`
+	Labels         []string `json:"labels,omitempty"`
+	Size           *string  `json:"size"`
+	Type           *string  `json:"type"`
 	// Branch carries the same key-always-present contract as
 	// V2RunRecord.Branch (#397) — see its doc. HistoryIndexEntry on the
 	// TypeScript side is a plain interface with no zod default, so an
@@ -470,6 +478,8 @@ type V2Index struct {
 	TotalRuns     int            `json:"total_runs"`
 	Entries       []V2IndexEntry `json:"entries"`
 }
+
+const historyIndexSchemaVersion = "2"
 
 // V2RunInput provides the metadata the scheduler passes alongside the
 // RuntimeState snapshot for building V2 history records.
@@ -717,20 +727,45 @@ func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error
 // index on first use, so a writer started in a fresh process (e.g. the
 // crash-recovery synthesizer after a restart) still recognizes runs already
 // recorded by a previous process and does not re-append them. The index
-// entry's StageCount is a lower bound on richness — sufficient to drop exact
-// re-emissions while still allowing a genuinely richer record to upgrade.
+// entry's RecordRichness is the exact stage-detail count used by the writer,
+// so exact re-emissions drop while genuinely richer records can upgrade.
 // Caller must hold c.mu.
 func (hw *HistoryWriter) seedSeenLocked(c *dirCoordinator) {
 	if c.seeded {
 		return
 	}
 	c.seeded = true
-	idx, _ := hw.readIndex() // best-effort: absent/corrupt index seeds nothing
-	for _, e := range idx.Entries {
-		key := indexEntryKey(e)
-		if e.StageCount > c.seen[key] {
-			c.seen[key] = e.StageCount
+	idx, ok := hw.readIndex()
+	if ok {
+		for _, e := range idx.Entries {
+			key := indexEntryKey(e)
+			if prev, exists := c.seen[key]; !exists || e.RecordRichness > prev {
+				c.seen[key] = e.RecordRichness
+			}
 		}
+		return
+	}
+
+	// An old/corrupt index cannot seed identity safely. Reconstruct identity
+	// from the append-only source of truth before the next append, so a v1→v2
+	// projection upgrade cannot duplicate a run already on disk (#447).
+	entries := hw.rebuildIndexEntriesFromJSONL()
+	for _, e := range entries {
+		key := indexEntryKey(e)
+		if prev, exists := c.seen[key]; !exists || e.RecordRichness > prev {
+			c.seen[key] = e.RecordRichness
+		}
+	}
+	// Upgrade the derived projection even when the incoming record is a
+	// duplicate and returns before updateIndexLocked.
+	upgraded := V2Index{
+		SchemaVersion: historyIndexSchemaVersion,
+		UpdatedAt:     time.Now().Format(time.RFC3339),
+		TotalRuns:     len(entries),
+		Entries:       entries,
+	}
+	if err := writeIndexAtomic(filepath.Join(hw.dir, "index.json"), upgraded); err != nil {
+		fmt.Fprintf(os.Stderr, "[history] index schema upgrade failed: %v\n", err)
 	}
 }
 
@@ -1165,6 +1200,7 @@ func buildIndexEntry(record V2RunRecord) V2IndexEntry {
 		Title:                  record.Title,
 		Outcome:                record.Outcome,
 		OutcomeType:            record.OutcomeType,
+		TerminalFailureKind:    record.TerminalFailureKind,
 		IsRecovery:             record.IsRecovery,
 		PerformanceMode:        record.PerformanceMode,
 		CostUSD:                record.Tokens.EstimatedCostUSD,
@@ -1174,6 +1210,7 @@ func buildIndexEntry(record V2RunRecord) V2IndexEntry {
 		TotalCacheCreateTokens: record.Tokens.TotalCacheCreation,
 		DurationMs:             record.TotalDuration,
 		StageCount:             stageCount,
+		RecordRichness:         recordRichness(record),
 		StartedAt:              record.StartedAt,
 		RecordedAt:             record.RecordedAt,
 		Labels:                 record.Labels,
@@ -1184,17 +1221,17 @@ func buildIndexEntry(record V2RunRecord) V2IndexEntry {
 }
 
 // readIndex loads index.json. It returns a fresh empty index when the file is
-// absent, and (false) when the file exists but is unparseable — signaling the
-// caller to rebuild from the JSONL source of truth rather than silently
-// discarding it.
+// absent, and (false) when the file exists but is unparseable or uses an older
+// projection schema — signaling the caller to rebuild from the JSONL source of
+// truth rather than silently discarding fields added to the index.
 func (hw *HistoryWriter) readIndex() (V2Index, bool) {
-	fresh := V2Index{SchemaVersion: "1", Entries: []V2IndexEntry{}}
+	fresh := V2Index{SchemaVersion: historyIndexSchemaVersion, Entries: []V2IndexEntry{}}
 	data, err := os.ReadFile(filepath.Join(hw.dir, "index.json"))
 	if err != nil {
 		return fresh, os.IsNotExist(err) // missing == clean start; other errors == "rebuild"
 	}
 	var existing V2Index
-	if json.Unmarshal(data, &existing) == nil && existing.SchemaVersion != "" {
+	if json.Unmarshal(data, &existing) == nil && existing.SchemaVersion == historyIndexSchemaVersion {
 		if existing.Entries == nil {
 			existing.Entries = []V2IndexEntry{}
 		}
@@ -1218,7 +1255,7 @@ func (hw *HistoryWriter) updateIndexLocked(record V2RunRecord) error {
 	idx, ok := hw.readIndex()
 	if !ok {
 		// Existing index is corrupt: reconstruct entries from the JSONL records.
-		idx = V2Index{SchemaVersion: "1", Entries: hw.rebuildIndexEntriesFromJSONL()}
+		idx = V2Index{SchemaVersion: historyIndexSchemaVersion, Entries: hw.rebuildIndexEntriesFromJSONL()}
 	}
 
 	entry := buildIndexEntry(record)

@@ -10,6 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { LocalAuditFallbackService } from "../../src/services/LocalAuditFallbackService";
+import { HISTORY_INDEX_SCHEMA_VERSION } from "../../src/utils/executionHistoryWriter";
 import type { AuditFilterState } from "../../src/views/dashboard/DashboardState";
 import type { HistoryIndex } from "../../src/services/TelemetryStore";
 
@@ -25,7 +26,7 @@ function makeFilters(overrides: Partial<AuditFilterState> = {}): AuditFilterStat
 
 function makeIndex(entries: HistoryIndex["entries"]): HistoryIndex {
   return {
-    schema_version: "1",
+    schema_version: HISTORY_INDEX_SCHEMA_VERSION,
     updated_at: new Date().toISOString(),
     total_runs: entries.length,
     entries,

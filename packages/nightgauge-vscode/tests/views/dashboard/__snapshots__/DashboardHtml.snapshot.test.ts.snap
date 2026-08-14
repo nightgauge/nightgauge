@@ -1206,6 +1206,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       background: var(--vscode-charts-green);
     }
 
+    .history-dot.failed {
+      background: var(--vscode-charts-red);
+    }
+
     .history-dot.skipped {
       background: var(--vscode-charts-yellow);
     }
@@ -5777,12 +5781,17 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
 
       // Export buttons
       document.getElementById('exportJson')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'json', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'json', target: getDisplayedExportTarget() });
       });
 
       document.getElementById('exportCsv')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'csv', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'csv', target: getDisplayedExportTarget() });
       });
+
+      function getDisplayedExportTarget() {
+        const issueNumber = parseInt(document.body.dataset.exportIssue || '', 10);
+        return isNaN(issueNumber) ? 'current' : getRunIdentity(document.body, issueNumber);
+      }
 
       // Export Analytics buttons (Issue #1010)
       document.getElementById('exportAnalyticsJsonAll')?.addEventListener('click', () => {
@@ -5918,6 +5927,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
       });
     })();
 
+    function getRunIdentity(element, issueNumber) {
+      const identity = { issueNumber: issueNumber };
+      if (element.dataset.runId) identity.runId = element.dataset.runId;
+      if (element.dataset.startedAt) identity.startedAt = element.dataset.startedAt;
+      return identity;
+    }
+
     // Escape HTML in JS context (for lazy-rendered content)
     function escapeHtmlJs(text) {
       const div = document.createElement('div');
@@ -5986,7 +6002,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: issueNumber });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(autoLoadEl, issueNumber) });
           }
         }
       }
@@ -6004,14 +6020,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
           if (action === 'select-history-run') {
             const row = target.closest('[data-issue]');
             if (row) {
-              vscode.postMessage({ type: 'selectRun', issueNumber: parseInt(row.dataset.issue, 10) });
+              vscode.postMessage({ type: 'selectRun', ...getRunIdentity(row, parseInt(row.dataset.issue, 10)) });
             }
           } else if (action === 'load-tool-calls') {
             const container = document.getElementById('tool-calls-load-container');
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: parseInt(target.dataset.issue, 10) });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(target, parseInt(target.dataset.issue, 10)) });
           } else if (action === 'load-more-history') {
             vscode.postMessage({ type: 'loadMoreHistory' });
           }
@@ -7848,6 +7864,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
 
     .history-dot.complete {
       background: var(--vscode-charts-green);
+    }
+
+    .history-dot.failed {
+      background: var(--vscode-charts-red);
     }
 
     .history-dot.skipped {
@@ -11941,7 +11961,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
     }
   </style>
 </head>
-<body>
+<body data-export-issue="42" data-started-at="2026-01-01T10:00:00.000Z">
   <div class="dashboard">
     <header class="dashboard-header">
       <div class="header-title">
@@ -12296,10 +12316,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       </div>
       <div class="history-list">
         
-          <div class="history-item" data-issue="42" data-action="select-history-run">
+          <div class="history-item" data-issue="42" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#42</span>
               <span class="history-title">Add feature X</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -12468,12 +12489,17 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
 
       // Export buttons
       document.getElementById('exportJson')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'json', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'json', target: getDisplayedExportTarget() });
       });
 
       document.getElementById('exportCsv')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'csv', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'csv', target: getDisplayedExportTarget() });
       });
+
+      function getDisplayedExportTarget() {
+        const issueNumber = parseInt(document.body.dataset.exportIssue || '', 10);
+        return isNaN(issueNumber) ? 'current' : getRunIdentity(document.body, issueNumber);
+      }
 
       // Export Analytics buttons (Issue #1010)
       document.getElementById('exportAnalyticsJsonAll')?.addEventListener('click', () => {
@@ -12609,6 +12635,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
       });
     })();
 
+    function getRunIdentity(element, issueNumber) {
+      const identity = { issueNumber: issueNumber };
+      if (element.dataset.runId) identity.runId = element.dataset.runId;
+      if (element.dataset.startedAt) identity.startedAt = element.dataset.startedAt;
+      return identity;
+    }
+
     // Escape HTML in JS context (for lazy-rendered content)
     function escapeHtmlJs(text) {
       const div = document.createElement('div');
@@ -12677,7 +12710,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: issueNumber });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(autoLoadEl, issueNumber) });
           }
         }
       }
@@ -12695,14 +12728,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
           if (action === 'select-history-run') {
             const row = target.closest('[data-issue]');
             if (row) {
-              vscode.postMessage({ type: 'selectRun', issueNumber: parseInt(row.dataset.issue, 10) });
+              vscode.postMessage({ type: 'selectRun', ...getRunIdentity(row, parseInt(row.dataset.issue, 10)) });
             }
           } else if (action === 'load-tool-calls') {
             const container = document.getElementById('tool-calls-load-container');
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: parseInt(target.dataset.issue, 10) });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(target, parseInt(target.dataset.issue, 10)) });
           } else if (action === 'load-more-history') {
             vscode.postMessage({ type: 'loadMoreHistory' });
           }
@@ -14539,6 +14572,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
 
     .history-dot.complete {
       background: var(--vscode-charts-green);
+    }
+
+    .history-dot.failed {
+      background: var(--vscode-charts-red);
     }
 
     .history-dot.skipped {
@@ -19005,12 +19042,17 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
 
       // Export buttons
       document.getElementById('exportJson')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'json', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'json', target: getDisplayedExportTarget() });
       });
 
       document.getElementById('exportCsv')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'csv', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'csv', target: getDisplayedExportTarget() });
       });
+
+      function getDisplayedExportTarget() {
+        const issueNumber = parseInt(document.body.dataset.exportIssue || '', 10);
+        return isNaN(issueNumber) ? 'current' : getRunIdentity(document.body, issueNumber);
+      }
 
       // Export Analytics buttons (Issue #1010)
       document.getElementById('exportAnalyticsJsonAll')?.addEventListener('click', () => {
@@ -19146,6 +19188,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
       });
     })();
 
+    function getRunIdentity(element, issueNumber) {
+      const identity = { issueNumber: issueNumber };
+      if (element.dataset.runId) identity.runId = element.dataset.runId;
+      if (element.dataset.startedAt) identity.startedAt = element.dataset.startedAt;
+      return identity;
+    }
+
     // Escape HTML in JS context (for lazy-rendered content)
     function escapeHtmlJs(text) {
       const div = document.createElement('div');
@@ -19214,7 +19263,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: issueNumber });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(autoLoadEl, issueNumber) });
           }
         }
       }
@@ -19232,14 +19281,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
           if (action === 'select-history-run') {
             const row = target.closest('[data-issue]');
             if (row) {
-              vscode.postMessage({ type: 'selectRun', issueNumber: parseInt(row.dataset.issue, 10) });
+              vscode.postMessage({ type: 'selectRun', ...getRunIdentity(row, parseInt(row.dataset.issue, 10)) });
             }
           } else if (action === 'load-tool-calls') {
             const container = document.getElementById('tool-calls-load-container');
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: parseInt(target.dataset.issue, 10) });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(target, parseInt(target.dataset.issue, 10)) });
           } else if (action === 'load-more-history') {
             vscode.postMessage({ type: 'loadMoreHistory' });
           }
@@ -21076,6 +21125,10 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
 
     .history-dot.complete {
       background: var(--vscode-charts-green);
+    }
+
+    .history-dot.failed {
+      background: var(--vscode-charts-red);
     }
 
     .history-dot.skipped {
@@ -25169,7 +25222,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
     }
   </style>
 </head>
-<body>
+<body data-export-issue="1" data-started-at="2026-01-01T10:00:00.000Z">
   <div class="dashboard">
     <header class="dashboard-header">
       <div class="header-title">
@@ -25328,7 +25381,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         </summary>
         <div class="section-content" id="section-tool-calls">
           
-          <div class="tool-calls-section" data-auto-load-issue="1">
+          <div class="tool-calls-section" data-auto-load-issue="1" data-started-at="2026-01-01T10:00:00.000Z">
             <div class="section-header">
               <h3>Tool Calls</h3>
             </div>
@@ -25537,10 +25590,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       </div>
       <div class="history-list">
         
-          <div class="history-item" data-issue="1" data-action="select-history-run">
+          <div class="history-item" data-issue="1" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#1</span>
               <span class="history-title">Issue 1</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -25551,10 +25605,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
           </div>
         
-          <div class="history-item" data-issue="2" data-action="select-history-run">
+          <div class="history-item" data-issue="2" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#2</span>
               <span class="history-title">Issue 2</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -25565,10 +25620,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
           </div>
         
-          <div class="history-item" data-issue="3" data-action="select-history-run">
+          <div class="history-item" data-issue="3" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#3</span>
               <span class="history-title">Issue 3</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -25579,10 +25635,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
           </div>
         
-          <div class="history-item" data-issue="4" data-action="select-history-run">
+          <div class="history-item" data-issue="4" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#4</span>
               <span class="history-title">Issue 4</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -25593,10 +25650,11 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             </div>
           </div>
         
-          <div class="history-item" data-issue="5" data-action="select-history-run">
+          <div class="history-item" data-issue="5" data-started-at="2026-01-01T10:00:00.000Z" data-action="select-history-run">
             <div class="history-item-main">
               <span class="history-issue">#5</span>
               <span class="history-title">Issue 5</span>
+              
             </div>
             <div class="history-item-stats">
               <div class="history-progress">
@@ -25765,12 +25823,17 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
 
       // Export buttons
       document.getElementById('exportJson')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'json', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'json', target: getDisplayedExportTarget() });
       });
 
       document.getElementById('exportCsv')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'csv', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'csv', target: getDisplayedExportTarget() });
       });
+
+      function getDisplayedExportTarget() {
+        const issueNumber = parseInt(document.body.dataset.exportIssue || '', 10);
+        return isNaN(issueNumber) ? 'current' : getRunIdentity(document.body, issueNumber);
+      }
 
       // Export Analytics buttons (Issue #1010)
       document.getElementById('exportAnalyticsJsonAll')?.addEventListener('click', () => {
@@ -25906,6 +25969,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
       });
     })();
 
+    function getRunIdentity(element, issueNumber) {
+      const identity = { issueNumber: issueNumber };
+      if (element.dataset.runId) identity.runId = element.dataset.runId;
+      if (element.dataset.startedAt) identity.startedAt = element.dataset.startedAt;
+      return identity;
+    }
+
     // Escape HTML in JS context (for lazy-rendered content)
     function escapeHtmlJs(text) {
       const div = document.createElement('div');
@@ -25974,7 +26044,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: issueNumber });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(autoLoadEl, issueNumber) });
           }
         }
       }
@@ -25992,14 +26062,14 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
           if (action === 'select-history-run') {
             const row = target.closest('[data-issue]');
             if (row) {
-              vscode.postMessage({ type: 'selectRun', issueNumber: parseInt(row.dataset.issue, 10) });
+              vscode.postMessage({ type: 'selectRun', ...getRunIdentity(row, parseInt(row.dataset.issue, 10)) });
             }
           } else if (action === 'load-tool-calls') {
             const container = document.getElementById('tool-calls-load-container');
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: parseInt(target.dataset.issue, 10) });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(target, parseInt(target.dataset.issue, 10)) });
           } else if (action === 'load-more-history') {
             vscode.postMessage({ type: 'loadMoreHistory' });
           }

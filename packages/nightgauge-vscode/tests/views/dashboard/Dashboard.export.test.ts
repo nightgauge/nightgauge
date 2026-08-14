@@ -162,6 +162,7 @@ import type { PipelineRunSummary } from "../../../src/views/dashboard/DashboardS
 const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
   schema_version: "2",
   record_type: "run",
+  run_id: `run-${issueNumber}`,
   issue_number: issueNumber,
   title: `Issue #${issueNumber} — test feature`,
   branch: `feat/${issueNumber}-test`,
@@ -252,6 +253,7 @@ const makeFullRecord = (issueNumber = 100): ExecutionHistoryRunRecordV2 => ({
  */
 function makeHistoryRunWithEmptyStages(issueNumber = 100): PipelineRunSummary {
   return {
+    runId: `run-${issueNumber}`,
     issueNumber,
     title: `Issue #${issueNumber} — test feature`,
     branch: `feat/${issueNumber}-test`,
@@ -284,7 +286,10 @@ function makeHistoryRunWithEmptyStages(issueNumber = 100): PipelineRunSummary {
 // ============================================================================
 
 type DashboardPrivate = {
-  handleExport(format: "json" | "csv", target: "current" | number): Promise<void>;
+  handleExport(
+    format: "json" | "csv",
+    target: "current" | { issueNumber: number; runId?: string; startedAt?: string }
+  ): Promise<void>;
   handleExportAnalytics(format: string, dateRange: "last7" | "last30" | "all"): Promise<void>;
   workspaceRoot: string | undefined;
   state: DashboardState;
@@ -298,6 +303,18 @@ function getWrittenContent(): string {
   const buf = writtenFiles.get("/tmp/test-export.csv");
   if (!buf) throw new Error("No file written to /tmp/test-export.csv");
   return buf.toString("utf-8");
+}
+
+function historyTarget(issueNumber = 100): {
+  issueNumber: number;
+  runId: string;
+  startedAt: string;
+} {
+  return {
+    issueNumber,
+    runId: `run-${issueNumber}`,
+    startedAt: "2026-04-01T09:00:00.000Z",
+  };
 }
 
 // ============================================================================
@@ -359,7 +376,7 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
   it("history run CSV has non-zero input tokens in feature-dev row (fix applied)", async () => {
     mockGetRunRecord.mockResolvedValue(makeFullRecord(100));
 
-    await asDashboardPrivate(dashboard).handleExport("csv", 100);
+    await asDashboardPrivate(dashboard).handleExport("csv", historyTarget());
 
     const content = getWrittenContent();
     const lines = content.split("\n");
@@ -374,7 +391,7 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
   it("history run CSV has non-zero output tokens in feature-planning row", async () => {
     mockGetRunRecord.mockResolvedValue(makeFullRecord(100));
 
-    await asDashboardPrivate(dashboard).handleExport("csv", 100);
+    await asDashboardPrivate(dashboard).handleExport("csv", historyTarget());
 
     const content = getWrittenContent();
     const lines = content.split("\n");
@@ -387,7 +404,7 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
   it("history run JSON export includes tokenUsage in serialized stages", async () => {
     mockGetRunRecord.mockResolvedValue(makeFullRecord(100));
 
-    await asDashboardPrivate(dashboard).handleExport("json", 100);
+    await asDashboardPrivate(dashboard).handleExport("json", historyTarget());
 
     const content = getWrittenContent();
     const parsed = JSON.parse(content);
@@ -400,6 +417,34 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
     expect(featureDevStage.tokenUsage.costUsd).toBeGreaterThan(0);
   });
 
+  it("exports the exact retry selected when two history runs share an issue", async () => {
+    const crash = {
+      ...makeHistoryRunWithEmptyStages(100),
+      runId: "crash-run-100",
+      title: "Orchestrator crash",
+      status: "failed" as const,
+      startedAt: new Date("2026-04-01T08:00:00.000Z"),
+    };
+    const retry = {
+      ...makeHistoryRunWithEmptyStages(100),
+      runId: "retry-run-100",
+      title: "Successful retry",
+      startedAt: new Date("2026-04-01T09:00:00.000Z"),
+    };
+    asDashboardPrivate(dashboard).state["history"] = [retry, crash];
+    mockGetRunRecord.mockResolvedValue({ ...makeFullRecord(100), run_id: crash.runId });
+
+    const target = {
+      issueNumber: 100,
+      runId: crash.runId,
+      startedAt: crash.startedAt.toISOString(),
+    };
+    await asDashboardPrivate(dashboard).handleExport("json", target);
+
+    expect(mockGetRunRecord).toHaveBeenCalledWith(100, target);
+    expect(JSON.parse(getWrittenContent()).title).toBe("Orchestrator crash");
+  });
+
   it("current run export does NOT call getRunRecord (live tokenUsage used instead)", async () => {
     asDashboardPrivate(dashboard).state.startRun(42, "Live run", "feat/42-live");
 
@@ -409,7 +454,7 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
   });
 
   it("shows warning when no run found for requested issueNumber", async () => {
-    await asDashboardPrivate(dashboard).handleExport("csv", 9999);
+    await asDashboardPrivate(dashboard).handleExport("csv", historyTarget(9999));
 
     expect(vscode.window.showWarningMessage).toHaveBeenCalledWith("No pipeline data to export.");
   });
@@ -418,13 +463,15 @@ describe("Dashboard.handleExport — post-fix (#2794)", () => {
     mockGetRunRecord.mockResolvedValue(undefined);
 
     // Should not throw — falls back to DashboardState export with empty stages
-    await expect(asDashboardPrivate(dashboard).handleExport("csv", 100)).resolves.not.toThrow();
+    await expect(
+      asDashboardPrivate(dashboard).handleExport("csv", historyTarget())
+    ).resolves.not.toThrow();
   });
 
   it("saves file to the URI from showSaveDialog", async () => {
     mockGetRunRecord.mockResolvedValue(makeFullRecord(100));
 
-    await asDashboardPrivate(dashboard).handleExport("csv", 100);
+    await asDashboardPrivate(dashboard).handleExport("csv", historyTarget());
 
     expect(vscode.workspace.fs.writeFile).toHaveBeenCalledWith(
       { fsPath: "/tmp/test-export.csv" },

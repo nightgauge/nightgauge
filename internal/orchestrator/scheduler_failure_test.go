@@ -726,6 +726,24 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	if rec.TerminalFailureKind != TerminalKindOrchestratorCrash {
 		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindOrchestratorCrash)
 	}
+	indexBytes, err := os.ReadFile(filepath.Join(tmpDir, ".nightgauge", "pipeline", "history", "index.json"))
+	if err != nil {
+		t.Fatalf("read crash-recovery index: %v", err)
+	}
+	var index state.V2Index
+	if err := json.Unmarshal(indexBytes, &index); err != nil {
+		t.Fatalf("unmarshal crash-recovery index: %v", err)
+	}
+	if index.SchemaVersion != "2" {
+		t.Errorf("index.SchemaVersion = %q, want 2 (terminal failure identity projection)", index.SchemaVersion)
+	}
+	if len(index.Entries) != 1 {
+		t.Fatalf("index entries = %d, want 1", len(index.Entries))
+	}
+	if index.Entries[0].TerminalFailureKind != TerminalKindOrchestratorCrash {
+		t.Errorf("index terminal_failure_kind = %q, want %q",
+			index.Entries[0].TerminalFailureKind, TerminalKindOrchestratorCrash)
+	}
 	if !rec.IsRecovery {
 		t.Error("rec.IsRecovery = false, want true (recovery runs are excluded from cost-trend baselines per #1261)")
 	}

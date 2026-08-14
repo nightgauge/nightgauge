@@ -641,12 +641,17 @@ function getScript(): string {
 
       // Export buttons
       document.getElementById('exportJson')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'json', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'json', target: getDisplayedExportTarget() });
       });
 
       document.getElementById('exportCsv')?.addEventListener('click', () => {
-        vscode.postMessage({ type: 'export', format: 'csv', target: 'current' });
+        vscode.postMessage({ type: 'export', format: 'csv', target: getDisplayedExportTarget() });
       });
+
+      function getDisplayedExportTarget() {
+        const issueNumber = parseInt(document.body.dataset.exportIssue || '', 10);
+        return isNaN(issueNumber) ? 'current' : getRunIdentity(document.body, issueNumber);
+      }
 
       // Export Analytics buttons (Issue #1010)
       document.getElementById('exportAnalyticsJsonAll')?.addEventListener('click', () => {
@@ -782,6 +787,13 @@ function getScript(): string {
       });
     })();
 
+    function getRunIdentity(element, issueNumber) {
+      const identity = { issueNumber: issueNumber };
+      if (element.dataset.runId) identity.runId = element.dataset.runId;
+      if (element.dataset.startedAt) identity.startedAt = element.dataset.startedAt;
+      return identity;
+    }
+
     // Escape HTML in JS context (for lazy-rendered content)
     function escapeHtmlJs(text) {
       const div = document.createElement('div');
@@ -850,7 +862,7 @@ function getScript(): string {
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: issueNumber });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(autoLoadEl, issueNumber) });
           }
         }
       }
@@ -868,14 +880,14 @@ function getScript(): string {
           if (action === 'select-history-run') {
             const row = target.closest('[data-issue]');
             if (row) {
-              vscode.postMessage({ type: 'selectRun', issueNumber: parseInt(row.dataset.issue, 10) });
+              vscode.postMessage({ type: 'selectRun', ...getRunIdentity(row, parseInt(row.dataset.issue, 10)) });
             }
           } else if (action === 'load-tool-calls') {
             const container = document.getElementById('tool-calls-load-container');
             if (container) {
               container.innerHTML = '<p class="tool-calls-loading">Loading tool calls...</p>';
             }
-            vscode.postMessage({ type: 'loadRunDetails', issueNumber: parseInt(target.dataset.issue, 10) });
+            vscode.postMessage({ type: 'loadRunDetails', ...getRunIdentity(target, parseInt(target.dataset.issue, 10)) });
           } else if (action === 'load-more-history') {
             vscode.postMessage({ type: 'loadMoreHistory' });
           }
@@ -947,6 +959,12 @@ export function getDashboardHtml(
 
   // Get run to display (current or most recent from history)
   const displayRun = currentRun || (history.length > 0 ? history[0] : null);
+  const historicalDisplayAttributes =
+    displayRun && !currentRun
+      ? ` data-export-issue="${displayRun.issueNumber}"${
+          displayRun.runId ? ` data-run-id="${escapeHtml(displayRun.runId)}"` : ""
+        } data-started-at="${escapeHtml(displayRun.startedAt.toISOString())}"`
+      : "";
 
   // Generate health widget HTML (sparkline Chart.js charts removed)
   let healthWidgetHtml = "";
@@ -967,7 +985,7 @@ export function getDashboardHtml(
     ${getStyles()}
   </style>
 </head>
-<body>
+<body${historicalDisplayAttributes}>
   <div class="dashboard">
     <header class="dashboard-header">
       <div class="header-title">
@@ -1042,7 +1060,11 @@ export function getDashboardHtml(
           <h3>${
             currentRun
               ? "Current Pipeline Run"
-              : `Most Recent Pipeline Run${displayRun.completedAt ? ` — Completed ${formatRelativeTime(displayRun.completedAt)}` : ""}`
+              : `Most Recent Pipeline Run${
+                  displayRun.completedAt
+                    ? ` — ${displayRun.status === "failed" ? "Failed" : displayRun.status === "cancelled" ? "Cancelled" : "Completed"} ${formatRelativeTime(displayRun.completedAt)}`
+                    : ""
+                }`
           }</h3>
         </summary>
         <div class="section-content">
@@ -1069,7 +1091,10 @@ export function getDashboardHtml(
           ${getToolCallsHtml(
             displayRun?.toolCalls || [],
             displayRun && !currentRun ? displayRun.issueNumber : undefined,
-            displayRun && !currentRun ? true : false
+            displayRun && !currentRun ? true : false,
+            displayRun && !currentRun
+              ? { runId: displayRun.runId, startedAt: displayRun.startedAt.toISOString() }
+              : undefined
           )}
         </div>
       </details>

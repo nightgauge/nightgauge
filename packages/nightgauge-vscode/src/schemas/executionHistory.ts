@@ -31,6 +31,11 @@ import {
 import { StallEventSchema } from "./stallEvents";
 import { ExecutionAdapterSchema } from "../config/schema";
 import { AdapterSourceSchema } from "../utils/resolvers/adapterResolver";
+import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../utils/orchestratorCrashRecord";
+export {
+  ORCHESTRATOR_CRASH_TERMINAL_KIND,
+  isOrchestratorCrashRecord,
+} from "../utils/orchestratorCrashRecord";
 
 // ============================================================================
 // Shared Sub-Schemas
@@ -352,7 +357,7 @@ export const TerminalFailureKindSchema = z.enum([
   "budget_exceeded",
   "validation_error",
   "subagent_crash",
-  "orchestrator_crash",
+  ORCHESTRATOR_CRASH_TERMINAL_KIND,
   "network_unavailable",
   "stream_idle_timeout",
   "rate_limit_quota_exhausted",

@@ -614,6 +614,23 @@ describe("DashboardState - updateRunToolCalls (Issue #1032)", () => {
     const result = state.updateRunToolCalls(999, []);
     expect(result).toBe(false);
   });
+
+  it("updates only the matching retry when issue numbers are shared", () => {
+    const state = new DashboardState(createMockMemento(), "/tmp/test");
+    state.startRun(42, "Crashed attempt", "fix/42");
+    state.completeRun();
+    state.startRun(42, "Successful retry", "fix/42");
+    state.completeRun();
+
+    const [retry, crash] = state.getHistory();
+    retry.runId = "retry-42";
+    crash.runId = "crash-42";
+    const crashCalls = [{ tool: "Read", target: "crash.log", timestamp: new Date() }];
+
+    expect(state.updateRunToolCalls(42, crashCalls, { runId: "crash-42" })).toBe(true);
+    expect(crash.toolCalls).toEqual(crashCalls);
+    expect(retry.toolCalls).toEqual([]);
+  });
 });
 
 describe("DashboardState - getAggregates costPerIssue (Issue #1410)", () => {

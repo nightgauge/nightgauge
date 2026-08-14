@@ -25,6 +25,7 @@ import {
   type ExecutionHistoryRunRecordV2,
   type ExecutionHistoryRunRecordV3,
 } from "../schemas/executionHistory";
+import { isOrchestratorCrashRecord } from "./orchestratorCrashRecord";
 
 import { ExecutionHistoryWriter } from "./executionHistoryWriter";
 
@@ -535,7 +536,11 @@ export class ExecutionHistoryReader {
           // pipeline-start) with $0 cost, created by a backup-write bug
           // that fired before the pipeline actually completed.
           const stageCount = parsed.stages ? Object.keys(parsed.stages).length : 0;
-          if (stageCount <= 1 && (parsed.tokens?.estimated_cost_usd ?? 0) === 0) {
+          if (
+            !isOrchestratorCrashRecord(parsed) &&
+            stageCount <= 1 &&
+            (parsed.tokens?.estimated_cost_usd ?? 0) === 0
+          ) {
             continue;
           }
 

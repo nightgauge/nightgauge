@@ -56,6 +56,41 @@ test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
     await expect(branch).toHaveAttribute("title", "No branch recorded for this run");
   });
 
+  test("Pipeline tab distinctly labels an orchestrator crash", async ({ page }) => {
+    await openDashboard(page);
+    await page.click('[data-tab="pipeline"]');
+
+    const status = page.locator("#section-pipeline-progress .status-badge");
+    await expect(status).toBeVisible();
+    await expect(status).toHaveText("Orchestrator crash");
+    await expect(status).toHaveCSS("background-color", "rgb(241, 76, 76)");
+    await expect(page.locator("#tab-panel-pipeline")).toContainText(
+      /Most Recent Pipeline Run — Failed/
+    );
+    await expect(page.locator("#section-pipeline-progress .progress-stage")).toHaveText("Failed");
+  });
+
+  test("History row distinctly labels an orchestrator crash", async ({ page }) => {
+    await openDashboard(page);
+    await page.click('[data-tab="history"]');
+    await page.click("#tab-panel-history details.collapsible-section:first-of-type > summary");
+
+    const row = page.locator('[data-action="select-history-run"]').first();
+    await expect(row).toContainText("Orchestrator crash");
+    await expect(row.locator(".history-dot.failed")).toHaveCount(1);
+    await expect(row).toHaveAttribute("data-run-id", "run-orchestrator-crash-41");
+    const startedAt = await row.getAttribute("data-started-at");
+
+    await row.click();
+    const messages = await getMessages(page);
+    expect(messages).toContainEqual({
+      type: "selectRun",
+      issueNumber: 41,
+      runId: "run-orchestrator-crash-41",
+      startedAt,
+    });
+  });
+
   // -------------------------------------------------------------------------
   // 1. Header controls
   // -------------------------------------------------------------------------
@@ -69,11 +104,20 @@ test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
 
   test('Export JSON button posts { type: "export", format: "json" }', async ({ page }) => {
     await openDashboard(page);
+    const startedAt = await page.locator("body").getAttribute("data-started-at");
     // exportJson is inside a CSS hover-dropdown — hover the trigger to show it first
     await page.hover(".dropdown");
     await page.click("#exportJson");
     const messages = await getMessages(page);
-    expect(messages).toContainEqual(expect.objectContaining({ type: "export", format: "json" }));
+    expect(messages).toContainEqual({
+      type: "export",
+      format: "json",
+      target: {
+        issueNumber: 41,
+        runId: "run-orchestrator-crash-41",
+        startedAt,
+      },
+    });
   });
 
   test('Export CSV button posts { type: "export", format: "csv" }', async ({ page }) => {
@@ -261,9 +305,11 @@ test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
     const issueNumber = await historyItem.evaluate((el) =>
       parseInt((el as HTMLElement).dataset.issue ?? "0", 10)
     );
+    const runId = await historyItem.getAttribute("data-run-id");
+    const startedAt = await historyItem.getAttribute("data-started-at");
     await historyItem.click();
     const messages = await getMessages(page);
-    expect(messages).toContainEqual({ type: "selectRun", issueNumber });
+    expect(messages).toContainEqual({ type: "selectRun", issueNumber, runId, startedAt });
   });
 
   // -------------------------------------------------------------------------
@@ -281,6 +327,8 @@ test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
         const btn = document.createElement("button");
         btn.setAttribute("data-action", "load-tool-calls");
         btn.setAttribute("data-issue", "41");
+        btn.setAttribute("data-run-id", "run-orchestrator-crash-41");
+        btn.setAttribute("data-started-at", "2026-08-11T00:39:37.000Z");
         btn.className = "load-tool-calls-btn";
         btn.textContent = "Load Tool Calls";
         historyPanel.appendChild(btn);
@@ -290,7 +338,12 @@ test.describe("Dashboard real HTML interactions (Issue #1757)", () => {
     await expect(loadBtn).toBeVisible();
     await loadBtn.click();
     const messages = await getMessages(page);
-    expect(messages).toContainEqual(expect.objectContaining({ type: "loadRunDetails" }));
+    expect(messages).toContainEqual({
+      type: "loadRunDetails",
+      issueNumber: 41,
+      runId: "run-orchestrator-crash-41",
+      startedAt: "2026-08-11T00:39:37.000Z",
+    });
   });
 
   // -------------------------------------------------------------------------
