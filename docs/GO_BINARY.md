@@ -1088,11 +1088,13 @@ snapshot is:
   `runstate.LivenessWindow` (30 min, the same constant the IPC orphan
   reconciler's ladder uses — one threshold, one authority). Note what that
   timestamp means: the snapshot is **refreshed at stage boundaries only** — the
-  orchestrator persists after a stage completes, the IPC server on repo-carrying
-  transitions, and no progress tick writes anything (there is no heartbeat). On
-  the Go-scheduler path the persisted pid also names a stage child that had
-  already exited when the file was written, which is why the sidecar arm exists:
-  it is the one signal that path writes while the run is alive; or
+  orchestrator persists at each stage's start and again when it completes, the
+  IPC server on repo-carrying transitions, and no progress tick writes anything
+  (there is no heartbeat). On the Go-scheduler path the persisted pid is never a
+  live one either: the stage-start write clears it to 0 (#534) and the
+  stage-completion write names a child that had already exited. That is why the
+  sidecar arm exists — it is the one signal that path writes while the run is
+  alive; or
 - **paused** — a deliberate "resume later" that powers the restore prompt days
   later, so it is never aged out by the liveness lease; or
 - **terminal within the tail window** — the terminal marker lands before the

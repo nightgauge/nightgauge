@@ -297,13 +297,17 @@ func writeSidecar(t *testing.T, dir string, issue, pid int, runID string) {
 // TestActiveIssuesFromSnapshots_SidecarWithALivePidProtects is the Go-scheduler
 // arm, and the reason it has to exist.
 //
-// On that path nothing persists the snapshot while a stage runs: SetProcess is an
-// in-memory mutation, internal/execution holds no Persist call at all, and the
-// orchestrator persists after a stage COMPLETES. So a live run in a long stage
-// has exactly the snapshot below — dead pid, old mtime — and arms 3 and 4 both
-// decline it. The sidecar is the one signal that path writes while the run is
-// alive (PID: os.Getpid() at stage start, removed on clean completion), and it
-// lives in the very directory this scan already walks.
+// On that path nothing persists the snapshot WHILE a stage runs: SetProcess is
+// an in-memory mutation and internal/execution holds no Persist call at all, so
+// the live child's pid never reaches disk; the orchestrator persists at each
+// stage's START (#534) and again when it COMPLETES, and nothing in between. The
+// stage-start write clears the pid to 0 rather than republish the previous
+// stage's exited child, so neither write ever puts a live pid on disk here. A
+// live run in a long stage therefore has exactly the snapshot below — no usable
+// pid, old mtime — and arms 3 and 4 both decline it. The sidecar is the one
+// signal that path writes while the run is alive (PID: os.Getpid() at stage
+// start, removed on clean completion), and it lives in the very directory this
+// scan already walks.
 func TestActiveIssuesFromSnapshots_SidecarWithALivePidProtects(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()

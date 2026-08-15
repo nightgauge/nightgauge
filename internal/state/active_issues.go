@@ -40,13 +40,19 @@ import (
 // # The Go-scheduler arm, and why the snapshot alone could not carry it
 //
 // On the Go-scheduler path arms 3 and 4 are both weak, for one measured reason:
-// nothing persists the snapshot while a stage is running. `SetProcess`
-// (internal/execution/manager.go) is an in-memory mutation, internal/execution
-// contains no Persist call at all, and the orchestrator persists after a stage
-// COMPLETES — so the pid that reaches disk always names a child that has already
-// exited, and the file's mtime advances at stage boundaries only. There is no
-// heartbeat in the tree. A live run in a long silent stage therefore has a dead
-// pid and an old mtime: exactly the shape this reader would decline to protect.
+// nothing persists the snapshot WHILE a stage is running. `SetProcess`
+// (internal/execution/manager.go) is an in-memory mutation and
+// internal/execution contains no Persist call at all, so the live child's pid
+// never reaches disk on this path; the orchestrator persists at each stage's
+// START and again when it COMPLETES (#534 added the first of those so the
+// extension can see the live stage), and nothing in between. The stage-start
+// write deliberately clears the pid to 0 — at that moment the only pid the
+// runtime holds is the PREVIOUS stage's exited child, and republishing it would
+// hand this reader a dead pid with a fresh mtime. So arm 3 still sees no live
+// child on this path (0 and an exited pid both fail ProcessAlive), and arm 4's
+// mtime still advances at stage boundaries only. There is no heartbeat in the
+// tree. A live run in a long silent stage therefore has no usable pid and an old
+// mtime: exactly the shape this reader would decline to protect.
 //
 // The one live signal that path does write is the crash-recovery sidecar
 // `current-run.json` (internal/orchestrator's writeCurrentRunSidecar), stamped
@@ -198,17 +204,18 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 
 		// Arm 3: the run's recorded stage child. Strong on the extension path,
 		// where the IPC server persists the pid of the child it was told about;
-		// STRUCTURALLY DEAD on the Go-scheduler path, where the pid reaches disk
-		// only after that child exited (see the block comment). The sidecar arm
-		// above is what covers a Go-dispatched run.
+		// STRUCTURALLY DEAD on the Go-scheduler path, whose stage-start write
+		// records 0 and whose stage-completion write records a child that has
+		// already exited (see the block comment). The sidecar arm above is what
+		// covers a Go-dispatched run.
 		if runstate.ProcessAlive(snap.PID) {
 			res.Issues[issueNumber] = true
 			continue
 		}
 
 		// Arm 4: the snapshot's own timestamp lease. The file is refreshed at
-		// STAGE BOUNDARIES ONLY — the orchestrator persists after a stage
-		// completes and the IPC server on repo-carrying transitions; no progress
+		// STAGE BOUNDARIES ONLY — the orchestrator persists at each stage's start
+		// and completion, the IPC server on repo-carrying transitions; no progress
 		// tick writes anything, and there is no heartbeat. So this lease means "a
 		// stage boundary happened recently", not "the run breathed recently", and
 		// a healthy long stage can outlive it while very much alive. That is why
@@ -234,15 +241,15 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		// permanent no-op, which is #403's structural-no-op defect re-created
 		// pointing the other way. Named rather than silently dropped.
 		//
-		// The warning says what the pid IS. On the Go-scheduler path it is the
-		// last persisted stage child, which exited before the file was written —
-		// so "that pid is not alive" is not evidence the run is dead, and a line
-		// implying otherwise is the thing the next person reads while auditing a
-		// wrongly removed directory. What actually decides here is the
-		// conjunction: no live sidecar, no live recorded child, no stage boundary
-		// inside the lease.
+		// The warning says what the pid IS. On the Go-scheduler path it is either
+		// 0 (the stage-start write clears it) or a stage child that had already
+		// exited when the file was written — so "that pid is not alive" is not
+		// evidence the run is dead, and a line implying otherwise is the thing the
+		// next person reads while auditing a wrongly removed directory. What
+		// actually decides here is the conjunction: no live sidecar, no live
+		// recorded child, no stage boundary inside the lease.
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
-			"%s: non-terminal snapshot, no in-flight sidecar vouches for #%d, last persisted stage child (pid %d) is not alive, and no stage boundary in the last %s (the file is rewritten at stage boundaries only — there is no heartbeat) — #%d is NOT protected as in-flight",
+			"%s: non-terminal snapshot, no in-flight sidecar vouches for #%d, the recorded stage child (pid %d) is not alive, and no stage boundary in the last %s (the file is rewritten at stage starts and completions only — there is no heartbeat) — #%d is NOT protected as in-flight",
 			name, issueNumber, snap.PID, now.Sub(info.ModTime()).Round(time.Second), issueNumber))
 	}
 
