@@ -35,6 +35,13 @@ jobs:
         run: bash scripts/check-license-headers.sh
       - name: SKILL.md metadata
         run: bash scripts/validate-skill-metadata.sh
+      # MUST stay the LAST step of this job. The generator MUTATES the
+      # checkout — it `rm -rf`s every non-`_shared` mirror subdirectory and
+      # rsyncs with --delete — so any step after it would run against a
+      # rewritten tree. #529 shipped three canonical-only overlay files
+      # because nothing ran this at all.
+      - name: Plugin skills mirror in sync
+        run: bash scripts/install-agent-skills.sh --generate-only
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**
