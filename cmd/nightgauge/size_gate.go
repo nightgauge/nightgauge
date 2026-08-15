@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
@@ -47,12 +48,23 @@ func sizeGateCheckCmd() *cobra.Command {
 			// Load gate config from YAML, falling back to defaults when absent.
 			cfg := loadSizeGateConfigFromYAML(configPath)
 
+			ownerPart, repoPart := splitRepo(owner, repo)
+			// Fail before the client is built and before any network call: an
+			// empty owner or repo would be stitched into a malformed "owner/"
+			// slug and surface as an opaque "Could not resolve to a
+			// Repository with the name 'owner/'" GitHub error (#536).
+			if strings.TrimSpace(ownerPart) == "" {
+				return fmt.Errorf("owner not configured: pass --owner or set owner: in .nightgauge/config.yaml")
+			}
+			if strings.TrimSpace(repoPart) == "" {
+				return fmt.Errorf("repo not configured: pass --repo or set repo: in .nightgauge/config.yaml")
+			}
+
 			client, err := clientFromConfig()
 			if err != nil {
 				return fmt.Errorf("create GitHub client: %w", err)
 			}
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewIssueService(client)
 			issue, err := svc.GetIssue(cmd.Context(), ownerPart, repoPart, issueNum)
 			if err != nil {
@@ -100,7 +112,7 @@ func sizeGateCheckCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repository name (defaults to config)")
+	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "GitHub issue number to evaluate (required)")
 	cmd.Flags().StringVar(&configPath, "config", ".nightgauge/config.yaml", "Path to config.yaml")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
