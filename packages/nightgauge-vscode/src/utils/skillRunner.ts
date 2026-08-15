@@ -158,6 +158,13 @@ import {
   type DefaultModel,
   type PipelineModelOverride,
 } from "./incrediConfig";
+// Direct resolver import (#569): the registry effort gate for non-Claude
+// adapter dispatches. Deliberately not routed through the incrediConfig
+// barrel — this is dispatch preflight, not configuration reading.
+import {
+  checkAdapterEffortSupported,
+  type AdapterEffortPreflight,
+} from "./resolvers/stageResolver";
 import { isCostAwareRoutingEnabled, getCostPerSuccessContext } from "./costAwareRouting";
 import { withBehavioralPreamble } from "./behavioralPreamble";
 import type { KillCeiling } from "./killCeiling";
@@ -1095,6 +1102,42 @@ export function resolveFallbackModel(
     return configuredFallback && configuredFallback !== "fable" ? configuredFallback : "opus";
   }
   return configuredFallback;
+}
+
+/**
+ * Registry effort gate for a non-Claude adapter dispatch (#569).
+ *
+ * Wraps {@link checkAdapterEffortSupported} into the same failure shape the
+ * Claude branch's effort preflight produces: when the requested effort is not
+ * on the RESOLVED model's `supported_efforts` ladder, `error` carries an
+ * `[stage:effort-unsupported]`-classified Error the caller reports through the
+ * failure envelope BEFORE spawn — the stage FAILS, never downgrades (#75).
+ * `warning` is set when the request is unverifiable (no registry descriptor)
+ * or outside the adapter's CLI vocabulary; callers log it so the pass-through
+ * is never silent.
+ */
+export function preflightAdapterEffort(
+  adapter: string,
+  effort: string | undefined,
+  modelId: string | undefined,
+  stage: string
+): { error?: Error; warning?: string } {
+  const check: AdapterEffortPreflight = checkAdapterEffortSupported(
+    adapter,
+    effort,
+    modelId,
+    stage
+  );
+  if (check.ok) {
+    return { warning: check.warning };
+  }
+  return {
+    error: new Error(
+      `[stage:effort-unsupported] adapter=${adapter} model=${modelId ?? "(default)"} ` +
+        `effort=${effort} supported=${check.supported?.join(",") || "none"} ` +
+        `reason=${check.reason}`
+    ),
+  };
 }
 
 export function resolveModel(
@@ -3704,16 +3747,20 @@ export function runStageSkillHeadless(
       effort = conformed.effort;
     }
     const finalEffort = effort;
-    // `modelSupportsEffort` takes a bare `string`, and what keeps that safe in
-    // production is the `adapter === "claude"` conjunct — this whole branch is
-    // already Claude-only, and the conjunct restates it at the gate. It is NOT
-    // #340's band collapse: nine registry entries carry no `tiers` at all
-    // (the OpenAI/Google/other-provider ids), so `modelTierBand` returns
-    // undefined for them and their raw id reaches the gate unnormalized, where
-    // the registry answers with a real non-empty ladder. Only the adapter
-    // scoping stops that ladder from becoming a `--effort` on a CLI that never
-    // asked for one.
-    const supportsEffort = adapter === "claude" && !!finalEffort && modelSupportsEffort(modelBand);
+    // `modelSupportsEffort` takes a bare `string`. The `adapter === "claude"`
+    // conjunct that used to sit here restated the enclosing branch condition
+    // (this whole block is Claude-only); it is gone because the effort gate is
+    // no longer Claude-only — every adapter's dispatch site now consults the
+    // registry (#569; see the codex/grok preflights below). The concern the
+    // conjunct guarded remains real and remains covered: nine registry entries
+    // carry no `tiers` at all (the OpenAI/Google/other-provider ids), so
+    // `modelTierBand` returns undefined for them and their raw id would reach
+    // this gate unnormalized, where the registry answers with a real non-empty
+    // ladder. What stops that ladder from becoming a `--effort` on a CLI that
+    // never asked for one is the EMISSION site itself: the
+    // `args.push("--effort", …)` below lives inside this Claude-only branch,
+    // so no other adapter's argv can grow the flag from here.
+    const supportsEffort = !!finalEffort && modelSupportsEffort(modelBand);
     if (supportsEffort && finalEffort) {
       // The gate above only says the model HAS an effort axis; this says the
       // requested level is on it (#75) — and it asks the ladder of the model
@@ -3913,6 +3960,38 @@ export function runStageSkillHeadless(
     } else {
       callbacks?.onStderr?.("[skillRunner] Grok model: (CLI default / registry)\n");
     }
+
+    // Registry effort gate (#569): the provider-global NIGHTGAUGE_GROK_EFFORT
+    // must sit on the supported_efforts ladder of the model this dispatch will
+    // actually serve — checked against the band-mapped model when one was
+    // resolved above, else the same env cascade the SDK GrokAdapter reads.
+    // A rung the model does not declare fails the stage closed here, BEFORE
+    // spawn, instead of reaching `grok --effort` and dying as #532's
+    // signature (exit 1 in seconds, no work, nothing classified).
+    const grokEffort = process.env.NIGHTGAUGE_GROK_EFFORT;
+    const grokEffortPreflight = preflightAdapterEffort(
+      "grok",
+      grokEffort,
+      grokModel ?? process.env.NIGHTGAUGE_GROK_MODEL ?? process.env.NIGHTGAUGE_MODEL,
+      stage
+    );
+    if (grokEffortPreflight.warning) {
+      callbacks?.onStderr?.(
+        `[skillRunner] Grok effort preflight: ${grokEffortPreflight.warning}\n`
+      );
+    }
+    if (grokEffortPreflight.error) {
+      const error = grokEffortPreflight.error;
+      callbacks?.onStderr?.(`[skillRunner] Effort preflight failed: ${error.message}\n`);
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+      };
+    }
   }
 
   // Codex model configuration (Issue #1656)
@@ -3934,6 +4013,33 @@ export function runStageSkillHeadless(
     const codexModel = heavyCodexOverride ?? modelDecision.model;
     codexEnv.NIGHTGAUGE_CODEX_MODEL = codexModel;
     const codexEffort = modelDecision.effort ?? getCodexReasoningEffort(workspaceRoot);
+
+    // Registry effort gate (#569): same rule as the Claude and Grok paths —
+    // the reasoning effort this dispatch forwards must sit on the resolved
+    // model's supported_efforts ladder. Fails the stage closed BEFORE spawn;
+    // an unknown model passes with a logged warning (#336). Codex-native
+    // sub-`low` rungs (`none`) normalize to `low` for the membership check,
+    // matching the grok-vocabulary rule (#523); the dispatched env value is
+    // untouched. (Deriving a codex-specific ladder is #435, out of scope.)
+    const codexEffortPreflight = preflightAdapterEffort("codex", codexEffort, codexModel, stage);
+    if (codexEffortPreflight.warning) {
+      callbacks?.onStderr?.(
+        `[skillRunner] Codex effort preflight: ${codexEffortPreflight.warning}\n`
+      );
+    }
+    if (codexEffortPreflight.error) {
+      const error = codexEffortPreflight.error;
+      callbacks?.onStderr?.(`[skillRunner] Effort preflight failed: ${error.message}\n`);
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+      };
+    }
+
     if (codexEffort) {
       codexEnv.NIGHTGAUGE_CODEX_REASONING_EFFORT = codexEffort;
     }
