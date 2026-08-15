@@ -409,7 +409,7 @@
         "output": 6.0,
         "cache_read": 0.5
       },
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 500000,
       "recommended": true,
       "behavior": {
@@ -425,6 +425,7 @@
     {
       "id": "grok-4.5",
       "provider": "xai",
+      "tiers": ["haiku"],
       "display_name": "Grok 4.5",
       "concrete_version": "grok-4.5",
       "rates": {
@@ -432,17 +433,16 @@
         "output": 6.0,
         "cache_read": 0.3
       },
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": ["low", "medium", "high"],
       "context_window": 500000,
       "behavior": {
         "thinking_default": "on",
-        "effort_default": "medium"
+        "effort_default": "high"
       }
     },
     {
       "id": "grok-build-0.1",
       "provider": "xai",
-      "tiers": ["haiku"],
       "display_name": "Grok Build 0.1",
       "concrete_version": "grok-build-0.1",
       "rates": {
@@ -450,11 +450,10 @@
         "output": 2.0,
         "cache_read": 0.2
       },
-      "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
+      "supported_efforts": [],
       "context_window": 256000,
       "behavior": {
         "thinking_default": "on",
-        "effort_default": "medium",
         "propensity": {
           "verification": "normal",
           "delegation": "normal",
