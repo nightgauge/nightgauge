@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -48,16 +49,13 @@ func sizeGateCheckCmd() *cobra.Command {
 			// Load gate config from YAML, falling back to defaults when absent.
 			cfg := loadSizeGateConfigFromYAML(configPath)
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			// Fail before the client is built and before any network call: an
 			// empty owner or repo would be stitched into a malformed "owner/"
 			// slug and surface as an opaque "Could not resolve to a
 			// Repository with the name 'owner/'" GitHub error (#536).
-			if strings.TrimSpace(ownerPart) == "" {
-				return fmt.Errorf("owner not configured: pass --owner or set owner: in .nightgauge/config.yaml")
-			}
-			if strings.TrimSpace(repoPart) == "" {
-				return fmt.Errorf("repo not configured: pass --repo or set repo: in .nightgauge/config.yaml")
+			ownerPart, repoPart, err := resolveGateRepo(owner, repo)
+			if err != nil {
+				return err
 			}
 
 			client, err := clientFromConfig()
@@ -119,6 +117,62 @@ func sizeGateCheckCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("issue")
 
 	return cmd
+}
+
+// repoBackfillConfigPath returns the project-tier config.yaml path that
+// config.Load consults when PersistentPreRunE back-fills --owner/--repo. It is
+// named in the guard's error so the operator knows WHICH file was read: the
+// back-fill resolves against os.Getwd(), which in a worktree or a multi-repo
+// workspace is frequently not the file the operator just edited. It also makes
+// the swallowed-config-error path discoverable — rootCmd's PersistentPreRunE
+// silently ignores config.Load failures, so malformed YAML in this exact file
+// presents as "nothing was configured".
+func repoBackfillConfigPath() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return filepath.Join(".nightgauge", "config.yaml")
+	}
+	return filepath.Join(wd, ".nightgauge", "config.yaml")
+}
+
+// resolveGateRepo normalizes --owner/--repo into the well-formed owner/name
+// pair handed to the GitHub API, or returns an actionable error (#536).
+//
+// It is the single point where the size gate decides the target repository, so
+// the values it RETURNS are the values the caller forwards — a check that
+// trimmed for its own comparison and then forwarded the untrimmed input would
+// let `--repo '  name '` reach GitHub and reproduce the very opaque
+// "Could not resolve to a Repository" error this guard exists to eliminate.
+//
+// The error messages name the config keys that are actually honored. Both
+// parsers must be described because which one runs depends on the file's shape:
+// a `project:` MAPPING selects the nested parser (project.repo → repo →
+// github.repo), anything else selects the flat parser (defaultRepo →
+// github.repo). Flat configs never read a top-level `repo:` at all, so naming
+// only `repo:` would tell an operator to do what they had already done.
+func resolveGateRepo(owner, repo string) (string, string, error) {
+	// Validate the RAW --repo before splitting. splitRepo("acme", "/") returns
+	// ("", ""), which would otherwise be reported as a missing OWNER while
+	// `owner: acme` sits in the operator's config — sending them to fix a
+	// setting that is not broken.
+	if trimmed := strings.TrimSpace(repo); strings.Contains(trimmed, "/") {
+		parts := strings.Split(trimmed, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", "", fmt.Errorf("malformed --repo %q: expected \"name\" or \"owner/name\"", repo)
+		}
+	}
+
+	ownerPart, repoPart := splitRepo(owner, repo)
+	ownerPart, repoPart = strings.TrimSpace(ownerPart), strings.TrimSpace(repoPart)
+
+	consulted := repoBackfillConfigPath()
+	if ownerPart == "" {
+		return "", "", fmt.Errorf("owner not configured (repo=%q, consulted %s): pass --owner, or set project.owner / owner (nested config) or owner / github.owner (flat config)", repoPart, consulted)
+	}
+	if repoPart == "" {
+		return "", "", fmt.Errorf("repo not configured (owner=%q, consulted %s): pass --repo, or set project.repo / repo (nested config) or defaultRepo / github.repo (flat config)", ownerPart, consulted)
+	}
+	return ownerPart, repoPart, nil
 }
 
 // sizeGateYAML is the YAML shape for pipeline.size_gate config section.
