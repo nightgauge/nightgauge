@@ -1189,8 +1189,15 @@ func setupLinkedWorktree(t *testing.T) (mainDir, worktreeDir string) {
 	gitExecTest(t, mainDir, "fetch", "origin")
 	// Remote-tracking refs are populated now, so repoint origin at a GitHub URL —
 	// the shape RemoteRepoSlug has to parse in production.
+	//
+	// The owner/repo here is deliberately NOT this repository. A fixture whose
+	// origin resolves to the real remote turns any accidental push — a stray
+	// exploratory run, a future test that exercises a push path, EnsureEpicBranch
+	// reached through the --issue codepath — into a write against production.
+	// That is not hypothetical: it happened once while this test was being
+	// written, and put a scratch "seed" commit on a real epic/* branch.
 	gitExecTest(t, mainDir, "remote", "set-url", "origin",
-		"https://github.com/nightgauge/nightgauge.git")
+		"https://github.com/nightgauge-fixture/not-a-real-repo.git")
 
 	gitExecTest(t, mainDir, "worktree", "add", "--detach", worktreeDir, "HEAD")
 	assertLinkedWorktree(t, worktreeDir)
@@ -1281,8 +1288,8 @@ func TestNewService_RemoteRepoSlugInLinkedWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoteRepoSlug: %v", err)
 	}
-	if slug != "nightgauge/nightgauge" {
-		t.Errorf("RemoteRepoSlug = %q, want \"nightgauge/nightgauge\"", slug)
+	if slug != "nightgauge-fixture/not-a-real-repo" {
+		t.Errorf("RemoteRepoSlug = %q, want \"nightgauge-fixture/not-a-real-repo\"", slug)
 	}
 }
 
