@@ -174,7 +174,7 @@ func TestResolveProviderTierBands(t *testing.T) {
 		{"copilot", "haiku", "gpt-4o-mini"},
 		{"copilot", "sonnet", "gpt-4o"},
 		{"copilot", "opus", "claude-sonnet-4.5"},
-		{"xai", "haiku", "grok-build-0.1"},
+		{"xai", "haiku", "grok-4.5"},
 		{"xai", "sonnet", "grok-4.6"},
 		{"xai", "opus", "grok-4.6"},
 		{"xai", "fable", "grok-4.6"},
@@ -310,6 +310,50 @@ func TestActiveAnthropicModelsDeclareBehavior(t *testing.T) {
 		}
 		if got := m.MaxOutputTokens(); got != c.maxOutputTokens {
 			t.Errorf("%s MaxOutputTokens() = %d, want %d", c.id, got, c.maxOutputTokens)
+		}
+	}
+}
+
+// TestActiveXaiModelsDeclareEfforts pins the per-model effort axis for every
+// xAI entry against the live Grok Build CLI catalog (#547). Same contract as
+// the Anthropic case above: an overlay reads these instead of restating them
+// (ADR 016 §5), and a wrong level is sent verbatim to the provider.
+//
+// grok-build-0.1 carries the EMPTY set on purpose. It is a real, documented
+// xAI API model that the CLI's chat proxy does not serve, so it is reachable
+// only by exact id (pricing replay) and never through band resolution; `[]` is
+// the positive "no effort axis" declaration, not missing data (#336).
+func TestActiveXaiModelsDeclareEfforts(t *testing.T) {
+	cases := []struct {
+		id            string
+		efforts       []string
+		effortDefault string
+	}{
+		{"grok-4.6", []string{"low", "medium", "high", "xhigh"}, "high"},
+		{"grok-4.5", []string{"low", "medium", "high"}, "high"},
+		{"grok-build-0.1", []string{}, ""},
+	}
+	for _, c := range cases {
+		m, ok := Get(c.id)
+		if !ok {
+			t.Errorf("%s missing from registry", c.id)
+			continue
+		}
+		if m.Provider != "xai" {
+			t.Errorf("%s provider = %q, want xai", c.id, m.Provider)
+		}
+		if len(m.SupportedEfforts) != len(c.efforts) {
+			t.Errorf("%s supported_efforts = %v, want %v", c.id, m.SupportedEfforts, c.efforts)
+			continue
+		}
+		for i, want := range c.efforts {
+			if m.SupportedEfforts[i] != want {
+				t.Errorf("%s supported_efforts = %v, want %v", c.id, m.SupportedEfforts, c.efforts)
+				break
+			}
+		}
+		if got := m.EffortDefault(); got != c.effortDefault {
+			t.Errorf("%s effort_default = %q, want %q", c.id, got, c.effortDefault)
 		}
 	}
 }

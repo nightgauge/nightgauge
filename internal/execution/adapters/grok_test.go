@@ -55,6 +55,33 @@ func TestGrokBuildCommandUsesPromptFile(t *testing.T) {
 	}
 }
 
+// TestGrokBuildCommandHaikuResolvesToServedModel guards the argv the CLI is
+// actually spawned with (#532). The haiku band used to resolve to
+// grok-build-0.1 — a real xAI API model that the Grok Build CLI's chat proxy
+// does not serve — so every haiku-band run died with `unknown model id` in
+// seconds. The registry alone cannot prove this: the bug bit at argv
+// construction, where a Resolve miss falls through and spawns the raw band
+// name. Assert the flag pair the process actually receives.
+func TestGrokBuildCommandHaikuResolvesToServedModel(t *testing.T) {
+	a := NewGrokAdapter()
+	_, args, _ := a.BuildCommand(RunOptions{
+		Prompt:      "do the work",
+		IssueNumber: 532,
+		Repo:        "nightgauge/nightgauge",
+		Stage:       "feature-dev",
+		Model:       "haiku",
+		TargetRepo:  "nightgauge/nightgauge",
+		WorktreeDir: "/tmp/wt",
+		RunID:       "run-2",
+	})
+	if !containsPair(args, "--model", "grok-4.5") {
+		t.Fatalf("haiku should resolve to grok-4.5, got %v", args)
+	}
+	if containsPair(args, "--model", "haiku") {
+		t.Fatalf("unresolved band name leaked onto argv: %v", args)
+	}
+}
+
 func TestMapGrokEffort(t *testing.T) {
 	if got := mapGrokEffortToNightgauge("none"); got != "low" {
 		t.Fatalf("none → %q", got)
