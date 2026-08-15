@@ -4,6 +4,7 @@ import {
   resolveAndValidateModel,
   ADAPTER_MODEL_POLICY,
   GEMINI_MODELS,
+  GROK_MODELS,
 } from "../../../cli/adapters/modelPreflight.js";
 import { AdapterError } from "../../../cli/adapters/errors.js";
 import type { IncrediAdapter } from "../../../cli/adapters/ICliAdapter.js";
@@ -169,5 +170,49 @@ describe("ADAPTER_MODEL_POLICY invariant", () => {
   it("exposes the maintained Gemini set recommended-first", () => {
     expect(GEMINI_MODELS[0]).toBe("gemini-2.5-pro");
     expect(GEMINI_MODELS).toContain("gemini-2.5-flash");
+  });
+});
+
+/**
+ * #532: the Grok Build CLI's chat proxy answers `unknown model id` for
+ * grok-build-0.1, so a run that reaches it dies in seconds having done nothing.
+ * Removing its band stops the ROUTED path, but grok is a CLOSED adapter whose
+ * valid set is derived as `provider === "xai" && !deprecated` — so until the
+ * entry is marked deprecated, `NIGHTGAUGE_GROK_MODEL=grok-build-0.1` still
+ * passes preflight and spawns into the same death on the EXPLICIT-OVERRIDE path.
+ */
+describe("validateModelForAdapter — Grok (closed)", () => {
+  it("resolves every band to the one CLI-served model", () => {
+    for (const band of ["haiku", "sonnet", "opus", "fable"] as const) {
+      const result = validateModelForAdapter("grok", band);
+      expect(result.model, `${band} must resolve to grok-4.6`).toBe("grok-4.6");
+      expect(result.resolvedFromTier).toBe(true);
+    }
+  });
+
+  it("excludes grok-build-0.1 from the closed valid set", () => {
+    // The exact predicate the policy table hands the validator.
+    const isValidGrokModel = ADAPTER_MODEL_POLICY.grok.isValid!;
+    expect(isValidGrokModel("grok-build-0.1")).toBe(false);
+    expect(GROK_MODELS).not.toContain("grok-build-0.1");
+    // The models the CLI does serve are still valid — this is a targeted
+    // exclusion, not a shrunken set.
+    expect(isValidGrokModel("grok-4.6")).toBe(true);
+    expect(isValidGrokModel("grok-4.5")).toBe(true);
+  });
+
+  it("rejects an explicit grok-build-0.1 override instead of spawning it", () => {
+    expect(() => validateModelForAdapter("grok", "grok-build-0.1")).toThrow(AdapterError);
+    expect(() => validateModelForAdapter("grok", "grok-build-0.1")).toThrow(/not valid/i);
+  });
+
+  it("still prices grok-build-0.1 by exact id (cost replay keeps the entry)", async () => {
+    // Deprecation removes it from ROUTING, not from the registry: historical
+    // runs that already billed against it must still cost out.
+    const { getModelDescriptor } = await import("../../../eval/modelRegistry.js");
+    const d = getModelDescriptor("grok-build-0.1");
+    expect(d?.id).toBe("grok-build-0.1");
+    expect(d?.deprecated).toBe(true);
+    expect(d?.rates.input).toBe(1.0);
   });
 });

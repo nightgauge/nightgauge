@@ -171,7 +171,7 @@ describe("model registry — adapter resolution (#56)", () => {
     expect(resolveModelForAdapter("gemini", "fable")?.id).toBe("gemini-2.5-pro");
     expect(resolveModelForAdapter("gemini-sdk", "haiku")?.id).toBe("gemini-2.5-flash");
     expect(resolveModelForAdapter("copilot", "haiku")?.id).toBe("gpt-4o-mini");
-    expect(resolveModelForAdapter("grok", "haiku")?.id).toBe("grok-build-0.1");
+    expect(resolveModelForAdapter("grok", "haiku")?.id).toBe("grok-4.6");
     expect(resolveModelForAdapter("grok", "sonnet")?.id).toBe("grok-4.6");
     expect(resolveModelForAdapter("grok", "opus")?.id).toBe("grok-4.6");
     expect(resolveModelForAdapter("grok", "fable")?.id).toBe("grok-4.6");
