@@ -56,10 +56,28 @@ func (o stageStartObservation) String() string {
 //     stage was never marked running and showed as pending while the adapter was
 //     actively working.
 //
-// Arm (c) is the one that actually pins the acceptance criterion. (a) and (b)
-// can both be satisfied by a snapshot that names the just-completed stage on the
-// NEXT dispatch if the loop is ever restructured; only "the persisted stage is
-// not the last completed stage" states the invariant the extension depends on.
+// ARM (b) IS THE LOAD-BEARING ONE: "the persisted stage is the stage being
+// dispatched right now" is the whole invariant the extension depends on, and it
+// is false for every pre-fix snapshot. (a) is the first-stage half — a run that
+// has no file at all is invisible rather than merely stale.
+//
+// THE SCOPE IS FORWARD PROGRESS, AND THE LIMIT IS NAMED RATHER THAN IMPLIED.
+// On a BACKTRACK the extension still renders the re-dispatched stage as
+// complete: BeginStage does not prune the stage from CompletedStages, so
+// applyRuntimeSnapshot's `!stages[goState.stage]` guard skips it and this
+// perfectly correct snapshot marks nothing running — the exact symptom #534
+// exists to remove, surviving on the rewind path. The fix is
+// CompletedStages meaning "stages whose MOST RECENT attempt completed" (the
+// shape #407 gave StageErrors), which carries history and cost-accounting blast
+// radius and is filed separately. This fixture cannot observe it either way:
+// its retry engine is built with MaxBacktracks: 0.
+//
+// An earlier revision carried a third arm — "the persisted stage is never the
+// last completed stage". It is DELETED, not weakened. Given (b) it says nothing
+// about the persist at all; it reduces to "the scheduler never re-dispatches a
+// completed stage", which is a claim about the retry engine and is FALSE on a
+// backtrack. A green assertion whose subject is not the code under test is worse
+// than no assertion.
 //
 // The observation runs inside runIDCapturingRunner.onStage, documented at
 // scheduler_run_identity_test.go as the only place a test can observe on-disk
@@ -128,15 +146,6 @@ func TestRunPipeline_PersistsTheRuntimeSnapshotAtStageStart(t *testing.T) {
 			t.Errorf("%s\n  current-run.json stage = %q but the scheduler is dispatching %q",
 				obs, obs.sidecarStage, obs.stage)
 		}
-
-		// (c) THE ARM THAT PINS THE AC: the persisted stage is never the stage
-		// that just completed. applyRuntimeSnapshot's completedStages guard
-		// makes such a snapshot a no-op for stage status.
-		if obs.lastComplete != "" && obs.snapshotName == obs.lastComplete {
-			t.Errorf("%s\n  snapshot.stage == the last completed stage (%q); applyRuntimeSnapshot skips a "+
-				"stage already in completedStages, so this snapshot marks nothing running",
-				obs, obs.lastComplete)
-		}
 	}
 }
 
@@ -204,6 +213,120 @@ func TestRunPipeline_StageStartSnapshotDoesNotAssertADeadStageChild(t *testing.T
 				"the runtime has ever been given is the PREVIOUS stage's exited child, and republishing it "+
 				"hands the liveness ladder a dead pid with a fresh mtime",
 				sample.dispatch, sample.stage, sample.pid)
+		}
+	}
+}
+
+// TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo pins the ROOT the
+// stage-start persist writes to (#534, over #229).
+//
+// The persist is `filepath.Join(workspaceRoot, …)` where `workspaceRoot` is
+// runPipeline's LOCAL variable — `s.runRoot(item.Repo)`, the run's TARGET repo —
+// and NOT the scheduler field `s.workspaceRoot`, its launch root. In a
+// single-repo fixture those two are the same string, so every other test in this
+// package is blind to the difference: repointing the persist at `s.workspaceRoot`
+// passed the entire module.
+//
+// It is not a hypothetical edit. Both idioms already live in this one file: the
+// #441 post-merge breadcrumb persists to `s.workspaceRoot` (correctly — it runs
+// outside the per-run root's scope), roughly three thousand lines below. Taking
+// the wrong one splits a cross-repo run's state across two repos on every stage,
+// and the failure is invisible on the machine that writes it: the snapshot lands
+// under the launch root where nothing composes its filename, so
+// CliPipelineReconciliationService ENOENTs on the target root and the run is
+// absent from the Pipeline tree — the very defect #534 removes, restored for
+// exactly the multi-repo workspaces #229 exists for.
+//
+// The fixture is two real git workspaces. `primary` is the scheduler's launch
+// root (`s.workspaceRoot` and the execution manager's root); `target` is where
+// the resolver routes `nightgauge/other`. Both carry the stage skill fixtures,
+// because skillrender resolves from the LOCAL workspaceRoot — a target without
+// them would dispatch nothing and every assertion here would pass vacuously,
+// which the len(observed) == 0 guard below refuses.
+func TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo(t *testing.T) {
+	primary := gitWorkspace(t)
+	target := gitWorkspace(t)
+
+	runner := &runIDCapturingRunner{}
+	s := newRunIdentityTestScheduler(t, primary, runner)
+	commitPipelineSkillFixtures(t, target)
+
+	const issue = 536
+	const targetRepo = "nightgauge/other"
+
+	// The #229 seam itself: the IPC server wires this from ClientResolver.RepoPath.
+	// Only the run's repo resolves; anything else falls through to the execution
+	// manager's root, so a misrouted lookup shows up as a primary-rooted write
+	// rather than as a silent pass.
+	s.WithRepoPathResolver(func(repo string) string {
+		if repo == targetRepo {
+			return target
+		}
+		return ""
+	})
+
+	primaryStateDir := filepath.Join(primary, ".nightgauge", "pipeline")
+	targetStateDir := filepath.Join(target, ".nightgauge", "pipeline")
+
+	type rootSample struct {
+		dispatch        int
+		stage           state.PipelineStage
+		inTarget        int
+		inPrimary       int
+		targetStageName state.PipelineStage
+	}
+
+	var observed []rootSample
+	var findErr error
+	runner.onStage = func() {
+		calls := runner.captured()
+		sample := rootSample{dispatch: len(calls), stage: calls[len(calls)-1].Stage}
+
+		inTarget, err := state.FindPersistedStatesForIssue(targetStateDir, issue)
+		if err != nil {
+			findErr = fmt.Errorf("scan target %s: %w", targetStateDir, err)
+			return
+		}
+		inPrimary, err := state.FindPersistedStatesForIssue(primaryStateDir, issue)
+		if err != nil {
+			findErr = fmt.Errorf("scan primary %s: %w", primaryStateDir, err)
+			return
+		}
+		sample.inTarget = len(inTarget)
+		sample.inPrimary = len(inPrimary)
+		if len(inTarget) == 1 {
+			sample.targetStageName = inTarget[0].Stage
+		}
+		observed = append(observed, sample)
+	}
+
+	item := types.BoardItem{Number: issue, Repo: targetRepo, ID: "item-536"}
+	s.runPipeline(context.Background(), item)
+
+	if findErr != nil {
+		t.Fatalf("snapshot scan failed: %v", findErr)
+	}
+	if len(observed) == 0 {
+		t.Fatal("no stage was dispatched into the target repo; the fixture is wrong, not the assertion — " +
+			"a target root without the stage skill fixtures makes every assertion below vacuous")
+	}
+
+	for _, sample := range observed {
+		if sample.inTarget != 1 {
+			t.Errorf("dispatch #%d (%s): the run's TARGET repo %s holds %d snapshots for #%d, want exactly 1 — "+
+				"the stage-start persist must use runPipeline's local workspaceRoot (s.runRoot(item.Repo)), "+
+				"not the scheduler's launch root s.workspaceRoot",
+				sample.dispatch, sample.stage, targetStateDir, sample.inTarget, issue)
+		}
+		if sample.inPrimary != 0 {
+			t.Errorf("dispatch #%d (%s): the scheduler's LAUNCH root %s holds %d snapshots for #%d, want 0 — "+
+				"a cross-repo run's state is split across two repos and the extension's reconciler, which "+
+				"looks under the target root, will never find it",
+				sample.dispatch, sample.stage, primaryStateDir, sample.inPrimary, issue)
+		}
+		if sample.inTarget == 1 && sample.targetStageName != sample.stage {
+			t.Errorf("dispatch #%d: the target-rooted snapshot names %q but the scheduler is dispatching %q",
+				sample.dispatch, sample.targetStageName, sample.stage)
 		}
 	}
 }

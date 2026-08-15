@@ -142,5 +142,13 @@ describe("applyRuntimeSnapshot — which snapshot shape shows the live stage", (
     // The summary fields the tree's header reads follow the same stage.
     expect(state?.current_stage).toBe("feature-dev");
     expect(state?.current_stage_label).toBeTruthy();
+
+    // The other field applyRuntimeSnapshot derives from `stage`, and the one
+    // consumer-visible NUMBER this change moves: the header's progress position.
+    // Asserted as the literal index rather than `indexOf(...)` — recomputing it
+    // from PIPELINE_STAGE_ORDER would just restate the production expression and
+    // stay green if the order itself drifted.
+    //   ["pipeline-start", "issue-pickup", "feature-planning", "feature-dev", …]
+    expect(state?.current_stage_position).toBe(3);
   });
 });

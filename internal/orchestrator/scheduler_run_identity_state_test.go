@@ -103,8 +103,12 @@ func TestCurrentRunSidecar_RunIdKeyIsAlwaysPresent(t *testing.T) {
 }
 
 // TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName pins that the
-// scheduler's three Persist sites need no code change but DO get the new
-// filename — the snapshot is discoverable by the same scan the reconciler runs.
+// scheduler's Persist sites need no code change but DO get the new filename —
+// the snapshot is discoverable by the same scan the reconciler runs. Deliberately
+// unnumbered: the count is a maintenance liability that goes stale silently (it
+// said "three" until #534 added the stage-start write), and nothing here depends
+// on how many sites there are — only that whichever one wrote first used the
+// composer.
 func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
 	root := gitWorkspace(t)
 	runner := &runIDCapturingRunner{}
