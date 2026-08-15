@@ -35,6 +35,21 @@ jobs:
         run: bash scripts/check-license-headers.sh
       - name: SKILL.md metadata
         run: bash scripts/validate-skill-metadata.sh
+      # Proves the gate below still FAILS CLOSED rather than passing vacuously
+      # — the defect #539 exists to fix. Runs BEFORE it: the suite works
+      # entirely in throwaway temp repos, so it is safe here, and putting it
+      # after would break the mutation-is-last invariant. Without this step,
+      # reverting the gate to `git diff --exit-code` or to `exit 0` produces a
+      # fully green build, which is #529 all over again.
+      - name: Mirror drift gate self-test
+        run: bash scripts/test-mirror-drift-gate.sh
+      # MUST stay the LAST step of this job. The generator MUTATES the
+      # checkout — it `rm -rf`s every non-`_shared` mirror subdirectory and
+      # rsyncs with --delete — so any step after it would run against a
+      # rewritten tree. #529 shipped three canonical-only overlay files
+      # because nothing ran this at all.
+      - name: Plugin skills mirror in sync
+        run: bash scripts/install-agent-skills.sh --generate-only
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**
