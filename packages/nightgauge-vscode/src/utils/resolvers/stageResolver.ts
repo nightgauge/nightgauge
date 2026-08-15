@@ -14,6 +14,7 @@ import {
   AutoModelSelector,
   EFFORT_LEVELS,
   getModelDescriptor,
+  resolveModelForAdapter,
   type IssueMetadata,
 } from "@nightgauge/sdk";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -423,6 +424,117 @@ export function assertEffortSupported(
       `(supports: ${supportedEfforts.join(", ")}). ` +
       `Choose a supported level or route the stage to a model that accepts "${effort}".`
   );
+}
+
+/** Result of {@link checkAdapterEffortSupported}. */
+export interface AdapterEffortPreflight {
+  /** False exactly when the dispatch must fail closed before spawn. */
+  ok: boolean;
+  /** Set when `!ok` — names the model, the requested effort, and the ladder. */
+  reason?: string;
+  /**
+   * Set when `ok` but unverified: the model has no registry descriptor, or
+   * the value is outside the Nightgauge ladder (the adapter's own vocabulary
+   * check handles it at dispatch — grok drops the flag, codex rejects the
+   * value). Callers log it so the deferral is never silent.
+   */
+  warning?: string;
+  /** The resolved model's declared ladder, when a descriptor was found. */
+  supported?: readonly string[];
+}
+
+/**
+ * Registry effort gate for an ADAPTER dispatch (#569) — the per-level
+ * validation {@link assertEffortSupported} performs for the Claude path,
+ * generalized to every adapter and to explicit provider-global efforts
+ * (`NIGHTGAUGE_GROK_EFFORT`, codex `reasoning_effort`, …).
+ *
+ * Semantics (#336), enforced against the model the adapter will actually
+ * dispatch, resolved the same way the adapter resolves it (band → the
+ * provider's registry model, concrete id → itself):
+ *
+ * - no requested effort → nothing to enforce;
+ * - vendor rungs below the Nightgauge ladder (`none`/`minimal`) collapse to
+ *   `low` BEFORE the membership check (#523) — enforcement always runs on the
+ *   normalized rung;
+ * - a value outside the Nightgauge ladder after normalization is not an
+ *   error HERE: the adapter's own vocabulary check handles it at dispatch
+ *   (the grok adapters drop the flag and let the provider default apply; the
+ *   codex adapter rejects the value loudly), and the returned `warning` keeps
+ *   the deferral from being silent;
+ * - a model with NO registry descriptor passes with a `warning`, never a hard
+ *   failure — a stage must not be blocked because the registry is silent;
+ * - `supported_efforts: []` is a positive declaration ("no effort axis"), so
+ *   an explicit adapter effort against it fails closed. This deliberately
+ *   differs from {@link assertEffortSupported}'s fail-open on `[]`: there the
+ *   emission gate has already declined to pass a flag, so `[]` is unreachable
+ *   with an effort in hand; here the effort is an explicit provider-global
+ *   request that WOULD reach the CLI, and dropping it silently is exactly the
+ *   downgrade #75 forbids;
+ * - a normalized rung missing from the declared ladder fails closed with a
+ *   reason naming the model, the requested effort, and the ladder.
+ */
+export function checkAdapterEffortSupported(
+  adapter: string,
+  effort: string | undefined,
+  modelId: string | undefined,
+  stage?: string
+): AdapterEffortPreflight {
+  const requested = effort?.trim().toLowerCase();
+  if (!requested) return { ok: true };
+
+  const normalized =
+    requested === "none" || requested === "minimal"
+      ? "low"
+      : (EFFORT_LEVELS as readonly string[]).includes(requested)
+        ? requested
+        : undefined;
+  if (!normalized) {
+    return {
+      ok: true,
+      warning:
+        `effort "${requested}" is not on the Nightgauge ladder ` +
+        `(${EFFORT_LEVELS.join("|")}) — deferring to the ${adapter} adapter's own ` +
+        `vocabulary check at dispatch (it drops the flag or rejects the value; ` +
+        `it is never forwarded unchecked)`,
+    };
+  }
+
+  const trimmedModel = modelId?.trim();
+  const descriptor = trimmedModel ? resolveModelForAdapter(adapter, trimmedModel) : undefined;
+  if (!descriptor) {
+    return {
+      ok: true,
+      warning:
+        `model "${trimmedModel || "(adapter default)"}" has no registry descriptor — ` +
+        `cannot verify effort "${requested}" against supported_efforts; passing through`,
+    };
+  }
+
+  const ladder = descriptor.supported_efforts;
+  const where = stage ? ` for stage "${stage}"` : "";
+  if (ladder.length === 0) {
+    return {
+      ok: false,
+      supported: ladder,
+      reason:
+        `Effort "${requested}"${where} is not supported by model "${descriptor.id}": ` +
+        `the model declares no effort axis (supported_efforts: []). ` +
+        `Unset the explicit effort or route the stage to a model with an effort ladder.`,
+    };
+  }
+  if (!(ladder as readonly string[]).includes(normalized)) {
+    const note = normalized !== requested ? ` (normalized to "${normalized}")` : "";
+    return {
+      ok: false,
+      supported: ladder,
+      reason:
+        `Effort "${requested}"${note}${where} is not supported by model "${descriptor.id}" ` +
+        `(supports: ${ladder.join(", ")}). ` +
+        `Choose a supported level or route the stage to a model that accepts "${requested}".`,
+    };
+  }
+  return { ok: true, supported: ladder };
 }
 
 /**
