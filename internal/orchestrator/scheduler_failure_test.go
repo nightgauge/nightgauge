@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,22 +30,44 @@ func mustMkdirAll(t *testing.T, dir string) {
 	}
 }
 
-// writeFailingStubCLI writes an executable shell script that prints stdout to
+// writeFailingStubCLI writes an executable shell script that copies stdout to
 // stdout, stderr to stderr, and exits with code. It stands in for a real
 // provider CLI so a test can exercise execution.Manager's spawn/wait path —
 // including its (result, nil) contract on a non-zero exit — without a network
 // call, an API key, or the provider binary being installed.
+//
+// The payloads go in sidecar files the script cats, rather than inline
+// heredocs: a heredoc would break on a payload containing the delimiter, and
+// the multi-megabyte payload one of these tests needs has no business being a
+// shell script.
 func writeFailingStubCLI(t *testing.T, dir, stdout, stderr string, code int) string {
 	t.Helper()
+	outPath := filepath.Join(dir, "stub-stdout.txt")
+	errPath := filepath.Join(dir, "stub-stderr.txt")
+	if err := os.WriteFile(outPath, []byte(stdout), 0644); err != nil {
+		t.Fatalf("write stub stdout: %v", err)
+	}
+	if err := os.WriteFile(errPath, []byte(stderr), 0644); err != nil {
+		t.Fatalf("write stub stderr: %v", err)
+	}
 	path := filepath.Join(dir, "stub-cli.sh")
 	script := "#!/bin/sh\n" +
-		"cat <<'NG_STDOUT_EOF'\n" + stdout + "\nNG_STDOUT_EOF\n" +
-		"cat >&2 <<'NG_STDERR_EOF'\n" + stderr + "\nNG_STDERR_EOF\n" +
+		"cat " + outPath + "\n" +
+		"cat " + errPath + " >&2\n" +
 		"exit " + strconv.Itoa(code) + "\n"
 	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
 		t.Fatalf("write stub CLI: %v", err)
 	}
 	return path
+}
+
+// countLines returns the number of lines in s (a trailing newline does not
+// start a new line).
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(strings.TrimRight(s, "\n"), "\n") + 1
 }
 
 // readDailyJSONLRecords reads every line from today's history JSONL file
@@ -1268,11 +1291,16 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 	}
 
 	s := buildStallTestScheduler(t, root, runner)
-	// Escalation off: any upward move here would be the #533 bug, and leaving
-	// it enabled would let an escalation mask the downgrade we're asserting.
+	// Escalation deliberately ENABLED. Disabling it would make the
+	// "did not escalate" assertion below vacuous — it has to be possible for
+	// the scheduler to escalate before "it didn't" means anything. Pre-fix,
+	// pr-create's haiku misclassifies as subagent_crash and escalates
+	// haiku → sonnet, re-dispatching the stage; post-fix it recognizes a
+	// rejected model and never moves up the ladder.
 	s.retryEngine = NewRetryEngine(RetryConfig{
 		MaxBacktracks:          0,
-		MaxEscalationsPerStage: 0,
+		MaxEscalationsPerStage: 1,
+		ModelLadder:            []string{"haiku", "sonnet", "opus"},
 	})
 
 	item := types.BoardItem{
@@ -1322,17 +1350,401 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 		t.Error("stages[pr-create].LastOutputLines empty — a CLI failure must carry its tail for retros")
 	}
 
-	// The #42 branch fired: a sticky tier substitution was recorded, and no
-	// upward escalation was applied to the stage.
-	if len(s.retryEngine.Downgrades()) == 0 {
-		t.Error("no sticky downgrade recorded — the model_unavailable branch never ran")
-	}
+	// The routing consequence, which is the whole point of classifying
+	// correctly. pr-create runs on haiku — the BOTTOM of the downgrade ladder —
+	// so #42 correctly finds no weaker tier and goes terminal. What must not
+	// happen is the other direction: pre-fix, subagent_crash sent this straight
+	// to EvaluateEscalation, which moved haiku → sonnet and burned a second
+	// dispatch on a model the API had just rejected.
 	if got := s.retryEngine.CurrentModel(string(state.StagePRCreate)); got != "" {
 		t.Errorf("pr-create escalated to %q — escalating UP on a rejected model is exactly "+
-			"what the subagent_crash misclassification caused", got)
+			"what the subagent_crash misclassification caused (#533/#42)", got)
 	}
-	if runner.failStageCalls <= 1 {
-		t.Errorf("pr-create dispatched %d time(s) — a model_unavailable failure must "+
-			"re-dispatch on the substituted tier before giving up", runner.failStageCalls)
+	if runner.failStageCalls != 1 {
+		t.Errorf("pr-create dispatched %d times, want 1 — a rejected model with no weaker "+
+			"tier is terminal; a second dispatch means the escalation ladder ran",
+			runner.failStageCalls)
+	}
+}
+
+// TestTailOutput_EnforcesDocumentedBounds covers the bounds StageRunResult's
+// LastOutputLines doc comment promises (≤200 lines, ≤200KB) directly, so a
+// change to either constant has to be deliberate.
+func TestTailOutput_EnforcesDocumentedBounds(t *testing.T) {
+	t.Run("empty and whitespace", func(t *testing.T) {
+		for _, in := range []string{"", "\n", "\n\n\n"} {
+			if got := tailOutput(in); got != "" {
+				t.Errorf("tailOutput(%q) = %q, want empty", in, got)
+			}
+		}
+	})
+
+	t.Run("short input is returned whole, minus the trailing newline", func(t *testing.T) {
+		if got := tailOutput("a\nb\nc\n"); got != "a\nb\nc" {
+			t.Errorf("tailOutput = %q, want %q", got, "a\nb\nc")
+		}
+	})
+
+	t.Run("line cap keeps the LAST lines", func(t *testing.T) {
+		var sb strings.Builder
+		for i := 0; i < stageOutputTailMaxLines*3; i++ {
+			fmt.Fprintf(&sb, "line-%d\n", i)
+		}
+		got := tailOutput(sb.String())
+		if n := countLines(got); n != stageOutputTailMaxLines {
+			t.Errorf("line count = %d, want %d", n, stageOutputTailMaxLines)
+		}
+		// The tail, not the head: the failure reason is always at the end.
+		if !strings.HasSuffix(got, fmt.Sprintf("line-%d", stageOutputTailMaxLines*3-1)) {
+			t.Errorf("tail does not end at the last line; got %q…", got[max(0, len(got)-40):])
+		}
+		if strings.Contains(got, "line-0\n") {
+			t.Error("tail retained the first line — the cap kept the head instead of the tail")
+		}
+	})
+
+	t.Run("byte cap binds when lines are long", func(t *testing.T) {
+		// 10 lines × 100KB = 1MB, well under the line cap but 5× the byte cap.
+		var sb strings.Builder
+		for i := 0; i < 10; i++ {
+			sb.WriteString(strings.Repeat("x", 100*1024))
+			sb.WriteByte('\n')
+		}
+		got := tailOutput(sb.String())
+		if len(got) > stageOutputTailMaxBytes {
+			t.Errorf("byte length = %d, want ≤ %d", len(got), stageOutputTailMaxBytes)
+		}
+	})
+
+	t.Run("a single over-cap line is truncated rather than dropped", func(t *testing.T) {
+		got := tailOutput(strings.Repeat("y", stageOutputTailMaxBytes*2))
+		if got == "" {
+			t.Fatal("a single huge line was dropped entirely — the reason would be lost")
+		}
+		if len(got) > stageOutputTailMaxBytes {
+			t.Errorf("byte length = %d, want ≤ %d", len(got), stageOutputTailMaxBytes)
+		}
+	})
+}
+
+// TestCLIStageOutputCarry_BoundedForHugeStdout is the persistence-safety half
+// of the #533 carry. ErrorText and LastOutputLines are the only two fields that
+// reach the runtime snapshot (via terminalReason) and the daily history JSONL
+// (via StageDetail.last_output_lines), and CLI mode's source for them is the
+// stage's ENTIRE captured output. A ~10MB run must not write a ~10MB record.
+func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
+	root := t.TempDir()
+
+	var sb strings.Builder
+	sb.Grow(11 << 20)
+	for i := 0; sb.Len() < 10<<20; i++ {
+		fmt.Fprintf(&sb, "chatter %07d %s\n", i, strings.Repeat("x", 80))
+	}
+	huge := sb.String()
+	if len(huge) < 10<<20 {
+		t.Fatalf("synthetic stdout is only %d bytes", len(huge))
+	}
+
+	stubCLI := writeFailingStubCLI(t, root, huge, grokUnknownModelStderr, 1)
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stubCLI)
+
+	runner := &ExecutionManagerRunner{
+		execMgr: execution.NewManager(root, adapters.NewGrokAdapter()),
+	}
+	mustMkdirAll(t, filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-533"))
+
+	res, err := runner.RunStage(context.Background(), StageRunParams{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 533,
+		Stage:       state.StagePRCreate,
+		Timeout:     2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+
+	for _, f := range []struct {
+		name string
+		val  string
+	}{
+		{"ErrorText", res.ErrorText},
+		{"LastOutputLines", res.LastOutputLines},
+	} {
+		if len(f.val) > stageOutputTailMaxBytes {
+			t.Errorf("%s = %d bytes, want ≤ %d — a 10MB stage would persist a 10MB record",
+				f.name, len(f.val), stageOutputTailMaxBytes)
+		}
+		if n := countLines(f.val); n > stageOutputTailMaxLines {
+			t.Errorf("%s = %d lines, want ≤ %d", f.name, n, stageOutputTailMaxLines)
+		}
+	}
+
+	// Bounded, but still the RIGHT bytes: stderr is what names the failure, and
+	// it must survive a stdout flood 50× the byte cap.
+	if !strings.Contains(res.ErrorText, "unknown model id") {
+		t.Errorf("ErrorText lost the failure reason under a stdout flood; got %q", res.ErrorText)
+	}
+	if !strings.Contains(res.LastOutputLines, "unknown model id") {
+		t.Error("LastOutputLines lost the failure reason — stderr must be the tail's last segment, not its first")
+	}
+}
+
+// TestCLIFailureTextPrefersStderrThenStdout pins the source-selection rule.
+// Adapters differ: grok writes the reason to stderr verbatim, while others
+// report failures only on the stdout event stream.
+func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
+	tests := []struct {
+		name           string
+		stdout, stderr string
+		wantErrText    string
+		wantInTail     []string
+	}{
+		{
+			name:        "stderr wins when both are present",
+			stdout:      `{"type":"error","message":"stdout copy"}`,
+			stderr:      "the real reason",
+			wantErrText: "the real reason",
+			wantInTail:  []string{"stdout copy", "the real reason"},
+		},
+		{
+			name:        "stdout is the fallback when stderr is silent",
+			stdout:      `{"type":"error","message":"only on stdout"}`,
+			stderr:      "",
+			wantErrText: `{"type":"error","message":"only on stdout"}`,
+			wantInTail:  []string{"only on stdout"},
+		},
+		{
+			name:        "both empty yields both empty",
+			stdout:      "",
+			stderr:      "",
+			wantErrText: "",
+		},
+		{
+			name:        "whitespace-only output is not a reason",
+			stdout:      "\n\n",
+			stderr:      "\n",
+			wantErrText: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotErr, gotTail := cliFailureText(tt.stdout, tt.stderr)
+			if gotErr != tt.wantErrText {
+				t.Errorf("errorText = %q, want %q", gotErr, tt.wantErrText)
+			}
+			for _, want := range tt.wantInTail {
+				if !strings.Contains(gotTail, want) {
+					t.Errorf("lastOutputLines = %q, missing %q", gotTail, want)
+				}
+			}
+			if len(tt.wantInTail) == 0 && gotTail != "" {
+				t.Errorf("lastOutputLines = %q, want empty", gotTail)
+			}
+		})
+	}
+}
+
+// ── #533 regression guard: the carry is adapter-AGNOSTIC ──────────────────
+//
+// The grok framing of #533 hides the blast radius. ExecutionManagerRunner is
+// the CLI seam for EVERY adapter, so after the fix every CLI-mode non-zero-exit
+// stage — claude, codex, gemini, copilot — suddenly has a non-empty failText
+// where it used to have "". That changes ResolveTerminalKind answers repo-wide,
+// and terminal kind drives retry, downgrade and escalation routing.
+//
+// The invariant these tests pin: an ORDINARY CLI crash must still classify as
+// subagent_crash, exactly as it did when the classifier only ever saw
+// "exit 1: <nil>". Only outputs that genuinely name a recognized condition are
+// allowed to move — that is the fix, not a side effect of it.
+
+// TestTerminalReasonClassification_AdapterParity is the table. Each case is the
+// real terminal reason the scheduler now persists for a CLI-mode failure, run
+// through the same ClassifyTerminalKind the V3 record uses.
+func TestTerminalReasonClassification_AdapterParity(t *testing.T) {
+	// What the classifier answered for EVERY CLI failure before #533, for any
+	// adapter: the nil-error placeholder.
+	const preFixReason = "exit 1: <nil>"
+	preFixKind := ClassifyTerminalKind(preFixReason)
+	if preFixKind != TerminalKindSubagentCrash {
+		t.Fatalf("premise check: ClassifyTerminalKind(%q) = %q, want %q — #533's "+
+			"whole story is that CLI mode collapsed to this one kind",
+			preFixReason, preFixKind, TerminalKindSubagentCrash)
+	}
+
+	tests := []struct {
+		name    string
+		adapter string
+		stderr  string
+		want    string
+		why     string
+	}{
+		// ── MUST NOT MOVE ────────────────────────────────────────────────
+		{
+			name:    "claude/node crash keeps the generic kind",
+			adapter: "claude",
+			stderr: "Error: Cannot read properties of undefined (reading 'text')\n" +
+				"    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)",
+			want: TerminalKindSubagentCrash,
+			why:  "an ordinary CLI crash routes exactly as it did pre-#533",
+		},
+		{
+			name:    "claude/bad flag keeps the generic kind",
+			adapter: "claude",
+			stderr:  "error: unknown option '--nope'",
+			want:    TerminalKindSubagentCrash,
+			why:     "a usage error is not a recognized pipeline condition",
+		},
+		{
+			name:    "codex/stream disconnect keeps the generic kind",
+			adapter: "codex",
+			stderr:  "codex exec: stream disconnected before completion",
+			want:    TerminalKindSubagentCrash,
+			why:     "a transport hiccup with no recognized marker stays generic",
+		},
+		{
+			name:    "codex/sandbox denial keeps the generic kind",
+			adapter: "codex",
+			stderr:  "ERROR: Unable to complete the task: the sandbox denied write access to /etc",
+			want:    TerminalKindSubagentCrash,
+			why:     "sandbox refusals must not be mistaken for permission_denied's harness bucket",
+		},
+		{
+			name:    "codex/go panic keeps the generic kind",
+			adapter: "codex",
+			stderr:  "panic: runtime error: invalid memory address or nil pointer dereference",
+			want:    TerminalKindSubagentCrash,
+			why:     "a hard crash is what subagent_crash is FOR",
+		},
+		{
+			name:    "empty stderr falls back to the pre-fix placeholder",
+			adapter: "claude",
+			stderr:  "",
+			want:    TerminalKindSubagentCrash,
+			why:     "no evidence means no behavior change at all",
+		},
+
+		// ── ALLOWED TO MOVE — this is the fix ────────────────────────────
+		{
+			name:    "grok/unknown model becomes model_unavailable",
+			adapter: "grok",
+			stderr:  strings.TrimSpace(grokUnknownModelStderr),
+			want:    TerminalKindModelUnavailable,
+			why:     "#42's sticky downgrade, not an upward escalation",
+		},
+		{
+			name:    "claude/stall marker becomes stall_kill",
+			adapter: "claude",
+			stderr:  "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)",
+			want:    TerminalKindStallKill,
+			why:     "CLI mode reaches the same recovery branch IPC mode already did",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reason := terminalFailureReason(1, nil, tt.stderr)
+			got := ClassifyTerminalKind(reason)
+			if got == "" {
+				got = TerminalKindSubagentCrash // recordV2History's fallback
+			}
+			if got != tt.want {
+				t.Errorf("adapter %s: terminal kind = %q, want %q (%s)\n  reason: %q",
+					tt.adapter, got, tt.want, tt.why, reason)
+			}
+			if tt.want == TerminalKindSubagentCrash && got != preFixKind {
+				t.Errorf("adapter %s: routing MOVED (%q → %q) for an ordinary failure — "+
+					"#533 must not reroute retries for adapters it was not about",
+					tt.adapter, preFixKind, got)
+			}
+		})
+	}
+}
+
+// TestCLIRunnerCarriesFailureTextForEveryAdapter drives the REAL
+// ExecutionManagerRunner over the claude and codex adapters with PATH-injected
+// stub binaries. The carry lives in the shared runner, not in anything
+// grok-specific, and this is what proves it — plus the other half of the
+// non-regression: a stage that exits 0 must carry no failure evidence at all.
+func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
+	tests := []struct {
+		binary  string
+		adapter adapters.SkillRunner
+		stderr  string
+	}{
+		{"claude", adapters.NewClaudeAdapter(), "Error: Cannot read properties of undefined (reading 'text')"},
+		{"codex", adapters.NewCodexAdapter(), "codex exec: stream disconnected before completion"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.binary+"/non-zero exit carries the reason", func(t *testing.T) {
+			root := t.TempDir()
+			stubDir := t.TempDir()
+			// claude and codex hardcode their command name (no CLI_COMMAND
+			// override), so the stub is injected by name on PATH.
+			stub := writeFailingStubCLI(t, stubDir, "", tt.stderr, 1)
+			if err := os.Rename(stub, filepath.Join(stubDir, tt.binary)); err != nil {
+				t.Fatalf("rename stub: %v", err)
+			}
+			t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			runner := &ExecutionManagerRunner{execMgr: execution.NewManager(root, tt.adapter)}
+			mustMkdirAll(t, filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-533"))
+
+			res, err := runner.RunStage(context.Background(), StageRunParams{
+				Repo:        "nightgauge/nightgauge",
+				IssueNumber: 533,
+				Stage:       state.StagePRCreate,
+				Timeout:     30 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("RunStage: %v", err)
+			}
+			if res.ExitCode != 1 {
+				t.Fatalf("ExitCode = %d, want 1 — the %s stub did not run", res.ExitCode, tt.binary)
+			}
+			if !strings.Contains(res.ErrorText, tt.stderr) {
+				t.Errorf("%s ErrorText = %q, want it to carry the CLI's stderr — the carry "+
+					"must not be grok-specific", tt.binary, res.ErrorText)
+			}
+			if res.LastOutputLines == "" {
+				t.Errorf("%s LastOutputLines empty", tt.binary)
+			}
+		})
+
+		t.Run(tt.binary+"/exit 0 carries nothing", func(t *testing.T) {
+			root := t.TempDir()
+			stubDir := t.TempDir()
+			// A successful stage whose stderr still has content: deprecation
+			// notices and progress chatter routinely land there. None of it is
+			// a failure reason, and treating it as one would hand the
+			// classifier text for a run that never failed.
+			stub := writeFailingStubCLI(t, stubDir, "", "warning: --foo is deprecated", 0)
+			if err := os.Rename(stub, filepath.Join(stubDir, tt.binary)); err != nil {
+				t.Fatalf("rename stub: %v", err)
+			}
+			t.Setenv("PATH", stubDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+			runner := &ExecutionManagerRunner{execMgr: execution.NewManager(root, tt.adapter)}
+			mustMkdirAll(t, filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-533"))
+
+			res, err := runner.RunStage(context.Background(), StageRunParams{
+				Repo:        "nightgauge/nightgauge",
+				IssueNumber: 533,
+				Stage:       state.StagePRCreate,
+				Timeout:     30 * time.Second,
+			})
+			if err != nil {
+				t.Fatalf("RunStage: %v", err)
+			}
+			if res.ExitCode != 0 {
+				t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
+			}
+			if res.ErrorText != "" || res.LastOutputLines != "" {
+				t.Errorf("%s succeeded but carried failure evidence (ErrorText=%q LastOutputLines=%q) — "+
+					"a successful stage's stderr is not a failure reason",
+					tt.binary, res.ErrorText, res.LastOutputLines)
+			}
+		})
 	}
 }

@@ -239,6 +239,120 @@ type ExecutionManagerRunner struct {
 	execMgr *execution.Manager
 }
 
+// The bounds StageRunResult.LastOutputLines' doc comment promises. They are
+// enforced here rather than upstream because CLI mode's source is the stage's
+// ENTIRE stdout/stderr buffer — megabytes for a chatty adapter — and the text
+// lands in the persisted runtime snapshot and the daily history JSONL. An
+// unbounded carry would trade one silent failure (#533) for a bloated one.
+const (
+	stageOutputTailMaxLines = 200
+	stageOutputTailMaxBytes = 200 * 1024
+)
+
+// tailOutput returns the trailing bounded snippet of s: at most
+// stageOutputTailMaxLines lines AND at most stageOutputTailMaxBytes bytes,
+// whichever binds first. The byte cap is applied after the line cap and cuts at
+// a line boundary when one survives, so the result is a whole number of lines
+// unless a single line alone exceeds the byte cap.
+//
+// It walks backwards instead of splitting: a 10MB stdout would otherwise
+// allocate a slice of every line, on a path that runs for every failed stage.
+// Slicing a Go string is O(1), so the result shares the caller's buffer.
+func tailOutput(s string) string {
+	s = strings.TrimRight(s, "\n")
+	if s == "" {
+		return ""
+	}
+	start, newlines := 0, 0
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] != '\n' {
+			continue
+		}
+		newlines++
+		if newlines == stageOutputTailMaxLines {
+			start = i + 1
+			break
+		}
+	}
+	out := s[start:]
+	if len(out) > stageOutputTailMaxBytes {
+		out = out[len(out)-stageOutputTailMaxBytes:]
+		// Drop the partial first line the byte cut left behind, unless that
+		// would empty the snippet (one line longer than the whole cap).
+		if idx := strings.IndexByte(out, '\n'); idx >= 0 && idx+1 < len(out) {
+			out = out[idx+1:]
+		}
+	}
+	return out
+}
+
+// cliFailureText derives the two failure-evidence fields from a CLI stage's
+// captured output (#533).
+//
+// ErrorText prefers STDERR: every CLI nightgauge dispatches writes the reason
+// for a non-zero exit there verbatim (grok's unknown-model rejection is one
+// line of it), while stdout is the streaming-JSON transcript. It falls back to
+// stdout for the adapters that report the failure only on the event stream.
+// LastOutputLines is the combined tail, so retros see the transcript context
+// around the failure and not just its last sentence.
+//
+// Both are bounded twice — once per source, once combined — so the combining
+// step never materializes a copy of a multi-megabyte buffer.
+func cliFailureText(stdout, stderr string) (errorText, lastOutputLines string) {
+	outTail, errTail := tailOutput(stdout), tailOutput(stderr)
+
+	errorText = errTail
+	if errorText == "" {
+		errorText = outTail
+	}
+
+	combined := outTail
+	if errTail != "" {
+		if combined != "" {
+			combined += "\n"
+		}
+		combined += errTail
+	}
+	return errorText, tailOutput(combined)
+}
+
+// stageFailureText is the single text every terminal-failure classification
+// input derives from.
+//
+// err.Error() WINS whenever the executor returned an error, so IPC mode and
+// CLI mode's non-exit failures behave exactly as before. Only when err is nil
+// — the CLI-mode non-zero-exit shape, where execution.Manager reports the exit
+// on the result and the reason on the result's stderr — does the runner's
+// carried ErrorText supply the text. Returning "" for both leaves the caller
+// on its pre-#533 behavior, which is what a runner with no evidence should do.
+func stageFailureText(err error, result *StageRunResult) string {
+	if err != nil {
+		return err.Error()
+	}
+	if result != nil {
+		return result.ErrorText
+	}
+	return ""
+}
+
+// terminalFailureReason renders the reason persisted on the runtime snapshot,
+// which recordV2History re-classifies into the V3 record's
+// terminal_failure_kind. Extracted so the classification consequences of the
+// #533 carry are testable at the same seam the scheduler uses.
+//
+// `%v` of a nil error renders the literal "<nil>", which is what every
+// CLI-mode failure recorded before #533 — so when there is no Go error but the
+// runner carried the process's own reason, print that instead. The "exit N: "
+// prefix stays either way: retro tooling and the terminal-kind corpus already
+// match against it, and it is what keeps an unrecognized failure classifying as
+// subagent_crash rather than falling out of the ladder entirely.
+func terminalFailureReason(exitCode int, err error, failText string) string {
+	if err == nil && failText != "" {
+		return fmt.Sprintf("exit %d: %s", exitCode, failText)
+	}
+	return fmt.Sprintf("exit %d: %v", exitCode, err)
+}
+
 // RunStage implements StageRunner by delegating to execution.Manager.
 func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
 	opts := execution.StageOptions{
@@ -260,11 +374,31 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 
 	result, err := r.execMgr.RunStage(ctx, opts)
 	if err != nil {
-		exitCode := 0
+		out := &StageRunResult{}
 		if result != nil {
-			exitCode = result.ExitCode
+			out.ExitCode = result.ExitCode
+			// Carry the evidence even on the error return: err.Error() still
+			// wins for classification, but LastOutputLines is what lands on
+			// the V3 record's StageDetail for retros regardless of err.
+			out.ErrorText, out.LastOutputLines = cliFailureText(result.Stdout, result.Stderr)
 		}
-		return &StageRunResult{ExitCode: exitCode}, err
+		return out, err
+	}
+
+	// CLI mode's terminal shape (#533): execution.Manager turns a non-zero exit
+	// into result.ExitCode and returns a NIL error, with the reason on
+	// result.Stderr. Every classification input in runPipeline used to derive
+	// only from that nil err, so ClassifyTerminalKind was handed the literal
+	// string "exit 1: <nil>" and answered subagent_crash (#520) for EVERY
+	// CLI-mode failure of every adapter — which then routed to an upward model
+	// escalation instead of, for a rejected model, the #42 sticky downgrade.
+	//
+	// Gated on a non-zero exit so a successful stage's output is never mistaken
+	// for a failure reason, matching the fields' documented meaning and
+	// IpcStageRunner's own `!result.Success` guard.
+	errorText, lastOutputLines := "", ""
+	if result.ExitCode != 0 {
+		errorText, lastOutputLines = cliFailureText(result.Stdout, result.Stderr)
 	}
 
 	return &StageRunResult{
@@ -277,6 +411,8 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		RefusalFallbackFrom:     result.RefusalFallbackFrom,
 		RefusalFallbackTo:       result.RefusalFallbackTo,
 		RefusalFallbackCategory: result.RefusalFallbackCategory,
+		ErrorText:               errorText,
+		LastOutputLines:         lastOutputLines,
 	}, nil
 }
 
@@ -4676,10 +4812,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// re-planning is a more accurate response. Cost-cap kills (#3002)
 			// are NEVER retried — operator's per-stage cap contract takes
 			// precedence. See ADR-004.
-			stallErrMsg := ""
-			if err != nil {
-				stallErrMsg = err.Error()
-			}
+			stallErrMsg := stageFailureText(err, result)
 			isStallKill := ResolveTerminalKind(gateRan, gateRes.TerminalKind, stallErrMsg) == TerminalKindStallKill
 			isCostCapKill := HasCostCapKillMarker(stallErrMsg)
 			if isStallKill && !isCostCapKill {
@@ -5001,10 +5134,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// already refused this one would be rejected the same way. The
 			// substitution is sticky for the rest of the run; the retry below
 			// re-dispatches this stage and the model resolution picks it up.
-			failText := ""
-			if err != nil {
-				failText = err.Error()
-			}
+			failText := stageFailureText(err, result)
 			modelRejected := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText) == TerminalKindModelUnavailable
 			if modelRejected {
 				if dg := s.retryEngine.EvaluateDowngrade(model); dg.ShouldDowngrade {
@@ -5054,7 +5184,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				}
 			}
 
-			terminalReason := fmt.Sprintf("exit %d: %v", exitCode, err)
+			terminalReason := terminalFailureReason(exitCode, err, failText)
 			if conflictExhaustionReason != "" {
 				terminalReason = conflictExhaustionReason
 			}
