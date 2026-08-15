@@ -133,6 +133,93 @@ func TestMapGrokEffort(t *testing.T) {
 	}
 }
 
+// TestValidateGrokEffortRejectsUndeclaredRung is the #532-signature regression
+// the issue's AC requires: a provider-global effort env of `xhigh` against a
+// model whose registry ladder tops out at `high` must fail closed BEFORE spawn
+// with an error naming the model, the requested effort, and the declared
+// ladder — instead of passing the static vocabulary filter and dying inside
+// the CLI (`unknown effort level 'xhigh'`, exit 1, no work, nothing
+// classified).
+func TestValidateGrokEffortRejectsUndeclaredRung(t *testing.T) {
+	// grok-4.5 declares supported_efforts [low, medium, high] in the registry.
+	err := validateGrokEffort("grok-4.5", "xhigh")
+	if err == nil {
+		t.Fatal("xhigh against grok-4.5 (tops out at high) must be rejected")
+	}
+	for _, want := range []string{"xhigh", "grok-4.5", "low, medium, high"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error must name %q (model, requested effort, declared ladder); got: %v", want, err)
+		}
+	}
+
+	// The same rejection must fire through the manager's pre-spawn hook with
+	// the provider-global env set — the exact dispatch shape #532 hit.
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "xhigh")
+	a := NewGrokAdapter()
+	if err := a.ValidateModel("grok-4.5"); err == nil {
+		t.Fatal("ValidateModel must fail closed on NIGHTGAUGE_GROK_EFFORT=xhigh for grok-4.5")
+	}
+	// max is above every current xai ladder — grok-4.6 declares up to xhigh.
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "max")
+	if err := a.ValidateModel("grok-4.6"); err == nil {
+		t.Fatal("ValidateModel must fail closed on NIGHTGAUGE_GROK_EFFORT=max for grok-4.6")
+	}
+}
+
+// TestValidateGrokEffortAcceptsDeclaredRungs pins the pass side of the gate,
+// including the #523 vocabulary subtlety: grok-native none/minimal normalize
+// to "low" BEFORE the ladder check, so they are valid exactly when the
+// resolved model declares "low". Band names resolve the same way BuildCommand
+// resolves them (sonnet → grok-4.6), so the rung is checked against the model
+// actually served.
+func TestValidateGrokEffortAcceptsDeclaredRungs(t *testing.T) {
+	// grok-4.6 declares [low, medium, high, xhigh].
+	for _, effort := range []string{"none", "minimal", "low", "medium", "high", "xhigh"} {
+		if err := validateGrokEffort("grok-4.6", effort); err != nil {
+			t.Fatalf("effort %q must be accepted for grok-4.6: %v", effort, err)
+		}
+	}
+	// Bands resolve before enforcement: sonnet → grok-4.6, which declares xhigh.
+	if err := validateGrokEffort("sonnet", "xhigh"); err != nil {
+		t.Fatalf("xhigh must be accepted for band sonnet (resolves to grok-4.6): %v", err)
+	}
+	// No explicit effort → nothing to enforce.
+	if err := validateGrokEffort("grok-4.5", ""); err != nil {
+		t.Fatalf("empty effort must pass: %v", err)
+	}
+}
+
+// TestValidateGrokEffortNoEffortAxis pins the #336 `[]` semantics: an empty
+// supported_efforts is a positive declaration ("no effort axis"), so ANY
+// explicit effort is rejected — including grok-native rungs that would
+// otherwise normalize onto the Nightgauge ladder.
+func TestValidateGrokEffortNoEffortAxis(t *testing.T) {
+	// grok-build-0.1 declares supported_efforts [] (reachable by exact id only).
+	for _, effort := range []string{"low", "none", "xhigh"} {
+		err := validateGrokEffort("grok-build-0.1", effort)
+		if err == nil {
+			t.Fatalf("explicit effort %q against a no-effort-axis model must be rejected", effort)
+		}
+		if !strings.Contains(err.Error(), "no effort axis") {
+			t.Fatalf("error must say the model declares no effort axis; got: %v", err)
+		}
+	}
+}
+
+// TestValidateGrokEffortUnknownModelPassesThrough pins the other half of the
+// #336 semantics: a model with NO registry descriptor (unregistered id — the
+// registry cannot answer) passes through with a warning, never a hard
+// failure. A value outside the Grok CLI vocabulary is likewise not an error:
+// BuildCommand's syntax filter drops the flag, exactly as before.
+func TestValidateGrokEffortUnknownModelPassesThrough(t *testing.T) {
+	if err := validateGrokEffort("some-unregistered-model", "xhigh"); err != nil {
+		t.Fatalf("unknown model must pass through (logged warning, no failure): %v", err)
+	}
+	if err := validateGrokEffort("grok-4.5", "banana"); err != nil {
+		t.Fatalf("non-vocabulary effort is dropped by the syntax filter, not an error: %v", err)
+	}
+}
+
 func containsPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {

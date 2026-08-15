@@ -21,6 +21,7 @@ export { CopilotCliAdapter } from "./CopilotCliAdapter.js";
 export { GrokAdapter, GROK_MIN_KNOWN_VERSION } from "./GrokAdapter.js";
 export { summarizeGrokStream, isGrokQuotaMessage, isGrokAuthMessage } from "./grokStream.js";
 export { mapGrokEffortToNightgauge, grokCliEffortFlag, GROK_CLI_EFFORTS } from "./grokEffort.js";
+export { codexReasoningEffortFlag, CODEX_REASONING_EFFORTS } from "./codexEffort.js";
 export { AdapterRegistry, defaultRegistry, isAgenticAdapter } from "./AdapterRegistry.js";
 
 // Canonical Codex model registry — single source of truth for Codex model ids,

@@ -36,6 +36,19 @@ const OPENAI_PRICING = "https://developers.openai.com/api/docs/pricing";
 const OPENAI_PROMPT_CACHING = "https://developers.openai.com/api/docs/guides/prompt-caching";
 const GOOGLE_PRICING = "https://ai.google.dev/gemini-api/docs/pricing";
 const XAI_MODELS = "https://docs.x.ai/developers/models";
+/**
+ * The #531 close-out: controlled live billing measurement against the Grok
+ * Build CLI (1.0.4) — input and cache-read tokens held constant, output
+ * varied, solved against held-out samples to 6e-8. The exact per-pool figures
+ * are published in PR #554's body:
+ * https://github.com/nightgauge/nightgauge/pull/554
+ *
+ * These are MEASURED CHARGED RATES for the CLI transport the pipeline
+ * actually uses, not xAI's API list prices — the sheet at XAI_MODELS is not
+ * this transport's bill (#570).
+ */
+const XAI_CLI_MEASUREMENT =
+  "https://github.com/nightgauge/nightgauge/issues/531#issuecomment-5303892638";
 
 /** The five per-1M pools the schema can express. */
 const POOLS = ["input", "output", "cache_read", "cache_creation_5m", "cache_creation_1h"] as const;
@@ -184,29 +197,33 @@ const VERIFIED_RATES: readonly VerifiedEntry[] = [
   },
 
   // ── xAI (Grok Build) ──────────────────────────────────────────────────────
-  // <200k-prompt-token sticker. The vendor also publishes a 2x rate at/above
-  // 200k; this schema has no threshold, so the registry records the standard
-  // column only (documented in $schema_note). No cache-write fee is listed.
+  // grok-4.6 and grok-4.5 are MEASURED CLI charges (XAI_CLI_MEASUREMENT), not
+  // the API sheet: the sheet declares both models at identical $2/$6 rates
+  // with grok-4.5's cache-read cheaper, while the CLI bills grok-4.5 at
+  // exactly 2x grok-4.6 with the cache-read relationship inverted (#570).
+  // grok-build-0.1 stays on the API sheet's list price: the CLI rejects the
+  // id outright, so no measured figure is obtainable, and the entry exists
+  // solely so historical cost replay prices already-booked runs.
   {
     id: "grok-4.6",
-    source: XAI_MODELS,
-    row: "Text API, <200k prompt tokens (read 2026-08-14)",
-    rates: { input: 2.0, output: 6.0, cache_read: 0.5 },
+    source: XAI_CLI_MEASUREMENT,
+    row: "Grok Build CLI 1.0.4, measured charge (measured 2026-08-15; figures in PR #554)",
+    rates: { input: 0.34, output: 1.02, cache_read: 0.085 },
     absenceNote:
-      "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
+      "no cache_creation_*: no cache-write fee observed on the CLI and xAI publishes none; a ≥200k-prompt multiplier is unmeasured on this transport",
   },
   {
     id: "grok-4.5",
-    source: XAI_MODELS,
-    row: "Text API, <200k prompt tokens (read 2026-08-14)",
-    rates: { input: 2.0, output: 6.0, cache_read: 0.3 },
+    source: XAI_CLI_MEASUREMENT,
+    row: "Grok Build CLI 1.0.4, measured charge (measured 2026-08-15; figures in PR #554)",
+    rates: { input: 0.68, output: 2.04, cache_read: 0.102 },
     absenceNote:
-      "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
+      "no cache_creation_*: no cache-write fee observed on the CLI and xAI publishes none; a ≥200k-prompt multiplier is unmeasured on this transport",
   },
   {
     id: "grok-build-0.1",
     source: XAI_MODELS,
-    row: "Text API, <200k prompt tokens (read 2026-08-14)",
+    row: "Text API LIST PRICE, <200k prompt tokens (read 2026-08-14) — CLI-unreachable, kept for historical cost replay",
     rates: { input: 1.0, output: 2.0, cache_read: 0.2 },
     absenceNote:
       "no cache_creation_*: xAI publishes cached-input only; ≥200k prompt tokens bill 2x and are unmodeled",
@@ -279,8 +296,9 @@ describe("registry rates match their live-verified vendor figures", () => {
       mismatches.length === 0
         ? ""
         : `Registry rates disagree with the live-verified table in this file ` +
-            `(read ${VERIFIED_ON}). Re-open the vendor page, correct BOTH the registry ` +
-            `and this table, and re-date VERIFIED_ON:\n\n${renderMismatchTable(mismatches)}\n`
+            `(read ${VERIFIED_ON}). Re-open the cited source (vendor page, or the ` +
+            `measurement for CLI-measured rows), correct BOTH the registry ` +
+            `and this table, and re-date the citation:\n\n${renderMismatchTable(mismatches)}\n`
     ).toEqual([]);
   });
 
@@ -306,6 +324,25 @@ describe("registry rates match their live-verified vendor figures", () => {
         12
       );
     }
+  });
+
+  it("the xAI CLI-measured rates preserve the measured relationships (#570)", () => {
+    // Cross-checks against the #531 measurement's two findings, so a future
+    // "correction" that quietly reverts to the API sheet fails loudly:
+    // 1. grok-4.5 bills exactly 2x grok-4.6 on input and output.
+    // 2. grok-4.5's cache-read is the MORE EXPENSIVE of the two — the API
+    //    sheet declares the inverse, which is exactly what made the 2x
+    //    regression invisible to telemetry (see XAI_CLI_MEASUREMENT).
+    const g46 = getModelDescriptor("grok-4.6")!;
+    const g45 = getModelDescriptor("grok-4.5")!;
+    expect(g45.rates.input, `see ${XAI_CLI_MEASUREMENT}`).toBeCloseTo(g46.rates.input * 2, 12);
+    expect(g45.rates.output, `see ${XAI_CLI_MEASUREMENT}`).toBeCloseTo(g46.rates.output * 2, 12);
+    expect(g45.rates.cache_read, "grok-4.5 must carry a cache-read rate").toBeDefined();
+    expect(g46.rates.cache_read, "grok-4.6 must carry a cache-read rate").toBeDefined();
+    expect(
+      g45.rates.cache_read!,
+      `grok-4.5's measured cache-read is HIGHER than grok-4.6's; see ${XAI_CLI_MEASUREMENT}`
+    ).toBeGreaterThan(g46.rates.cache_read!);
   });
 
   it("no OpenAI entry carries a 1-hour cache-write rate", () => {
