@@ -13,7 +13,7 @@ map to one model, and the declared xai rates are the wrong transport's list pric
 and capability (zero measured evidence exists; the eval lane's historical rows labeled an
 effort that was never applied until #571). Transport reachability is not modeled at all: it is
 encoded by overloading `deprecated: true` (grok-build-0.1) and tiers-absence (grok-4.5,
-nine entries total), which is the #532 defect class.
+11 entries total), which is the #532 defect class.
 
 **Verdicts** (all five epic recommendations are **adopt**, in dependency order):
 
@@ -57,7 +57,7 @@ capability cell from unmeasurable to measurable.
 ## 1. Axis Inventory
 
 One row per registry model (canonical file:
-`packages/nightgauge-sdk/src/eval/model-registry.json`, version 2, 27 entries). Providers map
+`packages/nightgauge-sdk/src/eval/model-registry.json`, version 2, 28 entries). Providers map
 to adapters as follows (`internal/doctor/adapters.go:95-103`): anthropic → `claude-headless`
 (CLI) + `claude-sdk` (API); openai → `codex` (CLI); google → `gemini` (CLI) + `gemini-sdk`
 (API); copilot → `copilot` (CLI); xai → `grok` (CLI); other → no adapter. Local providers
@@ -67,7 +67,7 @@ model serves every request and unknown ids cost $0 (`$schema_note`).
 **Hard rule applied**: every capability cell is `measured` (with cited evidence) or
 `pending (#528 / honest eval lane)`. No unmeasured capability tiering appears anywhere in this
 artifact. The `tiers` column is reproduced as what it is — a **declared routing membership**,
-not capability evidence. Propensity blocks (4 entries) are likewise declared, unmeasured.
+not capability evidence. Propensity blocks (5 entries) are likewise declared, unmeasured.
 
 Evidence keys used below:
 
@@ -360,7 +360,7 @@ executes the wire envelope verbatim (#340). The wire grows `effort` and `thinkin
 
 ### 4.3 Sparsity and confidence
 
-Naive combination space: 27 models × 5 efforts × 2 thinking = 270 combos per job class —
+Naive combination space: 28 models × 5 efforts × 2 thinking = 280 combos per job class —
 unmeasurable. Constraints that make it tractable:
 
 - The **registry interlock prunes before spawn** (#571 AC): only declared `supported_efforts`
