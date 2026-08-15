@@ -1193,8 +1193,47 @@ func setupLinkedWorktree(t *testing.T) (mainDir, worktreeDir string) {
 		"https://github.com/nightgauge/nightgauge.git")
 
 	gitExecTest(t, mainDir, "worktree", "add", "--detach", worktreeDir, "HEAD")
+	assertLinkedWorktree(t, worktreeDir)
 
 	return mainDir, worktreeDir
+}
+
+// assertLinkedWorktree fails unless worktreeDir really is a linked worktree.
+//
+// Without this the fixture asserts nothing: deleting the `worktree add` line
+// and returning the main checkout for both values leaves every
+// "InLinkedWorktree" test GREEN, because a normal checkout answers all of them.
+// The two properties that make the fixture the #535 shape are checked
+// positively — `.git` is a FILE pointing at the worktree gitdir, and that
+// gitdir is the chrooted one holding no objects, no config and no
+// refs/remotes — so a degraded fixture fails here rather than passing quietly.
+func assertLinkedWorktree(t *testing.T, worktreeDir string) {
+	t.Helper()
+
+	dotGit := filepath.Join(worktreeDir, ".git")
+	info, err := os.Lstat(dotGit)
+	if err != nil {
+		t.Fatalf("fixture is not a linked worktree: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("fixture is not a linked worktree: %s is not a file", dotGit)
+	}
+	data, err := os.ReadFile(dotGit)
+	if err != nil {
+		t.Fatalf("fixture is not a linked worktree: read %s: %v", dotGit, err)
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir:") {
+		t.Fatalf("fixture is not a linked worktree: %s does not start with \"gitdir:\" (%q)", dotGit, line)
+	}
+
+	gitDir := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+	for _, shouldBeAbsent := range []string{"objects", "config", filepath.Join("refs", "remotes")} {
+		if _, err := os.Lstat(filepath.Join(gitDir, shouldBeAbsent)); err == nil {
+			t.Fatalf("fixture is not a linked worktree: gitdir %s holds %s, so it is not the "+
+				"chrooted per-worktree gitdir #535 is about", gitDir, shouldBeAbsent)
+		}
+	}
 }
 
 // TestNewService_DefaultBranchInLinkedWorktree covers #535: the linked worktree's
@@ -1266,5 +1305,271 @@ func TestBranchCreateFrom_InLinkedWorktreeMovesHead(t *testing.T) {
 	head := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "--abbrev-ref", "HEAD"))
 	if head != branch {
 		t.Errorf("linked worktree HEAD = %q, want %q", head, branch)
+	}
+}
+
+// TestNewService_RefusesGhostWorktreeDirectory pins DetectDotGit OFF.
+//
+// `.worktrees/issue-N` lives INSIDE the primary checkout, so with parent
+// walking on, a ghost directory left behind by a removed run opens as the
+// enclosing repository and every mutation aimed at the dead worktree lands in
+// the operator's own tree — a write-containment escape
+// (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129). Adding
+// `DetectDotGit: true` to NewService turns this test red and nothing else.
+func TestNewService_RefusesGhostWorktreeDirectory(t *testing.T) {
+	mainDir, _ := setupLinkedWorktree(t)
+
+	ghost := filepath.Join(mainDir, ".worktrees", "issue-999")
+	if err := os.MkdirAll(ghost, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(ghost)
+	if err == nil {
+		root, _ := svc.Root()
+		t.Fatalf("NewService(%s) opened a path that is not a repository and resolved to %s", ghost, root)
+	}
+}
+
+// TestBranchCreateFrom_DirtyLinkedWorktreeKeepsModifications is the #535
+// aftermath: common-dir resolution made go-git's checkout REACHABLE in a linked
+// worktree, and go-git moves HEAD and writes refs/heads/<name> into the shared
+// store BEFORE it discovers the tree is dirty. The pipeline dirties the
+// worktree before the stage even runs (`npm install` rewrites tracked
+// package-lock.json; codegen rewrites committed generated files), so this is the
+// normal path, not an edge case — and the leaked ref made every retry take the
+// "branch already exists" route and fail identically forever.
+func TestBranchCreateFrom_DirtyLinkedWorktreeKeepsModifications(t *testing.T) {
+	_, worktreeDir := setupLinkedWorktree(t)
+
+	readme := filepath.Join(worktreeDir, "README.md")
+	if err := os.WriteFile(readme, []byte("seed\nuncommitted local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	const branch = "fix/535-dirty-worktree"
+	if err := svc.BranchCreateFrom(branch, "main"); err != nil {
+		t.Fatalf("BranchCreateFrom on a dirty linked worktree: %v", err)
+	}
+
+	if head := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "--abbrev-ref", "HEAD")); head != branch {
+		t.Errorf("HEAD = %q, want %q", head, branch)
+	}
+	content, err := os.ReadFile(readme)
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	if !strings.Contains(string(content), "uncommitted local edit") {
+		t.Errorf("the working-tree modification was discarded: %q", string(content))
+	}
+
+	// And it must be re-runnable: the wedge was a leaked ref, not a bad tree.
+	if err := svc.BranchCreateFrom(branch, "main"); err != nil {
+		t.Errorf("re-running BranchCreateFrom must be idempotent, got: %v", err)
+	}
+}
+
+// TestBranchCreateFrom_FailureLeavesNoRefAndUnmovedHead is the other half of
+// atomicity: when the checkout genuinely cannot proceed, NOTHING may have
+// happened. A created-but-unusable branch ref is what wedged the stage.
+func TestBranchCreateFrom_FailureLeavesNoRefAndUnmovedHead(t *testing.T) {
+	mainDir, worktreeDir := setupLinkedWorktree(t)
+
+	// A base whose README differs from the worktree's checked-out content, so a
+	// checkout onto it would have to overwrite the local modification.
+	gitExecTest(t, mainDir, "checkout", "-b", "other")
+	if err := os.WriteFile(filepath.Join(mainDir, "README.md"), []byte("divergent content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExecTest(t, mainDir, "commit", "-am", "chore: diverge")
+	gitExecTest(t, mainDir, "checkout", "main")
+
+	if err := os.WriteFile(filepath.Join(worktreeDir, "README.md"), []byte("seed\nlocal edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	headBefore := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "HEAD"))
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	const branch = "fix/535-would-clobber"
+	if err := svc.BranchCreateFrom(branch, "other"); err == nil {
+		t.Fatal("expected BranchCreateFrom to refuse a checkout that would overwrite local changes")
+	}
+
+	if out, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+		"refs/heads/"+branch).CombinedOutput(); err == nil {
+		t.Errorf("a failed BranchCreateFrom left refs/heads/%s behind at %s", branch, strings.TrimSpace(string(out)))
+	}
+	if got := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "HEAD")); got != headBefore {
+		t.Errorf("a failed BranchCreateFrom moved HEAD: %s -> %s", headBefore, got)
+	}
+	content, _ := os.ReadFile(filepath.Join(worktreeDir, "README.md"))
+	if !strings.Contains(string(content), "local edit") {
+		t.Errorf("the refused checkout still touched the working tree: %q", string(content))
+	}
+}
+
+// TestCheckout_RefusesBranchHeldByAnotherWorktree covers the second data-loss
+// path common-dir resolution opened. go-git never reads
+// <common>/worktrees/*/HEAD, so it put two worktrees on one branch — and the
+// consequence is not cosmetic: one stage's commit becomes a staged DELETION in
+// the other's tree, and commitAll's `git add -A && git commit` then erases the
+// first stage's deliverable from the branch tip.
+func TestCheckout_RefusesBranchHeldByAnotherWorktree(t *testing.T) {
+	mainDir, worktreeDir := setupLinkedWorktree(t)
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	err = svc.Checkout("main")
+	if err == nil {
+		t.Fatal("expected Checkout to refuse a branch the primary checkout already holds")
+	}
+	if !strings.Contains(err.Error(), mainDir) {
+		t.Errorf("the error must name the holding worktree, got: %v", err)
+	}
+	if head := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "HEAD" {
+		t.Errorf("the refused checkout moved HEAD to %q", head)
+	}
+
+	// And it must not over-fire: a branch nobody holds still checks out.
+	gitExecTest(t, mainDir, "branch", "spare", "main")
+	if err := svc.Checkout("spare"); err != nil {
+		t.Fatalf("Checkout of an unheld branch: %v", err)
+	}
+	if head := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "spare" {
+		t.Errorf("HEAD = %q, want \"spare\"", head)
+	}
+}
+
+// TestBranchDelete_RefusesBranchHeldByAnotherWorktree: removing the ref through
+// go-git left the holding worktree on an unborn HEAD with its commits reachable
+// only through the reflog. AbortPipeline shares this path, so it is guarded too.
+func TestBranchDelete_RefusesBranchHeldByAnotherWorktree(t *testing.T) {
+	mainDir, worktreeDir := setupLinkedWorktree(t)
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	err = svc.BranchDelete("main")
+	if err == nil {
+		t.Fatal("expected BranchDelete to refuse a branch another worktree has checked out")
+	}
+	if !strings.Contains(err.Error(), mainDir) {
+		t.Errorf("the error must name the holding worktree, got: %v", err)
+	}
+	if head := strings.TrimSpace(gitExecTest(t, mainDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "main" {
+		t.Errorf("the primary checkout was orphaned: HEAD = %q", head)
+	}
+
+	// Not over-firing: an unoccupied branch still deletes.
+	gitExecTest(t, mainDir, "branch", "stale/1", "main")
+	if err := svc.BranchDelete("stale/1"); err != nil {
+		t.Fatalf("BranchDelete of an unheld branch: %v", err)
+	}
+	if _, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+		"refs/heads/stale/1").CombinedOutput(); err == nil {
+		t.Error("refs/heads/stale/1 survived BranchDelete")
+	}
+}
+
+// TestAbortPipeline_NeverOrphansASiblingWorktree exercises the same guard
+// through the path that actually aborts runs. The happy half also pins that the
+// guard does not over-fire: aborting from the checkout that owns the branch
+// still checks out main and deletes it.
+func TestAbortPipeline_NeverOrphansASiblingWorktree(t *testing.T) {
+	mainDir, worktreeDir := setupLinkedWorktree(t)
+
+	primary, err := NewService(mainDir)
+	if err != nil {
+		t.Fatalf("NewService(main): %v", err)
+	}
+	if err := primary.BranchCreate("feat/535-abort-me"); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	if err := primary.AbortPipeline("feat/535-abort-me"); err != nil {
+		t.Fatalf("AbortPipeline in the owning checkout: %v", err)
+	}
+	if head := strings.TrimSpace(gitExecTest(t, mainDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "main" {
+		t.Errorf("after abort, HEAD = %q, want \"main\"", head)
+	}
+	if _, err := exec.Command("git", "-C", mainDir, "rev-parse", "--verify",
+		"refs/heads/feat/535-abort-me").CombinedOutput(); err == nil {
+		t.Error("AbortPipeline left the feature branch behind")
+	}
+
+	// Now the sibling case: the primary checkout holds the branch, and a run in
+	// the linked worktree aborts it. Deleting it would strand the primary on an
+	// unborn HEAD with its commits reachable only through the reflog.
+	if err := primary.BranchCreate("feat/535-sibling"); err != nil {
+		t.Fatalf("BranchCreate sibling: %v", err)
+	}
+	linked, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService(worktree): %v", err)
+	}
+	if err := linked.AbortPipeline("feat/535-sibling"); err == nil {
+		t.Fatal("expected AbortPipeline to refuse a branch a sibling worktree holds")
+	} else if !strings.Contains(err.Error(), mainDir) {
+		t.Errorf("the error must name the holding worktree, got: %v", err)
+	}
+	if head := strings.TrimSpace(gitExecTest(t, mainDir, "rev-parse", "--abbrev-ref", "HEAD")); head != "feat/535-sibling" {
+		t.Errorf("the sibling worktree was orphaned: HEAD = %q", head)
+	}
+}
+
+// TestResetPipeline_KeepsGitignoredFiles: go-git honours neither .gitignore nor
+// .git/info/exclude in its hard reset OR its Clean, so once #535 made both
+// reachable inside a worktree, every ResetPipeline deleted node_modules/, build
+// caches and .env — the stage's own execution environment, and possibly an
+// operator secret. The counterweight is
+// TestResetPipeline_DiscardsDirtWhenNothingRecordedIsAtRisk: untracked junk that
+// is NOT ignored must still be swept.
+func TestResetPipeline_KeepsGitignoredFiles(t *testing.T) {
+	svc, dir := setupTestRepoNamed(t, "checkout")
+	checkoutNewBranchTest(t, svc, "feat/297-widget")
+
+	// A committed deliverable the handoff accounts for, so the guard reaches a
+	// POSITIVE "nothing at risk" verdict and the reset actually runs — this test
+	// would otherwise pass by refusing to reset at all.
+	writeFileTest(t, dir, "internal/widget.go", "package internal\n")
+	writeFileTest(t, dir, ".gitignore", "node_modules/\n")
+	writeDevHandoff(t, dir, 297,
+		`{"schema_version":"1.8","files_changed":{"created":["internal/widget.go"],"modified":[]}}`)
+	gitExecTest(t, dir, "add", "-A")
+	gitExecTest(t, dir, "commit", "-m", "feat: land the deliverable")
+
+	// The second ignore source go-git also does not read.
+	writeFileTest(t, dir, ".git/info/exclude", ".env\n")
+
+	dep := writeFileTest(t, dir, "node_modules/dep/index.js", "module.exports = 1\n")
+	env := writeFileTest(t, dir, ".env", "GITHUB_TOKEN=secret\n")
+	junk := writeFileTest(t, dir, "build/out.tmp", "build output\n")
+
+	if err := svc.ResetPipeline(); err != nil {
+		t.Fatalf("ResetPipeline: %v", err)
+	}
+
+	if _, err := os.Stat(dep); err != nil {
+		t.Errorf("ResetPipeline deleted a .gitignore'd path: %v", err)
+	}
+	if _, err := os.Stat(env); err != nil {
+		t.Errorf("ResetPipeline deleted a .git/info/exclude'd path: %v", err)
+	}
+	// Not over-firing: untracked dirt that nothing ignores is still swept.
+	if _, err := os.Stat(junk); !os.IsNotExist(err) {
+		t.Errorf("expected the reset to sweep untracked, non-ignored dirt, err=%v", err)
 	}
 }
