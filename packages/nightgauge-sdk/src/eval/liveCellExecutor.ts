@@ -16,12 +16,18 @@
  *
  * Adapter parameterization (Issue #107): the executor is provider-neutral. The
  * cell's model resolves to a registry provider, which selects an
- * {@link EvalAdapterProfile} that owns the CLI flag shape, the reasoning wiring
- * (Claude's extended-thinking keywords in the prompt vs OpenAI's
- * `model_reasoning_effort` flag), and the stdout parsing. So a `codex` cell runs
- * `codex exec --json …` and a `claude` cell runs `claude --print …` through the
- * same code path — replacing the previously hardcoded Claude flag shape that
- * blocked every non-Claude adapter from the live lane.
+ * {@link EvalAdapterProfile} that owns the CLI flag shape, the effort/reasoning
+ * wiring, and the stdout parsing. So a `codex` cell runs `codex exec --json …`
+ * and a `claude` cell runs `claude --print …` through the same code path —
+ * replacing the previously hardcoded Claude flag shape that blocked every
+ * non-Claude adapter from the live lane.
+ *
+ * Honest cells (#571): `cell.effort` and `cell.reasoning` are applied through
+ * each adapter's REAL knobs — Claude's `--effort` flag plus the thinking env
+ * parameters, Codex's `model_reasoning_effort` config — never prompt keywords.
+ * A value an adapter has no knob for throws (UnsupportedCellError → error
+ * verdict via the runner); the runner's registry interlock skips invalid
+ * (model, effort, reasoning) combinations before this executor is ever called.
  *
  * Live runs cost real API money and require ambient adapter auth; they are
  * never exercised in CI (mock is the CI default).
@@ -39,13 +45,12 @@ import type {
   EvalTask,
   GateResult,
   Provider,
-  ReasoningLevel,
   TokenUsage,
 } from "./modelEvalSchemas.js";
 import {
   resolveEvalAdapterProfile,
   type EvalAdapterProfile,
-  type SpawnTelemetry,
+  type EvalSpawnPlan,
 } from "./evalAdapters.js";
 import { applyPromptVariant, resolveVariant, type PromptVariant } from "./promptVariants.js";
 import { runJudgeWithReliabilityGuard, type EvalJudge } from "./qualityScorer.js";
@@ -60,17 +65,21 @@ export interface CliSpawnResult {
 
 /**
  * Injectable spawn for one adapter CLI invocation. Tests pass a fake; production
- * uses {@link defaultCliSpawn}. Provider-neutral: the command + args are supplied
- * by the resolved {@link EvalAdapterProfile}, so this boundary only pipes a prompt
- * to a process and buffers its stdout. Command is passed first to mirror the
- * skill-eval `SpawnFn` convention.
+ * uses {@link defaultCliSpawn}. Provider-neutral: command, args, and the spawn-env
+ * OVERLAY (merged over `process.env` — how the Claude CLI takes its thinking
+ * parameters, #571) are supplied by the resolved {@link EvalAdapterProfile}, so
+ * this boundary only pipes a prompt to a process and buffers its stdout. An
+ * overlay key mapped to `undefined` must be REMOVED from the child env (the
+ * plan owns the key; ambient operator values never leak into a measurement).
+ * Command is passed first to mirror the skill-eval `SpawnFn` convention.
  */
 export type CliSpawnFn = (
   command: string,
   args: string[],
   prompt: string,
   cwd: string,
-  timeoutMs: number
+  timeoutMs: number,
+  env?: Record<string, string | undefined>
 ) => Promise<CliSpawnResult>;
 
 /** 15 min per attempt — real coding tasks run tools and can be slow. */
@@ -193,10 +202,12 @@ export class LiveCellExecutor implements EvalCellExecutor {
     const model = descriptor?.concrete_version ?? cell.model_id;
     const label = descriptor?.display_name ?? model;
     const command = profile.resolveCommand(this.commandOverride);
-    // Reasoning is expressed exactly once per adapter — in the prompt (Claude)
-    // or in the CLI args (Codex). The directive is "" for flag-based adapters.
-    const reasoningDirective = profile.reasoningPromptDirective(cell.reasoning);
-    const args = profile.buildArgs(model, cell.reasoning);
+    // Effort + reasoning are applied through the adapter's REAL knobs (#571):
+    // args (Claude `--effort`, Codex `model_reasoning_effort`) and spawn env
+    // (Claude's thinking parameters). Throws UnsupportedCellError when the
+    // adapter has no knob for a value — the cell errors instead of running
+    // mislabeled.
+    const plan: EvalSpawnPlan = profile.buildSpawnPlan(model, cell.effort, cell.reasoning);
     const cwd = workspace.dir;
 
     // Prompt-variant overlay (#72): transform the instruction ONCE, up front,
@@ -229,14 +240,11 @@ export class LiveCellExecutor implements EvalCellExecutor {
 
     while (attempt < this.maxAttempts && !green) {
       attempt++;
-      const prompt =
-        attempt === 1
-          ? initialPrompt(instruction, reasoningDirective)
-          : retryPrompt(instruction, gates, reasoningDirective);
+      const prompt = attempt === 1 ? initialPrompt(instruction) : retryPrompt(instruction, gates);
       this.onLog?.(`[${label}] ${task.id} attempt ${attempt}/${this.maxAttempts}`);
 
       const startedAt = Date.now();
-      const res = await this.spawn(command, args, prompt, cwd, this.timeoutMs);
+      const res = await this.spawn(command, plan.args, prompt, cwd, this.timeoutMs, plan.env);
       const wallClockMs = Date.now() - startedAt;
       if (res.code !== 0) {
         throw new Error(
@@ -298,40 +306,37 @@ export class LiveCellExecutor implements EvalCellExecutor {
 
 // Both prompt builders take the (possibly variant-overlaid, #72) instruction
 // text rather than the task, so the overlay is applied in exactly one place.
-// The trailing `reasoningDirective` is the adapter's prompt-borne reasoning
-// budget (empty when the adapter steers reasoning through a CLI flag instead).
-function initialPrompt(instruction: string, reasoningDirective: string): string {
-  return (
-    [
-      "You are implementing a software task in the current working directory.",
-      "Make all necessary changes directly in these files. When you are done, the",
-      "project must build and every test must pass. Do not weaken or delete tests",
-      "to make them pass.",
-      "",
-      "Task:",
-      instruction,
-    ].join("\n") + reasoningDirective
-  );
+// The prompt carries NO reasoning steering (#571): effort and thinking travel
+// through the adapter's real CLI knobs in the spawn plan, so the text under
+// measurement is identical across every (effort, reasoning) cell.
+function initialPrompt(instruction: string): string {
+  return [
+    "You are implementing a software task in the current working directory.",
+    "Make all necessary changes directly in these files. When you are done, the",
+    "project must build and every test must pass. Do not weaken or delete tests",
+    "to make them pass.",
+    "",
+    "Task:",
+    instruction,
+  ].join("\n");
 }
 
-function retryPrompt(instruction: string, gates: GateResult[], reasoningDirective: string): string {
+function retryPrompt(instruction: string, gates: GateResult[]): string {
   const failing = gates
     .filter((g) => !g.passed)
     .map((g) => `- ${g.name}: ${g.detail ?? "failed"}`)
     .join("\n");
-  return (
-    [
-      "Your previous attempt did not pass all checks. Fix the code in the current",
-      "working directory so every check passes. Do not weaken or delete the",
-      "checks or tests.",
-      "",
-      "Failing checks:",
-      failing,
-      "",
-      "Original task:",
-      instruction,
-    ].join("\n") + reasoningDirective
-  );
+  return [
+    "Your previous attempt did not pass all checks. Fix the code in the current",
+    "working directory so every check passes. Do not weaken or delete the",
+    "checks or tests.",
+    "",
+    "Failing checks:",
+    failing,
+    "",
+    "Original task:",
+    instruction,
+  ].join("\n");
 }
 
 /** Run each check in the workspace; a gate passes when its exit code matches. */
@@ -369,15 +374,29 @@ function tail(s: string, max = 600): string {
 
 /**
  * Default spawn: pipe the prompt to the adapter CLI over stdin and buffer stdout.
- * Unlike the skill-eval runner it resolves with the exit code (never rejects on a
- * non-zero exit) so the executor decides how to classify the outcome; only a
- * timeout or spawn error rejects.
+ * The profile's env overlay is merged over the ambient environment — that is how
+ * the Claude CLI receives its thinking parameters (#571). Overlay keys mapped to
+ * `undefined` are DELETED from the child env, not inherited: the spawn plan owns
+ * both thinking keys on every Claude cell, so an ambient operator workaround
+ * (`export CLAUDE_CODE_DISABLE_THINKING=1`, blessed by the pipeline for older
+ * CLIs) can never silently negate a cell's reasoning label. Unlike the
+ * skill-eval runner it resolves with the exit code (never rejects on a non-zero
+ * exit) so the executor decides how to classify the outcome; only a timeout or
+ * spawn error rejects.
  */
-export const defaultCliSpawn: CliSpawnFn = (command, args, prompt, cwd, timeoutMs) =>
+export const defaultCliSpawn: CliSpawnFn = (command, args, prompt, cwd, timeoutMs, env) =>
   import("node:child_process").then(
     ({ spawn }) =>
       new Promise<CliSpawnResult>((resolvePromise, reject) => {
-        const child = spawn(command, args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
+        const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+        for (const [key, value] of Object.entries(env ?? {})) {
+          if (value === undefined) delete childEnv[key];
+        }
+        const child = spawn(command, args, {
+          cwd,
+          env: childEnv,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
         let stdout = "";
         let stderr = "";
         let settled = false;

@@ -78,6 +78,7 @@ export { loadEvalTasks, parseEvalTask, DEFAULT_TASKS_DIR } from "./taskLoader.js
 // ---------------------------------------------------------------------------
 export {
   MODEL_EVAL_SCHEMA_VERSION,
+  MIN_HONEST_SCHEMA_VERSION,
   BASELINE_PROMPT_VARIANT,
   PROVIDERS,
   ProviderSchema,
@@ -223,6 +224,7 @@ export {
 
 export {
   parseClaudeResult,
+  maybeResolveEvalAdapterProfile,
   resolveEvalAdapterProfile,
   resolveEvalAdapterProfileForAdapter,
   claudeEvalProfile,

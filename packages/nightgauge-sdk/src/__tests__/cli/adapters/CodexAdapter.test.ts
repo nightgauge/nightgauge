@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { CodexAdapter, isEphemeralStage } from "../../../cli/adapters/CodexAdapter.js";
+import { AdapterError } from "../../../cli/adapters/errors.js";
 
 // Module-level mock — hoisted by Vitest so createCliQueryFn's internal spawn call is intercepted.
 // ESM module-scope calls cannot be intercepted with vi.spyOn; mock the dependency directly.
@@ -414,8 +415,10 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
   });
 
   it("passes the configured reasoning effort to Codex", async () => {
+    // gpt-5.6-sol declares supported_efforts [low, medium, high, xhigh] —
+    // xhigh is a declared rung, so the registry gate (#569) lets it through.
     vi.stubEnv("NIGHTGAUGE_CODEX_MODEL", "gpt-5.6-sol");
-    vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "max");
+    vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "xhigh");
     vi.stubEnv("NIGHTGAUGE_CODEX_RESUME_ENABLED", "");
     mockSpawnReturning(makeSuccessStdout());
 
@@ -426,7 +429,7 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
 
     const args = lastSpawnArgs();
     const configIdx = args.indexOf("-c");
-    expect(args[configIdx + 1]).toBe("model_reasoning_effort=max");
+    expect(args[configIdx + 1]).toBe("model_reasoning_effort=xhigh");
   });
 
   it("rejects an invalid reasoning effort before spawning Codex", async () => {
@@ -434,6 +437,31 @@ describe("CodexAdapter.createQueryFunction() — model routing", () => {
     await expect(new CodexAdapter().createQueryFunction({ stage: "feature-dev" })).rejects.toThrow(
       /Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT/
     );
+  });
+
+  it("rejects an effort the resolved model does not declare, before spawn (#569)", async () => {
+    // The #576-review repro: gpt-5.4's ladder tops out at high, so xhigh must
+    // fail closed at the SDK dispatch path with a classified error naming the
+    // model, the requested effort, and the declared ladder — never reach the
+    // codex CLI on the static vocabulary check alone.
+    vi.stubEnv("NIGHTGAUGE_CODEX_MODEL", "gpt-5.4");
+    vi.stubEnv("NIGHTGAUGE_CODEX_REASONING_EFFORT", "xhigh");
+    vi.stubEnv("NIGHTGAUGE_CODEX_RESUME_ENABLED", "");
+    mockSpawnReturning(makeSuccessStdout());
+
+    let thrown: unknown;
+    try {
+      await new CodexAdapter().createQueryFunction({ stage: "feature-dev" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AdapterError);
+    const err = thrown as AdapterError;
+    expect(err.category).toBe("CONFIG_INVALID");
+    expect(err.message).toContain("xhigh");
+    expect(err.message).toContain("gpt-5.4");
+    expect(err.message).toContain("low, medium, high");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("C2: does not inject --model when NIGHTGAUGE_CODEX_MODEL is unset", async () => {

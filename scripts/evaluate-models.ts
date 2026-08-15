@@ -362,9 +362,17 @@ async function main(): Promise<number> {
     console.log("\nPrompt-variant deltas vs baseline:");
     console.log(formatVariantDeltas(computeVariantDeltas(run.cells)));
   }
+  // Skipped cells never ran (registry interlock, #571) — surface them so a
+  // partially-interlocked run's totals are explained, and use the EXECUTED
+  // count as the pass denominator so never-run cells don't read as failures.
+  const executedCells = run.summary.total - run.summary.skipped;
+  const skipNote =
+    run.summary.skipped > 0
+      ? ` (${run.summary.skipped} skipped by the registry interlock — see skip_reason)`
+      : "";
   console.log(
     `\nTotal cost: $${run.summary.total_cost_usd.toFixed(4)} | ` +
-      `${run.summary.passed}/${run.summary.total} passed | records → ${args.out}`
+      `${run.summary.passed}/${executedCells} executed passed${skipNote} | records → ${args.out}`
   );
 
   if (args.emit) await emitToPlatform(run, args);

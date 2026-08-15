@@ -13,6 +13,7 @@
 
 import {
   BASELINE_PROMPT_VARIANT,
+  MIN_HONEST_SCHEMA_VERSION,
   MODEL_EVAL_SCHEMA_VERSION,
   type EvalMatrixCell,
   type EvalRun,
@@ -109,6 +110,13 @@ export function serializeEvalRun(run: EvalRun): string {
  * Render a human-readable comparison matrix aggregated by model — and by
  * `model@variant` when the run exercised more than the baseline prompt
  * variant (#72), so variant rows never blend into the model's baseline row.
+ *
+ * Skipped cells are NOT measurements (#571, ModelEvalVerdictSchema contract):
+ * they never ran, so they must not be averaged with executed cells. Each row
+ * aggregates executed cells only, reports the skip count in its own column,
+ * and a row whose cells were ALL skipped renders `-` markers — never `0`s
+ * that would be indistinguishable from a model that ran and failed
+ * everything.
  */
 export function formatComparisonMatrix(run: EvalRun): string {
   const multiVariant = run.cells.some((c) => c.cell.prompt_variant !== BASELINE_PROMPT_VARIANT);
@@ -119,17 +127,23 @@ export function formatComparisonMatrix(run: EvalRun): string {
     list.push(c);
     byModel.set(key, list);
   }
-  const header = ["model", "n", "pass%", "quality", "cost$", "latency_s", "attempts"];
+  const header = ["model", "n", "skip", "pass%", "quality", "cost$", "latency_s", "attempts"];
   const rows = [...byModel.entries()].map(([model, cells]) => {
-    const n = cells.length;
-    const passPct = (cells.filter((c) => c.verdict === "pass").length / n) * 100;
-    const quality = mean(cells.map((c) => c.score?.composite ?? 0));
-    const cost = mean(cells.map((c) => c.cost_usd));
-    const latency = mean(cells.map((c) => c.latency_ms)) / 1000;
-    const attempts = mean(cells.map((c) => c.attempts_to_green));
+    const executed = cells.filter((c) => c.verdict !== "skipped");
+    const skipped = cells.length - executed.length;
+    if (executed.length === 0) {
+      return [model, "0", String(skipped), "-", "-", "-", "-", "-"];
+    }
+    const n = executed.length;
+    const passPct = (executed.filter((c) => c.verdict === "pass").length / n) * 100;
+    const quality = mean(executed.map((c) => c.score?.composite ?? 0));
+    const cost = mean(executed.map((c) => c.cost_usd));
+    const latency = mean(executed.map((c) => c.latency_ms)) / 1000;
+    const attempts = mean(executed.map((c) => c.attempts_to_green));
     return [
       model,
       String(n),
+      String(skipped),
       passPct.toFixed(0),
       quality.toFixed(1),
       cost.toFixed(4),
@@ -175,11 +189,20 @@ export interface VariantDelta {
  * against a baseline captured on a LATER run by concatenating record sets.
  * Models with no scored baseline cells are skipped: a delta without a
  * baseline is not a measurement.
+ *
+ * Two row classes are excluded up front (#571):
+ * - **Pre-honest persisted records** (`schema_version < 3`): their effort/
+ *   thinking labels were never applied, so pooling them with honest rows —
+ *   exactly what cross-run record concatenation invites — would corrupt the
+ *   deltas. In-run cells (no run stamp) come from the current, honest runner.
+ * - **Skipped cells**: never run, so they carry no measurement to average
+ *   (ModelEvalVerdictSchema contract).
  */
 export function computeVariantDeltas(cells: EvalRun["cells"] | ModelEvalRecord[]): VariantDelta[] {
   type Cell = EvalRun["cells"][number];
   const byModel = new Map<string, Map<string, Cell[]>>();
   for (const c of cells) {
+    if (!isHonestExecutedRow(c)) continue;
     const variants = byModel.get(c.model_id) ?? new Map<string, Cell[]>();
     const list = variants.get(c.cell.prompt_variant) ?? [];
     list.push(c);
@@ -235,9 +258,27 @@ export function formatVariantDeltas(deltas: VariantDelta[]): string {
   return [header, ...rows].map((r) => r.join("\t")).join("\n");
 }
 
+/**
+ * Whether a row may enter an aggregation (#571): it must be an EXECUTED cell
+ * (skipped cells carry no measurement), and — when it is a persisted record
+ * rather than an in-run cell — it must be an honest (v3+) row. A record whose
+ * version is missing or malformed fails CLOSED (`Number(...)` → NaN). In-run
+ * cells carry no run stamp and are honest by construction: they were produced
+ * by this very runner, which only emits the current schema version.
+ */
+function isHonestExecutedRow(c: EvalRun["cells"][number] | ModelEvalRecord): boolean {
+  if (c.verdict === "skipped") return false;
+  if ("schema_version" in c || "run_id" in c) {
+    return Number((c as ModelEvalRecord).schema_version) >= MIN_HONEST_SCHEMA_VERSION;
+  }
+  return true;
+}
+
+/** Pass rate over EXECUTED cells only — a skipped cell is not a failed one (#571). */
 function passRate(cells: EvalRun["cells"]): number {
-  if (cells.length === 0) return 0;
-  return (cells.filter((c) => c.verdict === "pass").length / cells.length) * 100;
+  const executed = cells.filter((c) => c.verdict !== "skipped");
+  if (executed.length === 0) return 0;
+  return (executed.filter((c) => c.verdict === "pass").length / executed.length) * 100;
 }
 
 function round2(n: number): number {
