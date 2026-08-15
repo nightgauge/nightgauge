@@ -1,0 +1,67 @@
+{"type":"available_commands","tools":["run_terminal_command","read_file","search_replace","list_dir","grep","kill_command_or_subagent","todo_write","get_command_or_subagent_output","spawn_subagent","scheduler_create","scheduler_delete","scheduler_list","monitor","search_tool","use_tool","workflow","enter_plan_mode","exit_plan_mode","ask_user_question","web_search","web_fetch","image_gen","image_edit","image_to_video","reference_to_video","write"]}
+{"type":"available_commands","tools":["run_terminal_command","read_file","search_replace","list_dir","grep","kill_command_or_subagent","todo_write","get_command_or_subagent_output","spawn_subagent","scheduler_create","scheduler_delete","scheduler_list","monitor","search_tool","use_tool","workflow","enter_plan_mode","exit_plan_mode","ask_user_question","web_search","web_fetch","image_gen","image_edit","image_to_video","reference_to_video","write"]}
+{"type":"thought","data":"The"}
+{"type":"thought","data":" user"}
+{"type":"thought","data":" wants"}
+{"type":"thought","data":" me"}
+{"type":"thought","data":" to"}
+{"type":"thought","data":" use"}
+{"type":"thought","data":" the"}
+{"type":"thought","data":" Bash"}
+{"type":"thought","data":" tool"}
+{"type":"thought","data":" to"}
+{"type":"thought","data":" run"}
+{"type":"thought","data":" '"}
+{"type":"thought","data":"echo"}
+{"type":"thought","data":" one"}
+{"type":"thought","data":"',"}
+{"type":"thought","data":" then"}
+{"type":"thought","data":" reply"}
+{"type":"thought","data":" done"}
+{"type":"thought","data":"."}
+{"type":"thought","data":" This"}
+{"type":"thought","data":" is"}
+{"type":"thought","data":" a"}
+{"type":"thought","data":" simple"}
+{"type":"thought","data":" request"}
+{"type":"thought","data":"."}
+{"type":"text","data":"I'll"}
+{"type":"text","data":" run"}
+{"type":"text","data":" `"}
+{"type":"text","data":"echo"}
+{"type":"text","data":" one"}
+{"type":"text","data":"`"}
+{"type":"text","data":" now"}
+{"type":"text","data":","}
+{"type":"text","data":" then"}
+{"type":"text","data":" confirm"}
+{"type":"text","data":"."}
+{"type":"available_commands","tools":["run_terminal_command","read_file","search_replace","list_dir","grep","kill_command_or_subagent","todo_write","get_command_or_subagent_output","spawn_subagent","scheduler_create","scheduler_delete","scheduler_list","monitor","search_tool","use_tool","workflow","enter_plan_mode","exit_plan_mode","ask_user_question","web_search","web_fetch","image_gen","image_edit","image_to_video","reference_to_video","write"]}
+{"type":"usage","usage":{"input_tokens":3593,"output_tokens":63,"cache_read_input_tokens":11520,"cache_creation_input_tokens":0,"reasoning_tokens":28},"signature":"REDACTED"}
+{"type":"tool_call","toolCallId":"call-0cf3c91e-2543-4ef7-9c77-a077c66517f7-0","title":"run_terminal_command","kind":"execute","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"echo one","description":"Print the word one"},"content":[],"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-0cf3c91e-2543-4ef7-9c77-a077c66517f7-0","status":null,"content":[{"type":"content","content":{"type":"text","text":"Print the word one"}}],"rawOutput":null,"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-0cf3c91e-2543-4ef7-9c77-a077c66517f7-0","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":""}}],"rawOutput":{"type":"Bash","output":[],"output_for_prompt":"","exit_code":0,"command":"echo one","truncated":false,"signal":null,"timed_out":false,"description":null,"current_dir":"/tmp/nightgauge-fixture","output_file":"","total_bytes":0},"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-0cf3c91e-2543-4ef7-9c77-a077c66517f7-0","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"one\n"}}],"rawOutput":{"type":"Bash","output":[111,110,101,10],"output_for_prompt":"one\n","exit_code":0,"command":"echo one","truncated":false,"signal":null,"timed_out":false,"description":null,"current_dir":"/tmp/nightgauge-fixture","output_file":"","total_bytes":4},"locations":[]}
+{"type":"tool_call_update","toolCallId":"call-0cf3c91e-2543-4ef7-9c77-a077c66517f7-0","status":"completed","content":[{"type":"content","content":{"type":"text","text":"one\n"}}],"rawOutput":{"type":"Bash","output":[111,110,101,10],"output_for_prompt":"exit: 0\none\n","exit_code":0,"command":"echo one","truncated":false,"signal":null,"timed_out":false,"description":"Print the word one","current_dir":"/tmp/nightgauge-fixture","output_file":"/tmp/nightgauge-fixture","total_bytes":4,"was_bare_echo":true},"locations":[]}
+{"type":"thought","data":"The"}
+{"type":"thought","data":" command"}
+{"type":"thought","data":" ran"}
+{"type":"thought","data":" successfully"}
+{"type":"thought","data":" and"}
+{"type":"thought","data":" printed"}
+{"type":"thought","data":" \""}
+{"type":"thought","data":"one"}
+{"type":"thought","data":"\"."}
+{"type":"thought","data":" The"}
+{"type":"thought","data":" user"}
+{"type":"thought","data":" asked"}
+{"type":"thought","data":" me"}
+{"type":"thought","data":" to"}
+{"type":"thought","data":" reply"}
+{"type":"thought","data":" \""}
+{"type":"thought","data":"done"}
+{"type":"thought","data":"\"."}
+{"type":"text","data":"done"}
+{"type":"available_commands","tools":["run_terminal_command","read_file","search_replace","list_dir","grep","kill_command_or_subagent","todo_write","get_command_or_subagent_output","spawn_subagent","scheduler_create","scheduler_delete","scheduler_list","monitor","search_tool","use_tool","workflow","enter_plan_mode","exit_plan_mode","ask_user_question","web_search","web_fetch","image_gen","image_edit","image_to_video","reference_to_video","write"]}
+{"type":"usage","usage":{"input_tokens":3540,"output_tokens":26,"cache_read_input_tokens":11648,"cache_creation_input_tokens":0,"reasoning_tokens":21},"signature":"REDACTED"}
+{"type":"end","stopReason":"end_turn","sessionId":"00000000-0000-4000-8000-000000000000","requestId":"req_REDACTED","usage":{"input_tokens":7133,"cache_read_input_tokens":23168,"cache_creation_input_tokens":0,"output_tokens":89,"reasoning_tokens":49,"total_tokens":30390},"num_turns":2,"total_cost_usd":0.00448528,"total_cost_usd_ticks":44852800,"modelUsage":{"grok-4.6-build":{"inputTokens":7133,"outputTokens":89,"cacheReadInputTokens":23168,"cacheCreationInputTokens":0,"modelCalls":2,"costUSD":0.00448528}}}

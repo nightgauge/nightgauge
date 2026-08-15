@@ -109,3 +109,99 @@ The envelope sums equal the four **main-thread** turns exactly; the extra
 reports them. So neither source is complete on its own — envelopes carry the
 only accurate output count, turn snapshots are the only ones that see
 subagents — and the accumulator takes the better-informed of the two per field.
+
+## `grok_stream_real_capture.jsonl`
+
+A **real** Grok Build CLI transcript (#533), not a hand-authored one. Captured
+on `grok 1.0.4 (d846eb93d94d) [stable]`, logged in with grok.com, with:
+
+```bash
+grok --output-format streaming-json --always-approve --no-auto-update \
+  --cwd "$PWD" \
+  -p "Use the Bash tool to run 'echo one', then reply done." \
+  --model grok-4.6 --max-turns 6
+```
+
+then passed through [`redact-grok.jq`](redact-grok.jq). The run exited 0 and
+cost $0.00448528.
+
+### Why it is captured rather than written
+
+Same reason as `claude_stream_real_capture.jsonl` (#300/#166): a parser tested
+only against a shape the runtime does not emit stays green while booking
+nothing. Three shape facts this capture pins that no hand-authored file would
+have got right:
+
+1. `streaming-json` really is the format the adapter asks for, and the terminal
+   event is `type:"end"` carrying a **session-total** `usage` — not a delta.
+   Per-turn `type:"usage"` events precede it with that turn's snapshot only
+   (3593 then 3540 input), so the accumulator's assign-don't-sum behavior lands
+   on the `end` totals rather than double-counting.
+2. `reasoning_tokens` is a **sibling** of `output_tokens`, not a component of
+   it — the CLI reports 89 output and 49 reasoning against 30390 total.
+3. Live stdout emits `tool_call` / `tool_call_update`. It does **not** emit
+   `tool_started` / `tool_completed` / `phase_changed`: those are the
+   **session-file** schema under
+   `~/.grok/sessions/<url-encoded-cwd>/<id>/events.jsonl`, a different stream.
+   #533's original AC3 named the session-file events for stdout; that mismatch
+   is why it was split out rather than implemented here.
+
+**Do not replace this file with a synthesized equivalent.** Recapture it if the
+CLI's shape changes.
+
+### Ground truth encoded in the file
+
+The terminal `end` event:
+
+| field                        | value |
+| ---------------------------- | ----: |
+| `input_tokens`               |  7133 |
+| `output_tokens`              |    89 |
+| `reasoning_tokens`           |    49 |
+| `cache_read_input_tokens`    | 23168 |
+| `cache_creation_input_tokens`|     0 |
+
+`ParseGrokStreamLine` folds reasoning into output, so the accumulator lands on
+in=7133, out=138, cache-read=23168, cache-created=0.
+
+### Redaction
+
+`redact-grok.jq` is shape-preserving in the same sense as `redact.jq`: it only
+rewrites values and drops keys — it never adds a key, changes a key's position,
+reorders an event, or alters any token count. What it does:
+
+- Reduces `available_commands` (Grok's analogue of claude's `system/init`) to
+  its built-in `tools` roster, dropping the `commands` list of every locally
+  installed plugin's slash commands.
+- Rewrites absolute local paths, which appear inside `tool_call_update`
+  payloads (`current_dir`, `output_file`) rather than only at top level.
+- Replaces `sessionId` / `requestId` / the model's opaque reasoning
+  `signature` with stable placeholders.
+
+Every `usage` payload, the `end` event's key layout, and the event order are
+byte-for-byte as the CLI emitted them.
+
+## `grok_unknown_model_stdout.jsonl` / `grok_unknown_model_stderr.txt`
+
+The **real** failure the #533 fix is about, captured from the same CLI build:
+
+```bash
+grok --output-format streaming-json --always-approve --no-auto-update \
+  -p "reply ok" --model grok-build-0.1 --max-turns 1
+```
+
+`grok-build-0.1` is not a model this CLI serves (`grok models` lists only
+`grok-4.6` and `grok-4.5`). The process exits **1**, writes one `type:"error"`
+line to stdout and the same sentence to stderr. Neither file is redacted —
+neither contains a path, an id, or a token count.
+
+This is the input that makes the defect visible. `ClassifyTerminalKind` matches
+the `unknown model` clause in `internal/terminalkind/table.json` and answers
+`model_unavailable`, which routes to the #42 sticky **downgrade**. But CLI mode
+never delivered this text to the classifier — `execution.Manager.RunStage`
+returns `(result, nil)` on a non-zero exit with the text on `result.Stderr`,
+and `ExecutionManagerRunner.RunStage` dropped it — so the scheduler classified
+the literal string `exit 1: <nil>` and got `subagent_crash` (the #520
+signature), then **escalated** the model upward. See
+`TestCLIStageErrorTextReachesClassification_GrokUnknownModel` in
+`internal/orchestrator/scheduler_failure_test.go`.

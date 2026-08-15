@@ -760,6 +760,88 @@ func TestParseGrokStreamLineUsage(t *testing.T) {
 	}
 }
 
+// Ground truth read off testdata/grok_stream_real_capture.jsonl — the terminal
+// `end` event's session totals.
+const (
+	grokCaptureEndInput     = 7133
+	grokCaptureEndOutput    = 89
+	grokCaptureEndReasoning = 49
+	grokCaptureEndCacheR    = 23168
+	grokCaptureEndCacheC    = 0
+)
+
+// TestParseGrokStreamRealCapture runs the hand-authored TestParseGrokStreamLineUsage
+// expectations against a REAL `grok --output-format streaming-json` transcript
+// (#533). It asserts nothing new about the parser — it asserts that the shape the
+// parser was written for is the shape the CLI actually emits, which is the only
+// thing a synthetic fixture can never establish (#166/#300).
+func TestParseGrokStreamRealCapture(t *testing.T) {
+	data, err := os.ReadFile("testdata/grok_stream_real_capture.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+
+	acc := &TokenAccumulator{}
+	var endEvent *StreamEvent
+	sawToolCall, sawToolCallUpdate := false, false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		ev, _ := acc.ParseLine(StreamFormatGrok, line)
+		if ev == nil {
+			continue
+		}
+		switch ev.Type {
+		case "end":
+			endEvent = ev
+		case "tool_call":
+			sawToolCall = true
+		case "tool_call_update":
+			sawToolCallUpdate = true
+		}
+	}
+
+	if endEvent == nil {
+		t.Fatal("fixture has no `end` event — recapture it")
+	}
+	if endEvent.Usage == nil {
+		t.Fatal("`end` event carried no usage — the real terminal event is where grok reports session totals")
+	}
+	if endEvent.SessionID == "" {
+		t.Error("`end` event carried no sessionId — grok spells it camelCase, not session_id")
+	}
+
+	// The accumulator lands on the terminal event's totals: grok's `usage`
+	// events are per-turn snapshots and `end` is the session total, so the
+	// parser assigns rather than sums.
+	wantOutput := grokCaptureEndOutput + grokCaptureEndReasoning
+	if acc.InputTokens != grokCaptureEndInput {
+		t.Errorf("input = %d, want %d (the `end` event's session total)", acc.InputTokens, grokCaptureEndInput)
+	}
+	if acc.OutputTokens != wantOutput {
+		t.Errorf("output = %d, want %d (output %d + reasoning %d — reasoning_tokens is a sibling of output_tokens, not a component)",
+			acc.OutputTokens, wantOutput, grokCaptureEndOutput, grokCaptureEndReasoning)
+	}
+	if acc.CacheRead != grokCaptureEndCacheR {
+		t.Errorf("cache read = %d, want %d", acc.CacheRead, grokCaptureEndCacheR)
+	}
+	if acc.CacheCreated != grokCaptureEndCacheC {
+		t.Errorf("cache created = %d, want %d", acc.CacheCreated, grokCaptureEndCacheC)
+	}
+
+	// #533 scope note: live stdout emits `tool_call` / `tool_call_update`. It
+	// does NOT emit tool_started/tool_completed/phase_changed — those are the
+	// SESSION-FILE schema under ~/.grok/sessions/<enc-cwd>/<id>/events.jsonl.
+	// The capture is the evidence that pins which stream is which.
+	if !sawToolCall || !sawToolCallUpdate {
+		t.Errorf("capture is missing live tool events (tool_call=%v tool_call_update=%v) — recapture with a tool-using prompt",
+			sawToolCall, sawToolCallUpdate)
+	}
+	for _, absent := range []string{"tool_started", "tool_completed", "phase_changed"} {
+		if strings.Contains(string(data), `"type":"`+absent+`"`) {
+			t.Errorf("capture contains %q on stdout — the session-file schema is documented as distinct from stdout; re-check #533's scope split", absent)
+		}
+	}
+}
+
 func TestStreamFormatForAdapter(t *testing.T) {
 	tests := []struct {
 		adapter  string
