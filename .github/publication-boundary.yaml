@@ -270,6 +270,7 @@ deny:
     except:
       - "docs/spikes/README.md"
       - "docs/spikes/183-context-engineering-claude-5.md"
+      - "docs/spikes/568-model-identity-axes.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
@@ -279,7 +280,15 @@ deny:
       ADR references, eval variant names) with no COGS, pricing, customer
       data, or unreleased roadmap material, and the spike-materialize stage
       (docs/SPIKE_CONTRACT.md) requires the artifact to remain at this path
-      to file its follow-up issues.
+      to file its follow-up issues. Spike #568 (model-identity axes) is
+      reviewed and excepted on the same basis: it was authored public-safe by
+      contract and adversarially reviewed for boundary content — it analyzes
+      only the public core (the model registry, routing surfaces, and eval
+      machinery under internal/** and packages/**), and the only price
+      figures are provider-observable rates already public in issues
+      #531/#553/#570; no COGS, customer data, account identifiers, or
+      unreleased roadmap material. The spike-materialize stage requires the
+      artifact at this path to file the epic #567 follow-up issues.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
