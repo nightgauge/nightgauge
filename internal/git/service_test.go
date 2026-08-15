@@ -1580,3 +1580,73 @@ func TestResetPipeline_KeepsGitignoredFiles(t *testing.T) {
 		t.Errorf("expected the reset to sweep untracked, non-ignored dirt, err=%v", err)
 	}
 }
+
+// TestRefArgsBeginningWithDashAreRefused pins the argv boundary that appeared
+// when the guarded mutations moved from go-git to the git CLI. go-git took names
+// as Go strings and never built an argv; `git checkout <name>` and
+// `git branch -D <name>` take the name as a positional operand, so a name
+// starting with "-" is parsed as a flag instead. Branch names are derived from
+// issue titles, which on a public repository anyone can supply.
+//
+// Each arm asserts OUR refusal (not git's downstream complaint) and that the
+// repository was not mutated on the way to the error.
+func TestRefArgsBeginningWithDashAreRefused(t *testing.T) {
+	_, worktreeDir := setupLinkedWorktree(t)
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService(linked worktree): %v", err)
+	}
+
+	headBefore := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "HEAD"))
+
+	// Shapes git would read as options rather than names.
+	for _, name := range []string{"--upload-pack=touch /tmp/pwned", "-f", "--orphan", "-"} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				op   string
+				call func() error
+			}{
+				{"BranchCreate", func() error { return svc.BranchCreate(name) }},
+				{"BranchCreateFrom", func() error { return svc.BranchCreateFrom(name, "main") }},
+				{"BranchDelete", func() error { return svc.BranchDelete(name) }},
+				{"Checkout", func() error { return svc.Checkout(name) }},
+			} {
+				err := tc.call()
+				if err == nil {
+					t.Fatalf("%s(%q) returned nil — a name git parses as an option must be refused", tc.op, name)
+				}
+				if !strings.Contains(err.Error(), "makes git parse it as an option") {
+					t.Errorf("%s(%q): want our own refusal, got %v", tc.op, name, err)
+				}
+			}
+		})
+	}
+
+	// Nothing may have moved on the way to those errors.
+	if got := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "HEAD")); got != headBefore {
+		t.Errorf("HEAD moved during refused operations: %s -> %s", headBefore, got)
+	}
+	if branches := gitExecTest(t, worktreeDir, "branch", "--list"); strings.Contains(branches, "-") &&
+		strings.Contains(branches, "upload-pack") {
+		t.Errorf("a refused name reached git and created a branch: %q", branches)
+	}
+}
+
+// TestValidateRefArgAcceptsRealNames is the positive control: the guard must not
+// over-fire on the names the pipeline actually produces.
+func TestValidateRefArgAcceptsRealNames(t *testing.T) {
+	for _, name := range []string{
+		"main",
+		"fix/535-commondir-aware-git-service",
+		"epic/531-grok-live-run-defects",
+		"feat/1-a-b",
+	} {
+		if err := validateRefArg("branch", name); err != nil {
+			t.Errorf("validateRefArg(%q) = %v, want nil", name, err)
+		}
+	}
+	if err := validateRefArg("branch", ""); err == nil {
+		t.Error("validateRefArg(\"\") = nil, want an error")
+	}
+}

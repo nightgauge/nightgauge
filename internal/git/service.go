@@ -108,6 +108,31 @@ func (s *Service) gitExec(args ...string) (string, error) {
 	return string(out), nil
 }
 
+// validateRefArg rejects a ref name that git's own argument parser would read as
+// an option rather than as a name.
+//
+// This boundary did not exist while these operations went through go-git, which
+// takes names as Go strings and never builds an argv. Routing the guarded
+// mutations through the git CLI created it: `git checkout <name>` and
+// `git branch -D <name>` take the name as a positional operand, so a name
+// beginning with "-" is smuggled in as a flag. Nothing legitimate is lost by
+// refusing them — git itself will not create or resolve a branch whose name
+// starts with "-" (`git check-ref-format --branch` rejects it).
+//
+// Branch names here are derived from issue titles, which on a public repository
+// are supplied by anyone who can open an issue, so this is a real input boundary
+// and not a defensive formality.
+func validateRefArg(kind, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%s name is empty", kind)
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("refusing %s name %q: a leading %q makes git parse it as an option, not a name",
+			kind, name, "-")
+	}
+	return nil
+}
+
 // BranchInfo holds information about the current branch.
 type BranchInfo struct {
 	Name   string `json:"name"`
@@ -134,6 +159,9 @@ func (s *Service) CurrentBranch() (string, error) {
 // `git checkout -b` rather than SetReference + go-git checkout, for the
 // atomicity reason spelled out on BranchCreateFrom.
 func (s *Service) BranchCreate(name string) error {
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
 	if _, err := s.gitExec("checkout", "-b", name); err != nil {
 		return fmt.Errorf("create branch %s: %w", name, err)
 	}
@@ -156,6 +184,9 @@ func (s *Service) BranchCreate(name string) error {
 // dirty tree the way `git checkout -B` always has: modifications that do not
 // collide with the target are carried across and preserved.
 func (s *Service) BranchCreateFrom(name, base string) error {
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
 	baseHash, err := s.resolveBranchHash(base)
 	if err != nil {
 		return fmt.Errorf("resolve base branch %s: %w", base, err)
@@ -307,6 +338,9 @@ func (s *Service) ListRemoteBranches() ([]string, error) {
 // the go-git SetConfig round-trip (and the operator comments it discards) is
 // gone.
 func (s *Service) BranchDelete(name string) error {
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
 	if _, err := s.gitExec("branch", "-D", name); err != nil {
 		return fmt.Errorf("delete branch %s: %w", name, err)
 	}
@@ -393,6 +427,9 @@ func (s *Service) FindEpicBranch(epicNumber int) (string, error) {
 // branch tip. The re-run paths of `nightgauge git branch-create` (the
 // remoteExists and localExists cases) reach this on every retry.
 func (s *Service) Checkout(branch string) error {
+	if err := validateRefArg("branch", branch); err != nil {
+		return err
+	}
 	if _, err := s.gitExec("checkout", branch); err != nil {
 		return fmt.Errorf("checkout %s: %w", branch, err)
 	}
