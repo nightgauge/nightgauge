@@ -85,7 +85,9 @@ describe("runEvalSuite", () => {
       timestamp: "2026-06-30T00:00:00.000Z",
       mode: "mock",
       tasks: [TASK],
-      matrix: buildMatrix(["claude-opus-4-8", "claude-haiku-4-5-20251001"], ["low"], ["none"]),
+      // Both models declare a real effort axis containing "low" — cells the
+      // registry interlock (#571) would skip belong in the runner's own tests.
+      matrix: buildMatrix(["claude-opus-4-8", "claude-sonnet-4-6"], ["low"], ["none"]),
       models: [],
       executor: passExecutor,
       workspaces: noopWorkspaces,

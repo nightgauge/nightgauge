@@ -68,15 +68,27 @@ function claudeJson(
   });
 }
 
-/** Records spawn calls and returns a scripted queue of results. */
+/** Records spawn calls (args + env overlay) and returns a scripted queue of results. */
 function scriptedSpawn(results: CliSpawnResult[]): {
   spawn: CliSpawnFn;
-  calls: Array<{ command: string; args: string[]; prompt: string; cwd: string }>;
+  calls: Array<{
+    command: string;
+    args: string[];
+    prompt: string;
+    cwd: string;
+    env: Record<string, string>;
+  }>;
 } {
-  const calls: Array<{ command: string; args: string[]; prompt: string; cwd: string }> = [];
+  const calls: Array<{
+    command: string;
+    args: string[];
+    prompt: string;
+    cwd: string;
+    env: Record<string, string>;
+  }> = [];
   let i = 0;
-  const spawn: CliSpawnFn = async (command, args, prompt, cwd) => {
-    calls.push({ command, args, prompt, cwd });
+  const spawn: CliSpawnFn = async (command, args, prompt, cwd, _timeoutMs, env) => {
+    calls.push({ command, args, prompt, cwd, env: env ?? {} });
     const r = results[Math.min(i, results.length - 1)];
     i++;
     return r;
@@ -137,7 +149,8 @@ describe("LiveCellExecutor", () => {
     expect(result.gate_results).toEqual([{ name: "test", passed: true, detail: undefined }]);
     expect(result.model_version_label).toBe("Sonnet 5");
     expect(result.stage).toBe("feature-dev");
-    // Invoked by concrete version, headless + permissionless.
+    // Invoked by concrete version, headless + permissionless, at the CELL'S
+    // effort — the real CLI flag the pipeline emits (#571).
     expect(calls[0].args).toEqual(
       expect.arrayContaining([
         "--print",
@@ -146,8 +159,12 @@ describe("LiveCellExecutor", () => {
         "--model",
         "claude-sonnet-5",
         "--dangerously-skip-permissions",
+        "--effort",
+        "high",
       ])
     );
+    // reasoning "none" travels as the real thinking-disable env parameter.
+    expect(calls[0].env).toEqual({ CLAUDE_CODE_DISABLE_THINKING: "1" });
     // Task instruction reaches the model over stdin.
     expect(calls[0].prompt).toContain("Fix daysBetween");
     expect(calls[0].cwd).toBe("/tmp/ws/cell");
@@ -204,7 +221,7 @@ describe("LiveCellExecutor", () => {
     expect(calls).toHaveLength(2);
   });
 
-  it("maps reasoning=high to the ultrathink keyword in the prompt", async () => {
+  it("maps reasoning=high to a real thinking budget (MAX_THINKING_TOKENS), never a prompt keyword (#571)", async () => {
     const { spawn, calls } = scriptedSpawn([
       { stdout: claudeJson({ input_tokens: 1, output_tokens: 1 }), stderr: "", code: 0 },
     ]);
@@ -212,7 +229,24 @@ describe("LiveCellExecutor", () => {
     const exe = new LiveCellExecutor({ spawn, exec });
 
     await exe.execute(task(), CELL({ reasoning: "high" }), WORKSPACE);
-    expect(calls[0].prompt).toContain("Ultrathink");
+    expect(calls[0].env).toEqual({ MAX_THINKING_TOKENS: "31999" });
+    // The keyword ladder is retired: the prompt text is identical across
+    // reasoning cells, so the axis measures the PARAMETER, not prompt drift.
+    expect(calls[0].prompt).not.toContain("Ultrathink");
+    expect(calls[0].prompt).not.toContain("Think hard");
+  });
+
+  it("varies cell.effort into the --effort flag per cell (#571)", async () => {
+    const { spawn, calls } = scriptedSpawn([
+      { stdout: claudeJson({ input_tokens: 1, output_tokens: 1 }), stderr: "", code: 0 },
+    ]);
+    const { exec } = scriptedExec({ checkCodes: [0] });
+    const exe = new LiveCellExecutor({ spawn, exec });
+
+    await exe.execute(task(), CELL({ effort: "low" }), WORKSPACE);
+    await exe.execute(task(), CELL({ effort: "xhigh" }), WORKSPACE);
+    expect(calls[0].args[calls[0].args.indexOf("--effort") + 1]).toBe("low");
+    expect(calls[1].args[calls[1].args.indexOf("--effort") + 1]).toBe("xhigh");
   });
 
   it("applies the prompt-variant overlay to the executed prompt (#72)", async () => {
@@ -374,6 +408,9 @@ describe("LiveCellExecutor — adapter parameterization (#107)", () => {
     // The Claude flag shape must NOT leak onto a codex run.
     expect(calls[0].args).not.toContain("--print");
     expect(calls[0].args).not.toContain("--dangerously-skip-permissions");
+    expect(calls[0].args).not.toContain("--effort");
+    // …and codex takes the effort axis through its own knob (#571).
+    expect(calls[0].args[calls[0].args.indexOf("-c") + 1]).toBe("model_reasoning_effort=high");
   });
 
   it("parses codex turn.completed usage, normalizing the cached subset out of input", async () => {
@@ -396,32 +433,35 @@ describe("LiveCellExecutor — adapter parameterization (#107)", () => {
     expect(result.latency_ms).toBeGreaterThanOrEqual(0);
   });
 
-  it("expresses codex reasoning via the model_reasoning_effort flag, not a prompt keyword", async () => {
+  it("maps cell.effort onto codex model_reasoning_effort — the pipeline's adapter translation (#571)", async () => {
     const { spawn, calls } = scriptedSpawn([
       { stdout: codexJsonl({ input: 1, output: 1 }), stderr: "", code: 0 },
     ]);
     const { exec } = scriptedExec({ checkCodes: [0] });
     const exe = new LiveCellExecutor({ spawn, exec });
 
-    await exe.execute(task(), CELL({ model_id: "gpt-5.5", reasoning: "high" }), WORKSPACE);
+    await exe.execute(task(), CELL({ model_id: "gpt-5.5", effort: "low" }), WORKSPACE);
 
-    // Reasoning is a CLI flag for codex …
     const args = calls[0].args;
     expect(args).toContain("-c");
-    expect(args[args.indexOf("-c") + 1]).toBe("model_reasoning_effort=high");
-    // … and must NOT appear as Claude's prompt keyword.
+    expect(args[args.indexOf("-c") + 1]).toBe("model_reasoning_effort=low");
+    // No prompt-borne steering on any adapter.
     expect(calls[0].prompt).not.toContain("Ultrathink");
   });
 
-  it("omits the codex reasoning flag when reasoning is none (codex default)", async () => {
+  it("fails as unsupported when a codex cell requests a separate reasoning budget (#571)", async () => {
     const { spawn, calls } = scriptedSpawn([
       { stdout: codexJsonl({ input: 1, output: 1 }), stderr: "", code: 0 },
     ]);
     const { exec } = scriptedExec({ checkCodes: [0] });
     const exe = new LiveCellExecutor({ spawn, exec });
 
-    await exe.execute(task(), CELL({ model_id: "gpt-5.5", reasoning: "none" }), WORKSPACE);
-    expect(calls[0].args).not.toContain("-c");
+    // codex has ONE budget knob and effort drives it; reasoning !== "none"
+    // cannot be honored, so the cell must never run mislabeled.
+    await expect(
+      exe.execute(task(), CELL({ model_id: "gpt-5.5", reasoning: "high" }), WORKSPACE)
+    ).rejects.toThrow(/no thinking knob separate from 'model_reasoning_effort'/);
+    expect(calls).toHaveLength(0); // nothing was spawned
   });
 
   it("honors an explicit adapter override, resolving the model within that provider", async () => {

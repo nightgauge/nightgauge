@@ -100,6 +100,65 @@ describe("EvalRoutingAdvisor — eval data drives the recommendation", () => {
   });
 });
 
+describe("EvalRoutingAdvisor — honest-row exclusions (#571)", () => {
+  it("excludes pre-v3 rows: effort was never applied, so they must not be averaged", () => {
+    // Same (jobClass, model): 5 dishonest v2 rows claiming stellar quality and
+    // 3 honest v3 rows. Only the v3 rows may count.
+    const v2Rows = records("bugfix", "claude-opus-4-8", 99, 0.01, 5).map((r) => ({
+      ...r,
+      schema_version: "2",
+    })) as unknown as ModelEvalRecord[];
+    const v3Rows = records("bugfix", "claude-opus-4-8", 60, 0.35, 3);
+    const advisor = new EvalRoutingAdvisor([...v2Rows, ...v3Rows]);
+
+    const stats = advisor.statsFor("bugfix");
+    expect(stats).toHaveLength(1);
+    expect(stats[0].samples).toBe(3); // v2 rows never entered the aggregate
+    expect(stats[0].meanQuality).toBeCloseTo(60, 5);
+  });
+
+  it("mutes the advisor entirely when only pre-v3 data exists", () => {
+    const v2Only = records("bugfix", "claude-opus-4-8", 95, 0.3, 6).map((r) => ({
+      ...r,
+      schema_version: "2",
+    })) as unknown as ModelEvalRecord[];
+    const advisor = new EvalRoutingAdvisor(v2Only);
+    expect(advisor.recommend("bugfix", "maximum")).toBeUndefined();
+    expect(advisor.advise("claude-sonnet-5", "bugfix", "maximum").source).toBe("base");
+  });
+
+  it("fails closed on a missing or malformed schema_version — unknown provenance never aggregates", () => {
+    const noVersion = records("bugfix", "claude-opus-4-8", 95, 0.3, 4).map((r) => {
+      const { schema_version: _dropped, ...rest } = r;
+      return rest;
+    }) as unknown as ModelEvalRecord[];
+    const garbageVersion = records("bugfix", "claude-opus-4-8", 95, 0.3, 4).map((r) => ({
+      ...r,
+      schema_version: "not-a-number",
+    })) as unknown as ModelEvalRecord[];
+    const advisor = new EvalRoutingAdvisor([...noVersion, ...garbageVersion]);
+    expect(advisor.statsFor("bugfix")).toHaveLength(0);
+  });
+
+  it("excludes skipped cells — they carry no measurement", () => {
+    const skipped = records("bugfix", "claude-opus-4-8", 0, 0, 4).map((r) => ({
+      ...r,
+      verdict: "skipped" as const,
+      skip_reason: "effort 'max' is not supported by model 'claude-opus-4-8'",
+      score: undefined,
+    }));
+    const executed = records("bugfix", "claude-opus-4-8", 80, 0.3, 3);
+    const advisor = new EvalRoutingAdvisor([...skipped, ...executed]);
+
+    const stats = advisor.statsFor("bugfix");
+    expect(stats).toHaveLength(1);
+    expect(stats[0].samples).toBe(3);
+    // Skipped rows would have dragged passRate to 3/7 and quality toward 0.
+    expect(stats[0].passRate).toBe(1);
+    expect(stats[0].meanQuality).toBeCloseTo(80, 5);
+  });
+});
+
 describe("EvalRoutingAdvisor — advisory override (opt-in)", () => {
   const advisor = new EvalRoutingAdvisor([
     ...records("bugfix", "claude-haiku-4-5-20251001", 90, 0.04, 6),

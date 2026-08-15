@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   ModelEvalRunner,
+  cellSkipReason,
   mapWithConcurrency,
   type EvalCellExecutor,
   type WorkspaceProvider,
@@ -26,10 +27,14 @@ const TASK = (id: string): EvalTask => ({
   rubric: { criteria: [{ dimension: "correctness", weight: 1, guidance: "?" }] },
 });
 
-const CELL = (model_id: string, effort: "low" | "medium" | "high"): EvalMatrixCell => ({
+const CELL = (
+  model_id: string,
+  effort: EvalMatrixCell["effort"],
+  reasoning: EvalMatrixCell["reasoning"] = "none"
+): EvalMatrixCell => ({
   model_id,
   effort,
-  reasoning: "none",
+  reasoning,
   prompt_variant: "baseline",
 });
 
@@ -68,7 +73,7 @@ describe("ModelEvalRunner", () => {
   it("expands the task × matrix and prices cost from the registry", async () => {
     const { provider, acquired, disposedCount } = trackingProvider();
     const runner = new ModelEvalRunner(okExecutor, provider);
-    const matrix = [CELL("claude-opus-4-8", "low"), CELL("claude-haiku-4-5-20251001", "high")];
+    const matrix = [CELL("claude-opus-4-8", "low"), CELL("claude-sonnet-4-6", "high")];
     const run = await runner.run({
       suite: "smoke",
       runId: "r1",
@@ -80,7 +85,7 @@ describe("ModelEvalRunner", () => {
     });
 
     expect(run.cells).toHaveLength(4); // 2 tasks × 2 cells
-    expect(run.summary).toMatchObject({ total: 4, passed: 4, failed: 0, errored: 0 });
+    expect(run.summary).toMatchObject({ total: 4, passed: 4, failed: 0, errored: 0, skipped: 0 });
     expect(acquired).toHaveLength(4);
     expect(disposedCount()).toBe(4); // one workspace acquired AND disposed per cell
 
@@ -132,7 +137,7 @@ describe("ModelEvalRunner", () => {
     const { provider } = trackingProvider();
     const flaky: EvalCellExecutor = {
       async execute(_task, cell) {
-        if (cell.model_id === "boom") throw new Error("executor exploded");
+        if (cell.model_id === "claude-sonnet-4-6") throw new Error("executor exploded");
         return okExecutor.execute(_task, cell, { dir: "x", dispose: async () => {} });
       },
     };
@@ -143,11 +148,11 @@ describe("ModelEvalRunner", () => {
       timestamp: "t",
       mode: "mock",
       tasks: [TASK("a")],
-      matrix: [CELL("claude-opus-4-8", "low"), CELL("boom", "low")],
+      matrix: [CELL("claude-opus-4-8", "low"), CELL("claude-sonnet-4-6", "low")],
       models: MODELS,
     });
     expect(run.summary).toMatchObject({ total: 2, passed: 1, errored: 1 });
-    const errored = run.cells.find((c) => c.cell.model_id === "boom")!;
+    const errored = run.cells.find((c) => c.cell.model_id === "claude-sonnet-4-6")!;
     expect(errored.verdict).toBe("error");
     expect(errored.error).toMatch(/exploded/);
     expect(errored.cost_usd).toBe(0);
@@ -232,6 +237,131 @@ describe("ModelEvalRunner", () => {
     expect(score.dimensions.map((d) => d.dimension)).toContain("ux_quality");
     // A weak judge (40) must drag the composite below the gate-only correctness (100).
     expect(score.composite).toBeLessThan(100);
+  });
+});
+
+describe("registry interlock — invalid cells are skipped before spawn (#571)", () => {
+  /** Executor that must never run for a skipped cell. */
+  function explodingExecutor(): { executor: EvalCellExecutor; executions: () => number } {
+    let n = 0;
+    return {
+      executor: {
+        async execute(_task, cell) {
+          n++;
+          return okExecutor.execute(_task, cell, { dir: "x", dispose: async () => {} });
+        },
+      },
+      executions: () => n,
+    };
+  }
+
+  it("skips a cell whose model declares no effort axis (supported_efforts: [])", async () => {
+    const { provider, acquired } = trackingProvider();
+    const { executor, executions } = explodingExecutor();
+    const runner = new ModelEvalRunner(executor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [CELL("claude-haiku-4-5-20251001", "high")],
+      models: MODELS,
+      scoringBaseline: { attempts: 1, latencyMs: 60_000, costUsd: 1 },
+    });
+    const cell = run.cells[0];
+    expect(cell.verdict).toBe("skipped");
+    expect(cell.skip_reason).toMatch(/no effort axis/);
+    expect(cell.error).toBeUndefined(); // skipped, NOT failed/errored
+    expect(cell.score).toBeUndefined(); // no measurement → nothing to score
+    expect(cell.cost_usd).toBe(0);
+    expect(run.summary).toMatchObject({ total: 1, passed: 0, failed: 0, errored: 0, skipped: 1 });
+    // Never run: no workspace was acquired and the executor never fired.
+    expect(acquired).toHaveLength(0);
+    expect(executions()).toBe(0);
+  });
+
+  it("skips an effort level off the model's ladder (opus-4-8 has no 'max')", async () => {
+    const { provider } = trackingProvider();
+    const runner = new ModelEvalRunner(okExecutor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [CELL("claude-opus-4-8", "max")],
+      models: MODELS,
+    });
+    expect(run.cells[0].verdict).toBe("skipped");
+    expect(run.cells[0].skip_reason).toMatch(/'max' is not supported/);
+  });
+
+  it("skips an unknown model — effort support is unverifiable, so running would mislabel", async () => {
+    const { provider } = trackingProvider();
+    const runner = new ModelEvalRunner(okExecutor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [CELL("totally-unknown-model", "high")],
+      models: MODELS,
+    });
+    expect(run.cells[0].verdict).toBe("skipped");
+    expect(run.cells[0].skip_reason).toMatch(/no registry descriptor/);
+  });
+
+  it("applies the thinking-disable interlock: reasoning 'none' above the declared ceiling is skipped", async () => {
+    const { provider } = trackingProvider();
+    const runner = new ModelEvalRunner(okExecutor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [
+        // opus-5 declares thinking_disable_max_effort: high → xhigh+none is a 400.
+        CELL("claude-opus-5", "xhigh", "none"),
+        // …but the same effort with thinking ON is fine,
+        CELL("claude-opus-5", "xhigh", "high"),
+        // …and disabling at the ceiling itself is fine.
+        CELL("claude-opus-5", "high", "none"),
+      ],
+      models: MODELS,
+    });
+    const [conflicted, thinkingOn, atCeiling] = run.cells;
+    expect(conflicted.verdict).toBe("skipped");
+    expect(conflicted.skip_reason).toMatch(/rejects disabled thinking above effort 'high'/);
+    expect(thinkingOn.verdict).toBe("pass");
+    expect(atCeiling.verdict).toBe("pass");
+    expect(run.summary).toMatchObject({ total: 3, passed: 2, skipped: 1 });
+  });
+
+  it("skips reasoning 'none' at EVERY effort for a never-disable model (fable)", async () => {
+    const { provider } = trackingProvider();
+    const runner = new ModelEvalRunner(okExecutor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [CELL("claude-fable-5", "low", "none")],
+      models: MODELS,
+    });
+    expect(run.cells[0].verdict).toBe("skipped");
+    // The "never" ceiling must not be rendered as "lower the effort".
+    expect(run.cells[0].skip_reason).toMatch(/at every effort/);
+    expect(run.cells[0].skip_reason).not.toMatch(/above effort/);
+  });
+
+  it("cellSkipReason returns undefined for a fully valid combination", () => {
+    expect(cellSkipReason(CELL("claude-sonnet-5", "high", "medium"))).toBeUndefined();
+    // sonnet-5 declares no thinking-disable ceiling → none is valid at max.
+    expect(cellSkipReason(CELL("claude-sonnet-5", "max", "none"))).toBeUndefined();
   });
 });
 

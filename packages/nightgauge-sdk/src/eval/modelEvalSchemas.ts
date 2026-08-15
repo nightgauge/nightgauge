@@ -22,11 +22,17 @@ import { EvalModeSchema, EvalVerdictSchema, ModelTierSchema, PIPELINE_SKILLS } f
 
 /**
  * Model-eval record schema version. Bump on breaking JSONL/wire shape changes.
+ * v3 (#571): cells became HONEST — `cell.effort` is now wired into the real
+ * per-adapter knob and Claude reasoning uses the real thinking parameters
+ * instead of prompt keywords. Pre-v3 rows describe runs where the effort
+ * label was never applied, so aggregation (routing advisor, anything that
+ * averages records) must exclude `schema_version < 3` rows outright — they
+ * can never be averaged with honest ones.
  * v2 (#72): matrix cells gained the `prompt_variant` axis — old readers with
  * strict cell schemas reject v2 records, so the version signals the change
  * (old v1 records still parse here via the field's `baseline` default).
  */
-export const MODEL_EVAL_SCHEMA_VERSION = "2";
+export const MODEL_EVAL_SCHEMA_VERSION = "3";
 
 /**
  * The implicit prompt variant: the unmodified on-disk task instruction (#72).
@@ -71,10 +77,14 @@ export const EffortLevelSchema = z.enum(EFFORT_LEVELS);
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 
 /**
- * Provider-neutral reasoning-budget axis. Today effort is derived but reasoning
- * is not a typed axis; S4 (#4171) wires this into the adapter spawn (Claude
- * extended thinking, OpenAI reasoning effort, etc.). `none` means no extended
- * reasoning budget.
+ * Provider-neutral reasoning-budget axis, wired into the adapter spawn by the
+ * eval adapter profiles (#571): the Claude profile expresses it through the
+ * CLI's real thinking parameters (`CLAUDE_CODE_DISABLE_THINKING` for `none`,
+ * `MAX_THINKING_TOKENS` for the levels); Codex has no thinking knob separate
+ * from its reasoning-effort config (which the EFFORT axis drives), so a codex
+ * cell with a non-`none` reasoning fails as unsupported. `none` means no
+ * extended reasoning budget — i.e. thinking disabled, which the registry's
+ * thinking-disable interlock validates against the requested effort.
  */
 export const REASONING_LEVELS = ["none", "low", "medium", "high"] as const;
 export const ReasoningLevelSchema = z.enum(REASONING_LEVELS);
@@ -433,6 +443,19 @@ export const GateResultSchema = z
   .strict();
 export type GateResult = z.infer<typeof GateResultSchema>;
 
+/**
+ * Cell verdict vocabulary for the MODEL-eval lane (#571): the shared verdicts
+ * plus `skipped` — a cell the registry interlock excluded BEFORE spawn
+ * (effort level outside `supported_efforts`, no effort axis at all, or a
+ * thinking-disable conflict). A skipped cell carries NO measurement: it never
+ * ran, so it is neither a failure nor an error, and aggregators must not
+ * average it with executed cells. The reason lives in `skip_reason`.
+ * Deliberately local to this lane — the skill-eval lane's `EvalVerdictSchema`
+ * is untouched.
+ */
+export const ModelEvalVerdictSchema = z.enum([...EvalVerdictSchema.options, "skipped"]);
+export type ModelEvalVerdict = z.infer<typeof ModelEvalVerdictSchema>;
+
 /** One task × matrix-cell outcome: telemetry + (optional) score. */
 export const ModelEvalCellResultSchema = z
   .object({
@@ -445,7 +468,9 @@ export const ModelEvalCellResultSchema = z
     model_id: z.string().min(1),
     /** Concrete version label recorded for interpretation. */
     model_version_label: z.string(),
-    verdict: EvalVerdictSchema,
+    verdict: ModelEvalVerdictSchema,
+    /** Why the registry interlock excluded this cell (set only when verdict === "skipped"). */
+    skip_reason: z.string().optional(),
     tokens: TokenUsageSchema,
     /** Computed from the S2 registry rates. */
     cost_usd: z.number().nonnegative(),
@@ -468,6 +493,8 @@ export const EvalRunSummarySchema = z
     passed: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),
     errored: z.number().int().nonnegative(),
+    /** Cells the registry interlock excluded before spawn (#571) — never run. */
+    skipped: z.number().int().nonnegative(),
     total_cost_usd: z.number().nonnegative(),
   })
   .strict();

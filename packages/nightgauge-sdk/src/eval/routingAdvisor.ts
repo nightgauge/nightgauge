@@ -70,6 +70,30 @@ export interface AdvisorOptions {
 const CONFIDENCE_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
 
 /**
+ * Only rows from schema_version >= 3 carry honestly-applied effort/thinking
+ * (#571): before v3 the live executor never wired `cell.effort` into any
+ * spawn and Claude reasoning was faked via prompt keywords, so a pre-v3 row's
+ * axis labels describe a run that never happened. Averaging those with honest
+ * v3 rows would mis-rank models by construction — they are excluded outright.
+ */
+const MIN_HONEST_SCHEMA_VERSION = 3;
+
+/**
+ * A record the advisor may aggregate: an honest (v3+) row, from an executed
+ * cell (skipped cells carry no measurement), under the baseline prompt
+ * variant (experimental variant cells, #72, measure TEXT, not models).
+ * Defensive on purpose — callers hand in JSONL rows that may predate the
+ * current schema and skip the Zod parse.
+ */
+function isAggregatable(r: ModelEvalRecord): boolean {
+  // `>=` (not a negated `<`) so a missing/malformed version (Number → NaN)
+  // fails CLOSED: a row of unknown provenance is not an honest measurement.
+  if (!(Number(r.schema_version) >= MIN_HONEST_SCHEMA_VERSION)) return false;
+  if (r.verdict === "skipped") return false;
+  return (r.cell.prompt_variant ?? BASELINE_PROMPT_VARIANT) === BASELINE_PROMPT_VARIANT;
+}
+
+/**
  * Builds recommendations from eval records and advises the router. Pure: all
  * inputs are records; no clock, filesystem, or network.
  */
@@ -83,16 +107,9 @@ export class EvalRoutingAdvisor {
     this.qualityFloor = options.qualityFloor ?? 70;
     this.minSamples = options.minSamples ?? 3;
     this.minConfidenceToApply = options.minConfidenceToApply ?? "medium";
-    // Routing advice must reflect the prompts production actually runs — the
-    // baseline variant. Experimental prompt-variant cells (#72) measure TEXT,
-    // not models, and would skew per-model stats if aggregated here. The ??
-    // covers pre-v2 records handed in without a schema parse (the parse fills
-    // the baseline default) so old data never silently mutes the advisor.
-    this.stats = aggregate(
-      records.filter(
-        (r) => (r.cell.prompt_variant ?? BASELINE_PROMPT_VARIANT) === BASELINE_PROMPT_VARIANT
-      )
-    );
+    // Aggregate only honest, executed, baseline-variant rows (#571, #72) —
+    // see isAggregatable for why each exclusion exists.
+    this.stats = aggregate(records.filter(isAggregatable));
   }
 
   /** All aggregated (jobClass, model) stats — useful for the dashboard/API too. */
