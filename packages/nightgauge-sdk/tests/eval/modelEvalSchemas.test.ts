@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   MODEL_EVAL_SCHEMA_VERSION,
+  MIN_HONEST_SCHEMA_VERSION,
   EFFORT_LEVELS,
   REASONING_LEVELS,
   ModelDescriptorSchema,
@@ -16,6 +17,7 @@ import {
   EvalScoreSchema,
   EvalMatrixCellSchema,
   ModelEvalCellResultSchema,
+  ModelEvalVerdictSchema,
   EvalRunSchema,
   ModelEvalRecordSchema,
   CheckCommandSchema,
@@ -25,7 +27,7 @@ import {
   type EvalRun,
 } from "../../src/eval/modelEvalSchemas.js";
 import { getModelDescriptor } from "../../src/eval/modelRegistry.js";
-import { MODEL_TIERS } from "../../src/eval/schemas.js";
+import { EvalVerdictSchema, MODEL_TIERS } from "../../src/eval/schemas.js";
 
 const TS = "2026-06-30T12:00:00.000Z";
 
@@ -174,9 +176,72 @@ describe("model-eval schemas — round-trip parse", () => {
           },
         },
       ],
-      summary: { total: 1, passed: 1, failed: 0, errored: 0, total_cost_usd: 0.0175 },
+      summary: { total: 1, passed: 1, failed: 0, errored: 0, skipped: 0, total_cost_usd: 0.0175 },
     };
     expect(EvalRunSchema.parse(run)).toEqual(run);
+  });
+});
+
+describe("model-eval schemas — honest-cell versioning (#571)", () => {
+  const record = {
+    task_id: TASK.id,
+    job_class: "ui-creation",
+    cell: { model_id: OPUS.id, effort: "high", reasoning: "high", prompt_variant: "baseline" },
+    model_id: OPUS.id,
+    model_version_label: "Opus 4.8",
+    verdict: "pass",
+    tokens: { input: 1, output: 1 },
+    cost_usd: 0.01,
+    latency_ms: 10,
+    attempts_to_green: 1,
+    gate_results: [],
+    schema_version: MODEL_EVAL_SCHEMA_VERSION,
+    run_id: "run-1",
+    suite: "smoke",
+    timestamp: TS,
+    mode: "live",
+  };
+
+  it("the current schema version is 3 — effort/thinking are actually applied from v3 on", () => {
+    expect(MODEL_EVAL_SCHEMA_VERSION).toBe("3");
+    // The honest-aggregation floor every pooling path filters by: the current
+    // version must never fall below it, or the writer would emit rows its own
+    // aggregators refuse.
+    expect(Number(MODEL_EVAL_SCHEMA_VERSION)).toBeGreaterThanOrEqual(MIN_HONEST_SCHEMA_VERSION);
+  });
+
+  it("rejects pre-fix (v2) records — their effort labels were never applied", () => {
+    expect(() => ModelEvalRecordSchema.parse({ ...record, schema_version: "2" })).toThrow();
+  });
+
+  it("parses a skipped cell with its skip_reason", () => {
+    const skipped = ModelEvalCellResultSchema.parse({
+      task_id: "t",
+      job_class: "bugfix",
+      cell: {
+        model_id: "claude-haiku-4-5-20251001",
+        effort: "high",
+        reasoning: "none",
+        prompt_variant: "baseline",
+      },
+      model_id: "claude-haiku-4-5-20251001",
+      model_version_label: "claude-haiku-4-5-20251001",
+      verdict: "skipped",
+      skip_reason: "model declares no effort axis (supported_efforts: [])",
+      tokens: { input: 0, output: 0 },
+      cost_usd: 0,
+      latency_ms: 0,
+      attempts_to_green: 0,
+      gate_results: [],
+    });
+    expect(skipped.verdict).toBe("skipped");
+    expect(skipped.skip_reason).toMatch(/no effort axis/);
+  });
+
+  it("widens the verdict vocabulary ONLY in this lane — the skill-eval lane stays untouched", () => {
+    expect([...ModelEvalVerdictSchema.options]).toEqual(["pass", "fail", "error", "skipped"]);
+    // The shared skill-eval verdict must not learn "skipped".
+    expect(() => EvalVerdictSchema.parse("skipped")).toThrow();
   });
 });
 

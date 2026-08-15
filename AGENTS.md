@@ -73,15 +73,42 @@ git push -u origin feat/description-of-change
   and do it — avoid "quick fix vs proper fix" choices and "want me to…?"
   friction. (This does not override genuine product-direction decisions, which
   are still the user's call.)
-- **Manual PR merges only.** Auto-merge is disabled on all workspace repos.
-  Watch CI (`gh pr checks`), fix/rerun real failures (never dismiss a failing
-  test as "flaky" without root-causing it), then `gh pr merge --squash` — never
-  `--auto`. **`--admin` is required while the project has a single maintainer**:
-  `main` rulesets demand an approving review that nobody else can give, so
-  `--squash --admin` after green CI is the sanctioned path, not a bypass. Green
-  CI is still a precondition — `--admin` covers the missing reviewer, never a
-  failing check. Revisit when a second maintainer exists. See
-  [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
+- **Manual PR merges only, and `--admin` is NOT the routine path.** Auto-merge
+  is disabled on all workspace repos. Watch CI (`gh pr checks`), fix/rerun real
+  failures (never dismiss a failing test as "flaky" without root-causing it),
+  then **`gh pr merge --squash`** — never `--auto`, and **never `--admin` as a
+  matter of course**.
+
+  The `main` ruleset requires **zero** approving reviews (single maintainer), so
+  the plain squash merge succeeds on its own and GitHub itself enforces the 12
+  required status checks. That enforcement is the point: a merge must be
+  impossible while a check is red or pending, not merely discouraged.
+
+  **`--admin` bypasses the ENTIRE ruleset, not just one rule.** GitHub rulesets
+  have no per-rule bypass granularity — passing `--admin` waives required status
+  checks, linear history and everything else in one move. It exists as an
+  emergency escape hatch (the `OrganizationAdmin` bypass actor is deliberately
+  retained); using it routinely turns a machine-enforced gate back into an
+  honour system. If a merge needs `--admin`, that is a signal something is
+  misconfigured — fix the configuration instead.
+
+- **A green PR check is a prediction; `main`'s own run is the observation.**
+  After every merge, verify the merge commit's checks actually went green:
+
+  ```bash
+  gh api "repos/<owner>/<repo>/commits/<merge-sha>/check-runs" \
+    --jq '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")]|length'
+  ```
+
+  Non-zero means `main` is red and it is yours to fix immediately. PR checks run
+  against a _predicted_ merge; three classes only the post-merge run can catch —
+  **nondeterministic tests** (a coin-flip test passes the PR and fails `main` on
+  the identical tree — this is exactly how #572 was found), **merge skew** (two
+  PRs green apart, broken together), and **environment differences** (`main` has
+  secrets and permissions PR runs do not). Post-merge CI is not redundant with
+  the PR gate; it is the detector for what the PR gate structurally cannot see.
+  See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
+
 - **Clean up on merge — branch and worktree, remote and local, every forge.** A
   merge is not finished until its branch and any worktree are gone on both
   sides. Squash merges need `git branch -D` (the squash commit is not the branch

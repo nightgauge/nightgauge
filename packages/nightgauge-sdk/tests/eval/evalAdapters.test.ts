@@ -1,17 +1,24 @@
 /**
- * Tests for the per-adapter eval spawn profiles (Issue #107). Pure functions —
- * no CLI, no network. Covers the pieces the executor tests don't assert
- * directly: command-resolution precedence and provider→profile resolution.
+ * Tests for the per-adapter eval spawn profiles (Issue #107, honest axes #571).
+ * Pure functions — no CLI, no network. Covers the pieces the executor tests
+ * don't assert directly: command-resolution precedence, provider→profile
+ * resolution, and the real effort/thinking knob wiring.
  */
 
 import { describe, it, expect, afterEach } from "vitest";
 import {
+  CLAUDE_DISABLE_THINKING_ENV,
+  CLAUDE_MAX_THINKING_TOKENS_ENV,
+  CLAUDE_THINKING_BUDGETS,
+  UnsupportedCellError,
   claudeEvalProfile,
   codexEvalProfile,
+  maybeResolveEvalAdapterProfile,
   parseClaudeResult,
   resolveEvalAdapterProfile,
   resolveEvalAdapterProfileForAdapter,
 } from "../../src/eval/evalAdapters.js";
+import { EFFORT_LEVELS } from "../../src/eval/modelEvalSchemas.js";
 
 const CODEX_ENV = "NIGHTGAUGE_CODEX_CLI_COMMAND";
 const CLAUDE_ENV = "NIGHTGAUGE_CLAUDE_CLI_COMMAND";
@@ -40,6 +47,17 @@ describe("resolveEvalAdapterProfile", () => {
     expect(resolveEvalAdapterProfileForAdapter("claude-headless")).toBe(claudeEvalProfile);
     expect(resolveEvalAdapterProfileForAdapter("claude")).toBe(claudeEvalProfile);
   });
+
+  it("maybeResolveEvalAdapterProfile is total: undefined for unwired providers, never a throw", () => {
+    expect(maybeResolveEvalAdapterProfile("anthropic")).toBe(claudeEvalProfile);
+    expect(maybeResolveEvalAdapterProfile("openai")).toBe(codexEvalProfile);
+    expect(maybeResolveEvalAdapterProfile("google")).toBeUndefined();
+  });
+
+  it("declares the thinking-knob fact the runner interlock reads (#571)", () => {
+    expect(claudeEvalProfile.hasSeparateThinkingKnob).toBe(true);
+    expect(codexEvalProfile.hasSeparateThinkingKnob).toBe(false);
+  });
 });
 
 describe("command resolution precedence", () => {
@@ -61,20 +79,77 @@ describe("command resolution precedence", () => {
   });
 });
 
-describe("reasoning wiring is adapter-specific", () => {
-  it("claude carries reasoning in the prompt, codex carries it in a flag", () => {
-    // Claude: keyword directive in the prompt; no reasoning in args.
-    expect(claudeEvalProfile.reasoningPromptDirective("high")).toContain("Ultrathink");
-    expect(claudeEvalProfile.buildArgs("claude-opus-4-8", "high")).not.toContain("-c");
-    // Codex: flag in args; empty prompt directive.
-    expect(codexEvalProfile.reasoningPromptDirective("high")).toBe("");
-    const codexArgs = codexEvalProfile.buildArgs("gpt-5.5", "high");
-    expect(codexArgs).toContain("-c");
-    expect(codexArgs[codexArgs.indexOf("-c") + 1]).toBe("model_reasoning_effort=high");
+describe("claude spawn plan — real effort/thinking knobs (#571)", () => {
+  it("emits the pipeline's --effort flag for every ladder level", () => {
+    for (const effort of EFFORT_LEVELS) {
+      const plan = claudeEvalProfile.buildSpawnPlan("claude-opus-5", effort, "low");
+      const i = plan.args.indexOf("--effort");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(plan.args[i + 1]).toBe(effort);
+    }
   });
 
-  it("codex omits the reasoning flag for none", () => {
-    expect(codexEvalProfile.buildArgs("gpt-5.5", "none")).not.toContain("-c");
+  it("expresses reasoning 'none' as the thinking-disable env, not a prompt keyword", () => {
+    const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", "none");
+    expect(plan.env[CLAUDE_DISABLE_THINKING_ENV]).toBe("1");
+    // The budget key is OWNED-AND-CLEARED (present, `undefined` → evicted from
+    // the child env) so an ambient MAX_THINKING_TOKENS can never shadow the
+    // disabled thinking.
+    expect(CLAUDE_MAX_THINKING_TOKENS_ENV in plan.env).toBe(true);
+    expect(plan.env[CLAUDE_MAX_THINKING_TOKENS_ENV]).toBeUndefined();
+  });
+
+  it("expresses reasoning levels as MAX_THINKING_TOKENS budgets (keyword ladder retired)", () => {
+    for (const reasoning of ["low", "medium", "high"] as const) {
+      const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", reasoning);
+      expect(plan.env[CLAUDE_MAX_THINKING_TOKENS_ENV]).toBe(
+        String(CLAUDE_THINKING_BUDGETS[reasoning])
+      );
+      // The disable var is OWNED-AND-CLEARED: the pipeline blesses an ambient
+      // `export CLAUDE_CODE_DISABLE_THINKING=1` operator workaround, and if
+      // the plan did not evict it, every reasoning-level cell would run with
+      // thinking silently disabled — a mislabeled measurement.
+      expect(CLAUDE_DISABLE_THINKING_ENV in plan.env).toBe(true);
+      expect(plan.env[CLAUDE_DISABLE_THINKING_ENV]).toBeUndefined();
+    }
+    // The budget ladder ascends with the axis.
+    expect(CLAUDE_THINKING_BUDGETS.low).toBeLessThan(CLAUDE_THINKING_BUDGETS.medium);
+    expect(CLAUDE_THINKING_BUDGETS.medium).toBeLessThan(CLAUDE_THINKING_BUDGETS.high);
+  });
+
+  it("keeps the headless, permissionless flag shape", () => {
+    const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "medium", "none");
+    expect(plan.args).toEqual(
+      expect.arrayContaining([
+        "--print",
+        "--output-format",
+        "json",
+        "--model",
+        "claude-sonnet-5",
+        "--dangerously-skip-permissions",
+      ])
+    );
+  });
+});
+
+describe("codex spawn plan — effort drives the single reasoning-effort knob (#571)", () => {
+  it("maps cell.effort onto -c model_reasoning_effort=…, mirroring the pipeline adapter", () => {
+    for (const effort of EFFORT_LEVELS) {
+      const plan = codexEvalProfile.buildSpawnPlan("gpt-5.5", effort, "none");
+      const i = plan.args.indexOf("-c");
+      expect(i).toBeGreaterThanOrEqual(0);
+      expect(plan.args[i + 1]).toBe(`model_reasoning_effort=${effort}`);
+      expect(plan.env).toEqual({});
+    }
+  });
+
+  it("fails as unsupported for a non-none reasoning — codex has no separate thinking knob", () => {
+    expect(() => codexEvalProfile.buildSpawnPlan("gpt-5.5", "high", "high")).toThrow(
+      UnsupportedCellError
+    );
+    expect(() => codexEvalProfile.buildSpawnPlan("gpt-5.5", "high", "low")).toThrow(
+      /no thinking knob separate from 'model_reasoning_effort'/
+    );
   });
 });
 

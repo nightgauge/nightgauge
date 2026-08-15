@@ -756,6 +756,7 @@ export {
   type EvalDiffEntry,
   // Model-eval lane (docs/decisions/011-model-eval-system.md, #4168)
   MODEL_EVAL_SCHEMA_VERSION,
+  MIN_HONEST_SCHEMA_VERSION,
   BASELINE_PROMPT_VARIANT,
   PROVIDERS,
   ProviderSchema,

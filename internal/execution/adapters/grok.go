@@ -25,6 +25,18 @@ func (a *GrokAdapter) Agentic() bool { return true }
 // delivered with --prompt-file (or -p as a fallback).
 func (a *GrokAdapter) UsesStdin() bool { return false }
 
+// ValidateModel implements the optional pre-spawn validation hook the
+// execution manager checks before BuildCommand (#4021). For Grok it is the
+// registry's supported_efforts gate (#569): the provider-global
+// NIGHTGAUGE_GROK_EFFORT must sit on the ladder the RESOLVED model declares,
+// or the dispatch fails closed BEFORE any process is spawned — never a silent
+// pass-through to `grok --effort` (#532's failure signature), never a silent
+// downgrade (#75). Reads the same env var BuildCommand forwards so the value
+// that is validated is exactly the value that would be dispatched.
+func (a *GrokAdapter) ValidateModel(model string) error {
+	return validateGrokEffort(model, os.Getenv("NIGHTGAUGE_GROK_EFFORT"))
+}
+
 func resolveGrokModel(model string) string {
 	model = strings.TrimSpace(model)
 	if model == "" {

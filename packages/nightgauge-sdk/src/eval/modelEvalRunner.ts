@@ -16,9 +16,11 @@
  * @see docs/decisions/011-model-eval-system.md
  */
 
-import { computeCostUsd } from "./modelRegistry.js";
+import { maybeResolveEvalAdapterProfile } from "./evalAdapters.js";
+import { computeCostUsd, getModelDescriptor, thinkingDisableConflict } from "./modelRegistry.js";
 import {
   MODEL_EVAL_SCHEMA_VERSION,
+  THINKING_DISABLE_NEVER,
   type EvalMatrixCell,
   type EvalRun,
   type EvalTask,
@@ -77,10 +79,82 @@ export interface CellExecution {
 /**
  * Executes one task under one cell inside a prepared workspace and returns raw
  * telemetry. This is the boundary to the real pipeline (adapter spawn + gates);
- * it must honor `cell.effort` and `cell.reasoning`. Mocked in tests.
+ * it must honor `cell.effort` and `cell.reasoning` — the live executor applies
+ * both through each adapter's real CLI knobs (#571). The runner's registry
+ * interlock ({@link cellSkipReason}) guarantees the combination is valid
+ * before `execute` is ever called. Mocked in tests.
  */
 export interface EvalCellExecutor {
   execute(task: EvalTask, cell: EvalMatrixCell, workspace: EvalWorkspace): Promise<CellExecution>;
+}
+
+/**
+ * Registry interlock (#571): why a matrix cell must NOT be run, or `undefined`
+ * when it is measurable. Evaluated BEFORE any workspace/spawn cost, so invalid
+ * combinations are skipped-with-reason instead of discovered as mid-run
+ * failures (or worse, run mislabeled):
+ *
+ * - **Unknown model** — no registry descriptor means effort/thinking support
+ *   is unverifiable. Fails closed, mirroring the pipeline's `--effort`
+ *   emission gate (#336): a cell whose axes might silently not apply is a
+ *   mislabeled measurement.
+ * - **No effort axis** — `supported_efforts: []` is a positive declaration
+ *   (#336) that the model takes no effort parameter, so an effort-labeled
+ *   cell cannot be measured honestly.
+ * - **Unsupported effort level** — the level is off this model's ladder (#75
+ *   semantics: never downgrade, never run anyway).
+ * - **No separate thinking knob** — the provider's adapter profile declares
+ *   its only budget knob is the one the EFFORT axis drives (Codex's
+ *   `model_reasoning_effort`), so a `reasoning !== "none"` cell cannot be
+ *   honored. Excluding it here means no worktree is ever acquired for it —
+ *   the profile's own UnsupportedCellError throw remains as defense-in-depth
+ *   for callers that drive the executor directly.
+ * - **Thinking-disable conflict** — `reasoning: "none"` disables thinking,
+ *   and the registry's `thinking_disable_max_effort` (ThinkingDisableConflict
+ *   semantics, mirrored from the Go registry) says this model rejects that
+ *   pairing at the requested effort.
+ */
+export function cellSkipReason(cell: EvalMatrixCell): string | undefined {
+  const d = getModelDescriptor(cell.model_id);
+  if (!d) {
+    return (
+      `model '${cell.model_id}' has no registry descriptor, so effort/thinking support ` +
+      `cannot be verified — refusing to run a possibly mislabeled cell`
+    );
+  }
+  if (d.supported_efforts.length === 0) {
+    return (
+      `model '${d.id}' declares no effort axis (supported_efforts: []) — ` +
+      `an effort-labeled cell (effort '${cell.effort}') cannot be measured honestly`
+    );
+  }
+  if (!d.supported_efforts.includes(cell.effort)) {
+    return (
+      `effort '${cell.effort}' is not supported by model '${d.id}' ` +
+      `(supported: ${d.supported_efforts.join(", ")})`
+    );
+  }
+  if (cell.reasoning !== "none") {
+    const profile = maybeResolveEvalAdapterProfile(d.provider);
+    if (profile && !profile.hasSeparateThinkingKnob) {
+      return (
+        `adapter '${profile.adapter}' has no thinking knob separate from the one the effort ` +
+        `axis drives — reasoning '${cell.reasoning}' cannot be applied to model '${d.id}'; ` +
+        `use reasoning 'none' and vary the effort axis instead`
+      );
+    }
+  }
+  if (cell.reasoning === "none") {
+    const { conflict, limit } = thinkingDisableConflict(d.id, cell.effort, d.provider);
+    if (conflict) {
+      return limit === THINKING_DISABLE_NEVER
+        ? `model '${d.id}' rejects disabled thinking at every effort — ` +
+            `reasoning 'none' is never valid for it`
+        : `model '${d.id}' rejects disabled thinking above effort '${limit}' ` +
+            `(requested '${cell.effort}') — reasoning 'none' at this effort would be a 400`;
+    }
+  }
+  return undefined;
 }
 
 export interface ModelEvalRunOptions {
@@ -145,6 +219,7 @@ export class ModelEvalRunner {
         passed: cells.filter((c) => c.verdict === "pass").length,
         failed: cells.filter((c) => c.verdict === "fail").length,
         errored: cells.filter((c) => c.verdict === "error").length,
+        skipped: cells.filter((c) => c.verdict === "skipped").length,
         total_cost_usd,
       },
     };
@@ -161,6 +236,24 @@ export class ModelEvalRunner {
       cell,
       model_id: cell.model_id,
     } as const;
+
+    // Registry interlock (#571): an invalid (model, effort, reasoning)
+    // combination is excluded BEFORE any workspace or spawn cost — recorded as
+    // skipped-with-reason, never as a failure and never run mislabeled.
+    const skip_reason = cellSkipReason(cell);
+    if (skip_reason) {
+      return {
+        ...base,
+        model_version_label: cell.model_id,
+        verdict: "skipped",
+        skip_reason,
+        tokens: { input: 0, output: 0, cache_read: 0, cache_creation: 0 },
+        cost_usd: 0,
+        latency_ms: 0,
+        attempts_to_green: 0,
+        gate_results: [],
+      };
+    }
 
     let workspace: EvalWorkspace | undefined;
     try {

@@ -125,27 +125,57 @@ the entire merge lifecycle.
 
 ### Single-Maintainer Merge Policy
 
-`main` carries a ruleset requiring an approving review. With one maintainer on
-the project, no PR can satisfy it — a self-authored PR cannot be self-approved,
-so every PR reaches `mergeStateStatus: BLOCKED` / `REVIEW_REQUIRED` and stops
-there regardless of CI.
-
-Until a second maintainer exists, the sanctioned merge is:
+The sanctioned merge is:
 
 ```bash
-gh pr merge <n> --squash --admin --delete-branch
+gh pr merge <n> --squash --delete-branch
 ```
 
-This is a deliberate policy, not a bypass. Two rules keep it honest:
+**No `--admin`.** The `main` ruleset requires **zero** approving reviews while
+the project has one maintainer, so a plain squash merge succeeds on its own —
+and GitHub enforces the 12 required status checks itself. The gate is machine
+-enforced: a merge is _impossible_ while a check is red or pending.
 
-- **`--admin` substitutes for the missing reviewer, never for a failing check.**
-  All checks must be green first; a red gate is a real failure to fix or
-  root-cause, exactly as before.
+This replaces an earlier policy that used `--admin` to satisfy a
+one-approving-review requirement nobody could meet. That worked, but it solved a
+review problem with a tool that disables everything:
+
+- **`--admin` bypasses the ENTIRE ruleset.** Rulesets have no per-rule bypass
+  granularity, so `--admin` waives required status checks, linear history and
+  the rest in a single move. Under the old policy the "all checks green" rule
+  was prose enforced by whoever typed the command — an honour system wearing a
+  gate's clothing.
+- The `OrganizationAdmin` bypass actor is **deliberately retained** as an
+  emergency escape hatch. Needing it during ordinary work means something is
+  misconfigured; fix the configuration rather than reaching for the hatch.
 - **`--auto` remains forbidden.** Auto-merge surrenders the merge moment to
   GitHub, which is what the rest of this document exists to prevent.
 
-Revisit this section the moment a second maintainer can review — the review
-requirement is worth keeping once it is satisfiable.
+Restore `required_approving_review_count: 1` the moment a second maintainer can
+review — the requirement is worth keeping once it is satisfiable, and it no
+longer costs you the check gate to do so.
+
+### Verify `main` After Every Merge
+
+A green PR check is a **prediction** about a tree that does not exist yet; the
+run on the merge commit is the **observation** of the tree that does. They can
+disagree, and when they do the disagreement is the finding:
+
+```bash
+gh api "repos/<owner>/<repo>/commits/<merge-sha>/check-runs" \
+  --jq '[.check_runs[]|select(.conclusion!="success" and .conclusion!="skipped" and .conclusion!="neutral")]|length'
+```
+
+Non-zero means `main` is red and it is the merger's to fix immediately.
+
+Three classes only the post-merge run can catch, which is why this is not
+redundant with the PR gate:
+
+| Class                      | Why the PR gate misses it                                                                                                                             |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Nondeterministic test**  | A coin-flip test passes the PR and fails `main` on the _identical tree_. This is exactly how #572 was found — a 5023ms test against a 5000ms timeout. |
+| **Merge skew**             | Two PRs green apart, broken together. `strict_required_status_checks_policy` closes most of this, but not the window between last check and merge.    |
+| **Environment difference** | `main` runs have secrets and permissions that PR runs — especially from forks — do not.                                                               |
 
 ### Identity Preflight
 

@@ -17,6 +17,7 @@ import type {
 import { validateCLIAuth, verifyCLIInstalled } from "./validateCLIAuth.js";
 import { createCliQueryFn, parseCliArgs } from "./cliQueryHelper.js";
 import { resolveAndValidateModel } from "./modelPreflight.js";
+import { codexReasoningEffortFlag } from "./codexEffort.js";
 
 // Re-export the canonical alias resolver so existing import sites (and the
 // adapter barrel) keep resolving it from CodexAdapter. The implementation now
@@ -26,7 +27,6 @@ export { resolveCodexModelAlias } from "./codexModelRegistry.js";
 const ADAPTER_NAME = "Codex";
 const CODEX_DOCS_URL = "https://developers.openai.com/codex";
 const CODEX_INSTALL_CMD = "npm install -g @openai/codex";
-const CODEX_REASONING_EFFORTS = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * Pipeline stages that do not benefit from persistent session state.
@@ -187,14 +187,16 @@ export class CodexAdapter implements ICliAdapter {
     if (codexModel) {
       args.push("--model", codexModel);
     }
-    const reasoningEffort = process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT?.trim();
+    // Registry effort gate (#569): the requested reasoning effort must sit on
+    // the RESOLVED model's supported_efforts ladder — codexReasoningEffortFlag
+    // consults the registry and throws a classified AdapterError BEFORE spawn
+    // (the CLI vocabulary check alone let e.g. xhigh through to a model whose
+    // ladder tops out at high, the #532 silent pass-through class).
+    const reasoningEffort = codexReasoningEffortFlag(
+      process.env.NIGHTGAUGE_CODEX_REASONING_EFFORT,
+      codexModel
+    );
     if (reasoningEffort) {
-      if (!CODEX_REASONING_EFFORTS.has(reasoningEffort)) {
-        throw new Error(
-          `Invalid NIGHTGAUGE_CODEX_REASONING_EFFORT '${reasoningEffort}'. ` +
-            `Expected one of: ${[...CODEX_REASONING_EFFORTS].join(", ")}.`
-        );
-      }
       args.push("-c", `model_reasoning_effort=${reasoningEffort}`);
     }
 
