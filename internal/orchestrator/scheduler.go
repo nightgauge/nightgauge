@@ -3745,7 +3745,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// after escalation overrides, sticky downgrades, and the pr-create /
 		// feature-validate adjustments above.
 		runtime.RecordStageModel(stage, model)
-		s.emitStateChanged(item.Repo, item.Number, runtime)
 
 		// Clear the stage-child pid BEFORE the stage-start persist below (#534).
 		//
@@ -3779,14 +3778,37 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// workspaceRoot is runPipeline's LOCAL value (s.runRoot(item.Repo), the
 		// run's TARGET repo per #229), matching the stage-completion persist
 		// below — NOT s.workspaceRoot, which would split a cross-repo run's state
-		// across two repos on every stage.
+		// across two repos on every stage. Pinned by
+		// TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo, which runs a
+		// cross-repo dispatch where the two roots differ; without it this line's
+		// correctness rested on this comment, and the wrong idiom already sits in
+		// this file (the #441 post-merge breadcrumb persists to s.workspaceRoot).
 		//
-		// Best-effort, exactly like the completion persist: log and continue. A
-		// sealed run returns ErrRunSealed without writing, so this cannot
-		// resurrect a snapshot a terminal claim already removed.
+		// BEFORE emitStateChanged below, not after: that callback ships
+		// runtime.Snapshot() over the wire, and emitting first would describe this
+		// stage with the previous stage's dead pid while the file for the same
+		// stage carries 0. Nothing reads the wire snapshot's pid today; the order
+		// is what keeps it from mattering if something ever does.
+		//
+		// Best-effort, exactly like the completion persist: log and continue.
+		//
+		// The terminal latch does NOT cover this write, and saying it did would be
+		// a false invariant: nothing seals a scheduler-owned runtime. SealAndRemove
+		// has one in-tree caller — notifyComplete (internal/ipc/server.go) — and
+		// resolveRun refuses terminal verbs against a scheduler-owned run
+		// (run_wrong_owner), so rs.sealed is false for this run's entire life and
+		// the guard never fires here. What makes the extra write safe is narrower
+		// and true: it re-creates exactly the file the stage-completion persist
+		// already re-creates, from the same sole writer, into the same directory.
+		// RESIDUAL, pre-existing and not closed by this change: another process
+		// can adopt this run's non-terminal snapshot (loadRunSnapshot in
+		// internal/ipc/run_registry.go), seal the FILE from there, and this
+		// scheduler's own unsealed runtime re-creates it at the next stage start.
 		if persistErr := runtime.Persist(filepath.Join(workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
 			log.Printf("#%d: failed to persist state at %s start: %v", item.Number, stage, persistErr)
 		}
+
+		s.emitStateChanged(item.Repo, item.Number, runtime)
 
 		// Crash-recovery sidecar (Issue #3001): record the in-flight run at
 		// stage-start. Removed on clean completion (success and failure paths
