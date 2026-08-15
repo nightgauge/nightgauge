@@ -86,29 +86,6 @@ if [ -f scripts/validate-skill-metadata.sh ]; then
   run_step "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
 fi
 
-# 4c. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
-#     generated output committed on purpose (the marketplace manifest ships it
-#     as the plugin source), so a canonical skills/ edit that never reached it
-#     publishes a stale plugin. Mirrors lint.yml's last step.
-#
-#     ⚠ THIS STEP MUTATES THE WORKING TREE. Every other check in this file is
-#     read-only; this one regenerates the mirror in place and then asserts the
-#     result matches what is committed. On drift it leaves the regenerated
-#     files behind — that is deliberate (the fix is already applied, all that
-#     remains is `git add`), but it will surprise you mid-review otherwise.
-if [ -f scripts/install-agent-skills.sh ]; then
-  run_step "Plugin skills mirror in sync" \
-    bash scripts/install-agent-skills.sh --generate-only
-fi
-
-# 4d. Drift-gate self-test — proves the gate above still fails closed rather
-#     than passing vacuously, the defect it was created to fix (#539). Paired
-#     with 4c the same way 5b is paired with 5.
-if [ -f scripts/test-mirror-drift-gate.sh ]; then
-  run_step "Mirror drift gate regression suite" \
-    bash scripts/test-mirror-drift-gate.sh
-fi
-
 # 5. Publication boundary — allowlist, fail-closed. Catches private-class content
 #    before it is pushed rather than after CI rejects it.
 if [ -f scripts/publication-boundary-check.py ]; then
@@ -172,6 +149,33 @@ fi
 # 10. Markdown link check — cross-document reference integrity (root *.md + docs/**)
 if [ -f scripts/check-md-links.sh ]; then
   run_step "Markdown link check" bash scripts/check-md-links.sh
+fi
+
+# 11. Drift-gate self-test — proves the mirror gate below still fails closed
+#     rather than passing vacuously, the defect it was created to fix (#539).
+#     Runs BEFORE the gate for the same reason lint.yml orders them that way:
+#     the suite works entirely in throwaway temp repos, so it is safe anywhere,
+#     while the gate must stay last. Paired with 11b as 5b is paired with 5.
+if [ -f scripts/test-mirror-drift-gate.sh ]; then
+  run_step "Mirror drift gate regression suite" \
+    bash scripts/test-mirror-drift-gate.sh
+fi
+
+# 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
+#      generated output committed on purpose (the marketplace manifest ships it
+#      as the plugin source), so a canonical skills/ edit that never reached it
+#      publishes a stale plugin. Mirrors lint.yml's last step.
+#
+#      ⚠ THIS STEP MUTATES THE WORKING TREE, and it is LAST for that reason —
+#      the same invariant lint.yml states for its own job. Every other check in
+#      this file is read-only; this one regenerates the mirror in place and then
+#      asserts the result matches what is committed. On drift it leaves the
+#      regenerated files behind — deliberate (the fix is already applied, all
+#      that remains is `git add`), but it will surprise you mid-review
+#      otherwise. Nothing may be appended after this block.
+if [ -f scripts/install-agent-skills.sh ]; then
+  run_step "Plugin skills mirror in sync" \
+    bash scripts/install-agent-skills.sh --generate-only
 fi
 
 echo ""
