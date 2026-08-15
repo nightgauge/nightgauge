@@ -2,7 +2,9 @@ package execution
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -350,4 +352,75 @@ func TestComposeStageEnv_RunIdentityIsReconciledNotInherited(t *testing.T) {
 			t.Errorf("%s appears %d times in the composed env, want exactly 1", adapters.RunIDEnvVar, count)
 		}
 	})
+}
+
+// TestRunStage_NonZeroExit_ReturnsNilErrorWithStderr pins the contract the #533
+// fix rests on, and which nothing pinned before.
+//
+// A non-zero exit is NOT an error here: RunStage converts *exec.ExitError into
+// result.ExitCode and returns err == nil, keeping the process's own output on
+// result.Stdout / result.Stderr. Every consumer that wants to know WHY a CLI
+// stage failed must therefore read the result, not the error — which is exactly
+// what ExecutionManagerRunner failed to do, so the scheduler classified the
+// literal string "exit 1: <nil>" as subagent_crash for every CLI-mode failure.
+//
+// If this test ever starts failing because RunStage returns a non-nil error on
+// a non-zero exit, the orchestrator's stageFailureText fallback becomes dead
+// code — which is fine, but it should be a deliberate change, not a silent one.
+func TestRunStage_NonZeroExit_ReturnsNilErrorWithStderr(t *testing.T) {
+	root := t.TempDir()
+
+	const wantStdout = `{"type":"error","message":"unknown model id"}`
+	const wantStderr = `Error: Couldn't set model 'grok-build-0.1': Invalid params: "unknown model id".`
+
+	stubDir := t.TempDir()
+	outPath := filepath.Join(stubDir, "out.txt")
+	errPath := filepath.Join(stubDir, "err.txt")
+	if err := os.WriteFile(outPath, []byte(wantStdout+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(errPath, []byte(wantStderr+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(stubDir, "stub-grok.sh")
+	script := "#!/bin/sh\ncat " + outPath + "\ncat " + errPath + " >&2\nexit 1\n"
+	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stub)
+
+	// ensureWorktree returns early when the directory already exists, so the
+	// spawn/wait path is reachable without a git repo behind it.
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-533"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewManager(root, adapters.NewGrokAdapter())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := m.RunStage(ctx, StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 533,
+		Stage:       "pr-create",
+		Timeout:     30 * time.Second,
+	})
+
+	if err != nil {
+		t.Fatalf("RunStage returned err = %v; a non-zero exit must surface as "+
+			"result.ExitCode with a NIL error (manager.go's *exec.ExitError branch)", err)
+	}
+	if result == nil {
+		t.Fatal("RunStage returned a nil result alongside a nil error")
+	}
+	if result.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1", result.ExitCode)
+	}
+	if !strings.Contains(result.Stderr, wantStderr) {
+		t.Errorf("result.Stderr = %q, want it to contain the CLI's verbatim reason %q — "+
+			"this field is the ONLY place a CLI failure's reason survives", result.Stderr, wantStderr)
+	}
+	if !strings.Contains(result.Stdout, wantStdout) {
+		t.Errorf("result.Stdout = %q, want it to contain %q", result.Stdout, wantStdout)
+	}
 }
