@@ -923,6 +923,47 @@ dependencies at the source.
 nightgauge git branch-create [<branch-name> | --issue N] [--json]
 ```
 
+**The git service is common-dir aware, and must stay that way (#535).** Every
+pipeline stage runs inside a linked worktree, where `.git` is a file pointing at
+`<common>/worktrees/<name>` — a directory holding only HEAD, index, logs and a
+private `refs/`. It has no objects, no config and no `refs/remotes`. `NewService`
+therefore opens the repository with `EnableDotGitCommonDir`, without which go-git
+chroots its storer to that directory and the repository reads as one with no
+remotes, no history and no default branch: `DefaultBranch` finds no
+`origin/HEAD`, `RemoteRepoSlug` reports "remote not found", and any checkout
+fails on a missing object. The same option is what lets `ResetPipeline`,
+`AbortPipeline`, `Status`, `Commit`, `Log` and `Diff` read real history from inside
+a worktree at all — they share this one constructor, so anything that narrows the
+open narrows all of them at once.
+
+**`DetectDotGit` stays OFF because write containment depends on it**, not
+because callers always pass a repository root — they do not (`openGitService`
+passes `os.Getwd()`, `getGitRoot` passes `"."`). With parent walking on, a path
+that is _not_ a repository still opens: a ghost or stale worktree directory such
+as `<repo>/.worktrees/issue-999`, left behind when a run's worktree was removed,
+resolves upward to the enclosing primary checkout, and every mutation aimed at
+the dead worktree lands in the operator's own tree — the escape
+[write containment](MULTI_REPO_WORKSPACE.md#write-containment-issue-129) exists
+to prevent. Opening a non-repository path must fail; a negative test in
+`internal/git/service_test.go` pins that and goes red the moment `DetectDotGit`
+is enabled.
+
+**Reads use go-git; the mutations git guards use git.** Common-dir resolution
+made several go-git mutations reachable inside linked worktrees for the first
+time, and go-git implements none of git's safety rules for them: it moves HEAD
+and writes the branch ref into the shared store _before_ discovering the tree is
+dirty (leaving a half-created branch and a wedged retry loop), it checks out a
+branch a sibling worktree already holds (two worktrees on one branch turns one
+stage's commit into a staged deletion in the other's tree), it deletes a branch
+another worktree is sitting on (orphaning it on an unborn HEAD), and its hard
+reset and `Clean` honour neither `.gitignore` nor `.git/info/exclude` (deleting
+`node_modules/`, build caches and `.env`). So `BranchCreate`, `BranchCreateFrom`,
+`Checkout`, `BranchDelete` and `ResetPipeline`'s reset+clean shell out to `git`
+and inherit its guards, exactly as `ls-remote`, `commitAll` and the checkpoint
+anchor already did. This is a per-operation choice, not a fallback path: there
+is one implementation of each operation, and hand-rolling git's guards in Go
+would be a second, weaker copy of rules git already enforces.
+
 ### Worktree Reclamation (Issue #110)
 
 Worktree removal has two halves. The **inline** half runs when a run finishes.

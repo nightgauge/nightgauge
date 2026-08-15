@@ -32,8 +32,28 @@ type Service struct {
 }
 
 // NewService opens a git repository at the given path.
+//
+// EnableDotGitCommonDir is required, not optional: the pipeline runs its stages
+// inside linked worktrees, whose gitdir holds only HEAD, index, logs and refs —
+// no objects, no config, no refs/remotes. Without common-dir support go-git
+// chroots the storer to that directory and the repository reads as one with no
+// remotes and no history.
+//
+// DetectDotGit stays OFF, and that is load-bearing for write containment
+// (docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129) — not a
+// consequence of callers always passing a repository root, which they do not
+// (openGitService passes os.Getwd(), getGitRoot passes "."). With parent
+// walking on, a path that is NOT a repository still opens: a stale or ghost
+// worktree directory such as `<repo>/.worktrees/issue-999`, left behind when a
+// run's worktree was removed, resolves upward to the ENCLOSING primary checkout
+// and every mutation aimed at the dead worktree lands in the operator's own
+// tree instead. Opening a non-repository path must fail, not widen; the
+// negative test in service_test.go pins that and fails the moment DetectDotGit
+// is turned on.
 func NewService(repoPath string) (*Service, error) {
-	repo, err := gogit.PlainOpen(repoPath)
+	repo, err := gogit.PlainOpenWithOptions(repoPath, &gogit.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open repo at %s: %w", repoPath, err)
 	}
@@ -62,6 +82,57 @@ func NewServiceFromRepo(repo *gogit.Repository, repoPath string) *Service {
 	}
 }
 
+// gitExec runs a git subcommand in this service's checkout and returns its
+// combined output.
+//
+// Reads go through go-git; the MUTATIONS git itself guards go through git.
+// That split is not a fallback and not a compat shim — it is which
+// implementation is correct per operation. go-git implements none of git's
+// worktree safety guards: it will move HEAD and create a branch ref and only
+// then discover the tree is dirty (leaving both mutations behind), check out a
+// branch a sibling worktree already holds, and delete a branch another worktree
+// is sitting on. Every one of those became reachable the moment the service
+// learned to resolve the common dir (#535), because before that a linked
+// worktree simply read as an empty repository. Re-implementing git's guards in
+// Go would be a second, weaker copy of rules git already enforces, so the
+// mutating paths shell out and inherit them. This file already shells out for
+// ls-remote, commitAll and the checkpoint anchor; this is that same idiom.
+func (s *Service) gitExec(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = s.repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("git %s: %w: %s",
+			strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
+// validateRefArg rejects a ref name that git's own argument parser would read as
+// an option rather than as a name.
+//
+// This boundary did not exist while these operations went through go-git, which
+// takes names as Go strings and never builds an argv. Routing the guarded
+// mutations through the git CLI created it: `git checkout <name>` and
+// `git branch -D <name>` take the name as a positional operand, so a name
+// beginning with "-" is smuggled in as a flag. Nothing legitimate is lost by
+// refusing them — git itself will not create or resolve a branch whose name
+// starts with "-" (`git check-ref-format --branch` rejects it).
+//
+// Branch names here are derived from issue titles, which on a public repository
+// are supplied by anyone who can open an issue, so this is a real input boundary
+// and not a defensive formality.
+func validateRefArg(kind, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%s name is empty", kind)
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("refusing %s name %q: a leading %q makes git parse it as an option, not a name",
+			kind, name, "-")
+	}
+	return nil
+}
+
 // BranchInfo holds information about the current branch.
 type BranchInfo struct {
 	Name   string `json:"name"`
@@ -84,50 +155,45 @@ func (s *Service) CurrentBranch() (string, error) {
 }
 
 // BranchCreate creates a new branch from current HEAD and checks it out.
+//
+// `git checkout -b` rather than SetReference + go-git checkout, for the
+// atomicity reason spelled out on BranchCreateFrom.
 func (s *Service) BranchCreate(name string) error {
-	head, err := s.repo.Head()
-	if err != nil {
-		return fmt.Errorf("get HEAD: %w", err)
+	if err := validateRefArg("branch", name); err != nil {
+		return err
 	}
-
-	ref := plumbing.NewBranchReferenceName(name)
-	branchRef := plumbing.NewHashReference(ref, head.Hash())
-	if err := s.repo.Storer.SetReference(branchRef); err != nil {
+	if _, err := s.gitExec("checkout", "-b", name); err != nil {
 		return fmt.Errorf("create branch %s: %w", name, err)
 	}
-
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
-	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: ref}); err != nil {
-		return fmt.Errorf("checkout %s: %w", name, err)
-	}
-
 	return nil
 }
 
 // BranchCreateFrom creates a new branch from the specified base branch and checks it out.
+//
+// The base is resolved here (local branch first, then origin/<base>) and the
+// resulting commit is handed to `git checkout -B`, which is atomic: git stages
+// the working-tree update first and only writes the branch ref and HEAD once it
+// succeeds. The go-git equivalent is not. In a linked worktree holding ANY
+// modified tracked file — the normal state by the time a stage runs, since the
+// extension runs `npm install` and codegen over tracked files before dispatch —
+// go-git moved HEAD (worktree.go:190) and created refs/heads/<name> in the
+// COMMON store, then failed the reset that rejects a dirty tree
+// (worktree.go:201, ErrUnstagedChanges). The caller saw only a failure, while
+// the worktree was left on a branch that half-existed and every retry took the
+// "branch already exists" path and failed identically forever. git checks out a
+// dirty tree the way `git checkout -B` always has: modifications that do not
+// collide with the target are carried across and preserved.
 func (s *Service) BranchCreateFrom(name, base string) error {
+	if err := validateRefArg("branch", name); err != nil {
+		return err
+	}
 	baseHash, err := s.resolveBranchHash(base)
 	if err != nil {
 		return fmt.Errorf("resolve base branch %s: %w", base, err)
 	}
 
-	ref := plumbing.NewBranchReferenceName(name)
-	branchRef := plumbing.NewHashReference(ref, baseHash)
-	if err := s.repo.Storer.SetReference(branchRef); err != nil {
+	if _, err := s.gitExec("checkout", "-B", name, baseHash.String()); err != nil {
 		return fmt.Errorf("create branch %s from %s: %w", name, base, err)
-	}
-
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
-	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: ref}); err != nil {
-		return fmt.Errorf("checkout %s: %w", name, err)
 	}
 
 	return nil
@@ -261,17 +327,22 @@ func (s *Service) ListRemoteBranches() ([]string, error) {
 }
 
 // BranchDelete deletes a local branch.
+//
+// `git branch -D`, so a branch another worktree has checked out is refused
+// ("cannot delete branch 'x' used by worktree at …") instead of orphaning that
+// worktree on an unborn HEAD with its commits reachable only through the
+// reflog. Removing the ref through go-git had no such guard, and with
+// common-dir resolution the branch being removed is the SHARED one every
+// sibling worktree points at. git also drops the branch.<name>.* config as part
+// of the delete, so nothing here has to rewrite the config file — which is why
+// the go-git SetConfig round-trip (and the operator comments it discards) is
+// gone.
 func (s *Service) BranchDelete(name string) error {
-	ref := plumbing.NewBranchReferenceName(name)
-	if err := s.repo.Storer.RemoveReference(ref); err != nil {
-		return fmt.Errorf("delete branch %s: %w", name, err)
+	if err := validateRefArg("branch", name); err != nil {
+		return err
 	}
-
-	// Also remove from branch config
-	cfg, err := s.repo.Config()
-	if err == nil {
-		delete(cfg.Branches, name)
-		_ = s.repo.SetConfig(cfg)
+	if _, err := s.gitExec("branch", "-D", name); err != nil {
+		return fmt.Errorf("delete branch %s: %w", name, err)
 	}
 
 	return nil
@@ -346,14 +417,20 @@ func (s *Service) FindEpicBranch(epicNumber int) (string, error) {
 }
 
 // Checkout switches to the specified branch.
+//
+// Through git, so the worktree-occupancy guard applies: a branch another linked
+// worktree already has checked out is refused, naming the holding worktree.
+// go-git has no such check — it never reads <common>/worktrees/*/HEAD — so it
+// happily put two worktrees on one branch, and that is silent data loss rather
+// than an oddity: the second stage's `git add -A && git commit` (commitAll)
+// sees the first stage's files as deletions and erases its deliverable from the
+// branch tip. The re-run paths of `nightgauge git branch-create` (the
+// remoteExists and localExists cases) reach this on every retry.
 func (s *Service) Checkout(branch string) error {
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
+	if err := validateRefArg("branch", branch); err != nil {
+		return err
 	}
-
-	ref := plumbing.NewBranchReferenceName(branch)
-	if err := wt.Checkout(&gogit.CheckoutOptions{Branch: ref}); err != nil {
+	if _, err := s.gitExec("checkout", branch); err != nil {
 		return fmt.Errorf("checkout %s: %w", branch, err)
 	}
 
@@ -579,26 +656,17 @@ func (s *Service) Diff() (string, error) {
 }
 
 // AbortPipeline cleans up a pipeline branch: checks out main and deletes the feature branch.
+//
+// The delete goes through BranchDelete rather than a second inline copy of it,
+// so the worktree-occupancy guard covers this path too: aborting one run must
+// never yank the branch out from under a concurrent run's worktree.
 func (s *Service) AbortPipeline(featureBranch string) error {
 	// Checkout main first
 	if err := s.Checkout("main"); err != nil {
 		return fmt.Errorf("checkout main: %w", err)
 	}
 
-	// Delete the feature branch locally
-	ref := plumbing.NewBranchReferenceName(featureBranch)
-	if err := s.repo.Storer.RemoveReference(ref); err != nil {
-		return fmt.Errorf("delete branch %s: %w", featureBranch, err)
-	}
-
-	// Also remove from branch config
-	cfg, err := s.repo.Config()
-	if err == nil {
-		delete(cfg.Branches, featureBranch)
-		_ = s.repo.SetConfig(cfg)
-	}
-
-	return nil
+	return s.BranchDelete(featureBranch)
 }
 
 // ResetPipeline resets the working tree to a clean state (hard reset to HEAD).
@@ -641,25 +709,28 @@ func (s *Service) ResetPipeline() error {
 		log.Printf("git: ResetPipeline: failed to reclaim pipeline stashes: %v", err)
 	}
 
-	wt, err := s.repo.Worktree()
-	if err != nil {
-		return fmt.Errorf("get worktree: %w", err)
-	}
-
 	head, err := s.repo.Head()
 	if err != nil {
 		return fmt.Errorf("get HEAD: %w", err)
 	}
 
-	if err := wt.Reset(&gogit.ResetOptions{
-		Mode:   gogit.HardReset,
-		Commit: head.Hash(),
-	}); err != nil {
+	// Reset and clean through git, because "untracked" and "IGNORED" are
+	// different sets and only git knows the difference. go-git honours neither
+	// .gitignore nor .git/info/exclude in either operation: its hard reset
+	// diffs the tree with excludeIgnoredChanges=false and deletes every "extra"
+	// path it finds, and its Clean(Dir:true) walks the same way — so both wipe
+	// node_modules/, build caches and .env along with the junk. That is the
+	// stage's own execution environment and possibly an operator secret, and it
+	// was inert only while a linked worktree read as an empty repository; with
+	// common-dir resolution it is reachable on every reset. `git reset --hard`
+	// touches tracked content only and `git clean -fd` removes exactly what the
+	// reset is for — untracked files and directories — leaving ignored paths
+	// alone. Adding -x to the clean would restore the bug.
+	if _, err := s.gitExec("reset", "--hard", head.Hash().String()); err != nil {
 		return fmt.Errorf("reset: %w", err)
 	}
 
-	// Clean untracked files
-	if err := wt.Clean(&gogit.CleanOptions{Dir: true}); err != nil {
+	if _, err := s.gitExec("clean", "-fd"); err != nil {
 		return fmt.Errorf("clean: %w", err)
 	}
 
