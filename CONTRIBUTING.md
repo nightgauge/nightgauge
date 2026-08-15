@@ -461,8 +461,10 @@ When adding a new `/nightgauge:<name>` command:
       skill is meant to chain into it via the `Skill` tool, add
       `metadata.chainable: true` instead.
 - [ ] Run `bash scripts/install-agent-skills.sh --generate-only` and commit the
-      regenerated `claude-plugins/nightgauge/skills/` tree (the drift guard
-      in `.github/workflows/skills-smoke.yml` enforces this).
+      regenerated `claude-plugins/nightgauge/skills/` tree. The
+      `Plugin skills mirror in sync` step of
+      [`.github/workflows/lint.yml`](.github/workflows/lint.yml) enforces this,
+      and `scripts/ci-local.sh` runs the same check locally.
 
 ## Code Standards
 
