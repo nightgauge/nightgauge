@@ -211,6 +211,18 @@ func TestOverlayKeysCascade(t *testing.T) {
 			[]string{"openai", "opus", "fable", "gpt-5.6-sol"}},
 		{"adapter selects provider", "sonnet", "codex",
 			[]string{"openai", "sonnet", "gpt-5.6-terra"}},
+		// #532 moved the xai haiku band from grok-build-0.1 (which the Grok
+		// Build CLI does not serve) to grok-4.6. The cascade is what that move
+		// actually changes for a rendered skill — the overlay files a haiku-band
+		// grok run reads — and it was asserted nowhere.
+		//
+		// Every band appears, not just the requested one: OverlayKeys keys off
+		// the RESOLVED descriptor's full tier list (same rule as the gpt-5.6-sol
+		// case above). Here that reads as the economics — grok-4.6 serves all
+		// four xai bands, so a haiku-band grok run renders the identical overlay
+		// set to an opus-band one.
+		{"xai haiku cascade", "haiku", "grok",
+			[]string{"xai", "haiku", "sonnet", "opus", "fable", "grok-4.6"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, _, ok := OverlayKeys(tt.model, tt.adapter)

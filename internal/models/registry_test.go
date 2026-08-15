@@ -174,7 +174,7 @@ func TestResolveProviderTierBands(t *testing.T) {
 		{"copilot", "haiku", "gpt-4o-mini"},
 		{"copilot", "sonnet", "gpt-4o"},
 		{"copilot", "opus", "claude-sonnet-4.5"},
-		{"xai", "haiku", "grok-4.5"},
+		{"xai", "haiku", "grok-4.6"},
 		{"xai", "sonnet", "grok-4.6"},
 		{"xai", "opus", "grok-4.6"},
 		{"xai", "fable", "grok-4.6"},
@@ -270,6 +270,42 @@ func TestBandUniquenessAcrossProviders(t *testing.T) {
 	}
 }
 
+// TestEffortDefaultIsSupported is the registry-wide invariant tying the two
+// effort fields together: a declared `effort_default` MUST be a member of that
+// model's `supported_efforts`. The two are edited independently — #547 narrowed
+// one set and raised the other on the same entry in a single change — and a
+// default outside its own set is a value the pipeline hands the provider
+// verbatim, which is precisely how #532 died (exit 1 in seconds, no work).
+// Deprecated entries are included on purpose: cost replay reads them, and an
+// incoherent pair there is still a data bug.
+func TestEffortDefaultIsSupported(t *testing.T) {
+	checked := 0
+	for _, m := range All() {
+		if m.Behavior == nil || m.Behavior.EffortDefault == "" {
+			continue
+		}
+		checked++
+		if !containsString(m.SupportedEfforts, m.Behavior.EffortDefault) {
+			t.Errorf("%s effort_default = %q, not in supported_efforts %v",
+				m.ID, m.Behavior.EffortDefault, m.SupportedEfforts)
+		}
+	}
+	// Without this the invariant would silently pass on an empty registry or
+	// after a schema rename dropped every effort_default.
+	if checked == 0 {
+		t.Fatal("no model declares an effort_default — this invariant asserted nothing")
+	}
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // ─── Behavior block (#77) ────────────────────────────────────────────────────
 
 // TestActiveAnthropicModelsDeclareBehavior pins the vendor-documented facts the
@@ -319,10 +355,19 @@ func TestActiveAnthropicModelsDeclareBehavior(t *testing.T) {
 // the Anthropic case above: an overlay reads these instead of restating them
 // (ADR 016 §5), and a wrong level is sent verbatim to the provider.
 //
-// grok-build-0.1 carries the EMPTY set on purpose. It is a real, documented
-// xAI API model that the CLI's chat proxy does not serve, so it is reachable
-// only by exact id (pricing replay) and never through band resolution; `[]` is
-// the positive "no effort axis" declaration, not missing data (#336).
+// grok-build-0.1 carries the EMPTY set because that is the VENDOR FACT:
+// upstream scopes `reasoning_effort` to grok-4.6 and grok-4.5 only, and
+// grok-build-0.1 has no effort axis at all. `[]` is the positive "no effort
+// axis" declaration, not missing data (#336).
+//
+// Note what this comment deliberately does NOT say. supported_efforts is a
+// CAPABILITY field; whether a model is reachable is a separate axis carried by
+// `tiers` and `deprecated`. #532's root cause was exactly that conflation — a
+// reachability fact (which model the CLI spawns) read off the API catalog — so
+// justifying an effort set by "it is unreachable anyway" would re-commit the
+// same category error one level over. grok-build-0.1's unreachability is
+// enforced by its missing `tiers` and its `deprecated` flag; it is not encoded
+// here, and stripping either of those must break a routing test, not this one.
 func TestActiveXaiModelsDeclareEfforts(t *testing.T) {
 	cases := []struct {
 		id            string
@@ -345,6 +390,15 @@ func TestActiveXaiModelsDeclareEfforts(t *testing.T) {
 		if len(m.SupportedEfforts) != len(c.efforts) {
 			t.Errorf("%s supported_efforts = %v, want %v", c.id, m.SupportedEfforts, c.efforts)
 			continue
+		}
+		// A length check alone cannot see the distinction this test claims to
+		// pin: `"supported_efforts": []` and a MISSING key both have len 0.
+		// Only the nil-ness separates them — encoding/json leaves the field nil
+		// when the key is absent and allocates an empty slice when it is `[]`.
+		// The empty set is a positive vendor declaration (#336), so deleting the
+		// key must fail here rather than read as agreement.
+		if len(c.efforts) == 0 && m.SupportedEfforts == nil {
+			t.Errorf("%s supported_efforts is nil (key absent), want an explicit empty []", c.id)
 		}
 		for i, want := range c.efforts {
 			if m.SupportedEfforts[i] != want {
