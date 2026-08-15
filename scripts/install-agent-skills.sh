@@ -33,8 +33,11 @@ GENERATE_ONLY=0
 case "${1:-}" in
   --claude-only) DO_CODEX=0 ;;
   --codex-only) DO_CLAUDE=0 ;;
-  # Regenerate the committed plugin skills tree and exit — no tool refresh.
-  # Used by CI to assert the committed tree matches the canonical skills/.
+  # Regenerate the committed plugin skills tree, then ASSERT the regenerated
+  # tree is identical to what is committed — exit non-zero when it is not, so
+  # a canonical `skills/` edit that never reached the mirror fails the build.
+  # No tool refresh. Callers: `.github/workflows/lint.yml` (job `lint`, last
+  # step) and `scripts/ci-local.sh`. Note this MUTATES the working tree.
   --generate-only) GENERATE_ONLY=1 ;;
   "") ;;
   *)
@@ -208,7 +211,70 @@ install_claude() {
 sync_plugin_skills
 
 if [ "$GENERATE_ONLY" = "1" ]; then
-  echo "==> Generate-only: plugin skills tree regenerated; skipping tool refresh."
+  # Drift gate. `sync_plugin_skills` has just rewritten $PLUGIN_SKILLS from
+  # canonical `skills/`; anything git now reports under that path is output the
+  # committed mirror was missing. Prior to #539 this branch was a bare `exit 0`
+  # — the comment claimed CI asserted the mirror, nothing did, and #529's three
+  # `_shared/_overlays/*.md` files shipped canonical-only for a full release.
+  #
+  # WHY `git status --porcelain` AND NOT `git diff --exit-code`:
+  # the issue's own AC proposed `git diff --exit-code -- claude-plugins/`.
+  # That is blind to this exact drift. `git diff` compares the index against
+  # the worktree for TRACKED paths only; a brand-new generated file is
+  # untracked, so it is invisible to diff and the gate returns 0 — a false
+  # pass. Every file in the #529 drift was a new untracked path. `git status
+  # --porcelain` reports untracked entries as `??` alongside ` M`/` D`, so it
+  # catches additions, modifications and deletions in one shot. Do not
+  # "simplify" this back to `git diff`.
+  #
+  # Scoped to the skills subtree, not `claude-plugins/`, so unrelated
+  # working-tree dirt elsewhere in the plugin does not trip a local run.
+  # `git -C "$REPO_ROOT"` keeps it correct from any cwd and inside a linked
+  # worktree, where `.git` is a file rather than a directory.
+  MIRROR_REL="claude-plugins/nightgauge/skills"
+
+  # FAIL CLOSED when the tree cannot be inspected. This gate exists because a
+  # check that silently passed was mistaken for a check that ran; "git is
+  # unavailable" must not reproduce that failure by another route. There is no
+  # legitimate non-repo caller — both callers run inside the checkout.
+  if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "" >&2
+    echo "✗ Plugin skills mirror: cannot verify — '$REPO_ROOT' is not a git work tree." >&2
+    echo "  This gate compares the regenerated mirror against what is committed," >&2
+    echo "  so without git it can prove nothing. Failing closed rather than" >&2
+    echo "  reporting a pass it did not earn." >&2
+    exit 1
+  fi
+
+  DRIFT="$(git -C "$REPO_ROOT" status --porcelain -- "$MIRROR_REL")"
+
+  if [ -n "$DRIFT" ]; then
+    # Deliberately phrased as a task, not a crash. Contributors run this flag
+    # BECAUSE they expect the mirror to be stale — it has already been fixed
+    # in the working tree by the regeneration above, and all that remains is
+    # the commit. Output that reads like a stack trace is output people stop
+    # running, which is how the mirror drifted in the first place.
+    echo ""
+    echo "==> Plugin skills mirror was STALE — it has been regenerated for you."
+    echo ""
+    echo "    The committed claude-plugins/nightgauge/skills/ tree did not match"
+    echo "    canonical skills/. These paths are the difference:"
+    echo ""
+    printf '%s\n' "$DRIFT" | sed 's/^/      /'
+    echo ""
+    echo "    Next step — commit the regenerated tree:"
+    echo ""
+    echo "      git add $MIRROR_REL"
+    echo "      git commit -m 'chore(skills): regenerate plugin skills mirror'"
+    echo ""
+    echo "    (The mirror is generated output but is committed on purpose:"
+    echo "     .claude-plugin/marketplace.json ships this directory as the"
+    echo "     plugin source, so the published marketplace serves it verbatim.)"
+    echo ""
+    exit 1
+  fi
+
+  echo "==> Generate-only: plugin skills mirror is in sync with canonical skills/."
   exit 0
 fi
 
