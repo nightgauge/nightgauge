@@ -4,13 +4,14 @@
  * injected, so no real CLI, network, or toolchain runs here.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   LiveCellExecutor,
+  defaultCliSpawn,
   type CliSpawnFn,
   type CliSpawnResult,
 } from "../../src/eval/liveCellExecutor.js";
-import { parseClaudeResult } from "../../src/eval/evalAdapters.js";
+import { claudeEvalProfile, parseClaudeResult } from "../../src/eval/evalAdapters.js";
 import type { ExecFn, ExecResult } from "../../src/eval/worktreeWorkspace.js";
 import type { EvalMatrixCell, EvalTask } from "../../src/eval/modelEvalSchemas.js";
 import type { EvalWorkspace } from "../../src/eval/modelEvalRunner.js";
@@ -76,7 +77,7 @@ function scriptedSpawn(results: CliSpawnResult[]): {
     args: string[];
     prompt: string;
     cwd: string;
-    env: Record<string, string>;
+    env: Record<string, string | undefined>;
   }>;
 } {
   const calls: Array<{
@@ -84,7 +85,7 @@ function scriptedSpawn(results: CliSpawnResult[]): {
     args: string[];
     prompt: string;
     cwd: string;
-    env: Record<string, string>;
+    env: Record<string, string | undefined>;
   }> = [];
   let i = 0;
   const spawn: CliSpawnFn = async (command, args, prompt, cwd, _timeoutMs, env) => {
@@ -163,8 +164,11 @@ describe("LiveCellExecutor", () => {
         "high",
       ])
     );
-    // reasoning "none" travels as the real thinking-disable env parameter.
-    expect(calls[0].env).toEqual({ CLAUDE_CODE_DISABLE_THINKING: "1" });
+    // reasoning "none" travels as the real thinking-disable env parameter,
+    // and the budget key is owned-and-cleared so no ambient value leaks in.
+    expect(calls[0].env.CLAUDE_CODE_DISABLE_THINKING).toBe("1");
+    expect("MAX_THINKING_TOKENS" in calls[0].env).toBe(true);
+    expect(calls[0].env.MAX_THINKING_TOKENS).toBeUndefined();
     // Task instruction reaches the model over stdin.
     expect(calls[0].prompt).toContain("Fix daysBetween");
     expect(calls[0].cwd).toBe("/tmp/ws/cell");
@@ -229,7 +233,11 @@ describe("LiveCellExecutor", () => {
     const exe = new LiveCellExecutor({ spawn, exec });
 
     await exe.execute(task(), CELL({ reasoning: "high" }), WORKSPACE);
-    expect(calls[0].env).toEqual({ MAX_THINKING_TOKENS: "31999" });
+    expect(calls[0].env.MAX_THINKING_TOKENS).toBe("31999");
+    // The disable var is owned-and-cleared: an ambient operator
+    // CLAUDE_CODE_DISABLE_THINKING=1 must never negate the reasoning axis.
+    expect("CLAUDE_CODE_DISABLE_THINKING" in calls[0].env).toBe(true);
+    expect(calls[0].env.CLAUDE_CODE_DISABLE_THINKING).toBeUndefined();
     // The keyword ladder is retired: the prompt text is identical across
     // reasoning cells, so the axis measures the PARAMETER, not prompt drift.
     expect(calls[0].prompt).not.toContain("Ultrathink");
@@ -586,6 +594,56 @@ describe("LiveCellExecutor — judge wiring", () => {
     });
     await exe.execute(task(), CELL(), WORKSPACE);
     expect(calls()).toBe(3);
+  });
+});
+
+describe("defaultCliSpawn — the spawn plan owns the thinking env keys (#571)", () => {
+  /** Child that dumps exactly the two thinking keys it sees. */
+  const DUMP_THINKING_ENV =
+    "process.stdout.write(JSON.stringify({" +
+    "disable: process.env.CLAUDE_CODE_DISABLE_THINKING ?? null," +
+    "budget: process.env.MAX_THINKING_TOKENS ?? null}))";
+
+  const priorDisable = process.env.CLAUDE_CODE_DISABLE_THINKING;
+  const priorBudget = process.env.MAX_THINKING_TOKENS;
+  afterEach(() => {
+    if (priorDisable === undefined) delete process.env.CLAUDE_CODE_DISABLE_THINKING;
+    else process.env.CLAUDE_CODE_DISABLE_THINKING = priorDisable;
+    if (priorBudget === undefined) delete process.env.MAX_THINKING_TOKENS;
+    else process.env.MAX_THINKING_TOKENS = priorBudget;
+  });
+
+  it("evicts an ambient CLAUDE_CODE_DISABLE_THINKING=1 from a reasoning-level cell", async () => {
+    // The pipeline's DOCUMENTED operator workaround (skillRunner): without the
+    // eviction it leaks into every eval spawn and silently disables thinking
+    // on cells labeled reasoning low/medium/high.
+    process.env.CLAUDE_CODE_DISABLE_THINKING = "1";
+    const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", "high");
+    const res = await defaultCliSpawn(
+      process.execPath,
+      ["-e", DUMP_THINKING_ENV],
+      "",
+      process.cwd(),
+      30_000,
+      plan.env
+    );
+    expect(res.code).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual({ disable: null, budget: "31999" });
+  });
+
+  it("evicts an ambient MAX_THINKING_TOKENS from a reasoning-none cell", async () => {
+    process.env.MAX_THINKING_TOKENS = "31999";
+    const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", "none");
+    const res = await defaultCliSpawn(
+      process.execPath,
+      ["-e", DUMP_THINKING_ENV],
+      "",
+      process.cwd(),
+      30_000,
+      plan.env
+    );
+    expect(res.code).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual({ disable: "1", budget: null });
   });
 });
 

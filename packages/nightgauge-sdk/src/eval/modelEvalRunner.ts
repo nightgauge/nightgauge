@@ -16,6 +16,7 @@
  * @see docs/decisions/011-model-eval-system.md
  */
 
+import { maybeResolveEvalAdapterProfile } from "./evalAdapters.js";
 import { computeCostUsd, getModelDescriptor, thinkingDisableConflict } from "./modelRegistry.js";
 import {
   MODEL_EVAL_SCHEMA_VERSION,
@@ -102,6 +103,12 @@ export interface EvalCellExecutor {
  *   cell cannot be measured honestly.
  * - **Unsupported effort level** — the level is off this model's ladder (#75
  *   semantics: never downgrade, never run anyway).
+ * - **No separate thinking knob** — the provider's adapter profile declares
+ *   its only budget knob is the one the EFFORT axis drives (Codex's
+ *   `model_reasoning_effort`), so a `reasoning !== "none"` cell cannot be
+ *   honored. Excluding it here means no worktree is ever acquired for it —
+ *   the profile's own UnsupportedCellError throw remains as defense-in-depth
+ *   for callers that drive the executor directly.
  * - **Thinking-disable conflict** — `reasoning: "none"` disables thinking,
  *   and the registry's `thinking_disable_max_effort` (ThinkingDisableConflict
  *   semantics, mirrored from the Go registry) says this model rejects that
@@ -126,6 +133,16 @@ export function cellSkipReason(cell: EvalMatrixCell): string | undefined {
       `effort '${cell.effort}' is not supported by model '${d.id}' ` +
       `(supported: ${d.supported_efforts.join(", ")})`
     );
+  }
+  if (cell.reasoning !== "none") {
+    const profile = maybeResolveEvalAdapterProfile(d.provider);
+    if (profile && !profile.hasSeparateThinkingKnob) {
+      return (
+        `adapter '${profile.adapter}' has no thinking knob separate from the one the effort ` +
+        `axis drives — reasoning '${cell.reasoning}' cannot be applied to model '${d.id}'; ` +
+        `use reasoning 'none' and vary the effort axis instead`
+      );
+    }
   }
   if (cell.reasoning === "none") {
     const { conflict, limit } = thinkingDisableConflict(d.id, cell.effort, d.provider);

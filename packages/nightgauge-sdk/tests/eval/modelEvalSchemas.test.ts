@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   MODEL_EVAL_SCHEMA_VERSION,
+  MIN_HONEST_SCHEMA_VERSION,
   EFFORT_LEVELS,
   REASONING_LEVELS,
   ModelDescriptorSchema,
@@ -203,6 +204,10 @@ describe("model-eval schemas — honest-cell versioning (#571)", () => {
 
   it("the current schema version is 3 — effort/thinking are actually applied from v3 on", () => {
     expect(MODEL_EVAL_SCHEMA_VERSION).toBe("3");
+    // The honest-aggregation floor every pooling path filters by: the current
+    // version must never fall below it, or the writer would emit rows its own
+    // aggregators refuse.
+    expect(Number(MODEL_EVAL_SCHEMA_VERSION)).toBeGreaterThanOrEqual(MIN_HONEST_SCHEMA_VERSION);
   });
 
   it("rejects pre-fix (v2) records — their effort labels were never applied", () => {

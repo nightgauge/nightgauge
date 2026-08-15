@@ -13,6 +13,7 @@ import {
   UnsupportedCellError,
   claudeEvalProfile,
   codexEvalProfile,
+  maybeResolveEvalAdapterProfile,
   parseClaudeResult,
   resolveEvalAdapterProfile,
   resolveEvalAdapterProfileForAdapter,
@@ -45,6 +46,17 @@ describe("resolveEvalAdapterProfile", () => {
     expect(resolveEvalAdapterProfileForAdapter("codex")).toBe(codexEvalProfile);
     expect(resolveEvalAdapterProfileForAdapter("claude-headless")).toBe(claudeEvalProfile);
     expect(resolveEvalAdapterProfileForAdapter("claude")).toBe(claudeEvalProfile);
+  });
+
+  it("maybeResolveEvalAdapterProfile is total: undefined for unwired providers, never a throw", () => {
+    expect(maybeResolveEvalAdapterProfile("anthropic")).toBe(claudeEvalProfile);
+    expect(maybeResolveEvalAdapterProfile("openai")).toBe(codexEvalProfile);
+    expect(maybeResolveEvalAdapterProfile("google")).toBeUndefined();
+  });
+
+  it("declares the thinking-knob fact the runner interlock reads (#571)", () => {
+    expect(claudeEvalProfile.hasSeparateThinkingKnob).toBe(true);
+    expect(codexEvalProfile.hasSeparateThinkingKnob).toBe(false);
   });
 });
 
@@ -79,16 +91,25 @@ describe("claude spawn plan — real effort/thinking knobs (#571)", () => {
 
   it("expresses reasoning 'none' as the thinking-disable env, not a prompt keyword", () => {
     const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", "none");
-    expect(plan.env).toEqual({ [CLAUDE_DISABLE_THINKING_ENV]: "1" });
+    expect(plan.env[CLAUDE_DISABLE_THINKING_ENV]).toBe("1");
+    // The budget key is OWNED-AND-CLEARED (present, `undefined` → evicted from
+    // the child env) so an ambient MAX_THINKING_TOKENS can never shadow the
+    // disabled thinking.
+    expect(CLAUDE_MAX_THINKING_TOKENS_ENV in plan.env).toBe(true);
     expect(plan.env[CLAUDE_MAX_THINKING_TOKENS_ENV]).toBeUndefined();
   });
 
   it("expresses reasoning levels as MAX_THINKING_TOKENS budgets (keyword ladder retired)", () => {
     for (const reasoning of ["low", "medium", "high"] as const) {
       const plan = claudeEvalProfile.buildSpawnPlan("claude-sonnet-5", "high", reasoning);
-      expect(plan.env).toEqual({
-        [CLAUDE_MAX_THINKING_TOKENS_ENV]: String(CLAUDE_THINKING_BUDGETS[reasoning]),
-      });
+      expect(plan.env[CLAUDE_MAX_THINKING_TOKENS_ENV]).toBe(
+        String(CLAUDE_THINKING_BUDGETS[reasoning])
+      );
+      // The disable var is OWNED-AND-CLEARED: the pipeline blesses an ambient
+      // `export CLAUDE_CODE_DISABLE_THINKING=1` operator workaround, and if
+      // the plan did not evict it, every reasoning-level cell would run with
+      // thinking silently disabled — a mislabeled measurement.
+      expect(CLAUDE_DISABLE_THINKING_ENV in plan.env).toBe(true);
       expect(plan.env[CLAUDE_DISABLE_THINKING_ENV]).toBeUndefined();
     }
     // The budget ladder ascends with the axis.

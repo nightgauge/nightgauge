@@ -68,8 +68,10 @@ export interface CliSpawnResult {
  * uses {@link defaultCliSpawn}. Provider-neutral: command, args, and the spawn-env
  * OVERLAY (merged over `process.env` — how the Claude CLI takes its thinking
  * parameters, #571) are supplied by the resolved {@link EvalAdapterProfile}, so
- * this boundary only pipes a prompt to a process and buffers its stdout. Command
- * is passed first to mirror the skill-eval `SpawnFn` convention.
+ * this boundary only pipes a prompt to a process and buffers its stdout. An
+ * overlay key mapped to `undefined` must be REMOVED from the child env (the
+ * plan owns the key; ambient operator values never leak into a measurement).
+ * Command is passed first to mirror the skill-eval `SpawnFn` convention.
  */
 export type CliSpawnFn = (
   command: string,
@@ -77,7 +79,7 @@ export type CliSpawnFn = (
   prompt: string,
   cwd: string,
   timeoutMs: number,
-  env?: Record<string, string>
+  env?: Record<string, string | undefined>
 ) => Promise<CliSpawnResult>;
 
 /** 15 min per attempt — real coding tasks run tools and can be slow. */
@@ -373,18 +375,26 @@ function tail(s: string, max = 600): string {
 /**
  * Default spawn: pipe the prompt to the adapter CLI over stdin and buffer stdout.
  * The profile's env overlay is merged over the ambient environment — that is how
- * the Claude CLI receives its thinking parameters (#571). Unlike the skill-eval
- * runner it resolves with the exit code (never rejects on a non-zero exit) so the
- * executor decides how to classify the outcome; only a timeout or spawn error
- * rejects.
+ * the Claude CLI receives its thinking parameters (#571). Overlay keys mapped to
+ * `undefined` are DELETED from the child env, not inherited: the spawn plan owns
+ * both thinking keys on every Claude cell, so an ambient operator workaround
+ * (`export CLAUDE_CODE_DISABLE_THINKING=1`, blessed by the pipeline for older
+ * CLIs) can never silently negate a cell's reasoning label. Unlike the
+ * skill-eval runner it resolves with the exit code (never rejects on a non-zero
+ * exit) so the executor decides how to classify the outcome; only a timeout or
+ * spawn error rejects.
  */
 export const defaultCliSpawn: CliSpawnFn = (command, args, prompt, cwd, timeoutMs, env) =>
   import("node:child_process").then(
     ({ spawn }) =>
       new Promise<CliSpawnResult>((resolvePromise, reject) => {
+        const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+        for (const [key, value] of Object.entries(env ?? {})) {
+          if (value === undefined) delete childEnv[key];
+        }
         const child = spawn(command, args, {
           cwd,
-          env: { ...process.env, ...env },
+          env: childEnv,
           stdio: ["pipe", "pipe", "pipe"],
         });
         let stdout = "";

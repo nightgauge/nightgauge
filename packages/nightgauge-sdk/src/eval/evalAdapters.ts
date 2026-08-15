@@ -79,10 +79,18 @@ export interface SpawnTelemetry {
  * spawn-env OVERLAY (merged over `process.env`). Env is how the Claude CLI
  * takes its thinking parameters, so it is a first-class part of the plan —
  * not an executor-side afterthought.
+ *
+ * A key mapped to `undefined` is OWNED-AND-CLEARED: the spawner must REMOVE
+ * it from the child environment, not inherit the ambient value. This is what
+ * keeps cells honest against operator environments — the pipeline documents
+ * `export CLAUDE_CODE_DISABLE_THINKING=1` as a workaround (skillRunner,
+ * claude.go), and an ambient disable var leaking into a `reasoning: "high"`
+ * cell would silently negate the axis while the record still says the level
+ * was applied.
  */
 export interface EvalSpawnPlan {
   args: string[];
-  env: Record<string, string>;
+  env: Record<string, string | undefined>;
 }
 
 /**
@@ -108,6 +116,16 @@ export interface EvalAdapterProfile {
   readonly adapter: string;
   /** Registry provider this profile serves (drives model resolution + pricing). */
   readonly provider: Provider;
+  /**
+   * Whether this adapter has a thinking/reasoning knob SEPARATE from its
+   * effort knob (#571). Claude does (`--effort` + the thinking env params);
+   * Codex does not (`model_reasoning_effort` is its only budget knob, and the
+   * effort axis drives it). The runner's registry interlock reads this to
+   * exclude `reasoning !== "none"` cells for knobless adapters BEFORE any
+   * workspace is acquired; {@link buildSpawnPlan} still throws as
+   * defense-in-depth for callers that bypass the interlock.
+   */
+  readonly hasSeparateThinkingKnob: boolean;
   /** CLI command invoked when neither an override nor the env var is set. */
   readonly defaultCommand: string;
   /** Env var overriding the CLI command (e.g. `NIGHTGAUGE_CODEX_CLI_COMMAND`). */
@@ -193,6 +211,7 @@ export const CLAUDE_THINKING_BUDGETS: Record<Exclude<ReasoningLevel, "none">, nu
 export const claudeEvalProfile: EvalAdapterProfile = {
   adapter: "claude",
   provider: "anthropic",
+  hasSeparateThinkingKnob: true,
   defaultCommand: "claude",
   commandEnvVar: "NIGHTGAUGE_CLAUDE_CLI_COMMAND",
 
@@ -220,11 +239,25 @@ export const claudeEvalProfile: EvalAdapterProfile = {
     ];
     // Reasoning rides the CLI's real thinking parameters (#571), not prompt
     // keywords: `none` disables thinking via the pipeline's documented escape
-    // hatch; the levels set an explicit thinking budget.
-    const env: Record<string, string> =
+    // hatch; the levels set an explicit thinking budget. BOTH keys are pinned
+    // in EVERY plan — the one not in use is owned-and-cleared (`undefined` →
+    // removed from the child env). The pipeline blesses an ambient
+    // `export CLAUDE_CODE_DISABLE_THINKING=1` operator workaround
+    // (skillRunner), and without the pin it leaks into every eval spawn and
+    // silently disables thinking on cells labeled reasoning low/medium/high —
+    // the exact mislabeled-axis failure class v3 records exist to prevent.
+    // Symmetrically, an ambient MAX_THINKING_TOKENS must not shadow a
+    // `none` cell's disabled thinking.
+    const env: EvalSpawnPlan["env"] =
       reasoning === "none"
-        ? { [CLAUDE_DISABLE_THINKING_ENV]: "1" }
-        : { [CLAUDE_MAX_THINKING_TOKENS_ENV]: String(CLAUDE_THINKING_BUDGETS[reasoning]) };
+        ? {
+            [CLAUDE_DISABLE_THINKING_ENV]: "1",
+            [CLAUDE_MAX_THINKING_TOKENS_ENV]: undefined,
+          }
+        : {
+            [CLAUDE_DISABLE_THINKING_ENV]: undefined,
+            [CLAUDE_MAX_THINKING_TOKENS_ENV]: String(CLAUDE_THINKING_BUDGETS[reasoning]),
+          };
     return { args, env };
   },
 
@@ -260,6 +293,7 @@ const CODEX_EFFORT_VALUES: ReadonlySet<string> = new Set(["none", ...EFFORT_LEVE
 export const codexEvalProfile: EvalAdapterProfile = {
   adapter: "codex",
   provider: "openai",
+  hasSeparateThinkingKnob: false,
   defaultCommand: "codex",
   commandEnvVar: "NIGHTGAUGE_CODEX_CLI_COMMAND",
 
@@ -338,6 +372,17 @@ const PROFILES_BY_PROVIDER: Partial<Record<Provider, EvalAdapterProfile>> = {
   anthropic: claudeEvalProfile,
   openai: codexEvalProfile,
 };
+
+/**
+ * The spawn profile for a registry `provider`, or `undefined` when its live
+ * CLI is not wired. The non-throwing lookup for callers that must stay
+ * total — the runner's registry interlock consults profile facts (e.g.
+ * {@link EvalAdapterProfile.hasSeparateThinkingKnob}) for providers that HAVE
+ * a profile without turning an unwired provider into a crash.
+ */
+export function maybeResolveEvalAdapterProfile(provider: Provider): EvalAdapterProfile | undefined {
+  return PROFILES_BY_PROVIDER[provider];
+}
 
 /**
  * The spawn profile for a registry `provider`. Throws for a provider whose live

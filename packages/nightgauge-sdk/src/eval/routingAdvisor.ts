@@ -17,6 +17,7 @@
 
 import {
   BASELINE_PROMPT_VARIANT,
+  MIN_HONEST_SCHEMA_VERSION,
   type JobClass,
   type ModelEvalRecord,
 } from "./modelEvalSchemas.js";
@@ -68,15 +69,6 @@ export interface AdvisorOptions {
 }
 
 const CONFIDENCE_RANK: Record<Confidence, number> = { low: 0, medium: 1, high: 2 };
-
-/**
- * Only rows from schema_version >= 3 carry honestly-applied effort/thinking
- * (#571): before v3 the live executor never wired `cell.effort` into any
- * spawn and Claude reasoning was faked via prompt keywords, so a pre-v3 row's
- * axis labels describe a run that never happened. Averaging those with honest
- * v3 rows would mis-rank models by construction — they are excluded outright.
- */
-const MIN_HONEST_SCHEMA_VERSION = 3;
 
 /**
  * A record the advisor may aggregate: an honest (v3+) row, from an executed

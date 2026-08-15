@@ -358,10 +358,42 @@ describe("registry interlock — invalid cells are skipped before spawn (#571)",
     expect(run.cells[0].skip_reason).not.toMatch(/above effort/);
   });
 
+  it("skips a codex cell requesting a separate reasoning budget BEFORE workspace acquisition", async () => {
+    const { provider, acquired } = trackingProvider();
+    const { executor, executions } = explodingExecutor();
+    const runner = new ModelEvalRunner(executor, provider);
+    const run = await runner.run({
+      suite: "s",
+      runId: "r",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK("a")],
+      matrix: [
+        // codex's only budget knob is driven by the effort axis, so a separate
+        // reasoning budget is un-honorable — skipped, never an error verdict
+        // discovered after a worktree was created and torn down.
+        CELL("gpt-5.5", "high", "high"),
+        // …while the valid codex shape (reasoning none) still runs.
+        CELL("gpt-5.5", "high", "none"),
+      ],
+      models: MODELS,
+    });
+    const [reasoned, plain] = run.cells;
+    expect(reasoned.verdict).toBe("skipped");
+    expect(reasoned.skip_reason).toMatch(/no thinking knob separate/);
+    expect(plain.verdict).toBe("pass");
+    expect(run.summary).toMatchObject({ total: 2, passed: 1, errored: 0, skipped: 1 });
+    // Exactly one workspace: none was acquired for the invalid cell.
+    expect(acquired).toHaveLength(1);
+    expect(executions()).toBe(1);
+  });
+
   it("cellSkipReason returns undefined for a fully valid combination", () => {
     expect(cellSkipReason(CELL("claude-sonnet-5", "high", "medium"))).toBeUndefined();
     // sonnet-5 declares no thinking-disable ceiling → none is valid at max.
     expect(cellSkipReason(CELL("claude-sonnet-5", "max", "none"))).toBeUndefined();
+    // codex cells are valid at reasoning none — the effort axis drives its knob.
+    expect(cellSkipReason(CELL("gpt-5.5", "high", "none"))).toBeUndefined();
   });
 });
 

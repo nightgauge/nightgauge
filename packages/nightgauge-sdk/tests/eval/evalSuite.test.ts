@@ -154,6 +154,45 @@ describe("serialization", () => {
     expect(table[0]).toContain("model");
     expect(table).toHaveLength(3); // header + 2 models
   });
+
+  it("comparison matrix reports skipped cells apart — never as 0-quality failures (#571)", async () => {
+    const run = await runEvalSuite({
+      suite: "smoke",
+      runId: "r1",
+      timestamp: "t",
+      mode: "mock",
+      tasks: [TASK],
+      // haiku declares no effort axis → its cell is interlock-skipped;
+      // sonnet-5 executes normally.
+      matrix: buildMatrix(["claude-haiku-4-5-20251001", "claude-sonnet-5"], ["high"], ["none"]),
+      models: [],
+      executor: passExecutor,
+      workspaces: noopWorkspaces,
+      scoringBaseline: { attempts: 1, latencyMs: 60_000, costUsd: 1 },
+    });
+    const table = formatComparisonMatrix(run).split("\n");
+    expect(table[0].split("\t")).toContain("skip");
+
+    // A never-run model renders `-` markers, distinguishable at a glance from
+    // a model that ran and failed everything (which would show pass% 0).
+    const haiku = table.find((r) => r.startsWith("claude-haiku-4-5-20251001"))!;
+    expect(haiku.split("\t")).toEqual([
+      "claude-haiku-4-5-20251001",
+      "0", // executed
+      "1", // skipped
+      "-",
+      "-",
+      "-",
+      "-",
+      "-",
+    ]);
+
+    // The executed model aggregates over executed cells only.
+    const sonnet = table.find((r) => r.startsWith("claude-sonnet-5"))!.split("\t");
+    expect(sonnet[1]).toBe("1"); // n (executed)
+    expect(sonnet[2]).toBe("0"); // skip
+    expect(sonnet[3]).toBe("100"); // pass%
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -274,5 +313,56 @@ describe("computeVariantDeltas (#72)", () => {
     });
     expect(computeVariantDeltas(variantOnly.cells)).toHaveLength(0);
     expect(formatVariantDeltas([])).toContain("no variant deltas");
+  });
+
+  it("excludes pre-honest (schema_version < 3) records from pooled deltas (#571)", async () => {
+    const baselineRun = await runEvalSuite({
+      ...suiteOpts,
+      runId: "r-baseline",
+      matrix: buildMatrix(["claude-sonnet-5"], ["high"], ["none"], ["baseline"]),
+      executor: variantRegressionExecutor,
+    });
+    const variantRun = await runEvalSuite({
+      ...suiteOpts,
+      runId: "r-variant",
+      matrix: buildMatrix(["claude-sonnet-5"], ["high"], ["none"], ["verbose-preamble"]),
+      executor: variantRegressionExecutor,
+    });
+    const honest = [...evalRunToRecords(baselineRun), ...evalRunToRecords(variantRun)];
+
+    // The same rows stamped as pre-fix captures: their axis labels were never
+    // applied, so they must contribute NOTHING.
+    const stale = honest.map((r) => ({ ...r, schema_version: "2" })) as unknown as ReturnType<
+      typeof evalRunToRecords
+    >;
+    expect(computeVariantDeltas(stale)).toHaveLength(0);
+
+    // Pooling stale rows alongside honest ones must not move the deltas —
+    // exactly the cross-run concatenation pool-76-deltas performs.
+    expect(computeVariantDeltas([...honest, ...stale])).toEqual(computeVariantDeltas(honest));
+
+    // A persisted record with a missing/malformed version fails CLOSED.
+    const versionless = honest.map(({ schema_version: _v, ...rest }) => rest) as never;
+    expect(computeVariantDeltas(versionless)).toHaveLength(0);
+  });
+
+  it("excludes skipped cells from variant pass-rate denominators (#571)", async () => {
+    const run = await runEvalSuite({
+      ...suiteOpts,
+      // opus-4-8 has no 'max' on its effort ladder → those cells are
+      // interlock-skipped under BOTH variants, while 'high' executes.
+      matrix: buildMatrix(
+        ["claude-opus-4-8"],
+        ["high", "max"],
+        ["none"],
+        ["baseline", "verbose-preamble"]
+      ),
+      executor: variantRegressionExecutor,
+    });
+    const deltas = computeVariantDeltas(run.cells);
+    expect(deltas).toHaveLength(1);
+    // Executed cells only: baseline 1/1 pass, variant 0/1 → −100 points. With
+    // skipped cells blended into the denominator this would read −50.
+    expect(deltas[0].pass_rate_delta).toBe(-100);
   });
 });

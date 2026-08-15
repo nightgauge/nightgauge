@@ -35,6 +35,18 @@ import { EvalModeSchema, EvalVerdictSchema, ModelTierSchema, PIPELINE_SKILLS } f
 export const MODEL_EVAL_SCHEMA_VERSION = "3";
 
 /**
+ * The oldest schema version whose rows are HONEST measurements (#571): from
+ * v3 on, `cell.effort` and `cell.reasoning` are applied through real adapter
+ * knobs. The single authority every aggregation path (routing advisor,
+ * variant deltas, any record pooling) filters by — pre-v3 rows carry axis
+ * labels that were never applied and must be excluded outright, never
+ * averaged with honest rows. Compare with `Number(record.schema_version) >=
+ * MIN_HONEST_SCHEMA_VERSION` so a missing/malformed version (NaN) fails
+ * CLOSED.
+ */
+export const MIN_HONEST_SCHEMA_VERSION = 3;
+
+/**
  * The implicit prompt variant: the unmodified on-disk task instruction (#72).
  * Every cell carries a variant name; `baseline` means "no overlay applied".
  */

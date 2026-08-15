@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+  MIN_HONEST_SCHEMA_VERSION,
   computeVariantDeltas,
   formatVariantDeltas,
 } from "../packages/nightgauge-sdk/src/eval/index.js";
@@ -56,6 +57,19 @@ async function main(): Promise<void> {
   console.log("model\tvariant\tchecks\tcomposite");
   for (const r of rows) {
     console.log(`${r.model}\t${r.variant}\t${r.passed}/${r.total}\t${r.composite ?? "unscored"}`);
+  }
+
+  // computeVariantDeltas excludes pre-honest rows itself (#571); count them
+  // here so an operator staring at "no variant deltas" over old files knows
+  // why instead of suspecting the pooling.
+  const stale = records.filter(
+    (r) => !(Number(r.schema_version) >= MIN_HONEST_SCHEMA_VERSION)
+  ).length;
+  if (stale > 0) {
+    console.log(
+      `\n(${stale} pre-v${MIN_HONEST_SCHEMA_VERSION} row(s) excluded from the delta table — ` +
+        `their effort/thinking labels were never applied before schema v3; see #571)`
+    );
   }
 
   console.log("\n== Pooled variant deltas (decision table) ==");
