@@ -84,8 +84,22 @@ sync_plugin_skills() {
     # `nightgauge:<short>`; non-prefixed skills ship under their own name.
     short="${name#nightgauge-}"
     dest="$PLUGIN_SKILLS/$short"
+    # The excludes are two different jobs. `__tests__` / `*.test.*` keep test
+    # sources out of a shipped plugin. The rest keep the generator from
+    # producing output `.gitignore` REFUSES TO TRACK: `.gitignore` carries
+    # unanchored directory rules (node_modules/, dist/, build/, coverage/,
+    # .venv/, __pycache__/) that match at any depth, so copying such a
+    # directory into the mirror creates files nobody can commit — the published
+    # marketplace would silently lack them. This is not hypothetical:
+    # `skills/nightgauge-product-audit/package.json` exists, so any developer
+    # who runs `npm install` there has a `node_modules/` sitting in a canonical
+    # skill right now. The drift gate below fails on ignored mirror paths; this
+    # stops them being created in the first place.
     rsync -a --delete \
       --exclude '__tests__' --exclude '*.test.*' \
+      --exclude 'node_modules' --exclude 'dist' --exclude 'build' \
+      --exclude 'coverage' --exclude '.venv' --exclude '__pycache__' \
+      --exclude '.DS_Store' \
       "$src" "$dest/"
     # Two Claude-plugin-specific frontmatter transforms (canonical skills/ stay
     # tool-agnostic — Codex and the validator never see these):
@@ -123,8 +137,14 @@ PY
   done
 
   # Shared includes referenced by pipeline skills' `../_shared/...` directives.
+  # The `else` arm is load-bearing: `_shared` is the one mirror directory the
+  # sweep above deliberately skips, so without it a canonical `_shared/` that
+  # was deleted leaves its whole mirror copy behind and the drift gate reports
+  # "in sync" — the gate's assertion is only as unconditional as this sync is.
   if [ -d "$SKILLS_SRC/_shared" ]; then
     rsync -a --delete "$SKILLS_SRC/_shared/" "$PLUGIN_SKILLS/_shared/"
+  else
+    rm -rf "$PLUGIN_SKILLS/_shared"
   fi
 
   echo "    Generated $count plugin skills."
@@ -212,20 +232,22 @@ sync_plugin_skills
 
 if [ "$GENERATE_ONLY" = "1" ]; then
   # Drift gate. `sync_plugin_skills` has just rewritten $PLUGIN_SKILLS from
-  # canonical `skills/`; anything git now reports under that path is output the
-  # committed mirror was missing. Prior to #539 this branch was a bare `exit 0`
-  # — the comment claimed CI asserted the mirror, nothing did, and #529's three
+  # canonical `skills/`; anything git now reports under that path is an
+  # uncommitted difference — which may be a stale committed mirror OR an
+  # uncommitted canonical edit, and the message below must not claim to know
+  # which. Prior to #539 this branch was a bare `exit 0` — the comment claimed
+  # CI asserted the mirror, nothing did, and #529's three
   # `_shared/_overlays/*.md` files shipped canonical-only for a full release.
   #
-  # WHY `git status --porcelain` AND NOT `git diff --exit-code`:
+  # WHY `git status` AND NOT `git diff --exit-code`:
   # the issue's own AC proposed `git diff --exit-code -- claude-plugins/`.
   # That is blind to this exact drift. `git diff` compares the index against
   # the worktree for TRACKED paths only; a brand-new generated file is
   # untracked, so it is invisible to diff and the gate returns 0 — a false
-  # pass. Every file in the #529 drift was a new untracked path. `git status
-  # --porcelain` reports untracked entries as `??` alongside ` M`/` D`, so it
-  # catches additions, modifications and deletions in one shot. Do not
-  # "simplify" this back to `git diff`.
+  # pass. Every file in the #529 drift was a new untracked path. `git status`
+  # reports untracked entries as `??` alongside ` M`/` D`, so it catches
+  # additions, modifications and deletions in one shot. Do not "simplify" this
+  # back to `git diff`, and do not drop the hardening flags below.
   #
   # Scoped to the skills subtree, not `claude-plugins/`, so unrelated
   # working-tree dirt elsewhere in the plugin does not trip a local run.
@@ -237,40 +259,103 @@ if [ "$GENERATE_ONLY" = "1" ]; then
   # check that silently passed was mistaken for a check that ran; "git is
   # unavailable" must not reproduce that failure by another route. There is no
   # legitimate non-repo caller — both callers run inside the checkout.
-  if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  #
+  # Assert the ROOT IDENTITY, not merely "some work tree exists".
+  # `rev-parse --is-inside-work-tree` answers about whatever repo git walks UP
+  # to, which need not be $REPO_ROOT: a checkout carrying no `.git` of its own,
+  # nested inside an unrelated repository that IGNORES it, answers `true`. The
+  # porcelain query below then reads the OUTER repo's index, where every mirror
+  # path is ignored and therefore silent — a green gate on a tree with no
+  # committed mirror at all, i.e. exactly the unearned pass this block claims
+  # to refuse. Comparing `--show-toplevel` against $REPO_ROOT closes that;
+  # `pwd -P` on both sides so a symlinked checkout is not a false mismatch, and
+  # a real linked worktree still passes because `--show-toplevel` reports the
+  # worktree's own path there.
+  TOPLEVEL="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -z "$TOPLEVEL" ] || [ "$(cd "$TOPLEVEL" && pwd -P)" != "$(cd "$REPO_ROOT" && pwd -P)" ]; then
     echo "" >&2
-    echo "✗ Plugin skills mirror: cannot verify — '$REPO_ROOT' is not a git work tree." >&2
+    echo "✗ Plugin skills mirror: cannot verify — '$REPO_ROOT' is not the root of a git work tree." >&2
+    echo "  git resolved the work tree root as: ${TOPLEVEL:-<none — not a work tree>}" >&2
     echo "  This gate compares the regenerated mirror against what is committed," >&2
-    echo "  so without git it can prove nothing. Failing closed rather than" >&2
-    echo "  reporting a pass it did not earn." >&2
+    echo "  so pointed at another repository's index it can prove nothing." >&2
+    echo "  Failing closed rather than reporting a pass it did not earn." >&2
     exit 1
   fi
 
-  DRIFT="$(git -C "$REPO_ROOT" status --porcelain -- "$MIRROR_REL")"
+  # `--untracked-files=all` is not decoration: plain `--porcelain` honours the
+  # `status.showUntrackedFiles=no` config knob, a legitimate perf setting that
+  # silences the `??` class this gate exists to catch and turns it into an
+  # unconditional pass. `--ignored=matching` surfaces the other blind spot —
+  # generated output that `.gitignore` refuses to track is invisible to both
+  # `??` and ` M`, so the gate would report "in sync" about a file the
+  # published plugin does not contain. Flags, not config, decide what this
+  # gate can see. (Same hardening idiom as internal/orchestrator/scheduler.go.)
+  DRIFT="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all --ignored=matching -- "$MIRROR_REL")"
+  IGNORED_DRIFT="$(printf '%s\n' "$DRIFT" | grep '^!! ' || true)"
+  STALE_DRIFT="$(printf '%s\n' "$DRIFT" | grep -v '^!! ' | grep -v '^[[:space:]]*$' || true)"
+  GATE_FAILED=0
 
-  if [ -n "$DRIFT" ]; then
+  if [ -n "$IGNORED_DRIFT" ]; then
+    # An ignored path is NOT "commit this" — `git add` refuses it. It means the
+    # generator produced output that cannot be published, so the marketplace
+    # would ship a plugin missing it. Different problem, different instruction.
+    GATE_FAILED=1
+    echo ""
+    echo "✗ Plugin skills mirror contains output .gitignore will not let anyone commit."
+    echo ""
+    echo "    These regenerated paths are IGNORED, so they can never reach the"
+    echo "    published plugin — the marketplace would serve a plugin missing them:"
+    echo ""
+    printf '%s\n' "$IGNORED_DRIFT" | sed 's/^/      /'
+    echo ""
+    echo "    \`git add\` will refuse these. Fix the CAUSE, not the symptom:"
+    echo "      - a canonical skills/ directory whose name collides with an"
+    echo "        unanchored .gitignore rule (reports/, coverage/, dist/, ...)"
+    echo "        must be renamed; those rules match at any depth."
+    echo "      - build artifacts (node_modules/, dist/, ...) must be excluded"
+    echo "        from the rsync in sync_plugin_skills(), not committed."
+    echo ""
+  fi
+
+  if [ -n "$STALE_DRIFT" ]; then
     # Deliberately phrased as a task, not a crash. Contributors run this flag
     # BECAUSE they expect the mirror to be stale — it has already been fixed
     # in the working tree by the regeneration above, and all that remains is
     # the commit. Output that reads like a stack trace is output people stop
     # running, which is how the mirror drifted in the first place.
+    #
+    # The leading `✗` is a contract, not styling: scripts/ci-local.sh greps its
+    # captured logs for that marker to lift failing assertions into the run
+    # summary. Without it this step fails invisibly in the very file whose job
+    # is to name what failed.
+    GATE_FAILED=1
     echo ""
-    echo "==> Plugin skills mirror was STALE — it has been regenerated for you."
+    echo "✗ Plugin skills mirror was STALE — it has been regenerated for you."
     echo ""
-    echo "    The committed claude-plugins/nightgauge/skills/ tree did not match"
-    echo "    canonical skills/. These paths are the difference:"
+    echo "    Regenerating $MIRROR_REL from canonical skills/ left changes that"
+    echo "    are not committed. That is all this gate measured — the cause may"
+    echo "    be a stale committed mirror, or an uncommitted canonical edit."
+    echo "    git reports these paths:"
     echo ""
-    printf '%s\n' "$DRIFT" | sed 's/^/      /'
+    printf '%s\n' "$STALE_DRIFT" | sed 's/^/      /'
     echo ""
-    echo "    Next step — commit the regenerated tree:"
+    echo "    Next step — commit BOTH halves together:"
     echo ""
-    echo "      git add $MIRROR_REL"
-    echo "      git commit -m 'chore(skills): regenerate plugin skills mirror'"
+    echo "      git add skills $MIRROR_REL"
+    echo "      git commit"
+    echo ""
+    echo "    Stage the canonical half too. An uncommitted canonical edit trips"
+    echo "    this gate as well, and staging only the mirror produces a commit"
+    echo "    whose mirror is AHEAD of its source: green here, red in CI, on the"
+    echo "    same commit — the exact drift shape this gate exists to prevent."
     echo ""
     echo "    (The mirror is generated output but is committed on purpose:"
     echo "     .claude-plugin/marketplace.json ships this directory as the"
     echo "     plugin source, so the published marketplace serves it verbatim.)"
     echo ""
+  fi
+
+  if [ "$GATE_FAILED" = "1" ]; then
     exit 1
   fi
 
