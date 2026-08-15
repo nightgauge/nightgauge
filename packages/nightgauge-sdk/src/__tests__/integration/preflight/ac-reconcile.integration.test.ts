@@ -26,13 +26,37 @@ async function copyFixtureTree(dest: string): Promise<void> {
 
 describe("AC reconciliation — platform-#801 fixture", () => {
   let workdir: string;
+  let binDir: string;
+  let realPath: string | undefined;
 
   beforeEach(async () => {
     workdir = await mkdtemp(path.join(os.tmpdir(), "preflight-801-"));
+
+    // Make the docstring's "no live cross-repo calls" claim TRUE.
+    //
+    // The fixture body carries a branch-protection AC on purpose, which routes
+    // to the branch-protection-rule-present rule — and that rule shells out to
+    // `gh`. With a real `gh` on PATH those calls reach the network, so this
+    // test's runtime was set by DNS/TLS/auth latency rather than by the code
+    // under test: it passed in ~200ms locally and took 5023ms on a CI runner,
+    // tripping vitest's 5000ms default. The same tree passed on a PR run and
+    // failed on the merge-commit run.
+    //
+    // Pointing PATH at an empty directory makes the spawn fail with ENOENT
+    // immediately, so the rule returns its "undetectable" classification
+    // deterministically and this test measures reconciliation, not the network.
+    // The rule's own gh-dependent behaviour is covered separately in
+    // src/preflight/__tests__/ac-rules/branch-protection-rule-present.test.ts.
+    binDir = await mkdtemp(path.join(os.tmpdir(), "preflight-801-nogh-"));
+    realPath = process.env.PATH;
+    process.env.PATH = binDir;
   });
 
   afterEach(async () => {
+    if (realPath === undefined) delete process.env.PATH;
+    else process.env.PATH = realPath;
     await rm(workdir, { recursive: true, force: true });
+    await rm(binDir, { recursive: true, force: true });
   });
 
   it("classifies at least 4 of 6 ACs as satisfied with mostly-satisfied or all-satisfied aggregate", async () => {
