@@ -468,14 +468,22 @@ func (rs *RuntimeState) markAbandonedLocked(at time.Time, reason string) {
 //
 // Wired in step 5: pipeline.notifyStageTransition feeds it the wire's stagePid
 // on every extension-path transition. Deliberately NOT SetProcess, which also
-// writes WorktreeDir and belongs to the scheduler path — this is the extension
-// path's one-field setter. A stage's terminal transition sends 0, so a finished
-// child cannot vouch for the run and the PID-reuse window is bounded by one
-// stage rather than by the whole run.
+// writes WorktreeDir — this is the one-field setter. A stage's terminal
+// transition sends 0, so a finished child cannot vouch for the run and the
+// PID-reuse window is bounded by one stage rather than by the whole run.
 //
-// The value reaches disk through the transition handler's existing Persist — no
-// new persist site is introduced, which is what makes the liveness ladder's
-// arm 3 cheap.
+// BOTH PATHS USE IT (#534). The extension path writes the wire's pid here; the
+// scheduler path writes only the ZERO, from runPipeline's stage-start persist,
+// where runtime.PID still holds the previous stage's exited child (SetProcess in
+// internal/execution/manager.go runs after cmd.Start(), and the scheduler then
+// blocks until that stage exits). The scheduler's LIVE pid still arrives solely
+// through SetProcess; nothing but that zero is written from this seam on the
+// scheduler arm, so the two writers cannot fight over a pid value.
+//
+// The value reaches disk through the caller's existing Persist — the transition
+// handler's on the extension path, the stage-start persist's on the scheduler
+// path. No persist site exists for this setter alone, which is what makes the
+// liveness ladder's arm 3 cheap.
 func (rs *RuntimeState) SetStageChild(pid int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
