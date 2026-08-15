@@ -25,7 +25,7 @@ const RUN: EvalRun = {
   matrix: [{ model_id: "claude-sonnet-5", effort: "high", reasoning: "none" }],
   models: [],
   cells: [],
-  summary: { total: 0, passed: 0, failed: 0, errored: 0, total_cost_usd: 0 },
+  summary: { total: 0, passed: 0, failed: 0, errored: 0, skipped: 0, total_cost_usd: 0 },
 };
 
 const CONFIG: EvalEmitConfig = { baseUrl: "https://api.example.com", token: "lk_secret" };
