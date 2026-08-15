@@ -434,8 +434,9 @@ export interface AdapterEffortPreflight {
   reason?: string;
   /**
    * Set when `ok` but unverified: the model has no registry descriptor, or
-   * the value is outside the Nightgauge ladder (the adapter's own syntax
-   * filter drops it). Callers log it so the pass-through is never silent.
+   * the value is outside the Nightgauge ladder (the adapter's own vocabulary
+   * check handles it at dispatch — grok drops the flag, codex rejects the
+   * value). Callers log it so the deferral is never silent.
    */
   warning?: string;
   /** The resolved model's declared ladder, when a descriptor was found. */
@@ -457,8 +458,10 @@ export interface AdapterEffortPreflight {
  *   `low` BEFORE the membership check (#523) — enforcement always runs on the
  *   normalized rung;
  * - a value outside the Nightgauge ladder after normalization is not an
- *   error: the adapter's own CLI-syntax filter drops the flag, and the
- *   returned `warning` keeps the drop from being silent;
+ *   error HERE: the adapter's own vocabulary check handles it at dispatch
+ *   (the grok adapters drop the flag and let the provider default apply; the
+ *   codex adapter rejects the value loudly), and the returned `warning` keeps
+ *   the deferral from being silent;
  * - a model with NO registry descriptor passes with a `warning`, never a hard
  *   failure — a stage must not be blocked because the registry is silent;
  * - `supported_efforts: []` is a positive declaration ("no effort axis"), so
@@ -491,8 +494,9 @@ export function checkAdapterEffortSupported(
       ok: true,
       warning:
         `effort "${requested}" is not on the Nightgauge ladder ` +
-        `(${EFFORT_LEVELS.join("|")}) — the ${adapter} adapter's syntax filter drops ` +
-        `the flag and the provider default applies`,
+        `(${EFFORT_LEVELS.join("|")}) — deferring to the ${adapter} adapter's own ` +
+        `vocabulary check at dispatch (it drops the flag or rejects the value; ` +
+        `it is never forwarded unchecked)`,
     };
   }
 
