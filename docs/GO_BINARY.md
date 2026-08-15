@@ -923,6 +923,21 @@ dependencies at the source.
 nightgauge git branch-create [<branch-name> | --issue N] [--json]
 ```
 
+**The git service is common-dir aware, and must stay that way (#535).** Every
+pipeline stage runs inside a linked worktree, where `.git` is a file pointing at
+`<common>/worktrees/<name>` — a directory holding only HEAD, index, logs and a
+private `refs/`. It has no objects, no config and no `refs/remotes`. `NewService`
+therefore opens the repository with `EnableDotGitCommonDir`, without which go-git
+chroots its storer to that directory and the repository reads as one with no
+remotes, no history and no default branch: `DefaultBranch` finds no
+`origin/HEAD`, `RemoteRepoSlug` reports "remote not found", and any checkout
+fails on a missing object. `DetectDotGit` stays off — the repository path is
+always passed explicitly, and walking parent directories would silently widen
+resolution to an enclosing repository. The same option is what lets `ResetPipeline`,
+`AbortPipeline`, `Status`, `Commit`, `Log` and `Diff` read real history from inside
+a worktree at all — they share this one constructor, so anything that narrows the
+open narrows all of them at once.
+
 ### Worktree Reclamation (Issue #110)
 
 Worktree removal has two halves. The **inline** half runs when a run finishes.

@@ -32,8 +32,18 @@ type Service struct {
 }
 
 // NewService opens a git repository at the given path.
+//
+// EnableDotGitCommonDir is required, not optional: the pipeline runs its stages
+// inside linked worktrees, whose gitdir holds only HEAD, index, logs and refs —
+// no objects, no config, no refs/remotes. Without common-dir support go-git
+// chroots the storer to that directory and the repository reads as one with no
+// remotes and no history. DetectDotGit stays off: the repository path is always
+// passed explicitly, and walking parents would silently widen resolution to an
+// enclosing repository.
 func NewService(repoPath string) (*Service, error) {
-	repo, err := gogit.PlainOpen(repoPath)
+	repo, err := gogit.PlainOpenWithOptions(repoPath, &gogit.PlainOpenOptions{
+		EnableDotGitCommonDir: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("open repo at %s: %w", repoPath, err)
 	}

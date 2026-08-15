@@ -1156,3 +1156,115 @@ func TestResetPipeline_NeverTouchesAnOperatorStash(t *testing.T) {
 		t.Errorf("the operator's stash no longer holds its content: %q", show)
 	}
 }
+
+// setupLinkedWorktree builds a REAL linked worktree the way the pipeline does:
+// a repo whose default branch is `main`, a bare clone acting as origin, populated
+// remote-tracking refs, and `git worktree add --detach`. In a linked worktree
+// `.git` is a FILE pointing at <common>/worktrees/<name>, and that directory
+// holds only HEAD/index/logs/refs — no objects, no config, no refs/remotes.
+// That is the exact shape that broke `nightgauge git branch-create` (#535), so
+// the fixture is built with the git CLI rather than hand-authored: a
+// hand-written .git layout is how this bug class survives a green suite.
+func setupLinkedWorktree(t *testing.T) (mainDir, worktreeDir string) {
+	t.Helper()
+
+	root := t.TempDir()
+	mainDir = filepath.Join(root, "main")
+	originDir := filepath.Join(root, "origin.git")
+	worktreeDir = filepath.Join(root, "issue-535")
+
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	gitExecTest(t, mainDir, "init")
+	gitExecTest(t, mainDir, "symbolic-ref", "HEAD", "refs/heads/main")
+	if err := os.WriteFile(filepath.Join(mainDir, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitExecTest(t, mainDir, "add", "README.md")
+	gitExecTest(t, mainDir, "commit", "-m", "chore: seed")
+
+	gitExecTest(t, root, "clone", "--bare", mainDir, originDir)
+	gitExecTest(t, mainDir, "remote", "add", "origin", originDir)
+	gitExecTest(t, mainDir, "fetch", "origin")
+	// Remote-tracking refs are populated now, so repoint origin at a GitHub URL —
+	// the shape RemoteRepoSlug has to parse in production.
+	gitExecTest(t, mainDir, "remote", "set-url", "origin",
+		"https://github.com/nightgauge/nightgauge.git")
+
+	gitExecTest(t, mainDir, "worktree", "add", "--detach", worktreeDir, "HEAD")
+
+	return mainDir, worktreeDir
+}
+
+// TestNewService_DefaultBranchInLinkedWorktree covers #535: the linked worktree's
+// own gitdir carries no refs/remotes, so the service must resolve refs through
+// the common dir.
+func TestNewService_DefaultBranchInLinkedWorktree(t *testing.T) {
+	mainDir, worktreeDir := setupLinkedWorktree(t)
+
+	for _, tc := range []struct {
+		name string
+		dir  string
+	}{
+		{"main-checkout", mainDir},
+		{"linked-worktree", worktreeDir},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, err := NewService(tc.dir)
+			if err != nil {
+				t.Fatalf("NewService(%s): %v", tc.dir, err)
+			}
+			got, err := svc.DefaultBranch()
+			if err != nil {
+				t.Fatalf("DefaultBranch: %v", err)
+			}
+			if got != "main" {
+				t.Errorf("DefaultBranch = %q, want \"main\"", got)
+			}
+		})
+	}
+}
+
+// TestNewService_RemoteRepoSlugInLinkedWorktree covers the shape the pipeline
+// actually invokes: `nightgauge git branch-create --issue N --json` reaches
+// RemoteRepoSlug before DefaultBranch, and the linked worktree's gitdir has no
+// config file, so `origin` is invisible without common-dir support.
+func TestNewService_RemoteRepoSlugInLinkedWorktree(t *testing.T) {
+	_, worktreeDir := setupLinkedWorktree(t)
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService(linked worktree): %v", err)
+	}
+
+	slug, err := svc.RemoteRepoSlug()
+	if err != nil {
+		t.Fatalf("RemoteRepoSlug: %v", err)
+	}
+	if slug != "nightgauge/nightgauge" {
+		t.Errorf("RemoteRepoSlug = %q, want \"nightgauge/nightgauge\"", slug)
+	}
+}
+
+// TestBranchCreateFrom_InLinkedWorktreeMovesHead asserts the checkout really
+// happens: the object store lives in the common dir, and a checkout that
+// silently leaves HEAD detached must fail this test.
+func TestBranchCreateFrom_InLinkedWorktreeMovesHead(t *testing.T) {
+	_, worktreeDir := setupLinkedWorktree(t)
+
+	svc, err := NewService(worktreeDir)
+	if err != nil {
+		t.Fatalf("NewService(linked worktree): %v", err)
+	}
+
+	const branch = "fix/535-commondir-aware-git-service"
+	if err := svc.BranchCreateFrom(branch, "main"); err != nil {
+		t.Fatalf("BranchCreateFrom: %v", err)
+	}
+
+	head := strings.TrimSpace(gitExecTest(t, worktreeDir, "rev-parse", "--abbrev-ref", "HEAD"))
+	if head != branch {
+		t.Errorf("linked worktree HEAD = %q, want %q", head, branch)
+	}
+}
