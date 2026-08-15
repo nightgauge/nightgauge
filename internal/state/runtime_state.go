@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -1023,13 +1024,27 @@ func (rs *RuntimeState) RecordStageOutputTail(stage PipelineStage, raw string) {
 	if raw == "" {
 		return
 	}
-	tail := truncateOutputTail(raw)
+	tail := TruncateOutputTail(raw)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if rs.StageOutputTails == nil {
 		rs.StageOutputTails = make(map[string]string)
 	}
 	rs.StageOutputTails[string(stage)] = tail
+}
+
+// ClearStageOutputTail drops any captured tail for a stage.
+//
+// A stage that fails and is then re-dispatched (model escalation, recovery
+// retry, or a reconcile that clears the failure) can end the run recorded
+// `complete` while StageOutputTails still holds the SUPERSEDED attempt's
+// failure evidence — so the V3 record shows a successful stage carrying a
+// crash tail. Callers clear on the success path so the tail is only ever the
+// terminating attempt's (#533).
+func (rs *RuntimeState) ClearStageOutputTail(stage PipelineStage) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	delete(rs.StageOutputTails, string(stage))
 }
 
 // RecordTerminatingStageTokens stores the ground-truth token/cost data for a
@@ -1435,14 +1450,27 @@ func (rs *RuntimeState) StageOutputTail(stage PipelineStage) string {
 	return rs.StageOutputTails[string(stage)]
 }
 
-// truncateOutputTail keeps only the last StageOutputBufferLineLimit lines and
+// TruncateOutputTail keeps only the last StageOutputBufferLineLimit lines and
 // caps the total byte length at StageOutputBufferByteCap. The byte cap wins —
 // even a single very long line is sliced from its tail.
-func truncateOutputTail(raw string) string {
+//
+// Exported because the Go scheduler's CLI runner needs the SAME bounds before
+// it hands a captured process tail to RecordStageOutputTail (#533). It briefly
+// had its own copy of the caps and the walk, and the two implementations
+// already disagreed on trailing newlines and on which cap is applied first.
+// One implementation, one pair of constants.
+//
+// The result is CLONED rather than returned as a slice of `raw`. Slicing a Go
+// string is O(1) and shares the caller's backing array, so a 20KB tail of a CLI
+// stage's ~40MB output accumulator would pin all 40MB for the lifetime of the
+// run — the tail is stored in StageOutputTails until the run ends (#533).
+func TruncateOutputTail(raw string) string {
 	if len(raw) > StageOutputBufferByteCap {
 		raw = raw[len(raw)-StageOutputBufferByteCap:]
 	}
-	// Count lines and slice from the back.
+	// Count lines and slice from the back. Bounded by the byte cap applied
+	// above, so this never walks more than StageOutputBufferByteCap bytes
+	// however large the caller's buffer is.
 	newlineCount := 0
 	cut := 0
 	for i := len(raw) - 1; i >= 0; i-- {
@@ -1457,7 +1485,7 @@ func truncateOutputTail(raw string) string {
 	if cut > 0 {
 		raw = raw[cut:]
 	}
-	return raw
+	return strings.Clone(raw)
 }
 
 // ErrRunSealed is returned by every write path on a runtime whose terminal

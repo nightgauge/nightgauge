@@ -153,13 +153,13 @@ CLI's shape changes.
 
 The terminal `end` event:
 
-| field                        | value |
-| ---------------------------- | ----: |
-| `input_tokens`               |  7133 |
-| `output_tokens`              |    89 |
-| `reasoning_tokens`           |    49 |
-| `cache_read_input_tokens`    | 23168 |
-| `cache_creation_input_tokens`|     0 |
+| field                         | value |
+| ----------------------------- | ----: |
+| `input_tokens`                |  7133 |
+| `output_tokens`               |    89 |
+| `reasoning_tokens`            |    49 |
+| `cache_read_input_tokens`     | 23168 |
+| `cache_creation_input_tokens` |     0 |
 
 `ParseGrokStreamLine` folds reasoning into output, so the accumulator lands on
 in=7133, out=138, cache-read=23168, cache-created=0.
@@ -205,3 +205,11 @@ the literal string `exit 1: <nil>` and got `subagent_crash` (the #520
 signature), then **escalated** the model upward. See
 `TestCLIStageErrorTextReachesClassification_GrokUnknownModel` in
 `internal/orchestrator/scheduler_failure_test.go`.
+
+Only the **stderr** copy is used as the classifier's input. The stdout capture
+is kept as forensic evidence (`LastOutputLines`) and is never classified: for a
+CLI adapter, stdout is the whole streaming-JSON transcript, `tool_result`
+payloads included, and `ClassifyTerminalKind` is an ordered substring ladder —
+a `go test` line containing `hard cap` would read as a stall-kill. The stderr
+copy is sufficient, which is why the fixture pair exists: it proves the reason
+is on both channels and that taking the narrow one loses nothing.

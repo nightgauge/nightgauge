@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
@@ -30,11 +31,20 @@ func mustMkdirAll(t *testing.T, dir string) {
 	}
 }
 
+// stubRanMarker is the file writeFailingStubCLI's script touches on entry.
+const stubRanMarker = "STUB-RAN"
+
 // writeFailingStubCLI writes an executable shell script that copies stdout to
 // stdout, stderr to stderr, and exits with code. It stands in for a real
 // provider CLI so a test can exercise execution.Manager's spawn/wait path —
 // including its (result, nil) contract on a non-zero exit — without a network
 // call, an API key, or the provider binary being installed.
+//
+// It touches dir/STUB-RAN first. PATH-injected variants PREPEND to the
+// operator's real PATH, so a stub that failed to be found would silently hand
+// the test a REAL provider CLI (or nothing) and every assertion below would be
+// measuring something else. assertStubRan makes the substitution provable
+// instead of assumed.
 //
 // The payloads go in sidecar files the script cats, rather than inline
 // heredocs: a heredoc would break on a payload containing the delimiter, and
@@ -52,6 +62,7 @@ func writeFailingStubCLI(t *testing.T, dir, stdout, stderr string, code int) str
 	}
 	path := filepath.Join(dir, "stub-cli.sh")
 	script := "#!/bin/sh\n" +
+		": > " + filepath.Join(dir, stubRanMarker) + "\n" +
 		"cat " + outPath + "\n" +
 		"cat " + errPath + " >&2\n" +
 		"exit " + strconv.Itoa(code) + "\n"
@@ -59,6 +70,17 @@ func writeFailingStubCLI(t *testing.T, dir, stdout, stderr string, code int) str
 		t.Fatalf("write stub CLI: %v", err)
 	}
 	return path
+}
+
+// assertStubRan fails the test unless the stub written into dir actually
+// executed. Without it, an exit code of 1 from some OTHER binary on the
+// operator's PATH reads exactly like a successful stub run.
+func assertStubRan(t *testing.T, dir string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(dir, stubRanMarker)); err != nil {
+		t.Fatalf("the stub CLI in %s never executed (%v) — PATH injection did not take "+
+			"effect and this test measured a different binary", dir, err)
+	}
 }
 
 // countLines returns the number of lines in s (a trailing newline does not
@@ -1226,21 +1248,29 @@ func TestCLIStageErrorTextReachesClassification_GrokUnknownModel(t *testing.T) {
 // Go error. It is deliberately NOT the IPC shape: faking a non-nil error here
 // would test the path that already worked.
 type cliFailureStageRunner struct {
-	mu              sync.Mutex
-	failStageCalls  int
-	failStage       state.PipelineStage
+	mu             sync.Mutex
+	failStageCalls int
+	failStage      state.PipelineStage
+	// failTimes bounds how many of failStage's dispatches fail; 0 means every
+	// one of them does. A finite value models the retry that SUCCEEDS, which is
+	// how a superseded attempt's evidence ends up on a `complete` stage.
+	failTimes       int
 	errText         string
 	lastOutputLines string
 }
 
 func (r *cliFailureStageRunner) RunStage(_ context.Context, params StageRunParams) (*StageRunResult, error) {
-	if params.Stage == r.failStage {
+	failThisCall := params.Stage == r.failStage
+	if failThisCall {
 		r.mu.Lock()
 		r.failStageCalls++
+		if r.failTimes > 0 && r.failStageCalls > r.failTimes {
+			failThisCall = false
+		}
 		r.mu.Unlock()
 	}
 
-	if params.Stage != r.failStage {
+	if !failThisCall {
 		if params.OutputFile != "" {
 			if mkErr := os.MkdirAll(filepath.Dir(params.OutputFile), 0755); mkErr == nil {
 				payload := map[string]any{
@@ -1367,62 +1397,261 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 	}
 }
 
-// TestTailOutput_EnforcesDocumentedBounds covers the bounds StageRunResult's
-// LastOutputLines doc comment promises (≤200 lines, ≤200KB) directly, so a
-// change to either constant has to be deliberate.
-func TestTailOutput_EnforcesDocumentedBounds(t *testing.T) {
-	t.Run("empty and whitespace", func(t *testing.T) {
-		for _, in := range []string{"", "\n", "\n\n\n"} {
-			if got := tailOutput(in); got != "" {
-				t.Errorf("tailOutput(%q) = %q, want empty", in, got)
+// TestCLIStallKill_RewindsAndPersistsTheRealReason covers the OTHER unprefixed
+// consumer of the #533 carry: `stallErrMsg`, which decides whether adaptive
+// stall recovery rewinds to feature-planning. The sticky-downgrade test above
+// covers `failText`; this one covers the stall path, which had zero coverage.
+//
+// It also pins the M3 site. The second-stall branch persists the stage error
+// with its own Sprintf, and that line was DEAD for CLI mode before #533 —
+// stallErrMsg was always "", so isStallKill was false and the whole stall block
+// was unreachable. Making it reachable is what re-introduced "exit 1: <nil>" on
+// this path, so the branch is asserted here rather than left to inspection.
+func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
+	root := t.TempDir()
+	enableAdaptiveStallRecovery(t, root)
+
+	const stallText = "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)"
+	runner := &cliFailureStageRunner{
+		failStage:       state.StageFeatureDev,
+		errText:         stallText,
+		lastOutputLines: "…earlier transcript…\n" + stallText,
+	}
+
+	s := buildStallTestScheduler(t, root, runner)
+	item := types.BoardItem{
+		Number: 8534,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-8534",
+		Title:  "CLI-mode stall must reach stall recovery",
+	}
+	s.runPipeline(context.Background(), item)
+
+	// 1. The rewind fired at all — the synthetic feedback context only exists
+	//    if isStallKill was true, which requires stallErrMsg to be non-empty.
+	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-8534.json")
+	if _, statErr := os.Stat(feedbackPath); statErr != nil {
+		t.Fatalf("no synthetic feedback context at %s (%v) — a CLI-mode stall never "+
+			"reached adaptive stall recovery, so stallErrMsg was still empty (#533)",
+			feedbackPath, statErr)
+	}
+
+	// 2. …and the rewind re-dispatched feature-dev, which stalls again and goes
+	//    terminal on the second-stall branch.
+	if runner.failStageCalls != 2 {
+		t.Fatalf("feature-dev dispatched %d times, want 2 (stall → rewind → stall → terminal)",
+			runner.failStageCalls)
+	}
+
+	records := readDailyJSONLRecords(t, root)
+	var rec state.V2RunRecord
+	found := false
+	for _, r := range records {
+		if r.IssueNumber == item.Number {
+			rec, found = r, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no record for issue #%d in daily JSONL (got %d records)", item.Number, len(records))
+	}
+	if rec.TerminalFailureKind != TerminalKindStallKill {
+		t.Errorf("terminal_failure_kind = %q, want %q", rec.TerminalFailureKind, TerminalKindStallKill)
+	}
+
+	// 3. The M3 assertion: the reason the second-stall branch persisted.
+	detail, ok := rec.Stages[string(state.StageFeatureDev)]
+	if !ok {
+		t.Fatalf("feature-dev missing from record; got stages=%v", rec.Stages)
+	}
+	if strings.Contains(detail.Error, "<nil>") {
+		t.Errorf("stages[feature-dev].Error = %q — the stall-after-retry branch still "+
+			"renders `%%v` of a nil error, which is the exact string #533 removes", detail.Error)
+	}
+	if !strings.Contains(detail.Error, "stall-killed") {
+		t.Errorf("stages[feature-dev].Error = %q, expected the CLI's own stall reason", detail.Error)
+	}
+}
+
+// TestSupersededStageTailIsCleared covers the other half of carrying evidence
+// per stage: a stage that FAILED and then succeeded on a retry must not be
+// written to the record still holding the failed attempt's tail.
+//
+// Before #533 this could not happen on the CLI path at all, because the runner
+// never populated LastOutputLines. Populating it makes the stale-tail window
+// real: RecordStageOutputTail is keyed by stage, the failed attempt writes it,
+// and nothing removed it when the retry succeeded — so the V3 record showed a
+// `complete` feature-dev carrying a crash transcript.
+func TestSupersededStageTailIsCleared(t *testing.T) {
+	root := t.TempDir()
+
+	const crashTail = "…transcript…\nError: Cannot read properties of undefined (reading 'text')"
+	runner := &cliFailureStageRunner{
+		failStage:       state.StageFeatureDev,
+		failTimes:       1, // fails once, then the escalated retry succeeds
+		errText:         "Error: Cannot read properties of undefined (reading 'text')",
+		lastOutputLines: crashTail,
+	}
+
+	s := buildStallTestScheduler(t, root, runner)
+	// An ordinary crash classifies subagent_crash, which routes to the upward
+	// escalation ladder — the plain retry path. One rung is enough.
+	s.retryEngine = NewRetryEngine(RetryConfig{
+		MaxBacktracks:          0,
+		MaxEscalationsPerStage: 1,
+		ModelLadder:            []string{"haiku", "sonnet", "opus"},
+	})
+
+	item := types.BoardItem{
+		Number: 8535,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-8535",
+		Title:  "a superseded attempt must not leave evidence on a complete stage",
+	}
+	s.runPipeline(context.Background(), item)
+
+	if runner.failStageCalls != 2 {
+		t.Fatalf("feature-dev dispatched %d times, want 2 (fail → escalate → succeed)",
+			runner.failStageCalls)
+	}
+
+	records := readDailyJSONLRecords(t, root)
+	var rec state.V2RunRecord
+	found := false
+	for _, r := range records {
+		if r.IssueNumber == item.Number {
+			rec, found = r, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no record for issue #%d in daily JSONL (got %d records)", item.Number, len(records))
+	}
+
+	detail, ok := rec.Stages[string(state.StageFeatureDev)]
+	if !ok {
+		t.Fatalf("feature-dev missing from record; got stages=%v", rec.Stages)
+	}
+	if detail.Status != "complete" {
+		t.Fatalf("stages[feature-dev].Status = %q, want complete — the retry was supposed "+
+			"to succeed, so this test is no longer exercising a superseded attempt", detail.Status)
+	}
+	if detail.LastOutputLines != "" {
+		t.Errorf("stages[feature-dev] is %q but carries the FAILED attempt's tail %q — "+
+			"a successful stage must not be written with someone else's evidence (#533)",
+			detail.Status, detail.LastOutputLines)
+	}
+}
+
+// TestStderrFailureReason_Bounds covers the curated-reason extractor directly.
+// ErrorText is the string ClassifyTerminalKind reads, so its size and shape are
+// part of the classifier's input contract, not a cosmetic detail.
+func TestStderrFailureReason_Bounds(t *testing.T) {
+	t.Run("empty and whitespace yield no reason", func(t *testing.T) {
+		for _, in := range []string{"", "\n", "\n\n\n", "   \n\t\n"} {
+			if got := stderrFailureReason(in); got != "" {
+				t.Errorf("stderrFailureReason(%q) = %q, want empty — a stage with no "+
+					"stderr must keep its pre-#533 subagent_crash routing", in, got)
 			}
 		}
 	})
 
-	t.Run("short input is returned whole, minus the trailing newline", func(t *testing.T) {
-		if got := tailOutput("a\nb\nc\n"); got != "a\nb\nc" {
-			t.Errorf("tailOutput = %q, want %q", got, "a\nb\nc")
+	t.Run("keeps the LAST non-empty lines, in order", func(t *testing.T) {
+		got := stderrFailureReason("first\n\nsecond\nthird\n\nfourth\n\n")
+		want := "second\nthird\nfourth"
+		if got != want {
+			t.Errorf("stderrFailureReason = %q, want %q", got, want)
 		}
 	})
 
-	t.Run("line cap keeps the LAST lines", func(t *testing.T) {
+	t.Run("caps the line count", func(t *testing.T) {
 		var sb strings.Builder
-		for i := 0; i < stageOutputTailMaxLines*3; i++ {
+		for i := 0; i < 50; i++ {
 			fmt.Fprintf(&sb, "line-%d\n", i)
 		}
-		got := tailOutput(sb.String())
-		if n := countLines(got); n != stageOutputTailMaxLines {
-			t.Errorf("line count = %d, want %d", n, stageOutputTailMaxLines)
+		got := stderrFailureReason(sb.String())
+		if n := countLines(got); n != stderrReasonMaxLines {
+			t.Errorf("line count = %d, want %d\n  got: %q", n, stderrReasonMaxLines, got)
 		}
-		// The tail, not the head: the failure reason is always at the end.
-		if !strings.HasSuffix(got, fmt.Sprintf("line-%d", stageOutputTailMaxLines*3-1)) {
-			t.Errorf("tail does not end at the last line; got %q…", got[max(0, len(got)-40):])
+		if !strings.HasSuffix(got, "line-49") {
+			t.Errorf("reason does not end at the last stderr line; got %q", got)
 		}
-		if strings.Contains(got, "line-0\n") {
+	})
+
+	t.Run("caps the byte length", func(t *testing.T) {
+		got := stderrFailureReason(strings.Repeat("y", stderrReasonMaxBytes*4))
+		if got == "" {
+			t.Fatal("a single huge line was dropped entirely — the reason would be lost")
+		}
+		if len(got) > stderrReasonMaxBytes {
+			t.Errorf("byte length = %d, want ≤ %d", len(got), stderrReasonMaxBytes)
+		}
+	})
+
+	t.Run("the reason does not alias the caller's buffer", func(t *testing.T) {
+		// A single-line stderr is the case that matters: strings.Join returns
+		// its one element unchanged, and TrimSpace hands back a SLICE of the
+		// input. Without the clone the returned reason pins the whole capture
+		// for the lifetime of the run.
+		big := strings.Repeat("z", 1<<20) + "\nboom\n"
+		got := stderrFailureReason(big)
+		if got != "boom" {
+			t.Fatalf("stderrFailureReason = %q, want %q", got, "boom")
+		}
+		if unsafe.StringData(got) == unsafe.StringData(big[len(big)-len("boom\n"):]) {
+			t.Error("the returned reason shares the caller's backing array — a 1MB " +
+				"capture stays pinned for the whole run (#533)")
+		}
+	})
+}
+
+// TestCLIFailureTail_UsesTheStateCaps pins that the forensic tail obeys the
+// SAME bounds RecordStageOutputTail applies, because it is now the same
+// function. #533 briefly shipped a second implementation with its own copy of
+// the constants, and the two already disagreed.
+func TestCLIFailureTail_UsesTheStateCaps(t *testing.T) {
+	t.Run("line cap keeps the LAST lines", func(t *testing.T) {
+		var sb strings.Builder
+		for i := 0; i < state.StageOutputBufferLineLimit*3; i++ {
+			fmt.Fprintf(&sb, "line-%d\n", i)
+		}
+		_, tail := cliFailureText(sb.String(), "")
+		if n := countLines(tail); n > state.StageOutputBufferLineLimit {
+			t.Errorf("line count = %d, want ≤ %d", n, state.StageOutputBufferLineLimit)
+		}
+		if !strings.Contains(tail, fmt.Sprintf("line-%d", state.StageOutputBufferLineLimit*3-1)) {
+			t.Error("tail does not reach the last line — the cap kept the head")
+		}
+		if strings.Contains(tail, "line-0\n") {
 			t.Error("tail retained the first line — the cap kept the head instead of the tail")
 		}
 	})
 
 	t.Run("byte cap binds when lines are long", func(t *testing.T) {
-		// 10 lines × 100KB = 1MB, well under the line cap but 5× the byte cap.
+		// 10 lines × 100KB = 1MB: well under the line cap, 5× the byte cap.
 		var sb strings.Builder
 		for i := 0; i < 10; i++ {
 			sb.WriteString(strings.Repeat("x", 100*1024))
 			sb.WriteByte('\n')
 		}
-		got := tailOutput(sb.String())
-		if len(got) > stageOutputTailMaxBytes {
-			t.Errorf("byte length = %d, want ≤ %d", len(got), stageOutputTailMaxBytes)
+		_, tail := cliFailureText(sb.String(), "")
+		if len(tail) > state.StageOutputBufferByteCap {
+			t.Errorf("byte length = %d, want ≤ %d", len(tail), state.StageOutputBufferByteCap)
 		}
 	})
 
-	t.Run("a single over-cap line is truncated rather than dropped", func(t *testing.T) {
-		got := tailOutput(strings.Repeat("y", stageOutputTailMaxBytes*2))
-		if got == "" {
-			t.Fatal("a single huge line was dropped entirely — the reason would be lost")
+	t.Run("the tail does not alias the caller's buffer", func(t *testing.T) {
+		// execution.Manager accumulates the ENTIRE process output. Slicing a Go
+		// string is O(1) and shares the backing array, so a 20KB tail retained
+		// on the runtime for the run's lifetime would pin the whole capture.
+		big := strings.Repeat("q", 4<<20) + "\ntrailer\n"
+		_, tail := cliFailureText(big, "")
+		if len(tail) >= len(big) {
+			t.Fatalf("tail is %d bytes for a %d-byte input — not truncated", len(tail), len(big))
 		}
-		if len(got) > stageOutputTailMaxBytes {
-			t.Errorf("byte length = %d, want ≤ %d", len(got), stageOutputTailMaxBytes)
+		if unsafe.StringData(tail) == unsafe.StringData(big[len(big)-len(tail):]) {
+			t.Error("the tail shares the caller's backing array — a 4MB capture stays " +
+				"pinned for the whole run (#533)")
 		}
 	})
 }
@@ -1463,20 +1692,18 @@ func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
 		t.Fatalf("RunStage: %v", err)
 	}
 
-	for _, f := range []struct {
-		name string
-		val  string
-	}{
-		{"ErrorText", res.ErrorText},
-		{"LastOutputLines", res.LastOutputLines},
-	} {
-		if len(f.val) > stageOutputTailMaxBytes {
-			t.Errorf("%s = %d bytes, want ≤ %d — a 10MB stage would persist a 10MB record",
-				f.name, len(f.val), stageOutputTailMaxBytes)
-		}
-		if n := countLines(f.val); n > stageOutputTailMaxLines {
-			t.Errorf("%s = %d lines, want ≤ %d", f.name, n, stageOutputTailMaxLines)
-		}
+	if len(res.ErrorText) > stderrReasonMaxBytes {
+		t.Errorf("ErrorText = %d bytes, want ≤ %d", len(res.ErrorText), stderrReasonMaxBytes)
+	}
+	if n := countLines(res.ErrorText); n > stderrReasonMaxLines {
+		t.Errorf("ErrorText = %d lines, want ≤ %d", n, stderrReasonMaxLines)
+	}
+	if len(res.LastOutputLines) > state.StageOutputBufferByteCap {
+		t.Errorf("LastOutputLines = %d bytes, want ≤ %d — a 10MB stage would persist a 10MB record",
+			len(res.LastOutputLines), state.StageOutputBufferByteCap)
+	}
+	if n := countLines(res.LastOutputLines); n > state.StageOutputBufferLineLimit {
+		t.Errorf("LastOutputLines = %d lines, want ≤ %d", n, state.StageOutputBufferLineLimit)
 	}
 
 	// Bounded, but still the RIGHT bytes: stderr is what names the failure, and
@@ -1484,15 +1711,30 @@ func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
 	if !strings.Contains(res.ErrorText, "unknown model id") {
 		t.Errorf("ErrorText lost the failure reason under a stdout flood; got %q", res.ErrorText)
 	}
+	// And the 10MB of transcript chatter must NOT be in the classifier's input.
+	if strings.Contains(res.ErrorText, "chatter") {
+		t.Errorf("ErrorText carries stdout transcript text (%d bytes) — ErrorText is the "+
+			"curated reason ClassifyTerminalKind reads, never a buffer (#533)", len(res.ErrorText))
+	}
 	if !strings.Contains(res.LastOutputLines, "unknown model id") {
 		t.Error("LastOutputLines lost the failure reason — stderr must be the tail's last segment, not its first")
 	}
+	if !strings.Contains(res.LastOutputLines, "chatter") {
+		t.Error("LastOutputLines dropped the stdout transcript — it is the RAW evidence " +
+			"field and must keep the context around the failure")
+	}
 }
 
-// TestCLIFailureTextPrefersStderrThenStdout pins the source-selection rule.
-// Adapters differ: grok writes the reason to stderr verbatim, while others
-// report failures only on the stdout event stream.
-func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
+// TestCLIFailureText_ErrorTextIsStderrOnly pins the source-selection rule, which
+// is the whole safety argument for #533.
+//
+// ErrorText is CURATED — it is what ClassifyTerminalKind reads — so its only
+// source is the adapter's own stderr. LastOutputLines is RAW evidence, never
+// classified, so it keeps the stdout transcript too. A stdout fallback for
+// ErrorText is the misrouting bug: stdout is the streaming-JSON transcript,
+// every `tool_result` in it included, and the classifier is an ordered
+// substring ladder.
+func TestCLIFailureText_ErrorTextIsStderrOnly(t *testing.T) {
 	tests := []struct {
 		name           string
 		stdout, stderr string
@@ -1500,18 +1742,26 @@ func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
 		wantInTail     []string
 	}{
 		{
-			name:        "stderr wins when both are present",
+			name:        "stderr is the reason; stdout is evidence only",
 			stdout:      `{"type":"error","message":"stdout copy"}`,
 			stderr:      "the real reason",
 			wantErrText: "the real reason",
 			wantInTail:  []string{"stdout copy", "the real reason"},
 		},
 		{
-			name:        "stdout is the fallback when stderr is silent",
+			name:        "a silent stderr yields NO reason even when stdout names one",
 			stdout:      `{"type":"error","message":"only on stdout"}`,
 			stderr:      "",
-			wantErrText: `{"type":"error","message":"only on stdout"}`,
+			wantErrText: "",
 			wantInTail:  []string{"only on stdout"},
+		},
+		{
+			name: "a tool_result naming a classifier term never becomes the reason",
+			stdout: `{"type":"user","message":{"content":[{"type":"tool_result",` +
+				`"content":"npm ERR! missing prerequisite: node >= 20"}]}}`,
+			stderr:      "",
+			wantErrText: "",
+			wantInTail:  []string{"missing prerequisite"},
 		},
 		{
 			name:        "both empty yields both empty",
@@ -1524,6 +1774,7 @@ func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
 			stdout:      "\n\n",
 			stderr:      "\n",
 			wantErrText: "",
+			wantInTail:  []string{"\n"},
 		},
 	}
 
@@ -1545,6 +1796,61 @@ func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
 	}
 }
 
+// TestStageFailureText_Precedence pins the precedence rule that the helper's
+// doc comment claims: a non-nil Go error ALWAYS wins, so IPC mode and CLI
+// mode's non-exit failures behave exactly as they did before #533, and the
+// runner's carried ErrorText is consulted only when there is no Go error.
+//
+// Asserted directly rather than left to prose (the mutation review's M3): every
+// scheduler consumer reads this one function, so inverting the two branches
+// would silently re-route every IPC failure through a CLI-shaped result.
+func TestStageFailureText_Precedence(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		result *StageRunResult
+		want   string
+	}{
+		{
+			name:   "go error wins over a carried ErrorText",
+			err:    errors.New("go error"),
+			result: &StageRunResult{ExitCode: 1, ErrorText: "carried text"},
+			want:   "go error",
+		},
+		{
+			name:   "carried ErrorText is used only when err is nil",
+			err:    nil,
+			result: &StageRunResult{ExitCode: 1, ErrorText: "carried text"},
+			want:   "carried text",
+		},
+		{
+			name:   "go error wins even with no result at all",
+			err:    errors.New("go error"),
+			result: nil,
+			want:   "go error",
+		},
+		{
+			name:   "no error and no result yields no text",
+			err:    nil,
+			result: nil,
+			want:   "",
+		},
+		{
+			name:   "no error and an empty carry yields no text (pre-#533 behavior)",
+			err:    nil,
+			result: &StageRunResult{ExitCode: 1},
+			want:   "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stageFailureText(tt.err, tt.result); got != tt.want {
+				t.Errorf("stageFailureText = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // ── #533 regression guard: the carry is adapter-AGNOSTIC ──────────────────
 //
 // The grok framing of #533 hides the blast radius. ExecutionManagerRunner is
@@ -1558,12 +1864,35 @@ func TestCLIFailureTextPrefersStderrThenStdout(t *testing.T) {
 // "exit 1: <nil>". Only outputs that genuinely name a recognized condition are
 // allowed to move — that is the fix, not a side effect of it.
 
-// TestTerminalReasonClassification_AdapterParity is the table. Each case is the
-// real terminal reason the scheduler now persists for a CLI-mode failure, run
-// through the same ClassifyTerminalKind the V3 record uses.
-func TestTerminalReasonClassification_AdapterParity(t *testing.T) {
-	// What the classifier answered for EVERY CLI failure before #533, for any
-	// adapter: the nil-error placeholder.
+// cliTranscriptLine wraps body in the stream-JSON `tool_result` envelope a CLI
+// adapter writes to STDOUT for every tool the agent runs — a `go test` run, an
+// `npm install`, a `git push`. Anything the agent's tools print arrives here,
+// which is precisely why stdout must never reach the classifier.
+func cliTranscriptLine(body string) string {
+	return `{"type":"assistant","message":{"content":[{"type":"text","text":"running the suite"}]}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result","content":` +
+		fmt.Sprintf("%q", body) + `}]}}` + "\n" +
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"that did not work"}]}}` + "\n"
+}
+
+// TestTerminalReasonClassification_CLIShapeParity is the table. Every row is a
+// realistic CLI-mode capture pushed through the REAL cliFailureText, then
+// through BOTH classification consumers the scheduler has:
+//
+//	prefixed   — terminalFailureReason → ClassifyTerminalKind → the V3 record's
+//	             terminal_failure_kind and the persisted stage error.
+//	unprefixed — the bare failText / stallErrMsg that drive the #42 sticky
+//	             downgrade, the stall rewind, and HasCostCapKillMarker.
+//
+// The rows are keyed by CHANNEL, not by adapter: ExecutionManagerRunner is the
+// one CLI seam for every adapter, so an adapter column would imply per-adapter
+// coverage that does not exist (per-adapter wiring is proven by
+// TestCLIRunnerCarriesFailureTextForEveryAdapter). What actually decides the
+// answer is whether the text arrived on the adapter's own stderr or inside the
+// stdout transcript.
+func TestTerminalReasonClassification_CLIShapeParity(t *testing.T) {
+	// What the classifier answered for EVERY CLI failure before #533: the
+	// nil-error placeholder.
 	const preFixReason = "exit 1: <nil>"
 	preFixKind := ClassifyTerminalKind(preFixReason)
 	if preFixKind != TerminalKindSubagentCrash {
@@ -1573,89 +1902,181 @@ func TestTerminalReasonClassification_AdapterParity(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		adapter string
-		stderr  string
-		want    string
-		why     string
+		name           string
+		stdout, stderr string
+		want           string
+		why            string
 	}{
-		// ── MUST NOT MOVE ────────────────────────────────────────────────
+		// ── MUST NOT MOVE: tool output inside the stdout transcript ──────
+		//
+		// These are the measured misroutes from the #533 review. Each names a
+		// term the ordered substring ladder matches, and each lands on a
+		// recovery branch with NO attempt cap: stall_kill re-dispatches every
+		// 30 minutes forever without incrementing lifetime failures or feeding
+		// the cascade breaker; model_unavailable adds a sticky tier downgrade
+		// AND skips escalation; branch_forked deliberately strands the issue
+		// for a human. They must all read subagent_crash.
 		{
-			name:    "claude/node crash keeps the generic kind",
-			adapter: "claude",
+			name:   "node JSON-parse error in a tool_result",
+			stdout: cliTranscriptLine(`SyntaxError: Unexpected token 'o', "not json"... is not valid JSON`),
+			want:   TerminalKindSubagentCrash,
+			why:    "`is not valid JSON` matches validation_error; it is the agent's jq, not the pipeline's schema",
+		},
+		{
+			name:   "npm prerequisite failure in a tool_result",
+			stdout: cliTranscriptLine("npm ERR! code EBADENGINE\nnpm ERR! missing prerequisite: node >= 20"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`missing prerequisite` matches validation_error",
+		},
+		{
+			name:   "git push rejection in a tool_result",
+			stdout: cliTranscriptLine(" ! [rejected]  fix/533 -> fix/533 (non-fast-forward)\nerror: failed to push some refs"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`non-fast-forward` matches branch_forked, which strands the issue with no board revert",
+		},
+		{
+			name:   "503 upstream overload in a tool_result",
+			stdout: cliTranscriptLine("HTTP/1.1 503 Service Unavailable\nupstream overloaded, retry later"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`overloaded` matches api_overloaded; an unrelated gateway is not the model API",
+		},
+		{
+			name:   "lint line quoting the cost-cap marker",
+			stdout: cliTranscriptLine("scheduler.go:4820:2: comment references [cost-cap-exceeded] (godot)"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`cost-cap-exceeded` matches budget_exceeded and suppresses stall recovery outright",
+		},
+		{
+			name:   "go test naming the hard cap",
+			stdout: cliTranscriptLine("--- FAIL: TestBudget/hard_cap (0.01s)\n    budget_test.go:88: hard cap not enforced"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`hard cap` matches stall_kill — the uncapped 30-minute retry loop",
+		},
+		{
+			name:   "assistant prose naming a model and a usage limit",
+			stdout: cliTranscriptLine("Claude Opus 4.5 usage limit reached — resets at 5pm."),
+			want:   TerminalKindSubagentCrash,
+			why:    "`usage limit` + a registry model matches model_unavailable's sticky downgrade",
+		},
+		{
+			name:   "grep hit on the classifier table itself",
+			stdout: cliTranscriptLine(`table.json:  "clauses": [["invalid model"]],`),
+			want:   TerminalKindSubagentCrash,
+			why:    "the corpus's own vocabulary must not classify when the agent merely reads it",
+		},
+		{
+			name:   "a rejected tool call echoed in the transcript",
+			stdout: cliTranscriptLine("tool_use_result: the operator rejected this Bash call"),
+			want:   TerminalKindSubagentCrash,
+			why:    "`tool_use_result`+`rejected` matches permission_denied's harness bucket",
+		},
+		{
+			name:   "a multi-line transcript tail with no reason at all",
+			stdout: strings.Repeat(cliTranscriptLine("ok  github.com/nightgauge/nightgauge/internal/state\t0.4s"), 40),
+			want:   TerminalKindSubagentCrash,
+			why:    "a buffer is not a reason; with a silent stderr there is nothing to classify",
+		},
+
+		// ── MUST NOT MOVE: ordinary adapter crashes on stderr ────────────
+		{
+			name: "node crash on stderr",
 			stderr: "Error: Cannot read properties of undefined (reading 'text')\n" +
 				"    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)",
 			want: TerminalKindSubagentCrash,
 			why:  "an ordinary CLI crash routes exactly as it did pre-#533",
 		},
 		{
-			name:    "claude/bad flag keeps the generic kind",
-			adapter: "claude",
-			stderr:  "error: unknown option '--nope'",
-			want:    TerminalKindSubagentCrash,
-			why:     "a usage error is not a recognized pipeline condition",
+			name:   "bad flag on stderr",
+			stderr: "error: unknown option '--nope'",
+			want:   TerminalKindSubagentCrash,
+			why:    "a usage error is not a recognized pipeline condition",
 		},
 		{
-			name:    "codex/stream disconnect keeps the generic kind",
-			adapter: "codex",
-			stderr:  "codex exec: stream disconnected before completion",
-			want:    TerminalKindSubagentCrash,
-			why:     "a transport hiccup with no recognized marker stays generic",
+			name:   "stream disconnect on stderr",
+			stderr: "codex exec: stream disconnected before completion",
+			want:   TerminalKindSubagentCrash,
+			why:    "a transport hiccup with no recognized marker stays generic",
 		},
 		{
-			name:    "codex/sandbox denial keeps the generic kind",
-			adapter: "codex",
-			stderr:  "ERROR: Unable to complete the task: the sandbox denied write access to /etc",
-			want:    TerminalKindSubagentCrash,
-			why:     "sandbox refusals must not be mistaken for permission_denied's harness bucket",
+			name:   "sandbox denial on stderr",
+			stderr: "ERROR: Unable to complete the task: the sandbox denied write access to /etc",
+			want:   TerminalKindSubagentCrash,
+			why:    "sandbox refusals must not be mistaken for permission_denied's harness bucket",
 		},
 		{
-			name:    "codex/go panic keeps the generic kind",
-			adapter: "codex",
-			stderr:  "panic: runtime error: invalid memory address or nil pointer dereference",
-			want:    TerminalKindSubagentCrash,
-			why:     "a hard crash is what subagent_crash is FOR",
+			name:   "go panic on stderr",
+			stderr: "panic: runtime error: invalid memory address or nil pointer dereference",
+			want:   TerminalKindSubagentCrash,
+			why:    "a hard crash is what subagent_crash is FOR",
 		},
 		{
-			name:    "empty stderr falls back to the pre-fix placeholder",
-			adapter: "claude",
-			stderr:  "",
-			want:    TerminalKindSubagentCrash,
-			why:     "no evidence means no behavior change at all",
+			name: "no output at all",
+			want: TerminalKindSubagentCrash,
+			why:  "no evidence means no behavior change at all",
 		},
 
 		// ── ALLOWED TO MOVE — this is the fix ────────────────────────────
 		{
-			name:    "grok/unknown model becomes model_unavailable",
-			adapter: "grok",
-			stderr:  strings.TrimSpace(grokUnknownModelStderr),
-			want:    TerminalKindModelUnavailable,
-			why:     "#42's sticky downgrade, not an upward escalation",
+			name:   "unknown model on stderr becomes model_unavailable",
+			stderr: grokUnknownModelStderr,
+			want:   TerminalKindModelUnavailable,
+			why:    "#42's sticky downgrade, not an upward escalation",
 		},
 		{
-			name:    "claude/stall marker becomes stall_kill",
-			adapter: "claude",
-			stderr:  "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)",
-			want:    TerminalKindStallKill,
-			why:     "CLI mode reaches the same recovery branch IPC mode already did",
+			name:   "a stall marker on stderr becomes stall_kill",
+			stderr: "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)",
+			want:   TerminalKindStallKill,
+			why:    "CLI mode reaches the same recovery branch IPC mode already did",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			reason := terminalFailureReason(1, nil, tt.stderr)
+			failText, _ := cliFailureText(tt.stdout, tt.stderr)
+
+			// Consumer 1 — the PREFIXED reason: persisted on the runtime
+			// snapshot and re-classified into the V3 terminal_failure_kind.
+			reason := terminalFailureReason(1, nil, failText)
+			// The `exit N: ` prefix is load-bearing: subagent-crash's fallback
+			// clause is the literal "exit ", so a reason that lost the prefix
+			// falls out of the ladder entirely and classifies as nothing.
+			if !strings.HasPrefix(reason, "exit 1: ") {
+				t.Fatalf("terminalFailureReason lost the %q prefix: %q — subagent_crash's "+
+					"fallback clause matches on it", "exit 1: ", reason)
+			}
 			got := ClassifyTerminalKind(reason)
 			if got == "" {
 				got = TerminalKindSubagentCrash // recordV2History's fallback
 			}
 			if got != tt.want {
-				t.Errorf("adapter %s: terminal kind = %q, want %q (%s)\n  reason: %q",
-					tt.adapter, got, tt.want, tt.why, reason)
+				t.Errorf("prefixed terminal kind = %q, want %q (%s)\n  reason: %q",
+					got, tt.want, tt.why, reason)
 			}
 			if tt.want == TerminalKindSubagentCrash && got != preFixKind {
-				t.Errorf("adapter %s: routing MOVED (%q → %q) for an ordinary failure — "+
-					"#533 must not reroute retries for adapters it was not about",
-					tt.adapter, preFixKind, got)
+				t.Errorf("routing MOVED (%q → %q) for an ordinary failure — #533 must not "+
+					"reroute retries for shapes it was not about (%s)", preFixKind, got, tt.why)
+			}
+
+			// Consumer 2 — the UNPREFIXED text. `failText` drives the #42
+			// sticky downgrade and `stallErrMsg` drives the stall rewind; both
+			// read the bare string, never the prefixed reason, so the prefixed
+			// assertion above does not cover them.
+			bare := ResolveTerminalKind(false, "", failText)
+			if bare == "" {
+				bare = TerminalKindSubagentCrash
+			}
+			if bare != tt.want {
+				t.Errorf("unprefixed terminal kind = %q, want %q (%s)\n  failText: %q",
+					bare, tt.want, tt.why, failText)
+			}
+
+			// HasCostCapKillMarker is its own consumer: it gates whether a
+			// stall-kill may be retried at all, and it reads the same bare
+			// text. Only a genuine cost-cap kill may set it.
+			if wantMarker := tt.want == TerminalKindBudgetExceeded; HasCostCapKillMarker(failText) != wantMarker {
+				t.Errorf("HasCostCapKillMarker = %v, want %v — a lint line quoting the "+
+					"marker must not suppress stall recovery\n  failText: %q",
+					!wantMarker, wantMarker, failText)
 			}
 		})
 	}
@@ -1700,6 +2121,7 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunStage: %v", err)
 			}
+			assertStubRan(t, stubDir)
 			if res.ExitCode != 1 {
 				t.Fatalf("ExitCode = %d, want 1 — the %s stub did not run", res.ExitCode, tt.binary)
 			}
@@ -1737,6 +2159,7 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 			if err != nil {
 				t.Fatalf("RunStage: %v", err)
 			}
+			assertStubRan(t, stubDir)
 			if res.ExitCode != 0 {
 				t.Fatalf("ExitCode = %d, want 0", res.ExitCode)
 			}
