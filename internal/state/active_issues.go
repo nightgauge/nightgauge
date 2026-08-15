@@ -120,8 +120,8 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 	// THE GO-SCHEDULER LIVENESS ARM, read before the snapshots because it is the
 	// only arm whose evidence is CURRENT (see the block comment above): the
 	// sidecar's pid is the running orchestrator's, stamped at stage start, while
-	// a snapshot's pid names a stage child that has already exited by the time
-	// it reaches disk.
+	// a snapshot's pid is either 0 (the stage-start write clears it, #534) or a
+	// stage child that had already exited when the file was written.
 	if issue, warning := sidecarInFlightIssue(stateDir); issue > 0 {
 		res.Issues[issue] = true
 	} else if warning != "" {

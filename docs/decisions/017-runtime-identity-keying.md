@@ -1291,13 +1291,44 @@ for, and arm 4 refreshed an order of magnitude less often than claimed.
 C18 exists because an arm no run in a population writes is not a fallback for
 that population.
 
-| Population                                                     | Arm 1 (entry + fresh `LastSeen`)                         | Arm 2 (scheduler)            | Arm 3 (PID)                                    | Arm 4 (file age)         | Arm 5 (grace) |
-| -------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------- | ---------------------------------------------- | ------------------------ | ------------- |
-| **Extension-path runs** (`HeadlessOrchestrator`)               | **yes** — every accepted call; ≥5s while tokens flow     | never (not in that registry) | **yes, after the wire field below**            | at stage boundaries only | yes, 120s     |
-| **Scheduler-path runs** (`PipelineBridge`)                     | never (never adopted into `activeRuntimes`, Decision 11) | **yes** — the primary arm    | yes (`manager.go:301` already writes it)       | at stage boundaries only | yes, 120s     |
-| **CLI runs** (`nightgauge run`)                                | never                                                    | never                        | **yes** — same scheduler code path             | at stage boundaries only | yes, 120s     |
-| **Interactive stage runs** (`commands/runInteractiveStage.ts`) | one `running` transition, then nothing                   | never (not in that registry) | **yes, via the same wire field**               | that one transition only | yes, 120s     |
-| ↳ **Codex TUI sub-path** (#4024)                               | one `running` transition, then nothing                   | never                        | **no — structurally unobtainable** (see below) | that one transition only | yes, 120s     |
+| Population                                                     | Arm 1 (entry + fresh `LastSeen`)                         | Arm 2 (scheduler)            | Arm 3 (PID)                                    | Arm 4 (file age)                | Arm 5 (grace) |
+| -------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------- | ---------------------------------------------- | ------------------------------- | ------------- |
+| **Extension-path runs** (`HeadlessOrchestrator`)               | **yes** — every accepted call; ≥5s while tokens flow     | never (not in that registry) | **yes, after the wire field below**            | at stage boundaries only        | yes, 120s     |
+| **Scheduler-path runs** (`PipelineBridge`)                     | never (never adopted into `activeRuntimes`, Decision 11) | **yes** — the primary arm    | **no** — see below (#534)                      | at stage starts and completions | yes, 120s     |
+| **CLI runs** (`nightgauge run`)                                | never                                                    | never                        | **no** — see below (#534)                      | at stage starts and completions | yes, 120s     |
+| **Interactive stage runs** (`commands/runInteractiveStage.ts`) | one `running` transition, then nothing                   | never (not in that registry) | **yes, via the same wire field**               | that one transition only        | yes, 120s     |
+| ↳ **Codex TUI sub-path** (#4024)                               | one `running` transition, then nothing                   | never                        | **no — structurally unobtainable** (see below) | that one transition only        | yes, 120s     |
+
+**Arm 3 is DENIED, not merely weak, on both scheduler-driven rows — corrected
+here rather than softened (#534).** Two revisions of this table gave those cells
+"yes" on the strength of `manager.go`'s `SetProcess` call. `SetProcess` is an
+in-memory mutation and `internal/execution` contains no `Persist` at all, so that
+pid never reached disk: the scheduler blocks until the stage exits and only then
+persists, meaning the on-disk pid always named an **already-exited** child. #534
+makes the denial deterministic in the other direction too — the stage-start write
+clears `PID` to 0 before persisting, precisely so a dead pid is not republished
+with a fresh mtime. So the arm reads `ProcessAlive(0)` mid-stage and
+`ProcessAlive(<exited>)` between stages, and both are false by construction. **No
+run in either population can satisfy arm 3**, which is exactly the condition the
+preamble above says disqualifies a cell from counting as coverage.
+
+**What that leaves the CLI row.** Scheduler-path runs still have arm 2
+(`Scheduler.IsRunLive`) as their primary arm and are unaffected. CLI runs have
+neither arm 1 nor arm 2, so with arm 3 denied their only remaining evidence is
+arm 4 — a **stage-boundary** lease, refreshed at each stage's start and
+completion and nothing in between. #534 halves that exposure (the 30-minute clock
+now restarts at stage START rather than only at stage end) but does not close it:
+one stage that runs quietly past `LIVENESS_WINDOW` ages arm 4 out while healthy,
+and arm 5 expired at 120 seconds. That is a live reaping hazard for
+`nightgauge run` under a separate `serve` daemon, tracked as **#555** — closing
+it requires arm 3 to consult a genuinely live child pid, i.e. a persist
+immediately after `SetProcess`. Until then, treat the CLI row as covered by one
+weak arm, not by two.
+
+(A different reader, `state.ActiveIssuesFromSnapshots` — the worktree-reclamation
+scan, not this ladder — covers the same population with the `current-run.json`
+crash sidecar, whose pid is the running orchestrator's. That arm is not available
+here: `pipeline_orphan_reconcile.go` does not read the sidecar.)
 
 **The interactive stage driver is a population, and it is the thinnest one.**
 `commands/runInteractiveStage.ts` drives real pipeline stages through the
@@ -1388,13 +1419,28 @@ matching `RunID`, under `activeRuntimesMu` — is the arm that closes it.
 
 **Arms 3 and 4 exist because a fresh process has neither registry.** Both read
 the snapshot, which any process can parse: `RuntimeState.PID` names the stage
-child (written by `SetProcess` on the scheduler path and by `SetStageChild` on
-the extension path, per the wire field above), and every `Persist` bumps the
-snapshot's mtime. A live stage child is direct evidence the run is alive; a
-snapshot written 40 seconds ago is nearly as good. Arm 3 was previously
-described as "the evidence the tree already writes and never reads" — for the
-scheduler population that is true, and for the extension population the tree did
-not write it at all, which is F32.
+child, and every `Persist` bumps the snapshot's mtime. A live stage child is
+direct evidence the run is alive; a snapshot written 40 seconds ago is nearly as
+good. Arm 3 was previously described as "the evidence the tree already writes and
+never reads" — for the scheduler population that is true, and for the extension
+population the tree did not write it at all, which is F32.
+
+`RuntimeState.PID` has **three** writers, and the partition is by value as much
+as by path (amended by #534 — an earlier revision here split them by path alone
+and was wrong once the scheduler started calling `SetStageChild`):
+
+| Writer                                         | Path      | Value written                                                   |
+| ---------------------------------------------- | --------- | --------------------------------------------------------------- |
+| `SetProcess` (`internal/execution/manager.go`) | scheduler | the **live** stage child's pid, after `cmd.Start()`             |
+| `SetStageChild` (transition handler)           | extension | the **wire** `stagePid`, and 0 on a stage's terminal transition |
+| `SetStageChild` (`runPipeline`, stage start)   | scheduler | **only the zero** — never a pid                                 |
+
+That last clause is what keeps the third writer a **clear** rather than a
+competing one: on the scheduler path the live pid still arrives solely through
+`SetProcess`, and the stage-start seam writes nothing but 0, so the two writers
+cannot disagree about a pid value. It exists because at stage start the only pid
+the runtime holds is the PREVIOUS stage's exited child, and the stage-start
+persist must not republish that with a fresh mtime.
 
 **The ladder is deliberately biased, and the bias is stated as a rule (C13).**
 Every arm can only ever produce a **skip**, never a close. So:

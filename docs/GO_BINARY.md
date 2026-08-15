@@ -1479,6 +1479,19 @@ closed, so the sub-population that carries no obtainable child pid — the Codex
 interactive TUI (#4024), whose stage runs inside a VSCode terminal — rests on
 arms 1 and 4 alone.
 
+**Arm 3 covers the EXTENSION population only.** On the scheduler / CLI path the
+snapshot's `PID` is **0 while a stage runs, by design (#534)**: the orchestrator
+now persists at each stage's start as well as its completion, and the stage-start
+write clears the pid first, because the only pid the runtime holds at that moment
+is the previous stage's already-exited child — republishing it would hand this
+ladder a dead pid with a fresh mtime. `SetProcess` writes the live child in
+memory and `internal/execution` contains no `Persist` at all, so no live pid has
+ever reached disk on this path. Scheduler-path runs are carried by arm 2
+(`Scheduler.IsRunLive`); `nightgauge run` under a separate `serve` daemon has
+neither arm 1 nor 2 and is therefore carried by arm 4's stage-boundary lease
+alone — which #534 refreshes twice as often but does not make continuous. See
+ADR 017 §7.2's per-population table and #555.
+
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
 for the full decision, the refuted alternatives and their probe evidence.
