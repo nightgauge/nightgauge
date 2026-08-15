@@ -2868,10 +2868,13 @@ func (s *Server) registerMethods() {
 		// and `deferred` omit the field, which arrives as the same zero and means
 		// the same thing: no child is executing this run right now.
 		//
-		// NOT on the scheduler-owned arm: that runtime's PID belongs to
+		// NOT on the scheduler-owned arm: that runtime's LIVE pid comes from
 		// SetProcess (internal/execution/manager.go), written from the scheduler's
 		// own process tree. Writing the extension's pid over it would destroy the
 		// scheduler population's arm-3 evidence with a pid from another tree.
+		// (The scheduler does call SetStageChild itself — but only with 0, at
+		// stage start, so its stage-start snapshot does not republish the previous
+		// stage's dead child (#534). That is a clear, not a competing writer.)
 		//
 		// The value reaches disk through the Persist below — no new persist site.
 		if !res.schedulerOwned {

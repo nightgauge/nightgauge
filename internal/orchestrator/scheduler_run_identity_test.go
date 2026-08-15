@@ -67,9 +67,15 @@ func (r *runIDCapturingRunner) captured() []StageRunParams {
 	return append([]StageRunParams(nil), r.calls...)
 }
 
-// newRunIdentityTestScheduler builds a scheduler that can drive runPipeline
-// end-to-end against a fake stage runner, rooted at a real git workspace.
-func newRunIdentityTestScheduler(t *testing.T, root string, runner StageRunner) *Scheduler {
+// commitPipelineSkillFixtures installs a SKILL.md for every stage runPipeline
+// dispatches and commits them, so skillrender.Render resolves against `root`.
+//
+// Factored out of newRunIdentityTestScheduler because a CROSS-REPO fixture needs
+// them in the run's TARGET repo as well: skillrender's roots are built from
+// runPipeline's LOCAL workspaceRoot (s.runRoot(item.Repo)), not from
+// s.workspaceRoot, so a target repo without them dispatches nothing and any
+// assertion over the run's on-disk state passes vacuously.
+func commitPipelineSkillFixtures(t *testing.T, root string) {
 	t.Helper()
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",
@@ -83,6 +89,13 @@ func newRunIdentityTestScheduler(t *testing.T, root string, runner StageRunner) 
 	}
 	gitIn(t, root, "add", ".")
 	gitIn(t, root, "commit", "-m", "fixture skills")
+}
+
+// newRunIdentityTestScheduler builds a scheduler that can drive runPipeline
+// end-to-end against a fake stage runner, rooted at a real git workspace.
+func newRunIdentityTestScheduler(t *testing.T, root string, runner StageRunner) *Scheduler {
+	t.Helper()
+	commitPipelineSkillFixtures(t, root)
 
 	return &Scheduler{
 		repoRunning:   make(map[string]int),

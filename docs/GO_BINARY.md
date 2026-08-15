@@ -1088,11 +1088,13 @@ snapshot is:
   `runstate.LivenessWindow` (30 min, the same constant the IPC orphan
   reconciler's ladder uses — one threshold, one authority). Note what that
   timestamp means: the snapshot is **refreshed at stage boundaries only** — the
-  orchestrator persists after a stage completes, the IPC server on repo-carrying
-  transitions, and no progress tick writes anything (there is no heartbeat). On
-  the Go-scheduler path the persisted pid also names a stage child that had
-  already exited when the file was written, which is why the sidecar arm exists:
-  it is the one signal that path writes while the run is alive; or
+  orchestrator persists at each stage's start and again when it completes, the
+  IPC server on repo-carrying transitions, and no progress tick writes anything
+  (there is no heartbeat). On the Go-scheduler path the persisted pid is never a
+  live one either: the stage-start write clears it to 0 (#534) and the
+  stage-completion write names a child that had already exited. That is why the
+  sidecar arm exists — it is the one signal that path writes while the run is
+  alive; or
 - **paused** — a deliberate "resume later" that powers the restore prompt days
   later, so it is never aged out by the liveness lease; or
 - **terminal within the tail window** — the terminal marker lands before the
@@ -1476,6 +1478,19 @@ Arm 3 is the arm that scopes this: `stagePid` →
 closed, so the sub-population that carries no obtainable child pid — the Codex
 interactive TUI (#4024), whose stage runs inside a VSCode terminal — rests on
 arms 1 and 4 alone.
+
+**Arm 3 covers the EXTENSION population only.** On the scheduler / CLI path the
+snapshot's `PID` is **0 while a stage runs, by design (#534)**: the orchestrator
+now persists at each stage's start as well as its completion, and the stage-start
+write clears the pid first, because the only pid the runtime holds at that moment
+is the previous stage's already-exited child — republishing it would hand this
+ladder a dead pid with a fresh mtime. `SetProcess` writes the live child in
+memory and `internal/execution` contains no `Persist` at all, so no live pid has
+ever reached disk on this path. Scheduler-path runs are carried by arm 2
+(`Scheduler.IsRunLive`); `nightgauge run` under a separate `serve` daemon has
+neither arm 1 nor 2 and is therefore carried by arm 4's stage-boundary lease
+alone — which #534 refreshes twice as often but does not make continuous. See
+ADR 017 §7.2's per-population table and #555.
 
 See
 [docs/decisions/017-runtime-identity-keying.md](decisions/017-runtime-identity-keying.md)
