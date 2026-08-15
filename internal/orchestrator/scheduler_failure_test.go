@@ -9,14 +9,43 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
+
+// mustMkdirAll creates dir or fails the test.
+func mustMkdirAll(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+}
+
+// writeFailingStubCLI writes an executable shell script that prints stdout to
+// stdout, stderr to stderr, and exits with code. It stands in for a real
+// provider CLI so a test can exercise execution.Manager's spawn/wait path —
+// including its (result, nil) contract on a non-zero exit — without a network
+// call, an API key, or the provider binary being installed.
+func writeFailingStubCLI(t *testing.T, dir, stdout, stderr string, code int) string {
+	t.Helper()
+	path := filepath.Join(dir, "stub-cli.sh")
+	script := "#!/bin/sh\n" +
+		"cat <<'NG_STDOUT_EOF'\n" + stdout + "\nNG_STDOUT_EOF\n" +
+		"cat >&2 <<'NG_STDERR_EOF'\n" + stderr + "\nNG_STDERR_EOF\n" +
+		"exit " + strconv.Itoa(code) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatalf("write stub CLI: %v", err)
+	}
+	return path
+}
 
 // readDailyJSONLRecords reads every line from today's history JSONL file
 // and returns parsed V2RunRecord values. Test helper.
@@ -1077,5 +1106,233 @@ func TestCostCapKillJSONLRecord_IPCMode(t *testing.T) {
 	}
 	if !strings.Contains(detail.Error, "[cost-cap-exceeded]") {
 		t.Errorf("stages[pr-create].Error missing cost-cap marker; got %q", detail.Error)
+	}
+}
+
+// ── #533: CLI-mode failure text never reached classification ──────────────
+//
+// CLI mode and IPC mode fail in two DIFFERENT shapes, and only the IPC one was
+// ever wired up:
+//
+//	IPC — IpcStageRunner returns a non-nil error AND populates
+//	      StageRunResult.ErrorText / LastOutputLines (ipc_stage_runner.go:201).
+//	CLI — execution.Manager.RunStage turns a non-zero exit into result.ExitCode
+//	      and returns a NIL error (manager.go:385-391), with the real reason on
+//	      result.Stderr. ExecutionManagerRunner then built a StageRunResult that
+//	      never set ErrorText or LastOutputLines.
+//
+// Every classification input in the scheduler derived from that nil err, so
+// ClassifyTerminalKind was handed the literal string "exit 1: <nil>" and
+// answered subagent_crash — the #520 signature — for every CLI-mode failure of
+// every adapter. The two tests below cover the two halves of the carry: the
+// runner projection (Step 3) and the scheduler's use of it (Step 4).
+
+// grokUnknownModelStderr is the REAL stderr of `grok --model grok-build-0.1`,
+// captured in internal/execution/testdata/grok_unknown_model_stderr.txt on
+// grok 1.0.4. Duplicated as a literal rather than read across package
+// boundaries; the fixture file is the provenance record.
+const grokUnknownModelStderr = `Error: Couldn't set model 'grok-build-0.1': Invalid params: "unknown model id". Run 'grok models' to see available models.` + "\n"
+
+// TestCLIStageErrorTextReachesClassification_GrokUnknownModel is the #533
+// regression test for the runner projection. It drives the REAL
+// ExecutionManagerRunner over a REAL execution.Manager whose adapter spawns a
+// stub CLI that reproduces the captured failure — non-zero exit, reason on
+// stderr, nil Go error — and asserts the projection carries that text.
+//
+// This test MUST fail at 8dbbeb95: ErrorText and LastOutputLines were never
+// assigned in the ExecutionManagerRunner.RunStage literal, so both are "" and
+// ClassifyTerminalKind falls back to subagent_crash.
+func TestCLIStageErrorTextReachesClassification_GrokUnknownModel(t *testing.T) {
+	root := t.TempDir()
+	stubCLI := writeFailingStubCLI(t, root, "", grokUnknownModelStderr, 1)
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stubCLI)
+
+	runner := &ExecutionManagerRunner{
+		execMgr: execution.NewManager(root, adapters.NewGrokAdapter()),
+	}
+	// ensureWorktree returns early when the path already exists, so the stage
+	// needs no git repo behind it.
+	mustMkdirAll(t, filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-533"))
+
+	res, err := runner.RunStage(context.Background(), StageRunParams{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 533,
+		Stage:       state.StagePRCreate,
+		Timeout:     30 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("RunStage returned a non-nil error (%v) — the CLI path's whole "+
+			"defect is that a non-zero exit arrives with err==nil; if this "+
+			"changed, the test no longer covers #533", err)
+	}
+	if res == nil {
+		t.Fatal("RunStage returned a nil result")
+	}
+	if res.ExitCode != 1 {
+		t.Fatalf("ExitCode = %d, want 1 — the stub CLI did not run", res.ExitCode)
+	}
+
+	if res.ErrorText == "" {
+		t.Fatal("StageRunResult.ErrorText is empty — the CLI runner dropped the " +
+			"reason the process printed on stderr (#533)")
+	}
+	if !strings.Contains(res.ErrorText, "unknown model id") {
+		t.Errorf("ErrorText = %q, expected the CLI's verbatim stderr reason", res.ErrorText)
+	}
+	if res.LastOutputLines == "" {
+		t.Error("StageRunResult.LastOutputLines is empty — retros have no evidence for a CLI failure")
+	}
+
+	// The point of the carry: classification now sees the real reason and
+	// routes to the #42 sticky downgrade instead of escalating on a
+	// subagent_crash misread.
+	if got := ResolveTerminalKind(false, "", res.ErrorText); got != TerminalKindModelUnavailable {
+		t.Errorf("ResolveTerminalKind(ErrorText) = %q, want %q", got, TerminalKindModelUnavailable)
+	}
+	// And the pre-fix classification input really was the wrong answer, so the
+	// assertion above is testing a behavior change rather than a coincidence.
+	if got := ClassifyTerminalKind("exit 1: <nil>"); got != "" && got != TerminalKindSubagentCrash {
+		t.Errorf("ClassifyTerminalKind(\"exit 1: <nil>\") = %q — #533's premise "+
+			"is that the nil-error string classifies as nothing useful", got)
+	}
+}
+
+// cliFailureStageRunner reproduces the CLI-mode terminal shape at the
+// StageRunner seam: a non-zero exit, the reason on ErrorText, a captured tail
+// on LastOutputLines, and — the part that distinguishes CLI from IPC — a NIL
+// Go error. It is deliberately NOT the IPC shape: faking a non-nil error here
+// would test the path that already worked.
+type cliFailureStageRunner struct {
+	mu              sync.Mutex
+	failStageCalls  int
+	failStage       state.PipelineStage
+	errText         string
+	lastOutputLines string
+}
+
+func (r *cliFailureStageRunner) RunStage(_ context.Context, params StageRunParams) (*StageRunResult, error) {
+	if params.Stage == r.failStage {
+		r.mu.Lock()
+		r.failStageCalls++
+		r.mu.Unlock()
+	}
+
+	if params.Stage != r.failStage {
+		if params.OutputFile != "" {
+			if mkErr := os.MkdirAll(filepath.Dir(params.OutputFile), 0755); mkErr == nil {
+				payload := map[string]any{
+					"schema_version":   "1.0",
+					"issue_number":     params.IssueNumber,
+					"plan_file":        "plan.md",
+					"approach":         "test",
+					"files_to_create":  []string{},
+					"files_to_modify":  []string{},
+					"files_to_read":    []string{},
+					"validation_steps": []string{},
+					"ok":               true,
+				}
+				data, _ := json.Marshal(payload)
+				_ = os.WriteFile(params.OutputFile, data, 0644)
+			}
+		}
+		return &StageRunResult{ExitCode: 0, InputTokens: 100, OutputTokens: 50}, nil
+	}
+
+	return &StageRunResult{
+		ExitCode:        1,
+		ErrorText:       r.errText,
+		LastOutputLines: r.lastOutputLines,
+	}, nil // nil error — the CLI shape
+}
+
+// TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash is the scheduler
+// half of #533. It mirrors TestStallKillJSONLRecord_IPCMode, but with the CLI
+// failure shape (err == nil, reason on ErrorText). The scheduler must fold
+// ErrorText into failText / terminalReason so:
+//
+//  1. the run classifies as model_unavailable, not subagent_crash;
+//  2. the #42 sticky-downgrade branch fires (the stage is re-dispatched on a
+//     weaker tier) instead of an upward escalation;
+//  3. the persisted terminalReason is the CLI's sentence, not "exit 1: <nil>".
+//
+// This test MUST fail at 8dbbeb95 — with err==nil, failText stayed "" and
+// terminalReason was literally "exit 1: <nil>".
+func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
+	root := t.TempDir()
+
+	tail := "some earlier stdout chatter\n" + strings.TrimSpace(grokUnknownModelStderr)
+	runner := &cliFailureStageRunner{
+		failStage:       state.StagePRCreate,
+		errText:         strings.TrimSpace(grokUnknownModelStderr),
+		lastOutputLines: tail,
+	}
+
+	s := buildStallTestScheduler(t, root, runner)
+	// Escalation off: any upward move here would be the #533 bug, and leaving
+	// it enabled would let an escalation mask the downgrade we're asserting.
+	s.retryEngine = NewRetryEngine(RetryConfig{
+		MaxBacktracks:          0,
+		MaxEscalationsPerStage: 0,
+	})
+
+	item := types.BoardItem{
+		Number: 8533,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-8533",
+		Title:  "CLI-mode unknown model must not read as subagent_crash",
+		Labels: []string{"type:bug", "component:pipeline"},
+	}
+	s.runPipeline(context.Background(), item)
+
+	records := readDailyJSONLRecords(t, root)
+	var rec state.V2RunRecord
+	found := false
+	for _, r := range records {
+		if r.IssueNumber == item.Number {
+			rec, found = r, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no record for issue #%d in daily JSONL (got %d records)", item.Number, len(records))
+	}
+
+	if rec.Outcome != "failed" {
+		t.Errorf("outcome = %q, want failed", rec.Outcome)
+	}
+	if rec.TerminalFailureKind != TerminalKindModelUnavailable {
+		t.Errorf("terminal_failure_kind = %q, want %q — %q is the #520 signature "+
+			"that CLI mode produced for EVERY failure because the classifier only "+
+			"ever saw \"exit 1: <nil>\"",
+			rec.TerminalFailureKind, TerminalKindModelUnavailable, rec.TerminalFailureKind)
+	}
+
+	detail, ok := rec.Stages[string(state.StagePRCreate)]
+	if !ok {
+		t.Fatalf("pr-create stage missing from record; got stages=%v", rec.Stages)
+	}
+	if strings.Contains(detail.Error, "<nil>") {
+		t.Errorf("stages[pr-create].Error = %q — the nil-error placeholder means the "+
+			"CLI's real reason was never folded into terminalReason", detail.Error)
+	}
+	if !strings.Contains(detail.Error, "unknown model id") {
+		t.Errorf("stages[pr-create].Error = %q, expected the CLI's verbatim reason", detail.Error)
+	}
+	if detail.LastOutputLines == "" {
+		t.Error("stages[pr-create].LastOutputLines empty — a CLI failure must carry its tail for retros")
+	}
+
+	// The #42 branch fired: a sticky tier substitution was recorded, and no
+	// upward escalation was applied to the stage.
+	if len(s.retryEngine.Downgrades()) == 0 {
+		t.Error("no sticky downgrade recorded — the model_unavailable branch never ran")
+	}
+	if got := s.retryEngine.CurrentModel(string(state.StagePRCreate)); got != "" {
+		t.Errorf("pr-create escalated to %q — escalating UP on a rejected model is exactly "+
+			"what the subagent_crash misclassification caused", got)
+	}
+	if runner.failStageCalls <= 1 {
+		t.Errorf("pr-create dispatched %d time(s) — a model_unavailable failure must "+
+			"re-dispatch on the substituted tier before giving up", runner.failStageCalls)
 	}
 }
