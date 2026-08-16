@@ -1102,3 +1102,67 @@ func TestRunIDEnvVar_AllAdapters(t *testing.T) {
 		})
 	}
 }
+
+// TestTargetRepoEnvVar_AllAdapters is the repo-mismatch-gate exporter
+// contract (#416): EVERY adapter's BuildCommand exports NIGHTGAUGE_TARGET_REPO
+// when RunOptions.TargetRepo is set, and exports nothing at all when it is
+// empty.
+//
+// The variable feeds the per-stage repo-mismatch gate. Two adapters
+// (gemini, gemini-sdk) omitted it silently — the gate then checked the
+// workspace primary repo instead of the issue's target repo for any run
+// dispatched through them, producing either a false mismatch (blocks a
+// correct stage) or a false pass (fails to catch a stage aimed at the wrong
+// repo) in a multi-repo workspace.
+//
+// Table-driven over the REGISTRY (not a hand-picked adapter list) for the
+// same reason as TestRunIDEnvVar_AllAdapters above: a hand-written list only
+// tests the adapters someone remembered to add, so an adapter could omit the
+// contract var and this test would still pass. Driving it from
+// NewRegistry() makes the count assertion fail the moment the registry and
+// this test diverge, so a future adapter cannot silently join the registry
+// without also being exercised here.
+func TestTargetRepoEnvVar_AllAdapters(t *testing.T) {
+	const targetRepo = "nightgauge/nightgauge-internal"
+
+	registry := NewRegistry()
+	names := registry.Names()
+	if len(names) != 9 {
+		t.Fatalf("registry has %d adapters (%v), the target-repo contract was written against 9 — "+
+			"if an adapter was added, confirm it exports NIGHTGAUGE_TARGET_REPO and update this count",
+			len(names), names)
+	}
+
+	base := RunOptions{
+		SkillPath:   "/skills/feature-dev/SKILL.md",
+		WorktreeDir: "/tmp/worktree",
+		IssueNumber: 416,
+		Repo:        "nightgauge/nightgauge",
+		Stage:       "feature-dev",
+		Prompt:      "implement",
+	}
+
+	for _, name := range names {
+		adapter, err := registry.Get(name)
+		if err != nil {
+			t.Fatalf("registry.Get(%q): %v", name, err)
+		}
+
+		t.Run(name+"/present", func(t *testing.T) {
+			opts := base
+			opts.TargetRepo = targetRepo
+			_, _, env := adapter.BuildCommand(opts)
+			if env["NIGHTGAUGE_TARGET_REPO"] != targetRepo {
+				t.Errorf("%s: NIGHTGAUGE_TARGET_REPO = %q, want %q", adapter.Name(), env["NIGHTGAUGE_TARGET_REPO"], targetRepo)
+			}
+		})
+
+		t.Run(name+"/absent", func(t *testing.T) {
+			opts := base // TargetRepo deliberately empty — same-repo dispatch
+			_, _, env := adapter.BuildCommand(opts)
+			if v, ok := env["NIGHTGAUGE_TARGET_REPO"]; ok {
+				t.Errorf("%s: NIGHTGAUGE_TARGET_REPO present as %q with an empty TargetRepo; it must not be exported at all", adapter.Name(), v)
+			}
+		})
+	}
+}

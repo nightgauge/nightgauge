@@ -71,6 +71,9 @@ func (a *GeminiSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
 	}
+	if opts.TargetRepo != "" {
+		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
+	}
 	if opts.RunID != "" {
 		env[RunIDEnvVar] = opts.RunID
 	}

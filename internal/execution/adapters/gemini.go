@@ -62,10 +62,11 @@ func (a *GeminiAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 
 	env := map[string]string{
-		"NIGHTGAUGE_ISSUE_NUMBER": fmt.Sprintf("%d", opts.IssueNumber),
-		"NIGHTGAUGE_REPO":         opts.Repo,
-		"NIGHTGAUGE_STAGE":        opts.Stage,
-		"NIGHTGAUGE_ADAPTER":      "gemini",
+		"NIGHTGAUGE_ISSUE_NUMBER":  fmt.Sprintf("%d", opts.IssueNumber),
+		"NIGHTGAUGE_REPO":          opts.Repo,
+		"NIGHTGAUGE_STAGE":         opts.Stage,
+		"NIGHTGAUGE_OUTPUT_FORMAT": "stream-json", // matches the --output-format flag above
+		"NIGHTGAUGE_ADAPTER":       "gemini",
 	}
 
 	if opts.ContextFile != "" {
@@ -73,6 +74,9 @@ func (a *GeminiAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
+	}
+	if opts.TargetRepo != "" {
+		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
 	if opts.RunID != "" {
 		env[RunIDEnvVar] = opts.RunID
