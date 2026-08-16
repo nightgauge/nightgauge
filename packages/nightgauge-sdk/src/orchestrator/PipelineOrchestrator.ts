@@ -32,6 +32,7 @@ import type { WorkflowExecutorBindings } from "../cli/workflow/SdkFanoutRunner.j
 import { WorkflowExecutor, createNodeJournalFs, type JournalFs } from "./WorkflowExecutor.js";
 import type { ICliAdapter } from "../cli/adapters/ICliAdapter.js";
 import { TraceRecorder } from "../events/traceRecorder.js";
+import type { TierBand } from "../eval/tierBands.js";
 import { RunStateManager, uuidV7 } from "../context/RunStateManager.js";
 
 /**
@@ -61,8 +62,12 @@ export interface PipelineConfig {
   plansPath?: string;
   /** Base path for skill files (default: 'skills') */
   skillsPath?: string;
-  /** Default model to use (default: 'sonnet') */
-  defaultModel?: "sonnet" | "opus" | "haiku";
+  /**
+   * Default model to use (default: 'sonnet'). Typed against the `TIER_BANDS`
+   * authority (#581) — the previous hand-spelled three-band union silently
+   * excluded `fable` (#582).
+   */
+  defaultModel?: TierBand;
   /**
    * CLI provider identifier (claude | codex | gemini | …) for the single-agent
    * execution path. Threaded to `StageExecutor.execute` so provider-aware

@@ -179,8 +179,8 @@ func OutcomePredictedModelDiagnostic(issueNumber int, predicted string) string {
 			issueNumber)
 	}
 	return fmt.Sprintf(
-		"learning outcome has no PREDICTED model — issue-%d.json recommended %q, which the model registry has no band for; the corpus pair is compared band to band (haiku|sonnet|opus|fable), so an unregistered id is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
-		issueNumber, predicted)
+		"learning outcome has no PREDICTED model — issue-%d.json recommended %q, which the model registry has no band for; the corpus pair is compared band to band (%s), so an unregistered id is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
+		issueNumber, predicted, models.BandAlternation())
 }
 
 // OutcomeActualModelDiagnostic — see OutcomePredictedModelDiagnostic.
@@ -191,8 +191,8 @@ func OutcomeActualModelDiagnostic(served string) string {
 			OutcomeModelStage)
 	}
 	return fmt.Sprintf(
-		"learning outcome has no ACTUAL model — the %s stage served %q, which the model registry has no band for; the corpus pair is compared band to band (haiku|sonnet|opus|fable), so an unregistered id (a local model, or a provider id the registry does not carry) is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
-		OutcomeModelStage, served)
+		"learning outcome has no ACTUAL model — the %s stage served %q, which the model registry has no band for; the corpus pair is compared band to band (%s), so an unregistered id (a local model, or a provider id the registry does not carry) is EXCLUDED from the accuracy denominator rather than booked as a miss (#340)",
+		OutcomeModelStage, served, models.BandAlternation())
 }
 
 // OutcomeSizeInput resolves the size term the router itself scored the issue

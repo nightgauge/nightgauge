@@ -11,6 +11,7 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import { EvalScenarioSchema, PIPELINE_SKILLS, type EvalScenario } from "./schemas.js";
+import type { ModelTier } from "../analysis/AutoModelSelector.js";
 import type { MockFixture, MockFixtureMap } from "./modelRunner.js";
 
 type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
@@ -125,7 +126,9 @@ export async function loadFixtures(
           cause: err,
         });
       }
-      map[scenarioId] = raw as Partial<Record<"haiku" | "sonnet" | "opus", MockFixture>>;
+      // Keyed by ModelTier (authority-derived, #582) — the previous hand union
+      // omitted `fable`, so fable fixtures were untypeable.
+      map[scenarioId] = raw as Partial<Record<ModelTier, MockFixture>>;
     }
   }
   return map;

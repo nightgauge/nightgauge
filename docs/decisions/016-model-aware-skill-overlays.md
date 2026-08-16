@@ -153,12 +153,17 @@ where `<key>` is derived from the resolved model, most general first:
 | 2     | each `ModelDescriptor.tiers[]` | `opus`          |
 | 3     | `ModelDescriptor.id`           | `claude-opus-5` |
 
+> **Amended by #582 (band-vocabulary retirement):** the band segment (order 2)
+> is retired with the band vocabulary. The cascade is now provider → concrete
+> id. No band-keyed overlay file ever existed on disk, so no rendered output
+> changed; a rank-keyed middle segment was deliberately not added back.
+
 All matching fragments are **composed, not replaced**, and appended in
 precedence order — shared before skill-specific, general before specific:
 
 ```
-_shared/anthropic → _shared/opus → _shared/claude-opus-5
-  → <skill>/anthropic → <skill>/opus → <skill>/claude-opus-5
+_shared/anthropic → _shared/claude-opus-5
+  → <skill>/anthropic → <skill>/claude-opus-5
 ```
 
 Later fragments may explicitly countermand earlier ones; a skill-specific

@@ -50,13 +50,8 @@ func resolveCopilotModel(model string) string {
 	// "claude-sonnet-9" still land on the matching band — mirrors
 	// resolveCodexModel and the SDK resolver.
 	tier := m
-	switch {
-	case strings.HasPrefix(m, "claude-haiku"):
-		tier = "haiku"
-	case strings.HasPrefix(m, "claude-sonnet"):
-		tier = "sonnet"
-	case strings.HasPrefix(m, "claude-opus"), strings.HasPrefix(m, "claude-fable"):
-		tier = "opus"
+	if band, ok := models.ClaudeIDTier(m); ok {
+		tier = band
 	}
 	if resolved, ok := models.Resolve("copilot", tier); ok && resolved.Provider == "copilot" {
 		if !resolved.Deprecated {

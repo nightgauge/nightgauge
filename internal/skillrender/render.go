@@ -154,7 +154,11 @@ func Locate(stage string, roots []string) (string, error) {
 }
 
 // OverlayKeys derives the overlay cascade for a model, most general first:
-// provider, then each capability band, then the concrete id (ADR 016 §2).
+// provider, then the concrete id (ADR 016 §2 as amended by #582 — the band
+// segment is retired with the band vocabulary; no band-named overlay file
+// ever existed on disk, so the cascade is provider → concrete id. A
+// rank-keyed middle segment is deliberately NOT added back: no overlay needs
+// it, and pre-customer we delete paths rather than speculate).
 //
 // Returns nil for an unknown model and for every local provider, which have no
 // registry entries by design — those render base-only, which is the documented
@@ -174,8 +178,7 @@ func OverlayKeys(model, adapter string) (keys []string, descriptor models.ModelD
 	// Use the RESOLVED descriptor's provider, not the requested one: concrete
 	// ids are globally unique, so an exact-id lookup legitimately crosses
 	// providers and must key off where the model actually lives.
-	ordered := append([]string{m.Provider}, m.Tiers...)
-	ordered = append(ordered, m.ID)
+	ordered := []string{m.Provider, m.ID}
 	seen := make(map[string]bool, len(ordered))
 	for _, k := range ordered {
 		if k == "" || seen[k] {

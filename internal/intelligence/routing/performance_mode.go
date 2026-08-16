@@ -110,11 +110,13 @@ func parseMode(s string) PerformanceMode {
 // the Go side's one tier ladder: internal/orchestrator's downgradeLadder and
 // NormalizeModelTier are defined from it, and it mirrors
 // TIER_BANDS_STRONGEST_FIRST in packages/nightgauge-vscode/src/utils/skillRunner.ts.
+// The NAME spellings derive from models.Band* (#582) — the ORDER declared
+// below remains this file's authority.
 const (
-	TierHaiku  = "haiku"
-	TierSonnet = "sonnet"
-	TierOpus   = "opus"
-	TierFable  = "fable"
+	TierHaiku  = models.BandHaiku
+	TierSonnet = models.BandSonnet
+	TierOpus   = models.BandOpus
+	TierFable  = models.BandFable
 )
 
 // TierBandsStrongestFirst is the capability ordering of the registry bands.

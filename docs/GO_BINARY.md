@@ -284,12 +284,15 @@ expansion, resolution, and composition. Supplying no `--skills-root` is an
 error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
-**Resolution cascade** (ADR 016 §2), general to specific, shared before
-skill-specific:
+**Resolution cascade** (ADR 016 §2, as amended by #582), general to specific,
+shared before skill-specific — provider, then the concrete id. The band
+segment was retired with the band vocabulary (#582); band names remain valid
+as `--model` INPUTS (resolved through the registry to a concrete model), but
+no band-keyed overlay file is consulted:
 
 ```text
-_shared/anthropic → _shared/opus → _shared/claude-opus-5
-  → <skill>/anthropic → <skill>/opus → <skill>/claude-opus-5
+_shared/anthropic → _shared/claude-opus-5
+  → <skill>/anthropic → <skill>/claude-opus-5
 ```
 
 Fragments are **composed, not replaced**; later ones may countermand earlier

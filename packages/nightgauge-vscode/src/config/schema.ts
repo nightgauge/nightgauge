@@ -503,8 +503,14 @@ export const SizeGateRoutesSchema = z.object({
    * - 'soft-route': Continue with a downgraded model (haiku).
    */
   reject_action: z.enum(["fail", "soft-route"]).optional(),
-  /** Model to use when soft-routing. Default: 'haiku'. */
-  soft_route_model: z.enum(["haiku", "sonnet"]).optional(),
+  /**
+   * Model to use when soft-routing. Default: 'haiku'.
+   *
+   * The two WEAKEST bands, derived from the `TIER_BANDS` authority (#581)
+   * instead of a hand-inlined pair — soft-routing is a downgrade, so the
+   * subset is positional (bottom two rungs), not a re-spelled vocabulary.
+   */
+  soft_route_model: z.enum([TIER_BANDS[0], TIER_BANDS[1]]).optional(),
 });
 export type SizeGateRoutes = z.infer<typeof SizeGateRoutesSchema>;
 

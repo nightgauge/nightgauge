@@ -88,7 +88,30 @@ surfaces where the adapter is eligible.
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.
 
-## Architecture
+### Stored telemetry across the band retirement is accept-void (#582)
+
+Spike #568 §5 decided the migration policy for both history stores when the
+band vocabulary was retired (epic #567), and the decision is **accept-void** —
+no alias tables, no backfill, no migration code, ever (the pre-customer
+no-compat rule in `AGENTS.md`):
+
+- **Learning corpus** (`.nightgauge/pipeline/history/outcomes.jsonl`): rows
+  written before the dispatch-envelope cutover carry no `schema_version`
+  marker and no effort/thinking axes — those axes were never recorded and
+  cannot be reconstructed, so a backfill would fabricate data and an alias
+  would preserve almost nothing. Readers already exclude a pair with an empty
+  half from every denominator (#340); legacy rows join that excluded bucket.
+  Post-cutover rows are distinguished by the writer-stamped schema marker, so
+  exclusion is deterministic rather than vocabulary-sniffing.
+- **Run-record history** (per-stage `model_selection` in
+  `.nightgauge/pipeline/history/`): pre-envelope records hold bare band
+  strings in `model_selection.model`. They are operator forensics, not
+  learning inputs — they stay readable as-is and are never rewritten. New
+  records carry the full dispatch envelope `(model, effort, thinking)` plus
+  selection-source attribution (#599). Consumers key off envelope fields
+  resolved through the model registry — never band substrings, which fail
+  open (stop matching) on concrete ids; the health analyzers were rewritten
+  accordingly in #582.
 
 Two recording paths feed `ComplexityModelService`:
 

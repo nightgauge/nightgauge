@@ -17,13 +17,8 @@ import (
 func resolveGeminiModel(model string) string {
 	m := strings.TrimSpace(model)
 	tier := m
-	switch {
-	case strings.HasPrefix(m, "claude-haiku"):
-		tier = "haiku"
-	case strings.HasPrefix(m, "claude-sonnet"):
-		tier = "sonnet"
-	case strings.HasPrefix(m, "claude-opus"), strings.HasPrefix(m, "claude-fable"):
-		tier = "opus"
+	if band, ok := models.ClaudeIDTier(m); ok {
+		tier = band
 	}
 	if resolved, ok := models.Resolve("google", tier); ok && resolved.Provider == "google" && !resolved.Deprecated {
 		return resolved.ID
@@ -91,8 +86,8 @@ func ValidateGeminiModel(model string) error {
 	}
 	sort.Strings(valid)
 	return fmt.Errorf(
-		"model %q is not valid for the gemini adapter%s; valid models: %s, or a tier (haiku|sonnet|opus|fable)",
-		trimmed, note, strings.Join(valid, ", "),
+		"model %q is not valid for the gemini adapter%s; valid models: %s, or a tier (%s)",
+		trimmed, note, strings.Join(valid, ", "), models.BandAlternation(),
 	)
 }
 

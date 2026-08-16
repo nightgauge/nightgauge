@@ -39,6 +39,7 @@ import {
   type Transport,
 } from "./modelEvalSchemas.js";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
+import { TIER_BANDS } from "./tierBands.js";
 import type { ModelCostRate } from "../analysis/types.js";
 
 /**
@@ -362,7 +363,7 @@ export function computeCostUsd(modelId: string, tokens: TokenCounts): number {
  */
 export function deriveDefaultModelCostRates(): Record<string, ModelCostRate> {
   const out: Record<string, ModelCostRate> = {};
-  for (const tier of ["haiku", "sonnet", "opus", "fable"] as const) {
+  for (const tier of TIER_BANDS) {
     const m = getModelDescriptor(tier, "anthropic");
     if (!m) continue;
     out[tier] = {

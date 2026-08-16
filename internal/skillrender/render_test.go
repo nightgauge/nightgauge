@@ -205,24 +205,24 @@ func TestOverlayKeysCascade(t *testing.T) {
 		name, model, adapter string
 		want                 []string
 	}{
-		{"concrete anthropic id", "claude-opus-5", "", []string{"anthropic", "opus", "claude-opus-5"}},
-		{"tier alias", "opus", "", []string{"anthropic", "opus", "claude-opus-5"}},
-		{"multi-band model lists every band", "gpt-5.6-sol", "codex",
-			[]string{"openai", "opus", "fable", "gpt-5.6-sol"}},
+		// #582 retired the band segment from the cascade (ADR 016 §2 as
+		// amended): provider → concrete id. Band names survive as INPUTS —
+		// they resolve through the registry to a concrete model — but no
+		// band-keyed overlay file is consulted anymore (none ever existed on
+		// disk, so rendered output is unchanged).
+		{"concrete anthropic id", "claude-opus-5", "", []string{"anthropic", "claude-opus-5"}},
+		{"tier alias", "opus", "", []string{"anthropic", "claude-opus-5"}},
+		{"multi-band model keys off the concrete id", "gpt-5.6-sol", "codex",
+			[]string{"openai", "gpt-5.6-sol"}},
 		{"adapter selects provider", "sonnet", "codex",
-			[]string{"openai", "sonnet", "gpt-5.6-terra"}},
+			[]string{"openai", "gpt-5.6-terra"}},
 		// #532 moved the xai haiku band from grok-build-0.1 (which the Grok
-		// Build CLI does not serve) to grok-4.6. The cascade is what that move
-		// actually changes for a rendered skill — the overlay files a haiku-band
-		// grok run reads — and it was asserted nowhere.
-		//
-		// Every band appears, not just the requested one: OverlayKeys keys off
-		// the RESOLVED descriptor's full tier list (same rule as the gpt-5.6-sol
-		// case above). Here that reads as the economics — grok-4.6 serves all
-		// four xai bands, so a haiku-band grok run renders the identical overlay
-		// set to an opus-band one.
+		// Build CLI does not serve) to grok-4.6. Post-#582 the cascade keys
+		// off the RESOLVED model, so a haiku-band grok run renders the same
+		// overlay set as any other grok-4.6 run: the provider and the
+		// concrete id.
 		{"xai haiku cascade", "haiku", "grok",
-			[]string{"xai", "haiku", "sonnet", "opus", "fable", "grok-4.6"}},
+			[]string{"xai", "grok-4.6"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, _, ok := OverlayKeys(tt.model, tt.adapter)
@@ -299,28 +299,28 @@ func TestSharedOnlySkillOnlyAndBothCompose(t *testing.T) {
 	})
 
 	t.Run("skill only", func(t *testing.T) {
-		root := overlayFixture(t, nil, map[string]string{"opus": "SKILL-OPUS"}, "")
+		root := overlayFixture(t, nil, map[string]string{"claude-opus-5": "SKILL-MODEL"}, "")
 		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
-		assertFragments(t, res, "skill:opus")
+		assertFragments(t, res, "skill:claude-opus-5")
 	})
 
 	t.Run("both, shared before skill and general before specific", func(t *testing.T) {
 		root := overlayFixture(t,
-			map[string]string{"anthropic": "S-PROVIDER", "opus": "S-TIER", "claude-opus-5": "S-MODEL"},
+			map[string]string{"anthropic": "S-PROVIDER", "claude-opus-5": "S-MODEL"},
 			map[string]string{"anthropic": "K-PROVIDER", "claude-opus-5": "K-MODEL"}, "")
 		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
 
-		// ADR 016 §2: _shared/anthropic -> _shared/opus -> _shared/claude-opus-5
+		// ADR 016 §2 (amended by #582): _shared/anthropic -> _shared/claude-opus-5
 		//          -> <skill>/anthropic -> <skill>/claude-opus-5
 		assertFragments(t, res,
-			"shared:anthropic", "shared:opus", "shared:claude-opus-5",
+			"shared:anthropic", "shared:claude-opus-5",
 			"skill:anthropic", "skill:claude-opus-5")
 
 		// And the ORDER must hold in the rendered text, not just the metadata —
 		// "later fragments may countermand earlier ones" is only true if the
 		// composed body preserves the cascade.
 		var idx []int
-		for _, marker := range []string{"S-PROVIDER", "S-TIER", "S-MODEL", "K-PROVIDER", "K-MODEL"} {
+		for _, marker := range []string{"S-PROVIDER", "S-MODEL", "K-PROVIDER", "K-MODEL"} {
 			i := strings.Index(res.Content, marker)
 			if i < 0 {
 				t.Fatalf("fragment %q missing from composed output", marker)
@@ -337,7 +337,7 @@ func TestSharedOnlySkillOnlyAndBothCompose(t *testing.T) {
 
 func TestInjectionSites(t *testing.T) {
 	t.Run("after context includes by default", func(t *testing.T) {
-		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil, "")
+		root := overlayFixture(t, map[string]string{"claude-opus-5": "OVERLAY"}, nil, "")
 		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
 		if res.InjectionSite != SiteAfterContext {
 			t.Fatalf("InjectionSite = %q, want %q", res.InjectionSite, SiteAfterContext)
@@ -353,7 +353,7 @@ func TestInjectionSites(t *testing.T) {
 
 	t.Run("explicit anchor wins over the positional fallback", func(t *testing.T) {
 		body := strings.Replace(bodyWithContextIncludes, "Do the work.", OverlayAnchor+"\n\nDo the work.", 1)
-		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil, body)
+		root := overlayFixture(t, map[string]string{"claude-opus-5": "OVERLAY"}, nil, body)
 		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
 
 		if res.InjectionSite != SiteAnchor {
@@ -370,7 +370,7 @@ func TestInjectionSites(t *testing.T) {
 	})
 
 	t.Run("top of body when no context includes exist", func(t *testing.T) {
-		root := overlayFixture(t, map[string]string{"opus": "OVERLAY"}, nil,
+		root := overlayFixture(t, map[string]string{"claude-opus-5": "OVERLAY"}, nil,
 			"---\nname: x\n---\n\n# Bare Skill\n\nNo context includes here.\n")
 		res := mustRender(t, Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
 		if res.InjectionSite != SiteTopOfBody {
@@ -383,7 +383,7 @@ func TestInjectionSites(t *testing.T) {
 }
 
 func TestWholeFileOverrideReplacesBase(t *testing.T) {
-	root := overlayFixture(t, map[string]string{"anthropic": "SHARED"}, map[string]string{"opus": "SKILL-FRAG"}, "")
+	root := overlayFixture(t, map[string]string{"anthropic": "SHARED"}, map[string]string{"claude-opus-5": "SKILL-FRAG"}, "")
 	skillDir := filepath.Join(root, "nightgauge-feature-dev")
 	write(t, filepath.Join(skillDir, "_overlays", "claude-opus-5.SKILL.md"),
 		"---\nname: overridden\nallowed-tools: Read Bash\n---\n\n# Wholly Different Procedure\n")
@@ -458,8 +458,8 @@ func TestUnreadableFragmentWarnsAndSkips(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: chmod 000 does not deny reads")
 	}
-	root := overlayFixture(t, map[string]string{"anthropic": "READABLE", "opus": "UNREADABLE"}, nil, "")
-	bad := filepath.Join(root, "_shared", "_overlays", "opus.md")
+	root := overlayFixture(t, map[string]string{"anthropic": "READABLE", "claude-opus-5": "UNREADABLE"}, nil, "")
+	bad := filepath.Join(root, "_shared", "_overlays", "claude-opus-5.md")
 	if err := os.Chmod(bad, 0o000); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestUnreadableFragmentWarnsAndSkips(t *testing.T) {
 		t.Error("the readable fragment should still apply")
 	}
 	for _, f := range res.Fragments {
-		if strings.HasSuffix(f.Path, "opus.md") {
+		if strings.HasSuffix(f.Path, "claude-opus-5.md") {
 			t.Error("--json reported a fragment that contributed nothing to the output")
 		}
 	}
@@ -488,8 +488,8 @@ func TestUnreadableFragmentWarnsAndSkips(t *testing.T) {
 
 func TestRenderIsDeterministic(t *testing.T) {
 	root := overlayFixture(t,
-		map[string]string{"anthropic": "A", "opus": "B", "claude-opus-5": "C"},
-		map[string]string{"anthropic": "D", "opus": "E"}, "")
+		map[string]string{"anthropic": "A", "claude-opus-5": "B"},
+		map[string]string{"anthropic": "C", "claude-opus-5": "D"}, "")
 	opts := Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}}
 
 	first := mustRender(t, opts)
@@ -505,7 +505,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 }
 
 func TestJSONEnvelopeReportsProvenance(t *testing.T) {
-	root := overlayFixture(t, map[string]string{"opus": "S"}, map[string]string{"claude-opus-5": "K"}, "")
+	root := overlayFixture(t, map[string]string{"anthropic": "S"}, map[string]string{"claude-opus-5": "K"}, "")
 	res := mustRender(t, Options{Stage: "feature-dev", Model: "opus", SkillsRoots: []string{root}})
 
 	var envelope map[string]any

@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod";
+import type { TierBand } from "../eval/tierBands.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { PipelineStage } from "../events/EventBus.js";
@@ -49,8 +50,8 @@ export interface StageConfig<TInput, TOutput> {
 export interface StageExecuteOptions {
   /** Issue number being processed */
   issueNumber: number;
-  /** Model to use (defaults to sonnet) */
-  model?: "sonnet" | "opus" | "haiku";
+  /** Model to use (defaults to sonnet). Typed against the TIER_BANDS authority (#582). */
+  model?: TierBand;
   /** Maximum turns for SDK execution */
   maxTurns?: number;
   /** Working directory for SDK calls */

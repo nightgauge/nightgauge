@@ -15,9 +15,13 @@
  */
 
 import { getModelDescriptor, MODEL_REGISTRY } from "../../eval/modelRegistry.js";
+import { isTierBand, TIER_BANDS, type TierBand } from "../../eval/tierBands.js";
 
-/** Claude-style routing tiers used across the pipeline routing layer. */
-export type CodexTier = "haiku" | "sonnet" | "opus" | "fable";
+/**
+ * Claude-style routing tiers used across the pipeline routing layer —
+ * derived from the `TIER_BANDS` authority (#581), never re-listed (#582).
+ */
+export type CodexTier = TierBand;
 
 export interface CodexModelMeta {
   /** Recommended default model for most pipeline work. */
@@ -63,12 +67,9 @@ function mustResolveCodexTier(tier: CodexTier): string {
  * the Codex CLI needs concrete OpenAI ids. `fable` (premium frontier tier)
  * maps to the strongest model, same as `opus`.
  */
-export const CODEX_TIER_MODEL_MAP: Record<CodexTier, string> = {
-  haiku: mustResolveCodexTier("haiku"),
-  sonnet: mustResolveCodexTier("sonnet"),
-  opus: mustResolveCodexTier("opus"),
-  fable: mustResolveCodexTier("fable"),
-};
+export const CODEX_TIER_MODEL_MAP: Record<CodexTier, string> = Object.fromEntries(
+  TIER_BANDS.map((tier) => [tier, mustResolveCodexTier(tier)])
+) as Record<CodexTier, string>;
 
 /** Recommended frontier default (opus/fable tiers + the "recommended" UI tag). */
 export const CODEX_RECOMMENDED_DEFAULT_MODEL = CODEX_TIER_MODEL_MAP.opus;
@@ -76,10 +77,8 @@ export const CODEX_RECOMMENDED_DEFAULT_MODEL = CODEX_TIER_MODEL_MAP.opus;
 /** Base default model for the sonnet tier and the config `codex.model` default. */
 export const CODEX_DEFAULT_BASE_MODEL = CODEX_TIER_MODEL_MAP.sonnet;
 
-const CODEX_TIERS: readonly CodexTier[] = ["haiku", "sonnet", "opus", "fable"];
-
 function isCodexTier(value: string): value is CodexTier {
-  return (CODEX_TIERS as readonly string[]).includes(value);
+  return isTierBand(value);
 }
 
 /** True when `id` is a model the registry knows (including deprecated/preview). */
