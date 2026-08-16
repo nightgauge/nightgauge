@@ -39,6 +39,54 @@ type Rates struct {
 	CacheCreation1h *float64 `json:"cache_creation_1h,omitempty"`
 }
 
+// Transport names — the closed set of transports a registry model can be
+// reached through, matching the doctor's adapter kinds with sdk folded into
+// api. Mirrors TRANSPORTS in the SDK (modelEvalSchemas.ts, #578).
+const (
+	TransportCLI = "cli"
+	TransportAPI = "api"
+)
+
+// Rate provenance values — where a rate card's figures came from. Mirrors
+// RATE_PROVENANCES in the SDK (modelEvalSchemas.ts, #578).
+const (
+	// RateProvenanceMeasured: a controlled live billing measurement on the
+	// transport in use (e.g. the #531/#570 Grok Build CLI measurement).
+	RateProvenanceMeasured = "measured"
+	// RateProvenanceList: transcribed from the vendor's published price sheet.
+	RateProvenanceList = "list"
+	// RateProvenanceSubscription: flat-rate traffic where 0 is a design
+	// decision, not a price (copilot).
+	RateProvenanceSubscription = "subscription"
+	// RateProvenancePlaceholder: a recorded figure that is not a vendor price
+	// at all (never-listed research previews, provider-neutral fixtures).
+	RateProvenancePlaceholder = "placeholder"
+)
+
+// TransportFacts mirrors the SDK TransportFactsSchema (#578): per-transport
+// reachability plus an optional live-check citation and an optional
+// transport-specific rate card.
+//
+// Served=false is a positive fact — "exists at the provider, unreachable
+// through this transport" (the #532 class). An entirely ABSENT transport key
+// on a model is the unexpressed (pending) state and must never be read as
+// either served or unserved.
+type TransportFacts struct {
+	Served bool `json:"served"`
+	// Verified is the YYYY-MM-DD date of the last live catalog/billing check;
+	// empty means the fact is declared, not verified.
+	Verified string `json:"verified,omitempty"`
+	// Evidence cites the live check (e.g. "grok models catalog listing, grok
+	// CLI 1.0.4").
+	Evidence string `json:"evidence,omitempty"`
+	// Rates is the transport-specific rate card; nil inherits the model's
+	// top-level card (the two-rate-card reality #570 documents).
+	Rates *Rates `json:"rates,omitempty"`
+	// RateProvenance is REQUIRED whenever Rates is present — mustLoad asserts
+	// it, like band uniqueness.
+	RateProvenance string `json:"rate_provenance,omitempty"`
+}
+
 // ModelDescriptor mirrors the SDK ModelDescriptor (modelEvalSchemas.ts).
 type ModelDescriptor struct {
 	ID       string `json:"id"`
@@ -52,6 +100,14 @@ type ModelDescriptor struct {
 	DisplayName     string   `json:"display_name"`
 	ConcreteVersion string   `json:"concrete_version"`
 	Rates           Rates    `json:"rates"`
+	// RateProvenance states where the top-level (default) rate card's figures
+	// came from (#578): measured | list | subscription | placeholder.
+	RateProvenance string `json:"rate_provenance,omitempty"`
+	// Transports maps a transport (TransportCLI | TransportAPI) to its
+	// reachability facts (#578). A missing key is an UNEXPRESSED (pending)
+	// fact, never an implicit served=false. Nothing enforces these at
+	// selection yet — that is the fail-closed enforcement phase (#579).
+	Transports map[string]TransportFacts `json:"transports,omitempty"`
 	// SupportedEfforts: an empty slice is a positive declaration ("this model
 	// has no effort axis", e.g. Haiku), not missing data — the canonical schema
 	// requires the field, so unknown is descriptor-absence, never `[]` (#336).
@@ -130,8 +186,11 @@ func (m ModelDescriptor) HasTier(tier string) bool {
 }
 
 type registryFile struct {
-	Version string            `json:"version"`
-	Models  []ModelDescriptor `json:"models"`
+	Version string `json:"version"`
+	// EffortLevels is the effort ladder as DATA (#578) — must equal
+	// EffortOrder exactly; mustLoad asserts it.
+	EffortLevels []string          `json:"effort_levels"`
+	Models       []ModelDescriptor `json:"models"`
 }
 
 var registry = mustLoad()
@@ -140,6 +199,12 @@ func mustLoad() []ModelDescriptor {
 	var rf registryFile
 	if err := json.Unmarshal(registryJSON, &rf); err != nil {
 		panic(fmt.Sprintf("model registry: invalid embedded JSON: %v", err))
+	}
+	if err := validateEffortLevels(rf.EffortLevels); err != nil {
+		panic(fmt.Sprintf("model registry: %v", err))
+	}
+	if err := validateAxisFields(rf.Models); err != nil {
+		panic(fmt.Sprintf("model registry: %v", err))
 	}
 	seen := make(map[string]bool, len(rf.Models))
 	bands := make(map[string]bool)
@@ -162,6 +227,60 @@ func mustLoad() []ModelDescriptor {
 		}
 	}
 	return rf.Models
+}
+
+// validateEffortLevels is the loader-level assert (#578) tying the data
+// authority to the compiled ladder: the registry's effort_levels declaration
+// must equal EffortOrder exactly — order as much as membership, because the
+// ladder is ascending reasoning depth and effortIndex compares positions in
+// it. Mirrors assertEffortLevelsMatchAuthority in the SDK modelRegistry.ts.
+func validateEffortLevels(levels []string) error {
+	if len(levels) != len(EffortOrder) {
+		return fmt.Errorf("effort_levels %v must equal the effort ladder %v exactly", levels, EffortOrder)
+	}
+	for i, l := range levels {
+		if l != EffortOrder[i] {
+			return fmt.Errorf("effort_levels %v must equal the effort ladder %v exactly", levels, EffortOrder)
+		}
+	}
+	return nil
+}
+
+func validRateProvenance(p string) bool {
+	switch p {
+	case RateProvenanceMeasured, RateProvenanceList, RateProvenanceSubscription, RateProvenancePlaceholder:
+		return true
+	}
+	return false
+}
+
+// validateAxisFields is the loader-level assert (#578) on the axis fields the
+// Zod layer enforces structurally: transports keys must come from the closed
+// cli|api set, rate_provenance values from the closed provenance set, and a
+// per-transport rate card without provenance is an unattributable figure —
+// rate_provenance is mandatory wherever transport rates appear (mirrors
+// assertTransportRatesCarryProvenance in the SDK modelRegistry.ts).
+func validateAxisFields(models []ModelDescriptor) error {
+	for _, m := range models {
+		if m.RateProvenance != "" && !validRateProvenance(m.RateProvenance) {
+			return fmt.Errorf("%s: rate_provenance %q is not one of measured|list|subscription|placeholder",
+				m.ID, m.RateProvenance)
+		}
+		for transport, facts := range m.Transports {
+			if transport != TransportCLI && transport != TransportAPI {
+				return fmt.Errorf("%s: transports key %q is not in the closed set cli|api", m.ID, transport)
+			}
+			if facts.Rates != nil && facts.RateProvenance == "" {
+				return fmt.Errorf("%s: transports.%s declares rates without rate_provenance — "+
+					"every transport rate card must state where its figures came from", m.ID, transport)
+			}
+			if facts.RateProvenance != "" && !validRateProvenance(facts.RateProvenance) {
+				return fmt.Errorf("%s: transports.%s rate_provenance %q is not one of measured|list|subscription|placeholder",
+					m.ID, transport, facts.RateProvenance)
+			}
+		}
+	}
+	return nil
 }
 
 // All returns every model in the registry (including deprecated ones, kept for

@@ -1,6 +1,7 @@
 {
-  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. Anthropic bills TWO cache-write tiers, so cache creation has two rates: `cache_creation_5m` (5-minute TTL, 1.25x base input) and `cache_creation_1h` (1-hour TTL, 2.0x base input) — the CLI reports the split as usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens (#358). `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) — the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. ABSENT CACHE RATES CARRY THREE DIFFERENT MEANINGS AND MUST NEVER BE CONFLATED (#392). (a) NOT BILLED — for OpenAI models BEFORE the GPT-5.6 family the vendor charges a discounted rate for cached input and NO separate cache-write fee (the sheet prints '-' in that column), so those entries deliberately omit BOTH `cache_creation_*`: the omission IS the published price, and adding a write rate there would invent a charge the vendor does not make. From GPT-5.6 onward OpenAI DOES bill cache writes, in the vendor's own words: \"For GPT-5.6 models and later model families, cache writes cost 1.25x the uncached input token rate\" (https://developers.openai.com/api/docs/guides/prompt-caching). Each `gpt-5.6-*` entry therefore records `cache_creation_5m` at 1.25x its input rate. `cache_creation_1h` stays ABSENT on EVERY OpenAI entry regardless of family: OpenAI publishes a single cache-write tier, so there is no second-TTL figure to transcribe and none may be derived. `copilot` entries are flat-rate (subscription) and carry explicit 0 input/output with no cache pools at all. (b) NOT RECORDED — a `cache_read` absent from an `openai` or `google` entry means the vendor publishes no row for that model (gpt-5.1-codex-mini's row has been retired; gpt-5.3-codex-spark is a research preview that has never been listed, and its 0 input/output is a placeholder, not a price). Where a rate IS published both providers bill cached input, so an unrecorded pool prices at $0 and UNDER-REPORTS the bill. Never derive one of these rates from another by multiplier or by copying a same-sticker sibling; transcribe the vendor's own published per-1M figure or leave it absent. (c) OUT OF MODEL — Google's context caching ALSO bills storage per million-tokens-per-HOUR, a dimension this schema has no field for and that `computeCostUsd`/`CalculateCost` never see. A Gemini `cache_read` therefore prices the cached-input READ only; the storage component is deliberately unpriced rather than folded into a per-token rate, so Gemini totals are a floor on cache-heavy stages. Gemini `cache_read` figures are additionally the TEXT/IMAGE/VIDEO modality tier — audio cached input bills higher and this schema has no modality axis, so an audio-heavy Gemini stage under-reports for that reason too. PRICING NOTE, claude-sonnet-5 (recorded 2026-08-09): the $3.00 input / $15.00 output recorded here (and the cache pools derived from them) is the STANDARD sticker that takes effect after 2026-08-31; introductory pricing of $2.00/$10.00 applies through that date. Recording the standard rate is a deliberate conservative overstatement through the introductory window — it needs no dated edit when the window closes, and a cost estimate that is too high never hides an overrun. Every non-Anthropic rate in this file is pinned to a live-verified figure (vendor sheet or measured CLI charge) by packages/nightgauge-vscode/tests/utils/registryRatesLiveVerified.test.ts, which carries each figure's source URL and the date it was read: changing a rate here without updating that citation fails the test. Anthropic pools are pinned instead as DERIVATIONS off base input (0.1x read, 1.25x 5m write, 2.0x 1h write) by internal/models/registry_test.go. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, Issue #56, Issue #391, and Issue #392. PRICING NOTE, xAI (#570): grok-4.6 and grok-4.5 record MEASURED Grok Build CLI charges — the transport the pipeline actually uses — not xAI's API list prices. Provenance: measured-from-CLI 2026-08-15 (grok CLI 1.0.4; controlled live billing measurement from the #531 wave — input and cache-read tokens held constant, output varied, solved against held-out samples to 6e-8; figures published in PR #554 and the #531 close-out comment). Measured: grok-4.6 = $0.34 in / $1.02 out / $0.085 cache-read per 1M; grok-4.5 = $0.68 / $2.04 / $0.102 — grok-4.5 bills exactly 2x grok-4.6 on input and output, and its cache-read is the MORE EXPENSIVE of the two (xAI's API sheet declares the inverse relationship; the sheet is not this transport's bill). No cache-write fee was observed and xAI publishes none, so cache_creation_* stay absent. The API sheet's dual sticker (2x at/above 200k prompt tokens) is a list-price construct; whether the CLI applies a long-context multiplier is UNMEASURED, so CLI-stage cost at >=200k prompts is a floor. Subscription/OAuth traffic often omits cost floats entirely; those runs must treat cost as unstamped, never $0. This schema carries ONE rate card per model, so API-key traffic to grok-4.6/grok-4.5 (billed at list, higher) would under-report — per-transport rate cards are the parent epic #567's registry-axis-schema phase (#553). Provenance, grok-build-0.1: provider-list-price (docs.x.ai, read 2026-08-14, <200k standard sticker) — the Build CLI rejects the id (`deprecated`), no measured figure is obtainable, and the entry is kept solely so historical cost replay prices already-booked runs. Imagine/Voice models are out of this coding registry. Issues #523, #570. BAND NOTE, xAI (#532): ALL FOUR bands (haiku/sonnet/opus/fable) map to grok-4.6 — the only Grok model the Build CLI's chat proxy actually serves that also carries an effort axis — so the grok cost-downgrade ladder is deliberately a NO-OP: a haiku-band stage and an opus-band stage spawn the same model at the same rate. That is correct rather than accidental (grok-4.6 is the cheapest CLI-served Grok model; grok-4.5 measured 2x its per-token bill on the live CLI), but it voids the machine assumption that a lower band is a cheaper route, so nothing on the grok path may infer savings from a band downgrade. grok-4.5 and grok-build-0.1 are exact-id-only: 4.5 is priced and CLI-served but carries no band, and grok-build-0.1 is `deprecated` because the chat proxy rejects it outright (`unknown model id`) — it is kept solely for historical cost replay and must never be a routing target.",
+  "$schema_note": "CANONICAL SOURCE OF TRUTH for model identity + pricing + capabilities across ALL providers. Shape = ModelDescriptor (packages/nightgauge-sdk/src/eval/modelEvalSchemas.ts). Rates are USD per 1,000,000 tokens. Anthropic bills TWO cache-write tiers, so cache creation has two rates: `cache_creation_5m` (5-minute TTL, 1.25x base input) and `cache_creation_1h` (1-hour TTL, 2.0x base input) — the CLI reports the split as usage.cache_creation.{ephemeral_5m,ephemeral_1h}_input_tokens (#358). `tiers` is the list of cross-provider capability BANDS the model serves (haiku/sonnet/opus/fable are band names, not Anthropic-only aliases); at most ONE non-deprecated model per (provider, band) — the loaders on both layers enforce this. Local providers (ollama/lm-studio) have no entries by design: the configured local model serves every band and unknown ids cost $0. ABSENT CACHE RATES CARRY THREE DIFFERENT MEANINGS AND MUST NEVER BE CONFLATED (#392). (a) NOT BILLED — for OpenAI models BEFORE the GPT-5.6 family the vendor charges a discounted rate for cached input and NO separate cache-write fee (the sheet prints '-' in that column), so those entries deliberately omit BOTH `cache_creation_*`: the omission IS the published price, and adding a write rate there would invent a charge the vendor does not make. From GPT-5.6 onward OpenAI DOES bill cache writes, in the vendor's own words: \"For GPT-5.6 models and later model families, cache writes cost 1.25x the uncached input token rate\" (https://developers.openai.com/api/docs/guides/prompt-caching). Each `gpt-5.6-*` entry therefore records `cache_creation_5m` at 1.25x its input rate. `cache_creation_1h` stays ABSENT on EVERY OpenAI entry regardless of family: OpenAI publishes a single cache-write tier, so there is no second-TTL figure to transcribe and none may be derived. `copilot` entries are flat-rate (subscription) and carry explicit 0 input/output with no cache pools at all. (b) NOT RECORDED — a `cache_read` absent from an `openai` or `google` entry means the vendor publishes no row for that model (gpt-5.1-codex-mini's row has been retired; gpt-5.3-codex-spark is a research preview that has never been listed, and its 0 input/output is a placeholder, not a price). Where a rate IS published both providers bill cached input, so an unrecorded pool prices at $0 and UNDER-REPORTS the bill. Never derive one of these rates from another by multiplier or by copying a same-sticker sibling; transcribe the vendor's own published per-1M figure or leave it absent. (c) OUT OF MODEL — Google's context caching ALSO bills storage per million-tokens-per-HOUR, a dimension this schema has no field for and that `computeCostUsd`/`CalculateCost` never see. A Gemini `cache_read` therefore prices the cached-input READ only; the storage component is deliberately unpriced rather than folded into a per-token rate, so Gemini totals are a floor on cache-heavy stages. Gemini `cache_read` figures are additionally the TEXT/IMAGE/VIDEO modality tier — audio cached input bills higher and this schema has no modality axis, so an audio-heavy Gemini stage under-reports for that reason too. PRICING NOTE, claude-sonnet-5 (recorded 2026-08-09): the $3.00 input / $15.00 output recorded here (and the cache pools derived from them) is the STANDARD sticker that takes effect after 2026-08-31; introductory pricing of $2.00/$10.00 applies through that date. Recording the standard rate is a deliberate conservative overstatement through the introductory window — it needs no dated edit when the window closes, and a cost estimate that is too high never hides an overrun. Every non-Anthropic rate in this file is pinned to a live-verified figure (vendor sheet or measured CLI charge) by packages/nightgauge-vscode/tests/utils/registryRatesLiveVerified.test.ts, which carries each figure's source URL and the date it was read: changing a rate here without updating that citation fails the test. Anthropic pools are pinned instead as DERIVATIONS off base input (0.1x read, 1.25x 5m write, 2.0x 1h write) by internal/models/registry_test.go. To add a model: add ONE entry here, then run `scripts/sync-model-registry.sh` to mirror it to internal/models/model-registry.json (the Go parity test fails until they match). See docs/decisions/011-model-eval-system.md, Issue #4169, Issue #56, Issue #391, and Issue #392. PRICING NOTE, xAI (#570): grok-4.6 and grok-4.5 record MEASURED Grok Build CLI charges — the transport the pipeline actually uses — not xAI's API list prices. Provenance: measured-from-CLI 2026-08-15 (grok CLI 1.0.4; controlled live billing measurement from the #531 wave — input and cache-read tokens held constant, output varied, solved against held-out samples to 6e-8; figures published in PR #554 and the #531 close-out comment). Measured: grok-4.6 = $0.34 in / $1.02 out / $0.085 cache-read per 1M; grok-4.5 = $0.68 / $2.04 / $0.102 — grok-4.5 bills exactly 2x grok-4.6 on input and output, and its cache-read is the MORE EXPENSIVE of the two (xAI's API sheet declares the inverse relationship; the sheet is not this transport's bill). No cache-write fee was observed and xAI publishes none, so cache_creation_* stay absent. The API sheet's dual sticker (2x at/above 200k prompt tokens) is a list-price construct; whether the CLI applies a long-context multiplier is UNMEASURED, so CLI-stage cost at >=200k prompts is a floor. Subscription/OAuth traffic often omits cost floats entirely; those runs must treat cost as unstamped, never $0. The registry-axis-schema phase (#578) gave this file per-transport rate cards (transports.<t>.rates), but the xai API transport's card is deliberately UNEXPRESSED pending #553 — so API-key traffic to grok-4.6/grok-4.5 (billed at list, higher) still under-reports until #553 records it. Provenance, grok-build-0.1: provider-list-price (docs.x.ai, read 2026-08-14, <200k standard sticker) — the Build CLI rejects the id (`deprecated`), no measured figure is obtainable, and the entry is kept solely so historical cost replay prices already-booked runs. Imagine/Voice models are out of this coding registry. Issues #523, #570. BAND NOTE, xAI (#532): ALL FOUR bands (haiku/sonnet/opus/fable) map to grok-4.6 — the only Grok model the Build CLI's chat proxy actually serves that also carries an effort axis — so the grok cost-downgrade ladder is deliberately a NO-OP: a haiku-band stage and an opus-band stage spawn the same model at the same rate. That is correct rather than accidental (grok-4.6 is the cheapest CLI-served Grok model; grok-4.5 measured 2x its per-token bill on the live CLI), but it voids the machine assumption that a lower band is a cheaper route, so nothing on the grok path may infer savings from a band downgrade. grok-4.5 and grok-build-0.1 are exact-id-only: 4.5 is priced and CLI-served but carries no band, and grok-build-0.1 is `deprecated` because the chat proxy rejects it outright (`unknown model id`) — it is kept solely for historical cost replay and must never be a routing target. AXIS FIELDS (epic #567, #578 — additive; enforcement is #579): top-level `effort_levels` declares the effort ladder as DATA so both languages read one authority — the loaders on both layers assert it equals the compile-time ladder (EFFORT_LEVELS in modelEvalSchemas.ts / EffortOrder in registry.go) exactly, order and membership. Per-model `transports` maps the closed transport set cli|api (the doctor's adapter kinds with sdk folded into api; http-kind local servers have no entries by design) to per-transport reachability FACTS: `served: false` means 'exists at the provider, unreachable through this transport' — the #532 class, today smuggled through `deprecated`/tiers-absence until #579 retires that overloading — while an ABSENT transport key is the unexpressed/pending state (the xai `api` transport awaits #553; the deprecated openai/google entries' CLI reachability is unverified) and must never be read as either served or unserved. Optional `verified` (YYYY-MM-DD) + `evidence` cite the last live catalog/billing check — absent means declared, not verified; today only the xai entries carry measured catalog evidence (`grok models`, grok CLI 1.0.4, 2026-08-15: grok-4.6 listed as default, grok-4.5 listed, grok-build-0.1 absent). Optional per-transport `rates` express a transport-specific rate card (absent = inherit the top-level card) and REQUIRE `rate_provenance` — a loader-level assert on both layers, like band uniqueness. Per-model top-level `rate_provenance` states where the default rate card's figures came from: measured (controlled live billing measurement) | list (vendor sheet transcription) | subscription (flat-rate 0 by design) | placeholder (a recorded figure that is not a vendor price — the never-listed research preview and the vendor-x-pro fixture).",
   "version": "2",
+  "effort_levels": ["low", "medium", "high", "xhigh", "max"],
   "models": [
     {
       "id": "claude-opus-5",
@@ -14,6 +15,15 @@
         "cache_read": 0.5,
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
@@ -42,6 +52,15 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 200000,
       "deprecated": true,
@@ -69,6 +88,15 @@
         "cache_creation_5m": 3.75,
         "cache_creation_1h": 6.0
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
       "behavior": {
@@ -94,6 +122,15 @@
         "cache_creation_5m": 1.25,
         "cache_creation_1h": 2.0
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": [],
       "context_window": 200000,
       "behavior": {
@@ -113,6 +150,15 @@
         "cache_read": 1.0,
         "cache_creation_5m": 12.5,
         "cache_creation_1h": 20.0
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high", "xhigh", "max"],
       "context_window": 1000000,
@@ -136,6 +182,15 @@
         "cache_creation_5m": 3.75,
         "cache_creation_1h": 6.0
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
@@ -152,6 +207,15 @@
         "cache_read": 0.5,
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
@@ -170,6 +234,15 @@
         "cache_creation_5m": 6.25,
         "cache_creation_1h": 10.0
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000,
       "deprecated": true
@@ -185,6 +258,12 @@
         "output": 30.0,
         "cache_read": 0.5,
         "cache_creation_5m": 6.25
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000,
@@ -202,6 +281,12 @@
         "cache_read": 0.2,
         "cache_creation_5m": 2.5
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000
     },
@@ -217,6 +302,12 @@
         "cache_read": 0.02,
         "cache_creation_5m": 0.25
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 1050000
     },
@@ -229,6 +320,12 @@
         "input": 5.0,
         "output": 30.0,
         "cache_read": 0.5
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
@@ -243,6 +340,12 @@
         "output": 15.0,
         "cache_read": 0.25
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
     },
@@ -256,6 +359,12 @@
         "output": 4.5,
         "cache_read": 0.075
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000
     },
@@ -267,6 +376,12 @@
       "rates": {
         "input": 0.0,
         "output": 0.0
+      },
+      "rate_provenance": "placeholder",
+      "transports": {
+        "cli": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
@@ -282,6 +397,7 @@
         "output": 14.0,
         "cache_read": 0.175
       },
+      "rate_provenance": "list",
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
@@ -297,6 +413,7 @@
         "output": 14.0,
         "cache_read": 0.175
       },
+      "rate_provenance": "list",
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
@@ -311,6 +428,7 @@
         "input": 0.25,
         "output": 2.0
       },
+      "rate_provenance": "list",
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 400000,
       "deprecated": true,
@@ -327,6 +445,15 @@
         "output": 10.0,
         "cache_read": 0.125
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576,
       "recommended": true
@@ -342,6 +469,15 @@
         "output": 2.5,
         "cache_read": 0.03
       },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": true
+        },
+        "api": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576
     },
@@ -355,6 +491,7 @@
         "output": 0.4,
         "cache_read": 0.025
       },
+      "rate_provenance": "list",
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 1048576,
       "deprecated": true
@@ -369,6 +506,12 @@
         "input": 0.0,
         "output": 0.0
       },
+      "rate_provenance": "subscription",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 128000
     },
@@ -381,6 +524,12 @@
       "rates": {
         "input": 0.0,
         "output": 0.0
+      },
+      "rate_provenance": "subscription",
+      "transports": {
+        "cli": {
+          "served": true
+        }
       },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 128000
@@ -395,6 +544,12 @@
         "input": 0.0,
         "output": 0.0
       },
+      "rate_provenance": "subscription",
+      "transports": {
+        "cli": {
+          "served": true
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 200000
     },
@@ -408,6 +563,14 @@
         "input": 0.34,
         "output": 1.02,
         "cache_read": 0.085
+      },
+      "rate_provenance": "measured",
+      "transports": {
+        "cli": {
+          "served": true,
+          "verified": "2026-08-15",
+          "evidence": "grok models catalog listing, grok CLI 1.0.4 — listed as default (spike #568)"
+        }
       },
       "supported_efforts": ["low", "medium", "high", "xhigh"],
       "context_window": 500000,
@@ -432,6 +595,14 @@
         "output": 2.04,
         "cache_read": 0.102
       },
+      "rate_provenance": "measured",
+      "transports": {
+        "cli": {
+          "served": true,
+          "verified": "2026-08-15",
+          "evidence": "grok models catalog listing, grok CLI 1.0.4 — listed (spike #568)"
+        }
+      },
       "supported_efforts": ["low", "medium", "high"],
       "context_window": 500000,
       "behavior": {
@@ -448,6 +619,14 @@
         "input": 1.0,
         "output": 2.0,
         "cache_read": 0.2
+      },
+      "rate_provenance": "list",
+      "transports": {
+        "cli": {
+          "served": false,
+          "verified": "2026-08-15",
+          "evidence": "absent from the grok models catalog, grok CLI 1.0.4 — the chat proxy rejects the id (#532; spike #568)"
+        }
       },
       "supported_efforts": [],
       "context_window": 256000,
@@ -470,6 +649,7 @@
         "input": 2.0,
         "output": 8.0
       },
+      "rate_provenance": "placeholder",
       "supported_efforts": ["medium", "high"],
       "context_window": 128000
     }
