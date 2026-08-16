@@ -8,6 +8,7 @@ import {
 } from "../../../cli/adapters/modelPreflight.js";
 import { AdapterError } from "../../../cli/adapters/errors.js";
 import type { IncrediAdapter } from "../../../cli/adapters/ICliAdapter.js";
+import { checkTransportServed } from "../../../eval/modelRegistry.js";
 
 /**
  * Provider-aware model preflight (#4021): fail fast on an invalid (adapter,
@@ -214,5 +215,81 @@ describe("validateModelForAdapter — Grok (closed)", () => {
     expect(d?.id).toBe("grok-build-0.1");
     expect(d?.deprecated).toBe(true);
     expect(d?.rates.input).toBe(1.0);
+  });
+});
+
+/**
+ * fail-closed-axis-enforcement (#579): the transport-consult
+ * {@link checkTransportServed} adds to validateModelForAdapter, mirroring the
+ * Go registry.CheckTransportServed contract. #578 landed the facts; these pin
+ * the ENFORCEMENT — including the additive semantics (#579 AC4): a model
+ * with no transports.cli fact at all must keep today's fail-OPEN behavior.
+ */
+describe("validateModelForAdapter — transport reachability (#579)", () => {
+  it("resolves band haiku on the grok adapter to the served grok-4.6 and succeeds", () => {
+    const resolved = validateModelForAdapter("grok", "haiku").model;
+    expect(resolved).toBe("grok-4.6");
+    const check = checkTransportServed("xai", "cli", resolved);
+    expect(check.found).toBe(true);
+    expect(check.unreachable).toBeUndefined();
+    expect(check.model?.id).toBe("grok-4.6");
+  });
+
+  it("checkTransportServed classifies a known-but-unserved model distinctly from an unknown one", () => {
+    // Unknown entirely: an ordinary miss, no error.
+    expect(checkTransportServed("xai", "cli", "totally-made-up")).toEqual({ found: false });
+
+    // Known and served: succeeds with the resolved descriptor.
+    const served = checkTransportServed("xai", "cli", "grok-4.6");
+    expect(served.found).toBe(true);
+    expect(served.unreachable).toBeUndefined();
+    expect(served.model?.id).toBe("grok-4.6");
+
+    // Known but explicitly transports.cli.served=false: `unreachable` names
+    // provider, model, and transport; `model` is absent.
+    const unserved = checkTransportServed("xai", "cli", "grok-build-0.1");
+    expect(unserved.found).toBe(true);
+    expect(unserved.model).toBeUndefined();
+    expect(unserved.unreachable).toEqual({
+      provider: "xai",
+      model: "grok-build-0.1",
+      transport: "cli",
+    });
+  });
+
+  it("fails OPEN when a model declares no transports.cli fact at all (#579 AC4, additive enforcement)", () => {
+    // vendor-x-pro is the fixture entry with no `transports` field whatsoever
+    // — the unexpressed/pending state, which must never read as unserved.
+    const result = checkTransportServed("other", "cli", "vendor-x-pro");
+    expect(result.found).toBe(true);
+    expect(result.unreachable).toBeUndefined();
+    expect(result.model?.id).toBe("vendor-x-pro");
+  });
+
+  it("rejects grok-build-0.1 with a classified error naming provider, model, and transport", () => {
+    let threw = false;
+    try {
+      validateModelForAdapter("grok", "grok-build-0.1");
+    } catch (error) {
+      threw = true;
+      expect(error).toBeInstanceOf(AdapterError);
+      const adapterError = error as AdapterError;
+      expect(adapterError.category).toBe("CONFIG_INVALID");
+      const formatted = adapterError.format();
+      expect(formatted).toContain("[Grok] CONFIG_INVALID");
+      for (const want of ["xai", "grok-build-0.1", "cli"]) {
+        expect(formatted).toContain(want);
+      }
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("grok-build-0.1 is unselectable for two independent reasons: deprecated AND transports.cli.served=false", () => {
+    // Reason 1 — deprecated: excluded from the closed valid set regardless
+    // of the transport check ever running.
+    expect(GROK_MODELS).not.toContain("grok-build-0.1");
+    // Reason 2 — transport: checkTransportServed flags it as unreachable
+    // independent of the deprecated flag or the closed-set membership check.
+    expect(checkTransportServed("xai", "cli", "grok-build-0.1").unreachable).toBeDefined();
   });
 });

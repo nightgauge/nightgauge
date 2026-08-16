@@ -220,6 +220,72 @@ func TestValidateGrokEffortUnknownModelPassesThrough(t *testing.T) {
 	}
 }
 
+// TestValidateGrokModelAcceptsServedModels pins the pass side of the #579
+// closed-set gate: bands resolve to grok-4.6 (cli-served) and succeed, and
+// concrete served ids pass through.
+func TestValidateGrokModelAcceptsServedModels(t *testing.T) {
+	for _, m := range []string{"", "haiku", "sonnet", "opus", "fable", "grok-4.6", "grok-4.5"} {
+		if err := ValidateGrokModel(m); err != nil {
+			t.Errorf("ValidateGrokModel(%q) = %v, want nil", m, err)
+		}
+	}
+}
+
+// TestValidateGrokModelRejectsUnknownModel absorbs #552: resolveGrokModel's
+// bare 'return model' used to hand an unresolved name straight to `grok
+// --model`, reaching the CLI unchecked. ValidateGrokModel closes that gate —
+// Grok becomes a CLOSED set, like codex/gemini.
+func TestValidateGrokModelRejectsUnknownModel(t *testing.T) {
+	err := ValidateGrokModel("totally-made-up-model")
+	if err == nil {
+		t.Fatal("an unknown model must be rejected before spawn")
+	}
+	if !strings.Contains(err.Error(), "not valid") {
+		t.Errorf("error must say the model is not valid; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "grok-4.6") {
+		t.Errorf("error must list grok-4.6 among the valid models; got: %v", err)
+	}
+}
+
+// TestValidateGrokModelRejectsUnservedTransport is the #579 regression: a
+// model the registry knows about but marks transports.cli.served=false must
+// fail closed BEFORE spawn with a classified error naming provider, model,
+// and transport — grok-build-0.1 is exactly this shape (spike #568,
+// landed by #578). ValidateModel (the hook manager.go calls before
+// BuildCommand) must reject it too, independent of NIGHTGAUGE_GROK_EFFORT.
+func TestValidateGrokModelRejectsUnservedTransport(t *testing.T) {
+	err := ValidateGrokModel("grok-build-0.1")
+	if err == nil {
+		t.Fatal("grok-build-0.1 (transports.cli.served=false) must be rejected before spawn")
+	}
+	for _, want := range []string{"xai", "grok-build-0.1", "cli"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name provider/model/transport; missing %q in %q", want, err.Error())
+		}
+	}
+
+	a := NewGrokAdapter()
+	if err := a.ValidateModel("grok-build-0.1"); err == nil {
+		t.Fatal("GrokAdapter.ValidateModel must reject grok-build-0.1 before spawn (no effort env set)")
+	}
+}
+
+// TestGrokBuildBothUnselectableReasonsIndependentlyBlockDispatch pins the
+// #579 AC directly on the adapter's pre-spawn gate: grok-build-0.1 keeps
+// deprecated:true (cost-replay), but the reason ValidateGrokModel rejects it
+// is transports.cli.served:false — checked BEFORE the deprecated fallback —
+// and knownGrokModels() independently excludes it via `!Deprecated` too, so
+// either fact alone is sufficient.
+func TestGrokBuildBothUnselectableReasonsIndependentlyBlockDispatch(t *testing.T) {
+	if known := knownGrokModels(); known["grok-build-0.1"] {
+		t.Error("knownGrokModels() must exclude grok-build-0.1 (deprecated:true alone is sufficient)")
+	}
+	if err := ValidateGrokModel("grok-build-0.1"); err == nil {
+		t.Error("ValidateGrokModel must reject grok-build-0.1 (transports.cli.served:false alone is sufficient)")
+	}
+}
+
 func containsPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {

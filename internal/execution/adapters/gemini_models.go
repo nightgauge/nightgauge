@@ -32,46 +32,68 @@ func resolveGeminiModel(model string) string {
 }
 
 // knownGeminiModels returns the CLOSED set of Gemini model ids the pipeline
-// supports: the registry's non-deprecated `provider: "google"` entries.
+// supports: the registry's non-deprecated `provider: "google"` entries that
+// are also reachable through the cli transport (#579). A model with no
+// declared cli transport fact (unexpressed/pending) still counts as known —
+// additive enforcement, #579 AC4.
 func knownGeminiModels() map[string]bool {
 	known := make(map[string]bool)
 	for _, m := range models.All() {
-		if m.Provider == "google" && !m.Deprecated {
-			known[m.ID] = true
+		if m.Provider != "google" || m.Deprecated {
+			continue
 		}
+		if served, knownFact := m.ServedByTransport(models.TransportCLI); knownFact && !served {
+			continue
+		}
+		known[m.ID] = true
 	}
 	return known
 }
 
 // ValidateGeminiModel fails fast when the configured model does not resolve to
-// a known Gemini model id — the registry-backed generalization of the codex
-// preflight (#4021, #57) for the Go `nightgauge run --adapter gemini[-sdk]`
-// paths. An empty model is allowed (BuildCommand omits --model and the CLI
-// uses its own default). Tier aliases and Claude ids resolve first, so they
-// validate as their concrete Gemini model.
+// a known, cli-transport-reachable Gemini model id — the registry-backed
+// generalization of the codex preflight (#4021, #57), extended with the
+// registry's transport facts (#579) for the Go `nightgauge run --adapter
+// gemini[-sdk]` paths. An empty model is allowed (BuildCommand omits --model
+// and the CLI uses its own default). Tier aliases and Claude ids resolve
+// first, so they validate as their concrete Gemini model.
+//
+// models.CheckTransportServed is consulted first so a model that IS in the
+// registry but explicitly unreachable through the cli transport fails closed
+// with an error naming provider, model, and transport, distinct from the
+// generic "unknown model" case handled by the closed-set fallback below.
 func ValidateGeminiModel(model string) error {
 	trimmed := strings.TrimSpace(model)
 	if trimmed == "" {
 		return nil
 	}
 	resolved := resolveGeminiModel(trimmed)
-	known := knownGeminiModels()
-	if !known[resolved] {
-		note := ""
-		if resolved != trimmed {
-			note = fmt.Sprintf(" (resolved to %q)", resolved)
-		}
-		valid := make([]string, 0, len(known))
-		for id := range known {
-			valid = append(valid, id)
-		}
-		sort.Strings(valid)
-		return fmt.Errorf(
-			"model %q is not valid for the gemini adapter%s; valid models: %s, or a tier (haiku|sonnet|opus|fable)",
-			trimmed, note, strings.Join(valid, ", "),
-		)
+	m, ok, err := models.CheckTransportServed("google", models.TransportCLI, resolved)
+	if err != nil {
+		return err
 	}
-	return nil
+	// The provider check guards CheckTransportServed's exact-id lookup, which
+	// (like Resolve) is deliberately provider-agnostic: a concrete id from a
+	// DIFFERENT provider must still be rejected, matching the pre-#579
+	// closed-set behavior.
+	if ok && !m.Deprecated && m.Provider == "google" {
+		return nil
+	}
+
+	known := knownGeminiModels()
+	note := ""
+	if resolved != trimmed {
+		note = fmt.Sprintf(" (resolved to %q)", resolved)
+	}
+	valid := make([]string, 0, len(known))
+	for id := range known {
+		valid = append(valid, id)
+	}
+	sort.Strings(valid)
+	return fmt.Errorf(
+		"model %q is not valid for the gemini adapter%s; valid models: %s, or a tier (haiku|sonnet|opus|fable)",
+		trimmed, note, strings.Join(valid, ", "),
+	)
 }
 
 // ValidateModel implements the optional model-validation interface the
