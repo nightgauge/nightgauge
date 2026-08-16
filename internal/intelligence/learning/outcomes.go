@@ -15,6 +15,15 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
+// OutcomeSchemaVersion is the corpus row-format marker Record stamps onto
+// every row it appends — the band-retirement cutover generation (#582, spike
+// #568 §5). Rows written before the cutover carry no `schema_version` key at
+// all (the file was schema-less), so absence IS the legacy discriminator:
+// "no marker" means a pre-envelope band-era row, "2" means post-cutover. The
+// marker is row provenance, not the exclusion mechanism — accuracy
+// denominators still exclude via the #340 empty-half guard in Calibrate.
+const OutcomeSchemaVersion = "2"
+
 // Outcome records the result of a pipeline run for calibration.
 //
 // The predicted/actual pairs are the whole point of the corpus, and both of
@@ -25,8 +34,14 @@ import (
 // MEASUREMENT of what the run produced, never a second reading of the same
 // pre-run inputs the prediction came from.
 type Outcome struct {
-	IssueNumber int    `json:"issueNumber"`
-	Repo        string `json:"repo"`
+	// SchemaVersion is stamped by Record (never by callers) with
+	// OutcomeSchemaVersion, so post-cutover rows are deterministically
+	// identifiable without vocabulary-sniffing (#582). `omitempty` is
+	// load-bearing: a legacy row round-trips with the key still absent
+	// instead of gaining a fabricated "".
+	SchemaVersion string `json:"schema_version,omitempty"`
+	IssueNumber   int    `json:"issueNumber"`
+	Repo          string `json:"repo"`
 	// PredictedSize is the router's pre-run size estimate, as
 	// small|medium|large. Empty when the issue carried no size input to
 	// predict from (the board Size field or a size:* label —
@@ -100,10 +115,15 @@ func NewRecorder(workspaceRoot string) *Recorder {
 	}
 }
 
-// Record appends an outcome to the JSONL file.
+// Record appends an outcome to the JSONL file. It is the corpus's ONE append
+// point — both writers (Scheduler.recordOutcome and the IPC
+// `pipeline.notifyComplete` handler) flow through it — so the schema marker is
+// stamped here, unconditionally, rather than trusted to callers.
 func (r *Recorder) Record(outcome Outcome) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	outcome.SchemaVersion = OutcomeSchemaVersion
 
 	// The autonomous scheduler's terminal call site predates #369 and receives
 	// no line-count argument. Read the same persisted RuntimeState snapshot its

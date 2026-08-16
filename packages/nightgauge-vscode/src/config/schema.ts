@@ -1333,8 +1333,16 @@ export const PipelineConfigSchema = z.object({
         .object({
           maximum: z
             .object({
-              /** Override Claude model for the Maximum profile (default: 'opus') */
-              model: z.enum(["opus", "sonnet"]).optional(),
+              /**
+               * Override Claude model for the Maximum profile (default:
+               * 'opus'). The standard band and the one rung below it,
+               * positionally derived from the `TIER_BANDS` authority (#582)
+               * like `soft_route_model` — its consumer twin
+               * (`monitoringResolver.getSuperchargeModel`) derives the same
+               * pair, so neither side can drift alone. Accepted set
+               * unchanged.
+               */
+              model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
               /** Override Codex model for the Maximum profile (default: dynamic catalog) */
               codex_model: z.string().optional(),
               /** Stall kill multiplier override (default: 10) */
@@ -1357,8 +1365,12 @@ export const PipelineConfigSchema = z.object({
    */
   supercharge: z
     .object({
-      /** Override model for the Maximum profile (default: 'opus') */
-      model: z.enum(["opus", "sonnet"]).optional(),
+      /**
+       * Override model for the Maximum profile (default: 'opus').
+       * Positionally derived from `TIER_BANDS` (#582) — see the
+       * `performance_mode.overrides.maximum.model` note above.
+       */
+      model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
       /** Stall kill multiplier override (default: 10) */
       stall_kill_multiplier: z.number().int().min(1).optional(),
       /** Disable pipeline-level token budget ceiling (default: true) */

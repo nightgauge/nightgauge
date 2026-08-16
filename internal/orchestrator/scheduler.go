@@ -6518,6 +6518,16 @@ func SizeBucketForScore(score int) string {
 }
 
 // isHaikuModel checks whether a model string refers to Haiku.
+//
+// #582 keep-with-reason (band-retirement sweep, PR #607): the substring match
+// survives deliberately. The input is the DISPATCH model — bands plus claude-*
+// ids on this path — and the substring covers every Haiku spelling that
+// vocabulary has ever used ("haiku", "claude-haiku-4-5", the older dated
+// "claude-3-5-haiku-*" forms an operator env override can still pin), which
+// `models.ClaudeIDTier`'s prefix classifier does not. A single-band substring
+// is not a closed-set enumeration (gate-clean by design); rewriting it to a
+// registry resolution would change behavior for the legacy-id population,
+// outside this sweep's byte-identical boundary.
 func isHaikuModel(model string) bool {
 	return strings.Contains(model, "haiku")
 }

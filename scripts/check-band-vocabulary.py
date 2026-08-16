@@ -36,6 +36,20 @@ TierBand/DefaultModel union, so the compiler already pins them to the
 authority; what a type cannot catch is an ENUMERATION that claims to be the
 whole vocabulary while missing a member — which is exactly R1/R2.
 
+KNOWN LIMITATIONS (documented, not accidental — the gate targets the two
+incident shapes that actually shipped, not every conceivable reintroduction):
+
+  * Unquoted object-key enumerations pass R1: a TS
+    `{ haiku: ..., sonnet: ..., opus: ... }` literal spells the vocabulary
+    without quotes, and QUOTED_BAND requires them. No such live site exists on
+    this tree; a follow-up rule would need real parsing, not a regex.
+  * Substring predicates (`.includes("opus")`, `strings.Contains(m, "haiku")`)
+    are single-band by construction — below R1's >=3-distinct threshold and
+    not an R2 alternation. The surviving instances are deliberate,
+    individually justified keeps (stage_timeout.go's model-scale family match,
+    scheduler.go's isHaikuModel, the #384 behavioral-preamble predicates),
+    each carrying an inline #582 keep-with-reason comment; see PR #607.
+
 FAIL-CLOSED. Exit codes:
   0  clean
   1  band-vocabulary reintroduction found
@@ -87,6 +101,16 @@ EXCLUDE_PATTERNS = (
 
 # path -> justification. Every entry must name a surviving surface from the
 # spike §5 allowed list. Keep this list SHORT — the default is a violation.
+#
+# For the record: two entries below (AutoModelSelector.ts and
+# selectPerformanceMode.ts) are an interpretive EXTENSION of spike #568 §5's
+# literal surface list, which names only "the Anthropic adapter path" among
+# code surfaces. Both are justified inline — one is the #581 golden-pinned
+# pre-cutover selector explicitly deferred to #606, the other a
+# TS-exhaustiveness-anchored switch that structurally cannot derive its case
+# labels from an array — and both were hand-audited for live closed-set risk
+# (none found; PR #607 review). Any further entry needs the same standard:
+# a spike-§5 surface or an equally explicit, audited justification.
 ALLOWLIST: dict[str, str] = {
     # THE TypeScript band authority — the one place TS spells the vocabulary.
     "packages/nightgauge-sdk/src/eval/tierBands.ts": "TS band authority (#581)",

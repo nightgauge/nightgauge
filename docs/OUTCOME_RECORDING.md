@@ -99,10 +99,14 @@ no-compat rule in `AGENTS.md`):
   written before the dispatch-envelope cutover carry no `schema_version`
   marker and no effort/thinking axes — those axes were never recorded and
   cannot be reconstructed, so a backfill would fabricate data and an alias
-  would preserve almost nothing. Readers already exclude a pair with an empty
-  half from every denominator (#340); legacy rows join that excluded bucket.
-  Post-cutover rows are distinguished by the writer-stamped schema marker, so
-  exclusion is deterministic rather than vocabulary-sniffing.
+  would preserve almost nothing. Exclusion keys on the #340 empty-half guard:
+  readers exclude a pair with an empty half from every denominator, and
+  legacy rows join that excluded bucket because their empty halves are
+  exactly the unrecorded ones. Post-cutover rows additionally carry
+  `schema_version: "2"`, stamped at the corpus's one append point
+  (`learning.Recorder.Record` — both writers flow through it), so row
+  provenance is deterministic rather than vocabulary-sniffed; an unmarked
+  row IS a pre-cutover row.
 - **Run-record history** (per-stage `model_selection` in
   `.nightgauge/pipeline/history/`): pre-envelope records hold bare band
   strings in `model_selection.model`. They are operator forensics, not
@@ -110,8 +114,12 @@ no-compat rule in `AGENTS.md`):
   records carry the full dispatch envelope `(model, effort, thinking)` plus
   selection-source attribution (#599). Consumers key off envelope fields
   resolved through the model registry — never band substrings, which fail
-  open (stop matching) on concrete ids; the health analyzers were rewritten
-  accordingly in #582.
+  open (stop matching) on concrete ids; the analyzers over this record
+  stream (the model-routing health dimension and
+  `ModelPerformanceAnalyzer`'s under/over-routing detectors, via the shared
+  `bandStrength.ts` helper) were rewritten accordingly in #582. A handful of
+  dispatch-side substring predicates survive as explicit keeps with inline
+  reasons (see `scripts/check-band-vocabulary.py`'s header and PR #607).
 
 Two recording paths feed `ComplexityModelService`:
 
