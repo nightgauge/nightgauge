@@ -154,8 +154,54 @@ func (p *DefaultBranchHealth) failingRequired(runs []forgetypes.CheckDetail, req
 		}
 		out = append(out, fc)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
+	// Stable, so repeated runs of one check keep the order the forge reported
+	// them in. The name sort alone leaves duplicates interchangeable, and the
+	// representative run that ends up on the card would then depend on the sort
+	// implementation rather than on the data.
+	sort.SliceStable(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out
+}
+
+// distinctFailing collapses failing check RUNS into the set of distinct failing
+// check NAMES, sorted, and picks the representative run URL to link.
+//
+// The distinction is load-bearing, not cosmetic (issue #538). A scheduled
+// workflow that re-runs the same job against an unchanged red commit yields one
+// failedCheck per RUN, so a single stuck check accumulates N entries. Every
+// consumer of this list — the plural title arm, the blocker line, and above all
+// the fingerprint — is written as though it were the SET of failing checks.
+// Feeding it the multiset makes the fingerprint move every time the scheduler
+// fires, which defeats mute-until-changed on the highest-severity card class:
+// the operator mutes a known-red branch and is re-alerted the next morning by
+// the same check failing the same way.
+//
+// The sort is part of the contract, not tidiness. The forge does not guarantee
+// an ordering for check runs, so an unsorted set would reintroduce exactly the
+// same fingerprint churn by another route.
+//
+// Only the name list is deduplicated. The body deliberately still lists every
+// run, because how long and how often a check has been failing is the useful
+// part of the prose.
+func distinctFailing(failing []failedCheck) (names []string, url string) {
+	// name -> representative run URL. Presence in the map is the dedup key, so
+	// a check whose first run carries no link still counts as seen.
+	urls := make(map[string]string, len(failing))
+	names = make([]string, 0, len(failing))
+	for _, f := range failing {
+		if _, seen := urls[f.name]; !seen {
+			names = append(names, f.name)
+		}
+		if urls[f.name] == "" {
+			// First run of this check that actually carries a link. Dedup must
+			// not strand Context.URL on a run that reported none.
+			urls[f.name] = f.url
+		}
+	}
+	sort.Strings(names)
+	if len(names) > 0 {
+		url = urls[names[0]]
+	}
+	return names, url
 }
 
 // isFailedConclusion reports whether a check-run conclusion is a definite
@@ -175,14 +221,14 @@ func isFailedConclusion(conclusion string) bool {
 
 // request builds the standing observation for a red default branch.
 func (p *DefaultBranchHealth) request(repo, branch string, failing []failedCheck) attention.DecisionRequest {
-	names := make([]string, 0, len(failing))
-	for _, f := range failing {
-		names = append(names, f.name)
-	}
+	names, url := distinctFailing(failing)
 
+	// Distinct checks, not runs: five re-runs of one stuck job are one failing
+	// check, and reading "5 required checks failing" sends the operator looking
+	// for four problems that do not exist.
 	title := fmt.Sprintf("%s is red — %q is failing on %s", branch, names[0], repo)
-	if len(failing) > 1 {
-		title = fmt.Sprintf("%s is red — %d required checks failing on %s", branch, len(failing), repo)
+	if len(names) > 1 {
+		title = fmt.Sprintf("%s is red — %d required checks failing on %s", branch, len(names), repo)
 	}
 
 	return attention.DecisionRequest{
@@ -193,16 +239,17 @@ func (p *DefaultBranchHealth) request(repo, branch string, failing []failedCheck
 		Severity: attention.SeverityBlockingFleet,
 		Title:    title,
 		Body:     p.body(repo, branch, failing),
-		// The fingerprint is WHICH checks are failing, nothing else. Elapsed
-		// time moves on its own and would re-alert every sweep; the commit SHA
-		// moves on every push and would re-alert on unrelated commits while the
-		// same check stays red. A second check starting to fail is a genuine
-		// change, and does alert.
+		// The fingerprint is WHICH checks are failing, nothing else — the sorted
+		// SET of names, never the multiset of runs. Elapsed time moves on its
+		// own and would re-alert every sweep; the commit SHA moves on every push
+		// and would re-alert on unrelated commits while the same check stays
+		// red; another run of an already-failing check is not news either. A
+		// second check starting to fail is a genuine change, and does alert.
 		Fingerprint: "checks:" + strings.Join(names, ","),
 		Context: attention.Context{
 			Repo:    repo,
 			Blocker: fmt.Sprintf("required check(s) failing on %s: %s", branch, strings.Join(names, ", ")),
-			URL:     failing[0].url,
+			URL:     url,
 		},
 		Options: []attention.Option{
 			// The only honest button. It does not repair anything; it records
