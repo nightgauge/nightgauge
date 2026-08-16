@@ -346,6 +346,21 @@
       "signal": "rate_limit_quota_exhausted"
     },
     {
+      "input": "usage balance exhausted",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "exit 1: usage balance exhausted",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "USAGE BALANCE EXHAUSTED",
+      "kind": "rate_limit_quota_exhausted",
+      "signal": "rate_limit_quota_exhausted"
+    },
+    {
       "input": "not_found_error model",
       "kind": "model_unavailable",
       "signal": ""

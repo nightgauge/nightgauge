@@ -117,9 +117,10 @@
       "clauses": [
         ["[rate-limit-quota-exhausted]"],
         ["rate-limit-quota-exhausted"],
-        ["rate_limit_quota_exhausted"]
+        ["rate_limit_quota_exhausted"],
+        ["usage balance exhausted"]
       ],
-      "why": "Stamped by skillRunner (#3386) when an idle stall coincides with a quota-exhausted rate_limit_event. Above the stall-kill rules: the kill reason embeds `idle` / `stall idle threshold` and would otherwise retry in minutes against a bucket that resets in hours."
+      "why": "Stamped by skillRunner (#3386) when an idle stall coincides with a quota-exhausted rate_limit_event. Above the stall-kill rules: the kill reason embeds `idle` / `stall idle threshold` and would otherwise retry in minutes against a bucket that resets in hours. `usage balance exhausted` is the FOURTH producer of this same taxonomy kind (#560, split from #533's AC2): the grok Build CLI's own vendor 402 wording — `API error (status 402 Payment Required): Grok Build usage balance exhausted` — reaching the classifier as an ordinary stderr/API-error reason, not through skillRunner's bracketed stamp. Pre-#560 it satisfied no rule and fell through to subagent_crash, exactly the misclassification the sibling adapter-auth-failed clause (#591) was added to stop for grok's auth failures; this is the same fix for grok's billing failures. Added here rather than as a new rule/kind because a 402 usage-balance exhaustion IS a rate-limit-quota-exhausted event by meaning — one authority for one classification, per the route the issue recommends over widening the SDK-only `QUOTA_RE` regex in grokStream.ts, which would leave the Go CLI path unfixed and create a second authority for the same answer."
     },
     {
       "id": "model-unavailable",

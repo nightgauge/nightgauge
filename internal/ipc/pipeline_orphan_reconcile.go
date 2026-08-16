@@ -106,6 +106,27 @@ type runEvidence struct {
 //     either, so the gap costs nothing here; it means the per-population coverage
 //     claim holds from the first repo-carrying transition, not from dispatch.
 //
+//   - THE SCHEDULER PATH'S ARM 3 IS A LIVE CHILD SINCE #555, and was structurally
+//     false before it. execution.Manager.RunStage calls SetProcess after
+//     cmd.Start() and the scheduler then blocks until the stage exits, so the
+//     manager never regained control to persist and the only pid a
+//     scheduler-owned snapshot ever carried was the ZERO its stage-start persist
+//     wrote (#534). With arms 1 and 2 answering another process's registries,
+//     that left the whole population on arm 4 alone — and one stage running
+//     quietly past livenessWindow was enough to emit a terminal
+//     pipeline_done(success=false) for a HEALTHY run and delete its snapshot
+//     mid-flight. RunStage now publishes the live child immediately after
+//     SetProcess and retracts it (pid 0) the moment Wait returns, so this arm is
+//     true for exactly as long as a child is executing the run and false the
+//     instant it is not.
+//
+//     RESIDUAL, stated rather than papered over: if the OWNER process is killed
+//     while its child survives as an orphan, arm 3 keeps answering true until
+//     that child exits. That is not a false negative in the sense that matters —
+//     the run's work is genuinely in flight, #341's orphaned-process sweep is the
+//     detector for the process itself, and the pin is bounded twice over (by the
+//     child's own exit, and by the snapshot age cap that now bounds this arm).
+//
 //   - THE CODEX INTERACTIVE TUI SUB-PATH (#4024) HAS NO ARM 3, and cannot be
 //     given one from this host. It runs the stage inside a VSCode terminal
 //     (`vscode.window.createTerminal` + `sendText`), so the extension host never
@@ -158,8 +179,25 @@ func skipRun(ev runEvidence, runID string, snap *state.RuntimeState, modTime, no
 		return true // 1. this server's registry, lease inside the window
 	case ev.schedulerLive != nil && ev.schedulerLive(runID):
 		return true // 2. the Go scheduler's registry (Decision 11)
-	case snap != nil && ev.processAlive != nil && ev.processAlive(snap.PID):
-		return true // 3. the run's own stage child
+	case snap != nil && ev.processAlive != nil && now.Sub(modTime) <= snapshotAgeCap && ev.processAlive(snap.PID):
+		// 3. the run's own stage child — BOUNDED BY 7.4's LAST ROW, and the only
+		// arm that is. Arms 1, 2 and 5 are this process's own evidence and expire
+		// on their own; arm 3 reads a pid out of a FILE and asks the kernel about
+		// it, so a snapshot whose owner died while its child's pid was later
+		// recycled into an unrelated long-lived process would answer true
+		// forever — an immortal snapshot and a platform run row stuck at
+		// 'running', which is the exact phantom-in-flight symptom this reconciler
+		// exists to end. #555 made real pids reach disk on the scheduler path for
+		// the first time, so the cap is what keeps closing one false positive
+		// from opening an unbounded false negative. Two weeks is the same
+		// threshold every other row uses, and no live run's snapshot survives it:
+		// each stage boundary rewrites the file.
+		//
+		// Past the cap this arm simply does not match, and evaluation continues
+		// to arms 4 and 5 — arm 4 is false there by construction (two weeks is
+		// not thirty minutes), while arm 5 still protects a just-restarted
+		// backend's reconnect window whatever the file's age.
+		return true
 	case now.Sub(modTime) < livenessWindow:
 		return true // 4. the disk-side lease; a future mtime skips too, by design
 	case ev.withinGrace != nil && ev.withinGrace():

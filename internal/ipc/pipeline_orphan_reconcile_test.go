@@ -1,12 +1,17 @@
 package ipc
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -569,4 +574,231 @@ func onlySnapshotForIssue(t *testing.T, stateDir string, issueNumber int) *state
 		t.Fatalf("#%d has %d snapshots in %s, want exactly 1", issueNumber, len(found), stateDir)
 	}
 	return found[0]
+}
+
+// --- #555: a scheduler-owned run is not reaped mid-flight -------------------
+
+// blockingStageStub writes a stub CLI that reports its own pid and then blocks
+// until `release` appears — a HEALTHY stage that is SILENT, which is the shape
+// #555 is about. $$ is the pid of the process Go started, because the stub is
+// the command exec.Command spawns.
+func blockingStageStub(t *testing.T, dir string) (stub, release string) {
+	t.Helper()
+	release = filepath.Join(dir, "release")
+	stub = filepath.Join(dir, "stub-blocking-stage.sh")
+	script := fmt.Sprintf("#!/bin/sh\nwhile [ ! -f %s ]; do sleep 0.02; done\nexit 0\n", release)
+	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return stub, release
+}
+
+// pollUntil spins on cond until it holds or the deadline expires.
+func pollUntil(t *testing.T, why string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %s", timeout, why)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestOrphanReconcile_SchedulerOwnedStageSilentPastTheWindowSurvivesOnItsLiveChild
+// is #555's acceptance criterion, end to end and through the real reaper.
+//
+// The population is a run dispatched by the Go scheduler in ANOTHER process and
+// reconciled by a `serve` daemon that has neither registry. Arms 1 and 2 are
+// therefore structurally false; the stage below runs quietly past
+// livenessWindow, so arm 4 is false; no grace is armed, so arm 5 is false. Arm 3
+// is the only arm left, and before #555 it read the ZERO the scheduler's
+// stage-start persist wrote (#534) — the ladder ran out of arms and a HEALTHY
+// run was emitted as pipeline_done(success=false) and had its snapshot deleted
+// out from under it.
+//
+// BOTH DIRECTIONS, one after the other on ONE run, so neither can be satisfied
+// by a predicate that always answers the same way:
+//
+//	phase 1 — the child is alive: reconcilePass must leave the snapshot alone.
+//	phase 2 — the child has exited and the pid is retracted: the very same
+//	          reconcilePass, over the very same stale file, must collect it.
+//
+// The stage is driven through the REAL execution.Manager, not a hand-written
+// snapshot: what is under test is whether production's spawn path puts a live
+// pid on disk at all, and a fixture that set snap.PID itself would pass against
+// unfixed source and pin nothing.
+//
+// RED-FIRST: delete the publishStageChild call after SetProcess in
+// internal/execution/manager.go and phase 1 fails — "mid-flight … was reaped".
+func TestOrphanReconcile_SchedulerOwnedStageSilentPastTheWindowSurvivesOnItsLiveChild(t *testing.T) {
+	s, root, stateDir := reconcileServer(t)
+	const issue = 555
+	runID := newTestRunID()
+
+	stub, release := blockingStageStub(t, t.TempDir())
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stub)
+	// ensureWorktree returns early when the directory exists, so the spawn path
+	// is reachable without a git repo behind it.
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "acmeapp-issue-555"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := state.NewRuntimeState("nightgauge/acmeapp", issue, "", runID)
+	rt.BeginStage(state.StageFeatureDev)
+	// The scheduler's own stage-start persist (#534) — the file the reconciler
+	// will find, carrying pid 0.
+	if err := rt.Persist(stateDir); err != nil {
+		t.Fatalf("stage-start persist: %v", err)
+	}
+	snapshot := filepath.Join(stateDir, state.SnapshotFilename(issue, runID))
+
+	m := execution.NewManager(root, adapters.NewGrokAdapter())
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := m.RunStage(context.Background(), execution.StageOptions{
+			Repo:        "nightgauge/acmeapp",
+			IssueNumber: issue,
+			Stage:       "feature-dev",
+			Runtime:     rt,
+			Timeout:     60 * time.Second,
+		})
+		done <- runErr
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0644)
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+		}
+	})
+
+	livePID := 0
+	pollUntil(t, "the running stage to publish its live child into the snapshot", 30*time.Second, func() bool {
+		snap, err := state.LoadSnapshotByIdentity(stateDir, issue, runID)
+		if err != nil || snap == nil {
+			return false
+		}
+		livePID = snap.PID
+		return livePID != 0
+	})
+	if !runstate.ProcessAlive(livePID) {
+		t.Fatalf("the published pid %d is not alive while its stage still runs", livePID)
+	}
+
+	// Thirty-plus minutes of a stage that says nothing. The file has not been
+	// rewritten since the spawn, which is exactly what a long silent stage looks
+	// like on disk.
+	now := time.Now()
+	backdate(t, snapshot, now.Add(-2*livenessWindow))
+	if s.withinStartupGrace() {
+		t.Fatal("this test is about the post-grace pass")
+	}
+
+	// Phase 1 — the real reaper, over the real file.
+	if n := countEmissions(collectReconcileActions(stateDir, s.serverEvidence(now), now)); n != 0 {
+		t.Errorf("%d terminal pipeline_done(s) built for a healthy stage that is merely quiet; want 0", n)
+	}
+	s.reconcilePass(now)
+	mustExist(t, snapshot, "a scheduler-owned stage whose child is alive was reaped mid-flight (#555)")
+
+	// Phase 2 — the child exits, the manager retracts the pid, and the same
+	// stale file is now a genuine orphan: nothing holds a lease, no scheduler
+	// claims it, no process is executing it.
+	if err := os.WriteFile(release, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("RunStage: %v", runErr)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("RunStage did not return after the stub was released")
+	}
+	after, err := state.LoadSnapshotByIdentity(stateDir, issue, runID)
+	if err != nil || after == nil {
+		t.Fatalf("reload after the stage exited: %v", err)
+	}
+	if after.PID != 0 {
+		t.Errorf("on-disk pid after the stage exited = %d, want 0 — arm 3 must stop vouching the moment the child does", after.PID)
+	}
+
+	later := time.Now()
+	backdate(t, snapshot, later.Add(-2*livenessWindow))
+	acts := collectReconcileActions(stateDir, s.serverEvidence(later), later)
+	if len(acts) != 1 || acts[0].Disposition != dispositionEmitAndRemove {
+		t.Fatalf("collector gave %+v, want the one emit+remove a genuinely orphaned run earns", acts)
+	}
+	s.reconcilePass(later)
+	mustBeGone(t, snapshot, "a run with no lease, no scheduler and no live child must still be collected")
+}
+
+// TestSkipRun_LivePidIsBoundedByTheSnapshotAgeCap pins the guard that keeps
+// #555's fix from trading one silent failure for another.
+//
+// Arm 3 is the only arm that reads its evidence out of a FILE and then asks the
+// kernel about it. #555 makes real pids reach disk on the scheduler path for the
+// first time, so the recycled-pid case stops being theoretical: an owner killed
+// mid-stage leaves a pid behind, the kernel eventually hands that number to an
+// unrelated long-lived process, and an unbounded arm 3 would then answer true
+// forever — an immortal snapshot and a platform run row stuck at 'running',
+// which is the phantom-in-flight symptom this whole reconciler exists to end.
+//
+// RED-FIRST: drop the `now.Sub(modTime) <= snapshotAgeCap` conjunct from arm 3
+// and the past-the-cap case below skips instead of being collected.
+func TestSkipRun_LivePidIsBoundedByTheSnapshotAgeCap(t *testing.T) {
+	stateDir := t.TempDir()
+	now := time.Now()
+	// This process is unambiguously alive, which is what a recycled pid looks
+	// like to arm 3: a real, live, entirely unrelated process.
+	live := os.Getpid()
+
+	for _, tc := range []struct {
+		name     string
+		age      time.Duration
+		wantSkip bool
+	}{
+		{"stale by the liveness window — the live child carries it", 2 * livenessWindow, true},
+		{"older than the 14-day cap — 7.4's last row outranks the pid", 2 * snapshotAgeCap, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runID := newTestRunID()
+			rt := newInterruptedRuntime(560, runID)
+			rt.SetStageChild(live)
+			path := writeRuntimeSnapshot(t, stateDir, rt)
+			modTime := now.Add(-tc.age)
+			backdate(t, path, modTime)
+			t.Cleanup(func() { _ = os.Remove(path) })
+
+			snap, err := state.LoadSnapshotByIdentity(stateDir, 560, runID)
+			if err != nil || snap == nil {
+				t.Fatalf("reload: %v", err)
+			}
+			if snap.PID != live {
+				t.Fatalf("fixture pid = %d, want the live pid %d", snap.PID, live)
+			}
+
+			ev := runEvidence{processAlive: runstate.ProcessAlive}
+			if got := skipRun(ev, runID, snap, modTime, now); got != tc.wantSkip {
+				t.Errorf("skipRun = %v, want %v", got, tc.wantSkip)
+			}
+			// Through the classifier too, so the row the ladder feeds is pinned
+			// and not just the predicate.
+			d := classifyCandidate(reconcileCandidate{
+				name: filepath.Base(path), issue: 560, runID: runID, modTime: modTime, snap: snap,
+			}, ev, now)
+			want := dispositionKeep
+			if !tc.wantSkip {
+				want = dispositionEmitAndRemove
+			}
+			if d != want {
+				t.Errorf("disposition = %s, want %s", d, want)
+			}
+		})
+	}
 }

@@ -61,11 +61,22 @@ func (a *GeminiAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 		args = append(args, "--model", resolveGeminiModel(opts.Model))
 	}
 
+	// NIGHTGAUGE_OUTPUT_FORMAT mirrors the `--output-format stream-json` flag
+	// set above (#416). This adapter's omission WAS copy-paste drift: it already
+	// selected stream-json on the command line but never told the child process,
+	// unlike claude.go / gemini_sdk.go which do both.
+	//
+	// This variable is a per-adapter capability signal, not a universal contract
+	// var like NIGHTGAUGE_RUN_ID or NIGHTGAUGE_TARGET_REPO — codex and grok omit
+	// it deliberately, for reasons recorded and machine-checked in
+	// adapters_test.go's outputFormatPosture table. Change the posture there and
+	// here together, or the test fails.
 	env := map[string]string{
-		"NIGHTGAUGE_ISSUE_NUMBER": fmt.Sprintf("%d", opts.IssueNumber),
-		"NIGHTGAUGE_REPO":         opts.Repo,
-		"NIGHTGAUGE_STAGE":        opts.Stage,
-		"NIGHTGAUGE_ADAPTER":      "gemini",
+		"NIGHTGAUGE_ISSUE_NUMBER":  fmt.Sprintf("%d", opts.IssueNumber),
+		"NIGHTGAUGE_REPO":          opts.Repo,
+		"NIGHTGAUGE_STAGE":         opts.Stage,
+		"NIGHTGAUGE_OUTPUT_FORMAT": "stream-json",
+		"NIGHTGAUGE_ADAPTER":       "gemini",
 	}
 
 	if opts.ContextFile != "" {
@@ -73,6 +84,9 @@ func (a *GeminiAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
+	}
+	if opts.TargetRepo != "" {
+		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
 	if opts.RunID != "" {
 		env[RunIDEnvVar] = opts.RunID
