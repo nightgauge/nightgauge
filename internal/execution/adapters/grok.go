@@ -64,17 +64,18 @@ func resolveGrokModel(model string) string {
 // with no declared cli transport fact (unexpressed/pending) still counts as
 // known — additive enforcement, #579 AC4.
 func knownGrokModels() map[string]bool {
-	known := make(map[string]bool)
-	for _, m := range models.All() {
-		if m.Provider != "xai" || m.Deprecated {
-			continue
-		}
-		if served, knownFact := m.ServedByTransport(models.TransportCLI); knownFact && !served {
-			continue
-		}
-		known[m.ID] = true
+	return knownTransportServedModels(models.All(), "xai", grokTransport())
+}
+
+// grokTransport resolves the single-authority transport axis (#600) the grok
+// adapter's preflight consults. See codexTransport's doc for why a miss here
+// panics rather than degrading silently.
+func grokTransport() string {
+	t, ok := models.TransportForAdapter("grok")
+	if !ok {
+		panic("model registry: adapter_transports has no entry for \"grok\"")
 	}
-	return known
+	return t
 }
 
 // ValidateGrokModel fails fast when the configured model does not resolve to
@@ -104,7 +105,7 @@ func ValidateGrokModel(model string) error {
 	}
 	provider := models.ProviderForAdapter("grok")
 	resolved := resolveGrokModel(trimmed)
-	m, ok, err := models.CheckTransportServed(provider, models.TransportCLI, resolved)
+	m, ok, err := models.CheckTransportServed(provider, grokTransport(), resolved)
 	if err != nil {
 		return err
 	}

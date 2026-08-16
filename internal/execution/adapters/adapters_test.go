@@ -204,7 +204,9 @@ func TestValidateCodexModelRejectsCrossProviderConcreteID(t *testing.T) {
 // TestValidateGeminiModel mirrors TestValidateCodexModel (#579's
 // generalization of the codex preflight, #57): tiers/deprecated ids resolve
 // to a valid model, concrete valid ids pass, and unknown or cross-provider
-// ids are rejected before spawn.
+// ids are rejected before spawn. Run against BOTH "gemini" and "gemini-sdk"
+// (#600): the single-authority adapter_transports table pins both to the
+// "cli" transport, so their preflight outcomes must be identical.
 func TestValidateGeminiModel(t *testing.T) {
 	valid := []string{
 		"",                  // empty → skip, no error
@@ -216,16 +218,18 @@ func TestValidateGeminiModel(t *testing.T) {
 		"gemini-2.5-pro",    // concrete valid id
 		"gemini-2.5-flash",  // concrete valid id
 	}
-	for _, m := range valid {
-		if err := ValidateGeminiModel(m); err != nil {
-			t.Errorf("ValidateGeminiModel(%q) = %v, want nil", m, err)
-		}
-	}
-
 	invalid := []string{"gemini-1.0-typo", "totally-made-up", "grok-4.6", "gpt-4o"}
-	for _, m := range invalid {
-		if err := ValidateGeminiModel(m); err == nil {
-			t.Errorf("ValidateGeminiModel(%q) = nil, want error", m)
+
+	for _, adapter := range []string{"gemini", "gemini-sdk"} {
+		for _, m := range valid {
+			if err := ValidateGeminiModel(adapter, m); err != nil {
+				t.Errorf("ValidateGeminiModel(%q, %q) = %v, want nil", adapter, m, err)
+			}
+		}
+		for _, m := range invalid {
+			if err := ValidateGeminiModel(adapter, m); err == nil {
+				t.Errorf("ValidateGeminiModel(%q, %q) = nil, want error", adapter, m)
+			}
 		}
 	}
 }
@@ -236,8 +240,8 @@ func TestValidateGeminiModel(t *testing.T) {
 // models.CheckTransportServed's exact-id lookup is provider-agnostic, so the
 // caller's own provider check is what keeps this closed (#579).
 func TestValidateGeminiModelRejectsCrossProviderConcreteID(t *testing.T) {
-	if err := ValidateGeminiModel("grok-4.6"); err == nil {
-		t.Error("ValidateGeminiModel(grok-4.6) = nil, want error (grok-4.6 is an xai model, not google)")
+	if err := ValidateGeminiModel("gemini", "grok-4.6"); err == nil {
+		t.Error("ValidateGeminiModel(gemini, grok-4.6) = nil, want error (grok-4.6 is an xai model, not google)")
 	}
 }
 

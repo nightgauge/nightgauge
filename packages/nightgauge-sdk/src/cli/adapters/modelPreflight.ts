@@ -45,6 +45,7 @@ import {
 import {
   checkTransportServed,
   getModelDescriptor,
+  mustTransportForAdapter,
   MODEL_REGISTRY,
   providerForAdapter,
   type TransportServedResult,
@@ -68,15 +69,19 @@ function isTierKeyword(value: string): value is TierKeyword {
 }
 
 /**
- * True unless `m` explicitly declares `transports.cli.served: false`. An
- * absent `transports` map, or an absent `cli` key, is the unexpressed/pending
- * state and counts as served (#579 AC4 — additive enforcement). Used to keep
- * the GEMINI_MODELS/GROK_MODELS suggestion lists free of models the closed-set
- * check would reject anyway via {@link checkTransportServed}, which is the
- * authoritative gate this predicate only mirrors for listing purposes.
+ * True unless `m` explicitly declares `transports[transport].served: false`.
+ * An absent `transports` map, or an absent key for `transport`, is the
+ * unexpressed/pending state and counts as served (#579 AC4 — additive
+ * enforcement). Used to keep the GEMINI_MODELS/GROK_MODELS suggestion lists
+ * free of models the closed-set check would reject anyway via
+ * {@link checkTransportServed}, which is the authoritative gate this
+ * predicate only mirrors for listing purposes.
  */
-function servedOverCli(m: (typeof MODEL_REGISTRY)[number]): boolean {
-  return m.transports?.cli?.served !== false;
+function servedOverTransport(
+  m: (typeof MODEL_REGISTRY)[number],
+  transport: ReturnType<typeof mustTransportForAdapter>
+): boolean {
+  return m.transports?.[transport]?.served !== false;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,14 +89,26 @@ function servedOverCli(m: (typeof MODEL_REGISTRY)[number]): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * The transport axis (#600) that gates the Gemini closed set. `gemini` and
+ * `gemini-sdk` are DELIBERATELY pinned to the SAME transport (`"cli"` today —
+ * see {@link mustTransportForAdapter}) precisely because {@link GEMINI_MODELS}
+ * is a single shared list feeding both policy entries; if the single
+ * authority ever assigned them different transports this list would be wrong
+ * for whichever adapter it was NOT computed from — `modelRegistry.test.ts`
+ * pins both to the identical value so that divergence fails loud instead of
+ * silently.
+ */
+const GEMINI_TRANSPORT = mustTransportForAdapter("gemini");
+
+/**
  * Known Gemini models (recommended-first), derived from the model registry's
- * `provider: "google"` entries that are also cli-transport-reachable (#579)
- * — the same single source the Codex {@link listCodexModels} set resolves
- * through (#56). Add new GA ids to `eval/model-registry.json`; remove
- * retired ids there.
+ * `provider: "google"` entries that are also transport-reachable (#579,
+ * #600) — the same single source the Codex {@link listCodexModels} set
+ * resolves through (#56). Add new GA ids to `eval/model-registry.json`;
+ * remove retired ids there.
  */
 export const GEMINI_MODELS: readonly string[] = MODEL_REGISTRY.filter(
-  (m) => m.provider === "google" && !m.deprecated && servedOverCli(m)
+  (m) => m.provider === "google" && !m.deprecated && servedOverTransport(m, GEMINI_TRANSPORT)
 )
   .sort((a, b) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
   .map((m) => m.id);
@@ -113,13 +130,16 @@ function isValidGeminiModel(id: string): boolean {
   return GEMINI_MODELS.includes(id);
 }
 
-// Known xai models that are cli-transport-reachable (#579): grok-build-0.1 is
-// excluded by BOTH `!m.deprecated` and `servedOverCli` independently — it
-// keeps `deprecated: true` for historical cost replay, but its
-// unselectability no longer rests on that flag alone (#578 landed
+/** The transport axis (#600) that gates the Grok closed set. */
+const GROK_TRANSPORT = mustTransportForAdapter("grok");
+
+// Known xai models that are transport-reachable (#579, #600): grok-build-0.1
+// is excluded by BOTH `!m.deprecated` and `servedOverTransport`
+// independently — it keeps `deprecated: true` for historical cost replay,
+// but its unselectability no longer rests on that flag alone (#578 landed
 // `transports.cli.served: false` as an INDEPENDENT reason).
 export const GROK_MODELS: readonly string[] = MODEL_REGISTRY.filter(
-  (m) => m.provider === "xai" && !m.deprecated && servedOverCli(m)
+  (m) => m.provider === "xai" && !m.deprecated && servedOverTransport(m, GROK_TRANSPORT)
 )
   .sort((a, b) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
   .map((m) => m.id);
@@ -399,16 +419,22 @@ export function validateModelForAdapter(
   const resolved = policy.resolve(trimmed) ?? trimmed;
 
   if (policy.kind === "closed") {
-    // #579: consult the transport fact FIRST, so a model that IS a known
-    // registry entry but explicitly unreachable through this adapter's
-    // transport (all current CLI adapters dispatch over "cli") fails closed
+    // #579/#600: consult the transport fact FIRST, so a model that IS a known
+    // registry entry but explicitly unreachable through THIS adapter's
+    // transport (resolved per-adapter from the single authority, NOT a
+    // hardcoded "cli" literal — see mustTransportForAdapter) fails closed
     // with an error naming provider, model, and transport — distinct from
     // the generic "unknown model" case below, which the closed set
     // (policy.isValid) still handles for ids the registry has never heard
-    // of. A model with no transports fact for "cli" (unexpressed/pending) is
-    // NOT unreachable here — it falls through to the ordinary isValid check,
-    // which is the additive-enforcement semantics (#579 AC4).
-    const transportCheck = checkTransportServed(providerForAdapter(adapter), "cli", resolved);
+    // of. A model with no transports fact for that transport
+    // (unexpressed/pending) is NOT unreachable here — it falls through to the
+    // ordinary isValid check, which is the additive-enforcement semantics
+    // (#579 AC4).
+    const transportCheck = checkTransportServed(
+      providerForAdapter(adapter),
+      mustTransportForAdapter(adapter),
+      resolved
+    );
     if (transportCheck.unreachable) {
       throw buildTransportUnreachableError(policy, transportCheck.unreachable);
     }

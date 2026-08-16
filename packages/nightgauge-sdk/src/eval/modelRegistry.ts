@@ -26,10 +26,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 import {
+  AdapterTransportsSchema,
   EFFORT_LEVELS,
   EffortLevelSchema,
   ModelDescriptorSchema,
   THINKING_DISABLE_NEVER,
+  type AdapterTransports,
   type Behavior,
   type EffortLevel,
   type ModelDescriptor,
@@ -75,6 +77,12 @@ export const RegistryFileSchema = z
      */
     effort_levels: z.array(EffortLevelSchema),
     models: z.array(ModelDescriptorSchema).min(1),
+    /**
+     * The single-authority adapter→transport-axis mapping (#600) — see
+     * {@link transportForAdapter}. {@link assertAdapterTransportsComplete}
+     * asserts it declares exactly the closed-transport-adapter set at load.
+     */
+    adapter_transports: AdapterTransportsSchema,
   })
   .passthrough();
 
@@ -115,11 +123,71 @@ export function assertTransportRatesCarryProvenance(models: readonly ModelDescri
   }
 }
 
-function loadRegistry(): ModelDescriptor[] {
+/**
+ * Loader-level graduation assert (#600): every NON-DEPRECATED entry must
+ * declare at least one transports fact. The additive fail-open behavior
+ * {@link checkTransportServed} gives an absent transport key exists for
+ * entries whose reachability genuinely has not been assessed yet — today
+ * that is exactly the deprecated openai/google ids (unverified CLI
+ * reachability) and the vendor-x-pro fixture (kept deprecated specifically so
+ * it still exercises that branch). A non-deprecated entry with NO transports
+ * block at all would mean a model still being routed to has never been
+ * assessed for reachability on any transport — that must fail LOUD at load
+ * time, naming the entry, rather than silently reading as "served" through
+ * selection.
+ */
+export function assertNonDeprecatedModelsDeclareTransports(
+  models: readonly ModelDescriptor[]
+): void {
+  for (const m of models) {
+    if (m.deprecated) continue;
+    if (!m.transports || Object.keys(m.transports).length === 0) {
+      throw new Error(
+        `model-registry.json: ${m.id} is a non-deprecated entry with no transports block — ` +
+          `every non-deprecated entry must state at least one transport's reachability facts ` +
+          `(#600); mark it deprecated if reachability is genuinely unassessed, or add transports facts`
+      );
+    }
+  }
+}
+
+/**
+ * The exact set of adapters whose model preflight consults a transport fact
+ * — the `kind: "closed"` entries in `ADAPTER_MODEL_POLICY`
+ * (`cli/adapters/modelPreflight.ts`) that actually call
+ * {@link checkTransportServed}. Declared here (rather than imported from
+ * modelPreflight.ts) to avoid a circular import — that module already
+ * imports FROM this one.
+ */
+export const CLOSED_TRANSPORT_ADAPTERS = ["codex", "gemini", "gemini-sdk", "grok"] as const;
+
+/**
+ * Loader-level assert (#600) on the single-authority adapter→transport
+ * mapping: `adapter_transports` must declare EXACTLY the
+ * {@link CLOSED_TRANSPORT_ADAPTERS} set (membership, not just a superset — a
+ * stale or missing entry is a silent drift risk identical to band
+ * uniqueness). Value validity (closed `cli|api` set) is already structurally
+ * enforced by {@link AdapterTransportsSchema}.
+ */
+export function assertAdapterTransportsComplete(table: AdapterTransports): void {
+  const got = Object.keys(table).sort();
+  const want = [...CLOSED_TRANSPORT_ADAPTERS].sort();
+  const matches = got.length === want.length && want.every((a, i) => got[i] === a);
+  if (!matches) {
+    throw new Error(
+      `model-registry.json: adapter_transports keys ${JSON.stringify(got)} must equal the ` +
+        `closed-transport-adapter set ${JSON.stringify(want)} exactly (#600)`
+    );
+  }
+}
+
+function loadRegistry(): { models: ModelDescriptor[]; adapterTransports: AdapterTransports } {
   const raw = readFileSync(resolve(__dirname, "model-registry.json"), "utf-8");
   const parsed = RegistryFileSchema.parse(JSON.parse(raw));
   assertEffortLevelsMatchAuthority(parsed.effort_levels);
   assertTransportRatesCarryProvenance(parsed.models);
+  assertNonDeprecatedModelsDeclareTransports(parsed.models);
+  assertAdapterTransportsComplete(parsed.adapter_transports);
   const ids = new Set<string>();
   const bands = new Set<string>();
   for (const m of parsed.models) {
@@ -136,11 +204,53 @@ function loadRegistry(): ModelDescriptor[] {
       bands.add(key);
     }
   }
-  return parsed.models;
+  return { models: parsed.models, adapterTransports: parsed.adapter_transports };
 }
 
+const loaded = loadRegistry();
+
 /** The full registry (all models, including deprecated ones kept for cost replay). */
-export const MODEL_REGISTRY: readonly ModelDescriptor[] = Object.freeze(loadRegistry());
+export const MODEL_REGISTRY: readonly ModelDescriptor[] = Object.freeze(loaded.models);
+
+/** The single-authority adapter→transport mapping (#600), frozen at load. */
+const ADAPTER_TRANSPORTS: AdapterTransports = Object.freeze(loaded.adapterTransports);
+
+/**
+ * Resolve the single-authority transport axis (#600) `adapter`'s model
+ * preflight must consult. `undefined` means `adapter` is not in the
+ * closed-transport-adapter set — OPEN adapters and unrecognized names never
+ * had a transport check to make.
+ *
+ * `gemini-sdk` is pinned to `"cli"`, NOT `"api"`, despite its name and its
+ * `kindSDK` doctor classification: the Go `gemini-sdk` adapter is the
+ * pipeline's actual dispatch path for that adapter name and it genuinely
+ * spawns the agentic `gemini` CLI, while the TypeScript `gemini-sdk` adapter
+ * — though it does call the `@google/genai` API library directly — is
+ * chat-completion-only and barred from pipeline stage dispatch (#57). See the
+ * registry JSON's `$schema_note` for the full judgment-call rationale.
+ */
+export function transportForAdapter(adapter: string): Transport | undefined {
+  return ADAPTER_TRANSPORTS[adapter];
+}
+
+/**
+ * Like {@link transportForAdapter} but throws instead of returning
+ * `undefined` — for CLOSED-set call sites (`modelPreflight.ts`,
+ * `codexModelRegistry.ts`) where `adapter` is always a member of
+ * {@link CLOSED_TRANSPORT_ADAPTERS} and {@link assertAdapterTransportsComplete}
+ * already guarantees the table covers it at load time. A throw here means a
+ * NEW closed adapter was wired into preflight without a deliberate
+ * `adapter_transports` decision — a programming error, not a runtime
+ * condition, mirroring the Go `codexTransport`/`grokTransport`/
+ * `geminiTransport` panic-on-missing helpers.
+ */
+export function mustTransportForAdapter(adapter: string): Transport {
+  const t = transportForAdapter(adapter);
+  if (!t) {
+    throw new Error(`model-registry.json: adapter_transports has no entry for "${adapter}"`);
+  }
+  return t;
+}
 
 /** Models that are not deprecated — the set the pipeline should route to today. */
 export function activeModels(): ModelDescriptor[] {

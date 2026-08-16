@@ -14,7 +14,11 @@
  * @see Issue #56 — provider-aware registry with cross-provider tier bands
  */
 
-import { getModelDescriptor, MODEL_REGISTRY } from "../../eval/modelRegistry.js";
+import {
+  getModelDescriptor,
+  MODEL_REGISTRY,
+  mustTransportForAdapter,
+} from "../../eval/modelRegistry.js";
 import { isTierBand, TIER_BANDS, type TierBand } from "../../eval/tierBands.js";
 
 /**
@@ -32,6 +36,22 @@ export interface CodexModelMeta {
   deprecated?: boolean;
   /** For deprecated models, the current id callers should migrate to. */
   replacement?: string;
+  /**
+   * False ONLY when the model's `transports[<codex transport>].served` fact
+   * is explicitly `false` (#600). An absent transports map, or an absent key
+   * for the codex transport, is the unexpressed/pending state and reads as
+   * `true` — the same additive semantics {@link checkTransportServed}
+   * enforces (#579 AC4). Always set (not sparse like the flags above) so
+   * every consumer can read it without an `?? true` fallback.
+   */
+  servedOverTransport: boolean;
+}
+
+/** The transport axis (#600) that gates codex model reachability. */
+const CODEX_TRANSPORT = mustTransportForAdapter("codex");
+
+function servedOverCodexTransport(m: (typeof MODEL_REGISTRY)[number]): boolean {
+  return m.transports?.[CODEX_TRANSPORT]?.served !== false;
 }
 
 /**
@@ -49,6 +69,7 @@ export const CODEX_MODELS: Record<string, CodexModelMeta> = Object.fromEntries(
       ...(m.research_preview ? { researchPreview: true } : {}),
       ...(m.deprecated ? { deprecated: true } : {}),
       ...(m.replacement ? { replacement: m.replacement } : {}),
+      servedOverTransport: servedOverCodexTransport(m),
     },
   ])
 );
@@ -81,9 +102,31 @@ function isCodexTier(value: string): value is CodexTier {
   return isTierBand(value);
 }
 
-/** True when `id` is a model the registry knows (including deprecated/preview). */
+/**
+ * Pure predicate core of {@link isValidCodexModel} (#600), exported
+ * separately so the served-filtering behavior is directly unit-testable
+ * against synthetic {@link CodexModelMeta} data: no current `openai` registry
+ * entry has `transports.<codex transport>.served: false`, so a test against
+ * the LIVE registry cannot exercise that branch — mirrors the same
+ * hand-constructed-fixture approach `internal/models/registry_axes_test.go`'s
+ * `TestValidateTransportsGraduated` uses on the Go side.
+ */
+export function isServedCodexModelMeta(meta: CodexModelMeta | undefined): boolean {
+  return meta !== undefined && meta.servedOverTransport;
+}
+
+/**
+ * True when `id` is a model the registry knows (including deprecated/preview)
+ * AND the codex adapter's transport does not explicitly declare it unserved
+ * (#600). This is defense-in-depth, not the primary enforcement gate —
+ * `validateModelForAdapter` (`modelPreflight.ts`) already consults
+ * `checkTransportServed` FIRST and throws before this predicate is ever
+ * reached for a known-but-unserved id; it exists so this predicate can never
+ * disagree with that gate if a caller ever consults it directly.
+ */
 export function isValidCodexModel(id: string): boolean {
-  return Object.prototype.hasOwnProperty.call(CODEX_MODELS, id);
+  if (!Object.prototype.hasOwnProperty.call(CODEX_MODELS, id)) return false;
+  return isServedCodexModelMeta(CODEX_MODELS[id]);
 }
 
 /** True when `id` is a model OpenAI has deprecated. */
@@ -99,23 +142,49 @@ export function isResearchPreviewCodexModel(id: string): boolean {
 export interface ListCodexModelsOptions {
   includeDeprecated?: boolean;
   includeResearchPreview?: boolean;
+  /**
+   * Include models the codex adapter's transport explicitly declares
+   * unserved (#600). Default false: a suggestion/remediation list should
+   * never recommend a model `checkTransportServed` would reject.
+   */
+  includeUnserved?: boolean;
 }
 
 /**
- * List known Codex model ids, recommended-first. By default excludes deprecated
- * and research-preview models — the right set for catalog fallbacks and UI
- * pickers. Pass options to widen the set.
+ * Pure filter/sort core of {@link listCodexModels} (#600), exported
+ * separately so the served-filtering behavior is directly unit-testable
+ * against synthetic `Record<string, CodexModelMeta>` data — see
+ * {@link isServedCodexModelMeta}'s doc for why a live-registry test cannot
+ * exercise the served:false branch today.
  */
-export function listCodexModels(opts: ListCodexModelsOptions = {}): string[] {
-  const { includeDeprecated = false, includeResearchPreview = false } = opts;
-  return Object.entries(CODEX_MODELS)
+export function filterCodexModelIds(
+  models: Record<string, CodexModelMeta>,
+  opts: ListCodexModelsOptions = {}
+): string[] {
+  const {
+    includeDeprecated = false,
+    includeResearchPreview = false,
+    includeUnserved = false,
+  } = opts;
+  return Object.entries(models)
     .filter(([, meta]) => {
       if (meta.deprecated && !includeDeprecated) return false;
       if (meta.researchPreview && !includeResearchPreview) return false;
+      if (!meta.servedOverTransport && !includeUnserved) return false;
       return true;
     })
     .sort(([, a], [, b]) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
     .map(([id]) => id);
+}
+
+/**
+ * List known Codex model ids, recommended-first. By default excludes
+ * deprecated, research-preview, and transport-unserved models (#600) — the
+ * right set for catalog fallbacks, UI pickers, and preflight remediation
+ * suggestions. Pass options to widen the set.
+ */
+export function listCodexModels(opts: ListCodexModelsOptions = {}): string[] {
+  return filterCodexModelIds(CODEX_MODELS, opts);
 }
 
 /**

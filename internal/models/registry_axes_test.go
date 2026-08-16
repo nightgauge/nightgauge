@@ -442,3 +442,153 @@ func TestGrokBuild01UnselectableForBothReasonsIndependently(t *testing.T) {
 		t.Error("reason 2 (transport) must independently hold: transports.cli.served must be explicitly false")
 	}
 }
+
+// ─── Graduation: non-deprecated entries require transports facts (#600) ─────
+
+// TestValidateTransportsGraduated pins the loader-level assert directly: a
+// non-deprecated entry with no transports block fails with an error naming
+// the entry; a deprecated entry with no transports block is untouched
+// (additive fail-open survives ONLY for deprecated entries); a non-deprecated
+// entry that declares at least one transport fact passes.
+func TestValidateTransportsGraduated(t *testing.T) {
+	served := map[string]TransportFacts{TransportCLI: {Served: true}}
+	cases := []struct {
+		name    string
+		models  []ModelDescriptor
+		wantErr bool
+	}{
+		{"non-deprecated with transports", []ModelDescriptor{
+			{ID: "has-facts", Provider: "other", Transports: served},
+		}, false},
+		{"non-deprecated with NO transports", []ModelDescriptor{
+			{ID: "no-facts", Provider: "other"},
+		}, true},
+		{"deprecated with NO transports stays permitted", []ModelDescriptor{
+			{ID: "deprecated-no-facts", Provider: "other", Deprecated: true},
+		}, false},
+		{"mixed: one bad entry still fails the whole load", []ModelDescriptor{
+			{ID: "has-facts", Provider: "other", Transports: served},
+			{ID: "no-facts", Provider: "other"},
+		}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateTransportsGraduated(c.models)
+			if (err != nil) != c.wantErr {
+				t.Errorf("validateTransportsGraduated(%v) error = %v, wantErr %v", c.models, err, c.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "no-facts") {
+				t.Errorf("error must name the offending entry id; got %q", err.Error())
+			}
+		})
+	}
+}
+
+// TestRegistryGraduatesTransportsForNonDeprecatedEntries pins the graduation
+// guarantee against the LIVE embedded registry (#600): every non-deprecated
+// entry declares at least one transport fact. If this ever regresses, mustLoad
+// would already panic at package init before any test ran — this restates the
+// invariant as a readable failure instead of a bare init panic.
+func TestRegistryGraduatesTransportsForNonDeprecatedEntries(t *testing.T) {
+	for _, m := range All() {
+		if m.Deprecated {
+			continue
+		}
+		if len(m.Transports) == 0 {
+			t.Errorf("%s is non-deprecated and declares no transports block — the #600 graduation gate", m.ID)
+		}
+	}
+}
+
+// TestVendorXProIsADeprecatedCarrierFixture pins the #600 fixture migration:
+// vendor-x-pro is the deliberate no-transports fixture, and since graduation
+// now forbids that state on a non-deprecated entry, it was flipped to
+// deprecated:true so the deliberate-absence test
+// (TestCheckTransportServedFailsOpenOnUnexpressedTransport) keeps exercising
+// the additive fail-open branch without violating the graduation gate.
+func TestVendorXProIsADeprecatedCarrierFixture(t *testing.T) {
+	m, ok := Resolve("other", "vendor-x-pro")
+	if !ok {
+		t.Fatal("vendor-x-pro missing from registry")
+	}
+	if !m.Deprecated {
+		t.Error("vendor-x-pro must be deprecated:true — the #600 graduation gate forbids a " +
+			"non-deprecated entry with no transports block")
+	}
+	if len(m.Transports) != 0 {
+		t.Error("vendor-x-pro must still declare NO transports — that absence is the whole point " +
+			"of the fixture (exercises CheckTransportServed's fail-open branch)")
+	}
+}
+
+// ─── Single-authority adapter→transport mapping (#600) ──────────────────────
+
+// TestValidateAdapterTransports pins the loader-level assert on
+// adapter_transports: it must declare EXACTLY the closed-transport-adapter
+// set with values from the closed cli|api set — missing, extra, and
+// invalid-value tables all fail; the exact expected table passes.
+func TestValidateAdapterTransports(t *testing.T) {
+	complete := map[string]string{"codex": "cli", "gemini": "cli", "gemini-sdk": "cli", "grok": "cli"}
+	cases := []struct {
+		name    string
+		table   map[string]string
+		wantErr bool
+	}{
+		{"exact closed set", complete, false},
+		{"missing an adapter", map[string]string{"codex": "cli", "gemini": "cli", "grok": "cli"}, true},
+		{"extra unknown adapter", map[string]string{
+			"codex": "cli", "gemini": "cli", "gemini-sdk": "cli", "grok": "cli", "copilot": "cli",
+		}, true},
+		{"invalid transport value", map[string]string{
+			"codex": "cli", "gemini": "cli", "gemini-sdk": "sdk", "grok": "cli",
+		}, true},
+		{"empty table", map[string]string{}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateAdapterTransports(c.table)
+			if (err != nil) != c.wantErr {
+				t.Errorf("validateAdapterTransports(%v) error = %v, wantErr %v", c.table, err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestTransportForAdapterPinsTheDecidedMapping is the Go half of the #600
+// cross-language parity pin: the SDK's modelRegistry.test.ts asserts the
+// identical expected map via transportForAdapter. Both suites hardcode the
+// SAME values independently (the established pattern in this file — see
+// TestTransportAndProvenanceValuesMatchSpikeInventory) so a value edited in
+// the canonical JSON without a deliberate review of BOTH languages' pins fails
+// loud here rather than silently drifting. gemini-sdk is pinned to "cli", NOT
+// "api", despite its kindSDK doctor classification and its "-sdk" suffix: the
+// Go gemini-sdk adapter is the pipeline's actual dispatch path for that
+// adapter name, and it genuinely spawns the agentic gemini CLI (gemini_sdk.go
+// BuildCommand: cmd := "gemini") — see the registry JSON's $schema_note for
+// the full judgment-call rationale.
+func TestTransportForAdapterPinsTheDecidedMapping(t *testing.T) {
+	want := map[string]string{
+		"codex":      TransportCLI,
+		"gemini":     TransportCLI,
+		"gemini-sdk": TransportCLI,
+		"grok":       TransportCLI,
+	}
+	for adapter, wantTransport := range want {
+		got, known := TransportForAdapter(adapter)
+		if !known {
+			t.Errorf("TransportForAdapter(%q) known=false, want true", adapter)
+			continue
+		}
+		if got != wantTransport {
+			t.Errorf("TransportForAdapter(%q) = %q, want %q", adapter, got, wantTransport)
+		}
+	}
+
+	if _, known := TransportForAdapter("claude-headless"); known {
+		t.Error(`TransportForAdapter("claude-headless") known=true, want false — ` +
+			"OPEN adapters are not in the closed-transport-adapter set")
+	}
+	if _, known := TransportForAdapter("carrier-pigeon"); known {
+		t.Error(`TransportForAdapter("carrier-pigeon") known=true, want false for an unknown adapter`)
+	}
+}
