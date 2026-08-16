@@ -1024,10 +1024,10 @@ swept twice and the blind pass ran first. A root that resolves to no main checko
 Each reclaim reports the **door** that authorized it, because the sweep has two
 reclaim rules and only one of them compares anything (#410):
 
-| Door                      | What authorized the removal                                                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `content-merged`          | `git diff --stat origin/<default>..<branch>` was empty — the branch's content is already on the default branch.                |
-| `default-branch-checkout` | A clean pipeline worktree parked **on** the default branch. **No content comparison happens or can**; the branch is preserved. |
+| Door                      | What authorized the removal                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `content-merged`          | Path-restricted tip-vs-tip of the branch's own files was empty (or a wired merged-PR lookup matched the tip SHA). Never a bare full-tree two-dot diff. |
+| `default-branch-checkout` | A clean pipeline worktree parked **on** the default branch. **No content comparison happens or can**; the branch is preserved.                         |
 
 Before #410 both doors logged "content already on `<base>`", so the only
 operator-visible record of the more destructive removal asserted a check that
@@ -1035,9 +1035,31 @@ never ran.
 
 **Merged-ness is a content check, not an ancestry check.** A squash merge leaves
 the branch tip a non-ancestor of the default branch, so `git merge-base
---is-ancestor` reports a false negative for every merged branch. The sweep uses
-`git diff --stat origin/<default>..<branch>` instead (see
-[GIT_WORKFLOW.md § After Merge](GIT_WORKFLOW.md#after-merge)).
+--is-ancestor` reports a false negative for every merged branch. A full-tree
+two-dot `git diff --stat origin/<default>..<branch>` is also wrong: after
+`gh pr update-branch` the branch carries a merge commit from main, and after
+squash `origin/main` is a new commit, so the trees diverge on files the branch
+never touched ([GIT_WORKFLOW.md § After Merge](GIT_WORKFLOW.md#after-merge)).
+The sweep's `content-merged` door is the same algorithm as
+`scripts/branch-merged-check.sh`:
+
+1. Ancestor fast-path (`merge-base --is-ancestor branch base`) — cheap
+   positive; squash-merged tips skip this.
+2. File list: `git diff --name-only -z base...branch` (the branch's own
+   files). Empty list + not an ancestor is UNKNOWN (not merged) — fail-closed.
+3. Content: `git diff --stat base branch -- <files…>` with files as separate
+   argv (never one shell word). Empty stat means merged.
+4. Optional fail-open second door: when a `MergedPRLookup` is wired and a
+   merged PR's head SHA equals the branch tip, residual on those files is
+   "base moved on", not unmerged work. Missing auth / no PR / SHA mismatch
+   leaves the branch unmerged. The CLI does not wire this lookup today.
+
+**The sweep fetches `origin/<default>` once at the start of
+`SweepMergedWorktrees`.** Fetch is a side effect and stays out of
+`mergedIntoBase` so the merge test remains unit-testable against fixture refs.
+On fetch failure the result's `baseRefFetchError` is set and classification
+continues against the existing local ref — a stale `origin/main` must never
+silently report every just-merged branch as `unmerged-content`.
 
 A worktree is reclaimed only when **all** of these hold; every skip is reported
 with its reason:
