@@ -93,6 +93,7 @@ export {
   getMinimumModel,
   getConfidenceThreshold,
   getEscalatedModel,
+  isEvalRecommendationsEnabled,
 } from "./resolvers/modelResolver";
 
 /**
