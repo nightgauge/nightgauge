@@ -3411,9 +3411,12 @@ model's declared `supported_efforts` ladder, or the stage fails closed with an
 error naming the model, the requested effort, and the ladder (#569, #75) —
 never a silent pass-through, never a silent downgrade. What differs per
 adapter is how the requested effort is arrived at. Claude uses the full
-precedence chain below; Grok and Codex each read a single provider-global
-environment variable, gated the same way — see the **Registry effort gate —
-Grok and Codex** callout after the `max` effort callout below.
+precedence chain below; Codex reads a single provider-global environment
+variable, gated the same way. Grok is similar but not identical since #606:
+`NIGHTGAUGE_GROK_EFFORT` is an operator override rather than the only
+channel — absent it, Grok now receives the same Go-resolved dispatch
+envelope effort the Claude IPC path computes. See the **Registry effort
+gate — Grok and Codex** callout after the `max` effort callout below.
 
 When using the Claude adapter, effort is resolved with this precedence:
 
@@ -3490,6 +3493,22 @@ When using the Claude adapter, effort is resolved with this precedence:
 > SDK's `codexReasoningEffortFlag` and the same extension gate — the Go
 > binary's Codex adapter does not forward a reasoning-effort flag at all
 > today (a codex-specific ladder derivation is #435, out of scope for #569).
+>
+> **Effort channel update (#606):** the ladder gate above is unchanged, but
+> the value it gates changed for Grok. `NIGHTGAUGE_GROK_EFFORT` was demoted
+> from the only source (#569) to an **operator override**
+> (`dispatchGrokEffort`, `internal/execution/adapters/grok_effort.go`): set,
+> it wins outright at both the pre-spawn `ValidateEffort` gate and
+> `BuildCommand`'s `--effort` emission, so the gated value and the
+> dispatched value can never diverge. Unset, Grok now receives the same
+> Go-resolved dispatch envelope effort the Claude IPC path computes
+> (`resolveWireEffort`, `internal/orchestrator/scheduler.go`) instead of no
+> flag at all, threaded through `RunOptions.Effort` — further overridden,
+> last, by a same-model effort descent the `RetryEngine` records
+> (`StickyEffort`) after an API rejection, but never over the operator env
+> override. Codex has no Go-side equivalent yet (#435 tracks a codex-specific
+> ladder derivation) and still reads its single provider-global var on the TS
+> side only.
 >
 > **Worked example — the #532 signature:** `grok-4.5` declares
 > `supported_efforts: [low, medium, high]`. Dispatching to it with

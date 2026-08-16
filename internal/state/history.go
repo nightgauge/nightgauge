@@ -297,11 +297,21 @@ type V2ModelSelect struct {
 	// a guess or a copy of Model.
 	ServedModel string `json:"served_model,omitempty"`
 	// Effort is the resolved EFFORT_LEVELS rung actually in force for this
-	// dispatch (absorbs #434). Populated only where Go has direct evidence —
-	// today exclusively the grok adapter's NIGHTGAUGE_GROK_EFFORT dispatch
-	// env var, validated against the canonical ladder. Every other adapter's
-	// effort is resolved entirely on the TypeScript side with no Go-visible
-	// signal, so it stays empty rather than a registry-default guess.
+	// dispatch (absorbs #434). Populated only where Go has direct evidence,
+	// via scheduler.go's dispatch-envelope block (internal/orchestrator/
+	// scheduler.go, the wireEffort/effortAttr computation around #606's
+	// sticky-substitution comment): on the IPC path (no Go-side adapter) Go
+	// RESOLVES the wire effort itself (resolveWireEffort, dispatch_envelope.go)
+	// and this field carries that resolved rung; on the grok Go-direct
+	// adapter path it is the operator's NIGHTGAUGE_GROK_EFFORT dispatch env
+	// var (resolveDispatchEffort) when set, else the same Go-resolved wire
+	// effort. Either way, a same-model effort descent the RetryEngine
+	// recorded (StickyEffort, #606) substitutes in last — after the mode's
+	// effort clamp, but never over the operator env override, so a floor a
+	// downgrade just lowered can't re-raise itself into an identical
+	// failure. Every other Go-direct adapter's effort is still resolved
+	// entirely on the TypeScript side with no Go-visible signal, so it stays
+	// empty rather than a registry-default guess.
 	Effort string `json:"effort,omitempty"`
 	// Thinking is the "on"/"off" reasoning state actually in force (spike
 	// #568 §3's canonical binary axis). Derived from the resolved model's
