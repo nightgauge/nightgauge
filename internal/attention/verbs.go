@@ -2,8 +2,10 @@ package attention
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // The verb registry is the security boundary (ADR 015 §B/§J): every
@@ -62,6 +64,24 @@ const (
 	// issue, which the producer already declared.
 	VerbIssueApproveArchitecture Verb = "issue.approveArchitecture"
 
+	// VerbDependabotEnableAlerts turns the forge's dependency-alert scanning ON
+	// for one repository that is ALREADY in the configured repo list (#344).
+	//
+	// It exists because the condition it repairs is, unusually for a security
+	// card, repairable by a bounded deterministic operation. #343 deliberately
+	// ships no repair verb — nothing in a closed allowlist can patch a
+	// vulnerability, and a button implying otherwise is worse than none. "This
+	// repository is not being scanned" is the opposite case: one setting, one
+	// flip, no judgement, and the card is a dead end without it.
+	//
+	// The argument surface is EMPTY, and that is the security property rather
+	// than a convenience. The target is read from the persisted request's
+	// Context.Repo — what the producer declared — and is then required to be in
+	// the configured repo list, so neither half of the target can come from the
+	// resolving surface. See ExecuteEnableAlerts, which is the only place the
+	// verb is allowed to resolve a target.
+	VerbDependabotEnableAlerts Verb = "dependabot.enableAlerts"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -83,6 +103,7 @@ var registry = map[Verb]struct{}{
 	VerbBudgetRaiseCeiling:           {},
 	VerbRunRetryWithEscalation:       {},
 	VerbIssueApproveArchitecture:     {},
+	VerbDependabotEnableAlerts:       {},
 	VerbNoop:                         {},
 }
 
@@ -181,4 +202,119 @@ type NoopExecutor struct{}
 // ExecuteVerb implements VerbExecutor.
 func (NoopExecutor) ExecuteVerb(_ context.Context, _ *DecisionRequest, _ Option) error {
 	return nil
+}
+
+// --- dependabot.enableAlerts (#344) -----------------------------------------
+
+// ErrVerbTargetNotConfigured reports a resolution whose target repository is
+// not in the configured repo list.
+//
+// It is a SECURITY refusal, not a lookup miss. The verb performs a real
+// mutation on a real repository with the fleet's own credential, so the set of
+// repositories it may touch has to come from configuration — the thing an
+// operator edits deliberately — and never from the request being resolved.
+var ErrVerbTargetNotConfigured = errors.New("attention: verb target repository is not in the configured repo list")
+
+// ErrVerbArgsNotAccepted reports arguments supplied to a verb whose contract is
+// that it takes none.
+//
+// Rejecting rather than ignoring is the point: an ignored argument is a silent
+// invitation to add policy later at the surface, which is exactly how a bounded
+// verb becomes a general one. If this verb ever needs a parameter, it has to be
+// declared here and defended here.
+var ErrVerbArgsNotAccepted = errors.New("attention: this verb accepts no arguments")
+
+// DependabotAlertEnabler is the single forge capability
+// dependabot.enableAlerts needs.
+//
+// Declared as a one-method interface rather than taken as a whole forge client
+// so the verb layer depends on the one operation it performs: an executor that
+// can enable scanning cannot, through this seam, also close an issue or push a
+// branch. The daemon passes its forge adapter; tests pass a recorder.
+type DependabotAlertEnabler interface {
+	EnableSecurityAlerts(ctx context.Context, owner, repo string) error
+}
+
+// RepoInConfiguredSet reports whether repo is in the configured repo list,
+// matching on the canonical "owner/name" spec or on the bare name so a manifest
+// entry written either way counts.
+//
+// It is the verb-side twin of sweep.WorkspaceInput.Covers and MUST agree with
+// it: the sweep decides which repos may be carded, and this decides which
+// carded repos may be acted on. If the two matchers disagree, the producer
+// emits a card whose repair button the executor then refuses — a dead
+// affordance on the one card that exists to have a working one. They are
+// separate functions only because the sweep package imports this one and not
+// the reverse; sweep's dependabotcoverage_test.go pins them to the same answers.
+func RepoInConfiguredSet(configured []string, repo string) bool {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return false
+	}
+	for _, c := range configured {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		if strings.EqualFold(c, repo) {
+			return true
+		}
+		if i := strings.Index(c, "/"); i >= 0 && strings.EqualFold(c[i+1:], repo) {
+			return true
+		}
+		if i := strings.Index(repo, "/"); i >= 0 && strings.EqualFold(c, repo[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExecuteEnableAlerts is the ONLY implementation of the
+// dependabot.enableAlerts verb, so no surface can re-derive its target
+// differently.
+//
+// Four refusals guard one mutation, in this order:
+//
+//  1. the option must actually bind this verb (a mis-dispatched arm must not
+//     silently perform a repository mutation);
+//  2. the option must carry NO arguments — the verb takes no caller-supplied
+//     policy at all, so anything present means the caller believes it can steer
+//     something it cannot;
+//  3. the target is req.Context.Repo, the repository the PRODUCER declared when
+//     it raised the card, never anything read from the resolve payload;
+//  4. that target must be in the configured repo list.
+//
+// (3) is what actually closes the hole and (4) is defense in depth: even a
+// store write that somehow carried a foreign repo cannot reach the forge unless
+// configuration already covers it.
+func ExecuteEnableAlerts(ctx context.Context, enabler DependabotAlertEnabler, req *DecisionRequest, opt Option, configuredRepos []string) error {
+	if req == nil {
+		return fmt.Errorf("attention: %s requires the persisted request", VerbDependabotEnableAlerts)
+	}
+	if opt.Verb != VerbDependabotEnableAlerts {
+		return fmt.Errorf("attention: %s executor invoked for verb %q", VerbDependabotEnableAlerts, opt.Verb)
+	}
+	if len(opt.Args) > 0 {
+		return fmt.Errorf("%w: %s was given %d", ErrVerbArgsNotAccepted, VerbDependabotEnableAlerts, len(opt.Args))
+	}
+
+	repo := strings.TrimSpace(req.Context.Repo)
+	if repo == "" {
+		return fmt.Errorf("attention: %s: request %s names no repository", VerbDependabotEnableAlerts, req.ID)
+	}
+	if !RepoInConfiguredSet(configuredRepos, repo) {
+		return fmt.Errorf("%w: %q", ErrVerbTargetNotConfigured, repo)
+	}
+
+	owner, name, found := strings.Cut(repo, "/")
+	if !found || owner == "" || name == "" || strings.Contains(name, "/") {
+		return fmt.Errorf("attention: %s target %q is not owner/name", VerbDependabotEnableAlerts, repo)
+	}
+	if enabler == nil {
+		// A surface that cannot perform the verb must say so rather than
+		// succeed: the store CAS-resolves only after the verb returns nil, so a
+		// silent success here would consume the card and leave scanning off.
+		return fmt.Errorf("attention: %s is not available on this surface", VerbDependabotEnableAlerts)
+	}
+	return enabler.EnableSecurityAlerts(ctx, owner, name)
 }

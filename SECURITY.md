@@ -65,7 +65,11 @@ report because you want the software to be safe, not for a reward.
 
 ## Security Practices
 
-- All dependencies are monitored by Dependabot for known vulnerabilities
+- Nightgauge reads open Dependabot alerts directly from the forge and cards
+  each one for operator triage — including alerts with no remediation PR,
+  which nothing reported before this shipped. See
+  [docs/SECURITY_ALERTS.md](docs/SECURITY_ALERTS.md) for the producer
+  contract and the operator runbook.
 - See [standards/security.md](standards/security.md) for coding standards
 - See [docs/SECURITY.md](docs/SECURITY.md) for prompt injection safeguards
 

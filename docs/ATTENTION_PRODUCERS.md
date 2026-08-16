@@ -165,6 +165,53 @@ func (p *StaleRelease) Evaluate(ctx context.Context, in Input) ([]attention.Deci
 The sweep stamps `Producer` and `Standing` for you, defaults `ExpiresAt`, and
 generates the `ID`. You supply the identity, the fingerprint, and the prose.
 
+### A shipped example: `dependabot-alerts`
+
+`internal/attention/sweep/dependabotalerts.go` (issue #343) is a repo-scoped
+producer worth reading end to end once the minimal example above makes sense,
+because its constraints are less obvious than a boolean condition:
+
+- **Scope**: repo-scoped — evaluated once per repo, per sweep, against
+  `forge.SecurityService.ListOpenAlerts`.
+- **`fyi` at every advisory severity**, including `critical` — the cleanest
+  worked example of the table above being about _blocking_, not importance. A
+  vulnerability blocks no merge and stalls no run, so any blocking claim would
+  be false. The advisory's own severity rides in the card's title text and
+  never in the severity field, which means the inbox ordering (severity band,
+  then newest-first) conveys nothing about how bad these advisories are — a
+  deliberate trade the operator runbook states outright rather than leaving
+  the reader to infer a severity-ranked queue that does not exist.
+- **Fingerprint**: `sev:<severity>;fix:<remediation-state>[#<pr-number>];patch:<first-patched-version>`
+  — material state only (how bad the advisory is, and whether something
+  already fixes it), deliberately excluding the alert's `updated_at` and any
+  elapsed-time value, so a re-observation of an unchanged advisory refreshes
+  quietly instead of re-alerting.
+- **One card per open alert**, `IdempotencyKey` keyed on the forge's own alert
+  number so a dismissed-then-re-raised alert becomes a genuinely new card
+  rather than a resurrection.
+- **No repair verb** — the same call Invariant 3 below makes for
+  `default-branch-health` and `human-gate`: nothing in the closed verb
+  registry can patch a vulnerability, so the only option is an honest dismiss
+  and the real next action rides on `Context.URL`.
+- **Deliberately skips cross-producer dedupe** that a structurally similar
+  producer (`human-gate`) performs — an open advisory and a PR that cannot
+  merge are two different conditions observed from two vantage points, not one
+  fact seen twice, so suppressing the security card when another producer
+  already cards the same PR would make the reconciler auto-resolve a live
+  vulnerability. See the file's header comment for the full reasoning.
+
+The full producer contract, the card semantics per remediation state, and the
+operator runbook live in
+[docs/SECURITY_ALERTS.md](SECURITY_ALERTS.md) — this entry only orients a
+producer author to the file.
+
+A workspace-scoped companion — a repository that is configured but cannot
+report alerts at all (scanning off, or the token unreadable) is a distinct
+condition from "no alerts open", and belongs to a workspace producer for the
+same reason `coverage-gap` does (see [above](#which-kind-are-you-writing)) —
+is tracked separately (issue #344) and is not part of the shipped surface this
+document describes yet.
+
 ## Invariants
 
 ### 1. An empty result means the condition is FALSE
@@ -206,8 +253,10 @@ Every `option.verb` must resolve in the closed verb registry
 unregistered one. But the stricter rule is editorial: **if no registered verb
 can actually fix the condition, ship no repair option.**
 
-Nothing in the registry can fix a red `main` or approve a PR. A card that offers
-to anyway is worse than a card that offers nothing — the operator clicks it,
+Nothing in the registry can fix a red `main`, approve a PR, or patch a
+vulnerability — `default-branch-health`, `human-gate`, and `dependabot-alerts`
+all land on the same conclusion for their own condition. A card that offers to
+anyway is worse than a card that offers nothing — the operator clicks it,
 nothing changes, and the next card they see is one they have already learned to
 distrust. Use `VerbNoop` for an honest dismiss and put the real next action in
 `Context.URL`, which surfaces render as a first-class affordance.
