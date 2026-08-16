@@ -47,6 +47,9 @@ func TestNew_GitHub_ReturnsForgeClient(t *testing.T) {
 	if client.Rulesets() == nil {
 		t.Error("Rulesets() returned nil")
 	}
+	if client.Security() == nil {
+		t.Error("Security() returned nil")
+	}
 	if client.Auth() == nil {
 		t.Error("Auth() returned nil")
 	}
@@ -88,6 +91,9 @@ func TestNew_GitLab_ReturnsForgeClient(t *testing.T) {
 	}
 	if client.Rulesets() == nil {
 		t.Error("Rulesets() returned nil")
+	}
+	if client.Security() == nil {
+		t.Error("Security() returned nil")
 	}
 	if client.Auth() == nil {
 		t.Error("Auth() returned nil")

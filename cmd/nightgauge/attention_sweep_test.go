@@ -17,15 +17,16 @@ import (
 // make a live API call.
 type nilForge struct{}
 
-func (nilForge) Issues() forge.IssueService     { return nil }
-func (nilForge) PRs() forge.PRService           { return nil }
-func (nilForge) Project() forge.ProjectService  { return nil }
-func (nilForge) Board() forge.BoardService      { return nil }
-func (nilForge) CI() forge.CIService            { return nil }
-func (nilForge) Labels() forge.LabelService     { return nil }
-func (nilForge) Rulesets() forge.RulesetService { return nil }
-func (nilForge) Auth() forge.AuthService        { return nil }
-func (nilForge) Repo() forge.RepoService        { return nil }
+func (nilForge) Issues() forge.IssueService      { return nil }
+func (nilForge) PRs() forge.PRService            { return nil }
+func (nilForge) Project() forge.ProjectService   { return nil }
+func (nilForge) Board() forge.BoardService       { return nil }
+func (nilForge) CI() forge.CIService             { return nil }
+func (nilForge) Labels() forge.LabelService      { return nil }
+func (nilForge) Rulesets() forge.RulesetService  { return nil }
+func (nilForge) Security() forge.SecurityService { return nil }
+func (nilForge) Auth() forge.AuthService         { return nil }
+func (nilForge) Repo() forge.RepoService         { return nil }
 
 type cliProducer struct {
 	name string

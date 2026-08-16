@@ -33,20 +33,22 @@ const sweepTestRepo = "octocat/acme-web"
 // condition" and makes a broken producer look healthy.
 
 type sweepFakeForge struct {
-	ci   *sweepFakeCI
-	prs  *sweepFakePRs
-	repo *sweepFakeRepo
+	ci       *sweepFakeCI
+	prs      *sweepFakePRs
+	repo     *sweepFakeRepo
+	security *sweepFakeSecurity
 }
 
-func (f *sweepFakeForge) Issues() forge.IssueService     { return nil }
-func (f *sweepFakeForge) PRs() forge.PRService           { return f.prs }
-func (f *sweepFakeForge) Project() forge.ProjectService  { return nil }
-func (f *sweepFakeForge) Board() forge.BoardService      { return nil }
-func (f *sweepFakeForge) CI() forge.CIService            { return f.ci }
-func (f *sweepFakeForge) Labels() forge.LabelService     { return nil }
-func (f *sweepFakeForge) Rulesets() forge.RulesetService { return nil }
-func (f *sweepFakeForge) Auth() forge.AuthService        { return nil }
-func (f *sweepFakeForge) Repo() forge.RepoService        { return f.repo }
+func (f *sweepFakeForge) Issues() forge.IssueService      { return nil }
+func (f *sweepFakeForge) PRs() forge.PRService            { return f.prs }
+func (f *sweepFakeForge) Project() forge.ProjectService   { return nil }
+func (f *sweepFakeForge) Board() forge.BoardService       { return nil }
+func (f *sweepFakeForge) CI() forge.CIService             { return f.ci }
+func (f *sweepFakeForge) Labels() forge.LabelService      { return nil }
+func (f *sweepFakeForge) Rulesets() forge.RulesetService  { return nil }
+func (f *sweepFakeForge) Security() forge.SecurityService { return f.security }
+func (f *sweepFakeForge) Auth() forge.AuthService         { return nil }
+func (f *sweepFakeForge) Repo() forge.RepoService         { return f.repo }
 
 type sweepFakeCI struct {
 	forge.CIService
@@ -71,6 +73,17 @@ func (p *sweepFakePRs) ListPRs(context.Context, string, string, string, string) 
 	return p.prs, nil
 }
 
+// sweepFakeSecurity models a repository whose dependency scanning is on and
+// whose open-alert set is empty, so the dependabot-alerts producer contributes
+// nothing to these wiring tests instead of erroring out of them.
+type sweepFakeSecurity struct {
+	forge.SecurityService
+}
+
+func (s *sweepFakeSecurity) ListOpenAlerts(context.Context, string, string) (*forgetypes.SecurityAlerts, error) {
+	return &forgetypes.SecurityAlerts{Status: forgetypes.SecurityAlertsEnabled}, nil
+}
+
 type sweepFakeRepo struct {
 	forge.RepoService
 	defaultBranch string
@@ -84,8 +97,9 @@ func (r *sweepFakeRepo) RepoMetadata(_ context.Context, owner, name string) (*fo
 // completed long enough ago to be past the producer's grace window.
 func redMain() *sweepFakeForge {
 	return &sweepFakeForge{
-		repo: &sweepFakeRepo{defaultBranch: "main"},
-		prs:  &sweepFakePRs{},
+		repo:     &sweepFakeRepo{defaultBranch: "main"},
+		prs:      &sweepFakePRs{},
+		security: &sweepFakeSecurity{},
 		ci: &sweepFakeCI{
 			required: []string{"Security & license gates"},
 			runs: []forgetypes.CheckDetail{{

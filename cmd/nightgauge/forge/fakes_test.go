@@ -19,20 +19,22 @@ type fakeForge struct {
 	ci       *fakeCIService
 	labels   *fakeLabelService
 	rulesets forge.RulesetService
+	security forge.SecurityService
 	auth     *fakeAuthService
 	repo     *fakeRepoService
 	graphql  *fakeGraphQLService
 }
 
-func (f *fakeForge) Issues() forge.IssueService     { return f.issues }
-func (f *fakeForge) PRs() forge.PRService           { return f.prs }
-func (f *fakeForge) Project() forge.ProjectService  { return f.project }
-func (f *fakeForge) Board() forge.BoardService      { return f.board }
-func (f *fakeForge) CI() forge.CIService            { return f.ci }
-func (f *fakeForge) Labels() forge.LabelService     { return f.labels }
-func (f *fakeForge) Rulesets() forge.RulesetService { return f.rulesets }
-func (f *fakeForge) Auth() forge.AuthService        { return f.auth }
-func (f *fakeForge) Repo() forge.RepoService        { return f.repo }
+func (f *fakeForge) Issues() forge.IssueService      { return f.issues }
+func (f *fakeForge) PRs() forge.PRService            { return f.prs }
+func (f *fakeForge) Project() forge.ProjectService   { return f.project }
+func (f *fakeForge) Board() forge.BoardService       { return f.board }
+func (f *fakeForge) CI() forge.CIService             { return f.ci }
+func (f *fakeForge) Labels() forge.LabelService      { return f.labels }
+func (f *fakeForge) Rulesets() forge.RulesetService  { return f.rulesets }
+func (f *fakeForge) Security() forge.SecurityService { return f.security }
+func (f *fakeForge) Auth() forge.AuthService         { return f.auth }
+func (f *fakeForge) Repo() forge.RepoService         { return f.repo }
 
 // ExecuteGraphQL satisfies forge.GraphQLService when the test sets a
 // fakeGraphQLService on the fake forge. The graphql subcommand

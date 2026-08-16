@@ -5,10 +5,10 @@
 //
 // The package is structured as a set of per-domain service interfaces
 // (IssueService, PRService, ProjectService, BoardService, CIService,
-// LabelService, RulesetService, AuthService) plus a ForgeClient aggregate
-// that exposes accessors for each. Concrete adapters live in sibling
-// packages (internal/github today) and provide compile-time satisfaction
-// of these interfaces.
+// LabelService, RulesetService, AuthService, RepoService, SecurityService)
+// plus a ForgeClient aggregate that exposes accessors for each. Concrete
+// adapters live in sibling packages (internal/github today) and provide
+// compile-time satisfaction of these interfaces.
 //
 // New(Config) is the factory entry point. It dispatches on Config.Kind to
 // build the appropriate adapter and returns it as a ForgeClient. Unknown
@@ -88,6 +88,7 @@ type ForgeClient interface {
 	Rulesets() RulesetService
 	Auth() AuthService
 	Repo() RepoService
+	Security() SecurityService
 }
 
 // adapterFactory is the signature an adapter package registers via

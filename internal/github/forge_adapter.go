@@ -12,17 +12,18 @@ import (
 // ADR-006 §"Audit table" lists the full method-by-method mapping; these
 // asserts are the load-bearing check that the audit table stays accurate.
 var (
-	_ forge.IssueService   = (*IssueService)(nil)
-	_ forge.PRService      = (*PRService)(nil)
-	_ forge.ProjectService = (*ProjectService)(nil)
-	_ forge.BoardService   = (*BoardService)(nil)
-	_ forge.CIService      = (*CIService)(nil)
-	_ forge.LabelService   = (*LabelService)(nil)
-	_ forge.RulesetService = (*RulesetService)(nil)
-	_ forge.AuthService    = (*Client)(nil)
-	_ forge.RepoService    = (*RepoService)(nil)
-	_ forge.GraphQLService = (*Client)(nil)
-	_ forge.ForgeClient    = (*ForgeAdapter)(nil)
+	_ forge.IssueService    = (*IssueService)(nil)
+	_ forge.PRService       = (*PRService)(nil)
+	_ forge.ProjectService  = (*ProjectService)(nil)
+	_ forge.BoardService    = (*BoardService)(nil)
+	_ forge.CIService       = (*CIService)(nil)
+	_ forge.LabelService    = (*LabelService)(nil)
+	_ forge.RulesetService  = (*RulesetService)(nil)
+	_ forge.AuthService     = (*Client)(nil)
+	_ forge.RepoService     = (*RepoService)(nil)
+	_ forge.SecurityService = (*SecurityService)(nil)
+	_ forge.GraphQLService  = (*Client)(nil)
+	_ forge.ForgeClient     = (*ForgeAdapter)(nil)
 )
 
 // ForgeAdapter wraps a *Client (plus owner/projectNumber/ownerType) and
@@ -47,6 +48,7 @@ type ForgeAdapter struct {
 	labels   *LabelService
 	rulesets *RulesetService
 	repo     *RepoService
+	security *SecurityService
 }
 
 // NewForgeAdapter constructs a ForgeAdapter for the given client/project.
@@ -138,6 +140,14 @@ func (a *ForgeAdapter) Repo() forge.RepoService {
 		a.repo = NewRepoService(a.client)
 	}
 	return a.repo
+}
+
+// Security returns the SecurityService as a forge.SecurityService.
+func (a *ForgeAdapter) Security() forge.SecurityService {
+	if a.security == nil {
+		a.security = NewSecurityService(a.client)
+	}
+	return a.security
 }
 
 // Forge returns this Client wrapped as a forge.ForgeClient. Convenience

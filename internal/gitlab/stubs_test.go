@@ -63,6 +63,25 @@ func TestRepoAdapter_RepoMetadata_ReturnsErrUnsupported(t *testing.T) {
 	}
 }
 
+// TestSecurityAdapter_ListOpenAlerts_ReturnsErrUnsupported pins the GitLab leg
+// of #343. GitLab reports dependency findings through a CI-artifact-driven
+// Vulnerability Report rather than an always-on per-project alert feed, so the
+// capability is deliberately stubbed rather than designed out: a caller can
+// errors.Is its way to a GitLab-shaped path the moment one exists, and
+// "this forge has no alert feed" stays distinguishable from
+// "this project has scanning switched off", which is a STATUS on the result.
+func TestSecurityAdapter_ListOpenAlerts_ReturnsErrUnsupported(t *testing.T) {
+	c := NewClient("", "tok")
+	s := NewSecurityAdapter(c)
+	_, err := s.ListOpenAlerts(context.Background(), "o", "r")
+	if !errors.Is(err, forge.ErrUnsupported) {
+		t.Errorf("SecurityAdapter.ListOpenAlerts: err = %v, want ErrUnsupported chain", err)
+	}
+	if !strings.Contains(err.Error(), "#343") {
+		t.Errorf("SecurityAdapter.ListOpenAlerts: err = %v, want tracking issue #343 in message", err)
+	}
+}
+
 // TestForgeAdapter_AccessorsReturnNonNil verifies the aggregate adapter
 // surface returns non-nil services for every interface, including the stubbed
 // ones. A nil accessor would NPE callers before they can fall back to the
@@ -97,6 +116,9 @@ func TestForgeAdapter_AccessorsReturnNonNil(t *testing.T) {
 	}
 	if a.Repo() == nil {
 		t.Error("Repo() returned nil")
+	}
+	if a.Security() == nil {
+		t.Error("Security() returned nil")
 	}
 }
 
