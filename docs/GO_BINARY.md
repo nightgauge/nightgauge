@@ -3717,17 +3717,29 @@ Per adapter the doctor reports:
 For `codex`, an `mcp` sub-object reports whether `$CODEX_HOME/config.toml` exists
 and whether the nightgauge MCP managed block is present.
 
-#### CLI catalog drift detection (#551)
+#### CLI catalog drift detection (#551, #604)
 
-`cli`-kind adapters that wire a catalog probe (grok first-class today) get an
+`cli`-kind adapters that wire a catalog probe (grok, via `grok models`) get an
 extra live-vs-registry comparison: doctor shells the adapter's own catalog
-listing (`grok models`) and diffs the result against the registry's
+listing and diffs the result against the registry's
 `transports.cli.served` facts for that provider (`internal/models`,
 `ModelDescriptor.ServedByTransport`). This is the **detection** half of the
 #532 class — a registry entry declared CLI-served that the live CLI catalog
 does not actually offer — before a run spawns and fails mid-flight.
 Enforcement at selection time (fail-closed before spawn) is `CheckTransportServed`
 (#579); this probe never blocks a run, it only reports.
+
+The remaining `cli`-kind adapters — `claude`, `codex`, `gemini`, `copilot` —
+have **no** catalog probe wired: captured, real evidence (a `--help`
+invocation, or the CLI's absence entirely — see
+`internal/doctor/testdata/no-catalog-cli-probes/README.md`) showed no
+models-listing command to build a parser against, so each declares an
+`adapterSpec.catalogSkipReason` instead of `catalogArgs`/`catalogParser`
+(#604). This is a deliberate, evidence-backed "no catalog" decision, not an
+unfinished one — `checkAdapter` surfaces it via `catalog_warning` (prefixed
+`"no catalog probe: "`) once the adapter's own baseline health passes, so the
+gap is always explained rather than silently indistinguishable from a probe
+nobody got around to wiring. It never affects `ok`.
 
 Only runs once the adapter's baseline (binary present, version floor met)
 already passed — a CLI that is missing or stale already fails for that

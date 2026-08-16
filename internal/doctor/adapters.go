@@ -46,13 +46,17 @@ type AdapterHealth struct {
 	ModelOK         *bool             `json:"model_ok,omitempty"`   // http kind: configured model is in the /models catalog
 	// Catalog is the live-vs-registry model catalog comparison for kindCLI
 	// adapters with a wired catalog probe (#551; grok first-class). Nil means
-	// either the adapter has no catalog probe wired, or the probe could not
-	// run/parse — see CatalogWarning for why in that case.
+	// either the adapter has no catalog probe wired (an explicit,
+	// evidence-backed decision — see CatalogWarning), or the probe could not
+	// run/parse — see CatalogWarning for why in that case too.
 	Catalog *CatalogHealth `json:"catalog,omitempty"`
 	// CatalogWarning explains a degraded or skipped catalog probe (CLI spawn
-	// error, unauthenticated, unparseable output) or reports the inverse-drift
-	// warning (catalog offers a model the registry does not mark served).
-	// Never causes OK=false by itself — only a confirmed Catalog.Missing does.
+	// error, unauthenticated, unparseable output), a deliberate no-catalog
+	// adapter spec (#604, prefixed "no catalog probe: " — claude/codex/gemini/
+	// copilot today, see adapterSpec.catalogSkipReason), or reports the
+	// inverse-drift warning (catalog offers a model the registry does not
+	// mark served). Never causes OK=false by itself — only a confirmed
+	// Catalog.Missing does.
 	CatalogWarning string `json:"catalog_warning,omitempty"`
 	OK             bool   `json:"ok"` // adapter is usable for its kind's primary requirement
 	Remediation    string `json:"remediation,omitempty"`
@@ -134,28 +138,63 @@ type adapterSpec struct {
 	// catalogArgs/catalogParser (#551): kindCLI adapters that can list their
 	// own model catalog wire both — catalogArgs is the subcommand (e.g.
 	// grok's {"models"}) and catalogParser turns its output into the live
-	// model ids + the CLI's own reported default. Adapters that leave both
-	// unset (claude, codex, gemini, copilot today) have no catalog probe —
-	// the doctor skips the drift comparison for them rather than guessing at
-	// a command/shape nothing has captured evidence for.
+	// model ids + the CLI's own reported default.
 	catalogArgs   []string
 	catalogParser func(output string) (ids []string, defaultID string, ok bool)
+	// catalogSkipReason (#604) is set on kindCLI adapters that deliberately
+	// leave catalogArgs/catalogParser unset: captured, real evidence (a
+	// `--help` invocation, or the CLI's absence) showed no model-listing
+	// command to build a parser against — see
+	// testdata/no-catalog-cli-probes/README.md for the provenance. Exactly
+	// one of catalogParser/catalogSkipReason is set for any kindCLI adapter;
+	// TestAdapterSpecs_CatalogWiringIsMutuallyExclusive guards this. When
+	// set, applyCatalogSkip surfaces it via AdapterHealth.CatalogWarning so
+	// "no catalog probe" is always an explicit, explained state rather than
+	// silently absent fields indistinguishable from "not gotten to yet."
+	catalogSkipReason string
 }
 
 // adapterSpecs is keyed by canonical adapter name. The user-facing names from
 // the VSCode extension (claude, codex, gemini, gemini-sdk, lm-studio, ollama,
 // copilot) all resolve here after normalizeAdapterName.
 var adapterSpecs = map[string]adapterSpec{
-	"claude-headless": {binary: "claude", kind: kindCLI},
+	"claude-headless": {binary: "claude", kind: kindCLI, catalogSkipReason: claudeNoCatalogReason},
 	"claude-sdk":      {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
-	"codex":           {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true},
-	"gemini":          {binary: "gemini", kind: kindCLI, minVersion: "0.29.0"},
+	"codex":           {binary: "codex", kind: kindCLI, minVersion: "0.111.0", mcp: true, catalogSkipReason: codexNoCatalogReason},
+	"gemini":          {binary: "gemini", kind: kindCLI, minVersion: "0.29.0", catalogSkipReason: geminiNoCatalogReason},
 	"gemini-sdk":      {kind: kindSDK, apiKeyEnvs: []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}},
 	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
 	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
-	"copilot":         {binary: "copilot", kind: kindCLI},
+	"copilot":         {binary: "copilot", kind: kindCLI, catalogSkipReason: copilotNoCatalogReason},
 	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 }
+
+// No-catalog skip reasons (#604): each names the captured, real evidence
+// backing the "no catalog probe" decision — never a guess. Full provenance
+// (host, date, exact command, exit code) lives in
+// testdata/no-catalog-cli-probes/README.md; codex-help.txt and
+// claude-help.txt there are the verbatim captured `--help` outputs these
+// reference.
+const (
+	codexNoCatalogReason = "codex CLI has no models/catalog listing command — `codex --help` " +
+		"(codex-cli 0.145.0, captured 2026-08-16) lists only `-m/--model` to SELECT a model, " +
+		"no subcommand that LISTS available ones (evidence: testdata/no-catalog-cli-probes/codex-help.txt). " +
+		"Revisit if a future codex release adds one (#604)."
+	claudeNoCatalogReason = "claude CLI has no models/catalog listing command — `claude --help` " +
+		"(2.1.233, captured 2026-08-16) lists only `--model <model>` to SELECT a model, " +
+		"no subcommand that LISTS available ones (evidence: testdata/no-catalog-cli-probes/claude-help.txt). " +
+		"Revisit if a future claude release adds one (#604)."
+	geminiNoCatalogReason = "no gemini CLI was installed on the machine used to capture doctor catalog-probe " +
+		"evidence (2026-08-16, macOS 26.0/Darwin 27.0.0 arm64) — `gemini` was not on PATH and no global npm " +
+		"package provided it, so no command/output shape exists to build a parser against " +
+		"(evidence: testdata/no-catalog-cli-probes/README.md). Wire a probe once real gemini catalog-command " +
+		"output is captured (#604)."
+	copilotNoCatalogReason = "no functioning standalone Copilot CLI was found to capture doctor catalog-probe " +
+		"evidence (2026-08-16) — the only `copilot` on this machine's PATH is a VS Code Copilot Chat extension " +
+		"bootstrap shim that fails immediately without a real CLI installed (`Cannot find GitHub Copilot CLI`), " +
+		"not a genuine CLI (evidence: testdata/no-catalog-cli-probes/copilot-help.txt). Wire a probe once real " +
+		"copilot catalog-command output is captured (#604)."
+)
 
 // adapterAliases maps user-facing aliases to the canonical adapterSpecs key,
 // mirroring the execution registry's alias table.
@@ -294,8 +333,11 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 			}
 		}
 		h.OK = h.Installed && h.VersionOK
-		if spec.catalogParser != nil {
+		switch {
+		case spec.catalogParser != nil:
 			applyCatalogProbe(&h, spec, canonical, probe)
+		case spec.catalogSkipReason != "":
+			applyCatalogSkip(&h, spec)
 		}
 
 	case kindSDK:
@@ -435,6 +477,26 @@ func applyCatalogProbe(h *AdapterHealth, spec adapterSpec, canonical string, pro
 			h.CatalogWarning = warn
 		}
 	}
+}
+
+// applyCatalogSkip records why a kindCLI adapter with no wired catalog probe
+// (#604) has no Catalog: spec.catalogSkipReason names the captured, real
+// evidence (a `--help` invocation showing no models/catalog command, or the
+// CLI's absence entirely — see testdata/no-catalog-cli-probes/README.md)
+// that justified marking it no-catalog rather than guessing at a shape. This
+// keeps "no catalog probe" an explicit, explained state on every checkAdapter
+// call for that adapter — never silently indistinguishable from a probe that
+// simply has not been wired yet.
+//
+// Gated the same way as applyCatalogProbe (baseline already passed) so an
+// adapter that is already !OK for an unrelated reason (missing binary, stale
+// version) gets no additional, redundant note layered on top — that failure
+// is already reported via Installed/VersionOK/Remediation.
+func applyCatalogSkip(h *AdapterHealth, spec adapterSpec) {
+	if !h.Installed || !h.VersionOK {
+		return
+	}
+	h.CatalogWarning = "no catalog probe: " + spec.catalogSkipReason
 }
 
 // servedCLIModelDiff compares a live CLI catalog against the registry's
