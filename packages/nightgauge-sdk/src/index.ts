@@ -894,6 +894,10 @@ export {
   TIER_BAND_ALTERNATION,
   isTierBand,
   type TierBand,
+  // Band-strength classification of recorded model references (#582)
+  strongestBand,
+  isLightweightModel,
+  isHeavyweightModel,
   candidateLadder,
   resolveBandEnvelope,
   escalationLadder,

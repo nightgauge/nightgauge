@@ -8,6 +8,7 @@
  */
 
 import type { PipelineConfig } from "../orchestrator/PipelineOrchestrator.js";
+import { isTierBand, type TierBand } from "../eval/tierBands.js";
 import { requiresDirectApiKey, resolveAdapter, type IncrediAdapter } from "./adapter.js";
 import {
   DEFAULT_ORCHESTRATION_CONFIG,
@@ -93,12 +94,13 @@ function parseOutputFormat(value: string | undefined): CLIConfig["outputFormat"]
 }
 
 /**
- * Validate model
+ * Validate model — membership derives from the `TIER_BANDS` authority (#581)
+ * instead of a hand-inlined list. The previous three-band copy silently
+ * rejected `fable` (the incident class stageResolver's comments record; #582).
  */
-function parseModel(value: string | undefined): "sonnet" | "opus" | "haiku" | undefined {
+function parseModel(value: string | undefined): TierBand | undefined {
   if (!value) return undefined;
-  const valid = ["sonnet", "opus", "haiku"];
-  return valid.includes(value) ? (value as "sonnet" | "opus" | "haiku") : undefined;
+  return isTierBand(value) ? value : undefined;
 }
 
 /**

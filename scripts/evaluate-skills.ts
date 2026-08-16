@@ -31,6 +31,7 @@ import {
   EvalRecorder,
   LiveClaudeModelRunner,
   MockModelRunner,
+  MODEL_TIERS,
   PIPELINE_SKILLS,
   SkillEvalHarness,
   isLiveModeEnabled,
@@ -43,7 +44,14 @@ import {
   type ModelTier,
 } from "../packages/nightgauge-sdk/src/eval/index.js";
 
-const ALL_MODELS: ModelTier[] = ["haiku", "sonnet", "opus"];
+/**
+ * Default eval matrix, derived from the `MODEL_TIERS` band authority (#581)
+ * rather than a hand-inlined list (#582). `fable` is EXCLUDED deliberately,
+ * not silently: extending the skill-eval harness to the fable band is #383,
+ * blockedBy the honest eval lane (#571) — fable coverage is only worth paying
+ * for on honest cells. Pass `--models fable` to opt in explicitly.
+ */
+const ALL_MODELS: ModelTier[] = MODEL_TIERS.filter((tier) => tier !== "fable");
 type PipelineSkill = (typeof PIPELINE_SKILLS)[number];
 
 // Repo root is one level up from scripts/. Scenarios/fixtures live at the root.
@@ -98,9 +106,12 @@ function validateSkills(values: string[]): PipelineSkill[] {
 }
 
 function validateModels(values: string[]): ModelTier[] {
+  // Validate against the full band authority, not the default matrix — the
+  // default excludes `fable` for cost, but an explicit `--models fable` is
+  // the documented opt-in (#383).
   for (const v of values) {
-    if (!(ALL_MODELS as string[]).includes(v)) {
-      throw new Error(`unknown model "${v}". Valid: ${ALL_MODELS.join(", ")}`);
+    if (!(MODEL_TIERS as readonly string[]).includes(v)) {
+      throw new Error(`unknown model "${v}". Valid: ${MODEL_TIERS.join(", ")}`);
     }
   }
   return values as ModelTier[];

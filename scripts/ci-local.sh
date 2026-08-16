@@ -107,6 +107,18 @@ if [ -f scripts/test-publication-boundary.sh ]; then
   run_step "Publication boundary regression suite" bash scripts/test-publication-boundary.sh
 fi
 
+# 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
+#     closed sets / regex alternations in production source, outside the
+#     allowed surfaces (spike #568 §5).
+if [ -f scripts/check-band-vocabulary.py ]; then
+  run_step "band-vocabulary reintroduction gate" python3 scripts/check-band-vocabulary.py
+fi
+
+# 5d. Band-vocabulary gate self-test — proves the gate still fails closed.
+if [ -f scripts/test-band-vocabulary-check.sh ]; then
+  run_step "Band-vocabulary gate regression suite" bash scripts/test-band-vocabulary-check.sh
+fi
+
 # 4b. Cache-boundary measurement smoke test
 if [ -f scripts/test-measure-cache-boundary-loss.sh ]; then
   run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh

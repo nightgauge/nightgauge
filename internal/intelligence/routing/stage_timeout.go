@@ -68,6 +68,18 @@ const defaultStageTimeout = 30 * time.Minute
 // Matched on the tier family anywhere in the string so both the alias ("fable")
 // and the concrete id ("claude-fable-5") resolve. Unknown models return 1.0 —
 // the historical ceiling, unchanged.
+//
+// #582 keep-with-reason (band-retirement sweep, PR #607): these substring
+// matches survive deliberately. The input is the DISPATCH model — on the Go
+// side that vocabulary is band aliases plus claude-* ids (adapters translate
+// to non-Anthropic ids downstream, at the last mile), so the family match
+// covers what this path actually sees; anything else falls to the 1.0
+// historical ceiling, a conservative fail-open (a tighter deadline, never a
+// wrong one). `models.ClaudeIDTier` cannot replace it: that classifier
+// collapses fable onto the opus band, which would erase exactly the 2.0-vs-1.5
+// distinction this table exists for. Not a closed-set enumeration, so it is
+// structurally invisible to scripts/check-band-vocabulary.py — accounted for
+// here and in the PR #607 keep list instead.
 func stageTimeoutModelScale(model string) float64 {
 	m := strings.ToLower(model)
 	switch {

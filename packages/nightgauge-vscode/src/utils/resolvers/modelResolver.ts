@@ -15,7 +15,11 @@ import {
   CODEX_TIER_MODEL_MAP,
   REASONING_EFFORT_ALTERNATION,
   REASONING_EFFORT_LEVELS,
+  TIER_BAND_ALTERNATION,
+  TIER_BANDS,
   escalationLadder,
+  isTierBand,
+  type TierBand,
 } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
@@ -25,8 +29,11 @@ import { AdapterEnumSchema } from "../../config/schema";
 // Core model types and selection
 // ============================================================================
 
-/** Default model type for pipeline stages */
-export type DefaultModel = "sonnet" | "opus" | "haiku" | "fable";
+/**
+ * Default model type for pipeline stages — derived from the `TIER_BANDS`
+ * authority (#581), never re-spelled (#582).
+ */
+export type DefaultModel = TierBand;
 
 /**
  * Get the default model from config or environment.
@@ -44,7 +51,7 @@ export type DefaultModel = "sonnet" | "opus" | "haiku" | "fable";
  * @see Issue #626 - Claude CLI headless adapter audit
  */
 export function getDefaultModel(workspaceRoot?: string): DefaultModel | undefined {
-  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
+  const validModels: readonly DefaultModel[] = TIER_BANDS;
 
   // Check environment variable first
   const envModel = process.env.NIGHTGAUGE_UI_CORE_DEFAULT_MODEL;
@@ -96,7 +103,7 @@ export function getDefaultModel(workspaceRoot?: string): DefaultModel | undefine
 
       if (inCore) {
         const match = trimmed.match(
-          /^default_model:\s*['"]?(sonnet|opus|haiku|fable)['"]?(?:\s+#.*)?$/
+          new RegExp(`^default_model:\\s*['"]?(${TIER_BAND_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           return match[1] as DefaultModel;
@@ -117,7 +124,7 @@ export function getDefaultModel(workspaceRoot?: string): DefaultModel | undefine
  * @see Issue #626 - Claude CLI headless adapter audit
  */
 export function getFallbackModel(workspaceRoot?: string): DefaultModel | undefined {
-  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
+  const validModels: readonly DefaultModel[] = TIER_BANDS;
 
   // Check environment variable first
   const envModel = process.env.NIGHTGAUGE_UI_CORE_FALLBACK_MODEL;
@@ -173,7 +180,7 @@ export function getFallbackModel(workspaceRoot?: string): DefaultModel | undefin
         // grow for #340. A `fallback_model: fable` the env var accepts and the
         // file drops is the identical silent divergence in the adjacent knob.
         const match = trimmed.match(
-          /^fallback_model:\s*['"]?(sonnet|opus|haiku|fable)['"]?(?:\s+#.*)?$/
+          new RegExp(`^fallback_model:\\s*['"]?(${TIER_BAND_ALTERNATION})['"]?(?:\\s+#.*)?$`)
         );
         if (match) {
           return match[1] as DefaultModel;
@@ -815,7 +822,10 @@ export function resolveCodexPipelineModel(
   // CODEX_TIER_MODEL_MAP (#4018). `fable` was previously dropped by a type-guard
   // that omitted it, leaking the literal "fable" to the Codex CLI as an invalid
   // model id. Exact Codex model ids pass through unchanged.
-  if (trimmed === "haiku" || trimmed === "opus" || trimmed === "fable") {
+  // `sonnet` already returned above; every remaining band resolves through
+  // the canonical map — membership derives from the authority (#582), so a
+  // new band can no longer be silently dropped the way `fable` once was.
+  if (isTierBand(trimmed)) {
     return CODEX_TIER_MODEL_MAP[trimmed];
   }
 
@@ -1647,7 +1657,7 @@ export function getMinimumModel(
   stage: PipelineStage,
   workspaceRoot?: string
 ): DefaultModel | undefined {
-  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
+  const validModels: readonly DefaultModel[] = TIER_BANDS;
 
   // Check environment variable first
   const envKey = `NIGHTGAUGE_MODEL_ROUTING_MIN_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;

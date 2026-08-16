@@ -7,6 +7,7 @@
  * @see Issue #476 - Refactor tree providers, extension.ts, and settings.ts to use ConfigBridge
  */
 
+import type { TierBand } from "@nightgauge/sdk";
 import { ConfigBridge } from "../services/ConfigBridge";
 import {
   type UICoreConfig,
@@ -36,9 +37,10 @@ export type ExecutionAdapter =
   "claude" | "codex" | "gemini" | "gemini-sdk" | "lm-studio" | "ollama" | "copilot" | "grok";
 
 /**
- * Model selection options
+ * Model selection options — derived from the `TIER_BANDS` authority (#581),
+ * never re-spelled (#582).
  */
-export type ModelSelection = "sonnet" | "opus" | "haiku" | "fable";
+export type ModelSelection = TierBand;
 
 /**
  * Core configuration interface

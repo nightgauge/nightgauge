@@ -204,9 +204,12 @@ describe("analyzeModelRouting — under-routing", () => {
     expect(result.metrics["underRoutingCount"]).toBeGreaterThan(0);
   });
 
-  it("detects under-routing for a vendor-prefixed haiku model ID", () => {
+  // #582: classification resolves through the model registry (strongest
+  // declared band), so the fixture uses the real concrete id rather than the
+  // pre-#582 substring bait "claude-haiku".
+  it("detects under-routing for a concrete haiku-band model ID", () => {
     const records = buildRecords(5, {
-      model: "claude-haiku",
+      model: "claude-haiku-4-5-20251001",
       selectionSource: "scheduler",
       autoSelectorComplexity: "XL",
       success: false,
@@ -473,9 +476,12 @@ describe("analyzeModelRouting — over-routing", () => {
     expect(result.metrics["overRoutingCount"]).toBeGreaterThan(0);
   });
 
-  it("detects over-routing for a vendor-prefixed opus model ID", () => {
+  // #582: classification resolves through the model registry (strongest
+  // declared band), so the fixture uses the real concrete id rather than the
+  // pre-#582 substring bait "claude-opus".
+  it("detects over-routing for a concrete opus-band model ID", () => {
     const records = buildRecords(5, {
-      model: "claude-opus",
+      model: "claude-opus-5",
       selectionSource: "scheduler",
       autoSelectorComplexity: "XS",
       success: true,

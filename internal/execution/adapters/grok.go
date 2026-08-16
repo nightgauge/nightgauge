@@ -127,8 +127,8 @@ func ValidateGrokModel(model string) error {
 	}
 	sort.Strings(valid)
 	return fmt.Errorf(
-		"model %q is not valid for the grok adapter%s; valid models: %s, or a tier (haiku|sonnet|opus|fable)",
-		trimmed, note, strings.Join(valid, ", "),
+		"model %q is not valid for the grok adapter%s; valid models: %s, or a tier (%s)",
+		trimmed, note, strings.Join(valid, ", "), models.BandAlternation(),
 	)
 }
 

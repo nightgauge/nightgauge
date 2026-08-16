@@ -12,6 +12,7 @@
  */
 
 import { access, readFile } from "node:fs/promises";
+import type { TierBand } from "../eval/tierBands.js";
 import path from "node:path";
 import type { PipelineStage, PipelineRunEmitter } from "../events/EventBus.js";
 import type { TokenTracker, SDKResultMessage } from "../tracking/TokenTracker.js";
@@ -33,7 +34,8 @@ export interface StageExecutorOptions {
   /** Custom tool definitions for future PTC executor consumption (Issue #1066) */
   toolDefinitions?: CustomToolDefinition[];
   maxTurns?: number;
-  model?: "sonnet" | "opus" | "haiku";
+  /** Typed against the TIER_BANDS authority (#582) — the old hand union omitted `fable`. */
+  model?: TierBand;
   cwd?: string;
   /** Timeout in milliseconds (0 = no timeout) */
   timeoutMs?: number;

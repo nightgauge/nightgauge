@@ -48,13 +48,8 @@ func resolveCodexModel(model string) string {
 	// "claude-sonnet-9" still land on the matching band — mirrors
 	// resolveCodexModelAlias in the SDK.
 	tier := m
-	switch {
-	case strings.HasPrefix(m, "claude-haiku"):
-		tier = "haiku"
-	case strings.HasPrefix(m, "claude-sonnet"):
-		tier = "sonnet"
-	case strings.HasPrefix(m, "claude-opus"), strings.HasPrefix(m, "claude-fable"):
-		tier = "opus"
+	if band, ok := models.ClaudeIDTier(m); ok {
+		tier = band
 	}
 	if resolved, ok := models.Resolve("openai", tier); ok && resolved.Provider == "openai" {
 		if !resolved.Deprecated {
@@ -131,8 +126,8 @@ func ValidateCodexModel(model string) error {
 	}
 	sort.Strings(valid)
 	return fmt.Errorf(
-		"model %q is not valid for the codex adapter%s; valid models: %s, or a tier (haiku|sonnet|opus|fable)",
-		trimmed, note, strings.Join(valid, ", "),
+		"model %q is not valid for the codex adapter%s; valid models: %s, or a tier (%s)",
+		trimmed, note, strings.Join(valid, ", "), models.BandAlternation(),
 	)
 }
 

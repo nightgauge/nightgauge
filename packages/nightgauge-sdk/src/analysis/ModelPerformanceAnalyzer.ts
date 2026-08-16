@@ -30,6 +30,7 @@ import type {
 import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "./types.js";
 import type { ExperimentReport } from "./experiment-types.js";
 import { DEFAULT_MODEL_COST_RATES } from "./types.js";
+import { isLightweightModel, isHeavyweightModel } from "../eval/bandStrength.js";
 import { AutoModelSelector } from "./AutoModelSelector.js";
 import type { ComplexityLabel, ModelTier } from "./AutoModelSelector.js";
 
@@ -516,8 +517,10 @@ export class ModelPerformanceAnalyzer {
    * then failed.
    *
    * Looks for records where the model was NOT substituted after dispatch
-   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model was haiku/sonnet AND
-   * complexity was L/XL AND the stage failed.
+   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model resolved to a
+   * lightweight band via the registry (`bandStrength.ts`, #582 — never a band
+   * substring, which fails open on concrete non-Anthropic ids) AND complexity
+   * was L/XL AND the stage failed.
    *
    * STILL DEAD BY MISSING INPUT (#446): re-pointing the source filter did not
    * make this analytic live. It also gates on `autoSelectorComplexity`, which
@@ -544,7 +547,7 @@ export class ModelPerformanceAnalyzer {
       const complexity = record.autoSelectorComplexity ?? "";
 
       // Under-routing: lightweight model used for complex task
-      const isLightModel = model.includes("haiku") || model.includes("sonnet");
+      const isLightModel = isLightweightModel(model);
       const isComplexTask = ["L", "XL"].includes(complexity);
 
       if (isLightModel && isComplexTask) {
@@ -580,7 +583,8 @@ export class ModelPerformanceAnalyzer {
    * succeeded easily (wasted cost).
    *
    * Looks for records where the model was NOT substituted after dispatch
-   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model was opus/fable AND
+   * (`AUTOMATIC_MODEL_SELECTION_SOURCE`) AND the model resolved to a
+   * heavyweight band via the registry (`bandStrength.ts`, #582) AND
    * complexity was XS/S AND the stage succeeded on first attempt.
    *
    * STILL DEAD BY MISSING INPUT (#446): same as `detectUnderRouting` — the
@@ -611,7 +615,7 @@ export class ModelPerformanceAnalyzer {
 
       // Over-routing: heavy model used for simple task. Fable is the heaviest
       // tier (premium frontier) — flag it even more strongly than Opus here.
-      const isHeavyModel = model.includes("opus") || model.includes("fable");
+      const isHeavyModel = isHeavyweightModel(model);
       const isSimpleTask = ["XS", "S"].includes(complexity);
 
       if (isHeavyModel && isSimpleTask) {

@@ -9,13 +9,19 @@
 
 import { z } from "zod";
 import { EFFORT_LEVELS } from "../eval/modelEvalSchemas.js";
+import { TIER_BANDS } from "../eval/tierBands.js";
 
 // ============================================================================
 // Schemas
 // ============================================================================
 
-/** Model tier schema (matches DefaultModelSchema from config/schema.ts) */
-const ModelTierSchema = z.enum(["sonnet", "opus", "haiku", "fable"]);
+/**
+ * Model tier schema — derived from `TIER_BANDS`, the one TS band declaration
+ * (#581), not re-listed. This was one of the spike #568 "four independent band
+ * enums": a hand-inlined copy with no parity link, the class of site where
+ * `fable` was silently dropped twice before derivation (#582).
+ */
+const ModelTierSchema = z.enum(TIER_BANDS);
 
 /**
  * Claude effort schema — derived from `EFFORT_LEVELS`, not re-listed.

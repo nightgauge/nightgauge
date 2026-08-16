@@ -1335,7 +1335,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
                 class="select-input"
                 data-path="ui.core.default_model"
                 disabled>
-          <option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="haiku" >Haiku</option>
+          <option value="haiku" >Haiku</option><option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="fable" >Fable</option>
         </select>
       </div>
     </div>
@@ -5413,7 +5413,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.default_model"
                 >
-          <option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="haiku" >Haiku</option>
+          <option value="haiku" >Haiku</option><option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="fable" >Fable</option>
         </select>
       </div>
     </div>
@@ -9491,7 +9491,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.default_model"
                 >
-          <option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="haiku" >Haiku</option>
+          <option value="haiku" >Haiku</option><option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="fable" >Fable</option>
         </select>
       </div>
     </div>
@@ -13587,7 +13587,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
                 class="select-input"
                 data-path="ui.core.default_model"
                 disabled>
-          <option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="haiku" >Haiku</option>
+          <option value="haiku" >Haiku</option><option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="fable" >Fable</option>
         </select>
       </div>
     </div>
@@ -17665,7 +17665,7 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
                 class="select-input"
                 data-path="ui.core.default_model"
                 >
-          <option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="haiku" >Haiku</option>
+          <option value="haiku" >Haiku</option><option value="sonnet" selected>Sonnet</option><option value="opus" >Opus</option><option value="fable" >Fable</option>
         </select>
       </div>
     </div>

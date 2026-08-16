@@ -9,6 +9,7 @@
 
 import type { ExecutionHistoryRecord } from "../../types.js";
 import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "../../types.js";
+import { isLightweightModel, isHeavyweightModel } from "../../../eval/bandStrength.js";
 import type {
   HealthAnalysisInput,
   HealthAnalysisConfig,
@@ -57,14 +58,6 @@ function modelKey(record: ExecutionHistoryRecord): string {
  */
 function isAutoSelected(record: ExecutionHistoryRecord): boolean {
   return record.selectionSource === AUTOMATIC_MODEL_SELECTION_SOURCE;
-}
-
-function isLightweightModel(model: string): boolean {
-  return model.includes("haiku") || model.includes("sonnet");
-}
-
-function isHeavyweightModel(model: string): boolean {
-  return model.includes("opus");
 }
 
 function isHighComplexity(complexity: string | undefined): boolean {

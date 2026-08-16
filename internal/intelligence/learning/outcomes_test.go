@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -255,5 +256,59 @@ func TestRecorder_CreatesDirectory(t *testing.T) {
 	// Directory should have been created
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		t.Error("directory not created")
+	}
+}
+
+// The schema marker is the band-retirement cutover discriminator (#582, spike
+// #568 §5): Record stamps it on the WIRE (the raw JSONL line), callers cannot
+// override it, and a legacy line without the key loads as "" — absence is the
+// legacy signal, never fabricated into a value.
+func TestRecorder_RecordStampsSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	r := &Recorder{filePath: filepath.Join(dir, "outcomes.jsonl")}
+
+	// A caller-supplied value must not survive: the writer is the authority.
+	if err := r.Record(Outcome{IssueNumber: 1, SchemaVersion: "bogus", CompletedAt: time.Now()}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	data, err := os.ReadFile(r.filePath)
+	if err != nil {
+		t.Fatalf("read raw corpus: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal raw line: %v", err)
+	}
+	if got := raw["schema_version"]; got != OutcomeSchemaVersion {
+		t.Errorf("schema_version on the wire = %v, want %q", got, OutcomeSchemaVersion)
+	}
+
+	// A legacy (pre-cutover) line has no marker; it must load as "" — the
+	// absent-means-legacy contract — not error and not invent a version.
+	legacy := []byte(`{"issueNumber":2,"repo":"a/b","predictedSize":"","predictedModel":"","actualModel":"","success":true,"durationMs":1,"inputTokens":1,"outputTokens":1,"costUsd":0,"complexityScore":0,"retries":0,"completedAt":"2025-01-01T00:00:00Z"}` + "\n")
+	f, err := os.OpenFile(r.filePath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open for legacy append: %v", err)
+	}
+	if _, err := f.Write(legacy); err != nil {
+		t.Fatalf("append legacy line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	loaded, err := r.LoadAll()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("loaded = %d, want 2", len(loaded))
+	}
+	if loaded[0].SchemaVersion != OutcomeSchemaVersion {
+		t.Errorf("stamped row loads SchemaVersion = %q, want %q", loaded[0].SchemaVersion, OutcomeSchemaVersion)
+	}
+	if loaded[1].SchemaVersion != "" {
+		t.Errorf("legacy row loads SchemaVersion = %q, want empty", loaded[1].SchemaVersion)
 	}
 }

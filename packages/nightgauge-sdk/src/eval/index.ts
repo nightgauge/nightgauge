@@ -293,6 +293,10 @@ export {
   type TierBand,
 } from "./tierBands.js";
 
+// Band-strength classification of recorded model references (#582) — the
+// registry-resolving replacement for band-substring telemetry matchers.
+export { strongestBand, isLightweightModel, isHeavyweightModel } from "./bandStrength.js";
+
 export {
   candidateLadder,
   resolveBandEnvelope,

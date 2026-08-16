@@ -10,6 +10,7 @@
  */
 
 import * as vscode from "vscode";
+import { TIER_BANDS, type TierBand } from "@nightgauge/sdk";
 import type { IncrediConfig, ViewTier, TierViewState } from "./types";
 import { SETTINGS_SECTIONS, DEFAULT_CONFIG, TIER_TABS, PIPELINE_LOCKED_SECTIONS } from "./types";
 import { getForgeInstancesSectionHtml } from "./ForgeInstancesSection";
@@ -120,12 +121,20 @@ export const STAGE_ADAPTER_OPTIONS: ReadonlyArray<{ value: string; label: string
  * preview table below the matrix. The leading empty entry clears the override so
  * the stage falls back to the global default model.
  */
+const STAGE_MODEL_OPTION_HINTS: Partial<Record<TierBand, string>> = {
+  haiku: "light tier",
+  sonnet: "standard tier",
+  opus: "heavy tier",
+};
+
 export const STAGE_MODEL_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "", label: "(Use global default)" },
-  { value: "haiku", label: "haiku (light tier)" },
-  { value: "sonnet", label: "sonnet (standard tier)" },
-  { value: "opus", label: "opus (heavy tier)" },
-  { value: "fable", label: "fable" },
+  // Derived from the TIER_BANDS authority (#582) so a new band appears here
+  // without anyone remembering this list exists.
+  ...TIER_BANDS.map((band) => {
+    const hint = STAGE_MODEL_OPTION_HINTS[band];
+    return { value: band, label: hint ? `${band} (${hint})` : band };
+  }),
 ];
 
 const STAGE_LABELS: Record<string, string> = {
@@ -1345,11 +1354,13 @@ function getCoreSectionHtml(
           "Default Model",
           "Default model used when stage-level model is not specified",
           core.default_model ?? "sonnet",
-          [
-            { value: "sonnet", label: "Sonnet" },
-            { value: "opus", label: "Opus" },
-            { value: "haiku", label: "Haiku" },
-          ],
+          // Derived from TIER_BANDS (#582): the hand list offered three bands
+          // while the resolver accepted four — `fable` was silently absent
+          // from the picker (the #340 divergence class).
+          TIER_BANDS.map((band) => ({
+            value: band,
+            label: band.charAt(0).toUpperCase() + band.slice(1),
+          })),
           disabled,
           g("ui.core.default_model"),
           showBadges,

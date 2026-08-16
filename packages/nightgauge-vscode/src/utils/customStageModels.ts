@@ -26,7 +26,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { parseDocument } from "yaml";
-import type { PipelineStage } from "@nightgauge/sdk";
+import { TIER_BANDS, type PipelineStage } from "@nightgauge/sdk";
 import type { DefaultModel } from "./incrediConfig";
 import { resolveConfigPathSync, getConfigPaths } from "./configPathResolver";
 import { readEffectiveConfigTextSync } from "./mergedConfigReader";
@@ -47,16 +47,14 @@ export const CUSTOM_SELECTABLE_STAGES: readonly PipelineStage[] = [
 /** "auto" = defer to the adaptive router (no pin written). */
 export type StageModelChoice = DefaultModel | "auto";
 
-/** Selectable choices, in ascending capability order (auto first). */
-export const STAGE_MODEL_CHOICES: readonly StageModelChoice[] = [
-  "auto",
-  "haiku",
-  "sonnet",
-  "opus",
-  "fable",
-] as const;
+/**
+ * Selectable choices, in ascending capability order (auto first). The band
+ * set derives from the `TIER_BANDS` authority (#581) — hand-inlined copies of
+ * this list silently dropped `fable` twice before derivation (#582).
+ */
+export const STAGE_MODEL_CHOICES: readonly StageModelChoice[] = ["auto", ...TIER_BANDS] as const;
 
-const VALID_MODELS: readonly DefaultModel[] = ["haiku", "sonnet", "opus", "fable"] as const;
+const VALID_MODELS: readonly DefaultModel[] = TIER_BANDS;
 
 /** Routing modes under which `pipeline.stage_models` pins are actually honored. */
 const PIN_HONORING_MODES = new Set(["manual", "hybrid"]);

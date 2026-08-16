@@ -146,11 +146,11 @@ func recommendModel(complexityScore int) string {
 	var tier string
 	switch {
 	case complexityScore <= 3:
-		tier = "haiku"
+		tier = models.BandHaiku
 	case complexityScore <= 6:
-		tier = "sonnet"
+		tier = models.BandSonnet
 	default:
-		tier = "opus"
+		tier = models.BandOpus
 	}
 	if m, ok := models.Get(tier); ok {
 		return m.ID

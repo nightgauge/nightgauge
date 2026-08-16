@@ -24,6 +24,16 @@ import {
   type IssueMetadata,
 } from "../packages/nightgauge-sdk/src/analysis/AutoModelSelector.js";
 import { DEFAULT_MODEL_COST_RATES } from "../packages/nightgauge-sdk/src/analysis/types.js";
+import { ESCALATION_CEILING_BAND } from "../packages/nightgauge-sdk/src/eval/selectionQuery.js";
+import { TIER_BANDS } from "../packages/nightgauge-sdk/src/eval/tierBands.js";
+
+// Band anchors derived from the TIER_BANDS authority (#581) instead of
+// re-spelled literals (#582). Semantics are unchanged: "light" is the weakest
+// band the router can pick; "heavy" is the escalation-ceiling band — the
+// strongest band automatic routing escalates to (fable is opt-in-only and
+// never router-escalated, so it is deliberately not an over-routing signal).
+const LIGHTEST_BAND = TIER_BANDS[0];
+const HEAVY_BAND = ESCALATION_CEILING_BAND;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -378,8 +388,8 @@ function detectUnderRouting(simulations: RunSimulation[]): UnderRoutingPattern[]
     for (const stageSim of sim.stages) {
       if (stageSim.stageOutcome === "skipped") continue;
 
-      // Detect: haiku selected for non-lightweight stage with actual high cost
-      const isLightModel = stageSim.selection.model === "haiku";
+      // Detect: lightest band selected for non-lightweight stage with actual high cost
+      const isLightModel = stageSim.selection.model === LIGHTEST_BAND;
       const isNonLightweightStage = !["issue-pickup", "pr-create"].includes(stageSim.stage);
       const hasHighCost = stageSim.actualCostUsd > 10; // Above P90 threshold
       const hasRetries = stageSim.retries > 0;
@@ -411,14 +421,14 @@ function detectUnderRouting(simulations: RunSimulation[]): UnderRoutingPattern[]
 }
 
 function detectOverRouting(simulations: RunSimulation[]): OverRoutingPattern[] {
-  // Over-routing: opus selected for simple tasks that completed quickly and cheaply
+  // Over-routing: the ceiling band selected for simple tasks that completed quickly and cheaply
   const groups = new Map<string, { issues: number[]; costs: number[]; haikuCosts: number[] }>();
 
   for (const sim of simulations) {
     for (const stageSim of sim.stages) {
       if (stageSim.stageOutcome !== "complete") continue;
 
-      const isHeavyModel = stageSim.selection.model === "opus";
+      const isHeavyModel = stageSim.selection.model === HEAVY_BAND;
       const isSimpleComplexity = ["XS", "S"].includes(stageSim.selection.complexity);
       const noRetries = stageSim.retries === 0;
 
@@ -805,18 +815,20 @@ function generateReport(
   lines.push("");
   lines.push("### Per-Stage Model Distribution");
   lines.push("");
-  lines.push("| Stage | Haiku | Sonnet | Opus | Total |");
-  lines.push("| ----- | ----- | ------ | ---- | ----- |");
+  // Columns derive from the TIER_BANDS authority (#582): the hand-built
+  // three-column table could never show fable-routed runs.
+  const bandHeader = TIER_BANDS.map((b) => b.charAt(0).toUpperCase() + b.slice(1));
+  lines.push(`| Stage | ${bandHeader.join(" | ")} | Total |`);
+  lines.push(`| ----- | ${bandHeader.map(() => "-----").join(" | ")} | ----- |`);
 
   for (const stage of PIPELINE_STAGES) {
     const stageMetrics = metrics.filter((m) => m.stage === stage);
-    const haiku = stageMetrics.find((m) => m.model === "haiku")?.runs ?? 0;
-    const sonnet = stageMetrics.find((m) => m.model === "sonnet")?.runs ?? 0;
-    const opus = stageMetrics.find((m) => m.model === "opus")?.runs ?? 0;
-    const total = haiku + sonnet + opus;
-    lines.push(
-      `| ${stage} | ${haiku} (${total > 0 ? ((haiku / total) * 100).toFixed(0) : 0}%) | ${sonnet} (${total > 0 ? ((sonnet / total) * 100).toFixed(0) : 0}%) | ${opus} (${total > 0 ? ((opus / total) * 100).toFixed(0) : 0}%) | ${total} |`
+    const counts = TIER_BANDS.map((band) => stageMetrics.find((m) => m.model === band)?.runs ?? 0);
+    const total = counts.reduce((a, b) => a + b, 0);
+    const cells = counts.map(
+      (count) => `${count} (${total > 0 ? ((count / total) * 100).toFixed(0) : 0}%)`
     );
+    lines.push(`| ${stage} | ${cells.join(" | ")} | ${total} |`);
   }
 
   lines.push("");

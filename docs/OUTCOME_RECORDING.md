@@ -88,7 +88,38 @@ surfaces where the adapter is eligible.
 Attribution of what actually ran is kept where a concrete id belongs: the run
 record's per-stage `model_selection`.
 
-## Architecture
+### Stored telemetry across the band retirement is accept-void (#582)
+
+Spike #568 §5 decided the migration policy for both history stores when the
+band vocabulary was retired (epic #567), and the decision is **accept-void** —
+no alias tables, no backfill, no migration code, ever (the pre-customer
+no-compat rule in `AGENTS.md`):
+
+- **Learning corpus** (`.nightgauge/pipeline/history/outcomes.jsonl`): rows
+  written before the dispatch-envelope cutover carry no `schema_version`
+  marker and no effort/thinking axes — those axes were never recorded and
+  cannot be reconstructed, so a backfill would fabricate data and an alias
+  would preserve almost nothing. Exclusion keys on the #340 empty-half guard:
+  readers exclude a pair with an empty half from every denominator, and
+  legacy rows join that excluded bucket because their empty halves are
+  exactly the unrecorded ones. Post-cutover rows additionally carry
+  `schema_version: "2"`, stamped at the corpus's one append point
+  (`learning.Recorder.Record` — both writers flow through it), so row
+  provenance is deterministic rather than vocabulary-sniffed; an unmarked
+  row IS a pre-cutover row.
+- **Run-record history** (per-stage `model_selection` in
+  `.nightgauge/pipeline/history/`): pre-envelope records hold bare band
+  strings in `model_selection.model`. They are operator forensics, not
+  learning inputs — they stay readable as-is and are never rewritten. New
+  records carry the full dispatch envelope `(model, effort, thinking)` plus
+  selection-source attribution (#599). Consumers key off envelope fields
+  resolved through the model registry — never band substrings, which fail
+  open (stop matching) on concrete ids; the analyzers over this record
+  stream (the model-routing health dimension and
+  `ModelPerformanceAnalyzer`'s under/over-routing detectors, via the shared
+  `bandStrength.ts` helper) were rewritten accordingly in #582. A handful of
+  dispatch-side substring predicates survive as explicit keeps with inline
+  reasons (see `scripts/check-band-vocabulary.py`'s header and PR #607).
 
 Two recording paths feed `ComplexityModelService`:
 

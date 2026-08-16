@@ -49,6 +49,7 @@ import {
   providerForAdapter,
   type TransportServedResult,
 } from "../../eval/modelRegistry.js";
+import { isTierBand, TIER_BAND_ALTERNATION, type TierBand } from "../../eval/tierBands.js";
 import { AdapterError } from "./errors.js";
 import type { IncrediAdapter } from "./ICliAdapter.js";
 
@@ -56,14 +57,14 @@ import type { IncrediAdapter } from "./ICliAdapter.js";
 export type ModelSetKind = "closed" | "open";
 
 /**
- * The four canonical routing tiers. For a CLOSED adapter, a bare tier must
- * always resolve to a concrete model and never survive to the CLI as `--model`.
+ * The canonical routing tiers, derived from the `TIER_BANDS` authority (#581)
+ * — never re-listed (#582). For a CLOSED adapter, a bare tier must always
+ * resolve to a concrete model and never survive to the CLI as `--model`.
  */
-const TIER_KEYWORDS = ["haiku", "sonnet", "opus", "fable"] as const;
-type TierKeyword = (typeof TIER_KEYWORDS)[number];
+type TierKeyword = TierBand;
 
 function isTierKeyword(value: string): value is TierKeyword {
-  return (TIER_KEYWORDS as readonly string[]).includes(value);
+  return isTierBand(value);
 }
 
 /**
@@ -336,7 +337,7 @@ function buildInvalidModelError(
   }
   if (policy.envVar) {
     lines.push(
-      `Fix: set ${policy.envVar} to one of the valid models, or a tier (haiku|sonnet|opus|fable).`
+      `Fix: set ${policy.envVar} to one of the valid models, or a tier (${TIER_BAND_ALTERNATION}).`
     );
   }
   return new AdapterError(lines.join("\n"), "CONFIG_INVALID", policy.displayName, policy.docsUrl);

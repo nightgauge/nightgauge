@@ -12,7 +12,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { AuditConfig } from "@nightgauge/sdk";
-import { EFFORT_LEVELS } from "@nightgauge/sdk";
+import { EFFORT_LEVELS, TIER_BANDS } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import type { DefaultModel } from "./modelResolver";
@@ -873,11 +873,9 @@ export function getCostCapModelScale(model?: string, effort?: string): number {
   const m = model.toLowerCase();
   const e = (effort ?? "").toLowerCase();
 
-  let family: "haiku" | "sonnet" | "opus" | "fable" | undefined;
-  if (m.includes("haiku")) family = "haiku";
-  else if (m.includes("sonnet")) family = "sonnet";
-  else if (m.includes("opus")) family = "opus";
-  else if (m.includes("fable")) family = "fable";
+  // Family detection derives from the TIER_BANDS authority (#582); the
+  // ascending order preserves the pre-derivation first-match precedence.
+  const family = TIER_BANDS.find((band) => m.includes(band));
   if (!family) return 1.0;
 
   if (e !== "") {
@@ -2591,7 +2589,11 @@ export function getExperimentConfig(workspaceRoot?: string): ExperimentConfigRes
       return null;
     }
 
-    const validModels: DefaultModel[] = ["sonnet", "opus", "haiku"];
+    // Derived from the TIER_BANDS authority (#581), never re-listed: the
+    // previous hand-inlined three-band copy silently rejected `fable` while
+    // its Zod counterpart (experiment-types.ts ModelTierSchema) accepted it —
+    // the exact drift class stageResolver's incident comments record (#582).
+    const validModels: readonly DefaultModel[] = TIER_BANDS;
     const control = exp.control as Record<string, unknown> | undefined;
     const treatment = exp.treatment as Record<string, unknown> | undefined;
 
@@ -3417,9 +3419,13 @@ export function getSuperchargeModel(workspaceRoot?: string): "opus" | "sonnet" {
       }
 
       if (inSupercharge) {
-        const match = trimmed.match(/^model:\s*['"]?(opus|sonnet)['"]?/);
+        // The Maximum-profile override subset — the escalation-ceiling band and
+        // the standard band, positionally derived from TIER_BANDS (#582) to
+        // match the schema's supercharge `model` enum.
+        const superchargeBands = `${TIER_BANDS[2]}|${TIER_BANDS[1]}`;
+        const match = trimmed.match(new RegExp(`^model:\\s*['"]?(${superchargeBands})['"]?`));
         if (match) {
-          return match[1] as "opus" | "sonnet";
+          return match[1] as (typeof TIER_BANDS)[1] | (typeof TIER_BANDS)[2];
         }
       }
     }

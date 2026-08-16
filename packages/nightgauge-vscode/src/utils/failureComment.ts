@@ -11,6 +11,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import type { PipelineStage } from "@nightgauge/sdk";
+import { isHeavyweightModel } from "@nightgauge/sdk";
 import type { Logger } from "./logger";
 import type { PipelineState, BacktrackRecord } from "../services/PipelineStateService";
 import type { PipelineRunResult } from "../services/HeadlessOrchestrator";
@@ -348,11 +349,13 @@ function getRecommendations(
     );
   }
 
-  // Model escalation hints
+  // Model escalation hints. Resolved through the registry (#582) — the
+  // pre-#582 `toModel.includes("opus")` substring failed open on non-Anthropic
+  // escalation ids (codex's `gpt-5.6-sol` IS an opus/fable-band escalation).
   const escalations = state?.model_escalations ?? state?.modelEscalations ?? [];
-  if (escalations.length > 0 && escalations.some((e) => e.toModel.includes("opus"))) {
+  if (escalations.length > 0 && escalations.some((e) => isHeavyweightModel(e.toModel))) {
     recs.push(
-      "- \u{1F9E0} **Escalated to Opus** — the issue required the most capable model and still failed. This strongly suggests the issue scope needs human review."
+      "- \u{1F9E0} **Escalated to a top-tier model** — the issue required the most capable models and still failed. This strongly suggests the issue scope needs human review."
     );
   }
 

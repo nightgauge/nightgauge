@@ -29,10 +29,10 @@ import (
 // and even under `frontier` a floor reaches Fable only on feature-planning and
 // feature-dev — feature-validate and the plumbing stages stay at Opus.
 var (
-	ModelHaiku  = mustCurrentModelID("haiku")
-	ModelSonnet = mustCurrentModelID("sonnet")
-	ModelOpus   = mustCurrentModelID("opus")
-	ModelFable  = mustCurrentModelID("fable")
+	ModelHaiku  = mustCurrentModelID(models.BandHaiku)
+	ModelSonnet = mustCurrentModelID(models.BandSonnet)
+	ModelOpus   = mustCurrentModelID(models.BandOpus)
+	ModelFable  = mustCurrentModelID(models.BandFable)
 )
 
 // currentModelForBand resolves a registry BAND back to the concrete Anthropic

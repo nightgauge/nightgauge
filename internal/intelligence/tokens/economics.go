@@ -173,14 +173,14 @@ func EstimateCost(stages []string, complexityScore int) CostEstimate {
 func defaultModelForEstimate(stage string, complexity int) string {
 	switch stage {
 	case "issue-pickup", "pr-create", "pr-merge":
-		return concreteForTier("haiku")
+		return concreteForTier(models.BandHaiku)
 	default:
 		if complexity <= 3 {
-			return concreteForTier("haiku")
+			return concreteForTier(models.BandHaiku)
 		} else if complexity <= 6 {
-			return concreteForTier("sonnet")
+			return concreteForTier(models.BandSonnet)
 		}
-		return concreteForTier("opus")
+		return concreteForTier(models.BandOpus)
 	}
 }
 
