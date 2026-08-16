@@ -35,6 +35,14 @@ jobs:
         run: bash scripts/check-license-headers.sh
       - name: SKILL.md metadata
         run: bash scripts/validate-skill-metadata.sh
+      # Band-vocabulary reintroduction gate (#582): fails on hand-inlined band
+      # closed sets / regex alternations in production source outside the
+      # allowed surfaces (spike #568 §5). Self-test first — a gate nothing
+      # exercises degrades into an unconditional pass (the #539/#549 lesson).
+      - name: Band-vocabulary gate self-test
+        run: bash scripts/test-band-vocabulary-check.sh
+      - name: Band-vocabulary reintroduction gate
+        run: python3 scripts/check-band-vocabulary.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix. Runs BEFORE it: the suite works
       # entirely in throwaway temp repos, so it is safe here, and putting it
