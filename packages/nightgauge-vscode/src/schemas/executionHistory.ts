@@ -29,7 +29,7 @@ import {
   ProactiveEscalationRecordSchema,
 } from "./pipelineState";
 import { StallEventSchema } from "./stallEvents";
-import { ExecutionAdapterSchema } from "../config/schema";
+import { ExecutionAdapterSchema, ModelRoutingModeSchema } from "../config/schema";
 import { AdapterSourceSchema } from "../utils/resolvers/adapterResolver";
 import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../utils/orchestratorCrashRecord";
 export {
@@ -227,8 +227,17 @@ export const HistoryStageDetailSchema = z.object({
        * (internal/orchestrator/dispatch_envelope.go's
        * resolveDispatchSelectionMode, mirroring dispatch_routing.go's
        * modelRoutingMode exactly). Absent on records emitted before #580.
+       *
+       * DERIVED, never re-listed: `ModelRoutingModeSchema`
+       * (../config/schema.ts) is the single cross-language authority for this
+       * vocabulary — the same enum `model_routing.mode` config validation
+       * already uses — pinned against Go's state.ModelRoutingModes
+       * (internal/state/model_selection_envelope.go) by
+       * TestModelSelectionModePinnedToModelRoutingModeSchema. A hand-relisted
+       * literal here is exactly the #446 drift class the effort and thinking
+       * fields above already guard against.
        */
-      mode: z.enum(["manual", "automatic", "hybrid"]).optional(),
+      mode: ModelRoutingModeSchema.optional(),
       /**
        * The EFFORT_LEVELS rung actually in force for this dispatch (Issue
        * #580, absorbs #434).

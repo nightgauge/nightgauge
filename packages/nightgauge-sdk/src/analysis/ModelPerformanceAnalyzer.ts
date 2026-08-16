@@ -428,11 +428,12 @@ export class ModelPerformanceAnalyzer {
    * means "the dispatched model ran unsubstituted", which includes env
    * overrides, `pipeline.stage_models` pins, manual-mode defaults and
    * performance-mode ceilings; under `model_routing.mode: manual` every record
-   * lands here and none is an automatic selection. The record carries no way to
-   * separate the two (`modelSelectionMode` is declared in the TS schema and
-   * never written by Go — follow-up filed), so read
+   * lands here and none is an automatic selection. `modelSelectionMode` is the
+   * field that DOES separate the two — Go has written it on every record built
+   * after Issue #580 — but this method does not filter on it yet, so read
    * `totalAutoSelectedRecords`, `overallAutoSuccessRate` and
-   * `costSavingsVsStaticUsd` as "unsubstituted", not "router-chosen". The
+   * `costSavingsVsStaticUsd` as "unsubstituted", not "router-chosen", until a
+   * follow-up narrows the filter to `modelSelectionMode !== "manual"`. The
    * denominator is also biased toward success: Go attaches a
    * `model_selection` only to stages that completed, so a stage that failed
    * before completing never enters the count.

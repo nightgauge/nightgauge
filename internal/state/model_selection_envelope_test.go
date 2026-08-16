@@ -129,6 +129,20 @@ var tsExecutionHistorySchemaPath = filepath.Join(
 var tsModelSelectionEffortFieldRegexp = regexp.MustCompile(
 	`(?m)^\s*effort:\s*z\.enum\(EFFORT_LEVELS\)\.optional\(\),\s*$`)
 
+// tsEffortLevelsSdkImportRegexp requires EFFORT_LEVELS to be imported from
+// @nightgauge/sdk in this file. Without this check, the field-derivation
+// regexp above is satisfied by the TEXT `z.enum(EFFORT_LEVELS)` regardless of
+// what `EFFORT_LEVELS` actually resolves to — a local re-declaration would
+// pass the same way a real import does.
+var tsEffortLevelsSdkImportRegexp = regexp.MustCompile(
+	`(?m)^import\s*\{[^}]*\bEFFORT_LEVELS\b[^}]*\}\s*from\s*["']@nightgauge/sdk["'];?\s*$`)
+
+// tsLocalEffortLevelsDeclRegexp catches a local const/let/var named
+// EFFORT_LEVELS, which would shadow the imported binding the derivation
+// regexp above depends on being the real cross-language authority.
+var tsLocalEffortLevelsDeclRegexp = regexp.MustCompile(
+	`(?m)^\s*(?:export\s+)?(?:const|let|var)\s+EFFORT_LEVELS\b`)
+
 func TestModelSelectionEffortDerivesFromEffortLevelsAuthority(t *testing.T) {
 	source, err := os.ReadFile(tsExecutionHistorySchemaPath)
 	if err != nil {
@@ -137,13 +151,40 @@ func TestModelSelectionEffortDerivesFromEffortLevelsAuthority(t *testing.T) {
 			"tsExecutionHistorySchemaPath in this test with it — do NOT delete the pin.",
 			tsExecutionHistorySchemaPath, err)
 	}
-	if !tsModelSelectionEffortFieldRegexp.Match(source) {
-		t.Errorf("model_selection.effort in %s is not declared as `effort: z.enum(EFFORT_LEVELS).optional(),`.\n"+
+
+	matches := tsModelSelectionEffortFieldRegexp.FindAllIndex(source, -1)
+	switch len(matches) {
+	case 1:
+		// pinned shape
+	case 0:
+		t.Fatalf("model_selection.effort in %s is not declared as "+
+			"`effort: z.enum(EFFORT_LEVELS).optional(),`.\n"+
 			"This is the #434 drift class: a hand-copied literal (e.g. "+
 			"`z.enum([\"low\", \"medium\", \"high\"])`) silently falls behind the "+
 			"EFFORT_LEVELS ladder the moment a new rung is added. The field must derive "+
 			"from EFFORT_LEVELS (imported from @nightgauge/sdk in this file), never "+
 			"re-list its members.", tsExecutionHistorySchemaPath)
+	default:
+		t.Fatalf("found %d `effort: z.enum(EFFORT_LEVELS).optional(),` fields in %s; expected "+
+			"exactly 1.\nAmbiguous: this pin cannot tell which one is the actual "+
+			"model_selection.effort declaration — the check is not scoped to inside the "+
+			"model_selection block, so an unrelated field with the identical shape elsewhere "+
+			"in the file would make this ambiguous rather than silently passing.",
+			len(matches), tsExecutionHistorySchemaPath)
+	}
+
+	if tsLocalEffortLevelsDeclRegexp.Match(source) {
+		t.Fatalf("found a local `const/let/var EFFORT_LEVELS` declaration in %s.\n"+
+			"That would shadow the @nightgauge/sdk import the model_selection.effort "+
+			"derivation above depends on being the real cross-language authority "+
+			"(#394/#578) — the field would silently derive from a local list instead.",
+			tsExecutionHistorySchemaPath)
+	}
+	if !tsEffortLevelsSdkImportRegexp.Match(source) {
+		t.Fatalf("no `import { EFFORT_LEVELS, ... } from \"@nightgauge/sdk\";` found in %s.\n"+
+			"model_selection.effort derives from EFFORT_LEVELS, but without this import this "+
+			"pin cannot confirm that name resolves to the SDK authority (#394/#578) rather "+
+			"than an unrelated local binding.", tsExecutionHistorySchemaPath)
 	}
 }
 
@@ -201,5 +242,87 @@ func TestModelSelectionThinkingPinnedToExecutionHistorySchema(t *testing.T) {
 			"emit members of ThinkingStates; a TS member Go's list is missing would be "+
 			"unreachable, and a Go member TS does not list would fail strict validation.",
 			ThinkingStates, want, tsExecutionHistorySchemaPath)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-language vocabulary pin for the dispatch envelope's mode axis (Issue
+// #580, resolves #462 — the mode value axis, the third of the envelope's
+// value axes alongside effort and thinking above).
+//
+// Unlike thinking, mode has a pre-existing cross-language authority to derive
+// from: ModelRoutingModeSchema in
+// packages/nightgauge-vscode/src/config/schema.ts, the same enum
+// `model_routing.mode` config validation already uses. executionHistory.ts's
+// model_selection.mode field derives from it directly (see the `mode` field
+// comment there), so the only remaining hand-listed copy on the Go side is
+// state.ModelRoutingModes (model_selection_envelope.go) — this test pins that
+// against the TypeScript authority, exactly as
+// TestEffortOrderPinnedToSDKEffortLevels (internal/models/registry_test.go)
+// pins EffortOrder against EFFORT_LEVELS.
+
+// tsModelRoutingModeSchemaPath is the config schema that declares
+// ModelRoutingModeSchema, relative to this package directory (go test runs
+// with cwd = the package dir).
+var tsModelRoutingModeSchemaPath = filepath.Join(
+	"..", "..", "packages", "nightgauge-vscode", "src", "config", "schema.ts",
+)
+
+// tsModelRoutingModeLiteralRegexp lifts `export const ModelRoutingModeSchema
+// = z.enum([...]);` out of the TypeScript source. The `(?m)^` anchor requires
+// the declaration at column 0 — a module-scope `export const` always is — so
+// a comment-embedded copy can never satisfy the pin.
+//
+// Capture 1 is the raw bracket contents; tsQuotedMemberRegexp splits it.
+var tsModelRoutingModeLiteralRegexp = regexp.MustCompile(
+	`(?m)^export const ModelRoutingModeSchema\s*=\s*z\.enum\(\[([^\]]*)\]\)\s*;`)
+
+func TestModelSelectionModePinnedToModelRoutingModeSchema(t *testing.T) {
+	source, err := os.ReadFile(tsModelRoutingModeSchemaPath)
+	if err != nil {
+		t.Fatalf("cannot read %s: %v\n"+
+			"This pin is path-coupled: if schema.ts moved, move "+
+			"tsModelRoutingModeSchemaPath in this test with it — do NOT delete the pin.",
+			tsModelRoutingModeSchemaPath, err)
+	}
+
+	matches := tsModelRoutingModeLiteralRegexp.FindAllStringSubmatch(string(source), -1)
+	switch len(matches) {
+	case 1:
+		// pinned shape
+	case 0:
+		t.Fatalf("no `export const ModelRoutingModeSchema = z.enum([...]);` literal found "+
+			"in %s.\n"+
+			"The const was renamed, deleted, or rewritten in a form this pin cannot read. "+
+			"A missing definition is a FAILURE, never a skip.", tsModelRoutingModeSchemaPath)
+	default:
+		t.Fatalf("found %d `ModelRoutingModeSchema = z.enum([...])` literals in %s; expected "+
+			"exactly 1.\nAmbiguous: this pin cannot tell which one is the actual authority.",
+			len(matches), tsModelRoutingModeSchemaPath)
+	}
+
+	var want []string
+	for _, m := range tsQuotedMemberRegexp.FindAllStringSubmatch(matches[0][1], -1) {
+		want = append(want, m[1])
+	}
+	if len(want) == 0 {
+		t.Fatalf("ModelRoutingModeSchema in %s parsed to zero members from body %q.\n"+
+			"An empty extraction would make this pin pass against anything.",
+			tsModelRoutingModeSchemaPath, matches[0][1])
+	}
+	t.Logf("extracted ModelRoutingModeSchema from %s: %q", tsModelRoutingModeSchemaPath, want)
+
+	if !reflect.DeepEqual(ModelRoutingModes, want) {
+		t.Errorf("the mode vocabulary has DRIFTED between Go and TypeScript:\n"+
+			"  Go   ModelRoutingModes         = %q\n"+
+			"  TS   ModelRoutingModeSchema    = %q\n"+
+			"(internal/state/model_selection_envelope.go vs %s)\n"+
+			"modelRoutingMode (internal/orchestrator/dispatch_routing.go) — the same function "+
+			"resolveDispatchSelectionMode (dispatch_envelope.go) calls to populate "+
+			"model_selection.mode — validates env and config values against "+
+			"state.IsModelRoutingMode; a TS member Go's list is missing would be unreachable "+
+			"from config/env, and a Go member TS does not list would fail strict validation "+
+			"the instant a record carrying it is parsed (the #446 lesson).",
+			ModelRoutingModes, want, tsModelRoutingModeSchemaPath)
 	}
 }

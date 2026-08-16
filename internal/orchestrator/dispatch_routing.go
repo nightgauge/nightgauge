@@ -80,17 +80,21 @@ var lightweightStageDefaults = map[state.PipelineStage]string{
 // the TS getModelRoutingMode (modelResolver.ts): the
 // NIGHTGAUGE_MODEL_ROUTING_MODE env var wins over config, and anything
 // unrecognized (or absent) resolves to "automatic".
+//
+// Validity is state.IsModelRoutingMode, not a locally hand-listed set — this
+// is also the vocabulary resolveDispatchSelectionMode
+// (dispatch_envelope.go) feeds straight into model_selection.mode, and
+// state.ModelRoutingModes is what TestModelSelectionModePinnedToModelRoutingModeSchema
+// pins against the TS ModelRoutingModeSchema authority (#580, resolves the
+// #446 lesson for the mode axis).
 func modelRoutingMode(cfg *config.Config) string {
-	valid := func(m string) bool {
-		return m == "manual" || m == "automatic" || m == "hybrid"
-	}
-	if env := strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_MODE")); valid(env) {
+	if env := strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_MODE")); state.IsModelRoutingMode(env) {
 		return env
 	}
 	if cfg == nil || cfg.ModelRouting == nil {
 		return "automatic"
 	}
-	if m := strings.TrimSpace(cfg.ModelRouting.Mode); valid(m) {
+	if m := strings.TrimSpace(cfg.ModelRouting.Mode); state.IsModelRoutingMode(m) {
 		return m
 	}
 	return "automatic"

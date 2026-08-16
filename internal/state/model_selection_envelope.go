@@ -20,6 +20,16 @@ package state
 // packages/nightgauge-vscode/src/schemas/executionHistory.ts
 // (model_selection.thinking) by
 // TestModelSelectionThinkingPinnedToExecutionHistorySchema.
+//
+// Mode DOES have an existing cross-language authority to derive from:
+// ModelRoutingModeSchema in packages/nightgauge-vscode/src/config/schema.ts,
+// the same enum `model_routing.mode` config validation already uses.
+// ModelRoutingModes mirrors it, pinned by
+// TestModelSelectionModePinnedToModelRoutingModeSchema. dispatch_routing.go's
+// modelRoutingMode (the function resolveDispatchSelectionMode calls to
+// populate model_selection.mode) validates against this slice instead of a
+// separately hand-listed set, so there is exactly one Go-side declaration of
+// the vocabulary, not two.
 
 // ThinkingStates is the canonical binary thinking axis: "on" or "off",
 // whether the model reasoned with no thinking parameter set, or the runtime
@@ -34,6 +44,24 @@ var ThinkingStates = []string{"on", "off"}
 // declaration.
 func IsThinkingState(v string) bool {
 	for _, s := range ThinkingStates {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// ModelRoutingModes is the canonical model_routing.mode / model_selection.mode
+// vocabulary: "manual", "automatic", or "hybrid". Order is part of the pin —
+// see TestModelSelectionModePinnedToModelRoutingModeSchema.
+var ModelRoutingModes = []string{"manual", "automatic", "hybrid"}
+
+// IsModelRoutingMode reports whether v is a member of ModelRoutingModes. Used
+// by modelRoutingMode (internal/orchestrator/dispatch_routing.go) so the
+// env-var and config-value validity check has exactly one declaration of the
+// vocabulary instead of a second, independently hand-listed one.
+func IsModelRoutingMode(v string) bool {
+	for _, s := range ModelRoutingModes {
 		if s == v {
 			return true
 		}

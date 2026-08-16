@@ -71,10 +71,12 @@ export type ModelSelectionSource = (typeof MODEL_SELECTION_SOURCES)[number];
  * includes env overrides, `pipeline.stage_models.{stage}` config pins, the
  * manual-mode default table and the performance-mode ceiling — under
  * `model_routing.mode: manual` every record reads `"scheduler"` and not one of
- * them is an automatic selection. The record cannot distinguish the two cases:
- * `modelSelectionMode` exists in the TS schema (executionHistory.ts) but Go
- * never writes it, so no consumer can gate on `=== "automatic"` today. Filed as
- * a follow-up.
+ * them is an automatic selection. `source` alone cannot distinguish the two
+ * cases: `modelSelectionMode` (the TS field for wire `model_selection.mode`,
+ * executionHistory.ts) is what carries that distinction, and Go now writes it
+ * on every record built after Issue #580 — but no analyzer here consumes it
+ * yet, so `analyzeAutoSelectionOutcomes` below still counts operator pins as
+ * "auto".
  *
  * Routing analytics compare against this rather than restating the literal:
  * before #446 they filtered on `"auto"`, a value no writer could emit, so the
