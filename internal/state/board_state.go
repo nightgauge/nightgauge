@@ -5,6 +5,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -31,10 +32,27 @@ type BoardStatus string
 const (
 	StatusBacklog    BoardStatus = "Backlog"
 	StatusReady      BoardStatus = "Ready"
-	StatusInProgress BoardStatus = "In Progress"
-	StatusInReview   BoardStatus = "In Review"
+	StatusInProgress BoardStatus = "In progress"
+	StatusInReview   BoardStatus = "In review"
 	StatusDone       BoardStatus = "Done"
 )
+
+// EqualFold reports whether b and other name the same board column, ignoring
+// capitalization.
+//
+// Never compare a status READ off a board with `==` (#413). The constants
+// above spell the labels the nightgauge provisioner writes, but a board's
+// actual option labels are whatever its creator typed — a hand-made board
+// commonly spells the same column "In Review". Reads return that raw label
+// verbatim (gh.BoardService.ListItems copies the option name straight into
+// BoardItem.Status), so an exact comparison silently answers "different
+// column" for a board that merely capitalizes differently, and the caller
+// takes the wrong branch. Writes already fold
+// (gh.ProjectService.SetSingleSelectField), so folding here keeps both
+// directions agreeing on one notion of column identity.
+func (b BoardStatus) EqualFold(other BoardStatus) bool {
+	return strings.EqualFold(string(b), string(other))
+}
 
 // BoardStateService reads and writes pipeline state via GitHub Project Board fields.
 // Write operations are delegated to an embedded ProjectService for cache unification.
@@ -64,7 +82,7 @@ func NewBoardStateService(client *gh.Client, owner string, projectNumber int, ow
 	}
 }
 
-// SetStatus updates the board status for an item (e.g., Ready → In Progress → Done).
+// SetStatus updates the board status for an item (e.g., Ready → In progress → Done).
 func (s *BoardStateService) SetStatus(ctx context.Context, itemID string, status BoardStatus) error {
 	return s.projSvc.SetSingleSelectField(ctx, itemID, "Status", string(status))
 }
@@ -96,7 +114,7 @@ func (s *BoardStateService) GetPipelineStage(ctx context.Context, itemID string)
 	return "", nil // No stage set
 }
 
-// StartPipeline sets the board status to "In Progress" and records the initial stage.
+// StartPipeline sets the board status to "In progress" and records the initial stage.
 func (s *BoardStateService) StartPipeline(ctx context.Context, itemID string, stage PipelineStage) error {
 	if err := s.SetStatus(ctx, itemID, StatusInProgress); err != nil {
 		return fmt.Errorf("set status: %w", err)
@@ -107,7 +125,7 @@ func (s *BoardStateService) StartPipeline(ctx context.Context, itemID string, st
 	return nil
 }
 
-// CompletePipeline sets the board status to "In Review" or "Done" and clears the stage.
+// CompletePipeline sets the board status to "In review" or "Done" and clears the stage.
 func (s *BoardStateService) CompletePipeline(ctx context.Context, itemID string, status BoardStatus) error {
 	if err := s.SetStatus(ctx, itemID, status); err != nil {
 		return fmt.Errorf("set status: %w", err)
@@ -119,18 +137,23 @@ func (s *BoardStateService) CompletePipeline(ctx context.Context, itemID string,
 
 // FailPipeline reverts an issue's board status after a pipeline failure.
 // targetStatus is the configured failure destination ("Ready" or "Backlog").
-// If the issue is already "In Review" (a PR was opened before failure), the
+// If the issue is already "In review" (a PR was opened before failure), the
 // status is left unchanged to avoid disrupting the review workflow.
 // Returns true if the status was actually changed.
 func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, targetStatus BoardStatus) (bool, error) {
-	// Read current status to guard against reverting an "In Review" issue.
+	// Read current status to guard against reverting an "In review" issue.
 	currentStatus, err := s.readItemStatus(ctx, itemID)
 	if err != nil {
 		// If we can't read current status, proceed with the revert — better to
-		// move an issue back to Ready than leave it stuck In Progress.
+		// move an issue back to Ready than leave it stuck In progress.
 		_ = err // non-fatal: proceed with revert
-	} else if currentStatus == StatusInReview {
-		return false, nil // PR is open; leave status as-is
+	} else if currentStatus.EqualFold(StatusInReview) {
+		// PR is open; leave status as-is. Folded, not `==`: readItemStatus
+		// returns the board's raw option label, so a board spelling the column
+		// "In Review" must still trip this guard — otherwise the item drops
+		// back to Ready, the only dispatchable status, and gets re-dispatched
+		// on top of its own open PR.
+		return false, nil
 	}
 
 	if err := s.SetStatus(ctx, itemID, targetStatus); err != nil {
@@ -144,6 +167,11 @@ func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, tar
 }
 
 // readItemStatus fetches the current board status for a specific item.
+//
+// The returned value is the board's RAW single-select option label, not a
+// canonicalized BoardStatus — normalizing it here would report a value the
+// board does not actually hold. Compare it with BoardStatus.EqualFold, never
+// with `==`.
 func (s *BoardStateService) readItemStatus(ctx context.Context, itemID string) (BoardStatus, error) {
 	board := gh.NewBoardService(s.client, s.owner, s.projectNumber, s.ownerType)
 	items, err := board.ListItems(ctx, "")

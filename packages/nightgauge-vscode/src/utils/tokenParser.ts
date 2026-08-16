@@ -113,7 +113,12 @@ export type StreamJsonMessageType =
   | "rate_limit_event";
 
 /**
- * Parsed tool result from a user message containing tool_result content blocks
+ * One `tool_result` block from a user message.
+ *
+ * A `user` envelope's `content` is a LIST and may carry several of these — see
+ * {@link ParsedStreamMessage.toolResults} — so this describes a single block,
+ * never "the message's result".
+ *
  * @see Issue #1031 - Populate tool call telemetry
  */
 export interface ParsedToolResult {
@@ -233,8 +238,33 @@ export interface ParsedStreamMessage {
   toolUses?: ToolCall[];
   /** Session ID for conversation resumption (Issue #118) */
   sessionId?: string;
-  /** Tool result extracted from user messages (Issue #1031) */
-  toolResult?: ParsedToolResult;
+  /**
+   * EVERY `tool_result` block in a user message, in document order (#1031,
+   * #455).
+   *
+   * Plural for exactly the reason {@link toolUses} is plural: this parses an
+   * Anthropic Messages API `user` envelope, whose `content` is a list, and
+   * whose canonical representation of a parallel-tool turn is several
+   * `tool_result` blocks in one message. The parser used to `return` from
+   * inside the loop over that list, which surfaced block 0 and discarded the
+   * rest — lossy by construction, however few blocks happen to arrive.
+   *
+   * NOT a fix for an observed production symptom. #455 was filed believing the
+   * Claude CLI batches parallel results into one envelope; it does not. The
+   * CLI emits one content block per stdout event, so every result has always
+   * reached the consumers and joined. Verified against two complete captures
+   * (Claude Code 2.1.233 live, and this repo's own
+   * `internal/execution/testdata/claude_stream_real_capture.jsonl`) — see
+   * `tests/utils/tokenParser.batchedToolResults.test.ts` for the evidence and
+   * the retraction. What this removes is the latent truncation that would bite
+   * silently the moment the CLI's stream shape changes, which this repo already
+   * treats as unstable.
+   *
+   * Absent (not empty) when the message carries no `tool_result` with a string
+   * `tool_use_id`: ids are propagated, never coerced (#155/#169), and a block
+   * without one could bind a result to an unrelated call.
+   */
+  toolResults?: ParsedToolResult[];
   /** Rate limit event data (Issue #2573) */
   rateLimitEvent?: RateLimitEventData;
   /** System-event subtype (`init`, `model_refusal_fallback`, ...) (#91) */
@@ -446,9 +476,15 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       };
     }
 
-    // Handle user messages containing tool_result content blocks (Issue #1031)
+    // Handle user messages containing tool_result content blocks (Issue #1031).
+    //
+    // EVERY block is collected, not just the first (#455). `content` is a list
+    // and the old `return` sat inside this loop, so anything past block 0 was
+    // discarded unread — see {@link ParsedStreamMessage.toolResults} for why
+    // that is a latent truncation rather than an observed production bug.
     if (parsed.type === "user" && parsed.message?.content) {
       const contentArray = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+      const toolResults: ParsedToolResult[] = [];
       for (const block of contentArray) {
         if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
           // Extract result content: can be a string, an array of content blocks, or absent
@@ -465,15 +501,19 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
               .join("");
           }
 
-          return {
-            type: "user" as StreamJsonMessageType,
-            toolResult: {
-              toolUseId: block.tool_use_id,
-              content: resultContent,
-              isError: block.is_error === true,
-            },
-          };
+          toolResults.push({
+            toolUseId: block.tool_use_id,
+            content: resultContent,
+            isError: block.is_error === true,
+          });
         }
+      }
+
+      if (toolResults.length > 0) {
+        return {
+          type: "user" as StreamJsonMessageType,
+          toolResults,
+        };
       }
     }
 
