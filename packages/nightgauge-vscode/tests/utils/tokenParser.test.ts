@@ -810,11 +810,13 @@ describe("parseStreamJsonLine", () => {
       const result = parseStreamJsonLine(line);
 
       expect(result?.type).toBe("user");
-      expect(result?.toolResult).toEqual({
-        toolUseId: "toolu_abc123",
-        content: "File contents here",
-        isError: false,
-      });
+      expect(result?.toolResults).toEqual([
+        {
+          toolUseId: "toolu_abc123",
+          content: "File contents here",
+          isError: false,
+        },
+      ]);
     });
 
     it("should extract tool_result with array content blocks", () => {
@@ -836,11 +838,13 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
-      expect(result?.toolResult).toEqual({
-        toolUseId: "toolu_def456",
-        content: "Line 1\nLine 2",
-        isError: false,
-      });
+      expect(result?.toolResults).toEqual([
+        {
+          toolUseId: "toolu_def456",
+          content: "Line 1\nLine 2",
+          isError: false,
+        },
+      ]);
     });
 
     it("should detect is_error flag", () => {
@@ -860,8 +864,8 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
-      expect(result?.toolResult?.isError).toBe(true);
-      expect(result?.toolResult?.content).toBe("Permission denied");
+      expect(result?.toolResults?.[0]?.isError).toBe(true);
+      expect(result?.toolResults?.[0]?.content).toBe("Permission denied");
     });
 
     it("should handle tool_result with missing content", () => {
@@ -879,11 +883,13 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
-      expect(result?.toolResult).toEqual({
-        toolUseId: "toolu_empty",
-        content: "",
-        isError: false,
-      });
+      expect(result?.toolResults).toEqual([
+        {
+          toolUseId: "toolu_empty",
+          content: "",
+          isError: false,
+        },
+      ]);
     });
 
     it("should ignore tool_result without tool_use_id", () => {
@@ -901,12 +907,18 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
-      // Falls through to generic user message (no toolResult)
+      // Falls through to generic user message (no toolResults)
       expect(result?.type).toBe("user");
-      expect(result?.toolResult).toBeUndefined();
+      expect(result?.toolResults).toBeUndefined();
     });
 
-    it("should return first tool_result when multiple exist", () => {
+    it("should surface EVERY tool_result when multiple exist (#455)", () => {
+      // This test previously pinned the opposite contract — "should return
+      // first tool_result when multiple exist" — and that pin was the bug.
+      // Parallel tool calls come back batched into ONE user envelope, so
+      // returning on the first block silently discarded results 2..N: their
+      // tool-call log entries kept good ids but never joined, carrying no
+      // result, no error and no duration_ms. The pin is inverted deliberately.
       const line = JSON.stringify({
         type: "user",
         message: {
@@ -927,7 +939,8 @@ describe("parseStreamJsonLine", () => {
 
       const result = parseStreamJsonLine(line);
 
-      expect(result?.toolResult?.toolUseId).toBe("toolu_first");
+      expect(result?.toolResults?.map((r) => r.toolUseId)).toEqual(["toolu_first", "toolu_second"]);
+      expect(result?.toolResults?.map((r) => r.content)).toEqual(["First result", "Second result"]);
     });
 
     it("should handle user message without message.content", () => {
@@ -938,7 +951,7 @@ describe("parseStreamJsonLine", () => {
       const result = parseStreamJsonLine(line);
 
       expect(result?.type).toBe("user");
-      expect(result?.toolResult).toBeUndefined();
+      expect(result?.toolResults).toBeUndefined();
     });
 
     it("should handle user message with non-array content", () => {
@@ -952,7 +965,7 @@ describe("parseStreamJsonLine", () => {
       const result = parseStreamJsonLine(line);
 
       expect(result?.type).toBe("user");
-      expect(result?.toolResult).toBeUndefined();
+      expect(result?.toolResults).toBeUndefined();
     });
   });
 

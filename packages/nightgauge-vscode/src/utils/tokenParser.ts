@@ -113,7 +113,12 @@ export type StreamJsonMessageType =
   | "rate_limit_event";
 
 /**
- * Parsed tool result from a user message containing tool_result content blocks
+ * One `tool_result` block from a user message.
+ *
+ * A `user` envelope can carry SEVERAL of these — see
+ * {@link ParsedStreamMessage.toolResults} — so this describes a single block,
+ * never "the message's result".
+ *
  * @see Issue #1031 - Populate tool call telemetry
  */
 export interface ParsedToolResult {
@@ -233,8 +238,25 @@ export interface ParsedStreamMessage {
   toolUses?: ToolCall[];
   /** Session ID for conversation resumption (Issue #118) */
   sessionId?: string;
-  /** Tool result extracted from user messages (Issue #1031) */
-  toolResult?: ParsedToolResult;
+  /**
+   * EVERY `tool_result` block in a user message, in document order (#1031,
+   * #455).
+   *
+   * Plural for exactly the reason {@link toolUses} is plural. When the
+   * assistant issues parallel tool calls the CLI batches all of their results
+   * into ONE `user` envelope; the parser used to `return` on the first
+   * `tool_result` block, so results 2..N were never surfaced at all. Their
+   * `ToolCallLog` entries stayed indexed-but-unjoined — no result, no error,
+   * no `duration_ms` — and the Dashboard rendered them exactly like calls that
+   * quietly succeeded. That is the #402 symptom on a different wire shape, and
+   * `describeToolCallCorrelationGap`'s id-less arm cannot see it because the
+   * ids here are perfectly good.
+   *
+   * Absent (not empty) when the message carries no `tool_result` with a string
+   * `tool_use_id`: ids are propagated, never coerced (#155/#169), and a block
+   * without one could bind a result to an unrelated call.
+   */
+  toolResults?: ParsedToolResult[];
   /** Rate limit event data (Issue #2573) */
   rateLimitEvent?: RateLimitEventData;
   /** System-event subtype (`init`, `model_refusal_fallback`, ...) (#91) */
@@ -446,9 +468,15 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
       };
     }
 
-    // Handle user messages containing tool_result content blocks (Issue #1031)
+    // Handle user messages containing tool_result content blocks (Issue #1031).
+    //
+    // EVERY block is collected, not just the first (#455). Parallel tool calls
+    // come back batched into a single `user` envelope, and the old `return`
+    // inside this loop discarded results 2..N — see
+    // {@link ParsedStreamMessage.toolResults}.
     if (parsed.type === "user" && parsed.message?.content) {
       const contentArray = Array.isArray(parsed.message.content) ? parsed.message.content : [];
+      const toolResults: ParsedToolResult[] = [];
       for (const block of contentArray) {
         if (block.type === "tool_result" && typeof block.tool_use_id === "string") {
           // Extract result content: can be a string, an array of content blocks, or absent
@@ -465,15 +493,19 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
               .join("");
           }
 
-          return {
-            type: "user" as StreamJsonMessageType,
-            toolResult: {
-              toolUseId: block.tool_use_id,
-              content: resultContent,
-              isError: block.is_error === true,
-            },
-          };
+          toolResults.push({
+            toolUseId: block.tool_use_id,
+            content: resultContent,
+            isError: block.is_error === true,
+          });
         }
+      }
+
+      if (toolResults.length > 0) {
+        return {
+          type: "user" as StreamJsonMessageType,
+          toolResults,
+        };
       }
     }
 

@@ -6268,21 +6268,29 @@ export function runStageSkillHeadless(
       // in the assistant's tool_use input is deliberately not scanned
       // (tokenParser no longer surfaces it) — counting both sightings of the
       // same marker double-recorded every phase in phaseHistory (#217).
-      if (parsed?.type === "user" && parsed.toolResult?.content) {
-        for (const marker of parsePhaseMarkers(parsed.toolResult.content)) {
+      //
+      // #161: this channel also feeds the runaway monitor. Phase markers are a
+      // PRODUCTIVE signal, but only the assistant-text branch above recorded
+      // one — and every skill emits its markers by `printf`, whose output
+      // reaches us solely through this tool_result channel. The window
+      // therefore never advanced on the marker stream that actually exists: a
+      // feature-validate stage that walked 18 of its 23 phases was recorded
+      // with 4 productive signals and killed for "no productive progress"
+      // while running its commit-and-push phase. The same marker cannot arrive
+      // on both channels (tokenParser does not surface the tool_use command
+      // echo — #217), so this cannot double-count.
+      //
+      // Before #455 the guard here read, verbatim:
+      //   parsed?.type === "user" && parsed.toolResult?.content
+      // — a single-result read. `parseStreamJsonLine` returned on the FIRST
+      // tool_result block, so when the assistant issued parallel tool calls and
+      // the CLI batched their results into one `user` envelope, every marker
+      // printed by results 2..N was dropped before it ever reached this
+      // channel. The parser now surfaces every block; walk all of them.
+      for (const toolResult of parsed?.toolResults ?? []) {
+        for (const marker of parsePhaseMarkers(toolResult.content)) {
           lastPhaseName = marker.name;
           phaseInference.observeRealMarker(marker.index); // real marker wins (#3760)
-          // #161: feed the runaway monitor here too. Phase markers are a
-          // PRODUCTIVE signal, but only the assistant-text branch above
-          // recorded one — and every skill emits its markers by `printf`,
-          // whose output reaches us solely through this tool_result channel.
-          // The window therefore never advanced on the marker stream that
-          // actually exists: a feature-validate stage that walked 18 of its 23
-          // phases was recorded with 4 productive signals and killed for "no
-          // productive progress" while running its commit-and-push phase.
-          // Same marker cannot arrive on both channels (tokenParser does not
-          // surface the tool_use command echo — #217), so this cannot
-          // double-count.
           progressMonitor.recordSignal("phase_marker");
           traceRecorder.phaseTransition(stage, marker);
           callbacks?.onPhaseStart?.(stage, marker.name, marker.index, marker.total);
@@ -6364,8 +6372,14 @@ export function runStageSkillHeadless(
 
       // Detect tool_result in user messages for stage-exit diagnostics and the
       // Go-authoritative tool-call log.
-      if (parsed?.toolResult) {
-        lastToolResultId = parsed.toolResult.toolUseId; // track for stall diagnostic (#3484)
+      //
+      // EVERY result in the envelope, not just the first (#455). A batch of
+      // parallel tool calls comes back as one `user` message carrying N
+      // tool_result blocks; binding only block 0 left the other N-1 entries
+      // indexed but never joined — no result, no error, no duration_ms — which
+      // the Dashboard renders identically to calls that quietly succeeded.
+      for (const toolResult of parsed?.toolResults ?? []) {
+        lastToolResultId = toolResult.toolUseId; // track for stall diagnostic (#3484)
 
         // Stage-exit diagnostic capture (Issue #3605): bind this result to the
         // Bash tool_use that produced it. We don't have the literal exit code
@@ -6373,15 +6387,15 @@ export function runStageSkillHeadless(
         // (0) from failure (1) via the isError flag — sufficient resolution to
         // diagnose "stage exited mid-Bash, last bash command failed." Matching
         // by id rather than by recency means a result that arrives after a
-        // newer command started still lands on its own entry (#156).
-        recentBashRing.observeToolResult(parsed.toolResult.toolUseId, parsed.toolResult.isError);
+        // newer command started still lands on its own entry (#156) — and is
+        // what makes a batched envelope safe to iterate: each block finds its
+        // own call.
+        recentBashRing.observeToolResult(toolResult.toolUseId, toolResult.isError);
         // All-tools call log (Issue #144).
         toolCallLog.observeToolResult(
-          parsed.toolResult.toolUseId,
-          parsed.toolResult.isError,
-          typeof parsed.toolResult.content === "string"
-            ? parsed.toolResult.content.substring(0, 200)
-            : undefined
+          toolResult.toolUseId,
+          toolResult.isError,
+          typeof toolResult.content === "string" ? toolResult.content.substring(0, 200) : undefined
         );
       }
 
