@@ -250,9 +250,34 @@ account tiers:
 
 ### Triaging by severity
 
-The card's title always leads with the advisory's own severity — never a
-fabricated one — so the Action Center's default sort (most severe first) is
-already a triage queue:
+**Every alert card is filed at attention severity `fyi` — badge only, no
+interruption — no matter how bad the advisory is**
+(`internal/attention/sweep/dependabotalerts.go`). That is deliberate: the
+attention severity vocabulary measures what is _blocked_, not what is
+_important_
+([docs/ATTENTION_PRODUCERS.md § Choosing a severity](ATTENTION_PRODUCERS.md#choosing-a-severity)),
+and an open vulnerability blocks no merge and stalls no run. Claiming
+`blocking_fleet` for a critical CVE would be false in the one dimension that
+field measures, so the advisory's real severity leads the card's **title text**
+instead and is never fabricated into the severity field.
+
+**The consequence is that the Action Center is not a severity-ordered queue for
+these cards — do not work the list top-down.** Both surfaces sort by attention
+severity band first, then newest-first within the band (`sortInbox` in
+`internal/attention/store.go`; `compareRequests` in
+`packages/nightgauge-vscode/src/views/attention/attentionTreeItems.ts`), and
+every alert card shares the one `fyi` band. Their relative order is therefore
+pure recency — and recency of _first observation_ at that, since `created_at`
+is stamped when a sweep first raises the card and preserved across every later
+re-observation. A `low` advisory first seen this morning outranks a `critical`
+first seen last week, and both sit below any genuinely blocking card.
+
+In the VSCode tree that puts every alert card under the non-blocking **"Needs
+a human"** group rather than **"Blocking"**. So read the severity off each
+card's title and triage the whole set before acting on any of it: a card's
+position in the list carries no information about how urgent its advisory is.
+
+Once you have read the severities, what each one typically warrants:
 
 | Severity            | Typical response                                                                                                                                                                                                                                                                      |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

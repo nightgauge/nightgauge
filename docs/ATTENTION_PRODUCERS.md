@@ -173,6 +173,14 @@ because its constraints are less obvious than a boolean condition:
 
 - **Scope**: repo-scoped — evaluated once per repo, per sweep, against
   `forge.SecurityService.ListOpenAlerts`.
+- **`fyi` at every advisory severity**, including `critical` — the cleanest
+  worked example of the table above being about _blocking_, not importance. A
+  vulnerability blocks no merge and stalls no run, so any blocking claim would
+  be false. The advisory's own severity rides in the card's title text and
+  never in the severity field, which means the inbox ordering (severity band,
+  then newest-first) conveys nothing about how bad these advisories are — a
+  deliberate trade the operator runbook states outright rather than leaving
+  the reader to infer a severity-ranked queue that does not exist.
 - **Fingerprint**: `sev:<severity>;fix:<remediation-state>[#<pr-number>];patch:<first-patched-version>`
   — material state only (how bad the advisory is, and whether something
   already fixes it), deliberately excluding the alert's `updated_at` and any
