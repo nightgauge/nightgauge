@@ -862,6 +862,68 @@ func TestBuildV2Record_ModelSelectionEffortEnvelope(t *testing.T) {
 	}
 }
 
+// TestBuildV2Record_ServedEffortOpenVocabulary pins the PRODUCER half of the
+// served-envelope vocabulary contract (#612's "minor asymmetries" gap): Go
+// records and emits whatever rung the executor actually reported, verbatim,
+// with no validation against EFFORT_LEVELS. That is deliberate — ServedEffort
+// is first-hand evidence of what the last-mile translation dispatched, and
+// normalizing or dropping an unrecognized value would turn observed evidence
+// into a guess, the exact failure ServedModel's "empty means
+// honestly-unreported, never a guess" contract exists to prevent.
+//
+// It is also the input every consumer schema must tolerate. The TypeScript
+// reader currently types served_effort as a strict z.enum while served_model
+// is a free z.string(), so a value like the one below fails the parse of the
+// ENTIRE record rather than just that field. Reconciling the two readers is
+// tracked separately; this test fixes the producer side of the contract so
+// that work has something to reconcile against, and fails if Go ever starts
+// silently filtering served efforts to the canonical ladder.
+func TestBuildV2Record_ServedEffortOpenVocabulary(t *testing.T) {
+	const offLadder = "ultra" // deliberately not an EFFORT_LEVELS rung
+
+	rs := NewRuntimeState("nightgauge/nightgauge", 612, "item-612", testRunID())
+	rs.BeginStage(StageFeatureDev)
+	rs.RecordStageModel(StageFeatureDev, "grok-4.5")
+	rs.RecordStageEffort(StageFeatureDev, "high")
+	rs.RecordStageServedEffort(StageFeatureDev, offLadder)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "", "")
+
+	hw := NewHistoryWriter(t.TempDir())
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{
+		Title:      "612 served-effort vocabulary",
+		Branch:     "chore/612",
+		BaseBranch: "main",
+	}, time.Now())
+
+	sel := record.Stages[string(StageFeatureDev)].ModelSelection
+	if sel == nil {
+		t.Fatalf("ModelSelection is nil, want populated (StageModels was set)")
+	}
+	if sel.ServedEffort != offLadder {
+		t.Errorf("ServedEffort = %q, want %q recorded verbatim (no ladder filtering)", sel.ServedEffort, offLadder)
+	}
+	if sel.Effort != "high" {
+		t.Errorf("Effort = %q, want %q — an off-ladder served value must not disturb the requested rung", sel.Effort, "high")
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var raw struct {
+		Stages map[string]struct {
+			ModelSelection map[string]any `json:"model_selection"`
+		} `json:"stages"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	wireSel := raw.Stages[string(StageFeatureDev)].ModelSelection
+	if got, _ := wireSel["served_effort"].(string); got != offLadder {
+		t.Errorf("wire served_effort = %q, want %q — the off-ladder value must reach the wire, not be dropped by omitempty after a silent reset", got, offLadder)
+	}
+}
+
 // TestRecordStageAdapter_IgnoresEmpty verifies the no-op contract for empty
 // adapter strings — preserves the omitempty guarantee when the resolver
 // fails to produce a value.
