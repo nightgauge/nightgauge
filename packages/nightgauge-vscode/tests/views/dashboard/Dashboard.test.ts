@@ -1124,7 +1124,7 @@ describe("Dashboard - syncFromPipelineState reconciliation (Issue #639)", () => 
     expect(historicalRun?.status).toBe("failed");
   });
 
-  it("should use default title/branch when pipeline state lacks them", () => {
+  it("defaults the title but reports an UNDETERMINED branch when state lacks them", () => {
     const dashboardState = dashboard.getState();
     expect(dashboardState.getCurrentRun()).toBeNull();
 
@@ -1143,9 +1143,15 @@ describe("Dashboard - syncFromPipelineState reconciliation (Issue #639)", () => 
     const currentRun = dashboardState.getCurrentRun();
     expect(currentRun).not.toBeNull();
     expect(currentRun?.issueNumber).toBe(400);
-    // Should use fallback title and branch
+    // The two missing fields are NOT symmetric (#448). "Issue #400" is an
+    // honest synthetic title — it claims nothing. A branch name is a claim
+    // about the repository, and this one used to be `feat/400`: a value no
+    // reader could tell apart from a branch that really resolved, which then
+    // rode notifyStageTransition -> SeedRunContext -> V2RunInput.Branch into a
+    // durable history record. `""` is the #397 contract for "undetermined";
+    // `getBranchDisplayText` renders it as "(branch not determined)".
     expect(currentRun?.title).toBe("Issue #400");
-    expect(currentRun?.branch).toBe("feat/400");
+    expect(currentRun?.branch).toBe("");
   });
 });
 
