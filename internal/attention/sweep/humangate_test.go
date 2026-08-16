@@ -18,15 +18,16 @@ import (
 
 type gateForge struct{ prs *gatePRs }
 
-func (f *gateForge) Issues() forge.IssueService     { return nil }
-func (f *gateForge) PRs() forge.PRService           { return f.prs }
-func (f *gateForge) Project() forge.ProjectService  { return nil }
-func (f *gateForge) Board() forge.BoardService      { return nil }
-func (f *gateForge) CI() forge.CIService            { return nil }
-func (f *gateForge) Labels() forge.LabelService     { return nil }
-func (f *gateForge) Rulesets() forge.RulesetService { return nil }
-func (f *gateForge) Auth() forge.AuthService        { return nil }
-func (f *gateForge) Repo() forge.RepoService        { return nil }
+func (f *gateForge) Issues() forge.IssueService      { return nil }
+func (f *gateForge) PRs() forge.PRService            { return f.prs }
+func (f *gateForge) Project() forge.ProjectService   { return nil }
+func (f *gateForge) Board() forge.BoardService       { return nil }
+func (f *gateForge) CI() forge.CIService             { return nil }
+func (f *gateForge) Labels() forge.LabelService      { return nil }
+func (f *gateForge) Rulesets() forge.RulesetService  { return nil }
+func (f *gateForge) Security() forge.SecurityService { return nil }
+func (f *gateForge) Auth() forge.AuthService         { return nil }
+func (f *gateForge) Repo() forge.RepoService         { return nil }
 
 type gatePRs struct {
 	list     []types.PullRequest

@@ -26,15 +26,16 @@ type fakeForge struct {
 	ci *fakeCI
 }
 
-func (f *fakeForge) Issues() forge.IssueService     { return nil }
-func (f *fakeForge) PRs() forge.PRService           { return nil }
-func (f *fakeForge) Project() forge.ProjectService  { return nil }
-func (f *fakeForge) Board() forge.BoardService      { return nil }
-func (f *fakeForge) CI() forge.CIService            { return f.ci }
-func (f *fakeForge) Labels() forge.LabelService     { return nil }
-func (f *fakeForge) Rulesets() forge.RulesetService { return nil }
-func (f *fakeForge) Auth() forge.AuthService        { return nil }
-func (f *fakeForge) Repo() forge.RepoService        { return nil }
+func (f *fakeForge) Issues() forge.IssueService      { return nil }
+func (f *fakeForge) PRs() forge.PRService            { return nil }
+func (f *fakeForge) Project() forge.ProjectService   { return nil }
+func (f *fakeForge) Board() forge.BoardService       { return nil }
+func (f *fakeForge) CI() forge.CIService             { return f.ci }
+func (f *fakeForge) Labels() forge.LabelService      { return nil }
+func (f *fakeForge) Rulesets() forge.RulesetService  { return nil }
+func (f *fakeForge) Security() forge.SecurityService { return nil }
+func (f *fakeForge) Auth() forge.AuthService         { return nil }
+func (f *fakeForge) Repo() forge.RepoService         { return nil }
 
 // fakeCI serves canned check runs for a ref and counts calls, so a test can
 // assert the sweep's forge traffic is bounded.

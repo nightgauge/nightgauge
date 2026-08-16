@@ -26,14 +26,15 @@ func (f *strandedBoardForge) Issues() forge.IssueService {
 	}
 	return f.issues
 }
-func (f *strandedBoardForge) PRs() forge.PRService           { return nil }
-func (f *strandedBoardForge) Project() forge.ProjectService  { return nil }
-func (f *strandedBoardForge) Board() forge.BoardService      { return f.board }
-func (f *strandedBoardForge) CI() forge.CIService            { return nil }
-func (f *strandedBoardForge) Labels() forge.LabelService     { return nil }
-func (f *strandedBoardForge) Rulesets() forge.RulesetService { return nil }
-func (f *strandedBoardForge) Auth() forge.AuthService        { return nil }
-func (f *strandedBoardForge) Repo() forge.RepoService        { return nil }
+func (f *strandedBoardForge) PRs() forge.PRService            { return nil }
+func (f *strandedBoardForge) Project() forge.ProjectService   { return nil }
+func (f *strandedBoardForge) Board() forge.BoardService       { return f.board }
+func (f *strandedBoardForge) CI() forge.CIService             { return nil }
+func (f *strandedBoardForge) Labels() forge.LabelService      { return nil }
+func (f *strandedBoardForge) Rulesets() forge.RulesetService  { return nil }
+func (f *strandedBoardForge) Security() forge.SecurityService { return nil }
+func (f *strandedBoardForge) Auth() forge.AuthService         { return nil }
+func (f *strandedBoardForge) Repo() forge.RepoService         { return nil }
 
 // strandedIssues is the repo's open-issue list — the "is there work at all?"
 // half of the reachability question. Embeds the interface so only ListIssues

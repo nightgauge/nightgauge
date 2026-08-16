@@ -19,6 +19,7 @@ import (
 //   - #3358 — Sub-issues + blocking + labels CRUD
 //   - #3359 — Pipeline status + branch protection (LANDED — see ci.go, rulesets.go)
 //   - #3354 — Auth chain (LANDED — see auth.go)
+//   - #343  — Dependency security alerts
 
 // --- LabelService stub ---
 
@@ -48,6 +49,27 @@ func NewRepoAdapter(client *Client) *RepoAdapter { return &RepoAdapter{client: c
 
 func (r *RepoAdapter) RepoMetadata(ctx context.Context, owner, name string) (*forgetypes.Repo, error) {
 	return nil, unsupported("RepoService.RepoMetadata", "#3361")
+}
+
+// --- SecurityService stub ---
+
+// SecurityAdapter is the placeholder forge.SecurityService for GitLab (#343).
+// GitLab's dependency scanning reports findings through a fundamentally
+// different surface (a CI job artifact and the Vulnerability Report, rather
+// than an always-on per-repository alert feed), so mapping it onto
+// forgetypes.SecurityAlerts is real work, not a rename.
+//
+// Returning the wrapped sentinel keeps the capability visible instead of
+// designing it out: a caller can errors.Is its way to a GitLab-shaped path the
+// moment one exists, and the coverage producers can tell "this forge does not
+// support alerts" apart from "this repository has them switched off" — which
+// is exactly the distinction SecurityAlertsStatus draws for GitHub.
+type SecurityAdapter struct{ client *Client }
+
+func NewSecurityAdapter(client *Client) *SecurityAdapter { return &SecurityAdapter{client: client} }
+
+func (s *SecurityAdapter) ListOpenAlerts(ctx context.Context, owner, name string) (*forgetypes.SecurityAlerts, error) {
+	return nil, unsupported("SecurityService.ListOpenAlerts", "#343")
 }
 
 // unsupported builds a wrapped ErrUnsupported for stub methods, including

@@ -23,15 +23,16 @@ type branchForge struct {
 	ci   *branchCI
 }
 
-func (f *branchForge) Issues() forge.IssueService     { return nil }
-func (f *branchForge) PRs() forge.PRService           { return nil }
-func (f *branchForge) Project() forge.ProjectService  { return nil }
-func (f *branchForge) Board() forge.BoardService      { return nil }
-func (f *branchForge) CI() forge.CIService            { return f.ci }
-func (f *branchForge) Labels() forge.LabelService     { return nil }
-func (f *branchForge) Rulesets() forge.RulesetService { return nil }
-func (f *branchForge) Auth() forge.AuthService        { return nil }
-func (f *branchForge) Repo() forge.RepoService        { return f.repo }
+func (f *branchForge) Issues() forge.IssueService      { return nil }
+func (f *branchForge) PRs() forge.PRService            { return nil }
+func (f *branchForge) Project() forge.ProjectService   { return nil }
+func (f *branchForge) Board() forge.BoardService       { return nil }
+func (f *branchForge) CI() forge.CIService             { return f.ci }
+func (f *branchForge) Labels() forge.LabelService      { return nil }
+func (f *branchForge) Rulesets() forge.RulesetService  { return nil }
+func (f *branchForge) Security() forge.SecurityService { return nil }
+func (f *branchForge) Auth() forge.AuthService         { return nil }
+func (f *branchForge) Repo() forge.RepoService         { return f.repo }
 
 type repoSvc struct {
 	defaultBranch string

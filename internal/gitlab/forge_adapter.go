@@ -8,16 +8,17 @@ import (
 // forge surfaces breaks the build immediately, surfacing the offending
 // method one service at a time. Mirrors the GitHub adapter's pattern.
 var (
-	_ forge.IssueService   = (*IssueService)(nil)
-	_ forge.PRService      = (*PRService)(nil)
-	_ forge.ProjectService = (*ProjectService)(nil)
-	_ forge.BoardService   = (*BoardService)(nil)
-	_ forge.CIService      = (*CIService)(nil)
-	_ forge.LabelService   = (*LabelService)(nil)
-	_ forge.RulesetService = (*RulesetService)(nil)
-	_ forge.AuthService    = (*AuthAdapter)(nil)
-	_ forge.RepoService    = (*RepoAdapter)(nil)
-	_ forge.ForgeClient    = (*ForgeAdapter)(nil)
+	_ forge.IssueService    = (*IssueService)(nil)
+	_ forge.PRService       = (*PRService)(nil)
+	_ forge.ProjectService  = (*ProjectService)(nil)
+	_ forge.BoardService    = (*BoardService)(nil)
+	_ forge.CIService       = (*CIService)(nil)
+	_ forge.LabelService    = (*LabelService)(nil)
+	_ forge.RulesetService  = (*RulesetService)(nil)
+	_ forge.AuthService     = (*AuthAdapter)(nil)
+	_ forge.RepoService     = (*RepoAdapter)(nil)
+	_ forge.SecurityService = (*SecurityAdapter)(nil)
+	_ forge.ForgeClient     = (*ForgeAdapter)(nil)
 )
 
 // ForgeAdapter wraps a *Client and exposes per-domain services as
@@ -46,6 +47,7 @@ type ForgeAdapter struct {
 	rulesets *RulesetService
 	auth     *AuthAdapter
 	repoSvc  *RepoAdapter
+	security *SecurityAdapter
 }
 
 // NewForgeAdapter constructs a ForgeAdapter for the given client. owner /
@@ -163,6 +165,16 @@ func (a *ForgeAdapter) Repo() forge.RepoService {
 		a.repoSvc = NewRepoAdapter(a.client)
 	}
 	return a.repoSvc
+}
+
+// Security returns the SecurityAdapter as a forge.SecurityService. The
+// placeholder implementation returns ErrUnsupported until #343's GitLab leg
+// lands.
+func (a *ForgeAdapter) Security() forge.SecurityService {
+	if a.security == nil {
+		a.security = NewSecurityAdapter(a.client)
+	}
+	return a.security
 }
 
 // init registers the gitlab adapter with forge.New so importing this

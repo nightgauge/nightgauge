@@ -9,15 +9,16 @@ import (
 // only cares about constructing it, so the inner methods can be nil.
 type fakeClient struct{ id string }
 
-func (f *fakeClient) Issues() IssueService     { return nil }
-func (f *fakeClient) PRs() PRService           { return nil }
-func (f *fakeClient) Project() ProjectService  { return nil }
-func (f *fakeClient) Board() BoardService      { return nil }
-func (f *fakeClient) CI() CIService            { return nil }
-func (f *fakeClient) Labels() LabelService     { return nil }
-func (f *fakeClient) Rulesets() RulesetService { return nil }
-func (f *fakeClient) Auth() AuthService        { return nil }
-func (f *fakeClient) Repo() RepoService        { return nil }
+func (f *fakeClient) Issues() IssueService      { return nil }
+func (f *fakeClient) PRs() PRService            { return nil }
+func (f *fakeClient) Project() ProjectService   { return nil }
+func (f *fakeClient) Board() BoardService       { return nil }
+func (f *fakeClient) CI() CIService             { return nil }
+func (f *fakeClient) Labels() LabelService      { return nil }
+func (f *fakeClient) Rulesets() RulesetService  { return nil }
+func (f *fakeClient) Security() SecurityService { return nil }
+func (f *fakeClient) Auth() AuthService         { return nil }
+func (f *fakeClient) Repo() RepoService         { return nil }
 
 // withFakeAdapter registers a fake adapter under a custom Kind for the
 // duration of the test. The dispatch table uses a stringly-typed Kind so
