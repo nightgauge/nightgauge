@@ -221,6 +221,7 @@ func TestRunStage_EmitsEventAndReturnsResult(t *testing.T) {
 				CacheCreation5m: res.result.CacheCreationTokens,
 			},
 			"claude-haiku-4-5-20251001",
+			"",
 		)
 		if got := runtime.CompletedStages[0].CacheCreation; got != 3308 {
 			t.Errorf("history handoff CacheCreation = %d, want 3308", got)

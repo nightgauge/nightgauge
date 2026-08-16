@@ -94,7 +94,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredServedModel(t *testing.T) {
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
-	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "gemini-2.0-flash")
+	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "gemini-2.0-flash", "")
 	snap.RecordStageModel(state.StageFeatureDev, "gemini-2.0-flash")
 
 	out := captureLog(t, func() {
@@ -117,7 +117,7 @@ func TestRecordOutcomeDiagnosesAnUnregisteredPrediction(t *testing.T) {
 	item := types.BoardItem{Number: 340, Repo: "acme/widget", Size: types.SizeM}
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
-	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5")
+	snap.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 20}, "claude-sonnet-5", "")
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-5")
 
 	out := captureLog(t, func() {

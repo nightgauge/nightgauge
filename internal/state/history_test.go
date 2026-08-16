@@ -18,7 +18,7 @@ func TestHistoryWriteAndRead(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	if err := hw.Write(rs, true, ""); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -88,9 +88,9 @@ func TestWriteV2_ProducesValidRecord(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2001, "item-v2", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 2000}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 2000}, "", "")
 	rs.BeginStage(StageFeaturePlanning)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 3000}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 3000}, "", "")
 
 	input := V2RunInput{
 		Title:           "Test V2 record",
@@ -154,9 +154,9 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2002, "item-fail", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(1, tokens.TokenCounts{Input: 3000, Output: 1000}, "")
+	rs.CompleteStage(1, tokens.TokenCounts{Input: 3000, Output: 1000}, "", "")
 	// Through the production writer, in the production ORDER (#407): every
 	// failure path books the stage's spend first and records the error second,
 	// and completion is now the StageErrors clear site — so a raw map poke here
@@ -206,7 +206,7 @@ func TestWriteV2_UpdatesIndex(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rs := NewRuntimeState("nightgauge/nightgauge", 3000+i, "item", testRunID())
 		rs.BeginStage(StageIssuePickup)
-		rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 		input := V2RunInput{Title: "Index test", Branch: "feat/test"}
 		if err := hw.WriteV2(rs, true, "", input); err != nil {
 			t.Fatalf("WriteV2 %d: %v", i, err)
@@ -239,7 +239,7 @@ func TestWriteV2_SkippedStages(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 4000, "item-skip", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	rs.SkippedStages = []string{string(StageFeaturePlanning)}
 
 	input := V2RunInput{
@@ -609,15 +609,15 @@ func TestWriteV2_PerStagePerformanceMode(t *testing.T) {
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "efficiency")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// Deliberately no RecordStageMode here.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageMode(StageFeatureDev, "maximum")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
@@ -687,15 +687,15 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageAdapter(StageIssuePickup, "claude")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// No RecordStageAdapter — should fall back to V2RunInput.DefaultAdapter.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageAdapter(StageFeatureDev, "gemini")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
@@ -745,7 +745,7 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 	// treating absence as adapter-unknown.
 	rsNoAdapter := NewRuntimeState("nightgauge/nightgauge", 3224, "item-no-adapter", testRunID())
 	rsNoAdapter.BeginStage(StageIssuePickup)
-	rsNoAdapter.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rsNoAdapter.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	recordNoAdapter := hw.BuildV2Record(rsNoAdapter, true, "", V2RunInput{
 		Title:      "no adapter",
@@ -797,15 +797,15 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 	// Two elevated stages, one with no mode.
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "elevated")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// No mode recorded — omitempty must keep the field absent.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageMode(StageFeatureDev, "elevated")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)

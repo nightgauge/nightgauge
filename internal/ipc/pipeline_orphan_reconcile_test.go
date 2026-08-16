@@ -30,7 +30,7 @@ func writeRuntimeSnapshot(t *testing.T, stateDir string, rt *state.RuntimeState)
 func newInterruptedRuntime(issueNumber int, runID string) *state.RuntimeState {
 	rt := state.NewRuntimeState("nightgauge/acmeapp", issueNumber, "", runID)
 	rt.BeginStage(state.StageIssuePickup)
-	rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
+	rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "", "")
 	rt.BeginStage(state.StageFeatureDev)
 	return rt
 }

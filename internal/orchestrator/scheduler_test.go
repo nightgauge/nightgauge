@@ -165,7 +165,7 @@ func TestOutcomeRecording(t *testing.T) {
 	snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
 	snap.BeginStage(state.StageFeatureDev)
 	snap.RecordStageModel(state.StageFeatureDev, "claude-sonnet-4-6")
-	snap.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
+	snap.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6", "")
 	snapshot := snap.Snapshot()
 
 	// Record a successful outcome. tmpDir stands in for the run's TARGET repo

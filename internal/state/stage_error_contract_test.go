@@ -83,7 +83,7 @@ func TestStageErrors_ClearIsScopedToTheCompletingStage(t *testing.T) {
 	rs.SetStageError(StageFeaturePlanning, "planning timed out")
 
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
 
 	if got := rs.StageErrors[string(StageFeaturePlanning)]; got != "planning timed out" {
 		t.Errorf("feature-planning's error = %q after feature-dev completed, want it untouched", got)
@@ -195,7 +195,7 @@ func TestStageErrors_CompleteThenFailKeepsTheEntry(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 407, "item-407", testRunID())
 
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 1200}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 1200}, "", "")
 	if _, ok := rs.StageErrors[string(StageFeatureDev)]; ok {
 		t.Fatal("precondition: a clean completion records no error")
 	}
@@ -245,7 +245,7 @@ func TestStageErrors_RehydratePreservesUncompletedStages(t *testing.T) {
 	// entry is retired by that completion; the stage that never re-ran keeps
 	// its own.
 	loaded.BeginStage(StageFeatureDev)
-	loaded.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 300}, "")
+	loaded.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 300}, "", "")
 
 	if msg, ok := loaded.StageErrors[string(StageFeatureDev)]; ok {
 		t.Errorf("a rehydrated error survived the stage's successful re-run: %q", msg)

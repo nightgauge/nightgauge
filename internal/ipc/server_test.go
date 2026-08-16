@@ -176,7 +176,7 @@ func (s *Server) registerStageNotifyMethod() {
 		case "running":
 			rt.BeginStage(stage)
 		case "complete":
-			rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
+			rt.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "", "")
 		case "failed":
 			rt.SetStageError(stage, p.Error)
 		case "skipped", "deferred":
@@ -345,7 +345,7 @@ func TestGetStateFallback(t *testing.T) {
 
 	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", newTestRunID())
 	rs.BeginStage("feature-dev")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "", "")
 	if err := rs.Persist(stateDir); err != nil {
 		t.Fatalf("Persist: %v", err)
 	}

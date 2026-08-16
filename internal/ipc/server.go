@@ -2783,7 +2783,7 @@ func (s *Server) registerMethods() {
 				rt.CompleteStage(0, tokens.TokenCounts{
 					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
 					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
-				}, p.Model)
+				}, p.Model, p.Adapter)
 			}
 			// NOTE: Do NOT delete the runtime here on IsComplete().
 			// The HeadlessOrchestrator path has 8 stages (6 pipeline stages
@@ -2842,7 +2842,7 @@ func (s *Server) registerMethods() {
 				rt.CompleteStage(1, tokens.TokenCounts{
 					Input: p.InputTokens, Output: p.OutputTokens, CacheRead: p.CacheReadTokens,
 					CacheCreation5m: cacheCreation5m, CacheCreation1h: cacheCreation1h,
-				}, p.Model)
+				}, p.Model, p.Adapter)
 			}
 			rt.RecordTerminatingStageTokens(stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
 			rt.SetStageError(stage, p.Error)

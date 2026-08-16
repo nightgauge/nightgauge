@@ -271,6 +271,58 @@ func CalculateCost(model string, t TokenCounts) float64 {
 	if !ok {
 		return 0
 	}
+	return priceCounts(d, t)
+}
+
+// CalculateCostForAdapter prices a stage's tokens using the concrete model's
+// rates, resolved through the PROVIDER the serving adapter maps to (#585) —
+// not through CalculateCost's anthropic-default lookup.
+//
+// CalculateCost's models.Get(model) == models.Resolve("anthropic", model) is
+// only correct when the serving adapter genuinely IS Anthropic's. Every other
+// caller in the pipeline dispatches a bare routing-tier alias ("haiku",
+// "sonnet", "opus") whenever the CLI's own stream never reported a served
+// model back — and Get/Resolve's provider default silently priced that alias
+// at claude-sonnet's $3/$15 (or claude-haiku's $1/$5) even when the stage was
+// actually served by grok-4.6 at $0.34/$1.02. Observed live on run 01a007d5
+// (issue #583): feature-planning stamped $2.8989 (exactly the anthropic
+// sonnet rate) for tokens that price at ~$0.26 under grok's own rates — an
+// ~11x overstatement that poisons cost-per-success history and makes grok
+// look an order of magnitude more expensive than it is.
+//
+// adapter == "" keeps CalculateCost's existing anthropic default — a caller
+// that has not been updated to carry adapter context gets byte-identical
+// behavior rather than silently degrading to the providerless "other" path.
+//
+// stamped reports whether cost is a priced figure:
+//   - true when (provider, model) resolved a registry rate.
+//   - true, cost 0, for the local providers (ollama/lm-studio): they carry no
+//     registry rows BY DESIGN because their marginal cost genuinely IS zero
+//     (#56) — that $0 is an honest answer, not a gap.
+//   - false for every other unresolved (provider, model) pair — a REAL
+//     (billed) provider whose concrete model this call could not price. The
+//     caller MUST record this as explicitly unstamped/incomplete: never
+//     fabricate $0 as if it were a priced answer, and never fall back to
+//     another provider's rates (matches #528's cost criterion).
+func CalculateCostForAdapter(adapter, model string, t TokenCounts) (cost float64, stamped bool) {
+	provider := "anthropic"
+	if adapter != "" {
+		provider = models.ProviderForAdapter(adapter)
+	}
+	if d, ok := models.Resolve(provider, model); ok {
+		return priceCounts(d, t), true
+	}
+	if provider == "ollama" || provider == "lm-studio" {
+		return 0, true
+	}
+	return 0, false
+}
+
+// priceCounts prices every billable pool for an already-resolved model
+// descriptor. Shared by CalculateCost and CalculateCostForAdapter so the two
+// resolution strategies (anthropic-default vs. adapter-provider-aware) cannot
+// drift into two different pricing formulas.
+func priceCounts(d models.ModelDescriptor, t TokenCounts) float64 {
 	total := float64(t.Input)*d.Rates.Input + float64(t.Output)*d.Rates.Output
 	total += float64(t.CacheRead) * rate(d.Rates.CacheRead)
 	total += float64(t.CacheCreation5m) * rate(d.Rates.CacheCreation5m)

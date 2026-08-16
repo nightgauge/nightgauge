@@ -35,7 +35,7 @@ func TestStageLifecycle(t *testing.T) {
 		t.Errorf("Stage = %q, want %q", rs.Stage, StageIssuePickup)
 	}
 
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1", len(rs.CompletedStages))
 	}
@@ -72,7 +72,7 @@ func TestIsComplete(t *testing.T) {
 	// Complete 4 stages, skip 2
 	for _, stage := range []PipelineStage{StageIssuePickup, StageFeaturePlanning, StageFeatureDev, StagePRCreate} {
 		rs.BeginStage(stage)
-		rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
 	}
 	rs.SkipStage(StageFeatureValidate)
 	rs.SkipStage(StagePRMerge)
@@ -85,7 +85,7 @@ func TestIsComplete(t *testing.T) {
 func TestSnapshot(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "", "")
 
 	snap := rs.Snapshot()
 	if snap.Repo != rs.Repo {
@@ -106,7 +106,7 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 1845, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "claude-haiku-4-5-20251001", "")
 
 	if rs.TotalCostUSD == 0 {
 		t.Error("TotalCostUSD should be non-zero after CompleteStage")
@@ -121,13 +121,63 @@ func TestCompleteStageAccumulatesCost(t *testing.T) {
 
 	// Add a second stage — verify accumulation
 	rs.BeginStage(StageFeaturePlanning)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 1000}, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 1000}, "claude-sonnet-4-6", "")
 	if len(rs.CompletedStages) != 2 {
 		t.Fatal("should have 2 completed stages")
 	}
 	expected := rs.CompletedStages[0].CostUSD + rs.CompletedStages[1].CostUSD
 	if rs.TotalCostUSD != expected {
 		t.Errorf("TotalCostUSD=%v, want %v", rs.TotalCostUSD, expected)
+	}
+}
+
+// #585: CompleteStage must price a stage through the SERVING ADAPTER's
+// provider, not an anthropic default. Pins the run 01a007d5 regression
+// (issue #583): feature-planning tokens on adapter grok, band "sonnet", must
+// stamp at grok-4.6's rate — not claude-sonnet's $3/$15, which is exactly
+// what production stamped before this fix.
+func TestCompleteStage_AdapterAwarePricing_GrokVsClaude(t *testing.T) {
+	counts := tokens.TokenCounts{Input: 484709, Output: 96317}
+
+	grokRun := NewRuntimeState("nightgauge/nightgauge", 583, "item-1", testRunID())
+	grokRun.BeginStage(StageFeaturePlanning)
+	grokRun.CompleteStage(0, counts, "sonnet", "grok")
+	grokStage := grokRun.CompletedStages[0]
+	if grokStage.CostUnstamped {
+		t.Fatal("grok/sonnet should resolve to a stamped cost")
+	}
+	const wantGrok = 0.263044
+	if diff := grokStage.CostUSD - wantGrok; diff > 5e-5 || diff < -5e-5 {
+		t.Errorf("grok stage CostUSD = %.6f, want ~%.6f (grok-4.6 rates)", grokStage.CostUSD, wantGrok)
+	}
+
+	claudeRun := NewRuntimeState("nightgauge/nightgauge", 583, "item-2", testRunID())
+	claudeRun.BeginStage(StageFeaturePlanning)
+	claudeRun.CompleteStage(0, counts, "sonnet", "claude")
+	claudeStage := claudeRun.CompletedStages[0]
+	if claudeStage.CostUnstamped {
+		t.Fatal("claude/sonnet should resolve to a stamped cost")
+	}
+	const wantClaude = 2.8989
+	if diff := claudeStage.CostUSD - wantClaude; diff > 1e-3 || diff < -1e-3 {
+		t.Errorf("claude stage CostUSD = %.6f, want ~%.6f (anthropic sonnet rates, unchanged)", claudeStage.CostUSD, wantClaude)
+	}
+}
+
+// #585: a stage served by an adapter whose concrete model cannot be resolved
+// against its provider must record CostUnstamped, not a fabricated $0 or
+// another provider's price.
+func TestCompleteStage_UnresolvableAdapterModelIsUnstamped(t *testing.T) {
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-1", testRunID())
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	sr := rs.CompletedStages[0]
+	if !sr.CostUnstamped {
+		t.Error("unresolvable (grok/nonexistent-band-xyz) should be recorded CostUnstamped=true")
+	}
+	if sr.CostUSD != 0 {
+		t.Errorf("unstamped CostUSD placeholder = %v, want 0", sr.CostUSD)
 	}
 }
 
@@ -148,7 +198,7 @@ func TestCompleteStagePricesAllPoolsConsistently(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 358, "item-1", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, counts, model)
+	rs.CompleteStage(0, counts, model, "")
 
 	sr := rs.CompletedStages[0]
 	if want := tokens.CalculateCost(model, counts); sr.CostUSD != want {
@@ -212,9 +262,9 @@ func TestCompleteStageIdempotentPerOccurrence(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	// Second complete for the SAME occurrence (no BeginStage between).
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	if len(rs.CompletedStages) != 1 {
 		t.Fatalf("CompletedStages = %d, want 1 (duplicate complete must not append)", len(rs.CompletedStages))
@@ -230,12 +280,12 @@ func TestCompleteStageRetryStillAppends(t *testing.T) {
 	rs := NewRuntimeState("nightgauge/nightgauge", 244, "item-1", testRunID())
 
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
 	// A real retry: BeginStage stamps a new StageStart. Sleep guarantees the
 	// timestamp advances so the occurrence is distinguishable.
 	time.Sleep(time.Millisecond)
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 50}, "", "")
 
 	if len(rs.CompletedStages) != 2 {
 		t.Fatalf("CompletedStages = %d, want 2 (a genuine retry must append)", len(rs.CompletedStages))
@@ -251,7 +301,7 @@ func TestConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			rs.BeginStage(StageFeatureDev)
-			rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "")
+			rs.CompleteStage(0, tokens.TokenCounts{Input: 10, Output: 5}, "", "")
 			_ = rs.Snapshot()
 			_ = rs.IsComplete()
 			_ = rs.TotalDuration()
@@ -406,7 +456,7 @@ func TestPersistAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	rs := NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", testRunID())
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 500, Output: 200}, "", "")
 	rs.BeginPhase(StageFeatureDev, "implementation", 3, 14)
 	rs.SetStageError(StageFeaturePlanning, "timeout")
 

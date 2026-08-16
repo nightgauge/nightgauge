@@ -338,6 +338,12 @@ type StageResult struct {
 	CacheRead     int           `json:"cacheRead"` // cache read tokens (subset of InputTokens)
 	CacheCreation int           `json:"cacheCreation"`
 	CostUSD       float64       `json:"costUsd"`
+	// CostUnstamped is true when CostUSD is NOT a priced figure: the serving
+	// adapter's provider/model could not be resolved against the registry, so
+	// CostUSD is a placeholder 0 rather than a fabricated price (#585). Never
+	// set for the local-provider (ollama/lm-studio) $0, which is a genuine,
+	// intentional cost — see tokens.CalculateCostForAdapter.
+	CostUnstamped bool `json:"costUnstamped,omitempty"`
 }
 
 // NewRuntimeState creates a new runtime state for a pipeline execution.
@@ -576,8 +582,16 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 }
 
 // CompleteStage records the completion of the current stage.
-// model is the AI model used (e.g., "claude-sonnet-4-6"). If empty, a default
-// cost rate is applied. Cost is calculated from token counts and model rates.
+// model is the AI model used (e.g., "claude-sonnet-4-6"). adapter is the
+// execution adapter that served the stage (e.g., "claude", "grok",
+// "codex") — it selects the PROVIDER cost is priced against (#585), so a
+// grok-served stage prices at grok's registry rates even when model is
+// still a bare routing-tier alias ("sonnet") the CLI stream never resolved
+// to a concrete id. adapter == "" keeps the pre-#585 anthropic-default
+// pricing, byte-identical for any caller not yet carrying adapter context.
+// If the (adapter's provider, model) pair cannot be resolved, cost is
+// recorded as explicitly unstamped rather than a fabricated $0 or another
+// provider's rate — see tokens.CalculateCostForAdapter.
 //
 // counts carries every billable pool (#358): taking input/output alone here
 // while the caller's other cost path prices cache would produce two different
@@ -589,12 +603,12 @@ func (rs *RuntimeState) BeginStage(stage PipelineStage) {
 // subset — readers subtract (history.go does `InputTokens - CacheRead`) and
 // divide by it for the cache-hit rate. So the recorded input adds CacheRead
 // back in, exactly as CompleteStageWithCost does.
-func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, model string) {
+func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, model, adapter string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 
 	counts = rs.consumeCurrentStageTokenCountsLocked(counts)
-	cost := tokens.CalculateCost(model, counts)
+	cost, stamped := tokens.CalculateCostForAdapter(adapter, model, counts)
 	rs.completeStageInternalLocked(
 		exitCode,
 		counts.Input+counts.CacheRead,
@@ -602,6 +616,7 @@ func (rs *RuntimeState) CompleteStage(exitCode int, counts tokens.TokenCounts, m
 		counts.CacheRead,
 		counts.CacheCreation5m+counts.CacheCreation1h,
 		cost,
+		!stamped,
 	)
 }
 
@@ -632,6 +647,7 @@ func (rs *RuntimeState) CompleteStageWithCost(exitCode, inputTokens, outputToken
 		counts.CacheRead,
 		counts.CacheCreation5m+counts.CacheCreation1h,
 		actualCostUsd,
+		false, // the CLI-reported actual cost is always a priced figure
 	)
 }
 
@@ -677,7 +693,7 @@ func (rs *RuntimeState) consumeCurrentStageTokenCountsLocked(direct tokens.Token
 // completeStageInternalLocked appends one completed occurrence. The caller
 // holds rs.mu so pending-token consumption and the idempotency decision are one
 // atomic transaction.
-func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64) {
+func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int, cost float64, costUnstamped bool) {
 	// Idempotency guard (#230): if this exact stage occurrence was already
 	// completed — same Stage AND the same BeginStage-stamped StageStart — skip
 	// it so a residual double-complete yields exactly one completedStages entry
@@ -747,6 +763,7 @@ func (rs *RuntimeState) completeStageInternalLocked(exitCode, inputTokens, outpu
 		CacheRead:     cacheReadTokens,
 		CacheCreation: cacheCreationTokens,
 		CostUSD:       cost,
+		CostUnstamped: costUnstamped,
 	}
 	rs.CompletedStages = append(rs.CompletedStages, result)
 	rs.InputTokens += inputTokens
