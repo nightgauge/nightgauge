@@ -4927,13 +4927,21 @@ func costByClassCmd() *cobra.Command {
 				return nil
 			}
 			fmt.Printf("Cost by change_class — %d run(s) analyzed\n", res.RunsAnalyzed)
-			fmt.Printf("%-12s %5s %12s %12s %12s %10s %10s\n",
-				"class", "runs", "cost_p50", "cost_p95", "cost_mean", "dur_p50", "dur_p95")
-			fmt.Println(strings.Repeat("-", 78))
+			fmt.Printf("%-12s %5s %12s %12s %12s %10s %10s %8s\n",
+				"class", "runs", "cost_p50", "cost_p95", "cost_mean", "dur_p50", "dur_p95", "unstmp")
+			fmt.Println(strings.Repeat("-", 88))
+			anyUnstamped := false
 			for _, c := range res.Classes {
-				fmt.Printf("%-12s %5d %11.4f$ %11.4f$ %11.4f$ %9.1fm %9.1fm\n",
+				fmt.Printf("%-12s %5d %11.4f$ %11.4f$ %11.4f$ %9.1fm %9.1fm %8d\n",
 					c.ChangeClass, c.Runs, c.CostP50USD, c.CostP95USD, c.CostMeanUSD,
-					float64(c.DurationP50Ms)/60000.0, float64(c.DurationP95Ms)/60000.0)
+					float64(c.DurationP50Ms)/60000.0, float64(c.DurationP95Ms)/60000.0, c.UnstampedRuns)
+				if c.UnstampedRuns > 0 {
+					anyUnstamped = true
+				}
+			}
+			if anyUnstamped {
+				fmt.Println("\nunstmp > 0: cost figures for that class include at least one run priced")
+				fmt.Println("against an unresolvable (provider, model) pair — a floor, not a full total.")
 			}
 			return nil
 		},

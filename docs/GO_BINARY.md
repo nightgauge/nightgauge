@@ -1575,11 +1575,20 @@ nightgauge cost by-class --since 2026-01-01 --until 2026-06-30 --json
       "cost_mean_usd": 0.0401,
       "duration_p50_ms": 84000,
       "duration_p95_ms": 142000,
-      "total_cost_usd": 0.4812
+      "total_cost_usd": 0.4812,
+      "unstamped_runs": 0
     }
   ]
 }
 ```
+
+`unstamped_runs` (#585, #588) counts runs in the bucket whose recorded cost
+includes at least one stage priced against an unresolvable (provider, model)
+pair — a placeholder `$0`, not a genuinely free run. The cost fields above
+still sum/average these runs (excluding them would just undercount real spend
+elsewhere), so a non-zero `unstamped_runs` means the bucket's
+`cost_mean_usd`/`cost_p50_usd`/`cost_p95_usd` are a floor rather than a fully
+priced figure — check this before trusting the average.
 
 See [GATE_RELAXATION.md § "Measuring pipeline cost"](GATE_RELAXATION.md#measuring-pipeline-cost-nightgauge-cost-by-class)
 for how this proves the fast-track win.

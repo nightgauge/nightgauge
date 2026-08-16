@@ -279,12 +279,20 @@ type V2ModelSelect struct {
 
 // V2Tokens matches TokensSchema.
 type V2Tokens struct {
-	TotalInput         int                      `json:"total_input"`
-	TotalOutput        int                      `json:"total_output"`
-	TotalCacheRead     int                      `json:"total_cache_read"`
-	TotalCacheCreation int                      `json:"total_cache_creation"`
-	EstimatedCostUSD   float64                  `json:"estimated_cost_usd"`
-	PerStage           map[string]V2StageTokens `json:"per_stage,omitempty"`
+	TotalInput         int     `json:"total_input"`
+	TotalOutput        int     `json:"total_output"`
+	TotalCacheRead     int     `json:"total_cache_read"`
+	TotalCacheCreation int     `json:"total_cache_creation"`
+	EstimatedCostUSD   float64 `json:"estimated_cost_usd"`
+	// CostUnstamped is the run-level OR of every PerStage entry's
+	// CostUnstamped (#585, #588): true when EstimatedCostUSD folds in at
+	// least one stage whose cost is a placeholder 0 because the serving
+	// (provider, model) pair could not be resolved against the pricing
+	// registry — not a legitimately free local-provider run. Consumers that
+	// sum or average EstimatedCostUSD across runs (e.g. `cost by-class`) must
+	// check this before treating the total as a fully priced figure.
+	CostUnstamped bool                     `json:"cost_unstamped,omitempty"`
+	PerStage      map[string]V2StageTokens `json:"per_stage,omitempty"`
 }
 
 // V2StageTokens matches HistoryStageTokenUsageSchema.
@@ -302,6 +310,16 @@ type V2StageTokens struct {
 	// canonical set. Empty string maps to absent on the wire via omitempty —
 	// readers must treat absence as adapter-unknown rather than defaulting.
 	Adapter string `json:"adapter,omitempty"`
+	// CostUnstamped mirrors StageResult.CostUnstamped (#585, #588): true when
+	// CostUSD is a placeholder 0 because the serving (provider, model) pair
+	// could not be resolved against the pricing registry — never set for the
+	// local-provider (ollama/lm-studio) $0, which is a genuine cost. The
+	// BuildV2Record fold ORs this across every CompleteStage occurrence
+	// accumulated into one stage entry: a single unresolved attempt taints
+	// the accumulated cost_usd for the whole entry, even if a later retry on
+	// the same stage resolved cleanly. NOT forwarded to the platform V4
+	// telemetry payload — see pipelineRunV4Mapper.ts / execution_history_mapper.go.
+	CostUnstamped bool `json:"cost_unstamped,omitempty"`
 }
 
 // V2Files matches the v2 files sub-schema.
@@ -776,13 +794,14 @@ func (hw *HistoryWriter) seedSeenLocked(c *dirCoordinator) {
 // ensures interim records (written after a partial pipeline) show correct
 // accumulated totals instead of reading from global accumulators that may not
 // yet reflect all completed stages.
-func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead, cacheCreation int, costUSD float64) {
+func computeAccumulatedTokens(perStageTokens map[string]V2StageTokens) (input, output, cacheRead, cacheCreation int, costUSD float64, costUnstamped bool) {
 	for _, t := range perStageTokens {
 		input += t.Input + t.CacheRead // Input is non-cached; combined matches StageResult.InputTokens semantics
 		output += t.Output
 		cacheRead += t.CacheRead
 		cacheCreation += t.CacheCreation
 		costUSD += t.CostUSD
+		costUnstamped = costUnstamped || t.CostUnstamped
 	}
 	return
 }
@@ -905,6 +924,13 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		acc.CacheRead += sr.CacheRead
 		acc.CacheCreation += sr.CacheCreation
 		acc.CostUSD += sr.CostUSD
+		// OR, never assign: if ANY folded occurrence of this stage was
+		// unstamped, the accumulated cost_usd above is tainted by a
+		// placeholder-zero contribution even when a later retry resolved
+		// cleanly (#585, #588). Losing the flag on a subsequent stamped
+		// attempt would make the fold look more honest than the sum it
+		// actually is.
+		acc.CostUnstamped = acc.CostUnstamped || sr.CostUnstamped
 		acc.Adapter = stageAdapter
 
 		// Cache hit rate: cache_read / (input + cache_read), recomputed from the
@@ -966,6 +992,12 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 						CostUSD:       sr.CostUSD,
 						CacheHitRate:  cacheHitRate,
 						Adapter:       stageAdapter,
+						// RecordTerminatingStageTokens has no costUnstamped
+						// parameter today, so this is always false on this
+						// path — carried through for struct-literal
+						// completeness so a future caller that DOES pass one
+						// is not silently dropped here (#585, #588).
+						CostUnstamped: sr.CostUnstamped,
 					}
 				}
 			}
@@ -1059,7 +1091,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 	// Compute token totals from per-stage data rather than global accumulators.
 	// This ensures interim records (written mid-pipeline after N completed stages)
 	// always reflect the correct accumulated values for those N stages.
-	accInput, accOutput, accCacheRead, accCacheCreation, accCostUSD := computeAccumulatedTokens(perStageTokens)
+	accInput, accOutput, accCacheRead, accCacheCreation, accCostUSD, accCostUnstamped := computeAccumulatedTokens(perStageTokens)
 
 	// Bump schema_version to "3" when V3-only fields are populated (Issue #3001).
 	schemaVersion := "2"
@@ -1096,6 +1128,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 			TotalCacheRead:     accCacheRead,
 			TotalCacheCreation: accCacheCreation,
 			EstimatedCostUSD:   accCostUSD,
+			CostUnstamped:      accCostUnstamped,
 			PerStage:           perStageTokens,
 		},
 		Files: V2Files{},

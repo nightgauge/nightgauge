@@ -1091,3 +1091,104 @@ func TestBuildV2Record_StageErrorEntryStampsFailed(t *testing.T) {
 		t.Errorf("feature-validate status = %q, want \"complete\" — no global error was supplied", got)
 	}
 }
+
+// --- cost_unstamped survival tests (Issue #585, #588 review finding B1) ---
+//
+// StageResult.CostUnstamped (set by RuntimeState.CompleteStage when the
+// serving adapter's (provider, model) pair cannot be priced) must survive
+// BuildV2Record's per-stage fold into V2StageTokens.CostUnstamped and the
+// run-level V2Tokens.CostUnstamped aggregate — otherwise an unresolvable
+// pricing lookup persists into the durable JSONL history as `cost_usd: 0`,
+// indistinguishable from a legitimately-free run.
+
+// TestBuildV2Record_UnresolvableAdapterMarksCostUnstamped verifies a
+// CompleteStage call whose (model, adapter) pair cannot be resolved against
+// the pricing registry lands in the built V2 record with cost_unstamped set,
+// at both the per-stage and run levels.
+func TestBuildV2Record_UnresolvableAdapterMarksCostUnstamped(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585", testRunID())
+
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if !tok.CostUnstamped {
+		t.Errorf("PerStage[%q].CostUnstamped = false, want true for an unresolvable (grok, nonexistent-band-xyz) pair", stageName)
+	}
+	if tok.CostUSD != 0 {
+		t.Errorf("PerStage[%q].CostUSD = %v, want 0 (unstamped placeholder)", stageName, tok.CostUSD)
+	}
+	if !record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = false, want true — the run-level aggregate must surface an unstamped stage")
+	}
+}
+
+// TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped is the negative
+// counterpart: an ordinary stage whose (model, adapter) pair resolves
+// cleanly must NOT carry cost_unstamped at either the per-stage or run level.
+func TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585-stamped", testRunID())
+
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "claude")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if tok.CostUnstamped {
+		t.Errorf("PerStage[%q].CostUnstamped = true, want false for a resolvable (claude, sonnet) pair", stageName)
+	}
+	if tok.CostUSD == 0 {
+		t.Errorf("PerStage[%q].CostUSD = 0, want a non-zero priced figure", stageName)
+	}
+	if record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = true, want false — no stage in this run is unstamped")
+	}
+}
+
+// TestBuildV2Record_UnstampedFoldSurvivesRetry pins the OR-fold semantics: a
+// stage that ran twice (retry/backtrack) with the FIRST attempt unstamped and
+// the SECOND attempt stamped must still read cost_unstamped=true overall — a
+// later successful pricing must not erase the earlier placeholder-zero
+// contribution baked into the accumulated cost_usd.
+func TestBuildV2Record_UnstampedFoldSurvivesRetry(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585-retry", testRunID())
+
+	// First attempt: unresolvable pair, placeholder $0.
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	// Retry: resolves cleanly.
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "claude")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if !tok.CostUnstamped {
+		t.Error("PerStage[...].CostUnstamped = false, want true — the first attempt's unstamped $0 must survive the fold even after a stamped retry")
+	}
+	if !record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = false, want true — the run-level aggregate must reflect the tainted stage")
+	}
+}

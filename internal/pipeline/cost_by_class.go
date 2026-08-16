@@ -19,6 +19,15 @@ type ClassCostStats struct {
 	DurationP50Ms int64   `json:"duration_p50_ms"`
 	DurationP95Ms int64   `json:"duration_p95_ms"`
 	TotalCostUSD  float64 `json:"total_cost_usd"`
+	// UnstampedRuns counts runs in this bucket whose Tokens.CostUnstamped is
+	// true (#585, #588): at least one stage's cost is a placeholder 0 because
+	// the serving (provider, model) pair could not be priced, not a
+	// legitimately free run. The cost stats above still SUM these runs — a
+	// silent exclusion would just undercount real spend elsewhere — but a
+	// non-zero UnstampedRuns means CostMeanUSD/CostP50USD/CostP95USD for this
+	// class are a floor, not a fully measured total; callers must not blend
+	// them into an average as if every run were priced.
+	UnstampedRuns int `json:"unstamped_runs"`
 }
 
 // CostByClassResult is the stable JSON output for `cost by-class`.
@@ -45,9 +54,10 @@ var classBucketOrder = map[string]int{
 // Records with an empty change_class (pre-#4129 runs) bucket under "unknown".
 func AggregateCostByClass(records []state.V2RunRecord) CostByClassResult {
 	type acc struct {
-		costs []float64
-		durs  []float64
-		total float64
+		costs         []float64
+		durs          []float64
+		total         float64
+		unstampedRuns int
 	}
 	buckets := map[string]*acc{}
 	for _, r := range records {
@@ -61,6 +71,9 @@ func AggregateCostByClass(records []state.V2RunRecord) CostByClassResult {
 		b.costs = append(b.costs, c)
 		b.durs = append(b.durs, float64(r.TotalDuration))
 		b.total += c
+		if r.Tokens.CostUnstamped {
+			b.unstampedRuns++
+		}
 	}
 
 	out := make([]ClassCostStats, 0, len(buckets))
@@ -88,6 +101,7 @@ func AggregateCostByClass(records []state.V2RunRecord) CostByClassResult {
 			DurationP50Ms: int64(percentile(b.durs, 50)),
 			DurationP95Ms: int64(percentile(b.durs, 95)),
 			TotalCostUSD:  b.total,
+			UnstampedRuns: b.unstampedRuns,
 		})
 	}
 
