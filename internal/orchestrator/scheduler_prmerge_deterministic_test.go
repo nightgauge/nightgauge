@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -365,6 +366,136 @@ func TestScheduler_PRMerge_NonPRMergeStage_NoOp(t *testing.T) {
 	}
 	if got := rs.StageExecutionPath(state.StageFeatureDev); got != "" {
 		t.Errorf("execution_path leaked onto unrelated stage: %q", got)
+	}
+}
+
+// gitRunForCleanupTest runs a git subcommand for the linked-worktree cleanup
+// fixture below, failing the test on error.
+func gitRunForCleanupTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s (dir=%s): %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+}
+
+// currentBranchForCleanupTest reads the short branch name checked out in dir.
+func currentBranchForCleanupTest(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("read current branch in %s: %v", dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// remoteBranchExistsForCleanupTest reports whether originDir (a bare repo)
+// still carries refs/heads/<branch>.
+func remoteBranchExistsForCleanupTest(originDir, branch string) bool {
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = originDir
+	return cmd.Run() == nil
+}
+
+// TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch is the Issue #589
+// companion to the stages-level regression test: it exercises the
+// scheduler-orchestrated remote branch cleanup that replaces `gh pr merge
+// --delete-branch` now that the merge call itself no longer carries it. The
+// fixture is the full linked-worktree topology (primary checkout holding
+// `main`, run worktree on the PR's own head branch, both pointed at a real
+// bare "origin"), so this proves BranchDeleteRemote's push-based deletion
+// works — and needs no checkout — from exactly the topology that broke the
+// old flag-based cleanup.
+func TestScheduler_PRMerge_Deterministic_CleansUpRemoteBranch(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "main")
+	originDir := filepath.Join(root, "origin.git")
+	worktreeDir := filepath.Join(root, "issue-42")
+	const headBranch = "fix/42-cleanup-target"
+
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	gitRunForCleanupTest(t, mainDir, "init")
+	gitRunForCleanupTest(t, mainDir, "symbolic-ref", "HEAD", "refs/heads/main")
+	gitRunForCleanupTest(t, mainDir, "config", "user.email", "test@nightgauge.dev")
+	gitRunForCleanupTest(t, mainDir, "config", "user.name", "Nightgauge Test")
+	if err := os.WriteFile(filepath.Join(mainDir, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	gitRunForCleanupTest(t, mainDir, "add", "README.md")
+	gitRunForCleanupTest(t, mainDir, "commit", "-m", "chore: seed")
+
+	gitRunForCleanupTest(t, root, "clone", "--bare", mainDir, originDir)
+	gitRunForCleanupTest(t, mainDir, "remote", "add", "origin", originDir)
+	gitRunForCleanupTest(t, mainDir, "fetch", "origin")
+
+	// Linked worktree on the PR's own head branch — the primary checkout
+	// stays on main throughout.
+	gitRunForCleanupTest(t, mainDir, "worktree", "add", "-b", headBranch, worktreeDir, "HEAD")
+	gitRunForCleanupTest(t, worktreeDir, "push", "origin", headBranch)
+
+	if !remoteBranchExistsForCleanupTest(originDir, headBranch) {
+		t.Fatalf("fixture setup failed: origin does not carry refs/heads/%s", headBranch)
+	}
+
+	s := newSchedulerForDeterministicTest()
+	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
+		Path: pmstages.PathMerged, PRNumber: 42, PRState: "MERGED",
+		Reason: pmstages.ReasonCleanMerged, HeadRefName: headBranch,
+	}}
+	s.WithPRMergeRunner(det)
+
+	rs := state.NewRuntimeState("nightgauge/nightgauge", 42, "item-id", testRunID())
+	rs.BeginStage(state.StagePRMerge)
+	item := types.BoardItem{Number: 42, Repo: "nightgauge/nightgauge"}
+
+	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, worktreeDir)
+	if !merged {
+		t.Fatalf("tryDeterministicPRMerge returned false, want true")
+	}
+
+	if remoteBranchExistsForCleanupTest(originDir, headBranch) {
+		t.Errorf("origin still carries refs/heads/%s after the deterministic merge — remote branch cleanup did not run",
+			headBranch)
+	}
+
+	// Cleanup must be push-based, never a checkout: both checkouts are
+	// exactly where they started.
+	if got := currentBranchForCleanupTest(t, mainDir); got != "main" {
+		t.Errorf("primary checkout moved off main during cleanup: now on %q", got)
+	}
+	if got := currentBranchForCleanupTest(t, worktreeDir); got != headBranch {
+		t.Errorf("run worktree moved off %q during cleanup: now on %q", headBranch, got)
+	}
+}
+
+// TestScheduler_PRMerge_Deterministic_NoHeadRefSkipsCleanup asserts that
+// cleanupMergedRemoteBranch is a no-op (no git service touched) when the
+// deterministic result carries no HeadRefName — the shape every pre-#589 fake
+// PRMergeRunner in this file already returns, so existing callers must not
+// regress by suddenly requiring a real git repo at workdir.
+func TestScheduler_PRMerge_Deterministic_NoHeadRefSkipsCleanup(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	det := &fakePRMergeRunner{result: pmstages.PRMergeResult{
+		Path: pmstages.PathMerged, PRNumber: 99, PRState: "MERGED", Reason: pmstages.ReasonAlreadyMerged,
+	}}
+	s.WithPRMergeRunner(det)
+
+	rs := state.NewRuntimeState("owner/repo", 42, "item-id", testRunID())
+	rs.BeginStage(state.StagePRMerge)
+	item := types.BoardItem{Number: 42, Repo: "owner/repo"}
+
+	// workspaceRoot "/tmp" is not a git repo — if cleanup ran unconditionally
+	// this would either panic or, worse, silently walk up to an unrelated
+	// repository (git.NewService with an empty HeadRefName must never be
+	// called at all).
+	merged, _, _ := s.tryDeterministicPRMerge(context.Background(), state.StagePRMerge, rs, item, "/tmp")
+	if !merged {
+		t.Fatalf("tryDeterministicPRMerge returned false, want true")
 	}
 }
 
