@@ -1436,6 +1436,24 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// Filter out blocked items and items in repos at capacity
 	var candidates []types.BoardItem
 	for _, item := range items {
+		// Board-driven autonomous pickup does not dispatch PR-shaped items,
+		// INCLUDING Dependabot remediation PRs, and #345 deliberately left that
+		// alone.
+		//
+		// The fast-track route below is now correctly keyed on the PR (see
+		// isDependabotRemediationPR), and RunPipelineForItem already drives a
+		// PR-shaped types.BoardItem end to end — so nothing about the ROUTE is
+		// waiting on this line. What is missing is the trust answer: the gate
+		// immediately below refuses any item whose author is not affirmatively
+		// trusted, and internal/github/board.go's PullRequest branch populates
+		// no AuthorAssociation and no author login at all, so a bot-authored
+		// remediation PR cannot be told from a stranger's pull request here.
+		// Widening this filter without that fact would move the decision to a
+		// gate that fails closed on every PR anyway — a change that reads like a
+		// fix and is not. Populating PR authorship (board.go) and affirmatively
+		// trusting the forge's dependency bot (author_trust.go) are the two
+		// halves that turn board-driven pickup on, and both live outside this
+		// file.
 		if item.IsPR {
 			continue
 		}
@@ -3589,26 +3607,35 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		state.StagePRMerge,
 	}
 
-	// Dependabot issues skip feature-planning and feature-dev — dependency updates
-	// are mechanical changes that don't benefit from AI planning or implementation.
-	// Route: issue-pickup → feature-validate → pr-create → pr-merge.
-	if gh.IsDependabotIssue(item.Labels) {
-		log.Printf("#%d: Dependabot issue detected — skipping feature-planning and feature-dev stages",
-			item.Number)
-		runtime.SkipStage(state.StageFeaturePlanning)
-		runtime.SkipStage(state.StageFeatureDev)
-		for _, skipped := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev} {
-			tracer.Emit(trace.KindStageSkip, string(skipped), trace.StageSkipPayload{
+	// A Dependabot REMEDIATION PULL REQUEST skips feature-planning and
+	// feature-dev: the forge already wrote the diff, and a version bump is not
+	// something planning or implementation can improve.
+	//
+	// #345 re-keyed this route onto the artifact Dependabot actually produces.
+	// It used to test gh.IsDependabotIssue(item.Labels) against a project BOARD
+	// ITEM, and board items are ISSUES. Dependabot opens pull requests and does
+	// not open issues, so the branch fired only for an issue a human
+	// hand-created and hand-labelled — a correct, deliberate optimization wired
+	// to something that does not occur in practice. isDependabotRemediationPR
+	// is the whole fix; nothing about the resulting route changed.
+	//
+	// feature-validate is NOT in the skip set and must never be. Fast-tracking
+	// skips PLANNING and IMPLEMENTATION, which add nothing to a version bump;
+	// it does not skip validation, and pr-merge stays gated on green CI exactly
+	// as it is for every other run. A dependency bump that breaks the build is
+	// a worse outcome than one that lands late.
+	if isDependabotRemediationPR(item) {
+		skipped := dependabotFastTrackSkips()
+		log.Printf("#%d: Dependabot remediation PR detected — skipping %d stages (%s)",
+			item.Number, len(skipped), joinStages(skipped))
+		for _, st := range skipped {
+			runtime.SkipStage(st)
+			tracer.Emit(trace.KindStageSkip, string(st), trace.StageSkipPayload{
 				Source: "dependabot",
 				Reason: "dependency updates are mechanical — planning and dev stages add no value",
 			})
 		}
-		stages = []state.PipelineStage{
-			state.StageIssuePickup,
-			state.StageFeatureValidate,
-			state.StagePRCreate,
-			state.StagePRMerge,
-		}
+		stages = dependabotFastTrackStages(stages)
 	}
 
 	// Spike issues append a spike-materialize stage after pr-merge that creates
@@ -5963,6 +5990,74 @@ func loadIssueContext(workspaceRoot string, issueNumber int) (complexityScore in
 	}
 	return ctx.Routing.ComplexityScore, ctx.Routing.Path,
 		ctx.Routing.PickupRecommendation.DevModel
+}
+
+// isDependabotRemediationPR reports whether a board item is the artifact
+// Dependabot ACTUALLY produces: an open PULL REQUEST carrying Dependabot's own
+// labels.
+//
+// The `item.IsPR` half is the entire point of #345 and is not a redundant
+// belt-and-braces check. Dependabot does not open issues — it opens pull
+// requests — so keying the fast-track on labels alone routed on a board item
+// that only ever exists when a human hand-creates and hand-labels one. Both
+// halves are required and neither is sufficient: a label-only test fires for a
+// hand-made issue and never for the real artifact, and an IsPR-only test would
+// fast-track every pull request on the board past planning and dev.
+//
+// Label-based Dependabot detection is right HERE and wrong for escalation.
+// Deciding "is this a mechanical version bump" from the forge's own
+// `dependencies` / ecosystem labels costs nothing and misroutes nothing worse
+// than a full pipeline. Deciding HOW BAD a vulnerability is must come from the
+// advisory (forgetypes.SecurityAlert.Severity, #343), never from the presence
+// of a `security` label — see the escalation note in
+// packages/nightgauge-vscode/src/services/DependabotPRService.ts.
+func isDependabotRemediationPR(item types.BoardItem) bool {
+	return item.IsPR && gh.IsDependabotIssue(item.Labels)
+}
+
+// dependabotFastTrackSkips is the EXACT set of stages the Dependabot fast-track
+// removes from a run, and it is deliberately just these two.
+//
+// feature-validate, pr-create and pr-merge are absent because a dependency bump
+// still has to compile, still has to pass CI, and still has to go through the
+// same merge gate as everything else. Adding a stage here weakens the merge
+// gate; #345's whole premise is that landing a bump LATE beats landing a broken
+// one.
+func dependabotFastTrackSkips() []state.PipelineStage {
+	return []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureDev}
+}
+
+// dependabotFastTrackStages returns full minus dependabotFastTrackSkips,
+// preserving order.
+//
+// It FILTERS rather than returning a fresh hard-coded list, because the two
+// results must PARTITION the full stage list: the run reports success on
+// `completed + skipped == STAGE_ORDER`, so a stage that is neither run nor
+// marked skipped makes a successful fast-tracked run report failure. A literal
+// list drifts silently the first time the stage order gains a member; a filter
+// cannot.
+func dependabotFastTrackStages(full []state.PipelineStage) []state.PipelineStage {
+	skip := make(map[state.PipelineStage]bool, 2)
+	for _, st := range dependabotFastTrackSkips() {
+		skip[st] = true
+	}
+	out := make([]state.PipelineStage, 0, len(full))
+	for _, st := range full {
+		if skip[st] {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// joinStages renders a stage list for a log line.
+func joinStages(stages []state.PipelineStage) string {
+	names := make([]string, len(stages))
+	for i, st := range stages {
+		names[i] = string(st)
+	}
+	return strings.Join(names, ", ")
 }
 
 // deriveRoutingDecision computes the authoritative routing Decision for a queued
