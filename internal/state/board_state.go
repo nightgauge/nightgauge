@@ -5,6 +5,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
@@ -35,6 +36,23 @@ const (
 	StatusInReview   BoardStatus = "In review"
 	StatusDone       BoardStatus = "Done"
 )
+
+// EqualFold reports whether b and other name the same board column, ignoring
+// capitalization.
+//
+// Never compare a status READ off a board with `==` (#413). The constants
+// above spell the labels the nightgauge provisioner writes, but a board's
+// actual option labels are whatever its creator typed — a hand-made board
+// commonly spells the same column "In Review". Reads return that raw label
+// verbatim (gh.BoardService.ListItems copies the option name straight into
+// BoardItem.Status), so an exact comparison silently answers "different
+// column" for a board that merely capitalizes differently, and the caller
+// takes the wrong branch. Writes already fold
+// (gh.ProjectService.SetSingleSelectField), so folding here keeps both
+// directions agreeing on one notion of column identity.
+func (b BoardStatus) EqualFold(other BoardStatus) bool {
+	return strings.EqualFold(string(b), string(other))
+}
 
 // BoardStateService reads and writes pipeline state via GitHub Project Board fields.
 // Write operations are delegated to an embedded ProjectService for cache unification.
@@ -129,8 +147,13 @@ func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, tar
 		// If we can't read current status, proceed with the revert — better to
 		// move an issue back to Ready than leave it stuck In progress.
 		_ = err // non-fatal: proceed with revert
-	} else if currentStatus == StatusInReview {
-		return false, nil // PR is open; leave status as-is
+	} else if currentStatus.EqualFold(StatusInReview) {
+		// PR is open; leave status as-is. Folded, not `==`: readItemStatus
+		// returns the board's raw option label, so a board spelling the column
+		// "In Review" must still trip this guard — otherwise the item drops
+		// back to Ready, the only dispatchable status, and gets re-dispatched
+		// on top of its own open PR.
+		return false, nil
 	}
 
 	if err := s.SetStatus(ctx, itemID, targetStatus); err != nil {
@@ -144,6 +167,11 @@ func (s *BoardStateService) FailPipeline(ctx context.Context, itemID string, tar
 }
 
 // readItemStatus fetches the current board status for a specific item.
+//
+// The returned value is the board's RAW single-select option label, not a
+// canonicalized BoardStatus — normalizing it here would report a value the
+// board does not actually hold. Compare it with BoardStatus.EqualFold, never
+// with `==`.
 func (s *BoardStateService) readItemStatus(ctx context.Context, itemID string) (BoardStatus, error) {
 	board := gh.NewBoardService(s.client, s.owner, s.projectNumber, s.ownerType)
 	items, err := board.ListItems(ctx, "")
