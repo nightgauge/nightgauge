@@ -927,12 +927,12 @@ excluded. The confirmed instances are filed as:
   for every arm), **every non-reconciling exit says why** — the own-run block,
   the no-PR fallthrough, the unnameable branch and the failed probe each log one
   line naming the issue — and the run's terminal board status is per-arm:
-  issue-CLOSED → **Done**; PR-MERGED → **In Review**, because that arm runs only
+  issue-CLOSED → **Done**; PR-MERGED → **In review**, because that arm runs only
   after the issue check already answered NOT-closed and since #299 the
   reconciled run ends there, so `Done` would durably record
   Done-with-an-open-issue against the `Done ⟺ closed` invariant; stale foreign
-  OPEN PR → **In Review** (in review, not merged); every non-reconciled
-  completion keeps its long-standing **In Review**. The board write is no longer
+  OPEN PR → **In review** (in review, not merged); every non-reconciled
+  completion keeps its long-standing **In review**. The board write is no longer
   discarded — a status the run resolved but failed to persist logs
   `board status <S> NOT written: <err>`
 - **#300** — `ParseStreamLine` ignores assistant per-turn usage; a stage

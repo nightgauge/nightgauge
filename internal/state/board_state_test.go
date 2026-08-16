@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -42,7 +44,7 @@ func mockGQL(t *testing.T, opts ...mockOpt) *httptest.Server {
 		hasStatus:        true,
 		hasPipelineStage: true,
 		itemID:           "item1",
-		itemStatus:       "In Progress",
+		itemStatus:       "In progress", // provisioned spelling; see fieldsResp
 	}
 	for _, o := range opts {
 		o(cfg)
@@ -94,11 +96,23 @@ func fieldsResp(cfg *mockConfig) map[string]interface{} {
 			"__typename": "ProjectV2SingleSelectField",
 			"id":         "PVTSSF_status",
 			"name":       "Status",
+			// Spelled exactly as gh.DefaultFieldSchema provisions the "Status"
+			// column (#413) — "In progress"/"In review", not "In Progress"/
+			// "In Review". Do not "correct" the casing back: with the legacy
+			// spelling here every SetStatus in this file misses the exact-match
+			// lookup and lands on SetSingleSelectField's case-insensitive
+			// fallback, so the default fixture silently stops covering the
+			// happy path and emits a [WARN] per write instead. The fold path is
+			// covered deliberately and in isolation by
+			// TestSetSingleSelectField_CaseInsensitiveFallback and friends in
+			// internal/github/project_test.go; it does not need incidental
+			// coverage here. TestMockBoardOptionsMatchProvisionedSchema below
+			// pins this list so it cannot drift again.
 			"options": []interface{}{
 				map[string]interface{}{"id": "opt_backlog", "name": "Backlog"},
 				map[string]interface{}{"id": "opt_ready", "name": "Ready"},
-				map[string]interface{}{"id": "opt_inprog", "name": "In Progress"},
-				map[string]interface{}{"id": "opt_inrev", "name": "In Review"},
+				map[string]interface{}{"id": "opt_inprog", "name": "In progress"},
+				map[string]interface{}{"id": "opt_inrev", "name": "In review"},
 				map[string]interface{}{"id": "opt_done", "name": "Done"},
 			},
 		})
@@ -340,4 +354,87 @@ func TestConcurrentFieldWrites(t *testing.T) {
 	}
 	wg.Wait()
 	// Test goal: no race detector violations
+}
+
+// TestMockBoardOptionsMatchProvisionedSchema pins this file's mock "Status"
+// options to the labels gh.DefaultFieldSchema actually provisions (#413).
+//
+// Without this pin the fixture drifts silently in the one direction that
+// still passes: SetSingleSelectField falls back to a case-insensitive match,
+// so a mock spelling the column "In Progress" keeps every test in this file
+// green while quietly routing all of them through the fallback instead of the
+// exact-match path they are meant to exercise. The only visible symptom is a
+// [WARN] line per write buried in `go test -v` output — which is exactly the
+// kind of signal that gets read as background noise. Asserting equality
+// against the provisioner turns that silent drift into a failure, and keeps
+// the fold covered only where it is covered on purpose
+// (internal/github/project_test.go).
+func TestMockBoardOptionsMatchProvisionedSchema(t *testing.T) {
+	var provisioned []string
+	for _, f := range gh.DefaultFieldSchema().SingleSelectFields {
+		if f.Name == "Status" {
+			for _, o := range f.Options {
+				provisioned = append(provisioned, o.Name)
+			}
+		}
+	}
+	if len(provisioned) == 0 {
+		t.Fatal("DefaultFieldSchema provisions no \"Status\" single-select options")
+	}
+
+	statusField := findMockField(t, "Status")
+	rawOptions, ok := statusField["options"].([]interface{})
+	if !ok {
+		t.Fatalf("mock \"Status\" field has no options list: %#v", statusField)
+	}
+
+	mocked := make([]string, 0, len(rawOptions))
+	for _, o := range rawOptions {
+		opt, ok := o.(map[string]interface{})
+		if !ok {
+			t.Fatalf("mock option is not an object: %#v", o)
+		}
+		name, ok := opt["name"].(string)
+		if !ok {
+			t.Fatalf("mock option has no string name: %#v", opt)
+		}
+		mocked = append(mocked, name)
+	}
+
+	sort.Strings(provisioned)
+	sort.Strings(mocked)
+	if !slices.Equal(provisioned, mocked) {
+		t.Errorf("mockGQL \"Status\" options %q do not match the labels DefaultFieldSchema provisions %q — "+
+			"writes in this file will resolve through SetSingleSelectField's case-insensitive fallback "+
+			"instead of an exact match, so these tests stop covering the provisioned-board path",
+			mocked, provisioned)
+	}
+}
+
+// findMockField returns the fieldsResp node for the named field, failing the
+// test if the mock does not describe it.
+func findMockField(t *testing.T, name string) map[string]interface{} {
+	t.Helper()
+	resp := fieldsResp(&mockConfig{hasStatus: true, hasPipelineStage: true})
+
+	data, _ := resp["data"].(map[string]interface{})
+	org, _ := data["organization"].(map[string]interface{})
+	project, _ := org["projectV2"].(map[string]interface{})
+	fields, _ := project["fields"].(map[string]interface{})
+	nodes, _ := fields["nodes"].([]interface{})
+	if len(nodes) == 0 {
+		t.Fatalf("fieldsResp returned no field nodes; shape changed: %#v", resp)
+	}
+
+	for _, n := range nodes {
+		node, ok := n.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if node["name"] == name {
+			return node
+		}
+	}
+	t.Fatalf("fieldsResp describes no %q field", name)
+	return nil
 }

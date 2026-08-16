@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 	"sync"
 
@@ -244,7 +246,47 @@ func (p *ProjectService) SetSingleSelectField(ctx context.Context, itemID, field
 		return fmt.Errorf("field %q is type %s, not single_select", fieldName, field.Type)
 	}
 
+	// Exact match first, always: an option spelled exactly as requested is
+	// honoured without ever consulting the fold below, so a board that carries
+	// both "In review" and "In Review" still resolves deterministically for
+	// whichever of the two the caller actually named.
 	optionID, ok := field.Options[optionName]
+	if !ok {
+		// Defense-in-depth: fall back to a case-insensitive scan before
+		// failing. Board provenance varies — hand-made boards and boards
+		// provisioned by different tooling versions may capitalize option
+		// labels differently (e.g. "In Review" vs "In review") even though
+		// they represent the same logical status.
+		//
+		// The fold collects every candidate rather than returning the first
+		// hit. Go randomizes map iteration, so a "first match wins" scan picks
+		// a DIFFERENT option id from run to run on a board whose field carries
+		// two case-variant labels — GitHub Projects permits exactly that — and
+		// the item lands in a different column each time with no diagnostic.
+		// One match folds with a WARN; two or more is refused outright, naming
+		// every candidate: which column the operator meant is genuinely
+		// unknowable there, and guessing would silently file the item in a
+		// column half this codebase's sweeps are not watching.
+		var folded []string
+		for name := range field.Options {
+			if strings.EqualFold(name, optionName) {
+				folded = append(folded, name)
+			}
+		}
+		sort.Strings(folded)
+
+		switch len(folded) {
+		case 0:
+			// Nothing matched even folded — fall through to the error below.
+		case 1:
+			log.Printf("[WARN] github: field %q: option %q not found exactly; matched %q via case-insensitive fallback", fieldName, optionName, folded[0])
+			optionID, ok = field.Options[folded[0]], true
+		default:
+			return fmt.Errorf("option %q is ambiguous for field %q: %d options match case-insensitively (%s) — "+
+				"rename the duplicates on the board so exactly one spelling remains, or pass one of them verbatim",
+				optionName, fieldName, len(folded), quoteJoin(folded))
+		}
+	}
 	if !ok {
 		return fmt.Errorf("option %q not found for field %q (available: %s)", optionName, fieldName, p.optionNames(fieldName))
 	}
@@ -725,7 +767,22 @@ func (p *ProjectService) optionNames(fieldName string) string {
 	for name := range field.Options {
 		names = append(names, name)
 	}
+	// Sorted: this string is user-facing error text and it is read by a human
+	// comparing it against the board. Map order would reshuffle the same set of
+	// options on every run, making two reports of one failure look different.
+	sort.Strings(names)
 	return strings.Join(names, ", ")
+}
+
+// quoteJoin renders names as a comma-separated list of quoted strings, so an
+// option label containing a comma or trailing space is still legible in an
+// error message.
+func quoteJoin(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = fmt.Sprintf("%q", n)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // --- Field Schema and EnsureFields ---

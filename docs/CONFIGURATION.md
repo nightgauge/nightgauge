@@ -6353,7 +6353,7 @@ retain their defaults.
 | Config Key          | Default                                                    | Description                                           |
 | ------------------- | ---------------------------------------------------------- | ----------------------------------------------------- |
 | `max_stale_days`    | `30`                                                       | Days of inactivity before an epic is considered stale |
-| `board_status_enum` | `["Backlog", "Ready", "In Progress", "In Review", "Done"]` | Valid project board statuses                          |
+| `board_status_enum` | `["Backlog", "Ready", "In progress", "In review", "Done"]` | Valid project board statuses                          |
 
 ### Issue Creation
 

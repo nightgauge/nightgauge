@@ -4017,8 +4017,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// across two repos on every stage. Pinned by
 		// TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo, which runs a
 		// cross-repo dispatch where the two roots differ; without it this line's
-		// correctness rested on this comment, and the wrong idiom already sits in
-		// this file (the #441 post-merge breadcrumb persists to s.workspaceRoot).
+		// correctness rested on this comment. Every runtime-snapshot persist in
+		// this file now roots the same way: the post-merge breadcrumb in
+		// verifyPRMergeForStage was the last launch-rooted one, and #441 moved it
+		// onto s.runRoot(item.Repo) too (pinned by
+		// TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo).
 		//
 		// BEFORE emitStateChanged below, not after: that callback ships
 		// runtime.Snapshot() over the wire, and emitting first would describe this
@@ -7183,10 +7186,28 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// so the run record carries the merge commit SHA + mergedAt. Best-effort:
 	// SetMergeOutcome ignores empty values and a persist failure is logged, not
 	// fatal — the merge has already happened.
+	//
+	// ROOTED AT THE RUN'S TARGET REPO (#441, over #229/#410), the same
+	// s.runRoot(item.Repo) that runPipeline binds to its local `workspaceRoot`
+	// and that every other Persist in this file writes through — this is a
+	// runtime-{issue}-{runId}.json write, so it belongs beside the run's other
+	// snapshots and nowhere else. It used to go to s.workspaceRoot, the
+	// scheduler's LAUNCH root, which filed the breadcrumb under the wrong repo
+	// identity on a cross-repo run: since #410 each repo root's own
+	// .nightgauge/pipeline/ IS that root's in-flight source for
+	// state.ActiveIssuesFromSnapshots, so the launch repo's scan saw a phantom
+	// issue while the target repo's scan missed a real one. Contrast the
+	// survival record below, which is deliberately launch-rooted.
+	//
+	// The non-empty guard is on the RESOLVED run root, not on s.workspaceRoot:
+	// runRoot falls back to the execution manager's root for an unknown or empty
+	// repo, and an empty root would make filepath.Join yield the cwd-relative
+	// ".nightgauge/pipeline" — writing a run's state into whatever directory the
+	// process happens to be in. Skip the breadcrumb instead.
 	if pmResult.MergedCommitSha != "" || pmResult.MergedAt != "" {
 		runtime.SetMergeOutcome(pmResult.MergedCommitSha, pmResult.MergedAt)
-		if s.workspaceRoot != "" {
-			if persistErr := runtime.Persist(filepath.Join(s.workspaceRoot, ".nightgauge", "pipeline")); persistErr != nil {
+		if runRoot := s.runRoot(item.Repo); runRoot != "" {
+			if persistErr := runtime.Persist(filepath.Join(runRoot, ".nightgauge", "pipeline")); persistErr != nil {
 				log.Printf("#%d: warning: failed to persist merge breadcrumb: %v", item.Number, persistErr)
 			}
 		}
@@ -7196,6 +7217,19 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	// merges. Best-effort and strictly non-blocking — the merge has already
 	// landed; a store failure is logged, never fatal. The reconcile sweep later
 	// finalizes the record (survived / reverted / broke / unobserved).
+	//
+	// LAUNCH-ROOTED ON PURPOSE — this is NOT the breadcrumb's bug repeated (#441
+	// adjudication). The survival journal is a single append-only file at
+	// <root>/survival.StoreRelPath whose records are self-describing: each one
+	// carries its own Repo + Number (survival.NewPending(item.Repo, …)) and the
+	// detector resolves the repo to query from rec.Repo, never from the store's
+	// root. Both readers are launch-root global and there is no per-repo scan to
+	// pair with — sweepSurvivalRecords does survival.NewStore(as.workspaceRoot)
+	// and feeds gh.NewOutcomeService(as.workspaceRoot) — so run-rooting only the
+	// WRITER would make a cross-repo run's record unreadable by the sweep and it
+	// would age out to "unobserved". The breadcrumb is the opposite shape: a
+	// per-run snapshot file whose reader scans one repo root at a time and
+	// infers the owning repo from WHERE the file is.
 	if pmResult.SurvivalEligible && s.workspaceRoot != "" {
 		store := survival.NewStore(s.workspaceRoot)
 		rec := survival.NewPending(item.Repo, item.Number, mergedPRNumber, pmResult.MergedCommitSha, pmResult.MergedAt, "")
