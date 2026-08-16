@@ -15,6 +15,7 @@ import {
   CODEX_TIER_MODEL_MAP,
   REASONING_EFFORT_ALTERNATION,
   REASONING_EFFORT_LEVELS,
+  escalationLadder,
 } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
@@ -1793,11 +1794,14 @@ export function getConfidenceThreshold(workspaceRoot?: string): number {
 // ============================================================================
 
 /**
- * The fixed escalation path: haiku → sonnet → opus.
- * Returns the next more-capable model, or null if already at the ceiling.
+ * The escalation path (haiku → sonnet → opus with today's registry), derived
+ * from the selection query (#581): membership from the registry, order from
+ * the band ladder, and the frontier exclusion from the declared escalation
+ * ceiling — never a hand-inlined triplet. Go pair: routing.EscalationLadder
+ * feeding RetryConfig.ModelLadder.
  * @see Issue #1343 - Dynamic Model Escalation Engine
  */
-const ESCALATION_PATH: DefaultModel[] = ["haiku", "sonnet", "opus"];
+const ESCALATION_PATH: readonly DefaultModel[] = escalationLadder("anthropic");
 
 export function getEscalatedModel(currentModel: DefaultModel): DefaultModel | null {
   const idx = ESCALATION_PATH.indexOf(currentModel);
