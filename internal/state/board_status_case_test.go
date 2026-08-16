@@ -73,10 +73,11 @@ func TestBoardStatusConstantsMatchProvisionedOptions(t *testing.T) {
 // updateProjectV2ItemFieldValue mutation.
 //
 // This is a deliberately separate, minimal fixture from board_state_test.go's
-// mockGQL/fieldsResp (that file is outside this fix's ownership bar and its
-// "In Progress"/"In Review" fixture is intentionally left as-is here — see
-// TestSetSingleSelectField_ProvisionedBoardStatusConstants in
-// internal/github/project_test.go and the #413 PR notes for why).
+// mockGQL/fieldsResp: it answers only what a status write needs, so a failure
+// here points at the status-option resolution under test rather than at the
+// larger mock's item/stage plumbing. Both fixtures now provision the same
+// labels, and TestMockBoardOptionsMatchProvisionedSchema pins the other one to
+// DefaultFieldSchema so the two cannot drift apart.
 func newProvisionedStatusServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
