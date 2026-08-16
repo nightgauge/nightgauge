@@ -859,11 +859,16 @@ func TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor(t *testing.T) {
 	}
 }
 
-// TestCheckAdapter_NonGrokCLIHasNoCatalogProbe: adapters with no
-// catalogParser wired (claude, codex, gemini, copilot today) must never
-// populate Catalog/CatalogWarning — the doctor must not guess at a
-// command/shape nothing has captured evidence for (#551).
-func TestCheckAdapter_NonGrokCLIHasNoCatalogProbe(t *testing.T) {
+// TestCheckAdapter_NonGrokCLIHasNoCatalogProbeButSurfacesSkipReason (#604):
+// adapters with no catalogParser wired (claude, codex, gemini, copilot
+// today) must never populate Catalog with a guessed/fabricated
+// command/shape (#551) — but, unlike PR #602's original architecture-only
+// state, they now surface WHY via CatalogWarning rather than leaving the
+// field silently empty and indistinguishable from "not gotten to yet."
+// CONTRACT CHANGE (#604): this test previously asserted CatalogWarning=="".
+// It now asserts the opposite for exactly this reason — the AC requires the
+// skip to be explicit, not silently absent.
+func TestCheckAdapter_NonGrokCLIHasNoCatalogProbeButSurfacesSkipReason(t *testing.T) {
 	fp := fakeProbe{
 		paths:    map[string]string{"codex": "/bin/codex"},
 		versions: map[string]string{"/bin/codex": "codex 0.112.0"},
@@ -871,10 +876,149 @@ func TestCheckAdapter_NonGrokCLIHasNoCatalogProbe(t *testing.T) {
 	}
 	h := checkAdapter("codex", fp.toProbe())
 	if !h.OK {
-		t.Fatalf("expected codex OK, got %+v", h)
+		t.Fatalf("expected codex OK (a no-catalog skip reason never fails the adapter), got %+v", h)
 	}
-	if h.Catalog != nil || h.CatalogWarning != "" {
-		t.Errorf("expected codex to have no catalog probe, got catalog=%+v warning=%q", h.Catalog, h.CatalogWarning)
+	if h.Catalog != nil {
+		t.Errorf("expected codex to have no fabricated Catalog, got %+v", h.Catalog)
+	}
+	if !strings.HasPrefix(h.CatalogWarning, "no catalog probe: ") || !strings.Contains(h.CatalogWarning, "codex --help") {
+		t.Errorf("expected codex CatalogWarning to explain the skip reason, got %q", h.CatalogWarning)
+	}
+}
+
+// TestAdapterSpecs_CatalogWiringIsMutuallyExclusive (#604) pins that every
+// kindCLI adapter declares EXACTLY one of catalogParser (a wired, evidence-backed
+// probe) or catalogSkipReason (an explicit, evidence-backed "no probe"
+// decision) — never both, never neither. A kindCLI adapter with neither would
+// regress to #602's original silent-absence state; one with both would be
+// self-contradictory spec data.
+func TestAdapterSpecs_CatalogWiringIsMutuallyExclusive(t *testing.T) {
+	for name, spec := range adapterSpecs {
+		if spec.kind != kindCLI {
+			continue
+		}
+		wired := spec.catalogParser != nil
+		skipped := spec.catalogSkipReason != ""
+		if wired == skipped {
+			t.Errorf("adapter %q: exactly one of catalogParser/catalogSkipReason must be set, got wired=%v skipped=%v", name, wired, skipped)
+		}
+	}
+	// Pin the specific split as of #604.
+	for _, name := range []string{"claude-headless", "codex", "gemini", "copilot"} {
+		spec := adapterSpecs[name]
+		if spec.catalogParser != nil {
+			t.Errorf("adapter %q: expected no catalogParser (no captured command evidence exists)", name)
+		}
+		if spec.catalogSkipReason == "" {
+			t.Errorf("adapter %q: expected a non-empty catalogSkipReason", name)
+		}
+		if len(spec.catalogArgs) != 0 {
+			t.Errorf("adapter %q: expected no catalogArgs alongside a skip reason, got %v", name, spec.catalogArgs)
+		}
+	}
+	if adapterSpecs["grok"].catalogParser == nil {
+		t.Error(`adapter "grok": expected catalogParser to remain wired`)
+	}
+	if adapterSpecs["grok"].catalogSkipReason != "" {
+		t.Error(`adapter "grok": expected no catalogSkipReason alongside a wired catalogParser`)
+	}
+}
+
+// TestCheckAdapter_CatalogSkipReasonSurfacedForClaudeGeminiCopilot (#604)
+// exercises the remaining three no-catalog adapters end-to-end (codex is
+// covered above): once each passes its baseline health, CatalogWarning must
+// explain the skip — never leave Catalog/CatalogWarning both empty and never
+// fail OK on account of it.
+func TestCheckAdapter_CatalogSkipReasonSurfacedForClaudeGeminiCopilot(t *testing.T) {
+	cases := []struct {
+		adapter  string
+		fp       fakeProbe
+		wantText string
+	}{
+		{
+			adapter:  "claude",
+			fp:       fakeProbe{paths: map[string]string{"claude": "/opt/claude"}, versions: map[string]string{"/opt/claude": "claude 2.1.233"}},
+			wantText: "claude --help",
+		},
+		{
+			adapter:  "gemini",
+			fp:       fakeProbe{paths: map[string]string{"gemini": "/bin/gemini"}, versions: map[string]string{"/bin/gemini": "gemini 0.29.0"}},
+			wantText: "no gemini CLI was installed",
+		},
+		{
+			adapter:  "copilot",
+			fp:       fakeProbe{paths: map[string]string{"copilot": "/bin/copilot"}, versions: map[string]string{"/bin/copilot": "copilot 0.1.0"}},
+			wantText: "Cannot find GitHub Copilot CLI",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.adapter, func(t *testing.T) {
+			h := checkAdapter(c.adapter, c.fp.toProbe())
+			if !h.OK {
+				t.Fatalf("expected %s OK, got remediation=%q", c.adapter, h.Remediation)
+			}
+			if h.Catalog != nil {
+				t.Errorf("expected %s to have no fabricated Catalog, got %+v", c.adapter, h.Catalog)
+			}
+			if !strings.HasPrefix(h.CatalogWarning, "no catalog probe: ") || !strings.Contains(h.CatalogWarning, c.wantText) {
+				t.Errorf("expected %s CatalogWarning to mention %q, got %q", c.adapter, c.wantText, h.CatalogWarning)
+			}
+		})
+	}
+}
+
+// TestCheckAdapter_CatalogSkipReasonSkippedWhenBaselineFails (#604) mirrors
+// grok's TestCheckAdapter_GrokCatalogSkippedWhenNotInstalled /
+// …SkippedBelowVersionFloor: the no-catalog explanation must stay silent
+// when the adapter already fails for an unrelated reason — no redundant
+// second note layered on a baseline failure that's already reported via
+// Installed/VersionOK/Remediation.
+func TestCheckAdapter_CatalogSkipReasonSkippedWhenBaselineFails(t *testing.T) {
+	notInstalled := checkAdapter("codex", fakeProbe{codex: t.TempDir()}.toProbe())
+	if notInstalled.OK || notInstalled.Installed {
+		t.Fatal("expected codex !OK/!installed when the binary is missing")
+	}
+	if notInstalled.CatalogWarning != "" {
+		t.Errorf("expected no catalog-skip note when not installed, got %q", notInstalled.CatalogWarning)
+	}
+
+	belowFloor := checkAdapter("gemini", fakeProbe{
+		paths:    map[string]string{"gemini": "/bin/gemini"},
+		versions: map[string]string{"/bin/gemini": "gemini 0.28.9"},
+	}.toProbe())
+	if belowFloor.OK || belowFloor.VersionOK {
+		t.Fatal("expected gemini !OK below its version floor")
+	}
+	if belowFloor.CatalogWarning != "" {
+		t.Errorf("expected no catalog-skip note below the version floor, got %q", belowFloor.CatalogWarning)
+	}
+}
+
+// TestNoCatalogEvidence_CodexHelpHasNoModelsCommand and its claude sibling
+// below pin the captured evidence backing codexNoCatalogReason /
+// claudeNoCatalogReason (testdata/no-catalog-cli-probes/). If a future CLI
+// release adds a models/catalog-listing command, a freshly captured
+// `--help` would mention "models" and this test would fail — the intended
+// trip-wire telling a maintainer to revisit the skip reason and wire a real
+// probe (testdata/no-catalog-cli-probes/README.md § Revisiting this
+// decision), rather than the omission going unnoticed indefinitely.
+func TestNoCatalogEvidence_CodexHelpHasNoModelsCommand(t *testing.T) {
+	b, err := os.ReadFile("testdata/no-catalog-cli-probes/codex-help.txt")
+	if err != nil {
+		t.Fatalf("could not read codex --help fixture: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(b)), "models") {
+		t.Error(`captured codex --help now mentions "models" — revisit codexNoCatalogReason (#604): a newer codex release may have added a catalog-listing command`)
+	}
+}
+
+func TestNoCatalogEvidence_ClaudeHelpHasNoModelsCommand(t *testing.T) {
+	b, err := os.ReadFile("testdata/no-catalog-cli-probes/claude-help.txt")
+	if err != nil {
+		t.Fatalf("could not read claude --help fixture: %v", err)
+	}
+	if strings.Contains(strings.ToLower(string(b)), "models") {
+		t.Error(`captured claude --help now mentions "models" — revisit claudeNoCatalogReason (#604): a newer claude release may have added a catalog-listing command`)
 	}
 }
 
