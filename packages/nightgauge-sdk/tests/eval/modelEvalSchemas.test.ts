@@ -12,6 +12,9 @@ import {
   MIN_HONEST_SCHEMA_VERSION,
   EFFORT_LEVELS,
   REASONING_LEVELS,
+  TRANSPORTS,
+  RATE_PROVENANCES,
+  TransportFactsSchema,
   ModelDescriptorSchema,
   EvalTaskSchema,
   EvalScoreSchema,
@@ -264,6 +267,64 @@ describe("model-eval schemas — strict (reject unknown keys)", () => {
         x: 1,
       })
     ).toThrow();
+  });
+});
+
+describe("model-eval schemas — orthogonal axis fields (#578)", () => {
+  it("pins the closed transport and provenance vocabularies", () => {
+    expect([...TRANSPORTS]).toEqual(["cli", "api"]);
+    expect([...RATE_PROVENANCES]).toEqual(["measured", "list", "subscription", "placeholder"]);
+  });
+
+  it("accepts the minimal transport fact — served alone", () => {
+    expect(TransportFactsSchema.parse({ served: false })).toEqual({ served: false });
+  });
+
+  it("accepts the full measured shape and rejects a malformed verified date", () => {
+    const full = {
+      served: true,
+      verified: "2026-08-15",
+      evidence: "grok models catalog listing, grok CLI 1.0.4",
+      rates: { input: 0.34, output: 1.02 },
+      rate_provenance: "measured",
+    };
+    expect(TransportFactsSchema.parse(full)).toEqual(full);
+    expect(() => TransportFactsSchema.parse({ served: true, verified: "Aug 15" })).toThrow();
+  });
+
+  it("is strict: unknown transport-fact keys are rejected", () => {
+    expect(() => TransportFactsSchema.parse({ served: true, latency_ms: 40 })).toThrow();
+  });
+
+  it("rejects a provenance outside the closed set", () => {
+    expect(() => TransportFactsSchema.parse({ served: true, rate_provenance: "vendor" })).toThrow();
+  });
+
+  it("accepts descriptor transports keyed cli/api and rejects other keys", () => {
+    const withTransports = {
+      ...OPUS,
+      transports: { cli: { served: true }, api: { served: true } },
+    };
+    expect(() => ModelDescriptorSchema.parse(withTransports)).not.toThrow();
+    // `sdk` folds into `api` (spike #568 §2.1) — it must not be a key of its own.
+    expect(() =>
+      ModelDescriptorSchema.parse({ ...OPUS, transports: { sdk: { served: true } } })
+    ).toThrow();
+    // Partial by design: a cli-only map is a model whose api fact is unexpressed.
+    expect(() =>
+      ModelDescriptorSchema.parse({ ...OPUS, transports: { cli: { served: true } } })
+    ).not.toThrow();
+  });
+
+  it("accepts descriptor rate_provenance from the closed set only", () => {
+    expect(() => ModelDescriptorSchema.parse({ ...OPUS, rate_provenance: "list" })).not.toThrow();
+    expect(() => ModelDescriptorSchema.parse({ ...OPUS, rate_provenance: "fixture" })).toThrow();
+  });
+
+  it("keeps both fields optional — a pre-#578 descriptor still parses", () => {
+    // Additive phase: nothing forces the axes yet (#579 does), so historical
+    // eval-run snapshots with axis-less descriptors must keep parsing.
+    expect(() => ModelDescriptorSchema.parse(OPUS)).not.toThrow();
   });
 });
 

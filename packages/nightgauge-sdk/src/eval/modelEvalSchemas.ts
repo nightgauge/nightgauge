@@ -128,6 +128,68 @@ export const TokenRatesSchema = z
   .strict();
 export type TokenRates = z.infer<typeof TokenRatesSchema>;
 
+// ---------------------------------------------------------------------------
+// Transports + rate provenance (registry-axis-schema, epic #567 / #578)
+// ---------------------------------------------------------------------------
+
+/**
+ * The closed set of transports a registry model can be reached through,
+ * matching the doctor's adapter kinds with `sdk` folded into `api`
+ * (http-kind local servers have no registry entries by design).
+ */
+export const TRANSPORTS = ["cli", "api"] as const;
+export const TransportSchema = z.enum(TRANSPORTS);
+export type Transport = z.infer<typeof TransportSchema>;
+
+/**
+ * Where a rate card's figures came from:
+ *
+ * - `measured` — a controlled live billing measurement on the transport in
+ *   use (e.g. the #531/#570 Grok Build CLI measurement);
+ * - `list` — transcribed from the vendor's published price sheet;
+ * - `subscription` — flat-rate traffic where 0 is a design decision, not a
+ *   price (copilot);
+ * - `placeholder` — a recorded figure that is not a vendor price at all
+ *   (never-listed research previews, provider-neutral fixtures).
+ */
+export const RATE_PROVENANCES = ["measured", "list", "subscription", "placeholder"] as const;
+export const RateProvenanceSchema = z.enum(RATE_PROVENANCES);
+export type RateProvenance = z.infer<typeof RateProvenanceSchema>;
+
+/**
+ * Per-transport reachability + optional per-transport rate card (#578).
+ *
+ * `served: false` is a positive fact — "exists at the provider, unreachable
+ * through this transport" (the #532 class, previously smuggled through
+ * `deprecated: true`). An entirely ABSENT transport key is the unexpressed
+ * state: the fact is pending (e.g. the xai `api` transport awaits #553) and
+ * must never be read as either served or unserved.
+ *
+ * `verified` + `evidence` cite the last live catalog/billing check; absent
+ * means the fact is declared, not verified. Transport `rates` override the
+ * top-level card for this transport only (the two-rate-card reality #570
+ * documents); absent rates inherit the top-level card. `rate_provenance` is
+ * mandatory whenever transport rates are present — a loader-level assert in
+ * `modelRegistry.ts`, like band uniqueness.
+ */
+export const TransportFactsSchema = z
+  .object({
+    served: z.boolean(),
+    /** Date (YYYY-MM-DD) of the last live catalog/billing check; absent = declared. */
+    verified: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .optional(),
+    /** What the live check was (e.g. "grok models catalog listing, grok CLI 1.0.4"). */
+    evidence: z.string().min(1).optional(),
+    /** Transport-specific rate card; absent = inherit the model's top-level rates. */
+    rates: TokenRatesSchema.optional(),
+    /** REQUIRED whenever `rates` is present (loader-level assert). */
+    rate_provenance: RateProvenanceSchema.optional(),
+  })
+  .strict();
+export type TransportFacts = z.infer<typeof TransportFactsSchema>;
+
 /**
  * Sentinel for {@link BehaviorSchema.shape.thinking_disable_max_effort}: this
  * model rejects disabled thinking at EVERY effort level, so there is no
@@ -234,6 +296,19 @@ export const ModelDescriptorSchema = z
     concrete_version: z.string().min(1),
     /** USD/MTok rates — the basis for all eval cost computation. */
     rates: TokenRatesSchema,
+    /**
+     * Provenance of the top-level (default) rate card (#578). Optional in
+     * this additive phase; populated for every current entry.
+     */
+    rate_provenance: RateProvenanceSchema.optional(),
+    /**
+     * Per-transport reachability facts + optional per-transport rate cards
+     * (#578). Keys are the closed `cli | api` set; an absent key is an
+     * UNEXPRESSED (pending) fact, never an implicit `served: false`. Nothing
+     * enforces these at selection yet — that is the fail-closed enforcement
+     * phase (#579).
+     */
+    transports: z.partialRecord(TransportSchema, TransportFactsSchema).optional(),
     /**
      * The effort levels this model accepts. REQUIRED, and emptiable — two
      * registry states, both positive declarations (#336):
