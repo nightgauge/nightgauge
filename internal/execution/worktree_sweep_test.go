@@ -115,6 +115,132 @@ func TestSweepMergedWorktrees_ReclaimsSquashMergedBranch(t *testing.T) {
 	}
 }
 
+func TestSweepMergedWorktrees_ReclaimsUpdateBranchThenSquash(t *testing.T) {
+	// #583: after `gh pr update-branch` the branch tip is a merge commit from
+	// main; after squash, origin/main is a new commit and later main work
+	// makes a full-tree two-dot non-empty. Path-restricted compare of the
+	// branch's own files is empty — that is reclaimable.
+	f := newSweepFixture(t)
+	wt := f.addWorktree(583, "fix/583-update-branch")
+	f.commitIn(wt, "feature.txt", "work\n")
+
+	f.commitToMain("extra.txt", "unrelated\n")
+	run(t, wt, "git", "merge", "origin/main", "-m", "merge origin/main")
+	if merges := strings.TrimSpace(mustGit(t, wt, "rev-list", "--merges", "-n1", "HEAD")); merges == "" {
+		t.Fatal("expected an update-branch-style merge commit on the feature branch")
+	}
+
+	f.squashMergeToMain("fix/583-update-branch")
+	f.commitToMain("later.txt", "after squash\n")
+
+	twoDot := strings.TrimSpace(mustGit(t, f.root, "diff", "--stat", "origin/main..fix/583-update-branch"))
+	if twoDot == "" {
+		t.Fatal("fixture did not arm the two-dot trap — origin/main..branch is empty")
+	}
+	if _, err := gitOutput(f.root, "merge-base", "--is-ancestor", "fix/583-update-branch", "origin/main"); err == nil {
+		t.Fatal("fixture is not a real squash merge — branch tip is an ancestor of origin/main")
+	}
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Branch != "fix/583-update-branch" {
+		t.Fatalf("expected the update-branch+squash worktree to be reclaimed, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
+		t.Errorf("Door = %q, want %q", got, ReclaimContentMerged)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory still on disk at %s", wt)
+	}
+}
+
+func TestSweepMergedWorktrees_FetchesStaleOriginMain(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(584, "fix/584-stale-origin")
+	f.commitIn(wt, "feature.txt", "work\n")
+
+	stale := strings.TrimSpace(mustGit(t, f.root, "rev-parse", "refs/remotes/origin/main"))
+	f.squashMergeToMain("fix/584-stale-origin")
+	run(t, f.root, "git", "update-ref", "refs/remotes/origin/main", stale)
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if res.BaseRefFetchError != "" {
+		t.Fatalf("fetch should succeed against the local fixture origin, got %q", res.BaseRefFetchError)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Branch != "fix/584-stale-origin" {
+		t.Fatalf("expected fetch to refresh origin/main and reclaim, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory still on disk at %s", wt)
+	}
+}
+
+func TestSweepMergedWorktrees_ReportsFetchFailureAndContinues(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(585, "fix/585-fetch-fail")
+	f.commitIn(wt, "feature.txt", "work\n")
+
+	stale := strings.TrimSpace(mustGit(t, f.root, "rev-parse", "refs/remotes/origin/main"))
+	f.squashMergeToMain("fix/585-fetch-fail")
+	run(t, f.root, "git", "update-ref", "refs/remotes/origin/main", stale)
+	run(t, f.root, "git", "remote", "set-url", "origin", "file:///dev/null")
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep must continue after fetch failure, got %v", err)
+	}
+	if res.BaseRefFetchError == "" {
+		t.Fatal("expected BaseRefFetchError when origin is unreachable")
+	}
+	assertSkipped(t, res, wt, SkipUnmergedContent)
+	if _, err := os.Stat(wt); err != nil {
+		t.Errorf("worktree was removed despite a stale base ref: %v", err)
+	}
+}
+
+func TestSweepMergedWorktrees_ReclaimsViaMergedPRLookupWhenBaseRewroteFiles(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(586, "fix/586-pr-door")
+	f.commitIn(wt, "feature.txt", "original\n")
+	f.squashMergeToMain("fix/586-pr-door")
+	f.commitToMain("feature.txt", "rewritten on main\n")
+
+	tip := strings.TrimSpace(mustGit(t, f.root, "rev-parse", "fix/586-pr-door"))
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	assertSkipped(t, res, wt, SkipUnmergedContent)
+
+	res, err = SweepMergedWorktrees(WorktreeSweepOptions{
+		RepoRoot: f.root,
+		MergedPRLookup: func(branch, gotTip string) (string, bool) {
+			if branch != "fix/586-pr-door" || gotTip != tip {
+				return "", false
+			}
+			return tip, true
+		},
+	})
+	if err != nil {
+		t.Fatalf("sweep with lookup: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Branch != "fix/586-pr-door" {
+		t.Fatalf("expected PR-tip door to reclaim, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
+		t.Errorf("Door = %q, want %q", got, ReclaimContentMerged)
+	}
+}
+
 func TestSweepMergedWorktrees_KeepsBranchWithUniqueWork(t *testing.T) {
 	f := newSweepFixture(t)
 	wt := f.addWorktree(111, "feat/111-unmerged")

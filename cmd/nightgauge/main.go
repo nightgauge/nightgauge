@@ -7136,10 +7136,12 @@ func gitBranchCleanupCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "branch-cleanup",
 		Short: "Delete stale local and remote branches for closed issues",
-		Long: `Scans local branches matching feat/* and epic/* patterns, extracts
-the issue number, checks if the issue is CLOSED on GitHub, and deletes
-both local and remote branches for closed issues. Protected branches
-(main, master) are never deleted. The current branch is never deleted.`,
+		Long: `Scans local and remote-only issue-numbered pipeline branches
+(feat/, fix/, docs/, chore/, refactor/, test/, epic/), extracts the issue
+number, checks if the issue is CLOSED on GitHub, and deletes both local
+and remote branches for closed issues. Protected branches (main, master)
+are never deleted. The current branch is never deleted. Operator prefixes
+such as wip/ are never candidates.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svc, err := openGitService()
 			if err != nil {
@@ -7167,16 +7169,13 @@ both local and remote branches for closed issues. Protected branches
 				localSet[b] = true
 			}
 			for _, b := range remoteBranches {
-				if !localSet[b] && (strings.HasPrefix(b, "feat/") || strings.HasPrefix(b, "fix/") || strings.HasPrefix(b, "epic/")) {
+				if !localSet[b] && gitpkg.IsCleanupCandidate(b) {
 					branches = append(branches, b)
 				}
 			}
 
 			// Get current branch to protect it
 			currentBranch, _ := svc.CurrentBranch()
-
-			// Extract issue number from branch name: feat/1234-..., epic/1234-..., fix/1234-...
-			branchPattern := regexp.MustCompile(`^(?:feat|fix|epic)/(\d+)-`)
 
 			type cleanupResult struct {
 				Branch      string `json:"branch"`
@@ -7194,13 +7193,12 @@ both local and remote branches for closed issues. Protected branches
 					continue
 				}
 
-				m := branchPattern.FindStringSubmatch(branch)
-				if m == nil {
-					continue // not a pipeline branch
+				if !gitpkg.IsCleanupCandidate(branch) {
+					continue // not a pipeline issue-numbered branch
 				}
 
-				issueNum, _ := strconv.Atoi(m[1])
-				if issueNum == 0 {
+				issueNum, ok := gitpkg.ParseIssueNumberFromBranch(branch)
+				if !ok || issueNum == 0 {
 					continue
 				}
 

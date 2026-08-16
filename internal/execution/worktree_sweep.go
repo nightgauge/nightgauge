@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -116,13 +117,18 @@ type WorktreeSweepResult struct {
 	// DefaultBranch is the resolved default branch name; BaseRef is the ref
 	// branches were actually compared against (origin/<default> when the
 	// remote-tracking ref exists, the local branch otherwise).
-	DefaultBranch string              `json:"defaultBranch"`
-	BaseRef       string              `json:"baseRef"`
-	Scanned       int                 `json:"scanned"`
-	Reclaimed     []ReclaimedWorktree `json:"reclaimed"`
-	Skipped       []SkippedWorktree   `json:"skipped"`
-	Errors        []string            `json:"errors,omitempty"`
-	DryRun        bool                `json:"dryRun"`
+	DefaultBranch string `json:"defaultBranch"`
+	BaseRef       string `json:"baseRef"`
+	// BaseRefFetchError is set when `git fetch origin <default>` failed.
+	// Classification still runs against the existing local ref — the field
+	// exists so a stale origin/<default> is visible in --json instead of
+	// silently reporting every just-merged branch as unmerged (#583).
+	BaseRefFetchError string              `json:"baseRefFetchError"`
+	Scanned           int                 `json:"scanned"`
+	Reclaimed         []ReclaimedWorktree `json:"reclaimed"`
+	Skipped           []SkippedWorktree   `json:"skipped"`
+	Errors            []string            `json:"errors,omitempty"`
+	DryRun            bool                `json:"dryRun"`
 }
 
 // WorktreeSweepOptions configures one reconcile pass.
@@ -138,7 +144,18 @@ type WorktreeSweepOptions struct {
 	ActiveIssues map[int]bool
 	// DryRun classifies without removing anything.
 	DryRun bool
+	// MergedPRLookup is an optional fail-open second door for merged-ness.
+	// When the path-restricted content compare is non-empty, a lookup that
+	// returns the merged PR's head SHA equal to the branch tip treats the
+	// branch as merged (base moved on after the squash). Missing auth / no
+	// PR / SHA mismatch / a nil callback all leave the branch unmerged.
+	// The git merge test stays pure; this is never called from mergedIntoBase.
+	MergedPRLookup MergedPRLookup
 }
+
+// MergedPRLookup reports the head SHA of a merged PR for branch, if any.
+// ok is false when there is no merged PR or the lookup cannot run.
+type MergedPRLookup func(branch, tip string) (headSHA string, ok bool)
 
 // SweepMergedWorktrees reclaims every pipeline-created worktree in RepoRoot
 // whose branch carries no content the default branch is missing.
@@ -158,12 +175,20 @@ func SweepMergedWorktrees(opts WorktreeSweepOptions) (WorktreeSweepResult, error
 	if defaultBranch == "" {
 		defaultBranch = detectDefaultBranch(opts.RepoRoot)
 	}
+	res.DefaultBranch = defaultBranch
+	// Fetch once here, not inside mergedIntoBase: the merge test must stay
+	// a pure git function that unit tests can run against fixture refs.
+	// Failure is non-fatal — classify against the existing local ref and
+	// surface the error so staleness is not silent (#583).
+	if err := fetchOriginBranch(opts.RepoRoot, defaultBranch); err != nil {
+		res.BaseRefFetchError = err.Error()
+		log.Printf("[WARN] worktree sweep: fetch origin/%s failed: %v — classifying against local ref", defaultBranch, err)
+	}
 	baseRef, err := resolveBaseRef(opts.RepoRoot, defaultBranch)
 	if err != nil {
 		return res, fmt.Errorf("worktree sweep: %w", err)
 	}
 	res.BaseRef = baseRef
-	res.DefaultBranch = defaultBranch
 
 	listing, err := gitOutput(opts.RepoRoot, "worktree", "list", "--porcelain")
 	if err != nil {
@@ -290,6 +315,9 @@ func classifyWorktree(wt worktreeRecord, isPrimary bool, defaultBranch, baseRef 
 		return worktreeVerdict{Skip: SkipNoOwnCommits, IssueNumber: num}
 	}
 	if !merged {
+		if lookupMergedPR(opts, wt.Branch) {
+			return worktreeVerdict{IssueNumber: num, Door: ReclaimContentMerged}
+		}
 		return worktreeVerdict{Skip: SkipUnmergedContent, IssueNumber: num}
 	}
 	return worktreeVerdict{IssueNumber: num, Door: ReclaimContentMerged}
@@ -341,12 +369,24 @@ func DetectDefaultBranch(repoRoot string) string {
 // and whether the content of those commits is already fully represented in
 // baseRef (merged).
 //
-// The merge test is deliberately a CONTENT diff, not an ancestry check. This
+// The merge test is deliberately a CONTENT check, not an ancestry check. This
 // project squash-merges, so the branch tip is never an ancestor of the default
 // branch and `git merge-base --is-ancestor` reports a false negative for every
 // merged branch — the exact reason a squash-merged branch cannot be told apart
 // from one that was never pushed after the fact (AGENTS.md § Clean up on
 // merge; docs/GIT_WORKFLOW.md § After Merge).
+//
+// A full-tree two-dot `git diff --stat base..branch` is also wrong: after
+// `gh pr update-branch` the branch carries a merge commit from main, and
+// after squash origin/main is a new commit. Trees then diverge on files the
+// branch never touched. The algorithm matches scripts/branch-merged-check.sh:
+//
+//  1. ancestor fast-path (cheap positive)
+//  2. three-dot --name-only file list (the branch's own files)
+//  3. tip-vs-tip --stat restricted to those files as separate argv
+//
+// An empty file list that is not an ancestor is UNKNOWN (not merged) —
+// fail-closed. Never join paths into one shell word.
 //
 // hasOwnCommits is a safety guard, not part of the merge test: a worktree
 // created at the tip of the default branch that has committed nothing yet also
@@ -361,11 +401,49 @@ func mergedIntoBase(repoRoot, baseRef, branch string) (merged bool, hasOwnCommit
 	}
 	hasOwnCommits = strings.TrimSpace(countOut) != "0"
 
-	diffOut, err := gitOutput(repoRoot, "diff", "--stat", baseRef+".."+branch)
+	ancestor, err := mergeBaseIsAncestor(repoRoot, branch, baseRef)
+	if err != nil {
+		return false, hasOwnCommits, err
+	}
+	if ancestor {
+		return true, hasOwnCommits, nil
+	}
+
+	nameOut, err := gitOutput(repoRoot, "diff", "--name-only", "-z", baseRef+"..."+branch)
+	if err != nil {
+		return false, hasOwnCommits, err
+	}
+	files := splitNUL(nameOut)
+	if len(files) == 0 {
+		// Not an ancestor and no identifiable files — UNKNOWN, never reclaim.
+		return false, hasOwnCommits, nil
+	}
+
+	args := append([]string{"diff", "--stat", baseRef, branch, "--"}, files...)
+	diffOut, err := gitOutput(repoRoot, args...)
 	if err != nil {
 		return false, hasOwnCommits, err
 	}
 	return strings.TrimSpace(diffOut) == "", hasOwnCommits, nil
+}
+
+// lookupMergedPR is the fail-open second door: a merged PR whose head SHA
+// equals the branch tip means the residual is "base moved on", not unmerged
+// work. Any inspect failure leaves the branch unmerged.
+func lookupMergedPR(opts WorktreeSweepOptions, branch string) bool {
+	if opts.MergedPRLookup == nil {
+		return false
+	}
+	tip, err := gitOutput(opts.RepoRoot, "rev-parse", branch)
+	if err != nil {
+		return false
+	}
+	tip = strings.TrimSpace(tip)
+	if tip == "" {
+		return false
+	}
+	headSHA, ok := opts.MergedPRLookup(branch, tip)
+	return ok && headSHA == tip
 }
 
 // blockingChanges returns the changes in a worktree that must not be
@@ -524,6 +602,50 @@ func gitOutput(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+func fetchOriginBranch(repoRoot, branch string) error {
+	cmd := exec.Command("git", "fetch", "origin", branch)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// mergeBaseIsAncestor reports whether commit is an ancestor of ancestorOf.
+// git merge-base --is-ancestor exits 0 (yes), 1 (no), or 128 (inspect failed).
+func mergeBaseIsAncestor(repoRoot, commit, ancestorOf string) (bool, error) {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", commit, ancestorOf)
+	cmd.Dir = repoRoot
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, err
+}
+
+func splitNUL(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, "\x00")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // worktreeRecord is one entry from `git worktree list --porcelain`.

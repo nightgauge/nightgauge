@@ -373,27 +373,53 @@ export class WorktreeManager {
 
   /**
    * Content-diff merge check mirroring the Go side's `mergedIntoBase`
-   * (internal/execution/worktree_sweep.go): `git diff --stat baseRef..branch`
-   * empty means the branch's content is already fully represented on
-   * baseRef, which stays correct across squash merges where an ancestry
-   * check (`merge-base --is-ancestor`) would false-negative.
+   * (internal/execution/worktree_sweep.go). A full-tree two-dot
+   * `git diff --stat baseRef..branch` false-negatives after update-branch
+   * + squash (#583). Same algorithm as branch-merged-check.sh:
+   * ancestor fast-path, three-dot file list, path-restricted tip-vs-tip
+   * via execFile (argv-safe). Empty file list + not ancestor is not merged.
    */
   private async isMergedIntoBase(
     branch: string,
     baseRef: string
   ): Promise<{ merged: boolean; hasOwnCommits: boolean }> {
     try {
-      const { stdout: countOut } = await execAsync(`git rev-list --count "${baseRef}..${branch}"`, {
-        cwd: this.repoRoot,
-        timeout: 10_000,
-      });
-      const hasOwnCommits = countOut.trim() !== "0";
+      const { stdout: countOut } = await execFileAsync(
+        "git",
+        ["rev-list", "--count", `${baseRef}..${branch}`],
+        { cwd: this.repoRoot, timeout: 10_000, encoding: "utf-8" }
+      );
+      const hasOwnCommits = String(countOut).trim() !== "0";
 
-      const { stdout: diffOut } = await execAsync(`git diff --stat "${baseRef}..${branch}"`, {
-        cwd: this.repoRoot,
-        timeout: 10_000,
-      });
-      return { merged: diffOut.trim() === "", hasOwnCommits };
+      try {
+        await execFileAsync("git", ["merge-base", "--is-ancestor", branch, baseRef], {
+          cwd: this.repoRoot,
+          timeout: 10_000,
+        });
+        return { merged: true, hasOwnCommits };
+      } catch {
+        // Exit 1 = not an ancestor (squash-merged tips). Other failures
+        // fall through; later git calls will reject and we fail closed.
+      }
+
+      const { stdout: nameOut } = await execFileAsync(
+        "git",
+        ["diff", "--name-only", "-z", `${baseRef}...${branch}`],
+        { cwd: this.repoRoot, timeout: 10_000, encoding: "utf-8" }
+      );
+      const files = String(nameOut)
+        .split("\0")
+        .filter((p) => p.length > 0);
+      if (files.length === 0) {
+        return { merged: false, hasOwnCommits };
+      }
+
+      const { stdout: diffOut } = await execFileAsync(
+        "git",
+        ["diff", "--stat", baseRef, branch, "--", ...files],
+        { cwd: this.repoRoot, timeout: 10_000, encoding: "utf-8" }
+      );
+      return { merged: String(diffOut).trim() === "", hasOwnCommits };
     } catch {
       // Can't tell — treat as not-merged so we never delete an unmerged branch.
       return { merged: false, hasOwnCommits: false };
@@ -533,6 +559,18 @@ export class WorktreeManager {
     // delete on an inconclusive check.
     if (deleteBranch && branchName) {
       const defaultBranch = await this.detectDefaultBranch();
+      try {
+        await execFileAsync("git", ["fetch", "origin", defaultBranch], {
+          cwd: this.repoRoot,
+          timeout: 30_000,
+        });
+      } catch (error) {
+        console.warn(
+          `[WorktreeManager] failed to fetch origin/${defaultBranch} before merge check — classifying against local ref: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
       const baseRef = await this.resolveBaseRef(defaultBranch);
       const { merged, hasOwnCommits } = await this.isMergedIntoBase(branchName, baseRef);
       if (!merged || !hasOwnCommits) {

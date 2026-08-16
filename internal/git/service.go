@@ -1174,6 +1174,37 @@ func ParseIssueNumberFromBranch(name string) (int, bool) {
 	return number, true
 }
 
+// IssueNumberedCleanupPrefixes is GIT_WORKFLOW.md § Branch Naming plus
+// pipeline-only epic/. Used by git branch-cleanup. Do not use
+// ParseIssueNumberFromBranch as the allowlist — that matches any prefix,
+// including operator wip/*.
+var IssueNumberedCleanupPrefixes = []string{
+	"feat", "fix", "docs", "chore", "refactor", "test", "epic",
+}
+
+// IsCleanupCandidate reports whether branch is an issue-numbered pipeline
+// branch under one of IssueNumberedCleanupPrefixes (feat/123-…, docs/123-…,
+// chore/123-…, …). Operator prefixes such as wip/ and branches with no issue
+// number are never candidates.
+func IsCleanupCandidate(branch string) bool {
+	prefix, rest, ok := strings.Cut(branch, "/")
+	if !ok || rest == "" {
+		return false
+	}
+	allowed := false
+	for _, p := range IssueNumberedCleanupPrefixes {
+		if prefix == p {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return false
+	}
+	_, ok = ParseIssueNumberFromBranch(branch)
+	return ok
+}
+
 // RemoteRepoSlug returns the GitHub owner/repo from the origin remote URL.
 func (s *Service) RemoteRepoSlug() (string, error) {
 	remote, err := s.repo.Remote("origin")

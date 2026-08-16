@@ -32,7 +32,7 @@ loop capable of editing files, running commands, and calling `gh`.
 | codex           |             ✓             | **Beta**; live six-stage matrix pending         |
 | gemini          |             ✓             | **Experimental**; live six-stage matrix pending |
 | copilot         |             ✓             | **Experimental**; live six-stage matrix pending |
-| grok            |             ✓             | **Experimental**; live six-stage matrix pending |
+| grok            |             ✓             | **Experimental**; six-stage run complete (#528) |
 | gemini-sdk      |             ✗             | Chat-completion-only                            |
 | ollama          |             ✗             | Chat-completion-only                            |
 | lm-studio       |             ✗             | Chat-completion-only                            |
@@ -86,11 +86,53 @@ The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC 
 | lm-studio       |         ✗         |         ✓          | Not in Go registry                                                                      |
 | ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                        |
 | copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                           |
-| grok            |         ✓         |         ✓          | Experimental; live six-stage matrix pending (#528)                                      |
+| grok            |         ✓         |         ✓          | Experimental; six-stage run complete 2026-08-15 (#528) — see § Grok Live-Run Evidence   |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
 `@anthropic-ai/claude-agent-sdk` directly. They achieve similar results via different mechanisms.
+
+---
+
+## Grok Live-Run Evidence (#528)
+
+One full six-stage run (issue-pickup → pr-merge) executed 2026-08-15 with
+`adapter: grok` on subscription auth against a real M-sized Go fix
+(issue #583 → PR #587, merged with all required checks green and the
+merge commit verified green on `main`).
+
+| Stage            | Duration | Tokens in / out  | Cache read (hit rate) | Gate                                         |
+| ---------------- | -------- | ---------------- | --------------------- | -------------------------------------------- |
+| issue-pickup     | 5m 02s   | 99,950 / 27,527  | 1.42M (93%)           | ✅                                           |
+| feature-planning | 10m 30s  | 484,709 / 96,317 | 3.49M (88%)           | ✅                                           |
+| feature-dev      | 14m 57s  | 184,220 / 80,491 | 6.18M (97%)           | ✅                                           |
+| feature-validate | 19m 36s  | 244,486 / 66,297 | 6.45M (96%)           | ✅                                           |
+| pr-create        | 3s       | 0 / 0            | —                     | ✅ (deterministic path)                      |
+| pr-merge         | 10m 20s  | 99,579 / 32,016  | 0.93M (90%)           | ✅ (LLM path after deterministic punt, #589) |
+
+Every dispatched band resolved to `grok-4.6` — the xai band ladder is a
+deliberate cost no-op (see the registry BAND NOTE). Token capture per the
+#119 pattern is solid, including per-stage cache buckets and hit rates.
+
+**Status decision: remains Experimental.** The adapter itself performed
+flawlessly end-to-end; the blocking gaps are pipeline-side, filed and
+owned:
+
+- #585 — stage cost stamps priced this run at Anthropic rates
+  (~$12.66 recorded vs ≈ $2.26 true at the registry's measured grok-4.6
+  rates); fix in review at the time of writing
+- #591 — the CLI's `Not signed in` auth failure classifies as
+  `subagent_crash` instead of an auth AdapterError (live probe,
+  2026-08-15); same classification family as #560 (402 usage-balance)
+- #580 — run records cannot yet express adapter, concrete model id,
+  effort, or thinking (epic #567 run-record envelope)
+- #586 — CLI-started runs are nearly invisible in the extension while
+  executing
+- #589 — the pr-merge deterministic path punts in worktree runs
+
+**Beta promotion criteria:** #591 and #585 fixed (honest classification
+and honest cost), plus one re-run auth probe landing the correct
+AdapterError in the run record.
 
 ---
 
