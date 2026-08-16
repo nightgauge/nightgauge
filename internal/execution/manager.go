@@ -5,8 +5,10 @@ package execution
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -294,6 +296,26 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	if opts.Runtime != nil {
 		opts.Runtime.SetProcess(cmd.Process.Pid, worktreeDir)
+		// PUBLISH THE LIVE CHILD (#555). SetProcess only writes memory, and the
+		// scheduler then blocks in cmd.Wait() below until the stage exits — so
+		// before this line the manager never regained control to persist, and the
+		// only pid the run's snapshot ever carried on this path was the ZERO the
+		// stage-start persist wrote (#534). The reconciler's liveness ladder reads
+		// that file: arm 3 (processAlive(snap.PID)) was structurally false for
+		// every scheduler-owned run, and once a single stage ran quietly past
+		// runstate.LivenessWindow arm 4 went false too, so a HEALTHY run was
+		// emitted as pipeline_done(success=false) and its snapshot deleted
+		// mid-flight.
+		//
+		// One write, at the one instant the fact becomes true, is the whole fix:
+		// a live pid is an OS-verified statement about the process actually doing
+		// the run's work, and it stays true for exactly as long as the work does.
+		// It is deliberately NOT a periodic heartbeat — a timer that keeps
+		// stamping an mtime asserts "someone wrote recently", which is the same
+		// class of evidence arm 4 already is, and it fails in both directions
+		// (a wedged run whose ticker survives becomes immortal; a starved ticker
+		// reaps a healthy run).
+		m.publishStageChild(opts.Repo, opts.Runtime)
 	}
 
 	// Stream output concurrently, parsing NDJSON for token counts
@@ -383,6 +405,26 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	delete(m.running, execKey)
 	m.mu.Unlock()
 
+	// RETRACT THE CHILD (#555), the symmetric half of the publish above and the
+	// reason the fix cannot create a false negative.
+	//
+	// The child has exited. Leaving its pid on disk would hand arm 3 a dead pid
+	// that the kernel is free to recycle into an unrelated process, which is the
+	// PID-reuse window #534 exists to bound — and here it would span the whole
+	// between-stages gap (gates, git, CI waits) instead of one stage. Zero is
+	// what is true now, `runstate.ProcessAlive` refuses it before it makes a
+	// syscall, and the run is carried through the gap by arm 4's timestamp lease
+	// exactly as it was before this change.
+	//
+	// This runs on EVERY exit path after Wait — clean exit, non-zero exit, and
+	// the wait-error return below — because the retraction is about the child
+	// being gone, not about how it went. SetStageChild, not SetProcess: the
+	// worktree must survive for the failure path that inspects it (#399).
+	if opts.Runtime != nil {
+		opts.Runtime.SetStageChild(0)
+		m.publishStageChild(opts.Repo, opts.Runtime)
+	}
+
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
 	// The scheduler's legacy runner projection intentionally remains untouched:
 	// stage-keyed runtime handoff lets its existing CompleteStage call consume
@@ -407,6 +449,57 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	}
 
 	return result, nil
+}
+
+// stageStateDir is the directory the run's runtime-{issue}-{runId}.json lives
+// in, derived the same way every other writer derives it: the RUN'S TARGET REPO
+// (#229/#215), never the launch root. RepoRoot and the scheduler's runRoot
+// resolve through the same injected resolver — SetRepoPathResolver installs one
+// into both — so the manager writes the file the scheduler already created
+// rather than a second copy in another repo.
+func (m *Manager) stageStateDir(repo string) string {
+	return filepath.Join(m.RepoRoot(repo), ".nightgauge", "pipeline")
+}
+
+// publishStageChild flushes the runtime's CURRENT stage-child fact to the run's
+// snapshot so the orphan reconciler's liveness ladder can read it (#555).
+//
+// PersistExisting, never Persist: the manager is not the snapshot's creator and
+// must not become one. Creating a file here would manufacture a reconcilable
+// orphan for a run whose owner never persisted anything (a direct RunStage
+// caller), and — worse — could re-create a snapshot that a terminal claim had
+// already sealed and removed between the spawn and this write, which is
+// precisely the resurrection ADR-017 Decision 5 introduced PersistExisting to
+// prevent.
+//
+// Best-effort, exactly like the scheduler's own persists. Three outcomes are
+// NORMAL rather than faults and stay silent, or every identity-less/IPC-mode
+// dispatch would log twice per stage:
+//
+//   - no file (os.ErrNotExist): this run has no snapshot to update. Nothing can
+//     reap what does not exist, so there is nothing to fix.
+//   - sealed (state.ErrRunSealed): the terminal claim already won; the run is
+//     over and its file is deliberately gone.
+//   - no identity (state.ErrNoRunIdentity): a runtime that cannot name a run has
+//     no snapshot filename either.
+func (m *Manager) publishStageChild(repo string, runtime *state.RuntimeState) {
+	if runtime == nil {
+		return
+	}
+	err := runtime.PersistExisting(m.stageStateDir(repo))
+	switch {
+	case err == nil,
+		errors.Is(err, os.ErrNotExist),
+		errors.Is(err, state.ErrRunSealed),
+		errors.Is(err, state.ErrNoRunIdentity):
+		return
+	}
+	// Anything else is a real write failure. It is not fatal — the stage runs
+	// regardless — but it silently re-opens the false-reap window, so it gets a
+	// line that names the consequence rather than just the errno.
+	log.Printf("execution: could not publish the stage-child pid for %s#%d (run %s): %v — "+
+		"the orphan reconciler's liveness ladder will fall back to the timestamp lease for this stage",
+		repo, runtime.IssueNumber, runtime.RunID, err)
 }
 
 func runResultFromAccumulator(stdout, stderr string, tokenAcc *TokenAccumulator, modelTracker *ServedModelTracker) *adapters.RunResult {
