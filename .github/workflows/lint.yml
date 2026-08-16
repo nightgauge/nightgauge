@@ -51,7 +51,8 @@ jobs:
       - name: Mirror drift gate self-test
         run: bash scripts/test-mirror-drift-gate.sh
       # Read-only, and free to sit anywhere in this job: `--check-mirror`
-      # regenerates into a temp destination and compares file contents, so it
+      # regenerates into a temp destination and compares the two trees — paths,
+      # contents, symlink targets and the executable bit git tracks — so it
       # never writes the checkout (#546 — the previous `--generate-only` form
       # rewrote the mirror in place, which is what pinned it to last position).
       # #529 shipped three canonical-only overlay files because nothing ran a

@@ -261,9 +261,22 @@ install_claude() {
 # in exactly its primary use case. It was also mutating, which is what forced
 # the "must be the last step" ordering constraint on both call sites.
 #
-# The invariant lives in the FILE CONTENTS, not in git's index, so this
+# The invariant lives in the FILES THEMSELVES, not in git's index, so this
 # regenerates into a temp destination and compares trees. Nothing under
 # $REPO_ROOT is written; the gate may run at any point in any job.
+#
+# "THE FILES THEMSELVES" INCLUDES THE EXECUTABLE BIT.
+# git tracks exactly one permission bit — 100644 vs 100755 — and a clone of the
+# published marketplace preserves it, so a mirror whose bytes match while its
+# mode does not is a mirror that ships a broken plugin (today's one executable,
+# skills/nightgauge-docs-watch/scripts/snapshot-diff.sh, documents its own
+# `snapshot-diff.sh <snapshot.json> <urls.txt>` invocation). `cmp` cannot see
+# modes, so the content comparison below is paired with an owner-execute-bit
+# comparison; dropping it would leave the success line claiming "matches
+# generator output" about a property it never looked at. #539's
+# `git status --porcelain` oracle did catch mode changes — losing that while
+# fixing its false positives would have traded one blind spot for another.
+# Regression-tested by arm (m) of scripts/test-mirror-drift-gate.sh.
 #
 # WHY NOT `diff -r`:
 # `--exclude '*.test.*'` in sync_plugin_skills filters test FILES but still
@@ -328,14 +341,27 @@ check_mirror() {
   # Enumerate non-directory entries on both sides. `! -type d` rather than
   # `-type f` so a symlink is compared instead of silently skipped — a blind
   # spot in a drift gate is the defect this file keeps re-learning.
-  local gen_list have_list
+  #
+  # A second pass lists the OWNER-EXECUTABLE regular files on each side.
+  # `-perm -u+x` is git's own rule verbatim (`st_mode & 0100` decides 100755 vs
+  # 100644), which `test -x` is NOT: under root `test -x` answers via access(2)
+  # and returns true for any execute bit, so a gate built on it would read a
+  # different mode than the one git is about to record. `-type f` here rather
+  # than `! -type d` because a symlink has no meaningful mode of its own — git
+  # stores those as 120000 and the readlink comparison below owns them.
+  local gen_list have_list gen_exec have_exec
   gen_list="$CHECK_TMP/generated.list"
   have_list="$CHECK_TMP/committed.list"
+  gen_exec="$CHECK_TMP/generated.exec"
+  have_exec="$CHECK_TMP/committed.exec"
   (cd "$generated" && find . ! -type d -print) | sed 's|^\./||' | LC_ALL=C sort >"$gen_list"
+  (cd "$generated" && find . -type f -perm -u+x -print) | sed 's|^\./||' | LC_ALL=C sort >"$gen_exec"
   if [ -d "$PLUGIN_SKILLS" ]; then
     (cd "$PLUGIN_SKILLS" && find . ! -type d -print) | sed 's|^\./||' | LC_ALL=C sort >"$have_list"
+    (cd "$PLUGIN_SKILLS" && find . -type f -perm -u+x -print) | sed 's|^\./||' | LC_ALL=C sort >"$have_exec"
   else
     : >"$have_list"
+    : >"$have_exec"
   fi
 
   # A generator that produced NOTHING would compare equal to an empty mirror
@@ -371,19 +397,25 @@ check_mirror() {
   # (`.DS_Store`, a stray `node_modules/`): it cannot reach the published
   # plugin either way, and failing on it would resurrect the "gate goes red for
   # something unrelated to the mirror's correctness" defect this issue fixes.
-  local unpublishable gen_pub have_pub missing extra differing=""
+  local unpublishable gen_pub have_pub common missing extra differing=""
   unpublishable="$(LC_ALL=C comm -12 "$gen_list" "$ignored")"
   gen_pub="$CHECK_TMP/generated.publishable"
   have_pub="$CHECK_TMP/committed.publishable"
+  common="$CHECK_TMP/common.list"
   LC_ALL=C comm -23 "$gen_list" "$ignored" >"$gen_pub"
   LC_ALL=C comm -23 "$have_list" "$ignored" >"$have_pub"
+  LC_ALL=C comm -12 "$gen_pub" "$have_pub" >"$common"
   missing="$(LC_ALL=C comm -23 "$gen_pub" "$have_pub")"
   extra="$(LC_ALL=C comm -13 "$gen_pub" "$have_pub")"
 
-  local rel
+  # Paths present on both sides: compare content, and record which of them are
+  # a symlink on either side so the mode comparison can skip exactly those.
+  local rel symlinked="$CHECK_TMP/symlinked.list"
+  : >"$symlinked"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
     if [ -L "$generated/$rel" ] || [ -L "$PLUGIN_SKILLS/$rel" ]; then
+      printf '%s\n' "$rel" >>"$symlinked"
       [ "$(readlink "$generated/$rel" 2>/dev/null)" = "$(readlink "$PLUGIN_SKILLS/$rel" 2>/dev/null)" ] ||
         differing="$differing$rel
 "
@@ -391,7 +423,22 @@ check_mirror() {
       differing="$differing$rel
 "
     fi
-  done < <(LC_ALL=C comm -12 "$gen_pub" "$have_pub")
+  done <"$common"
+
+  # Executable-bit drift, over the paths that are a plain file on BOTH sides.
+  # Restricted to `$common` because a path only one side has is already named
+  # under missing/extra — reporting it a second time here would describe one
+  # defect as two — and minus `$symlinked` so a file-vs-symlink mismatch is
+  # reported once, by the content comparison that actually diagnoses it.
+  local regular gen_exec_common have_exec_common mode_lost mode_gained
+  regular="$CHECK_TMP/regular.list"
+  gen_exec_common="$CHECK_TMP/generated.exec.common"
+  have_exec_common="$CHECK_TMP/committed.exec.common"
+  LC_ALL=C comm -23 "$common" "$symlinked" >"$regular"
+  LC_ALL=C comm -12 "$gen_exec" "$regular" >"$gen_exec_common"
+  LC_ALL=C comm -12 "$have_exec" "$regular" >"$have_exec_common"
+  mode_lost="$(LC_ALL=C comm -23 "$gen_exec_common" "$have_exec_common")"
+  mode_gained="$(LC_ALL=C comm -13 "$gen_exec_common" "$have_exec_common")"
 
   local gate_failed=0
 
@@ -418,7 +465,8 @@ check_mirror() {
     echo ""
   fi
 
-  if [ -n "$missing" ] || [ -n "$extra" ] || [ -n "$differing" ]; then
+  if [ -n "$missing" ] || [ -n "$extra" ] || [ -n "$differing" ] ||
+    [ -n "$mode_lost" ] || [ -n "$mode_gained" ]; then
     # Deliberately phrased as a task, not a crash. Output that reads like a
     # stack trace is output people stop running, which is how the mirror
     # drifted in the first place.
@@ -451,6 +499,23 @@ check_mirror() {
       printf '%s' "$differing" | sed "s|^|      $MIRROR_REL/|"
       echo ""
     fi
+    if [ -n "$mode_lost" ] || [ -n "$mode_gained" ]; then
+      # Its own heading because the bytes may be identical: `git diff` shows
+      # this as a bare `old mode 100755 / new mode 100644` with no hunk, and a
+      # reader told only "content differs" would go looking for a text change
+      # that is not there.
+      echo "    Present in both, FILE MODE DIFFERS (git tracks 100644 vs 100755,"
+      echo "    and a clone of the published marketplace preserves it):"
+      if [ -n "$mode_lost" ]; then
+        echo "      generator 100755, mirror 100644 — the plugin ships it unrunnable:"
+        printf '%s\n' "$mode_lost" | sed "s|^|        $MIRROR_REL/|"
+      fi
+      if [ -n "$mode_gained" ]; then
+        echo "      generator 100644, mirror 100755 — a stray exec bit in the mirror:"
+        printf '%s\n' "$mode_gained" | sed "s|^|        $MIRROR_REL/|"
+      fi
+      echo ""
+    fi
     echo "    Next step — regenerate, then commit BOTH halves together:"
     echo ""
     echo "      bash scripts/install-agent-skills.sh --generate-only"
@@ -468,7 +533,10 @@ check_mirror() {
     exit 1
   fi
 
-  echo "==> Mirror check: $MIRROR_REL matches generator output ($(wc -l <"$gen_pub" | tr -d ' ') files)."
+  # Name the dimensions compared, not just "matches": a success line broader
+  # than the check behind it is how an unmeasured property (the exec bit, until
+  # arm (m)) passes for a measured one.
+  echo "==> Mirror check: $MIRROR_REL matches generator output — paths, contents, symlink targets and file modes ($(wc -l <"$gen_pub" | tr -d ' ') files)."
 }
 
 # `--check-mirror` must not write to the checkout it is judging, so it runs

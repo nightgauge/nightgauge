@@ -187,7 +187,8 @@ fi
 #      publishes a stale plugin. Mirrors lint.yml's step of the same name.
 #
 #      Read-only, like every other check in this file: `--check-mirror`
-#      regenerates into a temp destination and compares file contents, so it
+#      regenerates into a temp destination and compares the two trees — paths,
+#      contents, symlink targets and the executable bit git tracks — so it
 #      neither writes the checkout nor cares what is staged. That matters here
 #      specifically — this script is run BECAUSE you have uncommitted work, and
 #      the previous form (regenerate in place, fail on a dirty index) therefore

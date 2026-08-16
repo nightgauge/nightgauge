@@ -16,7 +16,9 @@
 # checkout, so `ci-local.sh` — run by construction on a dirty tree — went red on
 # uncommitted work the regeneration had already mirrored faithfully. Arms (i)
 # through (l) below pin the corrected behaviour; the rest pin the fail-closed
-# behaviour #539 established, which must survive the correction.
+# behaviour #539 established, which must survive the correction — arms (m) and
+# (m2) most explicitly, since the exec-bit class is one the discarded
+# `git status` oracle caught for free and a content-only comparison does not.
 #
 # Every case runs against a TEMP GIT REPO seeded from this repo's HEAD, so a
 # case tests only the drift it plants. (The gate itself no longer writes to the
@@ -107,12 +109,18 @@ expect_true() {
   fi
 }
 
-# Path list + content checksum of every non-`.git` entry in the fixture, so a
-# mutation git itself cannot see (an ignored file, an empty directory) is still
-# caught. Used by arm (l) to prove the gate writes nothing.
+# Path list, content checksum, and executable-bit list of every non-`.git`
+# entry in the fixture, so a mutation git itself cannot see (an ignored file, an
+# empty directory) is still caught. Used by arm (l) to prove the gate writes
+# nothing.
+#
+# The exec-bit line covers the dimension arm (m) added: now that the gate READS
+# modes, "helpfully chmod it for you" is a live way for non-mutation to regress,
+# and a content checksum cannot see it.
 tree_fingerprint() {
   (cd "$TMP" && find . -path ./.git -prune -o -print) | LC_ALL=C sort
   (cd "$TMP" && find . -path ./.git -prune -o -type f -exec cksum {} +) | LC_ALL=C sort
+  (cd "$TMP" && find . -path ./.git -prune -o -type f -perm -u+x -print) | LC_ALL=C sort
 }
 
 fixture_commit() {
@@ -362,6 +370,51 @@ FP_BEFORE="$(tree_fingerprint)"
 bash "$TMP/$GATE" --check-mirror >/dev/null 2>&1
 expect_true "a FAILING run leaves the tree byte-identical too" \
   test "$FP_BEFORE" = "$(tree_fingerprint)"
+
+# ── (m) EXEC-BIT drift is drift ─────────────────────────────────────────────
+# THE ARM `cmp -s` ALONE CANNOT PASS. git tracks exactly one permission bit —
+# 100644 vs 100755 — and a clone of the published marketplace preserves it, so
+# a mirror whose bytes match while its mode does not still ships a plugin whose
+# script will not run. `cmp` is content-only, so index-independence must not be
+# bought by dropping a class #539's `git status --porcelain` oracle DID catch:
+# that would trade one blind spot for another and leave the gate's success line
+# claiming "matches generator output" about a property it never inspected.
+#
+# The drift is COMMITTED, so the fixture tree is clean — exactly the CI regime
+# where this gate is the sole authority and there is no `git status` row to
+# fall back on. The precondition asserts that emptiness explicitly.
+#
+# The executable is DISCOVERED, not hardcoded: which skill ships a script is
+# not this suite's business, and a hardcoded path would turn a rename into a
+# mysterious red here instead of an honest precondition failure.
+seed_repo
+EXEC_FILE="$(cd "$TMP/$MIRROR" && find . -type f -perm -u+x -print |
+  sed 's|^\./||' | LC_ALL=C sort | head -1)"
+expect_true "precondition: the mirror ships at least one executable file" \
+  test -n "$EXEC_FILE"
+if [ -n "$EXEC_FILE" ]; then
+  chmod a-x "$TMP/$MIRROR/$EXEC_FILE"
+  fixture_commit "strip the exec bit from a mirrored script"
+  expect_true "precondition: the mode drift is committed, so the tree is clean" \
+    test -z "$(git -C "$TMP" status --porcelain)"
+  expect_gate nonzero "exec bit LOST by the mirror is caught" \
+    "$MIRROR/$EXEC_FILE"
+  # …and the gate's own next-step instruction is not a dead end: `rsync -a`
+  # applies permissions even when it skips the content, so the documented FIX
+  # command repairs a mode-only drift. A gate that names a remedy which does
+  # not remedy is a gate people route around.
+  bash "$TMP/$GATE" --generate-only >/dev/null 2>&1
+  expect_gate 0 "the documented fix (--generate-only) restores the mode"
+fi
+
+# ── (m2) …and the opposite polarity, a stray exec bit in the mirror ─────────
+# A gate that only asked "did the mirror LOSE an exec bit?" would pass this,
+# the same way arm (b) alone would have missed arm (b2).
+seed_repo
+chmod u+x "$TMP/$MIRROR/feature-dev/SKILL.md"
+fixture_commit "add a stray exec bit to a mirrored markdown file"
+expect_gate nonzero "stray exec bit ADDED by the mirror is caught" \
+  "$MIRROR/feature-dev/SKILL.md"
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then
