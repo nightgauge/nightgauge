@@ -275,6 +275,34 @@ func (s *Service) ResetLocalBranchToRemote(name string) error {
 }
 
 // ListLocalBranches returns all local branch names (excluding HEAD).
+//
+// The set is repository-wide, and that is deliberate (#541c). Since #540 taught
+// the service to resolve the common git dir, a call from inside a linked
+// worktree enumerates every branch in the repository rather than the one that
+// worktree has checked out. `git branch --list` answers identically from the
+// same place, so this is git's own semantics rather than an artefact of the
+// port, and it is the set every caller wants: branch pickers, reconcile sweeps
+// and diagnostics all ask about the repository, not about one checkout.
+//
+// #541 asked whether the branch-cleanup sweep should be handed a pre-narrowed
+// list instead. It should not, and the reason is where the protection has to
+// live. A filtered input cannot protect a branch a worktree claims AFTER the
+// filter ran — that race is precisely the shape #541 was reported as — and a
+// second definition of "deletable" sitting beside the code that actually
+// deletes is free to drift from it. So occupancy is enforced at the point of
+// deletion, where nothing can get past it:
+//
+//   - BranchCleanup refuses the entire operation — local half and remote half —
+//     with *BranchHeldByWorktreeError whenever a worktree holds the branch, and
+//     re-classifies git's own late refusal the same way.
+//   - The `git branch-cleanup` sweep additionally tests occupancy per branch
+//     before attempting a delete and reports "skipped" rather than "deleted".
+//
+// Branch SHAPE is filtered by the same callers, per branch, via
+// IsCleanupCandidate — that is what excludes main, master, operator prefixes
+// such as wip/, and anything without an issue number. Neither filter belongs
+// here: narrowing this enumerator would make it answer a question its other
+// callers never asked.
 func (s *Service) ListLocalBranches() ([]string, error) {
 	refs, err := s.repo.References()
 	if err != nil {
@@ -432,56 +460,6 @@ func (s *Service) branchesHeldByWorktrees() (map[string]string, error) {
 		}
 	}
 	return held, nil
-}
-
-// ListCleanupCandidateBranches returns the local branches a cleanup sweep may
-// consider deleting: issue-numbered pipeline branches that no worktree is
-// sitting on.
-//
-// This exists because ListLocalBranches is the wrong set to sweep and the right
-// set for everything else (#541c). Since #540 taught the service to resolve the
-// common dir, ListLocalBranches called from inside a linked worktree enumerates
-// the WHOLE repository rather than the one branch that worktree can see. That is
-// correct git behaviour — `git branch --list` says the same — so its semantics
-// are deliberately left alone; narrowing them would silently change every other
-// reader of the branch list to answer a question they did not ask.
-//
-// The narrowing belongs to the sweep, and it is two filters, both load-bearing:
-//
-//   - Shape. IsCleanupCandidate keeps feat/, fix/, docs/, chore/, refactor/,
-//     test/ and epic/ branches carrying an issue number, which is also what
-//     excludes main, master and operator prefixes such as wip/. A name check for
-//     main/master alone — all BranchCleanup used to have — leaves an operator's
-//     local work in the candidate set.
-//   - Occupancy. A branch some worktree holds belongs to a live run. Its issue
-//     can already read CLOSED (the pipeline closes on merge, then cleans up), so
-//     the sweep's issue-state test is not a substitute for this one.
-//
-// A worktree listing that cannot be read is an error, not an empty occupancy
-// map: failing closed here costs a deferred sweep, and failing open offers up
-// every live run's branch for deletion.
-func (s *Service) ListCleanupCandidateBranches() ([]string, error) {
-	all, err := s.ListLocalBranches()
-	if err != nil {
-		return nil, err
-	}
-	held, err := s.branchesHeldByWorktrees()
-	if err != nil {
-		return nil, fmt.Errorf("scope cleanup candidates: %w", err)
-	}
-
-	// ListLocalBranches is already sorted, and filtering preserves order.
-	var candidates []string
-	for _, branch := range all {
-		if !IsCleanupCandidate(branch) {
-			continue
-		}
-		if _, occupied := held[branch]; occupied {
-			continue
-		}
-		candidates = append(candidates, branch)
-	}
-	return candidates, nil
 }
 
 // BranchCleanup removes a branch locally and on origin, idempotently.

@@ -285,17 +285,33 @@ func TestBranchCleanup_RefusesProtectedAndOptionLikeNames(t *testing.T) {
 	}
 }
 
-// TestListCleanupCandidateBranches_ScopesTheSetFromInsideAWorktree is #541(c).
+// TestListLocalBranches_IsRepoWideAndEveryLiveBranchInItIsRefused is #541(c).
 //
-// Post-#540 ListLocalBranches resolves the COMMON store, so from inside a linked
-// worktree it enumerates every branch in the repository. That is correct git
-// behaviour and this test pins it unchanged — the scoping belongs to the
-// cleanup candidate set, not to the general-purpose enumerator.
-func TestListCleanupCandidateBranches_ScopesTheSetFromInsideAWorktree(t *testing.T) {
+// AC5 allowed either of two justifications for the candidate set: narrow it, or
+// state that repo-wide is intended and rely on the occupancy guard. This lane
+// takes the second, and this test is that decision made executable rather than
+// merely asserted in a doc comment — the alternative, a narrowing helper no
+// production sweep calls, would have been a second definition of "deletable"
+// free to drift from the one that actually deletes.
+//
+// Two halves, and the second is what makes the first safe:
+//
+//   - Post-#540 ListLocalBranches from inside a linked worktree enumerates the
+//     whole common store. Pinned exactly, so a future narrowing of the
+//     general-purpose enumerator has to break a test to happen.
+//   - Every branch in that repo-wide set that a live worktree holds is refused
+//     by BranchCleanup, both halves, from a DIFFERENT worktree — the exact
+//     traversal a sweep performs. The guard sits at the point of deletion, so
+//     it also covers a worktree that appears after any candidate list was
+//     built.
+//
+// Shape filtering (main, master, operator prefixes such as wip/) is
+// IsCleanupCandidate's job, applied per branch by the sweep; TestIsCleanupCandidate
+// in service_test.go pins it and it is deliberately not duplicated here.
+func TestListLocalBranches_IsRepoWideAndEveryLiveBranchInItIsRefused(t *testing.T) {
 	r := setupLiveRunRepo(t)
 	svc := r.service(t, r.worktrees["feat/999-live"])
 
-	// The unchanged, deliberately repo-wide primitive.
 	all, err := svc.ListLocalBranches()
 	if err != nil {
 		t.Fatalf("ListLocalBranches: %v", err)
@@ -303,20 +319,39 @@ func TestListCleanupCandidateBranches_ScopesTheSetFromInsideAWorktree(t *testing
 	wantAll := []string{"feat/123-stale", "feat/777-other", "feat/999-live", "main", "wip/999-operator"}
 	sort.Strings(all)
 	if strings.Join(all, ",") != strings.Join(wantAll, ",") {
-		t.Errorf("ListLocalBranches from a linked worktree = %v, want the whole common store %v", all, wantAll)
+		t.Fatalf("ListLocalBranches from a linked worktree = %v, want the whole common store %v", all, wantAll)
 	}
 
-	// The scoped set the cleanup sweep may act on.
-	got, err := svc.ListCleanupCandidateBranches()
+	held, err := svc.branchesHeldByWorktrees()
 	if err != nil {
-		t.Fatalf("ListCleanupCandidateBranches: %v", err)
+		t.Fatalf("branchesHeldByWorktrees: %v", err)
 	}
-	want := []string{"feat/123-stale"}
-	sort.Strings(got)
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("ListCleanupCandidateBranches from a linked worktree = %v, want %v\n"+
-			"  main/wip/999-operator are not pipeline branches; "+
-			"feat/999-live and feat/777-other are held by live worktrees", got, want)
+	refused := 0
+	for _, branch := range all {
+		if branch == "main" || branch == "master" {
+			continue // protected by name; covered separately
+		}
+		if _, occupied := held[branch]; !occupied {
+			continue
+		}
+		refused++
+		err := svc.BranchCleanup(branch)
+		if !errors.Is(err, ErrBranchHeldByWorktree) {
+			t.Errorf("BranchCleanup(%s) err = %v, want ErrBranchHeldByWorktree — "+
+				"the repo-wide list offered a live branch and nothing refused it", branch, err)
+		}
+		if !r.localRefExists(t, branch) {
+			t.Errorf("local refs/heads/%s was deleted although a worktree holds it", branch)
+		}
+		if !r.remoteRefExists(t, branch) {
+			t.Errorf("origin refs/heads/%s was deleted although a worktree holds it", branch)
+		}
+	}
+	// Without this the loop above passes vacuously if the occupancy read ever
+	// returns nothing, which is the failure mode the guard exists to prevent.
+	if refused != 2 {
+		t.Fatalf("expected feat/999-live and feat/777-other to be held and refused, got %d refusals from %v",
+			refused, held)
 	}
 }
 
