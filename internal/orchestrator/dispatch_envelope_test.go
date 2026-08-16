@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -219,7 +220,10 @@ func TestResolveWireEffort(t *testing.T) {
 
 // TestResolveWireThinking pins the wire thinking to the selection query's
 // declared rung under the band contract the wire Model already speaks (#581),
-// with the CLAUDE_CODE_DISABLE_THINKING interlock as the one override.
+// with the CLAUDE_CODE_DISABLE_THINKING interlock as the one override. Every
+// mode passes the same table because no mode declares a thinking policy
+// (#606): the policy axis exists and is consumed, but its column is empty —
+// so the mode parameter must be behaviorally inert today.
 func TestResolveWireThinking(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -234,13 +238,49 @@ func TestResolveWireThinking(t *testing.T) {
 		{"local model has no rung: absent", "my-local-model", "", ""},
 		{"empty model: absent", "", "", ""},
 	}
+	modes := []routing.PerformanceMode{
+		routing.ModeEfficiency, routing.ModeElevated, routing.ModeMaximum, routing.ModeFrontier,
+	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.disableThinking != "" {
 				t.Setenv("CLAUDE_CODE_DISABLE_THINKING", tc.disableThinking)
 			}
-			if got := resolveWireThinking(tc.model); got != tc.want {
-				t.Errorf("resolveWireThinking(%q) = %q, want %q", tc.model, got, tc.want)
+			for _, mode := range modes {
+				if got := resolveWireThinking(tc.model, mode); got != tc.want {
+					t.Errorf("resolveWireThinking(%q, %s) = %q, want %q", tc.model, mode, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// TestWireThinkingUnderPolicy exercises the policy branch the wire thinking
+// grew in #606 (spike #568 §4.1.3) at its explicit seam, since no shipped
+// mode declares a policy value yet: a policy overrides the rung's declared
+// default, supplies a value where the rung declares none, an off-vocabulary
+// policy is ignored, and the disable interlock still wins over a policy.
+func TestWireThinkingUnderPolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		model           string
+		policy          string
+		disableThinking string
+		want            string
+	}{
+		{"policy overrides the declared default", "sonnet", "off", "", "off"},
+		{"policy raises where the rung declares off", "haiku", "on", "", "on"},
+		{"policy supplies a value where no rung exists", "my-local-model", "on", "", "on"},
+		{"off-vocabulary policy is ignored, not dispatched", "sonnet", "hard", "", "on"},
+		{"disable interlock outranks the policy", "haiku", "on", "1", "off"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.disableThinking != "" {
+				t.Setenv("CLAUDE_CODE_DISABLE_THINKING", tc.disableThinking)
+			}
+			if got := wireThinkingUnderPolicy(tc.model, tc.policy); got != tc.want {
+				t.Errorf("wireThinkingUnderPolicy(%q, %q) = %q, want %q", tc.model, tc.policy, got, tc.want)
 			}
 		})
 	}

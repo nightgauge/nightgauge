@@ -58,8 +58,11 @@ type RunStageParams struct {
 	//
 	// VOCABULARY: Effort is an EFFORT_LEVELS rung; Thinking is "on"/"off".
 	// Both ride the Model field's band contract: adapters that translate the
-	// band at the last mile translate or drop the envelope with it (the grok
-	// path stays NIGHTGAUGE_GROK_EFFORT-owned, #569).
+	// band at the last mile translate or drop the envelope with it. The grok
+	// path executes the wire effort too (#606): NIGHTGAUGE_GROK_EFFORT is
+	// demoted to operator override — it wins when set, the envelope
+	// dispatches otherwise — which is what lets a same-model effort descent
+	// (the #532 xai ladder) reach the spawned CLI.
 	Effort            string   `json:"effort,omitempty"`
 	Thinking          string   `json:"thinking,omitempty"`
 	MaxTokens         int      `json:"maxTokens,omitempty"`

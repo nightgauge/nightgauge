@@ -172,14 +172,17 @@ func TierRank(model string) int {
 }
 
 // ModeEnvelope is the `[Floor, Ceiling]` band a performance mode routes
-// within, plus the mode's EFFORT bounds (spike #568 §4.1.3: envelopes carry
-// an effort axis alongside the rung axis). Mirrors ModeEnvelope in
+// within, plus the mode's EFFORT bounds and THINKING policy (spike #568
+// §4.1.3: envelopes are `(rung floor, rung ceiling, effort ceiling, thinking
+// policy)`). Mirrors ModeEnvelope in
 // packages/nightgauge-vscode/src/utils/modeProfiles.ts, INCLUDING the effort
 // fields that table already declared (`effortCeiling` on efficiency,
 // `effortFloor` on maximum) — before #581 the Go mirror silently dropped
 // them, so the wire-effort resolution (dispatch_envelope.go) had no clamp to
-// apply. The thinking-policy axis the spike also names has NO value in either
-// table yet; it lands with the #582 sweep rather than as a dead field here.
+// apply. The thinking-policy axis landed with #606 (the #581 re-scope): the
+// axis exists and is consumed (resolveWireThinking), while no mode DECLARES
+// a value yet — deliberately, so adding the axis is behavior-preserving; the
+// Go⇄TS parity tests pin both tables' thinking columns together.
 type ModeEnvelope struct {
 	Floor   string
 	Ceiling string
@@ -189,6 +192,12 @@ type ModeEnvelope struct {
 	// EffortCeiling caps a resolved effort (Efficiency trades reasoning for
 	// cost); "" = no ceiling. Mirrors ModeEnvelope.effortCeiling.
 	EffortCeiling string
+	// ThinkingPolicy pins the mode's thinking state ("on"/"off"), overriding
+	// the dispatched rung's declared thinking default; "" = no policy — the
+	// rung's declared default rules. The CLAUDE_CODE_DISABLE_THINKING
+	// interlock (#76) still wins over a policy: an operator escape hatch
+	// outranks a mode table. Mirrors ModeEnvelope.thinkingPolicy.
+	ThinkingPolicy string
 }
 
 // modeProfile mirrors one MODE_PROFILES entry: the per-stage PINS the mode

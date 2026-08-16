@@ -419,8 +419,22 @@ neither:
   `--effort` at all is a question about its tier band, so the extension
   normalizes the value with `modelTierBand` before asking — a concrete id
   would otherwise drop the flag with no error and no log line. The grok
-  adapters remain the deliberate exception: their effort is the
-  provider-global `NIGHTGAUGE_GROK_EFFORT` env contract (#569) on both paths.
+  adapters execute the dispatch envelope too since #606: the TS path feeds the
+  wire effort into the `NIGHTGAUGE_GROK_EFFORT` env contract the SDK
+  GrokAdapter reads, the Go-direct path threads it through
+  `RunOptions.Effort`, and the provider-global env var is demoted to operator
+  override — it wins when set, exactly like the
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` overrides. The #569 preflights gate the
+  value that will actually dispatch (override else envelope) on both paths.
+  This is what makes the xai same-model effort descent real: on a
+  fully-collapsed provider (every ladder rung one model id — xai today), a
+  model-unavailable rejection descends one declared effort rung within the
+  model (`grok-4.6@xhigh → high → …`) instead of exhausting, sticky for the
+  run via the RetryEngine's effort substitution (`StickyEffort`), which is
+  applied after the mode's effort clamps for the same #42 reason a floor
+  never re-raises a sticky model downgrade. Partially-collapsed providers
+  keep the same-model skip (pinned decision — see the PROVENANCE note in
+  `internal/intelligence/routing/selection.go`).
 
 - **Thinking.** Also on the wire since #581, as attribution rather than
   execution (no CLI flag exists): `resolveWireThinking` answers with the

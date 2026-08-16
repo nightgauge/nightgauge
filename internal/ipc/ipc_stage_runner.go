@@ -165,7 +165,7 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 				if dg := r.retryEngine.EvaluateDowngrade(params.Model); dg.ShouldDowngrade {
 					log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
 						params.IssueNumber, params.Stage, params.Model, dg.NewTier)
-					r.retryEngine.RecordDowngrade(params.Model, dg.NewTier)
+					r.retryEngine.RecordDowngrade(params.Model, dg.NewTier, dg.DescentEffort())
 					fallbackRecorded = true
 					fallbackFrom, fallbackTo = params.Model, dg.NewTier
 				} else {

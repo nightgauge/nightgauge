@@ -37,6 +37,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/recovery"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -75,8 +76,10 @@ type StageRunParams struct {
 	// spike #568 §4.1: "the wire grows effort and thinking alongside model").
 	// Resolved by resolveWireEffort/resolveWireThinking on the IPC path,
 	// where the scheduler is the only resolver (#340) and the extension
-	// executes the wire effort verbatim. Empty on the Go-direct adapter path,
-	// whose effort/thinking stay env/adapter-owned (dispatch_envelope.go).
+	// executes the wire effort verbatim. On the Go-direct adapter path
+	// Thinking stays env/adapter-owned (dispatch_envelope.go) and Effort is
+	// resolved only for xai adapters (#606) — RunOptions threads it to the
+	// grok CLI, with NIGHTGAUGE_GROK_EFFORT demoted to operator override.
 	Effort       string
 	Thinking     string
 	MaxTokens    int
@@ -375,6 +378,7 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		ContextFile:  params.ContextFile,
 		OutputFile:   params.OutputFile,
 		Model:        params.Model,
+		Effort:       params.Effort,
 		MaxTokens:    params.MaxTokens,
 		Timeout:      params.Timeout,
 		Runtime:      params.Runtime,
@@ -3895,23 +3899,39 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// after escalation overrides, sticky downgrades, and the pr-create /
 		// feature-validate adjustments above.
 		runtime.RecordStageModel(stage, model)
-		// Dispatch envelope (#580 → #581): effort/thinking/mode alongside the
-		// model above. On the IPC path (no Go-side adapter) the scheduler now
-		// RESOLVES effort and thinking onto the wire — the selection query's
-		// rung plus the Go-owned effort chain (dispatch_envelope.go) — and the
-		// record carries the wire value the extension executes verbatim, the
-		// same epistemic status as the Model field. On the Go-direct adapter
-		// path the axes stay env/adapter-owned and the #580 observation
-		// functions answer, each honestly absent when Go has no direct
-		// evidence.
+		// Dispatch envelope (#580 → #581 → #606): effort/thinking/mode
+		// alongside the model above. On the IPC path (no Go-side adapter) the
+		// scheduler RESOLVES effort and thinking onto the wire — the selection
+		// query's rung plus the Go-owned effort chain (dispatch_envelope.go) —
+		// and the record carries the wire value the extension executes
+		// verbatim, the same epistemic status as the Model field. On the
+		// Go-direct adapter path the thinking axis stays env/adapter-owned
+		// (the #580 observation functions answer, honestly absent when Go has
+		// no direct evidence) — but the EFFORT axis now reaches the grok
+		// adapters through RunOptions (#606): xai is where the effort rung IS
+		// the downgrade ladder (#532), so the envelope must actually dispatch.
 		wireEffort, wireThinking := "", ""
 		if adapterName == "" {
 			wireEffort = resolveWireEffort(workspaceRoot, stage)
-			wireThinking = resolveWireThinking(model)
+			wireThinking = resolveWireThinking(model, stagePerfMode)
+		} else if models.ProviderForAdapter(adapterName) == "xai" {
+			wireEffort = resolveWireEffort(workspaceRoot, stage)
 		}
-		effortAttr := wireEffort
+		// Sticky effort substitution (#606): a same-model effort descent
+		// recorded by the RetryEngine overrides the resolved wire effort,
+		// LAST — after the mode's effort clamps — for the #42 reason: a floor
+		// re-raising what an API rejection just lowered would re-fail
+		// identically. `model` has already been rerouted by ApplyDowngrades,
+		// so the substituted tier and this lookup key always agree.
+		if sticky := s.retryEngine.StickyEffort(model); sticky != "" {
+			wireEffort = sticky
+		}
+		// Attribution: the operator's NIGHTGAUGE_GROK_EFFORT env override
+		// (resolveDispatchEffort, xai only) wins at the adapter boundary, so
+		// it wins here too; the wire effort answers otherwise.
+		effortAttr := resolveDispatchEffort(adapterName)
 		if effortAttr == "" {
-			effortAttr = resolveDispatchEffort(adapterName)
+			effortAttr = wireEffort
 		}
 		thinkingAttr := wireThinking
 		if thinkingAttr == "" {
@@ -5218,8 +5238,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				terminalFailureKind = TerminalKindAdapterAuthFailed
 			}
 			if modelRejected {
-				if dg := s.retryEngine.EvaluateDowngrade(model); dg.ShouldDowngrade {
-					s.retryEngine.RecordDowngrade(model, dg.NewTier)
+				// The wire model is a band, and a band cannot name its
+				// provider — but on the Go-direct path the scheduler holds
+				// the adapter, so an xai dispatch can walk the xai ladder
+				// (grok-4.6's effort rungs) instead of the anthropic one
+				// (#606, the #532 runtime resolution). Scoped to xai
+				// deliberately: threading every adapter's provider here
+				// would change unpinned downgrade outcomes for providers
+				// whose bands the anthropic inference happened to serve
+				// (see the PR body's judgment-calls section).
+				downgradeProvider := ""
+				if adapterName != "" && models.ProviderForAdapter(adapterName) == "xai" {
+					downgradeProvider = "xai"
+				}
+				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, downgradeProvider); dg.ShouldDowngrade {
+					s.retryEngine.RecordDowngrade(model, dg.NewTier, dg.DescentEffort())
 					runtime.AppendEscalation(state.EscalationRecord{
 						Stage:     stage,
 						FromModel: model,

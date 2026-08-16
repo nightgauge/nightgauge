@@ -224,6 +224,17 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			return nil, fmt.Errorf("model validation failed for adapter %q: %w", adapter.Name(), err)
 		}
 	}
+	// Effort preflight (#569 → #606): adapters whose dispatch consumes the
+	// envelope's effort half expose the optional ValidateEffort hook and gate
+	// the value that will ACTUALLY dispatch (their own env-override-else-
+	// RunOptions resolution) — fail fast BEFORE spawn, like the model hook.
+	if validator, ok := adapter.(interface {
+		ValidateEffort(model, effort string) error
+	}); ok {
+		if err := validator.ValidateEffort(runOpts.Model, runOpts.Effort); err != nil {
+			return nil, fmt.Errorf("effort validation failed for adapter %q: %w", adapter.Name(), err)
+		}
+	}
 
 	cmdName, args, env := adapter.BuildCommand(runOpts)
 
@@ -582,13 +593,16 @@ func (m *Manager) GetState(key string) interface{} {
 
 // StageOptions holds all parameters for running a pipeline stage.
 type StageOptions struct {
-	Repo         string
-	IssueNumber  int
-	Stage        string
-	SkillPath    string
-	ContextFile  string
-	OutputFile   string
-	Model        string
+	Repo        string
+	IssueNumber int
+	Stage       string
+	SkillPath   string
+	ContextFile string
+	OutputFile  string
+	Model       string
+	// Effort is the dispatch envelope's effort half (#581/#606) — see
+	// adapters.RunOptions.Effort for the consumption contract.
+	Effort       string
 	MaxTokens    int
 	Timeout      time.Duration
 	Runtime      *state.RuntimeState
@@ -631,6 +645,7 @@ func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions 
 		Repo:         opts.Repo,
 		Stage:        opts.Stage,
 		Model:        opts.Model,
+		Effort:       opts.Effort,
 		MaxTokens:    opts.MaxTokens,
 		AllowedTools: opts.AllowedTools,
 		Prompt:       opts.Prompt,

@@ -33,21 +33,22 @@ import (
 //     the instant Go's own evidence runs out, rather than filling the gap
 //     with a plausible-looking default.
 
-// resolveDispatchEffort returns the EFFORT_LEVELS rung actually in force for
-// a grok-family dispatch, or "" when Go has no direct evidence of it.
+// resolveDispatchEffort returns the EFFORT_LEVELS rung the OPERATOR pinned
+// for a grok-family dispatch via NIGHTGAUGE_GROK_EFFORT, or "" when the env
+// var is unset/off-ladder.
 //
-// Grok is the only Go-direct adapter whose invocation Go's own process can
-// observe end-to-end: internal/execution/adapters/grok.go builds
-// `--effort <val>` straight from the ambient NIGHTGAUGE_GROK_EFFORT env var
-// it inherits via os.Environ(). This reads that SAME env var, at the SAME
-// trust level, without editing that package. Every other Go-direct adapter's
-// effort is env/TS-owned with no Go-visible signal — recording a value there
-// would be a guess, not a fact, so the field stays absent rather than
-// falling back to the model's registry effort_default, which is only a fact
-// about the UNOVERRIDDEN case and Go cannot tell whether an override
-// happened. (On the IPC path this observation is superseded by the WIRE
-// RESOLUTION above: there Go OWNS the effort chain, so the wire value is the
-// fact and this function is only the fallback — see the header.)
+// Since #606 the env var is an operator OVERRIDE, not the sole authority:
+// internal/execution/adapters/grok.go dispatches the env value when set and
+// the RunOptions-threaded envelope effort otherwise (dispatchGrokEffort).
+// This observation therefore OUTRANKS the wire effort in attribution —
+// mirroring the dispatch precedence — and the wire value answers when it is
+// absent. Every other Go-direct adapter's effort is env/TS-owned with no
+// Go-visible signal — recording a value there would be a guess, not a fact,
+// so the field stays absent rather than falling back to the model's registry
+// effort_default, which is only a fact about the UNOVERRIDDEN case and Go
+// cannot tell whether an override happened. (On the IPC path this
+// observation is superseded by the WIRE RESOLUTION above: there Go OWNS the
+// effort chain, so the wire value is the fact — see the header.)
 //
 // The raw env value is validated against models.EffortOrder (the ladder
 // pinned to the SDK's EFFORT_LEVELS authority, #394/#578): the Grok CLI
@@ -187,19 +188,36 @@ func resolveWireEffort(workspaceRoot string, stage state.PipelineStage) string {
 // through the selection query: the dispatched band's rung under the anthropic
 // provider — the band contract RunStageParams.Model already speaks (the
 // extension translates the band at the last mile for codex/gemini/copilot,
-// and the envelope translates or drops with it) — adjusted by the one
-// override Go's own process observes, the Claude Code disable escape hatch
-// (#76's interlock). "" for a model with no rung (a user-defined local model)
-// or an undeclared thinking default: absent, never fabricated.
-func resolveWireThinking(model string) string {
-	rung, ok := routing.ResolveBandEnvelope("anthropic", routing.TierBand(model), "")
-	if !ok || !state.IsThinkingState(rung.Thinking) {
+// and the envelope translates or drops with it) — overridden by the mode
+// envelope's thinking policy when the mode declares one (#606, spike #568
+// §4.1.3; no mode does today, so the policy branch is dormant by
+// construction), and adjusted by the one override Go's own process observes,
+// the Claude Code disable escape hatch (#76's interlock) — an operator
+// escape hatch outranks both the rung's declared default and a mode table.
+// "" for a model with no rung (a user-defined local model) or an undeclared
+// thinking default under a policy-less mode: absent, never fabricated.
+func resolveWireThinking(model string, mode routing.PerformanceMode) string {
+	return wireThinkingUnderPolicy(model, routing.Envelope(mode).ThinkingPolicy)
+}
+
+// wireThinkingUnderPolicy is resolveWireThinking with the mode's thinking
+// policy made explicit — the seam the policy-branch tests exercise, since no
+// shipped mode table declares a policy value yet (#606).
+func wireThinkingUnderPolicy(model, policy string) string {
+	thinking := ""
+	if rung, ok := routing.ResolveBandEnvelope("anthropic", routing.TierBand(model), ""); ok && state.IsThinkingState(rung.Thinking) {
+		thinking = rung.Thinking
+	}
+	if state.IsThinkingState(policy) {
+		thinking = policy
+	}
+	if thinking == "" {
 		return ""
 	}
 	if preflight.ThinkingDisabledInEnv() {
 		return "off"
 	}
-	return rung.Thinking
+	return thinking
 }
 
 // resolveDispatchSelectionMode returns model_routing.mode (manual | automatic

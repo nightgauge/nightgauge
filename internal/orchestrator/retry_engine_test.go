@@ -516,3 +516,121 @@ func TestRetryEngine_ConflictBacktrackBoundedByEdgeCount(t *testing.T) {
 		t.Error("declined conflict edge must report LimitReached")
 	}
 }
+
+// ── #606: same-model effort descent on fully-collapsed providers ─────────────
+
+// TestEvaluateDowngrade_FullyCollapsedProviderDescendsEffort is the #532
+// runtime resolution: on xai — where every ladder rung is grok-4.6 — a
+// model-unavailable rejection descends EFFORT within the one model instead of
+// exhausting, and the decision carries the envelope of the accepted rung.
+func TestEvaluateDowngrade_FullyCollapsedProviderDescendsEffort(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+	dg := engine.EvaluateDowngrade("grok-4.6")
+	if !dg.ShouldDowngrade {
+		t.Fatalf("xai must descend, got %+v", dg)
+	}
+	if dg.FromTier != "fable" || dg.NewTier != "opus" {
+		t.Fatalf("descent must step one band (fable → opus), got %+v", dg)
+	}
+	if !dg.SameModelDescent || dg.NewModelID != "grok-4.6" || dg.NewEffort != "high" {
+		t.Fatalf("decision must carry the same-model envelope (grok-4.6@high), got %+v", dg)
+	}
+	if dg.Reason != "model_unavailable_effort_descent" {
+		t.Fatalf("descent must be distinguishable from a cross-model fallback, got %q", dg.Reason)
+	}
+	if dg.DescentEffort() != "high" {
+		t.Fatalf("DescentEffort must expose the sticky effort, got %q", dg.DescentEffort())
+	}
+}
+
+// TestEvaluateDowngrade_DescentChainsThroughTheLadder pins the repeat case:
+// after fable → opus (grok-4.6@high) is recorded, a rejection of the
+// substituted tier descends again (opus → sonnet, grok-4.6@medium) — the
+// provider-aware evaluation resolves the band within xai.
+func TestEvaluateDowngrade_DescentChainsThroughTheLadder(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+	first := engine.EvaluateDowngrade("grok-4.6")
+	engine.RecordDowngrade("grok-4.6", first.NewTier, first.DescentEffort())
+
+	second := engine.EvaluateDowngradeForProvider("opus", "xai")
+	if !second.ShouldDowngrade || !second.SameModelDescent {
+		t.Fatalf("substituted tier must descend again on xai, got %+v", second)
+	}
+	if second.NewTier != "sonnet" || second.NewEffort != "medium" {
+		t.Fatalf("second descent must be grok-4.6@medium on sonnet, got %+v", second)
+	}
+	engine.RecordDowngrade("opus", second.NewTier, second.DescentEffort())
+
+	// The sticky chain reroutes fable all the way down, and the effort of the
+	// FINAL tier is what StickyEffort answers with.
+	if got := engine.ApplyDowngrades("fable"); got != "sonnet" {
+		t.Fatalf("ApplyDowngrades(fable) = %q, want sonnet", got)
+	}
+	if got := engine.StickyEffort("sonnet"); got != "medium" {
+		t.Fatalf("StickyEffort(sonnet) = %q, want medium", got)
+	}
+}
+
+// TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip PINS the
+// #606 1(d) decision: on a PARTIALLY-collapsed provider the same-model rungs
+// are the SYNTHESIZED effort points the PROVENANCE note on
+// routing.CandidateLadder flags — no registry field declares them as a band's
+// serving envelope, and the provider has a real weaker MODEL to fall to, so
+// the model ladder stays the honest downgrade and the same-model skip stays.
+func TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+
+	// google: flash serves sonnet AND haiku. A flash rejection finds only
+	// flash's own synthesized haiku rung below it — skipped, so exhausted.
+	dg := engine.EvaluateDowngrade("gemini-2.5-flash")
+	if dg.ShouldDowngrade || dg.Reason != "downgrade_ladder_exhausted" {
+		t.Fatalf("partially-collapsed same-model rung must stay skipped, got %+v", dg)
+	}
+	if dg.SameModelDescent {
+		t.Fatalf("no descent may be reported on a partially-collapsed provider: %+v", dg)
+	}
+
+	// openai: sol serves fable AND opus, but sonnet is a DIFFERENT model —
+	// the cross-model fallback stays the downgrade, never an effort descent.
+	dg = engine.EvaluateDowngrade("gpt-5.6-sol")
+	if !dg.ShouldDowngrade || dg.NewTier != "sonnet" || dg.SameModelDescent {
+		t.Fatalf("partially-collapsed provider must fall to its real weaker model, got %+v", dg)
+	}
+	if dg.Reason != "model_unavailable_fallback" {
+		t.Fatalf("cross-model fallback reason changed: %+v", dg)
+	}
+	if dg.DescentEffort() != "" {
+		t.Fatalf("cross-model downgrades must record NO sticky effort, got %q", dg.DescentEffort())
+	}
+}
+
+// TestRecordDowngrade_CrossModelRecordsNoStickyEffort guards the wire-effort
+// chain of every post-downgrade anthropic stage: only a same-model descent
+// may substitute effort.
+func TestRecordDowngrade_CrossModelRecordsNoStickyEffort(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+	dg := engine.EvaluateDowngrade("opus")
+	if !dg.ShouldDowngrade || dg.SameModelDescent {
+		t.Fatalf("anthropic opus must cross-model downgrade, got %+v", dg)
+	}
+	engine.RecordDowngrade("opus", dg.NewTier, dg.DescentEffort())
+	if got := engine.StickyEffort(dg.NewTier); got != "" {
+		t.Fatalf("cross-model downgrade left a sticky effort %q on %s", got, dg.NewTier)
+	}
+}
+
+// TestRetryEngine_ResetClearsStickyEfforts: the RetryEngine is reused across
+// runs; a leaked effort substitution would silently rewrite a later run's
+// wire effort.
+func TestRetryEngine_ResetClearsStickyEfforts(t *testing.T) {
+	engine := NewRetryEngine(DefaultRetryConfig())
+	dg := engine.EvaluateDowngrade("grok-4.6")
+	engine.RecordDowngrade("grok-4.6", dg.NewTier, dg.DescentEffort())
+	if engine.StickyEffort(dg.NewTier) == "" {
+		t.Fatal("precondition: descent recorded a sticky effort")
+	}
+	engine.Reset()
+	if got := engine.StickyEffort(dg.NewTier); got != "" {
+		t.Fatalf("Reset leaked sticky effort %q", got)
+	}
+}

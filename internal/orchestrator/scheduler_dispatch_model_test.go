@@ -55,7 +55,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	// So must the sticky #42 downgrade: an API rejection of sonnet has to
 	// reroute the unrouted stage too, or the run re-fails identically.
 	down := testScheduler(t)
-	down.retryEngine.RecordDowngrade("sonnet", "haiku")
+	down.retryEngine.RecordDowngrade("sonnet", "haiku", "")
 	if got := down.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "haiku" {
 		t.Errorf("downgraded model = %q, want haiku", got)
 	}
@@ -107,7 +107,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	// onto the very tier that just refused it.
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
-	s.retryEngine.RecordDowngrade("sonnet", "haiku")
+	s.retryEngine.RecordDowngrade("sonnet", "haiku", "")
 
 	floors := map[string]string{string(state.StageFeatureDev): "sonnet"}
 	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors)

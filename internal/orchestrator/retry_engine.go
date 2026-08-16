@@ -71,17 +71,27 @@ type RetryEngine struct {
 	// re-fail identically. Cleared by Reset() so the next run re-attempts the
 	// originally-requested model (caps reset; plans change).
 	downgrades map[string]string
+	// downgradeEfforts records the sticky EFFORT substitution that rides a
+	// same-model effort descent (#606, the #532 runtime resolution): substituted
+	// tier → the effort rung that tier's envelope descends to. Populated ONLY
+	// when EvaluateDowngrade accepted a same-model rung on a fully-collapsed
+	// provider (DowngradeDecision.SameModelDescent); a cross-model downgrade
+	// records no effort, so every non-descent dispatch keeps the unchanged
+	// effort-resolution chain. Read by StickyEffort after ApplyDowngrades has
+	// rerouted the tier. Cleared by Reset() alongside downgrades.
+	downgradeEfforts map[string]string
 }
 
 // NewRetryEngine creates a new retry engine with the given config.
 func NewRetryEngine(cfg RetryConfig) *RetryEngine {
 	return &RetryEngine{
-		config:         cfg,
-		escalations:    make(map[string]int),
-		traversedEdges: make(map[string]bool),
-		currentModels:  make(map[string]string),
-		conflictEdges:  make(map[string]int),
-		downgrades:     make(map[string]string),
+		config:           cfg,
+		escalations:      make(map[string]int),
+		traversedEdges:   make(map[string]bool),
+		currentModels:    make(map[string]string),
+		conflictEdges:    make(map[string]int),
+		downgrades:       make(map[string]string),
+		downgradeEfforts: make(map[string]string),
 	}
 }
 
@@ -109,11 +119,39 @@ func NormalizeModelTier(model string) string {
 }
 
 // DowngradeDecision is the result of EvaluateDowngrade.
+//
+// NewModelID/NewEffort carry the dispatch ENVELOPE of the accepted rung
+// (#606, spike #568 §4.1: the ladder is envelope-valued, so a downgrade
+// decision names an envelope point, not just a band). On a cross-model
+// downgrade they are attribution only; on a SameModelDescent they are the
+// decision itself — the same model re-dispatched one declared effort rung
+// lower, which is the only downgrade a fully-collapsed provider has (#532).
 type DowngradeDecision struct {
 	ShouldDowngrade bool
 	FromTier        string
 	NewTier         string // registry tier name — resolved to the current model by models.Get at run time
-	Reason          string
+	// NewModelID is the concrete registry id serving NewTier's rung, and
+	// NewEffort that rung's declared effort ("" when the rung declares none).
+	NewModelID string
+	NewEffort  string
+	// SameModelDescent is true when NewTier is served by the REJECTED model
+	// itself at a lower declared effort — the fully-collapsed-provider descent
+	// (#606). Only then does the rung's effort become a sticky substitution
+	// (see DescentEffort / RecordDowngrade).
+	SameModelDescent bool
+	Reason           string
+}
+
+// DescentEffort returns the effort to record as the sticky substitution for
+// NewTier: the rung effort on a same-model descent, "" otherwise. Cross-model
+// downgrades deliberately record no effort — their effort resolution is the
+// unchanged #581 chain, and recording the rung's declared effort would
+// silently rewrite the wire effort of every post-downgrade stage.
+func (d DowngradeDecision) DescentEffort() string {
+	if d.SameModelDescent {
+		return d.NewEffort
+	}
+	return ""
 }
 
 // EvaluateDowngrade resolves the next-best model tier below the rejected
@@ -126,27 +164,64 @@ type DowngradeDecision struct {
 // no fallback) or the ladder is exhausted — nothing weaker exists for that
 // provider.
 //
-// SAME-MODEL RUNGS — the #532 xai case, explicitly scoped: on a provider
-// whose bands collapse onto one model, the rungs below the rejected tier are
-// the SAME model at lower declared efforts (grok-4.6@xhigh → high → …), which
-// spike #568 §4.1 names as the real downgrade ladder the band vocabulary
-// could not express. This walk still SKIPS them, deliberately: a
-// model-unavailable rejection names the MODEL, and re-dispatching the
-// rejected model at a lower effort requires the effort-execution contract to
-// reach the grok adapters, whose effort is pinned to the provider-global
-// NIGHTGAUGE_GROK_EFFORT env contract (#569) on both the Go-direct and TS
-// paths. Re-pointing that contract at the wire effort is tracked as its own
-// change (the #581 re-scope, see the follow-up issue in the PR body) rather
-// than half-shipped here — so the xai row of selection_compat_golden.json
-// deliberately still pins downgrade_ladder_exhausted.
+// SAME-MODEL RUNGS — the #532 xai case, resolved by #606: on a provider whose
+// bands FULLY collapse onto one model (every ladder rung one model id — xai
+// today), the rungs below the rejected tier are the SAME model at lower
+// declared efforts (grok-4.6@xhigh → high → …), which spike #568 §4.1 names
+// as the real downgrade ladder the band vocabulary could not express. The
+// walk now ACCEPTS those rungs for fully-collapsed providers — the
+// effort-execution contract reaches the grok adapters since #606 (wire effort
+// on the TS path, RunOptions-threaded effort on the Go-direct path, with
+// NIGHTGAUGE_GROK_EFFORT demoted to operator override), so the descended
+// effort actually dispatches; the substitution is made sticky by
+// RecordDowngrade's effort half and applied by StickyEffort.
+//
+// PARTIALLY-collapsed providers (google's pro/flash pairs, openai's
+// gpt-5.6-sol) KEEP the same-model skip, pinned by
+// TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip: their
+// same-model rungs are the SYNTHESIZED effort points the PROVENANCE note on
+// routing.CandidateLadder flags — points no registry field declares as a
+// band's serving envelope — and those providers have a REAL weaker model to
+// fall to, which stays the honest downgrade.
 func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision {
+	return r.EvaluateDowngradeForProvider(rejectedModel, "")
+}
+
+// providerFullyCollapsed reports whether every rung of the provider's
+// candidate ladder is served by one model id — the precondition for treating
+// same-model effort rungs as downgrade targets (#606). An empty ladder
+// (local providers) is not "collapsed": there is nothing to descend through.
+func providerFullyCollapsed(provider string) bool {
+	rungs := routing.CandidateLadder(provider, "")
+	if len(rungs) == 0 {
+		return false
+	}
+	for _, rung := range rungs[1:] {
+		if rung.ModelID != rungs[0].ModelID {
+			return false
+		}
+	}
+	return true
+}
+
+// EvaluateDowngradeForProvider is EvaluateDowngrade with the dispatching
+// provider made explicit (#606). The dispatch model is a registry BAND on the
+// wire (#340), and a band alone cannot name its provider — the inference
+// below resolves bands against anthropic, exactly as before. A caller that
+// KNOWS the dispatch provider (the Go-direct adapter path, where the
+// scheduler holds the adapter) passes it so an xai rejection of band
+// "sonnet" walks the xai ladder — grok-4.6's effort rungs — instead of the
+// anthropic one. provider "" preserves the historical inference bit for bit.
+func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider string) DowngradeDecision {
 	fromTier := NormalizeModelTier(rejectedModel)
 	if fromTier == "" {
 		return DowngradeDecision{Reason: "model_not_in_registry"}
 	}
-	provider := "anthropic"
+	if provider == "" {
+		provider = "anthropic"
+	}
 	rejectedID := ""
-	if desc, ok := models.Get(rejectedModel); ok {
+	if desc, ok := models.Resolve(provider, rejectedModel); ok {
 		provider = desc.Provider
 		rejectedID = desc.ID
 	}
@@ -177,12 +252,28 @@ func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision 
 			continue
 		}
 		if rung.ModelID == rejectedID {
-			continue // same model serves this rung — see SAME-MODEL RUNGS above
+			// Same model serves this rung — see SAME-MODEL RUNGS above.
+			// Fully-collapsed provider with a real (distinct, declared)
+			// effort on the rung: this IS the provider's downgrade ladder.
+			if !providerFullyCollapsed(provider) || rung.Effort == "" {
+				continue // partially-collapsed keeps the skip (pinned decision, #606)
+			}
+			return DowngradeDecision{
+				ShouldDowngrade:  true,
+				FromTier:         fromTier,
+				NewTier:          tier,
+				NewModelID:       rung.ModelID,
+				NewEffort:        rung.Effort,
+				SameModelDescent: true,
+				Reason:           "model_unavailable_effort_descent",
+			}
 		}
 		return DowngradeDecision{
 			ShouldDowngrade: true,
 			FromTier:        fromTier,
 			NewTier:         tier,
+			NewModelID:      rung.ModelID,
+			NewEffort:       rung.Effort,
 			Reason:          "model_unavailable_fallback",
 		}
 	}
@@ -191,8 +282,11 @@ func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision 
 
 // RecordDowngrade makes a model-tier substitution sticky for the remainder of
 // the run: every subsequent stage that resolves to the rejected tier is
-// rerouted to newTier by ApplyDowngrades. Cleared by Reset().
-func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier string) {
+// rerouted to newTier by ApplyDowngrades. newEffort is the sticky effort half
+// of a same-model descent (#606) — pass DowngradeDecision.DescentEffort(), so
+// it is "" for every cross-model downgrade and the wire-effort chain stays
+// untouched there. Cleared by Reset().
+func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier, newEffort string) {
 	fromTier := NormalizeModelTier(rejectedModel)
 	if fromTier == "" || newTier == "" || fromTier == newTier {
 		return
@@ -200,6 +294,27 @@ func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.downgrades[fromTier] = newTier
+	if newEffort != "" {
+		r.downgradeEfforts[newTier] = newEffort
+	}
+}
+
+// StickyEffort returns the effort rung a same-model descent (#606) recorded
+// for the tier a dispatch RESOLVED to (i.e. after ApplyDowngrades), or ""
+// when no descent touched that tier. The caller substitutes it for the
+// resolved wire effort, LAST — after the mode's effort clamps — for the same
+// reason the model floor is never re-applied over a sticky downgrade (#42):
+// re-raising the effort the API-rejection descent just lowered would re-fail
+// identically. The NIGHTGAUGE_GROK_EFFORT operator override still wins at the
+// adapter boundary; an operator pin is an explicit choice, not a pipeline one.
+func (r *RetryEngine) StickyEffort(model string) string {
+	tier := NormalizeModelTier(model)
+	if tier == "" {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.downgradeEfforts[tier]
 }
 
 // ApplyDowngrades reroutes a model through the run's sticky tier
@@ -530,4 +645,5 @@ func (r *RetryEngine) Reset() {
 	r.currentModels = make(map[string]string)
 	r.conflictEdges = make(map[string]int)
 	r.downgrades = make(map[string]string)
+	r.downgradeEfforts = make(map[string]string)
 }

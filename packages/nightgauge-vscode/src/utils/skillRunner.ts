@@ -4103,14 +4103,36 @@ export function runStageSkillHeadless(
       callbacks?.onStderr?.("[skillRunner] Grok model: (CLI default / registry)\n");
     }
 
-    // Registry effort gate (#569): the provider-global NIGHTGAUGE_GROK_EFFORT
-    // must sit on the supported_efforts ladder of the model this dispatch will
-    // actually serve — checked against the band-mapped model when one was
-    // resolved above, else the same env cascade the SDK GrokAdapter reads.
-    // A rung the model does not declare fails the stage closed here, BEFORE
-    // spawn, instead of reaching `grok --effort` and dying as #532's
-    // signature (exit 1 in seconds, no work, nothing classified).
-    const grokEffort = process.env.NIGHTGAUGE_GROK_EFFORT;
+    // The grok dispatch effort (#606): the dispatch envelope is the primary
+    // source — the Go scheduler's wire effort on the IPC path (executed
+    // verbatim, #340/#581), the local resolveStageEffort chain otherwise —
+    // with the provider-global NIGHTGAUGE_GROK_EFFORT env var DEMOTED from
+    // sole authority (#569) to operator override: the most explicit, most
+    // ephemeral signal wins when set, exactly like the
+    // NIGHTGAUGE_PIPELINE_STAGE_MODEL_* overrides. This is what lets an
+    // EvaluateDowngrade same-model effort descent (the #532 ladder) actually
+    // reach the spawned CLI: the descended rung rides the wire effort. The
+    // envelope value is delivered through the SAME env contract the SDK
+    // GrokAdapter already reads, so the adapter needs no second channel.
+    const grokOperatorEffort = process.env.NIGHTGAUGE_GROK_EFFORT?.trim() || undefined;
+    const grokEffort = grokOperatorEffort ?? modelDecision.effort;
+    if (grokEffort) {
+      if (!grokOperatorEffort) {
+        grokEnv.NIGHTGAUGE_GROK_EFFORT = grokEffort;
+      }
+      callbacks?.onStderr?.(
+        `[skillRunner] Grok effort: ${grokEffort}${grokOperatorEffort ? " (operator override)" : " (dispatch envelope)"}\n`
+      );
+    }
+
+    // Registry effort gate (#569 → #606): the effort that will ACTUALLY
+    // dispatch — operator override else envelope — must sit on the
+    // supported_efforts ladder of the model this dispatch will actually
+    // serve, checked against the band-mapped model when one was resolved
+    // above, else the same env cascade the SDK GrokAdapter reads. A rung the
+    // model does not declare fails the stage closed here, BEFORE spawn,
+    // instead of reaching `grok --effort` and dying as #532's signature
+    // (exit 1 in seconds, no work, nothing classified).
     const grokEffortPreflight = preflightAdapterEffort(
       "grok",
       grokEffort,
