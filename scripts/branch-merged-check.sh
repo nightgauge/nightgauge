@@ -41,10 +41,19 @@
 # later. Large deletion counts are the tell: base is ahead, the branch is stale.
 #
 # So content alone cannot distinguish "carries unmerged work" from "was merged,
-# then base moved on". This script consults the forge for a merged PR whose head
-# SHA equals the branch tip — which means the branch is precisely what merged
-# and is therefore safe to delete regardless of how far base has since moved.
-# Set NO_PR=1 to skip that lookup; the result is then conservative by design.
+# then base moved on". This script consults the forge for a merged PR whose
+# head commit CONTAINS the branch tip — either the head SHA equals the tip, or
+# the tip is one of that commit's own parents — which means the branch is
+# precisely what merged and is therefore safe to delete regardless of how far
+# base has since moved. The parent case is the decisive one for a branch that
+# was `gh pr update-branch`'d before its squash merge (#593): update-branch
+# creates a merge commit on the PR's remote head whose parents are exactly
+# [previous branch tip, base at merge time], and a content diff of the LOCAL
+# tip (which never advances past "previous branch tip" — update-branch runs on
+# the forge side, not in a local checkout) against a base that has since
+# evolved the SAME files the branch touched reads as unmerged even though the
+# branch is fully landed. Set NO_PR=1 to skip the forge lookup entirely; the
+# result is then conservative by design.
 
 set -uo pipefail
 
@@ -86,6 +95,19 @@ merged_pr_for() {
   [ -n "$PR_INDEX" ] || return 1
   printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
     '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}'
+}
+
+# merged_pr_head_parents <sha> -> prints one parent SHA per line for a merged
+# PR's head commit. `{owner}`/`{repo}` are gh's own placeholders, resolved
+# from the repo `gh` is run in — no separate remote-parsing needed here.
+# Empty output (no gh, unauthenticated, network failure, no such commit) is
+# indistinguishable from "no parents" to the caller, and that is fine: an
+# empty result never turns a KEEP into a SAFE-DELETE, only the reverse is
+# gated on it being non-empty.
+merged_pr_head_parents() {
+  [ "${NO_PR:-0}" = "1" ] && return 0
+  command -v gh >/dev/null 2>&1 || return 0
+  gh api "repos/{owner}/{repo}/commits/$1" --jq '.parents[].sha' 2>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -165,6 +187,19 @@ classify() {
       echo "SAFE-DELETE  merged as PR #$pr_num at this exact tip; $base moved on since"
       return 0
     fi
+
+    # tip != pr_sha: still safe if tip is one of the merged head's own
+    # parents — the update-branch shape (#593). merge-base --is-ancestor
+    # cannot substitute here: pr_sha is the PR's REMOTE head, very often never
+    # fetched into this checkout at all, so it may not even be a valid ref
+    # locally to ask ancestry of.
+    local parents
+    parents=$(merged_pr_head_parents "$pr_sha")
+    if [ -n "$parents" ] && printf '%s\n' "$parents" | grep -qx "$tip"; then
+      echo "SAFE-DELETE  merged as PR #$pr_num; tip is a parent of the merged head (update-branch) — $base moved on since"
+      return 0
+    fi
+
     echo "KEEP         PR #$pr_num merged a DIFFERENT tip (${pr_sha:0:7} vs ${tip:0:7}) — commits past the merge"
     return 1
   fi
