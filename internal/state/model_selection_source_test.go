@@ -333,7 +333,7 @@ func buildOneStageRecord(t *testing.T, mutate func(rs *RuntimeState)) V2StageDet
 	if mutate != nil {
 		mutate(rs)
 	}
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6", "")
 
 	hw := NewHistoryWriter(t.TempDir())
 	rec := hw.BuildV2Record(rs.Snapshot(), true, "", V2RunInput{}, time.Now())

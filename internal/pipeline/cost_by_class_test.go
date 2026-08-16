@@ -11,6 +11,14 @@ func rec(class string, costUSD float64, durMs int64) state.V2RunRecord {
 	}
 }
 
+func recUnstamped(class string, costUSD float64, durMs int64) state.V2RunRecord {
+	return state.V2RunRecord{
+		Routing:       state.V2Routing{ChangeClass: class},
+		Tokens:        state.V2Tokens{EstimatedCostUSD: costUSD, CostUnstamped: true},
+		TotalDuration: durMs,
+	}
+}
+
 func TestAggregateCostByClass(t *testing.T) {
 	records := []state.V2RunRecord{
 		rec("docs_only", 0.20, 60000),
@@ -71,5 +79,46 @@ func TestAggregateCostByClass_Empty(t *testing.T) {
 	}
 	if res.V != 1 {
 		t.Errorf("V = %d, want 1", res.V)
+	}
+}
+
+// TestAggregateCostByClass_UnstampedRuns verifies runs whose Tokens.CostUnstamped
+// is true are counted per-bucket (#585, #588) without being excluded from the
+// cost sums — a silent exclusion would just undercount real spend elsewhere.
+func TestAggregateCostByClass_UnstampedRuns(t *testing.T) {
+	records := []state.V2RunRecord{
+		rec("source", 6.00, 1800000),
+		recUnstamped("source", 0.00, 1200000),
+		recUnstamped("source", 4.00, 1500000),
+		rec("docs_only", 0.20, 60000),
+	}
+	res := AggregateCostByClass(records)
+
+	byClass := map[string]ClassCostStats{}
+	for _, c := range res.Classes {
+		byClass[c.ChangeClass] = c
+	}
+
+	src, ok := byClass["source"]
+	if !ok {
+		t.Fatal("source bucket missing")
+	}
+	if src.UnstampedRuns != 2 {
+		t.Errorf("source UnstampedRuns = %d, want 2", src.UnstampedRuns)
+	}
+	if src.Runs != 3 {
+		t.Errorf("source Runs = %d, want 3 (unstamped runs still counted)", src.Runs)
+	}
+	wantTotal := 6.00 + 0.00 + 4.00
+	if src.TotalCostUSD < wantTotal-0.0001 || src.TotalCostUSD > wantTotal+0.0001 {
+		t.Errorf("source TotalCostUSD = %f, want %f — unstamped runs must still be summed, not silently dropped", src.TotalCostUSD, wantTotal)
+	}
+
+	docs, ok := byClass["docs_only"]
+	if !ok {
+		t.Fatal("docs_only bucket missing")
+	}
+	if docs.UnstampedRuns != 0 {
+		t.Errorf("docs_only UnstampedRuns = %d, want 0", docs.UnstampedRuns)
 	}
 }

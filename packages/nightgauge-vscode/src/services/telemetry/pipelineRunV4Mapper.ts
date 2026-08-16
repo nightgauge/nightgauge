@@ -223,6 +223,15 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
     const inputTokens = asNonNegInt(tokens["input"]);
     const outputTokens = asNonNegInt(tokens["output"]);
 
+    // tokens["cost_unstamped"] (Go state.V2StageTokens.CostUnstamped, #585,
+    // #588) is deliberately NOT read here. The platform's `.strict()` V4 Zod
+    // schema (ExecutionHistoryRunRecordV4Schema) has no field for it and
+    // rejects the WHOLE record on any unknown key, so forwarding it would
+    // reintroduce the exact "0 runs" failure mode this file's header
+    // documents. V4StageMetric intentionally has no `costUnstamped` property
+    // — the signal stays local (V2StageTokens.cost_unstamped /
+    // V2Tokens.cost_unstamped) for `nightgauge cost by-class` and other local
+    // consumers until a coordinated platform schema change adds it.
     out.push({
       stageId: stageName.slice(0, 100),
       stageName: stageName.slice(0, 100),

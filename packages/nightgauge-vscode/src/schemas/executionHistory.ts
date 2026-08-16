@@ -110,6 +110,17 @@ export const HistoryStageTokenUsageSchema = z.object({
    * that was the only path that ever produced a non-zero cost pre-#3228.
    */
   cost_source: z.enum(["native", "computed", "unknown"]).optional(),
+  /**
+   * Mirrors Go `state.V2StageTokens.CostUnstamped` (Issue #585, #588): true
+   * when `cost_usd` is a placeholder `0` because the serving (provider,
+   * model) pair could not be resolved against the pricing registry — never
+   * set for a genuinely free local-provider ($0) run. OR'd across every
+   * CompleteStage occurrence folded into this entry, so one unresolved
+   * attempt taints the accumulated `cost_usd` even if a later retry on the
+   * same stage priced cleanly. Optional/absent on pre-#585 records — readers
+   * must treat absence as "not known to be unstamped", not "stamped".
+   */
+  cost_unstamped: z.boolean().optional(),
 });
 export type HistoryStageTokenUsage = z.infer<typeof HistoryStageTokenUsageSchema>;
 
@@ -447,6 +458,13 @@ const TokensSchema = z.object({
   total_cache_read: z.number().int().min(0),
   total_cache_creation: z.number().int().min(0),
   estimated_cost_usd: z.number().min(0),
+  /**
+   * Mirrors Go `state.V2Tokens.CostUnstamped` (Issue #585, #588): the
+   * run-level OR of every `per_stage[*].cost_unstamped` entry. True means
+   * `estimated_cost_usd` folds in at least one placeholder-zero stage cost
+   * and is not a fully priced total. Optional/absent on pre-#585 records.
+   */
+  cost_unstamped: z.boolean().optional(),
   per_stage: z.record(z.string(), HistoryStageTokenUsageSchema).optional(),
   /** PTC metrics for programmatic vs direct tool call tracking (Issue #1071) */
   ptc_metrics: PTCMetricsSchema.optional(),

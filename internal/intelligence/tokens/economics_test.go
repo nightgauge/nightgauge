@@ -161,3 +161,98 @@ func TestCalculateCost_NonAnthropicRegistryRates(t *testing.T) {
 		t.Errorf("CalculateCost(gpt-5.5, 1M, 1M) = %f, want 35.00", got)
 	}
 }
+
+// TestCalculateCostForAdapter_PinsRun01a007d5Regression pins the exact-match
+// arithmetic observed live on run 01a007d5 (issue #583, adapter grok) —
+// feature-planning: 484,709 in / 96,317 out. Before #585 this stamped
+// $2.8989, exactly claude-sonnet's $3/$15 rate, because the cost call had no
+// provider input and defaulted to Anthropic regardless of the serving
+// adapter. It must now price at grok-4.6's registry rate ($0.34 in / $1.02
+// out per MTok ≈ $0.263), and the SAME tokens on adapter claude must still
+// stamp the pre-existing $2.8989-equivalent anthropic-rate figure — proving
+// the fix is adapter-scoped, not a blanket rate change.
+func TestCalculateCostForAdapter_PinsRun01a007d5Regression(t *testing.T) {
+	counts := TokenCounts{Input: 484709, Output: 96317}
+
+	grokCost, grokStamped := CalculateCostForAdapter("grok", "sonnet", counts)
+	if !grokStamped {
+		t.Fatal("grok/sonnet should resolve to a stamped cost (grok-4.6 serves the sonnet band)")
+	}
+	const wantGrok = 0.263044 // 484709*0.34/1e6 + 96317*1.02/1e6
+	if diff := grokCost - wantGrok; diff > 5e-5 || diff < -5e-5 {
+		t.Errorf("grok/sonnet cost = %.6f, want ~%.6f (grok-4.6 rates)", grokCost, wantGrok)
+	}
+	if grokCost >= 1.0 {
+		t.Errorf("grok/sonnet cost = %.4f looks priced at anthropic rates ($2.8989), not grok's (~$0.26)", grokCost)
+	}
+
+	claudeCost, claudeStamped := CalculateCostForAdapter("claude", "sonnet", counts)
+	if !claudeStamped {
+		t.Fatal("claude/sonnet should resolve to a stamped cost")
+	}
+	const wantClaude = 2.8989 // 484709*3/1e6 + 96317*15/1e6, matches run 01a007d5's stamped figure
+	if diff := claudeCost - wantClaude; diff > 1e-3 || diff < -1e-3 {
+		t.Errorf("claude/sonnet cost = %.6f, want ~%.6f (anthropic sonnet rates, unchanged)", claudeCost, wantClaude)
+	}
+}
+
+// TestCalculateCostForAdapter_EmptyAdapterMatchesCalculateCost pins the
+// no-regression requirement: a caller that has not been updated to pass
+// adapter context (adapter == "") must price EXACTLY like the pre-#585
+// CalculateCost anthropic-default path — byte-identical, not merely close.
+func TestCalculateCostForAdapter_EmptyAdapterMatchesCalculateCost(t *testing.T) {
+	counts := TokenCounts{Input: 484709, Output: 96317}
+	for _, model := range []string{"sonnet", "claude-sonnet-4-6", "claude-opus-4-8", "unknown-model-xyz"} {
+		want := CalculateCost(model, counts)
+		got, stamped := CalculateCostForAdapter("", model, counts)
+		if got != want {
+			t.Errorf("CalculateCostForAdapter(%q, %q) = %v, want CalculateCost's %v (byte-identical anthropic default)",
+				"", model, got, want)
+		}
+		if model == "unknown-model-xyz" && stamped {
+			t.Errorf("CalculateCostForAdapter(%q) unresolvable model should be unstamped", model)
+		}
+	}
+}
+
+// TestCalculateCostForAdapter_LocalProviderStaysIntentionalZero pins the
+// pre-existing local-model convention (#56): ollama/lm-studio have no
+// registry rows by design because their marginal cost genuinely IS zero.
+// That must remain a STAMPED $0 — not get reclassified as "unstamped" now
+// that unstamped exists for a different reason (an unresolved REAL provider).
+func TestCalculateCostForAdapter_LocalProviderStaysIntentionalZero(t *testing.T) {
+	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
+	for _, adapter := range []string{"ollama", "lm-studio"} {
+		cost, stamped := CalculateCostForAdapter(adapter, "qwen3-coder:32b", counts)
+		if !stamped {
+			t.Errorf("adapter %q: local-model $0 should be stamped=true (intentional, not a gap)", adapter)
+		}
+		if cost != 0 {
+			t.Errorf("adapter %q: cost = %v, want 0", adapter, cost)
+		}
+	}
+}
+
+// TestCalculateCostForAdapter_UnresolvedRealProviderIsUnstamped is the
+// explicit-unstamped semantic the issue's acceptance criteria requires: when
+// the serving provider is a REAL (billed) provider but the concrete model
+// cannot be resolved against it, the result must be unstamped/incomplete —
+// never a fabricated $0 and never another provider's rate.
+func TestCalculateCostForAdapter_UnresolvedRealProviderIsUnstamped(t *testing.T) {
+	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
+	cost, stamped := CalculateCostForAdapter("grok", "nonexistent-band-xyz", counts)
+	if stamped {
+		t.Error("unresolvable (xai, nonexistent-band-xyz) should be unstamped, not a priced figure")
+	}
+	if cost != 0 {
+		t.Errorf("unstamped cost placeholder = %v, want 0 (never fabricate a nonzero price)", cost)
+	}
+
+	// And it must never silently borrow another provider's rate for the same
+	// bare band name — grok's failure must not fall through to Anthropic's
+	// sonnet price.
+	anthropicSonnet := CalculateCost("sonnet", counts)
+	if cost == anthropicSonnet {
+		t.Error("unstamped cost accidentally matches anthropic's rate — cross-provider fallback regression")
+	}
+}

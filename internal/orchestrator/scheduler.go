@@ -4242,7 +4242,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				// Unsplit cache-creation count booked as 5m per the
 				// CalculateCost convention. Per-stage 5m/1h split is #390.
 				CacheCreation5m: cacheCreationTokens,
-			}, servedModel)
+			}, servedModel, adapterName)
 		}
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 
@@ -4393,8 +4393,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 					if anomalyCost == 0 {
 						// The IPC-delivered cache-creation count is unsplit; booked as
 						// 5m per the CalculateCost convention. Per-stage 5m/1h split
-						// is #390.
-						anomalyCost = tokens.CalculateCost(servedModel, tokens.TokenCounts{
+						// is #390. Adapter-aware (#585): prices at the serving
+						// provider's rates, not an anthropic default.
+						anomalyCost, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
 							Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 							CacheCreation5m: cacheCreationTokens,
 						})
@@ -4634,7 +4635,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			if stageCostForCb == 0 {
 				// The IPC-delivered cache-creation count is unsplit; booked as 5m
 				// per the CalculateCost convention. Per-stage 5m/1h split is #390.
-				stageCostForCb = tokens.CalculateCost(servedModel, tokens.TokenCounts{
+				// Adapter-aware (#585): prices at the serving provider's rates,
+				// not an anthropic default.
+				stageCostForCb, _ = tokens.CalculateCostForAdapter(adapterName, servedModel, tokens.TokenCounts{
 					Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 					CacheCreation5m: cacheCreationTokens,
 				})
@@ -5392,7 +5395,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if stageCost == 0 {
 			// The IPC-delivered cache-creation count is unsplit; booked as 5m per
 			// the CalculateCost convention. Per-stage 5m/1h split is #390.
-			stageCost = tokens.CalculateCost(model, tokens.TokenCounts{
+			// Adapter-aware (#585): prices at the serving provider's rates, not
+			// an anthropic default.
+			stageCost, _ = tokens.CalculateCostForAdapter(adapterName, model, tokens.TokenCounts{
 				Input: inputTokens, Output: outputTokens, CacheRead: cacheReadTokens,
 				CacheCreation5m: cacheCreationTokens,
 			})

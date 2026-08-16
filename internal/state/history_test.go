@@ -18,7 +18,7 @@ func TestHistoryWriteAndRead(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 1311, "item-123", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	if err := hw.Write(rs, true, ""); err != nil {
 		t.Fatalf("Write: %v", err)
@@ -88,9 +88,9 @@ func TestWriteV2_ProducesValidRecord(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2001, "item-v2", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 2000}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 5000, Output: 2000}, "", "")
 	rs.BeginStage(StageFeaturePlanning)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 3000}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 8000, Output: 3000}, "", "")
 
 	input := V2RunInput{
 		Title:           "Test V2 record",
@@ -154,9 +154,9 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2002, "item-fail", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	rs.BeginStage(StageFeatureDev)
-	rs.CompleteStage(1, tokens.TokenCounts{Input: 3000, Output: 1000}, "")
+	rs.CompleteStage(1, tokens.TokenCounts{Input: 3000, Output: 1000}, "", "")
 	// Through the production writer, in the production ORDER (#407): every
 	// failure path books the stage's spend first and records the error second,
 	// and completion is now the StageErrors clear site — so a raw map poke here
@@ -206,7 +206,7 @@ func TestWriteV2_UpdatesIndex(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		rs := NewRuntimeState("nightgauge/nightgauge", 3000+i, "item", testRunID())
 		rs.BeginStage(StageIssuePickup)
-		rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+		rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 		input := V2RunInput{Title: "Index test", Branch: "feat/test"}
 		if err := hw.WriteV2(rs, true, "", input); err != nil {
 			t.Fatalf("WriteV2 %d: %v", i, err)
@@ -239,7 +239,7 @@ func TestWriteV2_SkippedStages(t *testing.T) {
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 4000, "item-skip", testRunID())
 	rs.BeginStage(StageIssuePickup)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 	rs.SkippedStages = []string{string(StageFeaturePlanning)}
 
 	input := V2RunInput{
@@ -609,15 +609,15 @@ func TestWriteV2_PerStagePerformanceMode(t *testing.T) {
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "efficiency")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// Deliberately no RecordStageMode here.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageMode(StageFeatureDev, "maximum")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
@@ -687,15 +687,15 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageAdapter(StageIssuePickup, "claude")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// No RecordStageAdapter — should fall back to V2RunInput.DefaultAdapter.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageAdapter(StageFeatureDev, "gemini")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	hw := NewHistoryWriter(t.TempDir())
 	now := time.Now()
@@ -745,7 +745,7 @@ func TestWriteV2_PerStageAdapter(t *testing.T) {
 	// treating absence as adapter-unknown.
 	rsNoAdapter := NewRuntimeState("nightgauge/nightgauge", 3224, "item-no-adapter", testRunID())
 	rsNoAdapter.BeginStage(StageIssuePickup)
-	rsNoAdapter.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rsNoAdapter.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	recordNoAdapter := hw.BuildV2Record(rsNoAdapter, true, "", V2RunInput{
 		Title:      "no adapter",
@@ -797,15 +797,15 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 	// Two elevated stages, one with no mode.
 	rs.BeginStage(StageIssuePickup)
 	rs.RecordStageMode(StageIssuePickup, "elevated")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "", "")
 
 	rs.BeginStage(StageFeaturePlanning)
 	// No mode recorded — omitempty must keep the field absent.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1500, Output: 600}, "", "")
 
 	rs.BeginStage(StageFeatureDev)
 	rs.RecordStageMode(StageFeatureDev, "elevated")
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
 	dir := t.TempDir()
 	hw := NewHistoryWriter(dir)
@@ -1089,5 +1089,106 @@ func TestBuildV2Record_StageErrorEntryStampsFailed(t *testing.T) {
 	// proves the assertion above came from the StageErrors overwrite.
 	if got := record.Stages[string(StageFeatureValidate)].Status; got != "complete" {
 		t.Errorf("feature-validate status = %q, want \"complete\" — no global error was supplied", got)
+	}
+}
+
+// --- cost_unstamped survival tests (Issue #585, #588 review finding B1) ---
+//
+// StageResult.CostUnstamped (set by RuntimeState.CompleteStage when the
+// serving adapter's (provider, model) pair cannot be priced) must survive
+// BuildV2Record's per-stage fold into V2StageTokens.CostUnstamped and the
+// run-level V2Tokens.CostUnstamped aggregate — otherwise an unresolvable
+// pricing lookup persists into the durable JSONL history as `cost_usd: 0`,
+// indistinguishable from a legitimately-free run.
+
+// TestBuildV2Record_UnresolvableAdapterMarksCostUnstamped verifies a
+// CompleteStage call whose (model, adapter) pair cannot be resolved against
+// the pricing registry lands in the built V2 record with cost_unstamped set,
+// at both the per-stage and run levels.
+func TestBuildV2Record_UnresolvableAdapterMarksCostUnstamped(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585", testRunID())
+
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if !tok.CostUnstamped {
+		t.Errorf("PerStage[%q].CostUnstamped = false, want true for an unresolvable (grok, nonexistent-band-xyz) pair", stageName)
+	}
+	if tok.CostUSD != 0 {
+		t.Errorf("PerStage[%q].CostUSD = %v, want 0 (unstamped placeholder)", stageName, tok.CostUSD)
+	}
+	if !record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = false, want true — the run-level aggregate must surface an unstamped stage")
+	}
+}
+
+// TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped is the negative
+// counterpart: an ordinary stage whose (model, adapter) pair resolves
+// cleanly must NOT carry cost_unstamped at either the per-stage or run level.
+func TestBuildV2Record_StampedStageDoesNotCarryCostUnstamped(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585-stamped", testRunID())
+
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "claude")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if tok.CostUnstamped {
+		t.Errorf("PerStage[%q].CostUnstamped = true, want false for a resolvable (claude, sonnet) pair", stageName)
+	}
+	if tok.CostUSD == 0 {
+		t.Errorf("PerStage[%q].CostUSD = 0, want a non-zero priced figure", stageName)
+	}
+	if record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = true, want false — no stage in this run is unstamped")
+	}
+}
+
+// TestBuildV2Record_UnstampedFoldSurvivesRetry pins the OR-fold semantics: a
+// stage that ran twice (retry/backtrack) with the FIRST attempt unstamped and
+// the SECOND attempt stamped must still read cost_unstamped=true overall — a
+// later successful pricing must not erase the earlier placeholder-zero
+// contribution baked into the accumulated cost_usd.
+func TestBuildV2Record_UnstampedFoldSurvivesRetry(t *testing.T) {
+	hw := NewHistoryWriter(t.TempDir())
+	now := time.Now()
+	rs := NewRuntimeState("nightgauge/nightgauge", 585, "item-585-retry", testRunID())
+
+	// First attempt: unresolvable pair, placeholder $0.
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "nonexistent-band-xyz", "grok")
+
+	// Retry: resolves cleanly.
+	rs.BeginStage(StageFeaturePlanning)
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 1000, Output: 500}, "sonnet", "claude")
+
+	record := hw.BuildV2Record(rs, true, "", V2RunInput{}, now)
+
+	stageName := string(StageFeaturePlanning)
+	tok, ok := record.Tokens.PerStage[stageName]
+	if !ok {
+		t.Fatalf("Tokens.PerStage missing entry for %q", stageName)
+	}
+	if !tok.CostUnstamped {
+		t.Error("PerStage[...].CostUnstamped = false, want true — the first attempt's unstamped $0 must survive the fold even after a stamped retry")
+	}
+	if !record.Tokens.CostUnstamped {
+		t.Error("Tokens.CostUnstamped = false, want true — the run-level aggregate must reflect the tainted stage")
 	}
 }

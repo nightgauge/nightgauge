@@ -212,6 +212,13 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 				summedCostUSD += tok.CostUSD
 			}
 		}
+		// tok.CostUnstamped (#585, #588) is deliberately NOT read here: the
+		// platform's ExecutionHistoryStageMetric / V4 schema has no field for
+		// it, and this mapper mirrors pipelineRunV4Mapper.ts's allowlisted
+		// field construction, so adding one requires a coordinated platform
+		// schema change first. The signal stays in the local V2 record
+		// (state.V2StageTokens.CostUnstamped / state.V2Tokens.CostUnstamped)
+		// for `nightgauge cost by-class` and other local consumers.
 
 		var durationMs *int64
 		if detail.DurationMs > 0 {

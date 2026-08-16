@@ -66,7 +66,7 @@ func TestScheduler_GateFailure_ConvertsToStageFailure(t *testing.T) {
 	stage := state.StageFeatureDev
 	rs := state.NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.BeginStage(stage)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6", "")
 
 	gate := &stubGate{
 		name:   "feature-dev",
@@ -109,7 +109,7 @@ func TestScheduler_TerminalFailure_ReconciledByGate(t *testing.T) {
 	stage := state.StagePRMerge
 	rs := state.NewRuntimeState("o/r", 3806, "item-1", testRunID())
 	rs.BeginStage(stage)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8", "")
 
 	// Skill reported failure (e.g. hit a 429 right after merging the PR).
 	stageErr := errors.New("API Error: 429")
@@ -148,7 +148,7 @@ func TestScheduler_TerminalFailure_GateAlsoFails(t *testing.T) {
 	stage := state.StagePRMerge
 	rs := state.NewRuntimeState("o/r", 477, "item-1", testRunID())
 	rs.BeginStage(stage)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-opus-4-8", "")
 
 	stageErr := errors.New("merge failed")
 	exitCode := 1
@@ -204,7 +204,7 @@ func TestScheduler_GatePass_DoesNotErrorOut(t *testing.T) {
 	stage := state.StageIssuePickup
 	rs := state.NewRuntimeState("o/r", 42, "item-1", testRunID())
 	rs.BeginStage(stage)
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 100, Output: 200}, "claude-sonnet-4-6", "")
 
 	gate := &stubGate{name: "issue-pickup", passed: true, reason: "ok"}
 	registry := map[state.PipelineStage]gates.StageGate{stage: gate}

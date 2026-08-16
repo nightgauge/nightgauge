@@ -334,7 +334,7 @@ func TestScheduler_PRMerge_DeterministicPath_CostZero(t *testing.T) {
 
 	// Simulate the scheduler's downstream CompleteStage call for the
 	// deterministic happy path: zero tokens, zero cost.
-	rs.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "")
+	rs.CompleteStage(0, tokens.TokenCounts{Input: 0, Output: 0}, "", "")
 
 	if rs.TotalCostUSD != beforeCost {
 		t.Errorf("TotalCostUSD changed: before=%v after=%v", beforeCost, rs.TotalCostUSD)
