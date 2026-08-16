@@ -3887,6 +3887,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// after escalation overrides, sticky downgrades, and the pr-create /
 		// feature-validate adjustments above.
 		runtime.RecordStageModel(stage, model)
+		// Dispatch envelope (#580): effort/thinking/mode alongside the model
+		// above, each honestly absent when Go has no direct evidence — see
+		// dispatch_envelope.go's doc comments for what "direct evidence" means
+		// per field.
+		runtime.RecordStageModelSelectionMode(stage, resolveDispatchSelectionMode(workspaceRoot))
+		runtime.RecordStageEffort(stage, resolveDispatchEffort(adapterName))
+		runtime.RecordStageThinking(stage, resolveDispatchThinking(adapterName, model))
 
 		// Clear the stage-child pid BEFORE the stage-start persist below (#534).
 		//
@@ -4201,6 +4208,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		servedModel := model
 		if result != nil && result.ServedModel != "" {
 			servedModel = result.ServedModel
+		}
+		// #580: record the CLI stream's raw ServedModel verbatim (possibly
+		// empty), independent of the servedModel fallback above — this is the
+		// honestly-unreported-when-empty concrete id, not the
+		// request-or-served value servedModel computes.
+		if result != nil {
+			runtime.RecordStageServedModel(stage, result.ServedModel)
 		}
 		if result != nil && result.RefusalFallbackTo != "" {
 			runtime.RecordModelRefusalFallback(stage, result.RefusalFallbackFrom,

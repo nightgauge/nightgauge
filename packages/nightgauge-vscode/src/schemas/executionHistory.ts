@@ -21,7 +21,7 @@
  */
 
 import { z } from "zod";
-import { MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
+import { EFFORT_LEVELS, MODEL_SELECTION_SOURCES } from "@nightgauge/sdk";
 import {
   PipelineExecutionModeSchema,
   PipelineStageSchema,
@@ -29,7 +29,7 @@ import {
   ProactiveEscalationRecordSchema,
 } from "./pipelineState";
 import { StallEventSchema } from "./stallEvents";
-import { ExecutionAdapterSchema } from "../config/schema";
+import { ExecutionAdapterSchema, ModelRoutingModeSchema } from "../config/schema";
 import { AdapterSourceSchema } from "../utils/resolvers/adapterResolver";
 import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../utils/orchestratorCrashRecord";
 export {
@@ -216,8 +216,68 @@ export const HistoryStageDetailSchema = z.object({
       source: z.enum(MODEL_SELECTION_SOURCES),
       confidence: z.number().min(0).max(1).optional(),
       complexity: z.string().optional(),
-      mode: z.enum(["manual", "automatic", "hybrid"]).optional(),
-      effort: z.enum(["low", "medium", "high"]).optional(),
+      /**
+       * model_routing.mode (manual | automatic | hybrid) active when this
+       * stage's model was resolved (Issue #580, resolves #462). Distinguishes
+       * an operator-pinned model (manual) from a router-chosen one
+       * (automatic/hybrid) — `source` alone cannot: under
+       * `model_routing.mode: manual` every stage's source still reads
+       * "scheduler", so routing analytics that filter on source counted every
+       * pinned record as an automatic selection. Go is the sole writer
+       * (internal/orchestrator/dispatch_envelope.go's
+       * resolveDispatchSelectionMode, mirroring dispatch_routing.go's
+       * modelRoutingMode exactly). Absent on records emitted before #580.
+       *
+       * DERIVED, never re-listed: `ModelRoutingModeSchema`
+       * (../config/schema.ts) is the single cross-language authority for this
+       * vocabulary — the same enum `model_routing.mode` config validation
+       * already uses — pinned against Go's state.ModelRoutingModes
+       * (internal/state/model_selection_envelope.go) by
+       * TestModelSelectionModePinnedToModelRoutingModeSchema. A hand-relisted
+       * literal here is exactly the #446 drift class the effort and thinking
+       * fields above already guard against.
+       */
+      mode: ModelRoutingModeSchema.optional(),
+      /**
+       * The EFFORT_LEVELS rung actually in force for this dispatch (Issue
+       * #580, absorbs #434).
+       *
+       * DERIVED from EFFORT_LEVELS, never re-listed — the #434 drift class
+       * was a hand-copied `z.enum(["low", "medium", "high"])` that fell two
+       * rungs behind the ladder and was never written by any Go site. Go
+       * writes this field only where it has direct dispatch-time evidence
+       * (today: the grok adapter's NIGHTGAUGE_GROK_EFFORT env var, validated
+       * against the same ladder) — absent for every other adapter, which is
+       * resolved entirely on this (TypeScript) side with no signal threaded
+       * back to Go yet.
+       */
+      effort: z.enum(EFFORT_LEVELS).optional(),
+      /**
+       * The "on"/"off" reasoning state actually in force for this dispatch
+       * (Issue #580, spike #568 §3's canonical binary thinking axis).
+       * Go-written, derived from the resolved model's registry
+       * `behavior.thinking_default` and the Claude Code
+       * `CLAUDE_CODE_DISABLE_THINKING` interlock (#76). Absent when the model
+       * declares no default. Pinned against Go's `ThinkingStates`
+       * (internal/state/model_selection_envelope.go) by
+       * internal/state/model_selection_envelope_test.go.
+       */
+      thinking: z.enum(["on", "off"]).optional(),
+      /**
+       * The adapter that served this stage (Issue #580) — a self-contained
+       * mirror of `HistoryStageTokenUsageSchema.adapter` (#3224) so a
+       * `model_selection` block does not require cross-referencing the
+       * tokens block to know which provider ran it.
+       */
+      adapter: ExecutionAdapterSchema.optional(),
+      /**
+       * The concrete model id the CLI's own stream reported (Issue #580),
+       * independent of `model` above — `model` may still be an unresolved
+       * tier band ("sonnet") when the stream never reported anything more
+       * specific. Absent means the stream reported nothing (#299/#397
+       * empty-means-undetermined) — never a guess or a copy of `model`.
+       */
+      served_model: z.string().optional(),
       /** The model that was active before escalation (Issue #1343) */
       escalated_from: z.string().optional(),
     })

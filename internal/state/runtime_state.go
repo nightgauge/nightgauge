@@ -195,6 +195,38 @@ type RuntimeState struct {
 	// attribute each stage to the model that ran it.
 	StageModels map[string]string `json:"stageModels,omitempty"`
 
+	// StageServedModels captures the CONCRETE model id the CLI's own stream
+	// reported for each stage (Issue #580), independent of StageModels above.
+	// StageModels mirrors the requested/dispatched value and only diverges
+	// from it when a #91 refusal fallback fires; this map is the raw
+	// adapters.RunResult.ServedModel observation, which may still be a bare
+	// tier alias ("sonnet") when the stream never resolved to anything more
+	// specific. Absent/empty means the stream reported nothing — the
+	// #299/#397 empty-means-undetermined convention — never a guess.
+	StageServedModels map[string]string `json:"stageServedModels,omitempty"`
+
+	// StageEfforts captures the EFFORT_LEVELS rung actually in force for each
+	// stage's dispatch, when Go has direct, first-party evidence of it (Issue
+	// #580). Today that evidence exists only for the grok-family adapters'
+	// NIGHTGAUGE_GROK_EFFORT dispatch env var. Absent means Go genuinely does
+	// not know — never a registry-default guess.
+	StageEfforts map[string]string `json:"stageEfforts,omitempty"`
+
+	// StageThinking captures the "on"/"off" reasoning state resolved for each
+	// stage's dispatch (Issue #580, spike #568 §3's canonical binary thinking
+	// axis), derived from the resolved model's registry
+	// behavior.thinking_default and the Claude Code disable interlock (#76).
+	// Absent when the model has no registry entry or declares no default.
+	StageThinking map[string]string `json:"stageThinking,omitempty"`
+
+	// StageModelSelectionModes captures model_routing.mode (manual |
+	// automatic | hybrid) active when each stage's model was resolved (Issue
+	// #580, resolves #462): distinguishes an operator-pinned model from a
+	// router-chosen one, which model_selection.source alone cannot — under
+	// `model_routing.mode: manual` every source read "scheduler" regardless
+	// of whether a human pinned the model.
+	StageModelSelectionModes map[string]string `json:"stageModelSelectionModes,omitempty"`
+
 	// ModelRefusalFallbacks is the append-only record of CLI-internal model
 	// swaps observed in the stage stream (#91): on a safety refusal the
 	// claude CLI silently retries the turn on a fallback model and the
@@ -1220,6 +1252,119 @@ func (rs *RuntimeState) StageModel(stage PipelineStage) string {
 	return rs.StageModels[string(stage)]
 }
 
+// RecordStageServedModel records the concrete model id the CLI's own stream
+// reported for a stage (Issue #580). Mirrors RecordStageModel/RecordStageAdapter:
+// called by the scheduler at stage completion with
+// adapters.RunResult.ServedModel verbatim. Empty strings are ignored — the
+// stream reporting nothing is the honest default (absent), not a stored ""
+// distinct from absence — to preserve the omitempty contract on the wire.
+func (rs *RuntimeState) RecordStageServedModel(stage PipelineStage, model string) {
+	if model == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedModels == nil {
+		rs.StageServedModels = make(map[string]string)
+	}
+	rs.StageServedModels[string(stage)] = model
+}
+
+// StageServedModel returns the recorded served model id for a stage, or ""
+// when the stream never reported one.
+func (rs *RuntimeState) StageServedModel(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedModels == nil {
+		return ""
+	}
+	return rs.StageServedModels[string(stage)]
+}
+
+// RecordStageEffort records the EFFORT_LEVELS rung actually in force for a
+// stage's dispatch (Issue #580), when Go has direct evidence of it. Mirrors
+// RecordStageAdapter: empty strings are ignored to preserve the omitempty
+// contract on the wire — callers pass "" precisely when they have no genuine
+// evidence, and that must read as absent, not as a stored empty value.
+func (rs *RuntimeState) RecordStageEffort(stage PipelineStage, effort string) {
+	if effort == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageEfforts == nil {
+		rs.StageEfforts = make(map[string]string)
+	}
+	rs.StageEfforts[string(stage)] = effort
+}
+
+// StageEffort returns the recorded effort for a stage, or "" when absent.
+func (rs *RuntimeState) StageEffort(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageEfforts == nil {
+		return ""
+	}
+	return rs.StageEfforts[string(stage)]
+}
+
+// RecordStageThinking records the "on"/"off" thinking state resolved for a
+// stage's dispatch (Issue #580). Mirrors RecordStageAdapter: empty strings
+// are ignored — an undeclared registry default must read as absent, not as
+// a stored empty value.
+func (rs *RuntimeState) RecordStageThinking(stage PipelineStage, thinking string) {
+	if thinking == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageThinking == nil {
+		rs.StageThinking = make(map[string]string)
+	}
+	rs.StageThinking[string(stage)] = thinking
+}
+
+// StageThinkingState returns the recorded thinking state for a stage, or ""
+// when absent. (Named StageThinkingState, not StageThinking, to avoid
+// colliding with the StageThinking map field of the same name.)
+func (rs *RuntimeState) StageThinkingState(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageThinking == nil {
+		return ""
+	}
+	return rs.StageThinking[string(stage)]
+}
+
+// RecordStageModelSelectionMode records model_routing.mode (manual |
+// automatic | hybrid) active when a stage's model was resolved (Issue #580,
+// resolves #462). Unlike its siblings this value is never empty in practice
+// — modelRoutingMode is total and defaults to "automatic" — but the empty
+// guard is kept for symmetry with every other Record* method here and to
+// protect a future caller that has no config context.
+func (rs *RuntimeState) RecordStageModelSelectionMode(stage PipelineStage, mode string) {
+	if mode == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageModelSelectionModes == nil {
+		rs.StageModelSelectionModes = make(map[string]string)
+	}
+	rs.StageModelSelectionModes[string(stage)] = mode
+}
+
+// StageModelSelectionMode returns the recorded routing mode for a stage, or
+// "" when absent.
+func (rs *RuntimeState) StageModelSelectionMode(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageModelSelectionModes == nil {
+		return ""
+	}
+	return rs.StageModelSelectionModes[string(stage)]
+}
+
 // AppendEscalation records a model-change event (upward escalation or
 // model-unavailable downgrade, distinguished by Reason) on the run's
 // EscalationHistory. Issue #42 added the first writer for this field — it
@@ -1836,6 +1981,30 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageModels = make(map[string]string, len(rs.StageModels))
 		for k, v := range rs.StageModels {
 			snap.StageModels[k] = v
+		}
+	}
+	if len(rs.StageServedModels) > 0 {
+		snap.StageServedModels = make(map[string]string, len(rs.StageServedModels))
+		for k, v := range rs.StageServedModels {
+			snap.StageServedModels[k] = v
+		}
+	}
+	if len(rs.StageEfforts) > 0 {
+		snap.StageEfforts = make(map[string]string, len(rs.StageEfforts))
+		for k, v := range rs.StageEfforts {
+			snap.StageEfforts[k] = v
+		}
+	}
+	if len(rs.StageThinking) > 0 {
+		snap.StageThinking = make(map[string]string, len(rs.StageThinking))
+		for k, v := range rs.StageThinking {
+			snap.StageThinking[k] = v
+		}
+	}
+	if len(rs.StageModelSelectionModes) > 0 {
+		snap.StageModelSelectionModes = make(map[string]string, len(rs.StageModelSelectionModes))
+		for k, v := range rs.StageModelSelectionModes {
+			snap.StageModelSelectionModes[k] = v
 		}
 	}
 	if len(rs.ModelRefusalFallbacks) > 0 {
