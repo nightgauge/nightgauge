@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,11 +9,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/models"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -41,8 +44,50 @@ type AdapterHealth struct {
 	ServerReachable bool              `json:"server_reachable"`     // http kind: base URL answered the probe (#57)
 	Model           string            `json:"model,omitempty"`      // http kind: resolved model id (env, else machine-tier config)
 	ModelOK         *bool             `json:"model_ok,omitempty"`   // http kind: configured model is in the /models catalog
-	OK              bool              `json:"ok"`                   // adapter is usable for its kind's primary requirement
-	Remediation     string            `json:"remediation,omitempty"`
+	// Catalog is the live-vs-registry model catalog comparison for kindCLI
+	// adapters with a wired catalog probe (#551; grok first-class). Nil means
+	// either the adapter has no catalog probe wired, or the probe could not
+	// run/parse — see CatalogWarning for why in that case.
+	Catalog *CatalogHealth `json:"catalog,omitempty"`
+	// CatalogWarning explains a degraded or skipped catalog probe (CLI spawn
+	// error, unauthenticated, unparseable output) or reports the inverse-drift
+	// warning (catalog offers a model the registry does not mark served).
+	// Never causes OK=false by itself — only a confirmed Catalog.Missing does.
+	CatalogWarning string `json:"catalog_warning,omitempty"`
+	OK             bool   `json:"ok"` // adapter is usable for its kind's primary requirement
+	Remediation    string `json:"remediation,omitempty"`
+}
+
+// CatalogHealth is the live-vs-registry model catalog comparison for a
+// kindCLI adapter with a wired catalog probe (#551): the doctor shells the
+// adapter's own catalog-listing command (e.g. `grok models`) and diffs the
+// result against the registry's transports.cli.served facts for the
+// adapter's provider (internal/models, CheckTransportServed's read-only
+// sibling data). This catches the #532 drift class — the registry declares a
+// model CLI-served but the live CLI catalog does not actually offer it —
+// before a run spawns and fails mid-flight, and its inverse (the catalog
+// offers a model the registry does not mark served, or omits entirely).
+//
+// This is the DETECTION half only. Enforcement at selection time
+// (CheckTransportServed, fail-closed before spawn) landed in #579.
+type CatalogHealth struct {
+	Provider  string `json:"provider"`  // registry provider (models.ProviderForAdapter)
+	Transport string `json:"transport"` // always "cli" today (models.TransportCLI)
+	// Live is every model id the CLI's own catalog command reported.
+	Live []string `json:"live"`
+	// Default is the CLI's own reported default model id, when the catalog
+	// output states one. Diagnostic only — never compared against anything.
+	Default string `json:"default,omitempty"`
+	// Missing lists registry models declared transports.cli.served=true for
+	// Provider/Transport whose id is absent from Live — confirmed drift.
+	// Non-empty Missing sets AdapterHealth.OK=false with a named Remediation.
+	Missing []string `json:"missing,omitempty"`
+	// Undeclared lists Live ids the registry does not mark served:true for
+	// Provider/Transport (served:false, the model/transport key is
+	// unexpressed, or the id has no registry entry at all) — the inverse
+	// drift direction. Warning-only, via AdapterHealth.CatalogWarning; never
+	// flips OK.
+	Undeclared []string `json:"undeclared,omitempty"`
 }
 
 // AdapterMcpHealth describes the Codex MCP managed-block state (Issue #4025).
@@ -86,6 +131,15 @@ type adapterSpec struct {
 	baseURLEnv     string      // kindHTTP: env var overriding the local server base URL
 	defaultBaseURL string      // kindHTTP: base URL when the env override is unset
 	mcp            bool        // codex: provisions an MCP managed block in config.toml
+	// catalogArgs/catalogParser (#551): kindCLI adapters that can list their
+	// own model catalog wire both — catalogArgs is the subcommand (e.g.
+	// grok's {"models"}) and catalogParser turns its output into the live
+	// model ids + the CLI's own reported default. Adapters that leave both
+	// unset (claude, codex, gemini, copilot today) have no catalog probe —
+	// the doctor skips the drift comparison for them rather than guessing at
+	// a command/shape nothing has captured evidence for.
+	catalogArgs   []string
+	catalogParser func(output string) (ids []string, defaultID string, ok bool)
 }
 
 // adapterSpecs is keyed by canonical adapter name. The user-facing names from
@@ -100,7 +154,7 @@ var adapterSpecs = map[string]adapterSpec{
 	"ollama":          {kind: kindHTTP, modelEnv: "NIGHTGAUGE_OLLAMA_MODEL", modelConfigKey: "ollama.model", pullHint: "ollama pull", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_OLLAMA_BASE_URL", defaultBaseURL: "http://localhost:11434/v1"},
 	"lm-studio":       {kind: kindHTTP, modelEnv: "NIGHTGAUGE_LM_STUDIO_MODEL", modelConfigKey: "lm_studio.model", pullHint: "lms get", bridgeBinary: "claude", baseURLEnv: "NIGHTGAUGE_LM_STUDIO_BASE_URL", defaultBaseURL: "http://localhost:1234/v1"},
 	"copilot":         {binary: "copilot", kind: kindCLI},
-	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0"},
+	"grok":            {binary: "grok", kind: kindCLI, minVersion: "1.0.0", catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 }
 
 // adapterAliases maps user-facing aliases to the canonical adapterSpecs key,
@@ -143,7 +197,8 @@ func normalizeAdapterName(name string) string {
 // fakes for binary lookup, the `--version` spawn, and filesystem reads.
 type adapterProbe struct {
 	lookPath     func(string) (string, error)
-	runVersion   func(path string) (string, error) // combined output of `<path> --version`
+	runVersion   func(path string) (string, error)                // combined output of `<path> --version`
+	runCatalog   func(path string, args []string) (string, error) // kindCLI: combined output of `<path> <catalogArgs...>` (#551)
 	readFile     func(string) ([]byte, error)
 	getenv       func(string) string
 	httpProbe    func(baseURL string) localServerProbeResult // kindHTTP: reachability + /models catalog (#520)
@@ -151,11 +206,22 @@ type adapterProbe struct {
 	codexHome    string                                      // resolved $CODEX_HOME (or ~/.codex); injectable for tests
 }
 
+// catalogProbeTimeout bounds the live catalog-listing spawn (#551), mirroring
+// the doctor's other bounded CLI probes (doctor.go's binaryVersion, also 5s)
+// so a hung/misbehaving adapter cannot stall `doctor --adapters`.
+const catalogProbeTimeout = 5 * time.Second
+
 func defaultAdapterProbe() adapterProbe {
 	return adapterProbe{
 		lookPath: exec.LookPath,
 		runVersion: func(path string) (string, error) {
 			out, err := exec.Command(path, "--version").CombinedOutput()
+			return string(out), err
+		},
+		runCatalog: func(path string, args []string) (string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), catalogProbeTimeout)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, path, args...).CombinedOutput()
 			return string(out), err
 		},
 		readFile:     os.ReadFile,
@@ -228,6 +294,9 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 			}
 		}
 		h.OK = h.Installed && h.VersionOK
+		if spec.catalogParser != nil {
+			applyCatalogProbe(&h, spec, canonical, probe)
+		}
 
 	case kindSDK:
 		h.Installed = anyEnvSet(probe.getenv, spec.apiKeyEnvs)
@@ -305,6 +374,164 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 		h.Mcp = checkCodexMcp(probe)
 	}
 	return h
+}
+
+// applyCatalogProbe runs a kindCLI adapter's live catalog-listing command
+// (spec.catalogArgs, e.g. `grok models`) and diffs it against the registry's
+// transports.cli.served facts for the adapter's provider (#551) — the
+// detection half of the #532 drift class: the registry declares a model
+// CLI-served but the CLI's own catalog does not actually offer it.
+//
+// Only runs when the adapter already passed its baseline (binary present,
+// version floor met, if any) — an adapter that is already !OK for that
+// reason gets no second, redundant complaint layered on top. Any failure to
+// RUN or PARSE the catalog (spawn error, timeout, not authenticated,
+// unrecognized output shape) degrades to CatalogWarning and never touches
+// OK: only a confirmed comparison against a successfully parsed live catalog
+// may fail the adapter, matching "never a hard doctor failure for a missing
+// optional adapter."
+func applyCatalogProbe(h *AdapterHealth, spec adapterSpec, canonical string, probe adapterProbe) {
+	if !h.Installed || !h.VersionOK || probe.runCatalog == nil {
+		return
+	}
+	cmdLabel := spec.binary + " " + strings.Join(spec.catalogArgs, " ")
+	out, err := probe.runCatalog(h.Path, spec.catalogArgs)
+	if err != nil {
+		h.CatalogWarning = "could not run `" + cmdLabel +
+			"` (adapter may not be installed correctly or authenticated): " + err.Error()
+		return
+	}
+	ids, defaultID, ok := spec.catalogParser(out)
+	if !ok {
+		h.CatalogWarning = "could not parse `" + cmdLabel + "` output; skipping catalog drift check"
+		return
+	}
+
+	provider := models.ProviderForAdapter(canonical)
+	missing, undeclared := servedCLIModelDiff(provider, ids)
+	h.Catalog = &CatalogHealth{
+		Provider:   provider,
+		Transport:  models.TransportCLI,
+		Live:       ids,
+		Default:    defaultID,
+		Missing:    missing,
+		Undeclared: undeclared,
+	}
+
+	if len(missing) > 0 {
+		h.OK = false
+		h.Remediation = "provider " + provider + " model(s) " + strings.Join(missing, ", ") +
+			" are declared transports." + models.TransportCLI + ".served=true in the registry, but `" + cmdLabel +
+			"` does not list them — confirm with `" + cmdLabel + "`, then correct the registry's transports." +
+			models.TransportCLI + ".served fact if the CLI catalog changed (the #532 class)."
+	}
+	if len(undeclared) > 0 {
+		warn := "`" + cmdLabel + "` catalog offers " + strings.Join(undeclared, ", ") +
+			", which the registry does not mark transports." + models.TransportCLI + ".served=true for provider " +
+			provider + " (served:false or unexpressed) — possible registry drift, the inverse of #532."
+		if h.CatalogWarning != "" {
+			h.CatalogWarning += "; " + warn
+		} else {
+			h.CatalogWarning = warn
+		}
+	}
+}
+
+// servedCLIModelDiff compares a live CLI catalog against the registry's
+// transports.cli.served facts for provider (#551). missing lists provider
+// models declared served:true whose id is absent from live — confirmed
+// drift. undeclared lists live ids the registry does not mark served:true
+// for provider over the cli transport (served:false, the model/transport key
+// unexpressed, or the id has no registry entry at all) — the inverse
+// direction. Both are sorted for a deterministic report.
+func servedCLIModelDiff(provider string, live []string) (missing, undeclared []string) {
+	liveSet := make(map[string]bool, len(live))
+	for _, id := range live {
+		liveSet[id] = true
+	}
+	servedSet := make(map[string]bool)
+	for _, m := range models.All() {
+		if m.Provider != provider {
+			continue
+		}
+		served, known := m.ServedByTransport(models.TransportCLI)
+		if !known || !served {
+			continue
+		}
+		servedSet[m.ID] = true
+		if !liveSet[m.ID] {
+			missing = append(missing, m.ID)
+		}
+	}
+	for _, id := range live {
+		if !servedSet[id] {
+			undeclared = append(undeclared, id)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(undeclared)
+	return missing, undeclared
+}
+
+// grokDefaultModelRe extracts the id from grok's "Default model: <id>" line.
+var grokDefaultModelRe = regexp.MustCompile(`(?m)^Default model:\s*(\S+)\s*$`)
+
+// grokCatalogBulletRe matches one catalog entry line under "Available
+// models:" — a leading `*` (the CLI's own default marker) or `-` bullet, the
+// model id, and an optional trailing "(default)" annotation.
+var grokCatalogBulletRe = regexp.MustCompile(`^[*-]\s+(\S+?)(?:\s+\(default\))?$`)
+
+// parseGrokCatalog parses `grok models` output into the live model catalog
+// plus the CLI's own reported default (#551). Observed shape (grok CLI
+// 1.0.4, captured 2026-08-15 — testdata/grok-catalog/):
+//
+//	You are logged in with grok.com.
+//
+//	Default model: grok-4.6
+//
+//	Available models:
+//	  * grok-4.6 (default)
+//	  - grok-4.5
+//
+// The auth-status preamble line is deliberately NOT matched on: the catalog
+// listing is free even when unauthenticated (confirmed live and recorded in
+// testdata/grok-catalog/README.md), so parsing never branches on its
+// wording — it scans past whatever that line says for "Available models:".
+//
+// ok=false when the "Available models:" section cannot be found, or is found
+// with no parseable entries under it — a CLI output shape change the doctor
+// must degrade on (CatalogWarning), not silently misread as an empty catalog
+// (which would falsely report every served model as missing).
+func parseGrokCatalog(output string) (ids []string, defaultID string, ok bool) {
+	if m := grokDefaultModelRe.FindStringSubmatch(output); m != nil {
+		defaultID = m[1]
+	}
+	inList := false
+	found := false
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !inList {
+			if strings.EqualFold(trimmed, "Available models:") {
+				inList = true
+				found = true
+			}
+			continue
+		}
+		m := grokCatalogBulletRe.FindStringSubmatch(trimmed)
+		if m == nil {
+			break // catalog list ended
+		}
+		id := m[1]
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids, defaultID, found && len(ids) > 0
 }
 
 // checkCodexMcp reports whether Codex's config.toml exists and whether the

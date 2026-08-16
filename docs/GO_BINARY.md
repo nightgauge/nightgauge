@@ -3706,6 +3706,57 @@ Per adapter the doctor reports:
 For `codex`, an `mcp` sub-object reports whether `$CODEX_HOME/config.toml` exists
 and whether the nightgauge MCP managed block is present.
 
+#### CLI catalog drift detection (#551)
+
+`cli`-kind adapters that wire a catalog probe (grok first-class today) get an
+extra live-vs-registry comparison: doctor shells the adapter's own catalog
+listing (`grok models`) and diffs the result against the registry's
+`transports.cli.served` facts for that provider (`internal/models`,
+`ModelDescriptor.ServedByTransport`). This is the **detection** half of the
+#532 class — a registry entry declared CLI-served that the live CLI catalog
+does not actually offer — before a run spawns and fails mid-flight.
+Enforcement at selection time (fail-closed before spawn) is `CheckTransportServed`
+(#579); this probe never blocks a run, it only reports.
+
+Only runs once the adapter's baseline (binary present, version floor met)
+already passed — a CLI that is missing or stale already fails for that
+reason. Any failure to run or parse the catalog (spawn error, not
+authenticated, unrecognized output shape) degrades to `catalog_warning` and
+never fails the adapter — only a confirmed drift does:
+
+| Field             | Meaning                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `catalog`         | present when the probe ran and parsed; `provider`, `transport`, `live` (catalog ids), `default` (CLI's own reported default), `missing` (registry `served:true` absent from `live` — fails the adapter), `undeclared` (`live` ids the registry does not mark `served:true` — warning only, the inverse of #532) |
+| `catalog_warning` | set when the probe was skipped/degraded (spawn error, unparseable output), or to report `undeclared` drift; never on its own evidence for `ok:false` |
+
+```json
+{
+  "adapter": "grok",
+  "kind": "cli",
+  "binary": "grok",
+  "installed": true,
+  "version": "1.0.4",
+  "version_ok": true,
+  "catalog": {
+    "provider": "xai",
+    "transport": "cli",
+    "live": ["grok-4.6", "grok-4.5"],
+    "default": "grok-4.6"
+  },
+  "ok": true
+}
+```
+
+A `missing` entry looks like:
+
+```json
+{
+  "catalog": { "provider": "xai", "transport": "cli", "live": ["grok-4.6"], "missing": ["grok-4.5"] },
+  "ok": false,
+  "remediation": "provider xai model(s) grok-4.5 are declared transports.cli.served=true in the registry, but `grok models` does not list them — confirm with `grok models`, then correct the registry's transports.cli.served fact if the CLI catalog changed (the #532 class)."
+}
+```
+
 Auth status (`codex login status`, `claude auth status`, …) is intentionally
 **not** probed here — it lives in the SDK adapters and is layered on by the
 VSCode **Adapter Doctor** (see [ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md)). The

@@ -27,6 +27,8 @@ type fakeProbe struct {
 	catalogParseErr bool
 	machineModels   map[string]string // canonical adapter -> machine-tier model
 	probedURLs      []string
+	catalogOutputs  map[string]string // #551: path -> catalog-command combined output
+	catalogErrs     map[string]error  // #551: path -> error from the catalog-command spawn
 }
 
 func (f fakeProbe) toProbe() adapterProbe {
@@ -39,6 +41,9 @@ func (f fakeProbe) toProbe() adapterProbe {
 		},
 		runVersion: func(path string) (string, error) {
 			return f.versions[path], f.verErrs[path]
+		},
+		runCatalog: func(path string, args []string) (string, error) {
+			return f.catalogOutputs[path], f.catalogErrs[path]
 		},
 		readFile: func(path string) ([]byte, error) {
 			if b, ok := f.files[path]; ok {
@@ -643,4 +648,276 @@ func TestReadMachineHTTPModel(t *testing.T) {
 	if got := readMachineHTTPModel("codex"); got != "" {
 		t.Errorf("non-http adapter must not resolve a machine model, got %q", got)
 	}
+}
+
+// --- CLI catalog drift probe (#551) ---
+//
+// The fixtures below all derive from the real captured
+// testdata/grok-catalog/grok-models.txt (see its README) by substituting a
+// bullet line's model id, per that README's rule against inventing a new
+// catalog shape from scratch. The registry facts asserted against
+// (grok-4.6/grok-4.5 served:true, grok-build-0.1 served:false) are the real
+// embedded xai entries — TestServedCLIModelDiff_RealRegistry pins that
+// coupling explicitly so a registry edit that removes it is a loud test
+// failure, not a silent gap.
+
+func readGrokCatalogFixture(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("testdata/grok-catalog/grok-models.txt")
+	if err != nil {
+		t.Fatalf("could not read grok catalog fixture: %v", err)
+	}
+	return string(b)
+}
+
+func TestParseGrokCatalog_CapturedFixture(t *testing.T) {
+	ids, defaultID, ok := parseGrokCatalog(readGrokCatalogFixture(t))
+	if !ok {
+		t.Fatal("expected the captured fixture to parse")
+	}
+	if defaultID != "grok-4.6" {
+		t.Errorf("expected default model grok-4.6, got %q", defaultID)
+	}
+	if len(ids) != 2 || ids[0] != "grok-4.6" || ids[1] != "grok-4.5" {
+		t.Fatalf("expected [grok-4.6 grok-4.5], got %v", ids)
+	}
+}
+
+func TestParseGrokCatalog_MalformedOutput(t *testing.T) {
+	// Truncated before "Available models:" — a shape change the parser must
+	// not silently misread as an empty catalog.
+	truncated := strings.Split(readGrokCatalogFixture(t), "Available models:")[0]
+	if _, _, ok := parseGrokCatalog(truncated); ok {
+		t.Error("expected ok=false when the Available models: section is missing")
+	}
+
+	if _, _, ok := parseGrokCatalog("garbage, not grok output at all"); ok {
+		t.Error("expected ok=false for unrecognized output")
+	}
+
+	if _, _, ok := parseGrokCatalog(""); ok {
+		t.Error("expected ok=false for empty output")
+	}
+}
+
+// TestCheckAdapter_GrokCatalogHealthy pins the no-drift path against the
+// REAL registry: grok-4.6 and grok-4.5 are both transports.cli.served=true
+// for xai, and the captured fixture lists exactly those two, so nothing is
+// missing or undeclared.
+func TestCheckAdapter_GrokCatalogHealthy(t *testing.T) {
+	fp := fakeProbe{
+		paths:          map[string]string{"grok": "/bin/grok"},
+		versions:       map[string]string{"/bin/grok": "grok 1.0.4 (d846eb93d94d) [stable]"},
+		catalogOutputs: map[string]string{"/bin/grok": readGrokCatalogFixture(t)},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if !h.OK {
+		t.Fatalf("expected grok OK with a matching catalog, got remediation=%q catalog_warning=%q", h.Remediation, h.CatalogWarning)
+	}
+	if h.CatalogWarning != "" {
+		t.Errorf("expected no catalog warning on the healthy path, got %q", h.CatalogWarning)
+	}
+	if h.Catalog == nil {
+		t.Fatal("expected Catalog to be populated")
+	}
+	if h.Catalog.Provider != "xai" || h.Catalog.Transport != "cli" {
+		t.Errorf("expected provider=xai transport=cli, got %+v", h.Catalog)
+	}
+	if h.Catalog.Default != "grok-4.6" {
+		t.Errorf("expected default grok-4.6, got %q", h.Catalog.Default)
+	}
+	if len(h.Catalog.Missing) != 0 || len(h.Catalog.Undeclared) != 0 {
+		t.Errorf("expected no drift, got missing=%v undeclared=%v", h.Catalog.Missing, h.Catalog.Undeclared)
+	}
+}
+
+// TestCheckAdapter_GrokCatalogMissingServedModel is the #532 class itself:
+// the registry declares grok-4.5 served over cli, but the live catalog
+// (derived from the real fixture with that bullet dropped) does not offer
+// it. The failure must name the provider, the concrete model id, and the
+// transport, and it must fail the adapter (#551 AC).
+func TestCheckAdapter_GrokCatalogMissingServedModel(t *testing.T) {
+	dropped := strings.Replace(readGrokCatalogFixture(t), "  - grok-4.5\n", "", 1)
+	fp := fakeProbe{
+		paths:          map[string]string{"grok": "/bin/grok"},
+		versions:       map[string]string{"/bin/grok": "grok 1.0.4"},
+		catalogOutputs: map[string]string{"/bin/grok": dropped},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if h.OK {
+		t.Fatal("expected grok !OK when a served model is absent from the live catalog")
+	}
+	if h.Catalog == nil || len(h.Catalog.Missing) != 1 || h.Catalog.Missing[0] != "grok-4.5" {
+		t.Fatalf("expected Missing=[grok-4.5], got %+v", h.Catalog)
+	}
+	for _, want := range []string{"xai", "grok-4.5", "cli"} {
+		if !strings.Contains(h.Remediation, want) {
+			t.Errorf("expected remediation to name %q, got %q", want, h.Remediation)
+		}
+	}
+}
+
+// TestCheckAdapter_GrokCatalogUndeclaredWarning is the inverse drift
+// direction: the live catalog (derived from the real fixture with a
+// grok-build-0.1 bullet appended) offers a model the registry marks
+// served:false for cli. Warning-only — the adapter must stay OK.
+func TestCheckAdapter_GrokCatalogUndeclaredWarning(t *testing.T) {
+	extra := strings.Replace(readGrokCatalogFixture(t), "  - grok-4.5\n", "  - grok-4.5\n  - grok-build-0.1\n", 1)
+	fp := fakeProbe{
+		paths:          map[string]string{"grok": "/bin/grok"},
+		versions:       map[string]string{"/bin/grok": "grok 1.0.4"},
+		catalogOutputs: map[string]string{"/bin/grok": extra},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if !h.OK {
+		t.Fatalf("expected grok to stay OK on an undeclared-only drift, got remediation=%q", h.Remediation)
+	}
+	if h.Catalog == nil || len(h.Catalog.Undeclared) != 1 || h.Catalog.Undeclared[0] != "grok-build-0.1" {
+		t.Fatalf("expected Undeclared=[grok-build-0.1], got %+v", h.Catalog)
+	}
+	for _, want := range []string{"grok-build-0.1", "xai", "#532"} {
+		if !strings.Contains(h.CatalogWarning, want) {
+			t.Errorf("expected catalog warning to mention %q, got %q", want, h.CatalogWarning)
+		}
+	}
+}
+
+// TestCheckAdapter_GrokCatalogProbeErrorDegradesToWarning covers "CLI not
+// authenticated" and any other catalog-spawn failure (#551 AC): the probe
+// must degrade to a warning naming why, never a hard doctor failure, when
+// the adapter's baseline health (installed, version floor met) already
+// passed.
+func TestCheckAdapter_GrokCatalogProbeErrorDegradesToWarning(t *testing.T) {
+	fp := fakeProbe{
+		paths:       map[string]string{"grok": "/bin/grok"},
+		versions:    map[string]string{"/bin/grok": "grok 1.0.4"},
+		catalogErrs: map[string]error{"/bin/grok": errors.New("exit status 1: not authenticated")},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if !h.OK {
+		t.Fatalf("expected grok to stay OK when only the catalog probe fails, got remediation=%q", h.Remediation)
+	}
+	if h.Catalog != nil {
+		t.Errorf("expected no Catalog when the probe could not run, got %+v", h.Catalog)
+	}
+	if h.CatalogWarning == "" || !strings.Contains(h.CatalogWarning, "not authenticated") {
+		t.Errorf("expected catalog warning naming the spawn error, got %q", h.CatalogWarning)
+	}
+}
+
+// TestCheckAdapter_GrokCatalogParseFailureDegradesToWarning: the CLI runs
+// and exits cleanly but the output does not match the known shape (a future
+// CLI update). Degrades to warning, never a hard failure.
+func TestCheckAdapter_GrokCatalogParseFailureDegradesToWarning(t *testing.T) {
+	fp := fakeProbe{
+		paths:          map[string]string{"grok": "/bin/grok"},
+		versions:       map[string]string{"/bin/grok": "grok 1.0.4"},
+		catalogOutputs: map[string]string{"/bin/grok": "grok has changed its models command output entirely"},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if !h.OK {
+		t.Fatalf("expected grok to stay OK when the catalog cannot be parsed, got remediation=%q", h.Remediation)
+	}
+	if h.Catalog != nil {
+		t.Errorf("expected no Catalog when parsing failed, got %+v", h.Catalog)
+	}
+	if h.CatalogWarning == "" || !strings.Contains(h.CatalogWarning, "could not parse") {
+		t.Errorf("expected a parse-failure catalog warning, got %q", h.CatalogWarning)
+	}
+}
+
+// TestCheckAdapter_GrokCatalogSkippedWhenNotInstalled: the catalog probe
+// must never run (and never fabricate a Catalog/CatalogWarning) when the
+// binary itself is missing — that failure is already reported via the
+// existing Installed/Remediation path.
+func TestCheckAdapter_GrokCatalogSkippedWhenNotInstalled(t *testing.T) {
+	h := checkAdapter("grok", fakeProbe{}.toProbe())
+	if h.OK || h.Installed {
+		t.Fatal("expected grok !OK/!installed when the binary is missing")
+	}
+	if h.Catalog != nil || h.CatalogWarning != "" {
+		t.Errorf("expected no catalog probe attempt when not installed, got catalog=%+v warning=%q", h.Catalog, h.CatalogWarning)
+	}
+}
+
+// TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor: same skip rule when
+// the binary is present but below the version floor — no redundant second
+// complaint layered on an adapter that already fails for another reason.
+func TestCheckAdapter_GrokCatalogSkippedBelowVersionFloor(t *testing.T) {
+	fp := fakeProbe{
+		paths:    map[string]string{"grok": "/bin/grok"},
+		versions: map[string]string{"/bin/grok": "grok 0.9.0"},
+		// Even a matching catalog must not be fetched/compared here.
+		catalogOutputs: map[string]string{"/bin/grok": readGrokCatalogFixture(t)},
+	}
+	h := checkAdapter("grok", fp.toProbe())
+	if h.OK || h.VersionOK {
+		t.Fatal("expected grok !OK below its version floor")
+	}
+	if h.Catalog != nil {
+		t.Errorf("expected no catalog probe below the version floor, got %+v", h.Catalog)
+	}
+}
+
+// TestCheckAdapter_NonGrokCLIHasNoCatalogProbe: adapters with no
+// catalogParser wired (claude, codex, gemini, copilot today) must never
+// populate Catalog/CatalogWarning — the doctor must not guess at a
+// command/shape nothing has captured evidence for (#551).
+func TestCheckAdapter_NonGrokCLIHasNoCatalogProbe(t *testing.T) {
+	fp := fakeProbe{
+		paths:    map[string]string{"codex": "/bin/codex"},
+		versions: map[string]string{"/bin/codex": "codex 0.112.0"},
+		codex:    t.TempDir(),
+	}
+	h := checkAdapter("codex", fp.toProbe())
+	if !h.OK {
+		t.Fatalf("expected codex OK, got %+v", h)
+	}
+	if h.Catalog != nil || h.CatalogWarning != "" {
+		t.Errorf("expected codex to have no catalog probe, got catalog=%+v warning=%q", h.Catalog, h.CatalogWarning)
+	}
+}
+
+// TestServedCLIModelDiff_RealRegistry pins servedCLIModelDiff against the
+// real embedded xai registry entries: grok-4.6 and grok-4.5 are
+// transports.cli.served=true; grok-build-0.1 is explicitly served=false
+// (kept for historical cost replay only, #532). A registry edit that
+// changes these facts must fail this test loudly rather than silently
+// widen/narrow what #551's drift probe catches.
+func TestServedCLIModelDiff_RealRegistry(t *testing.T) {
+	cases := []struct {
+		name           string
+		live           []string
+		wantMissing    []string
+		wantUndeclared []string
+	}{
+		{"exact match", []string{"grok-4.6", "grok-4.5"}, nil, nil},
+		{"missing one served model", []string{"grok-4.6"}, []string{"grok-4.5"}, nil},
+		{"missing all served models", nil, []string{"grok-4.5", "grok-4.6"}, nil},
+		{"deprecated unserved model offered", []string{"grok-4.6", "grok-4.5", "grok-build-0.1"}, nil, []string{"grok-build-0.1"}},
+		{"unknown id offered", []string{"grok-4.6", "grok-4.5", "grok-9-mystery"}, nil, []string{"grok-9-mystery"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			missing, undeclared := servedCLIModelDiff("xai", c.live)
+			if !equalStrings(missing, c.wantMissing) {
+				t.Errorf("missing = %v, want %v", missing, c.wantMissing)
+			}
+			if !equalStrings(undeclared, c.wantUndeclared) {
+				t.Errorf("undeclared = %v, want %v", undeclared, c.wantUndeclared)
+			}
+		})
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

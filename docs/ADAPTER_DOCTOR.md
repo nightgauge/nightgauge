@@ -102,6 +102,26 @@ the configured id and a pull command (`lms get <model>` / `ollama pull
 adapter requires `model` and has no default. The healthy path (`model` in
 the catalog) still reports `ok: true`.
 
+### CLI catalog drift detection (`cli` kind, #551)
+
+For `cli`-kind adapters that wire a catalog probe (grok first-class today via
+`grok models`), doctor also diffs the CLI's own live model catalog against
+the registry's `transports.cli.served` facts for that provider — the
+detection half of the #532 class, where the registry declared a model
+CLI-served that the live CLI catalog never actually offered. A confirmed
+missing model fails the adapter (`ok: false`) and names the provider, the
+concrete model id, and the transport; the inverse (the CLI catalog offers a
+model the registry does not mark served) is a warning only. A CLI that is not
+installed, not authenticated, or whose catalog output cannot be parsed
+degrades the probe to `catalog_warning` and never fails the adapter on that
+basis alone — see [GO_BINARY.md → CLI catalog drift detection](GO_BINARY.md#cli-catalog-drift-detection-551)
+for the full field reference.
+
+Enforcement at model-selection time (rejecting an unserved model before
+spawn) is a separate, already-shipped mechanism
+(`internal/models.CheckTransportServed`, #579); this probe only detects and
+reports.
+
 ### Binary self-check cascade (#277)
 
 The `binary` check in the default (non-adapter) `nightgauge doctor` output
