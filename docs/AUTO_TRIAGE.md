@@ -381,7 +381,12 @@ their producers and consumers are different — keep them separate.
   cap), the failure branch substitutes the next-best tier
   (fable → opus → sonnet → haiku, sticky for the run) and retries the stage
   INSTEAD of escalating upward — a stronger model on a plan that already
-  refused this one would be rejected the same way.
+  refused this one would be rejected the same way. `adapter_auth_failed`
+  (#591) is excluded from escalation the same way, with no substitution to
+  retry into: an auth-shaped failure means the adapter CLI itself is not
+  logged in, and no model on any tier can authenticate it, so the failure
+  branch skips `EvaluateEscalation` outright and goes straight to the
+  terminal path (board → Ready, no `LifetimeIssueFailures` increment).
 - **Not a place for LLM-based decisions.** The determinism rule applies.
 - **Not a denormalized run-level summary.** `V2RunRecord.RecoveryEvents` is
   reserved for the Recovery Dialog (Issue #3239).

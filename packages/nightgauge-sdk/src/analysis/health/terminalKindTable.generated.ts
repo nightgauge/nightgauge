@@ -654,9 +654,12 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
         ],
         [
           "adapter_auth_failed"
+        ],
+        [
+          "not signed in"
         ]
       ],
-      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306)."
+      "why": "The pipeline-start auth gate refused to launch (#312) — an adapter probe timed out after a retry (transient starvation under a concurrent dispatch burst) or the adapter CLI is logged out. Above the subagent-crash fallback, whose `exit ` substring would otherwise feed the cascade breaker a false crash. All three spellings: the wrapped pipeline-start form carries the marker BARE, which the SDK mirror missed on a real observed failure (#306). `not signed in` is the FOURTH producer of this same taxonomy kind (#591): the grok Build CLI's own vendor text — `Error: Not signed in. To authenticate without a browser, run: grok login --device-code…` — when credentials are absent. That text carries none of the three markers above; it never passes through the pipeline-start probe at all because the CLI fails too fast for the probe to run, so it reaches the classifier only as the adapter's raw stderr reason (#533's cliFailureText carry) and fell all the way through to subagent_crash before this clause existed."
     },
     {
       "id": "no-changes-produced",
