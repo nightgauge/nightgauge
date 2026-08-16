@@ -3930,26 +3930,39 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// adapters through RunOptions (#606): xai is where the effort rung IS
 		// the downgrade ladder (#532), so the envelope must actually dispatch.
 		wireEffort, wireThinking := "", ""
+		grokEnvEffortSet := false
 		if adapterName == "" {
 			wireEffort = resolveWireEffort(workspaceRoot, stage)
 			wireThinking = resolveWireThinking(model, stagePerfMode)
 		} else if models.ProviderForAdapter(adapterName) == "xai" {
-			wireEffort = resolveWireEffort(workspaceRoot, stage)
+			// The operator's NIGHTGAUGE_GROK_EFFORT override owns the
+			// dispatch when set (in ANY grok vocabulary — dispatchGrokEffort
+			// in the adapter applies the same precedence): resolve no wire
+			// effort then, so the envelope neither competes with the
+			// override nor mis-attributes a value that never dispatched.
+			grokEnvEffortSet = strings.TrimSpace(os.Getenv("NIGHTGAUGE_GROK_EFFORT")) != ""
+			if !grokEnvEffortSet {
+				wireEffort = resolveWireEffort(workspaceRoot, stage)
+			}
 		}
 		// Sticky effort substitution (#606): a same-model effort descent
 		// recorded by the RetryEngine overrides the resolved wire effort,
 		// LAST — after the mode's effort clamps — for the #42 reason: a floor
 		// re-raising what an API rejection just lowered would re-fail
 		// identically. `model` has already been rerouted by ApplyDowngrades,
-		// so the substituted tier and this lookup key always agree.
-		if sticky := s.retryEngine.StickyEffort(model); sticky != "" {
-			wireEffort = sticky
+		// so the substituted tier and this lookup key always agree. Never
+		// over an operator env override, which outranks the pipeline.
+		if !grokEnvEffortSet {
+			if sticky := s.retryEngine.StickyEffort(model); sticky != "" {
+				wireEffort = sticky
+			}
 		}
-		// Attribution: the operator's NIGHTGAUGE_GROK_EFFORT env override
-		// (resolveDispatchEffort, xai only) wins at the adapter boundary, so
-		// it wins here too; the wire effort answers otherwise.
+		// Attribution: the operator env override (resolveDispatchEffort, xai
+		// only, EFFORT_LEVELS values — a grok-native rung honestly attributes
+		// nothing, per the pinned #580 filter) wins exactly as it wins at the
+		// adapter boundary; the wire effort answers otherwise.
 		effortAttr := resolveDispatchEffort(adapterName)
-		if effortAttr == "" {
+		if effortAttr == "" && !grokEnvEffortSet {
 			effortAttr = wireEffort
 		}
 		thinkingAttr := wireThinking
