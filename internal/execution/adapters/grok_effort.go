@@ -24,6 +24,21 @@ func mapGrokEffortToNightgauge(effort string) string {
 	}
 }
 
+// dispatchGrokEffort resolves the effort value a grok dispatch will actually
+// forward (#606): the provider-global NIGHTGAUGE_GROK_EFFORT env var when set
+// — demoted from sole authority (#569) to OPERATOR OVERRIDE, the most
+// explicit, most ephemeral signal, winning exactly as the
+// NIGHTGAUGE_PIPELINE_STAGE_MODEL_* overrides do — else the dispatch
+// envelope's effort threaded through RunOptions.Effort. Both ValidateEffort
+// and BuildCommand resolve through this one function so the gated value and
+// the dispatched value can never diverge.
+func dispatchGrokEffort(optEffort string) string {
+	if env := strings.TrimSpace(os.Getenv("NIGHTGAUGE_GROK_EFFORT")); env != "" {
+		return env
+	}
+	return strings.TrimSpace(optEffort)
+}
+
 // grokCliEffortFlag is the value to pass as `grok --effort`. SYNTAX validation
 // only — membership in the Grok CLI's documented vocabulary. Whether the
 // resolved model actually serves a rung is the registry's call, enforced by

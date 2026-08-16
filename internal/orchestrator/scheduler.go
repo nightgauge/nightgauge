@@ -37,6 +37,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/recovery"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
@@ -75,8 +76,10 @@ type StageRunParams struct {
 	// spike #568 §4.1: "the wire grows effort and thinking alongside model").
 	// Resolved by resolveWireEffort/resolveWireThinking on the IPC path,
 	// where the scheduler is the only resolver (#340) and the extension
-	// executes the wire effort verbatim. Empty on the Go-direct adapter path,
-	// whose effort/thinking stay env/adapter-owned (dispatch_envelope.go).
+	// executes the wire effort verbatim. On the Go-direct adapter path
+	// Thinking stays env/adapter-owned (dispatch_envelope.go) and Effort is
+	// resolved only for xai adapters (#606) — RunOptions threads it to the
+	// grok CLI, with NIGHTGAUGE_GROK_EFFORT demoted to operator override.
 	Effort       string
 	Thinking     string
 	MaxTokens    int
@@ -136,6 +139,16 @@ type StageRunResult struct {
 	// never feed routing, sticky downgrades, or retries.
 	// See docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string
+	// ServedEffort/ServedThinking are the envelope analogues of ServedModel
+	// (#606, mirroring the #91 flow): what the executor's last-mile
+	// translation ACTUALLY dispatched — the codex reasoning vocabulary value,
+	// the grok effort after normalization into EFFORT_LEVELS, the disable
+	// interlock's "off" — never a copy of the requested wire envelope. Empty
+	// means honestly-unreported (adapter with no effort axis, no first-hand
+	// evidence). Attribution only, same rule as ServedModel: never feeds
+	// routing, sticky substitutions, or retries.
+	ServedEffort   string
+	ServedThinking string
 	// RefusalFallback* echo the CLI's model_refusal_fallback event when one
 	// was observed (#91). Attribution + notification only.
 	RefusalFallbackFrom     string
@@ -375,6 +388,7 @@ func (r *ExecutionManagerRunner) RunStage(ctx context.Context, params StageRunPa
 		ContextFile:  params.ContextFile,
 		OutputFile:   params.OutputFile,
 		Model:        params.Model,
+		Effort:       params.Effort,
 		MaxTokens:    params.MaxTokens,
 		Timeout:      params.Timeout,
 		Runtime:      params.Runtime,
@@ -3156,6 +3170,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// Non-fatal: missing or malformed context results in zero values.
 	complexityScore, issueRoutingPath, predictedModel := loadIssueContext(workspaceRoot, item.Number)
 
+	// Job-class attribution at pickup (#606): the labels are already read
+	// here, and the conservative type-label mapping is the same one the TS
+	// resolver applies (jobClassForIssue) — so eval-advice consumption keys
+	// on exact job-class entries on BOTH paths, closing the (model, *, *)
+	// backoff asymmetry (the dual-path family #340 removed). "" when no type
+	// label directly names an eval job class: no advice, the axis query
+	// alone decides.
+	issueJobClass := routing.JobClassForLabels(item.Labels)
+
 	// Per-stage model_routing.minimum_model floors (#366), loaded once for the
 	// run. Applied at dispatch below so an autonomous run honors a configured
 	// minimum tier — parity with the TS SkillRunner's enforceMinimumModel.
@@ -3799,7 +3822,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// alias — so every escalation, floor, and downgrade below has to have
 		// been applied by the time Render runs. The behavioral preamble still
 		// applies after the prompt is assembled; only the resolution moves.
-		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors)
+		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors, issueJobClass)
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
 		// With no overlay files present this is byte-identical to a base-only
@@ -3895,23 +3918,52 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// after escalation overrides, sticky downgrades, and the pr-create /
 		// feature-validate adjustments above.
 		runtime.RecordStageModel(stage, model)
-		// Dispatch envelope (#580 → #581): effort/thinking/mode alongside the
-		// model above. On the IPC path (no Go-side adapter) the scheduler now
-		// RESOLVES effort and thinking onto the wire — the selection query's
-		// rung plus the Go-owned effort chain (dispatch_envelope.go) — and the
-		// record carries the wire value the extension executes verbatim, the
-		// same epistemic status as the Model field. On the Go-direct adapter
-		// path the axes stay env/adapter-owned and the #580 observation
-		// functions answer, each honestly absent when Go has no direct
-		// evidence.
+		// Dispatch envelope (#580 → #581 → #606): effort/thinking/mode
+		// alongside the model above. On the IPC path (no Go-side adapter) the
+		// scheduler RESOLVES effort and thinking onto the wire — the selection
+		// query's rung plus the Go-owned effort chain (dispatch_envelope.go) —
+		// and the record carries the wire value the extension executes
+		// verbatim, the same epistemic status as the Model field. On the
+		// Go-direct adapter path the thinking axis stays env/adapter-owned
+		// (the #580 observation functions answer, honestly absent when Go has
+		// no direct evidence) — but the EFFORT axis now reaches the grok
+		// adapters through RunOptions (#606): xai is where the effort rung IS
+		// the downgrade ladder (#532), so the envelope must actually dispatch.
 		wireEffort, wireThinking := "", ""
+		grokEnvEffortSet := false
 		if adapterName == "" {
 			wireEffort = resolveWireEffort(workspaceRoot, stage)
-			wireThinking = resolveWireThinking(model)
+			wireThinking = resolveWireThinking(model, stagePerfMode)
+		} else if models.ProviderForAdapter(adapterName) == "xai" {
+			// The operator's NIGHTGAUGE_GROK_EFFORT override owns the
+			// dispatch when set (in ANY grok vocabulary — dispatchGrokEffort
+			// in the adapter applies the same precedence): resolve no wire
+			// effort then, so the envelope neither competes with the
+			// override nor mis-attributes a value that never dispatched.
+			grokEnvEffortSet = strings.TrimSpace(os.Getenv("NIGHTGAUGE_GROK_EFFORT")) != ""
+			if !grokEnvEffortSet {
+				wireEffort = resolveWireEffort(workspaceRoot, stage)
+			}
 		}
-		effortAttr := wireEffort
-		if effortAttr == "" {
-			effortAttr = resolveDispatchEffort(adapterName)
+		// Sticky effort substitution (#606): a same-model effort descent
+		// recorded by the RetryEngine overrides the resolved wire effort,
+		// LAST — after the mode's effort clamps — for the #42 reason: a floor
+		// re-raising what an API rejection just lowered would re-fail
+		// identically. `model` has already been rerouted by ApplyDowngrades,
+		// so the substituted tier and this lookup key always agree. Never
+		// over an operator env override, which outranks the pipeline.
+		if !grokEnvEffortSet {
+			if sticky := s.retryEngine.StickyEffort(model); sticky != "" {
+				wireEffort = sticky
+			}
+		}
+		// Attribution: the operator env override (resolveDispatchEffort, xai
+		// only, EFFORT_LEVELS values — a grok-native rung honestly attributes
+		// nothing, per the pinned #580 filter) wins exactly as it wins at the
+		// adapter boundary; the wire effort answers otherwise.
+		effortAttr := resolveDispatchEffort(adapterName)
+		if effortAttr == "" && !grokEnvEffortSet {
+			effortAttr = wireEffort
 		}
 		thinkingAttr := wireThinking
 		if thinkingAttr == "" {
@@ -4246,6 +4298,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			// #606 served-envelope attribution, mirroring the servedModel flow
+			// exactly: the raw executor report lands on the served_* fields,
+			// and the requested-value fields are re-recorded onto the served
+			// value below only when the two diverge — requested vs served stay
+			// epistemically distinct end to end.
+			runtime.RecordStageServedEffort(stage, result.ServedEffort)
+			runtime.RecordStageServedThinking(stage, result.ServedThinking)
+			if result.ServedEffort != "" && result.ServedEffort != effortAttr {
+				runtime.RecordStageEffort(stage, result.ServedEffort)
+			}
+			if result.ServedThinking != "" && result.ServedThinking != thinkingAttr {
+				runtime.RecordStageThinking(stage, result.ServedThinking)
+			}
 		}
 		if result != nil && result.RefusalFallbackTo != "" {
 			runtime.RecordModelRefusalFallback(stage, result.RefusalFallbackFrom,
@@ -5218,8 +5283,21 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 				terminalFailureKind = TerminalKindAdapterAuthFailed
 			}
 			if modelRejected {
-				if dg := s.retryEngine.EvaluateDowngrade(model); dg.ShouldDowngrade {
-					s.retryEngine.RecordDowngrade(model, dg.NewTier)
+				// The wire model is a band, and a band cannot name its
+				// provider — but on the Go-direct path the scheduler holds
+				// the adapter, so an xai dispatch can walk the xai ladder
+				// (grok-4.6's effort rungs) instead of the anthropic one
+				// (#606, the #532 runtime resolution). Scoped to xai
+				// deliberately: threading every adapter's provider here
+				// would change unpinned downgrade outcomes for providers
+				// whose bands the anthropic inference happened to serve
+				// (see the PR body's judgment-calls section).
+				downgradeProvider := ""
+				if adapterName != "" && models.ProviderForAdapter(adapterName) == "xai" {
+					downgradeProvider = "xai"
+				}
+				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, downgradeProvider); dg.ShouldDowngrade {
+					s.retryEngine.RecordDowngrade(model, dg.NewTier, dg.DescentEffort())
 					runtime.AppendEscalation(state.EscalationRecord{
 						Stage:     stage,
 						FromModel: model,
@@ -6590,6 +6668,7 @@ func (s *Scheduler) resolveDispatchModel(
 	workspaceRoot string,
 	predictedModel string,
 	modelFloors map[string]string,
+	jobClass string,
 ) string {
 	// Per-stage base routing. An unrouted run still ends on the general-purpose
 	// default tier, and that default lives in stageBaseModel's last branch and
@@ -6604,7 +6683,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// per-stage attribution, and tokens.CalculateCost("") returns a
 	// truthful-looking $0.
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
+	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel, jobClass)
 	model := baseModel
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {

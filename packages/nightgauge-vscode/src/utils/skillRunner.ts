@@ -475,6 +475,18 @@ export interface SkillRunResult {
    */
   servedModel?: string;
   /**
+   * The served-envelope analogues of `servedModel` (#606): the effort the
+   * adapter branch ACTUALLY dispatched (claude `--effort`, codex reasoning
+   * effort, grok effort — normalized one-way into EFFORT_LEVELS, #523), and
+   * the thinking state the extension has first-hand evidence of (only the
+   * CLAUDE_CODE_DISABLE_THINKING interlock's "off", #76). Undefined means
+   * honestly-unreported — never a copy of the requested wire envelope.
+   * Forwarded to Go via pipeline.stageResult, recorded next to served_model
+   * in the V2 history record.
+   */
+  servedEffort?: string;
+  servedThinking?: string;
+  /**
    * The CLI's silent model swap after a safety refusal, when one was
    * observed (#91). Attribution + notification only — never used to retry.
    */
@@ -1161,6 +1173,38 @@ export function preflightAdapterEffort(
         `reason=${check.reason}`
     ),
   };
+}
+
+/**
+ * Normalize an adapter-native effort value into the EFFORT_LEVELS vocabulary
+ * for served-effort attribution (#606). The adapter-boundary translation is a
+ * ONE-WAY filter into EFFORT_LEVELS (spike #568 vocabulary unification):
+ * vendor-native sub-`low` rungs (codex `none`, grok `none`/`minimal`) report
+ * as `low` (#523), on-ladder values pass through, and anything else returns
+ * undefined — never re-widened on the way back into the run record.
+ */
+function servedEffortLevel(effort: string | undefined): string | undefined {
+  const e = effort?.trim().toLowerCase();
+  if (!e) return undefined;
+  if (e === "none" || e === "minimal") return "low";
+  return (EFFORT_ORDER as readonly string[]).includes(e) ? e : undefined;
+}
+
+/**
+ * Mirror of the Go interlock truthiness (preflight.isTruthy) for the
+ * CLAUDE_CODE_DISABLE_THINKING escape hatch (#76) — the one thinking signal
+ * the extension has first-hand evidence of (#606 served-thinking).
+ */
+function thinkingDisabledInEnv(value: string | undefined): boolean {
+  switch ((value ?? "").trim().toLowerCase()) {
+    case "1":
+    case "true":
+    case "yes":
+    case "on":
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -3826,6 +3870,16 @@ export function runStageSkillHeadless(
   let cmd = "claude";
   let args: string[];
 
+  // Served-effort attribution (#606): the effort this dispatch ACTUALLY
+  // forwards, set by whichever adapter branch below emits one — the claude
+  // `--effort` flag, the codex reasoning effort, the grok effort — each
+  // normalized INTO the EFFORT_LEVELS vocabulary (the one-way adapter-boundary
+  // filter: vendor-native sub-`low` rungs report as "low"). Stays undefined
+  // when the dispatch carries no effort axis: the provider default served and
+  // the extension cannot observe which rung — honestly unreported, never a
+  // guess. The ServedModel analogue, reported through pipeline.stageResult.
+  let dispatchedEffort: string | undefined;
+
   if (adapter === "claude") {
     const authProvider = getAuthProvider(workspaceRoot);
     args = [
@@ -3941,6 +3995,7 @@ export function runStageSkillHeadless(
         };
       }
       args.push("--effort", finalEffort);
+      dispatchedEffort = finalEffort; // #606 served-effort attribution
     }
 
     const effortLabel = supportsEffort ? finalEffort : "default";
@@ -4103,14 +4158,36 @@ export function runStageSkillHeadless(
       callbacks?.onStderr?.("[skillRunner] Grok model: (CLI default / registry)\n");
     }
 
-    // Registry effort gate (#569): the provider-global NIGHTGAUGE_GROK_EFFORT
-    // must sit on the supported_efforts ladder of the model this dispatch will
-    // actually serve — checked against the band-mapped model when one was
-    // resolved above, else the same env cascade the SDK GrokAdapter reads.
-    // A rung the model does not declare fails the stage closed here, BEFORE
-    // spawn, instead of reaching `grok --effort` and dying as #532's
-    // signature (exit 1 in seconds, no work, nothing classified).
-    const grokEffort = process.env.NIGHTGAUGE_GROK_EFFORT;
+    // The grok dispatch effort (#606): the dispatch envelope is the primary
+    // source — the Go scheduler's wire effort on the IPC path (executed
+    // verbatim, #340/#581), the local resolveStageEffort chain otherwise —
+    // with the provider-global NIGHTGAUGE_GROK_EFFORT env var DEMOTED from
+    // sole authority (#569) to operator override: the most explicit, most
+    // ephemeral signal wins when set, exactly like the
+    // NIGHTGAUGE_PIPELINE_STAGE_MODEL_* overrides. This is what lets an
+    // EvaluateDowngrade same-model effort descent (the #532 ladder) actually
+    // reach the spawned CLI: the descended rung rides the wire effort. The
+    // envelope value is delivered through the SAME env contract the SDK
+    // GrokAdapter already reads, so the adapter needs no second channel.
+    const grokOperatorEffort = process.env.NIGHTGAUGE_GROK_EFFORT?.trim() || undefined;
+    const grokEffort = grokOperatorEffort ?? modelDecision.effort;
+    if (grokEffort) {
+      if (!grokOperatorEffort) {
+        grokEnv.NIGHTGAUGE_GROK_EFFORT = grokEffort;
+      }
+      callbacks?.onStderr?.(
+        `[skillRunner] Grok effort: ${grokEffort}${grokOperatorEffort ? " (operator override)" : " (dispatch envelope)"}\n`
+      );
+    }
+
+    // Registry effort gate (#569 → #606): the effort that will ACTUALLY
+    // dispatch — operator override else envelope — must sit on the
+    // supported_efforts ladder of the model this dispatch will actually
+    // serve, checked against the band-mapped model when one was resolved
+    // above, else the same env cascade the SDK GrokAdapter reads. A rung the
+    // model does not declare fails the stage closed here, BEFORE spawn,
+    // instead of reaching `grok --effort` and dying as #532's signature
+    // (exit 1 in seconds, no work, nothing classified).
     const grokEffortPreflight = preflightAdapterEffort(
       "grok",
       grokEffort,
@@ -4134,6 +4211,7 @@ export function runStageSkillHeadless(
         kill: () => {},
       };
     }
+    dispatchedEffort = servedEffortLevel(grokEffort); // #606 served-effort attribution
   }
 
   // Codex model configuration (Issue #1656)
@@ -4184,6 +4262,10 @@ export function runStageSkillHeadless(
 
     if (codexEffort) {
       codexEnv.NIGHTGAUGE_CODEX_REASONING_EFFORT = codexEffort;
+      // #606 served-effort attribution: the codex reasoning vocabulary is a
+      // last-mile translation, so report what actually dispatched, normalized
+      // one-way into EFFORT_LEVELS (`none` → "low", #523).
+      dispatchedEffort = servedEffortLevel(codexEffort);
     }
     const sourceSuffix = modelOverride
       ? " (run override)"
@@ -4569,6 +4651,21 @@ export function runStageSkillHeadless(
     stdio: ["pipe", "pipe", "pipe"], // Enable stdin pipe
     env: spawnEnv,
   });
+
+  // Served-thinking attribution (#606): the ONE thinking signal the extension
+  // has first-hand evidence of is the CLAUDE_CODE_DISABLE_THINKING interlock
+  // (#76) present in the env the claude-family child was actually spawned
+  // with. "off" then; undefined otherwise — no CLI flag turns thinking on and
+  // no stream event reports it, so "on" is never fabricated.
+  const dispatchedThinking: "off" | undefined =
+    adapter === "claude" &&
+    thinkingDisabledInEnv(
+      typeof spawnEnv.CLAUDE_CODE_DISABLE_THINKING === "string"
+        ? spawnEnv.CLAUDE_CODE_DISABLE_THINKING
+        : undefined
+    )
+      ? "off"
+      : undefined;
 
   // ADR-017 §7.2: surface the stage child's pid to whoever owns this stage's
   // `running` transition, synchronously and exactly once.
@@ -6694,6 +6791,14 @@ export function runStageSkillHeadless(
         (servedModel ?? launchedModel) !== requestedModel
           ? (servedModel ?? launchedModel)
           : undefined,
+      // ── #606 served-envelope attribution, the ServedModel analogues ────
+      // What the adapter branch actually dispatched (normalized one-way into
+      // EFFORT_LEVELS). Same omit-when-equal rule as servedModel: suppressed
+      // only when byte-identical to the requested wire effort — there is
+      // nothing to add then; undefined also when no effort axis dispatched
+      // (honestly unreported, the provider default served).
+      servedEffort: dispatchedEffort !== effortOverride ? dispatchedEffort : undefined,
+      servedThinking: dispatchedThinking,
       modelRefusalFallback,
     });
   });

@@ -75,7 +75,7 @@ func computeSelectionCompat(t *testing.T) selectionCompatGolden {
 	for _, stage := range dispatchStages {
 		for _, mode := range modes {
 			for _, p := range predicted {
-				model, explicit := stageBaseModel(root, mode, stage, p)
+				model, explicit := stageBaseModel(root, mode, stage, p, "")
 				key := fmt.Sprintf("%s|%s|%s", stage, mode, p)
 				g.StageBase[key] = fmt.Sprintf("%s|%v", model, explicit)
 			}

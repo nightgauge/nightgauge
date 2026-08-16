@@ -78,11 +78,11 @@ func TestAdviseBandPicksPerModeWithinEnvelope(t *testing.T) {
 
 	elevated := Envelope(ModeElevated)
 	// Maximum-style quality pick: opus wins on quality.
-	if band := AdviseBand(advice, ModeMaximum, elevated); band != TierOpus {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, elevated); band != TierOpus {
 		t.Fatalf("AdviseBand(maximum) = %q, want opus", band)
 	}
 	// Efficiency: cheapest above the quality floor — sonnet.
-	if band := AdviseBand(advice, ModeEfficiency, Envelope(ModeEfficiency)); band != TierSonnet {
+	if band := AdviseBand(advice, "bugfix", ModeEfficiency, Envelope(ModeEfficiency)); band != TierSonnet {
 		t.Fatalf("AdviseBand(efficiency) = %q, want sonnet", band)
 	}
 }
@@ -94,7 +94,7 @@ func TestAdviseBandNeverEscapesTheEnvelope(t *testing.T) {
 
 	// Efficiency envelope caps at sonnet; a quality-driven opus pick must be
 	// rejected, not clamped — advice re-picks within the clamps or not at all.
-	if band := AdviseBand(advice, ModeMaximum, Envelope(ModeEfficiency)); band != "" {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeEfficiency)); band != "" {
 		t.Fatalf("AdviseBand outside envelope = %q, want \"\"", band)
 	}
 }
@@ -110,7 +110,7 @@ func TestAdviseBandIgnoresSparseEntries(t *testing.T) {
 				Backoff: "exact", Samples: 2, MeanQuality: 99, MeanCostUsd: 1.5, Advisable: false},
 		},
 	}
-	if band := AdviseBand(advice, ModeFrontier, Envelope(ModeFrontier)); band != "" {
+	if band := AdviseBand(advice, "refactor", ModeFrontier, Envelope(ModeFrontier)); band != "" {
 		t.Fatalf("AdviseBand(sparse only) = %q, want \"\"", band)
 	}
 }
@@ -125,7 +125,7 @@ func TestAdviseBandUnknownModelYieldsNoAdvice(t *testing.T) {
 	}
 	// A model outside the band vocabulary cannot be dispatched on the band
 	// wire — no advice, no invented band.
-	if band := AdviseBand(advice, ModeMaximum, Envelope(ModeElevated)); band != "" {
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated)); band != "" {
 		t.Fatalf("AdviseBand(unknown model) = %q, want \"\"", band)
 	}
 }
@@ -166,5 +166,76 @@ func TestRoutingAdviceCrossLanguageFixture(t *testing.T) {
 	}
 	if sparse := advice.Entries[2]; sparse.Advisable {
 		t.Fatalf("sparse entry lost its advisable=false: %+v", sparse)
+	}
+}
+
+// ── #606: job-class-keyed consumption (the #340 convergence) ─────────────────
+
+func TestAdviseBandRequiresAJobClass(t *testing.T) {
+	root := t.TempDir()
+	writeAdviceFile(t, root, validAdvice)
+	advice, _ := LoadRoutingAdvice(root)
+	// No job class ⇒ no advice — mirroring the TS resolver, which consults
+	// pickAdvice only for issues whose type label directly names a job class.
+	if band := AdviseBand(advice, "", ModeMaximum, Envelope(ModeElevated)); band != "" {
+		t.Fatalf("AdviseBand without a job class = %q, want \"\"", band)
+	}
+}
+
+func TestAdviseBandKeysOnExactJobClass(t *testing.T) {
+	root := t.TempDir()
+	writeAdviceFile(t, root, validAdvice)
+	advice, _ := LoadRoutingAdvice(root)
+	// The file's only advisable entries are bugfix; docs evidence does not
+	// exist, and bugfix measurements must not answer for docs work — the
+	// exact-key discipline that replaces the retired (model, *, *) pooling.
+	if band := AdviseBand(advice, "docs", ModeMaximum, Envelope(ModeElevated)); band != "" {
+		t.Fatalf("AdviseBand(docs) pooled foreign job-class evidence: %q", band)
+	}
+}
+
+func TestAdviseBandPrefersExactBackoffOverModelAggregates(t *testing.T) {
+	advice := RoutingAdvice{
+		SchemaVersion: RoutingAdviceSchemaVersion,
+		QualityFloor:  70,
+		Entries: []RoutingAdviceEntry{
+			// A (model, *, *) aggregate with the higher quality…
+			{JobClass: "bugfix", ModelID: "claude-opus-5", Backoff: "model",
+				Samples: 20, MeanQuality: 95, MeanCostUsd: 0.5, QualityPerDollar: 190, Advisable: true},
+			// …must lose to an exact-backoff envelope, mirroring pickAdvice.
+			{JobClass: "bugfix", ModelID: "claude-sonnet-5", Effort: "low", Thinking: "off",
+				Backoff: "exact", Samples: 6, MeanQuality: 85, MeanCostUsd: 0.05,
+				QualityPerDollar: 1700, Advisable: true},
+		},
+	}
+	if band := AdviseBand(advice, "bugfix", ModeMaximum, Envelope(ModeElevated)); band != TierSonnet {
+		t.Fatalf("exact backoff must be preferred over model aggregates, got %q", band)
+	}
+}
+
+// TestJobClassForLabels pins the Go attribution to the TS jobClassForIssue
+// mapping: conservative, first type label decides, matched or not.
+func TestJobClassForLabels(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels []string
+		want   string
+	}{
+		{"docs", []string{"type:docs"}, "docs"},
+		{"bug", []string{"type:bug"}, "bugfix"},
+		{"bugfix", []string{"type:bugfix"}, "bugfix"},
+		{"refactor", []string{"priority:high", "type:refactor"}, "refactor"},
+		{"case-insensitive prefix", []string{"Type:Bug"}, "bugfix"},
+		{"unmapped type stays unattributed", []string{"type:feature"}, ""},
+		{"first type label decides, matched or not", []string{"type:feature", "type:docs"}, ""},
+		{"no type label", []string{"auto-process"}, ""},
+		{"empty", nil, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := JobClassForLabels(tc.labels); got != tc.want {
+				t.Fatalf("JobClassForLabels(%v) = %q, want %q", tc.labels, got, tc.want)
+			}
+		})
 	}
 }

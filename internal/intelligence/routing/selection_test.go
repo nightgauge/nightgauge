@@ -159,3 +159,38 @@ func TestEscalationLadderDerivation(t *testing.T) {
 		t.Errorf("EscalationLadder(ollama) = %v, want empty", got)
 	}
 }
+
+// TestBandRankSpaceEquivalentToRungOrder pins the structural fact that keeps
+// the band-rank clamps (ClampToEnvelope / tierRank / stageBaseModel) CORRECT
+// without a rung-native conversion (#606 deliverable 4): for every provider
+// with a registry ladder, bands ↔ rungs are 1:1 (each band answers for at
+// most one rung) and the rungs' band order is strictly descending in
+// capability rank — so comparing two clamp inputs in band-rank space is
+// equivalent to comparing their rung indices for every reachable case. The
+// #606 same-model effort descent does not break this: its substituted value
+// is still a BAND (the rung's Band), and the effort half rides beside the
+// band clamps (StickyEffort applied after ClampEffortToEnvelope), never
+// through them. If a registry change ever makes a band answer for two rungs
+// — or reorders rungs against the band ladder — this fails, and the clamps
+// must be converted to rung-native comparisons before that change lands.
+func TestBandRankSpaceEquivalentToRungOrder(t *testing.T) {
+	for _, provider := range []string{"anthropic", "openai", "google", "xai", "copilot"} {
+		rungs := CandidateLadder(provider, "")
+		seen := map[string]bool{}
+		prevRank := -1
+		for i, rung := range rungs {
+			if seen[rung.Band] {
+				t.Fatalf("%s: band %q answers for two rungs — band-rank clamps are no longer equivalent to rung-native comparison", provider, rung.Band)
+			}
+			seen[rung.Band] = true
+			rank := tierRank(rung.Band)
+			if rank < 0 {
+				t.Fatalf("%s: rung %d band %q is not in the band ladder", provider, i, rung.Band)
+			}
+			if prevRank != -1 && rank >= prevRank {
+				t.Fatalf("%s: rung order diverges from band capability order at %q (rank %d after %d)", provider, rung.Band, rank, prevRank)
+			}
+			prevRank = rank
+		}
+	}
+}

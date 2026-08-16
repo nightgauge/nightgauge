@@ -232,6 +232,7 @@ func stageBaseModel(
 	mode routing.PerformanceMode,
 	stage state.PipelineStage,
 	predictedModel string,
+	jobClass string,
 ) (model string, explicit bool) {
 	if env := stageEnvModel(stage); env != "" {
 		return env, true
@@ -249,14 +250,18 @@ func stageBaseModel(
 	if predictedModel != "" {
 		// Eval-advice re-pick (#581, opt-in, default off): on the
 		// router-chosen branch only — the same slot the TS resolver consults
-		// the advisor in (after the selector, inside the clamps). AdviseBand
-		// returns "" unless advisable evidence names a band INSIDE this
-		// stage's routed-tier envelope, so with the key off, no advice file,
-		// or sparse evidence, the axis query alone decides — exactly the
-		// pre-advice behavior the compatibility table pins.
+		// the advisor in (after the selector, inside the clamps). Keyed on
+		// the issue's job class (#606, routing.JobClassForLabels at pickup) —
+		// exact job-class entries with exact-over-model backoff, mirroring
+		// the TS pickAdvice, the #340 convergence. AdviseBand returns ""
+		// unless a job class was attributed AND advisable evidence names a
+		// band INSIDE this stage's routed-tier envelope, so with the key off,
+		// no advice file, no job class, or sparse evidence, the axis query
+		// alone decides — exactly the pre-advice behavior the compatibility
+		// table pins.
 		if useEvalRecommendations(workspaceRoot) {
 			if advice, ok := routing.LoadRoutingAdvice(workspaceRoot); ok {
-				if band := routing.AdviseBand(advice, mode, envelope); band != "" {
+				if band := routing.AdviseBand(advice, jobClass, mode, envelope); band != "" {
 					return band, false
 				}
 			}

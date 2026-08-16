@@ -216,6 +216,14 @@ export interface StageResult {
    * See docs/spikes/fable-5-behavior-porting.md §8.3.
    */
   servedModel?: string;
+  /**
+   * Served-envelope analogues of `servedModel` (#606): the effort the adapter
+   * actually dispatched (normalized into EFFORT_LEVELS) and the thinking
+   * state the extension has first-hand evidence of. Undefined =
+   * honestly-unreported.
+   */
+  servedEffort?: string;
+  servedThinking?: string;
   /** Original model of the CLI's refusal fallback, when one was observed. */
   refusalFallbackFrom?: string;
   /** Fallback model of the CLI's refusal fallback, when one was observed. */
@@ -552,6 +560,9 @@ export class SkillRunner {
               toolCalls: result.toolCalls,
               // ── #91 served-model attribution forwarding ────────────
               servedModel: result.servedModel,
+              // ── #606 served-envelope forwarding ────────────────────
+              servedEffort: result.servedEffort,
+              servedThinking: result.servedThinking,
               refusalFallbackFrom: result.modelRefusalFallback?.originalModel,
               refusalFallbackTo: result.modelRefusalFallback?.fallbackModel,
               refusalFallbackCategory: result.modelRefusalFallback?.category,

@@ -177,7 +177,7 @@
     "fable": "true|fable|opus|model_unavailable_fallback",
     "gemini-2.5-flash": "false|sonnet||downgrade_ladder_exhausted",
     "gpt-5.6-sol": "true|fable|sonnet|model_unavailable_fallback",
-    "grok-4.6": "false|fable||downgrade_ladder_exhausted",
+    "grok-4.6": "true|fable|opus|model_unavailable_effort_descent",
     "haiku": "false|haiku||downgrade_ladder_exhausted",
     "opus": "true|opus|sonnet|model_unavailable_fallback",
     "sonnet": "true|sonnet|haiku|model_unavailable_fallback",

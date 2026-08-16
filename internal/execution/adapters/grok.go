@@ -27,22 +27,23 @@ func (a *GrokAdapter) Agentic() bool { return true }
 func (a *GrokAdapter) UsesStdin() bool { return false }
 
 // ValidateModel implements the optional pre-spawn validation hook the
-// execution manager checks before BuildCommand (#4021). Two independent
-// gates, both fail-closed BEFORE any process is spawned:
-//   - ValidateGrokModel (#579): the resolved model must be a known,
-//     transport-reachable, non-deprecated xai model — the closed-set gate
-//     codex/gemini already have, absorbing #552's silent band-name
-//     fallthrough to `grok --model`.
-//   - validateGrokEffort (#569): the provider-global NIGHTGAUGE_GROK_EFFORT
-//     must sit on the ladder the resolved model declares.
-//
-// Reads the same env var BuildCommand forwards so the value that is
-// validated is exactly the value that would be dispatched.
+// execution manager checks before BuildCommand (#4021): ValidateGrokModel
+// (#579) — the resolved model must be a known, transport-reachable,
+// non-deprecated xai model, the closed-set gate codex/gemini already have,
+// absorbing #552's silent band-name fallthrough to `grok --model`. The
+// effort half of the preflight moved to ValidateEffort (#606) so it gates
+// the RunOptions-threaded envelope, not just the env var.
 func (a *GrokAdapter) ValidateModel(model string) error {
-	if err := ValidateGrokModel(model); err != nil {
-		return err
-	}
-	return validateGrokEffort(model, os.Getenv("NIGHTGAUGE_GROK_EFFORT"))
+	return ValidateGrokModel(model)
+}
+
+// ValidateEffort implements the optional effort-preflight hook (#569 → #606):
+// validateGrokEffort runs against dispatchGrokEffort's resolution — the
+// provider-global NIGHTGAUGE_GROK_EFFORT operator override when set, else the
+// dispatch envelope's effort threaded through RunOptions — so the value that
+// is validated is exactly the value BuildCommand would dispatch.
+func (a *GrokAdapter) ValidateEffort(model, effort string) error {
+	return validateGrokEffort(model, dispatchGrokEffort(effort))
 }
 
 func resolveGrokModel(model string) string {
@@ -158,7 +159,11 @@ func (a *GrokAdapter) BuildCommand(opts RunOptions) (string, []string, map[strin
 		args = append(args, "--model", model)
 	}
 
-	if effort := grokCliEffortFlag(os.Getenv("NIGHTGAUGE_GROK_EFFORT")); effort != "" {
+	// The dispatch effort (#606): the operator's NIGHTGAUGE_GROK_EFFORT env
+	// override when set, else the wire envelope's effort threaded through
+	// RunOptions — which is how a descended rung (EvaluateDowngrade's
+	// same-model effort descent, #532) actually reaches the spawned CLI.
+	if effort := grokCliEffortFlag(dispatchGrokEffort(opts.Effort)); effort != "" {
 		args = append(args, "--effort", effort)
 	}
 

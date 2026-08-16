@@ -88,6 +88,18 @@ describe("modeProfiles", () => {
     expect(getModeEnvelope("frontier")).toMatchObject({ floor: "haiku", ceiling: "fable" });
   });
 
+  it("no mode declares a thinking policy yet (#606, spike #568 §4.1.3)", () => {
+    // The thinking-policy axis exists on ModeEnvelope with Go parity
+    // (routing.ModeEnvelope.ThinkingPolicy, pinned by Go's
+    // TestModeEnvelopeThinkingPolicyColumnIsEmpty) and is consumed by the
+    // wire-thinking resolution — but its column is empty, so adding the axis
+    // was behavior-preserving. A mode that gains a policy must update both
+    // tables and both pins in one commit.
+    for (const mode of ["efficiency", "elevated", "maximum", "frontier"] as const) {
+      expect(getModeEnvelope(mode).thinkingPolicy).toBeUndefined();
+    }
+  });
+
   it("frontier is the ONLY mode whose envelope ceiling reaches Fable", () => {
     for (const mode of ["efficiency", "elevated", "maximum"] as const) {
       expect(getModeEnvelope(mode).ceiling).not.toBe("fable");

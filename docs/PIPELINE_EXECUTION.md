@@ -419,29 +419,57 @@ neither:
   `--effort` at all is a question about its tier band, so the extension
   normalizes the value with `modelTierBand` before asking — a concrete id
   would otherwise drop the flag with no error and no log line. The grok
-  adapters remain the deliberate exception: their effort is the
-  provider-global `NIGHTGAUGE_GROK_EFFORT` env contract (#569) on both paths.
+  adapters execute the dispatch envelope too since #606: the TS path feeds the
+  wire effort into the `NIGHTGAUGE_GROK_EFFORT` env contract the SDK
+  GrokAdapter reads, the Go-direct path threads it through
+  `RunOptions.Effort`, and the provider-global env var is demoted to operator
+  override — it wins when set, exactly like the
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` overrides. The #569 preflights gate the
+  value that will actually dispatch (override else envelope) on both paths.
+  This is what makes the xai same-model effort descent real: on a
+  fully-collapsed provider (every ladder rung one model id — xai today), a
+  model-unavailable rejection descends one declared effort rung within the
+  model (`grok-4.6@xhigh → high → …`) instead of exhausting, sticky for the
+  run via the RetryEngine's effort substitution (`StickyEffort`), which is
+  applied after the mode's effort clamps for the same #42 reason a floor
+  never re-raises a sticky model downgrade. Partially-collapsed providers
+  keep the same-model skip (pinned decision — see the PROVENANCE note in
+  `internal/intelligence/routing/selection.go`).
 
 - **Thinking.** Also on the wire since #581, as attribution rather than
   execution (no CLI flag exists): `resolveWireThinking` answers with the
   selection query's declared rung for the dispatched band
   (`routing.ResolveBandEnvelope`) under the anthropic band contract the
   `model` field already speaks, `off` when the `CLAUDE_CODE_DISABLE_THINKING`
-  interlock is set, and absent when undeclared. Run records carry the wire
-  value; a served-thinking correction (the `servedModel` analogue) does not
-  exist yet.
+  interlock is set, and absent when undeclared. The mode envelopes carry a
+  thinking-policy axis (`ModeEnvelope.ThinkingPolicy` ⇄
+  `modeProfiles.ts thinkingPolicy`, spike §4.1.3) that overrides the rung's
+  declared default when a mode declares one — no mode does today, so the axis
+  is dormant by construction; the interlock outranks a policy either way.
+  Since #606 the served envelope is reported back exactly like `servedModel`
+  (#91): `StageResultParams.servedEffort`/`servedThinking` carry what the
+  last-mile translation actually dispatched (codex reasoning vocabulary and
+  vendor-native sub-`low` rungs normalize one-way into EFFORT_LEVELS;
+  adapters with no effort axis report nothing), Go records the raw report on
+  `model_selection.served_effort`/`served_thinking` and re-records the
+  requested fields onto the served value only when the two diverge —
+  requested vs served stay epistemically distinct end to end.
 
-- **Eval-advice policy differs per resolver — deliberately, and only when
-  `model_routing.use_eval_recommendations` is ON.** The TS resolver consumes
-  advice only for issues whose `type:` label directly names an eval job class
-  (docs/bug/refactor), from exact job-class entries with exact-over-model
-  backoff (`pickAdvice`); the Go dispatch path has no job-class attribution,
-  so it consumes at spike §4.3's `(model, *, *)` backoff level, pooling
-  advisable entries across job classes (`routing.AdviseBand`). Identical
-  inputs can therefore resolve differently on the IPC vs Headless paths while
-  the key is on. This is a documented, opt-in asymmetry, not drift-by-neglect
-  — the convergence plan (job-class attribution on the Go dispatch path) is
-  tracked in the #581 follow-up.
+- **Eval-advice policy is CONVERGED across resolvers (#606), and only active
+  when `model_routing.use_eval_recommendations` is ON.** Both resolvers
+  consume advice only for issues whose `type:` label directly names an eval
+  job class (docs/bug/refactor): the TS resolver via `jobClassForIssue` →
+  `pickAdvice`, the Go dispatch path via `routing.JobClassForLabels`
+  (attributed once at issue pickup, where labels are already read) →
+  `routing.AdviseBand`, which mirrors `pickAdvice` step for step — exact
+  job-class entries, exact-over-model backoff preference, the stamped quality
+  floor for the cost-driven modes, the same per-mode ordering — then applies
+  the band/envelope gate the wire vocabulary needs. No job class ⇒ no advice
+  on either path; the `(model, *, *)` cross-class pooling Go used to run was
+  the dual-path family #340 removed and is retired. One residual asymmetry,
+  stated so it is not silent: the TS resolver also dispatches the advised
+  entry's _effort_ on its own path, while the Go wire effort stays the #581
+  chain — the advised band converges, the advised effort remains TS-local.
 
 Attribution follows the same ownership. Go records the dispatch model up front
 (`runtime.RecordStageModel` at stage start) and re-records on the served model

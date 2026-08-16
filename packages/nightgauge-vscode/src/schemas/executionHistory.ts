@@ -278,6 +278,19 @@ export const HistoryStageDetailSchema = z.object({
        * empty-means-undetermined) — never a guess or a copy of `model`.
        */
       served_model: z.string().optional(),
+      /**
+       * The served-envelope analogues of `served_model` (#606): the raw
+       * executor report of what the last-mile translation actually
+       * dispatched, independent of `effort`/`thinking` above (which mirror
+       * the request and are re-recorded onto the served value when the two
+       * diverge, exactly like `model`). Absent means honestly-unreported —
+       * never a guess or a copy of the requested value. Vocabulary derives
+       * from EFFORT_LEVELS / the canonical thinking axis, same as the
+       * requested fields — the adapter boundary normalizes one-way into
+       * EFFORT_LEVELS before reporting (#523).
+       */
+      served_effort: z.enum(EFFORT_LEVELS).optional(),
+      served_thinking: z.enum(["on", "off"]).optional(),
       /** The model that was active before escalation (Issue #1343) */
       escalated_from: z.string().optional(),
     })

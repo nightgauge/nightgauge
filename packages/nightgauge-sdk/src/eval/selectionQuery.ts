@@ -108,11 +108,15 @@ function nextLowerSupportedEffort(
  * PARTIALLY-collapsed providers (google's pro/flash pairs, openai's
  * gpt-5.6-sol) is this module's generalization, not a spike mandate: it
  * synthesizes effort points (gemini-2.5-pro@medium, gpt-5.6-sol@high) no
- * registry field declares as a band's serving envelope. Nothing dispatches
- * those synthesized rungs today; a consumer that starts executing rung
- * efforts on a partially-collapsed provider must first decide whether they
- * are wanted behavior or the descent should be restricted to fully-collapsed
- * providers. The twin ladder tests pin the current shape so that decision
+ * registry field declares as a band's serving envelope. The decision the
+ * earlier version of this note deferred is now MADE and PINNED (#606): the
+ * Go RetryEngine's downgrade walk executes the descent ONLY on
+ * fully-collapsed providers and keeps the same-model skip on
+ * partially-collapsed ones — their synthesized rungs stay declared-ladder
+ * shape that nothing dispatches, because those providers have a real weaker
+ * MODEL to fall to. Pinned by
+ * TestEvaluateDowngrade_PartiallyCollapsedProviderKeepsSameModelSkip
+ * (retry_engine_test.go) and the twin ladder tests, so widening the descent
  * cannot happen by accident. (Go pair: the identical note on
  * CandidateLadder, selection.go.)
  *

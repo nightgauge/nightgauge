@@ -98,6 +98,36 @@ func TestGrokBuildCommandEveryBandResolvesToServedModel(t *testing.T) {
 	}
 }
 
+// TestGrokBuildCommandDispatchesTheEnvelopeEffort pins the #606 effort
+// contract on the Go-direct path: the RunOptions-threaded envelope effort
+// reaches `grok --effort`, the NIGHTGAUGE_GROK_EFFORT env var is an operator
+// override that wins when set, and no effort anywhere omits the flag (the
+// model's declared default rules — byte-identical to pre-#606 argv).
+func TestGrokBuildCommandDispatchesTheEnvelopeEffort(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "")
+	a := NewGrokAdapter()
+
+	_, args, _ := a.BuildCommand(RunOptions{Prompt: "x", Model: "sonnet", Effort: "medium", WorktreeDir: "/tmp/wt"})
+	if !containsPair(args, "--effort", "medium") {
+		t.Fatalf("RunOptions effort did not reach argv: %v", args)
+	}
+
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "high")
+	_, args, _ = a.BuildCommand(RunOptions{Prompt: "x", Model: "sonnet", Effort: "medium", WorktreeDir: "/tmp/wt"})
+	if !containsPair(args, "--effort", "high") || containsPair(args, "--effort", "medium") {
+		t.Fatalf("operator env override must outrank the RunOptions effort: %v", args)
+	}
+
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "")
+	_, args, _ = a.BuildCommand(RunOptions{Prompt: "x", Model: "sonnet", WorktreeDir: "/tmp/wt"})
+	for i, arg := range args {
+		if arg == "--effort" {
+			t.Fatalf("no effort anywhere must omit the flag, got %v at %d", args, i)
+		}
+	}
+}
+
 // TestGrokBuildCommandRejectsUnservedModelAsBandTarget is the other half of
 // #532: the models the CLI cannot spawn must not be reachable through band
 // resolution on ANY band, only by exact id. grok-build-0.1 is `deprecated` (the
@@ -152,17 +182,43 @@ func TestValidateGrokEffortRejectsUndeclaredRung(t *testing.T) {
 		}
 	}
 
-	// The same rejection must fire through the manager's pre-spawn hook with
-	// the provider-global env set — the exact dispatch shape #532 hit.
+	// The same rejection must fire through the manager's pre-spawn effort
+	// hook (#606: ValidateEffort, split from ValidateModel so it can gate the
+	// RunOptions-threaded envelope) with the provider-global env set — the
+	// exact dispatch shape #532 hit.
 	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "xhigh")
 	a := NewGrokAdapter()
-	if err := a.ValidateModel("grok-4.5"); err == nil {
-		t.Fatal("ValidateModel must fail closed on NIGHTGAUGE_GROK_EFFORT=xhigh for grok-4.5")
+	if err := a.ValidateEffort("grok-4.5", ""); err == nil {
+		t.Fatal("ValidateEffort must fail closed on NIGHTGAUGE_GROK_EFFORT=xhigh for grok-4.5")
 	}
 	// max is above every current xai ladder — grok-4.6 declares up to xhigh.
 	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "max")
-	if err := a.ValidateModel("grok-4.6"); err == nil {
-		t.Fatal("ValidateModel must fail closed on NIGHTGAUGE_GROK_EFFORT=max for grok-4.6")
+	if err := a.ValidateEffort("grok-4.6", ""); err == nil {
+		t.Fatal("ValidateEffort must fail closed on NIGHTGAUGE_GROK_EFFORT=max for grok-4.6")
+	}
+	// The env var is an OPERATOR OVERRIDE (#606): it outranks — and is gated
+	// in place of — a RunOptions effort the envelope threaded through.
+	if err := a.ValidateEffort("grok-4.6", "low"); err == nil {
+		t.Fatal("ValidateEffort must gate the env override, not the overridden RunOptions effort")
+	}
+}
+
+// TestValidateEffortGatesTheRunOptionsEnvelope pins the #606 half of the
+// preflight: with no env override set, the value gated is the dispatch
+// envelope's effort threaded through RunOptions — the value BuildCommand
+// will actually dispatch.
+func TestValidateEffortGatesTheRunOptionsEnvelope(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_GROK_EFFORT", "")
+	a := NewGrokAdapter()
+	// grok-4.5 tops out at high — a threaded xhigh must fail closed.
+	if err := a.ValidateEffort("grok-4.5", "xhigh"); err == nil {
+		t.Fatal("ValidateEffort must fail closed on a RunOptions effort the model does not declare")
+	}
+	if err := a.ValidateEffort("grok-4.5", "high"); err != nil {
+		t.Fatalf("declared RunOptions effort must pass: %v", err)
+	}
+	if err := a.ValidateEffort("grok-4.5", ""); err != nil {
+		t.Fatalf("absent effort must pass (model default rules): %v", err)
 	}
 }
 

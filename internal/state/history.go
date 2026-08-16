@@ -310,6 +310,14 @@ type V2ModelSelect struct {
 	// anthropic-provider stage (#76's interlock). Empty when the model has no
 	// registry entry or declares no default.
 	Thinking string `json:"thinking,omitempty"`
+	// ServedEffort/ServedThinking are the served-envelope analogues of
+	// ServedModel (#606): the raw executor report of what the last-mile
+	// translation actually dispatched, independent of Effort/Thinking above
+	// (which mirror the request and are re-recorded onto the served value
+	// when the two diverge, exactly like Model). Empty means
+	// honestly-unreported — never a guess or a copy of the requested value.
+	ServedEffort   string `json:"served_effort,omitempty"`
+	ServedThinking string `json:"served_thinking,omitempty"`
 	// Mode is model_routing.mode (manual | automatic | hybrid) active when
 	// this stage's model was resolved (resolves #462). Distinguishes an
 	// operator-pinned model (manual) from a router-chosen one
@@ -937,7 +945,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 				ServedModel: snap.StageServedModels[stageName],
 				Effort:      snap.StageEfforts[stageName],
 				Thinking:    snap.StageThinking[stageName],
-				Mode:        snap.StageModelSelectionModes[stageName],
+				// #606 served-envelope attribution, the ServedModel analogues.
+				ServedEffort:   snap.StageServedEfforts[stageName],
+				ServedThinking: snap.StageServedThinking[stageName],
+				Mode:           snap.StageModelSelectionModes[stageName],
 			}
 		}
 

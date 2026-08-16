@@ -38,14 +38,23 @@ const RunIDEnvVar = "NIGHTGAUGE_RUN_ID"
 
 // RunOptions are the parameters for running a skill stage.
 type RunOptions struct {
-	SkillPath    string // Path to the SKILL.md file
-	WorktreeDir  string // Working directory for the execution
-	ContextFile  string // Path to context JSON from previous stage
-	OutputFile   string // Path for output context JSON
-	IssueNumber  int
-	Repo         string
-	Stage        string
-	Model        string   // Optional model override
+	SkillPath   string // Path to the SKILL.md file
+	WorktreeDir string // Working directory for the execution
+	ContextFile string // Path to context JSON from previous stage
+	OutputFile  string // Path for output context JSON
+	IssueNumber int
+	Repo        string
+	Stage       string
+	Model       string // Optional model override
+	// Effort is the effort half of the dispatch envelope (#581/#606), an
+	// EFFORT_LEVELS rung or "" (no explicit effort — the model's declared
+	// default rules). Threaded from the scheduler's wire resolution so a
+	// descended rung can reach the spawned CLI. Consumed today only by the
+	// grok adapter (the #532/#606 effort-descent contract), where the
+	// provider-global NIGHTGAUGE_GROK_EFFORT env var is demoted to operator
+	// override: it wins when set, this value dispatches otherwise. Every
+	// other adapter ignores the field — their effort stays env/TS-owned.
+	Effort       string
 	MaxTokens    int      // Optional token budget
 	AllowedTools []string // Tools allowed for this skill (from SKILL.md frontmatter)
 	Prompt       string   // Built prompt to pass via stdin (for Claude adapter)

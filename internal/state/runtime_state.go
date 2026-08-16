@@ -219,6 +219,16 @@ type RuntimeState struct {
 	// Absent when the model has no registry entry or declares no default.
 	StageThinking map[string]string `json:"stageThinking,omitempty"`
 
+	// StageServedEfforts / StageServedThinking capture the SERVED envelope
+	// the executor reported for each stage (#606), the ServedModel analogues:
+	// what the last-mile translation actually dispatched (normalized into
+	// EFFORT_LEVELS / the "on"/"off" axis at the adapter boundary),
+	// independent of the requested StageEfforts/StageThinking above. Absent
+	// means honestly-unreported — the #299/#397 convention — never a copy of
+	// the requested value.
+	StageServedEfforts  map[string]string `json:"stageServedEfforts,omitempty"`
+	StageServedThinking map[string]string `json:"stageServedThinking,omitempty"`
+
 	// StageModelSelectionModes captures model_routing.mode (manual |
 	// automatic | hybrid) active when each stage's model was resolved (Issue
 	// #580, resolves #462): distinguishes an operator-pinned model from a
@@ -1336,6 +1346,60 @@ func (rs *RuntimeState) StageThinkingState(stage PipelineStage) string {
 	return rs.StageThinking[string(stage)]
 }
 
+// RecordStageServedEffort records the effort the executor reported as
+// actually dispatched (#606), the ServedModel analogue. Empty strings are
+// ignored — honestly-unreported must read as absent, never as a stored
+// empty value, and never as a copy of the requested effort.
+func (rs *RuntimeState) RecordStageServedEffort(stage PipelineStage, effort string) {
+	if effort == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedEfforts == nil {
+		rs.StageServedEfforts = make(map[string]string)
+	}
+	rs.StageServedEfforts[string(stage)] = effort
+}
+
+// StageServedEffort returns the recorded served effort for a stage, or ""
+// when the executor reported none.
+func (rs *RuntimeState) StageServedEffort(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedEfforts == nil {
+		return ""
+	}
+	return rs.StageServedEfforts[string(stage)]
+}
+
+// RecordStageServedThinking records the thinking state the executor reported
+// first-hand evidence for (#606) — today only the disable interlock's "off".
+// Empty strings are ignored, same contract as RecordStageServedEffort.
+func (rs *RuntimeState) RecordStageServedThinking(stage PipelineStage, thinking string) {
+	if thinking == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedThinking == nil {
+		rs.StageServedThinking = make(map[string]string)
+	}
+	rs.StageServedThinking[string(stage)] = thinking
+}
+
+// StageServedThinkingState returns the recorded served thinking for a stage,
+// or "" when the executor reported none. (Named like StageThinkingState to
+// avoid colliding with the StageServedThinking map field.)
+func (rs *RuntimeState) StageServedThinkingState(stage PipelineStage) string {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.StageServedThinking == nil {
+		return ""
+	}
+	return rs.StageServedThinking[string(stage)]
+}
+
 // RecordStageModelSelectionMode records model_routing.mode (manual |
 // automatic | hybrid) active when a stage's model was resolved (Issue #580,
 // resolves #462). Unlike its siblings this value is never empty in practice
@@ -1999,6 +2063,18 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		snap.StageThinking = make(map[string]string, len(rs.StageThinking))
 		for k, v := range rs.StageThinking {
 			snap.StageThinking[k] = v
+		}
+	}
+	if len(rs.StageServedEfforts) > 0 {
+		snap.StageServedEfforts = make(map[string]string, len(rs.StageServedEfforts))
+		for k, v := range rs.StageServedEfforts {
+			snap.StageServedEfforts[k] = v
+		}
+	}
+	if len(rs.StageServedThinking) > 0 {
+		snap.StageServedThinking = make(map[string]string, len(rs.StageServedThinking))
+		for k, v := range rs.StageServedThinking {
+			snap.StageServedThinking[k] = v
 		}
 	}
 	if len(rs.StageModelSelectionModes) > 0 {
