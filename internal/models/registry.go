@@ -105,8 +105,8 @@ type ModelDescriptor struct {
 	RateProvenance string `json:"rate_provenance,omitempty"`
 	// Transports maps a transport (TransportCLI | TransportAPI) to its
 	// reachability facts (#578). A missing key is an UNEXPRESSED (pending)
-	// fact, never an implicit served=false. Nothing enforces these at
-	// selection yet — that is the fail-closed enforcement phase (#579).
+	// fact, never an implicit served=false. Selection paths consult these via
+	// CheckTransportServed (#579) rather than reading the map directly.
 	Transports map[string]TransportFacts `json:"transports,omitempty"`
 	// SupportedEfforts: an empty slice is a positive declaration ("this model
 	// has no effort axis", e.g. Haiku), not missing data — the canonical schema
@@ -336,6 +336,80 @@ func ProviderForAdapter(adapter string) string {
 	default:
 		return "other"
 	}
+}
+
+// ServedByTransport reports the model's transports[transport].served fact.
+// known=false means the transport key (or the whole transports map) is
+// ABSENT — the unexpressed/pending state (#578) — and callers must never
+// read that as implicit unserved: only an explicit false is a positive
+// unreachability fact (#579 AC4). served is meaningless when known is false.
+func (m ModelDescriptor) ServedByTransport(transport string) (served bool, known bool) {
+	if m.Transports == nil {
+		return false, false
+	}
+	facts, ok := m.Transports[transport]
+	if !ok {
+		return false, false
+	}
+	return facts.Served, true
+}
+
+// TransportUnreachableError is the classified fail-closed error for #579: a
+// model exists in the registry under the requested id/tier but is not
+// reachable through the dispatching adapter's transport. The message
+// deliberately contains the literal phrase "invalid model" so it classifies
+// under the EXISTING terminalkind `model_unavailable` rule (table.json
+// "invalid model" clause) — reusing the established classified-error
+// convention (#591 adapter_auth_failed, #533's taxonomy) instead of inventing
+// a parallel mechanism.
+type TransportUnreachableError struct {
+	Provider  string
+	Model     string
+	Transport string
+}
+
+func (e *TransportUnreachableError) Error() string {
+	return fmt.Sprintf(
+		"invalid model %q for provider %q: not served over the %q transport "+
+			"(transports.%s.served=false) — choose a served model or dispatch through a transport that serves it",
+		e.Model, e.Provider, e.Transport, e.Transport,
+	)
+}
+
+// CheckTransportServed is the transport-aware selection entry point (#579):
+// selection paths (adapter model validators) must call this instead of bare
+// Resolve, so a model the dispatching transport cannot reach fails closed
+// BEFORE spawn with a classified error naming provider, model, and transport
+// — rather than resolving silently and reaching the CLI unchecked (#552's
+// exact gap). Resolve itself is untouched and keeps serving non-selection
+// callers (effort validation, propensity/behavior lookups, cost replay) that
+// have no transport to reason about.
+//
+// Resolution is Resolve's exact concrete-id-then-tier rule; only the outcome
+// is reinterpreted through the transport fact:
+//   - ok=false, err=nil:  no such id/tier in the registry — Resolve's
+//     ordinary miss, unchanged. Callers keep their own closed-set handling
+//     for this case (e.g. "unknown model, valid models: …").
+//   - ok=true, err=nil:   found and selectable through transport — the fact
+//     is explicit true, OR the transport key (or the whole transports map)
+//     is absent, the unexpressed/pending state that must fail OPEN with
+//     today's behavior (#579 AC4).
+//   - ok=true, err!=nil:  found, but transports[transport] explicitly
+//     declares served:false — m is the zero value; err is a
+//     *TransportUnreachableError naming provider, model, and transport.
+func CheckTransportServed(provider, transport, idOrTier string) (m ModelDescriptor, ok bool, err error) {
+	resolved, found := Resolve(provider, idOrTier)
+	if !found {
+		return ModelDescriptor{}, false, nil
+	}
+	if served, known := resolved.ServedByTransport(transport); known && !served {
+		return ModelDescriptor{}, true, &TransportUnreachableError{
+			Provider:  resolved.Provider,
+			Model:     resolved.ID,
+			Transport: transport,
+		}
+	}
+	return resolved, true, nil
 }
 
 // RawJSON returns the embedded canonical registry bytes (used by parity tests).

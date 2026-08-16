@@ -36,6 +36,7 @@ import {
   type Propensity,
   type Provider,
   type ThinkingDisableLimit,
+  type Transport,
 } from "./modelEvalSchemas.js";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
 import type { ModelCostRate } from "../analysis/types.js";
@@ -198,6 +199,62 @@ export function resolveModelForAdapter(
 /** True when the registry knows this concrete model id (any provider). */
 export function isKnownModel(modelId: string): boolean {
   return MODEL_REGISTRY.some((m) => m.id === modelId);
+}
+
+// ---------------------------------------------------------------------------
+// Transport-reachability enforcement (fail-closed-axis-enforcement, #579)
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of consulting a model's transport reachability facts (#579).
+ * Mirrors the Go `models.CheckTransportServed` contract exactly, so both
+ * languages answer the same reachability question the same way:
+ *
+ * - `found: false` — `idOrTier` does not resolve to any registry entry for
+ *   `provider` — the ordinary {@link getModelDescriptor} miss, unchanged.
+ * - `found: true, model` — resolved and selectable through `transport`: the
+ *   fact is explicit `served: true`, OR the transport key (or the whole
+ *   `transports` map) is absent — the unexpressed/pending state that MUST
+ *   fail OPEN with today's behavior (#579 AC4).
+ * - `found: true, unreachable` — resolved, but `transports[transport]`
+ *   explicitly declares `served: false`. `model` is absent; `unreachable`
+ *   carries provider, model id, and transport for a classified error.
+ */
+export interface TransportServedResult {
+  found: boolean;
+  model?: ModelDescriptor;
+  unreachable?: { provider: Provider; model: string; transport: Transport };
+}
+
+/**
+ * The transport-aware selection entry point (#579): resolves `idOrTier` for
+ * `provider` exactly like {@link getModelDescriptor} (concrete id — provider
+ * agnostic, ids are globally unique — then tier band within `provider`), then
+ * classifies the result against `transport`. Selection paths (adapter model
+ * preflight — `validateModelForAdapter` in `cli/adapters/modelPreflight.ts`)
+ * call this INSTEAD OF bare `getModelDescriptor` so a model the dispatching
+ * transport cannot reach fails closed BEFORE spawn with a classified error
+ * naming provider, model, and transport — rather than resolving silently and
+ * reaching the CLI unchecked (#552's exact gap, absorbed by #579).
+ *
+ * `getModelDescriptor`'s exact-id lookup is deliberately provider-agnostic
+ * (ids are globally unique across providers) — callers that need a
+ * provider-scoped closed set (every current closed-adapter policy does) must
+ * additionally check `model.provider === provider` on a `found` result,
+ * exactly as {@link resolveModelForAdapter}'s callers already do.
+ */
+export function checkTransportServed(
+  provider: Provider,
+  transport: Transport,
+  idOrTier: string
+): TransportServedResult {
+  const model = getModelDescriptor(idOrTier, provider);
+  if (!model) return { found: false };
+  const facts = model.transports?.[transport];
+  if (facts && facts.served === false) {
+    return { found: true, unreachable: { provider: model.provider, model: model.id, transport } };
+  }
+  return { found: true, model };
 }
 
 // ---------------------------------------------------------------------------

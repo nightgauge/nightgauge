@@ -7,23 +7,34 @@
  * (SDK adapters, the codex preflight command, and the VSCode skillRunner just
  * before spawn). It resolves any Claude-style routing tier
  * (`haiku|sonnet|opus|fable`) to a concrete per-adapter model and then, for
- * adapters with a CLOSED known set, asserts the resolved id is valid — throwing
- * an {@link AdapterError} (`CONFIG_INVALID`) with a nearest-valid suggestion
- * when it is not.
+ * adapters with a CLOSED known set, asserts the resolved id is BOTH a known
+ * id AND reachable through the adapter's transport (`checkTransportServed`,
+ * #579) — throwing an {@link AdapterError} (`CONFIG_INVALID`) when it is not:
+ * a transport-specific message naming provider/model/transport when the id is
+ * known but `transports.cli.served: false`, or a nearest-valid suggestion
+ * from the known set when the id is unrecognized entirely.
  *
  * Set membership is policy-driven via {@link ADAPTER_MODEL_POLICY}:
- *   - CLOSED (codex, gemini, gemini-sdk): a finite, maintained set; unknown ids
- *     are rejected. Codex reuses the canonical {@link isValidCodexModel}/
- *     {@link resolveCodexModelAlias} registry (#4018) so there is exactly one
- *     Codex model list in the codebase. Gemini uses {@link GEMINI_MODELS}.
+ *   - CLOSED (codex, gemini, gemini-sdk, grok): a finite, maintained set;
+ *     unknown ids are rejected. Codex reuses the canonical
+ *     {@link isValidCodexModel}/{@link resolveCodexModelAlias} registry
+ *     (#4018) so there is exactly one Codex model list in the codebase.
+ *     Gemini uses {@link GEMINI_MODELS}; Grok uses {@link GROK_MODELS}
+ *     (absorbing #552 — a Resolve miss used to hand the raw band name
+ *     straight to `grok --model`, reaching the CLI unchecked).
  *   - OPEN (claude-sdk, claude-headless, ollama, lm-studio, copilot): no closed
  *     set. claude-* accept tier keywords natively (the tier IS a valid model);
  *     ollama/lm-studio draw from a user-defined local catalog unknowable at
  *     preflight; the copilot CLI adapter does not consume a model id. These
  *     never reject — they pass the (trimmed) value through.
  *
+ * A model with NO `transports.cli` fact at all (unexpressed/pending, e.g.
+ * most claude/gemini entries pre-#578) is never treated as unreachable — only
+ * an EXPLICIT `served: false` fails closed (#579 AC4: additive enforcement).
+ *
  * @see Issue #4021 — Model↔provider validation preflight (fail fast)
  * @see Issue #4018 — Canonical Codex model registry (the dependency reused here)
+ * @see Issue #579 — Transport-reachability fail-closed enforcement at selection
  */
 
 import {
@@ -31,7 +42,13 @@ import {
   listCodexModels,
   resolveCodexModelAlias,
 } from "./codexModelRegistry.js";
-import { getModelDescriptor, MODEL_REGISTRY } from "../../eval/modelRegistry.js";
+import {
+  checkTransportServed,
+  getModelDescriptor,
+  MODEL_REGISTRY,
+  providerForAdapter,
+  type TransportServedResult,
+} from "../../eval/modelRegistry.js";
 import { AdapterError } from "./errors.js";
 import type { IncrediAdapter } from "./ICliAdapter.js";
 
@@ -49,18 +66,31 @@ function isTierKeyword(value: string): value is TierKeyword {
   return (TIER_KEYWORDS as readonly string[]).includes(value);
 }
 
+/**
+ * True unless `m` explicitly declares `transports.cli.served: false`. An
+ * absent `transports` map, or an absent `cli` key, is the unexpressed/pending
+ * state and counts as served (#579 AC4 — additive enforcement). Used to keep
+ * the GEMINI_MODELS/GROK_MODELS suggestion lists free of models the closed-set
+ * check would reject anyway via {@link checkTransportServed}, which is the
+ * authoritative gate this predicate only mirrors for listing purposes.
+ */
+function servedOverCli(m: (typeof MODEL_REGISTRY)[number]): boolean {
+  return m.transports?.cli?.served !== false;
+}
+
 // ---------------------------------------------------------------------------
 // Gemini closed set
 // ---------------------------------------------------------------------------
 
 /**
  * Known Gemini models (recommended-first), derived from the model registry's
- * `provider: "google"` entries — the same single source the Codex
- * {@link listCodexModels} set resolves through (#56). Add new GA ids to
- * `eval/model-registry.json`; remove retired ids there.
+ * `provider: "google"` entries that are also cli-transport-reachable (#579)
+ * — the same single source the Codex {@link listCodexModels} set resolves
+ * through (#56). Add new GA ids to `eval/model-registry.json`; remove
+ * retired ids there.
  */
 export const GEMINI_MODELS: readonly string[] = MODEL_REGISTRY.filter(
-  (m) => m.provider === "google" && !m.deprecated
+  (m) => m.provider === "google" && !m.deprecated && servedOverCli(m)
 )
   .sort((a, b) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
   .map((m) => m.id);
@@ -82,8 +112,13 @@ function isValidGeminiModel(id: string): boolean {
   return GEMINI_MODELS.includes(id);
 }
 
+// Known xai models that are cli-transport-reachable (#579): grok-build-0.1 is
+// excluded by BOTH `!m.deprecated` and `servedOverCli` independently — it
+// keeps `deprecated: true` for historical cost replay, but its
+// unselectability no longer rests on that flag alone (#578 landed
+// `transports.cli.served: false` as an INDEPENDENT reason).
 export const GROK_MODELS: readonly string[] = MODEL_REGISTRY.filter(
-  (m) => m.provider === "xai" && !m.deprecated
+  (m) => m.provider === "xai" && !m.deprecated && servedOverCli(m)
 )
   .sort((a, b) => Number(b.recommended ?? false) - Number(a.recommended ?? false))
   .map((m) => m.id);
@@ -308,6 +343,30 @@ function buildInvalidModelError(
 }
 
 /**
+ * The classified fail-closed error for #579: `unreachable.model` IS a known
+ * registry entry, but `transports[unreachable.transport]` explicitly declares
+ * `served: false` for the dispatching adapter's provider — it is not the
+ * generic "unknown model" case {@link buildInvalidModelError} handles, so the
+ * remediation text names the transport fact directly rather than only
+ * appearing buried in a valid-models list.
+ */
+function buildTransportUnreachableError(
+  policy: AdapterModelPolicy,
+  unreachable: NonNullable<TransportServedResult["unreachable"]>
+): AdapterError {
+  const lines = [
+    `Model '${unreachable.model}' is not valid for the ${policy.displayName} adapter: ` +
+      `not served over the '${unreachable.transport}' transport ` +
+      `(transports.${unreachable.transport}.served=false, provider '${unreachable.provider}').`,
+    `Choose a served model, or dispatch through a transport that serves it.`,
+  ];
+  if (policy.envVar) {
+    lines.push(`Fix: set ${policy.envVar} to a served model.`);
+  }
+  return new AdapterError(lines.join("\n"), "CONFIG_INVALID", policy.displayName, policy.docsUrl);
+}
+
+/**
  * Validate (and resolve) a model for an adapter. Throws an
  * {@link AdapterError} (`CONFIG_INVALID`) when the resolved model is invalid for
  * a CLOSED adapter; otherwise returns the concrete model that should run.
@@ -339,6 +398,20 @@ export function validateModelForAdapter(
   const resolved = policy.resolve(trimmed) ?? trimmed;
 
   if (policy.kind === "closed") {
+    // #579: consult the transport fact FIRST, so a model that IS a known
+    // registry entry but explicitly unreachable through this adapter's
+    // transport (all current CLI adapters dispatch over "cli") fails closed
+    // with an error naming provider, model, and transport — distinct from
+    // the generic "unknown model" case below, which the closed set
+    // (policy.isValid) still handles for ids the registry has never heard
+    // of. A model with no transports fact for "cli" (unexpressed/pending) is
+    // NOT unreachable here — it falls through to the ordinary isValid check,
+    // which is the additive-enforcement semantics (#579 AC4).
+    const transportCheck = checkTransportServed(providerForAdapter(adapter), "cli", resolved);
+    if (transportCheck.unreachable) {
+      throw buildTransportUnreachableError(policy, transportCheck.unreachable);
+    }
+
     const valid = policy.isValid ? policy.isValid(resolved) : false;
     if (!valid) {
       throw buildInvalidModelError(policy, trimmed, resolved);
