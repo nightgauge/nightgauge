@@ -151,13 +151,28 @@ export type TokenRates = z.infer<typeof TokenRatesSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * The closed set of transports a registry model can be reached through,
- * matching the doctor's adapter kinds with `sdk` folded into `api`
- * (http-kind local servers have no registry entries by design).
+ * The closed set of transports a registry model can be reached through
+ * (http-kind local servers have no registry entries by design). Which
+ * transport a given ADAPTER consults is not a blanket "doctor kind" rule —
+ * it is the explicit, per-adapter `adapter_transports` table in the registry
+ * JSON (#600); see {@link transportForAdapter} in `modelRegistry.ts` and the
+ * registry JSON's `$schema_note` for why `gemini-sdk` is pinned to `cli`
+ * despite its `kindSDK` doctor classification.
  */
 export const TRANSPORTS = ["cli", "api"] as const;
 export const TransportSchema = z.enum(TRANSPORTS);
 export type Transport = z.infer<typeof TransportSchema>;
+
+/**
+ * The single-authority per-adapter transport-axis mapping (#600): which
+ * transport's reachability facts gate a CLOSED-set adapter's model preflight.
+ * Keyed by raw adapter name (not {@link Transport} itself) so this schema
+ * never has to import the `IncrediAdapter` union — mirrors the
+ * `providerForAdapter`/`ProviderForAdapter` precedent of taking a plain
+ * string. Mirrors Go's `AdapterTransports` (`registry.go`).
+ */
+export const AdapterTransportsSchema = z.record(z.string(), TransportSchema);
+export type AdapterTransports = z.infer<typeof AdapterTransportsSchema>;
 
 /**
  * Where a rate card's figures came from:

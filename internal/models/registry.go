@@ -40,8 +40,11 @@ type Rates struct {
 }
 
 // Transport names — the closed set of transports a registry model can be
-// reached through, matching the doctor's adapter kinds with sdk folded into
-// api. Mirrors TRANSPORTS in the SDK (modelEvalSchemas.ts, #578).
+// reached through. Mirrors TRANSPORTS in the SDK (modelEvalSchemas.ts, #578).
+// Which adapter consults which transport is NOT a blanket "doctor kind"
+// rule — it is the explicit, per-adapter adapter_transports table (#600);
+// see TransportForAdapter and the registry JSON's $schema_note for why
+// gemini-sdk is pinned to cli despite its kindSDK doctor classification.
 const (
 	TransportCLI = "cli"
 	TransportAPI = "api"
@@ -191,11 +194,24 @@ type registryFile struct {
 	// EffortOrder exactly; mustLoad asserts it.
 	EffortLevels []string          `json:"effort_levels"`
 	Models       []ModelDescriptor `json:"models"`
+	// AdapterTransports is the single-authority per-adapter transport-axis
+	// mapping (#600): which transport's reachability facts gate a CLOSED-set
+	// adapter's model preflight. Mirrors the SDK's identically-named JSON
+	// field, consumed there via transportForAdapter (modelRegistry.ts).
+	AdapterTransports map[string]string `json:"adapter_transports"`
 }
 
-var registry = mustLoad()
+var registry, adapterTransports = mustLoad()
 
-func mustLoad() []ModelDescriptor {
+// closedTransportAdapters is the exact set of adapters whose model preflight
+// consults a transport fact — the Go mirror of the SDK's ADAPTER_MODEL_POLICY
+// "closed" kind entries with a transport check wired in (codex.go, grok.go,
+// gemini_models.go). mustLoad asserts adapter_transports declares exactly
+// this set so a new closed adapter forces a deliberate mapping decision
+// instead of silently falling through.
+var closedTransportAdapters = []string{"codex", "gemini", "gemini-sdk", "grok"}
+
+func mustLoad() ([]ModelDescriptor, map[string]string) {
 	var rf registryFile
 	if err := json.Unmarshal(registryJSON, &rf); err != nil {
 		panic(fmt.Sprintf("model registry: invalid embedded JSON: %v", err))
@@ -204,6 +220,12 @@ func mustLoad() []ModelDescriptor {
 		panic(fmt.Sprintf("model registry: %v", err))
 	}
 	if err := validateAxisFields(rf.Models); err != nil {
+		panic(fmt.Sprintf("model registry: %v", err))
+	}
+	if err := validateTransportsGraduated(rf.Models); err != nil {
+		panic(fmt.Sprintf("model registry: %v", err))
+	}
+	if err := validateAdapterTransports(rf.AdapterTransports); err != nil {
 		panic(fmt.Sprintf("model registry: %v", err))
 	}
 	seen := make(map[string]bool, len(rf.Models))
@@ -226,7 +248,7 @@ func mustLoad() []ModelDescriptor {
 			bands[key] = true
 		}
 	}
-	return rf.Models
+	return rf.Models, rf.AdapterTransports
 }
 
 // validateEffortLevels is the loader-level assert (#578) tying the data
@@ -281,6 +303,73 @@ func validateAxisFields(models []ModelDescriptor) error {
 		}
 	}
 	return nil
+}
+
+// validateTransportsGraduated is the loader-level graduation assert (#600):
+// every NON-DEPRECATED entry must declare at least one transports fact. The
+// additive fail-open behavior ServedByTransport/CheckTransportServed give an
+// absent transport key exists for entries whose reachability genuinely has
+// not been assessed yet — today that is exactly the deprecated openai/google
+// ids (unverified CLI reachability) and the vendor-x-pro fixture (kept
+// deprecated specifically so it still exercises that branch). A non-deprecated
+// entry with NO transports block at all would mean a model still being routed
+// to has never been assessed for reachability on any transport — that must
+// fail LOUD at load time, naming the entry, rather than silently reading as
+// "served" through selection.
+func validateTransportsGraduated(models []ModelDescriptor) error {
+	for _, m := range models {
+		if m.Deprecated {
+			continue
+		}
+		if len(m.Transports) == 0 {
+			return fmt.Errorf(
+				"%s: non-deprecated entry declares no transports block — every non-deprecated "+
+					"entry must state at least one transport's reachability facts (#600); "+
+					"mark it deprecated if reachability is genuinely unassessed, or add transports facts",
+				m.ID,
+			)
+		}
+	}
+	return nil
+}
+
+// validateAdapterTransports is the loader-level assert (#600) on the
+// single-authority adapter→transport mapping: adapter_transports must declare
+// EXACTLY the closed-transport-adapter set (membership, not just a superset —
+// a stale or missing entry is a silent drift risk identical to band
+// uniqueness), and every value must be a member of the closed cli|api set.
+func validateAdapterTransports(table map[string]string) error {
+	seen := make(map[string]bool, len(closedTransportAdapters))
+	for adapter, transport := range table {
+		if transport != TransportCLI && transport != TransportAPI {
+			return fmt.Errorf(
+				"adapter_transports[%q] = %q is not in the closed set cli|api", adapter, transport)
+		}
+		seen[adapter] = true
+	}
+	for _, adapter := range closedTransportAdapters {
+		if !seen[adapter] {
+			return fmt.Errorf(
+				"adapter_transports is missing required closed-set adapter %q", adapter)
+		}
+	}
+	if len(table) != len(closedTransportAdapters) {
+		return fmt.Errorf(
+			"adapter_transports has %d entries, want exactly the %d closed-set adapters %v",
+			len(table), len(closedTransportAdapters), closedTransportAdapters)
+	}
+	return nil
+}
+
+// TransportForAdapter resolves the single-authority transport axis (#600) a
+// CLOSED-set adapter's model preflight must consult — e.g. "gemini-sdk" →
+// "cli", because the Go gemini-sdk adapter genuinely spawns the agentic
+// gemini CLI (see adapter_transports' $schema_note for the full rationale).
+// known=false means adapter is not in the closed-transport-adapter set; OPEN
+// adapters and unrecognized names never had a transport check to make.
+func TransportForAdapter(adapter string) (transport string, known bool) {
+	t, ok := adapterTransports[adapter]
+	return t, ok
 }
 
 // All returns every model in the registry (including deprecated ones, kept for

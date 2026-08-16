@@ -70,17 +70,20 @@ func resolveCodexModel(model string) string {
 // enforcement, #579 AC4. resolveCodexModel remaps deprecated ids to a live
 // replacement before validation (#4018, #4021, #56).
 func knownCodexModels() map[string]bool {
-	known := make(map[string]bool)
-	for _, m := range models.All() {
-		if m.Provider != "openai" || m.Deprecated {
-			continue
-		}
-		if served, knownFact := m.ServedByTransport(models.TransportCLI); knownFact && !served {
-			continue
-		}
-		known[m.ID] = true
+	return knownTransportServedModels(models.All(), "openai", codexTransport())
+}
+
+// codexTransport resolves the single-authority transport axis (#600) the
+// codex adapter's preflight consults. The "codex" entry is a mandatory member
+// of adapter_transports (mustLoad asserts it), so a miss here is a
+// programming error, not a runtime condition — panicking surfaces it at the
+// first call instead of silently mis-gating every codex model.
+func codexTransport() string {
+	t, ok := models.TransportForAdapter("codex")
+	if !ok {
+		panic("model registry: adapter_transports has no entry for \"codex\"")
 	}
-	return known
+	return t
 }
 
 // ValidateCodexModel fails fast when the configured model does not resolve to a
@@ -103,7 +106,7 @@ func ValidateCodexModel(model string) error {
 		return nil
 	}
 	resolved := resolveCodexModel(trimmed)
-	m, ok, err := models.CheckTransportServed("openai", models.TransportCLI, resolved)
+	m, ok, err := models.CheckTransportServed("openai", codexTransport(), resolved)
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,11 @@ import {
   deriveDefaultModelCostRates,
   assertEffortLevelsMatchAuthority,
   assertTransportRatesCarryProvenance,
+  assertNonDeprecatedModelsDeclareTransports,
+  assertAdapterTransportsComplete,
+  CLOSED_TRANSPORT_ADAPTERS,
+  transportForAdapter,
+  mustTransportForAdapter,
 } from "../../src/eval/modelRegistry.js";
 import { EFFORT_LEVELS, ModelDescriptorSchema } from "../../src/eval/modelEvalSchemas.js";
 import { DEFAULT_MODEL_COST_RATES } from "../../src/analysis/types.js";
@@ -325,7 +330,9 @@ describe("model registry — orthogonal axis fields (#578, spike #568 §1/§2)",
 
   it("leaves unverified/pending transport cells unexpressed rather than guessed", () => {
     // Deprecated openai/google entries whose reachability the spike could not
-    // verify, and the fixture entry, carry no transports at all.
+    // verify, and the fixture entry (also deprecated as of #600's graduation
+    // gate — a non-deprecated entry may no longer omit transports entirely;
+    // see the "graduation" describe block below), carry no transports at all.
     for (const id of [
       "gpt-5.2",
       "gpt-5.3-codex",
@@ -334,6 +341,7 @@ describe("model registry — orthogonal axis fields (#578, spike #568 §1/§2)",
       "vendor-x-pro",
     ]) {
       expect(getModelDescriptor(id)?.transports, `${id} transports`).toBeUndefined();
+      expect(getModelDescriptor(id)?.deprecated, `${id} deprecated`).toBe(true);
     }
   });
 
@@ -375,5 +383,103 @@ describe("model registry — orthogonal axis fields (#578, spike #568 §1/§2)",
       readFileSync(resolve(__dirname, "../../src/eval/model-registry.json"), "utf-8")
     ) as { effort_levels: string[] };
     expect(() => assertEffortLevelsMatchAuthority(file.effort_levels)).not.toThrow();
+  });
+});
+
+// ─── Graduation: non-deprecated entries require transports facts (#600) ─────
+
+describe("model registry — transports graduation (#600)", () => {
+  it("assertNonDeprecatedModelsDeclareTransports rejects a non-deprecated entry with no transports block", () => {
+    const base = MODEL_REGISTRY[0];
+    const noFacts = { ...base, id: "no-facts-test", transports: undefined };
+    expect(() => assertNonDeprecatedModelsDeclareTransports([noFacts])).toThrow(/no-facts-test/);
+    expect(() => assertNonDeprecatedModelsDeclareTransports([noFacts])).toThrow(
+      /no transports block/
+    );
+
+    const emptyFacts = { ...base, id: "empty-facts-test", transports: {} };
+    expect(() => assertNonDeprecatedModelsDeclareTransports([emptyFacts])).toThrow(
+      /empty-facts-test/
+    );
+
+    const withFacts = { ...base, id: "has-facts-test", transports: { cli: { served: true } } };
+    expect(() => assertNonDeprecatedModelsDeclareTransports([withFacts])).not.toThrow();
+  });
+
+  it("assertNonDeprecatedModelsDeclareTransports permits a DEPRECATED entry with no transports block", () => {
+    const base = MODEL_REGISTRY[0];
+    const deprecatedNoFacts = {
+      ...base,
+      id: "deprecated-no-facts-test",
+      deprecated: true,
+      transports: undefined,
+    };
+    expect(() => assertNonDeprecatedModelsDeclareTransports([deprecatedNoFacts])).not.toThrow();
+  });
+
+  it("the shipped registry graduates: every non-deprecated entry declares at least one transport fact", () => {
+    // If this ever regressed, loadRegistry() would already have thrown at
+    // module import before this test ran — restated readably.
+    expect(() => assertNonDeprecatedModelsDeclareTransports(MODEL_REGISTRY)).not.toThrow();
+    for (const m of MODEL_REGISTRY) {
+      if (m.deprecated) continue;
+      expect(Object.keys(m.transports ?? {}).length, `${m.id} transports`).toBeGreaterThan(0);
+    }
+  });
+
+  it("vendor-x-pro is the deliberate deprecated-carrier fixture (#600 fixture migration)", () => {
+    // Graduation forbids a non-deprecated entry from omitting transports
+    // entirely, so the deliberate no-transports fixture was flipped to
+    // deprecated:true to keep exercising checkTransportServed's fail-open
+    // branch (modelPreflight.test.ts) without violating the gate.
+    const m = getModelDescriptor("vendor-x-pro", "other");
+    expect(m?.deprecated).toBe(true);
+    expect(m?.transports).toBeUndefined();
+  });
+});
+
+// ─── Single-authority adapter→transport mapping (#600) ──────────────────────
+
+describe("model registry — adapter→transport axis (#600)", () => {
+  it("assertAdapterTransportsComplete requires EXACTLY the closed-transport-adapter set", () => {
+    const complete = { codex: "cli", gemini: "cli", "gemini-sdk": "cli", grok: "cli" } as const;
+    expect(() => assertAdapterTransportsComplete(complete)).not.toThrow();
+
+    const missing = { codex: "cli", gemini: "cli", grok: "cli" } as const;
+    expect(() => assertAdapterTransportsComplete(missing)).toThrow(/adapter_transports/);
+
+    const extra = { ...complete, copilot: "cli" } as const;
+    expect(() => assertAdapterTransportsComplete(extra)).toThrow(/adapter_transports/);
+  });
+
+  it("transportForAdapter/mustTransportForAdapter pin the decided mapping — parity with Go's TestTransportForAdapterPinsTheDecidedMapping", () => {
+    // Hardcoded (not derived) so this suite and the Go suite each
+    // independently pin the same values — the established cross-language
+    // parity pattern in this codebase. An edit to adapter_transports that
+    // nobody updates BOTH pins for fails loud in whichever language runs.
+    const want: Record<(typeof CLOSED_TRANSPORT_ADAPTERS)[number], string> = {
+      codex: "cli",
+      gemini: "cli",
+      "gemini-sdk": "cli",
+      grok: "cli",
+    };
+    for (const adapter of CLOSED_TRANSPORT_ADAPTERS) {
+      expect(transportForAdapter(adapter)).toBe(want[adapter]);
+      expect(mustTransportForAdapter(adapter)).toBe(want[adapter]);
+    }
+  });
+
+  it("gemini-sdk is deliberately pinned to cli, not api, despite its name (#600 judgment call)", () => {
+    expect(transportForAdapter("gemini-sdk")).toBe("cli");
+  });
+
+  it("transportForAdapter returns undefined for OPEN adapters and unknown names", () => {
+    expect(transportForAdapter("claude-headless")).toBeUndefined();
+    expect(transportForAdapter("ollama")).toBeUndefined();
+    expect(transportForAdapter("carrier-pigeon")).toBeUndefined();
+  });
+
+  it("mustTransportForAdapter throws for an adapter outside the closed-transport-adapter set", () => {
+    expect(() => mustTransportForAdapter("claude-headless")).toThrow(/adapter_transports/);
   });
 });
