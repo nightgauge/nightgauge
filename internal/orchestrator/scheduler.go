@@ -3732,6 +3732,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if budgetDecision.ShouldTerminate {
 			log.Printf("#%d: pipeline budget exceeded (%d tokens > %d ceiling, $%.4f accumulated, mode=%s) — aborting",
 				item.Number, budgetDecision.UsedTokens, budgetDecision.CeilingTokens, runtime.TotalCostUSD, budgetDecision.PerformanceMode)
+			// Enter the stage before failing it (mirrors the branch-fork
+			// preflight below). Nothing is dispatched — the point is that no
+			// tokens are spent — but every snap.Stage-keyed reader (IPC
+			// terminal-notify, the exit-record fallback, outcome recording,
+			// autonomous reporting) derives "what went wrong" from the
+			// CURRENT stage: without this, StageErrors keys the budget
+			// refusal under the refused stage while snap.Stage still names
+			// the PREVIOUS one, and every one of those readers misses it.
+			runtime.BeginStage(stage)
 			runtime.SetStageError(stage, budgetDecision.Reason)
 			s.emitStateChanged(item.Repo, item.Number, runtime)
 			// Issue #3001: record the terminal kind so the V3 record names what
