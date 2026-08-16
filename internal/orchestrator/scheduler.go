@@ -6732,6 +6732,40 @@ func getDiffLineCount(workspaceRoot string) int {
 	return ins + del
 }
 
+// cleanupMergedRemoteBranch deletes a just-merged PR's remote head branch
+// after the deterministic pr-merge path (Issue #589). The deterministic
+// runner's Merge call no longer passes `gh pr merge --delete-branch` — that
+// flag shells `git checkout <base>` locally, which fails from a linked
+// worktree because the primary checkout already holds it (the punt this
+// issue fixes). Cleanup moves here instead, through the common-dir-aware git
+// service's BranchDeleteRemote: a push-based ref deletion that needs no
+// checkout at all, so it works unchanged from a linked worktree.
+//
+// Best-effort and non-blocking, matching every other post-merge branch
+// cleanup in this codebase (e.g. epic.go's BranchCleanup calls): the merge
+// itself is already confirmed by the time this runs, and a repo with
+// delete_branch_on_merge enabled (the onboarding-recommended default, see
+// `nightgauge repo enable-delete-branch`) will usually have deleted the
+// branch server-side already, so "already gone" is an expected, ignorable
+// outcome here — never a reason to fail a stage whose merge already landed.
+func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefName string) {
+	if headRefName == "" {
+		return
+	}
+	gitSvc, err := git.NewService(workdir)
+	if err != nil {
+		log.Printf("#%d: pr-merge deterministic path: remote branch cleanup for %s skipped — git service unavailable: %v",
+			issueNumber, headRefName, err)
+		return
+	}
+	if err := gitSvc.BranchDeleteRemote(headRefName); err != nil {
+		log.Printf("#%d: pr-merge deterministic path: remote branch cleanup for %s failed (likely already deleted server-side): %v",
+			issueNumber, headRefName, err)
+		return
+	}
+	log.Printf("#%d: pr-merge deterministic path: deleted remote branch %s after merge", issueNumber, headRefName)
+}
+
 // ensureEpicBranchForItem creates the epic base branch when dispatching the first
 // sub-issue of an epic. It is non-blocking: errors are logged and do not abort
 // the pipeline. The TypeScript enforceEpicBaseBranch() will fall back to main
@@ -7136,6 +7170,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 				SchemaVersion: "1",
 			})
 		}
+		s.cleanupMergedRemoteBranch(item.Number, stageWS, detResult.HeadRefName)
 		return true, detResult.PRState, false
 	}
 

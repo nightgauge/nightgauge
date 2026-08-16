@@ -79,6 +79,12 @@ type PRMergeResult struct {
 	PRState    string
 	Reason     string
 	DurationMs int64
+	// HeadRefName is the PR's head branch, populated whenever Path is
+	// PathMerged. The merge call itself never deletes it (Issue #589 — see
+	// execGhClient.Merge); callers that want remote-branch cleanup after a
+	// deterministic merge use this to drive it themselves through a
+	// common-dir-aware git service, without shelling to `gh` a second time.
+	HeadRefName string
 }
 
 // PRMergeRunner is the contract the scheduler uses to invoke the deterministic
@@ -97,6 +103,7 @@ type PRViewSnapshot struct {
 	MergeStateStatus  string             // CLEAN | DIRTY | BLOCKED | UNSTABLE | BEHIND | DRAFT | HAS_HOOKS | UNKNOWN
 	ReviewDecision    string             // APPROVED | REVIEW_REQUIRED | CHANGES_REQUESTED | "" (no review required)
 	StatusCheckRollup []PRStatusCheckRow // CI / status checks
+	HeadRefName       string             // the PR's head branch — carried through to PRMergeResult on merge
 }
 
 // PRStatusCheckRow is the projection of one GitHub statusCheckRollup entry.
@@ -286,14 +293,17 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if !decision.ShouldMerge {
 		// Already merged or punt path — no merge call.
 		path := PathPunt
+		headRef := ""
 		if snap.State == "MERGED" {
 			path = PathMerged
+			headRef = snap.HeadRefName
 		}
 		return finish(PRMergeResult{
-			Path:     path,
-			PRNumber: prNumber,
-			PRState:  snap.State,
-			Reason:   decision.Reason,
+			Path:        path,
+			PRNumber:    prNumber,
+			PRState:     snap.State,
+			Reason:      decision.Reason,
+			HeadRefName: headRef,
 		}, nil)
 	}
 
@@ -333,11 +343,19 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		}, nil)
 	}
 	if postSnap.State == "MERGED" {
+		headRef := postSnap.HeadRefName
+		if headRef == "" {
+			// Some eventual-consistency windows return a leaner payload on the
+			// first post-merge snapshot; fall back to the pre-merge snapshot's
+			// head ref, which is the same branch by construction.
+			headRef = snap.HeadRefName
+		}
 		return finish(PRMergeResult{
-			Path:     PathMerged,
-			PRNumber: prNumber,
-			PRState:  "MERGED",
-			Reason:   ReasonCleanMerged,
+			Path:        PathMerged,
+			PRNumber:    prNumber,
+			PRState:     "MERGED",
+			Reason:      ReasonCleanMerged,
+			HeadRefName: headRef,
 		}, nil)
 	}
 
@@ -581,7 +599,7 @@ func (c *execGhClient) withWorkdir(dir string) ghClient {
 
 func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, error) {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "view", fmt.Sprintf("%d", prNumber),
-		"--json", "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision")
+		"--json", "state,statusCheckRollup,mergeable,mergeStateStatus,reviewDecision,headRefName")
 	if c.workdir != "" {
 		cmd.Dir = c.workdir
 	}
@@ -594,6 +612,7 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 		Mergeable         string `json:"mergeable"`
 		MergeStateStatus  string `json:"mergeStateStatus"`
 		ReviewDecision    string `json:"reviewDecision"`
+		HeadRefName       string `json:"headRefName"`
 		StatusCheckRollup []struct {
 			Name       string `json:"name"`
 			Conclusion string `json:"conclusion"`
@@ -607,6 +626,7 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 		Mergeable:        raw.Mergeable,
 		MergeStateStatus: raw.MergeStateStatus,
 		ReviewDecision:   raw.ReviewDecision,
+		HeadRefName:      raw.HeadRefName,
 	}
 	for _, row := range raw.StatusCheckRollup {
 		snap.StatusCheckRollup = append(snap.StatusCheckRollup, PRStatusCheckRow{
@@ -617,9 +637,31 @@ func (c *execGhClient) View(ctx context.Context, prNumber int) (PRViewSnapshot, 
 	return snap, nil
 }
 
+// Merge issues a server-side squash merge via `gh pr merge --squash`.
+//
+// Deliberately NOT `--delete-branch` (Issue #589). Every pipeline run
+// executes from a linked worktree checked out on the PR's own head branch.
+// `gh pr merge --delete-branch` merges via the API (fine, no local git
+// needed) and THEN, because it can't delete the branch out from under the
+// caller's own checkout, switches the LOCAL repo to the base branch first —
+// i.e. it shells `git checkout main` in cwd. In a linked worktree that
+// collides with the primary checkout, which already holds `main`
+// (`fatal: 'main' is already used by worktree at '<primary checkout>'`), and
+// gh exits non-zero even though the merge itself already landed. That
+// turned every worktree-mode merge into a punt to the LLM path, which then
+// discovered the PR was already merged and did nothing but spend tokens
+// confirming it.
+//
+// Branch cleanup is not lost by dropping the flag — it just moves to callers
+// that can do it without a checkout: DeterministicRunner reports the merged
+// PR's HeadRefName so the orchestrator can delete the remote branch through
+// the common-dir-aware git service (a plain push-based ref deletion, which
+// never needs any branch checked out), and the LOCAL branch/worktree is
+// reclaimed by the post-merge worktree sweep once the worktree is no longer
+// active.
 func (c *execGhClient) Merge(ctx context.Context, prNumber int) error {
 	cmd := exec.CommandContext(ctx, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber),
-		"--squash", "--delete-branch")
+		"--squash")
 	if c.workdir != "" {
 		cmd.Dir = c.workdir
 	}

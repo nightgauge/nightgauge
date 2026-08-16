@@ -2,14 +2,26 @@
 
 > Status: shipped in PR #3264.
 >
-> Predecessors: #3001, #3259, #3260.
+> Predecessors: #3001, #3259, #3260. Worktree fix: #589.
 
 The `pr-merge` pipeline stage runs in one of two modes:
 
 1. **Deterministic path** (default) — a Go-native stage runner that consults
    GitHub via `gh pr view`, decides whether the PR is safe to merge, and
-   issues `gh pr merge --squash --delete-branch` directly. Zero LLM tokens,
-   zero subagent processes, completes in seconds.
+   issues `gh pr merge --squash` directly. Zero LLM tokens, zero subagent
+   processes, completes in seconds. Deliberately **not** `--delete-branch`
+   (Issue #589): every pipeline run executes from a linked worktree checked
+   out on the PR's own head branch, and `gh pr merge --delete-branch` shells
+   `git checkout <base>` locally before it can delete that branch — which
+   collides with the primary checkout's claim on `main`
+   (`fatal: 'main' is already used by worktree at '<primary checkout>'`) and
+   turned every worktree-mode merge into a punt to the LLM path even though
+   the merge itself had already landed. Branch cleanup after a deterministic
+   merge instead goes through the common-dir-aware git service
+   (`git.Service.BranchDeleteRemote`, #540) — a push-based remote deletion
+   that needs no checkout — while local branch/worktree removal is the
+   post-merge worktree sweep's job (it runs once the worktree is no longer
+   active, so it can check out `main` safely).
 2. **LLM path** (fallback) — the existing `nightgauge-pr-merge` skill
    runs via the normal `StageRunner` → Claude pipeline. Reached only when the
    deterministic runner punts.

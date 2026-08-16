@@ -336,8 +336,15 @@ branch that was merged reads "differs" once base evolves those files. A branch
 merged via squash PR read `6 files changed, 6 insertions(+), 292 deletions(-)`
 sixteen days on. Large deletion counts mean base is ahead and the branch is
 stale, not that the branch holds work. The script therefore also accepts a
-merged PR whose **head SHA equals the branch tip** — proof the branch is
-precisely what merged, however far base has moved since.
+merged PR whose head commit **contains the branch tip** — either the head SHA
+equals the tip, or the tip is one of that commit's own parents — proof the
+branch is precisely what merged, however far base has moved since. The parent
+case matters for a branch that was also `gh pr update-branch`'d: update-branch
+creates a merge commit on the PR's REMOTE head whose parents are exactly the
+branch's previous tip and base at merge time, and that commit is typically
+never fetched into the local branch ref — so a branch that fully landed can
+still read as content-differs against a base that evolved the same files after
+the branch was cut (#593).
 
 **Do not substitute a hand-written `git diff`.** Both obvious forms report
 "nothing unmerged" on branches that carry real work:

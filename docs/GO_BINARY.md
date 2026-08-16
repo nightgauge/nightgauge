@@ -1024,10 +1024,10 @@ swept twice and the blind pass ran first. A root that resolves to no main checko
 Each reclaim reports the **door** that authorized it, because the sweep has two
 reclaim rules and only one of them compares anything (#410):
 
-| Door                      | What authorized the removal                                                                                                                            |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `content-merged`          | Path-restricted tip-vs-tip of the branch's own files was empty (or a wired merged-PR lookup matched the tip SHA). Never a bare full-tree two-dot diff. |
-| `default-branch-checkout` | A clean pipeline worktree parked **on** the default branch. **No content comparison happens or can**; the branch is preserved.                         |
+| Door                      | What authorized the removal                                                                                                                                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `content-merged`          | Path-restricted tip-vs-tip of the branch's own files was empty (or a wired merged-PR lookup found the tip contained in the merged PR's head — SHA-equal, or one of the head commit's own parents). Never a bare full-tree two-dot diff. |
+| `default-branch-checkout` | A clean pipeline worktree parked **on** the default branch. **No content comparison happens or can**; the branch is preserved.                                                                                                          |
 
 Before #410 both doors logged "content already on `<base>`", so the only
 operator-visible record of the more destructive removal asserted a check that
@@ -1049,9 +1049,17 @@ The sweep's `content-merged` door is the same algorithm as
    files). Empty list + not an ancestor is UNKNOWN (not merged) — fail-closed.
 3. Content: `git diff --stat base branch -- <files…>` with files as separate
    argv (never one shell word). Empty stat means merged.
-4. Optional fail-open second door: when a `MergedPRLookup` is wired and a
-   merged PR's head SHA equals the branch tip, residual on those files is
-   "base moved on", not unmerged work. Missing auth / no PR / SHA mismatch
+4. Optional fail-open second door: when a `MergedPRLookup` is wired and it
+   reports the merged PR's head commit CONTAINS the branch tip (head SHA
+   equals the tip, or the tip is one of the head commit's own parents),
+   residual on those files is "base moved on", not unmerged work. The parent
+   case is decisive for a branch that was also `gh pr update-branch`'d before
+   its squash merge (#593): update-branch creates a merge commit on the PR's
+   REMOTE head whose parents are `[previous branch tip, base at merge
+time]`, and that commit is never fetched into the local branch ref the
+   sweep reads — a content diff of the stale local tip against a base that
+   has since evolved the SAME files the branch touched reads as unmerged even
+   though the branch fully landed. Missing auth / no PR / no containment
    leaves the branch unmerged. The CLI does not wire this lookup today.
 
 **The sweep fetches `origin/<default>` once at the start of

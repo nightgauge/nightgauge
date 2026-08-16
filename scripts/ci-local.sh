@@ -63,6 +63,15 @@ if [ -f go.mod ]; then
     bash -c '! gofmt -l ./internal ./cmd | grep .'
 fi
 
+# 1b. branch-merged-check.sh regression suite — the shell-side decision
+#     procedure `git branch -D` reclaim decisions defer to (AGENTS.md § Clean
+#     up on merge). Kept aligned with the Go sweep's own ancestry-acceptance
+#     door (#593).
+if [ -f scripts/test-branch-merged-check.sh ]; then
+  run_step "branch-merged-check.sh regression suite" \
+    bash scripts/test-branch-merged-check.sh
+fi
+
 # 2. Generated files must be in sync
 if [ -f Makefile ] && grep -q '^generate-ipc-client:' Makefile; then
   run_step "make generate-ipc-client" make generate-ipc-client

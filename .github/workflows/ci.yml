@@ -65,6 +65,12 @@ jobs:
       # unrelated pre-existing races this change neither owns nor worsens.
       - name: Test (race, orchestrator)
         run: go test -race -count=1 ./internal/orchestrator/
+      # The shell-side decision procedure AGENTS.md § Clean up on merge
+      # defers to for `git branch -D` calls, kept aligned with the Go sweep's
+      # own ancestry-acceptance door (#593). No npm/node needed, so it runs
+      # here rather than in lint.yml.
+      - name: branch-merged-check.sh regression suite
+        run: bash scripts/test-branch-merged-check.sh
 
   # The Node suite (~15.5k tests) is split into two parallel jobs so it fits the
   # window on 2-core runners. `npm ci` needs no registry auth: the tree vendors

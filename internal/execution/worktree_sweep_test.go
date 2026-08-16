@@ -222,11 +222,16 @@ func TestSweepMergedWorktrees_ReclaimsViaMergedPRLookupWhenBaseRewroteFiles(t *t
 
 	res, err = SweepMergedWorktrees(WorktreeSweepOptions{
 		RepoRoot: f.root,
-		MergedPRLookup: func(branch, gotTip string) (string, bool) {
-			if branch != "fix/586-pr-door" || gotTip != tip {
-				return "", false
+		// #593: the lookup contract changed from (branch, tip)->(headSHA, ok)
+		// to (branch)->(headSHA, parents, ok) so ancestry-containment (tip is
+		// one of head's parents), not just SHA equality, can authorize this
+		// door. The equal-SHA case this test exercises is still accepted —
+		// headSHA == tip is the first branch lookupMergedPR checks.
+		MergedPRLookup: func(branch string) (string, []string, bool) {
+			if branch != "fix/586-pr-door" {
+				return "", nil, false
 			}
-			return tip, true
+			return tip, nil, true
 		},
 	})
 	if err != nil {
@@ -238,6 +243,119 @@ func TestSweepMergedWorktrees_ReclaimsViaMergedPRLookupWhenBaseRewroteFiles(t *t
 	}
 	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
 		t.Errorf("Door = %q, want %q", got, ReclaimContentMerged)
+	}
+}
+
+// TestSweepMergedWorktrees_ReclaimsViaAncestryWhenUpdateBranchNeverReachedLocal
+// is the #593 regression: branch B is cut BEFORE another PR (P) lands on
+// main and evolves a file B also touches; B's PR is `gh pr update-branch`'d
+// and squash-merged. update-branch creates its merge commit on the PR's
+// REMOTE head — the pipeline's local worktree never fetches it, so the local
+// branch ref stays at its pre-update-branch tip forever. mergedIntoBase's
+// content diff then compares that stale tip's copy of the shared file
+// (missing P's edit) against main's post-squash copy (carrying both edits)
+// and correctly reports them as different — content alone cannot tell "tip
+// is missing P's later change" apart from "tip carries unmerged work" here.
+// Only the forge knows the real merged PR head and its parents.
+func TestSweepMergedWorktrees_ReclaimsViaAncestryWhenUpdateBranchNeverReachedLocal(t *testing.T) {
+	f := newSweepFixture(t)
+	// Establish the shared file before the branch is cut, so both B and P can
+	// edit different regions of it without conflicting.
+	f.commitToMain("shared.txt", "line1\nline2\nline3\nline4\nline5\n")
+
+	wt := f.addWorktree(585, "fix/585-cost-stamps")
+	writeFile(t, filepath.Join(wt, "shared.txt"), "line1\nline2\nline3\nline4\nline5-edited-by-B\n")
+	run(t, wt, "git", "add", "shared.txt")
+	run(t, wt, "git", "commit", "-m", "work: cost stamps")
+	// tip is the LOCAL branch ref's commit — it never advances past this,
+	// because update-branch happens on the forge side, not in this worktree.
+	tip := strings.TrimSpace(mustGit(t, wt, "rev-parse", "HEAD"))
+
+	// P — an unrelated PR — lands directly on main, evolving a DIFFERENT
+	// region of the same shared file after B was cut.
+	f.commitToMain("shared.txt", "line1-edited-by-P\nline2\nline3\nline4\nline5\n")
+
+	// Simulate `gh pr update-branch`: build the real 3-way merge commit GitHub
+	// would have produced on the PR's remote head, WITHOUT touching
+	// refs/heads/fix/585-cost-stamps — a detached scratch worktree keeps the
+	// pipeline's actual branch ref untouched, which is the whole bug: local
+	// git has no ref that ever points at this commit.
+	scratchWt := filepath.Join(t.TempDir(), "pr-remote-head")
+	run(t, f.root, "git", "worktree", "add", "--detach", scratchWt, tip)
+	run(t, scratchWt, "git", "merge", "origin/main", "-m", "merge origin/main (update-branch)")
+	prHead := strings.TrimSpace(mustGit(t, scratchWt, "rev-parse", "HEAD"))
+	prParents := strings.Fields(strings.TrimSpace(mustGit(t, f.root, "log", "-1", "--format=%P", prHead)))
+	run(t, f.root, "git", "worktree", "remove", scratchWt, "--force")
+	if len(prParents) != 2 {
+		t.Fatalf("expected the update-branch merge commit to have 2 parents, got %v", prParents)
+	}
+	found := false
+	for _, p := range prParents {
+		if p == tip {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("fixture bug: local branch tip %s is not among the simulated PR head's parents %v", tip, prParents)
+	}
+
+	// GitHub's squash merge applies the PR head's TREE (both edits combined)
+	// as one new commit on main — not the local branch's tree.
+	run(t, f.root, "git", "merge", "--squash", prHead)
+	run(t, f.root, "git", "commit", "-m", "squash: fix/585-cost-stamps")
+	run(t, f.root, "git", "push", "origin", "main")
+	run(t, f.root, "git", "fetch", "origin")
+
+	// Arm the trap: content diff alone must still read this as unmerged,
+	// exactly like the live evidence in #593.
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	assertSkipped(t, res, wt, SkipUnmergedContent)
+
+	res, err = SweepMergedWorktrees(WorktreeSweepOptions{
+		RepoRoot: f.root,
+		MergedPRLookup: func(branch string) (string, []string, bool) {
+			if branch != "fix/585-cost-stamps" {
+				return "", nil, false
+			}
+			return prHead, prParents, true
+		},
+	})
+	if err != nil {
+		t.Fatalf("sweep with ancestry lookup: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].Branch != "fix/585-cost-stamps" {
+		t.Fatalf("expected ancestry-containment to reclaim the branch, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if got := res.Reclaimed[0].Door; got != ReclaimContentMerged {
+		t.Errorf("Door = %q, want %q", got, ReclaimContentMerged)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory still on disk at %s", wt)
+	}
+}
+
+func TestBranchHeldByWorktree(t *testing.T) {
+	f := newSweepFixture(t)
+	wt := f.addWorktree(587, "fix/587-held")
+
+	path, held, err := BranchHeldByWorktree(f.root, "fix/587-held")
+	if err != nil {
+		t.Fatalf("BranchHeldByWorktree: %v", err)
+	}
+	if !held || path != wt {
+		t.Fatalf("BranchHeldByWorktree = (%q, %v), want (%q, true)", path, held, wt)
+	}
+
+	_, held, err = BranchHeldByWorktree(f.root, "fix/no-such-branch")
+	if err != nil {
+		t.Fatalf("BranchHeldByWorktree: %v", err)
+	}
+	if held {
+		t.Fatal("a branch no worktree holds must report held=false")
 	}
 }
 
