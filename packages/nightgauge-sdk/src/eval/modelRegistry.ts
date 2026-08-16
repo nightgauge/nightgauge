@@ -27,6 +27,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import {
   EFFORT_LEVELS,
+  EffortLevelSchema,
   ModelDescriptorSchema,
   THINKING_DISABLE_NEVER,
   type Behavior,
@@ -54,17 +55,69 @@ const UNKNOWN_MODEL_RATES = {
   cache_creation_1h: 0,
 } as const;
 
-/** Shape of the canonical registry file. Extra top-level keys (e.g. `$schema_note`) are ignored. */
-const RegistryFileSchema = z
+/**
+ * Shape of the canonical registry file. Extra top-level keys (e.g.
+ * `$schema_note`) are ignored. Exported so the extension's packaging test can
+ * parse the packaged `dist/model-registry.json` through the EXACT schema the
+ * loader uses — a stale dist copy plus this strict schema is a load-time
+ * crash, so skew must be a red test instead (#436).
+ */
+export const RegistryFileSchema = z
   .object({
     version: z.string(),
+    /**
+     * The effort ladder as DATA (#578) — the single data authority both
+     * languages read. Must equal `EFFORT_LEVELS` exactly (order and
+     * membership); {@link assertEffortLevelsMatchAuthority} throws at load
+     * otherwise.
+     */
+    effort_levels: z.array(EffortLevelSchema),
     models: z.array(ModelDescriptorSchema).min(1),
   })
   .passthrough();
 
+/**
+ * Loader-level assert (#578): the registry's `effort_levels` declaration must
+ * equal the compile-time authority {@link EFFORT_LEVELS} exactly — order as
+ * much as membership, because the ladder is ascending reasoning depth and the
+ * clamps index against it. Two authorities that can disagree are how the
+ * pre-#394 vocabulary silently dropped `max`.
+ */
+export function assertEffortLevelsMatchAuthority(effortLevels: readonly string[]): void {
+  const authority = EFFORT_LEVELS as readonly string[];
+  const matches =
+    effortLevels.length === authority.length && authority.every((l, i) => effortLevels[i] === l);
+  if (!matches) {
+    throw new Error(
+      `model-registry.json: effort_levels ${JSON.stringify(effortLevels)} must equal ` +
+        `EFFORT_LEVELS ${JSON.stringify(authority)} exactly (order and membership, #394/#578)`
+    );
+  }
+}
+
+/**
+ * Loader-level assert (#578): a per-transport rate card without provenance is
+ * an unattributable figure — `rate_provenance` is mandatory wherever
+ * transport `rates` appear, the same pattern as the band-uniqueness throw.
+ */
+export function assertTransportRatesCarryProvenance(models: readonly ModelDescriptor[]): void {
+  for (const m of models) {
+    for (const [transport, facts] of Object.entries(m.transports ?? {})) {
+      if (facts?.rates && !facts.rate_provenance) {
+        throw new Error(
+          `model-registry.json: ${m.id} transports.${transport} declares rates without ` +
+            `rate_provenance — every transport rate card must state where its figures came from`
+        );
+      }
+    }
+  }
+}
+
 function loadRegistry(): ModelDescriptor[] {
   const raw = readFileSync(resolve(__dirname, "model-registry.json"), "utf-8");
   const parsed = RegistryFileSchema.parse(JSON.parse(raw));
+  assertEffortLevelsMatchAuthority(parsed.effort_levels);
+  assertTransportRatesCarryProvenance(parsed.models);
   const ids = new Set<string>();
   const bands = new Set<string>();
   for (const m of parsed.models) {

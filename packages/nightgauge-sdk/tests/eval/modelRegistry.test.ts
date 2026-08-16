@@ -8,6 +8,8 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   MODEL_REGISTRY,
   activeModels,
@@ -17,8 +19,10 @@ import {
   isKnownModel,
   computeCostUsd,
   deriveDefaultModelCostRates,
+  assertEffortLevelsMatchAuthority,
+  assertTransportRatesCarryProvenance,
 } from "../../src/eval/modelRegistry.js";
-import { ModelDescriptorSchema } from "../../src/eval/modelEvalSchemas.js";
+import { EFFORT_LEVELS, ModelDescriptorSchema } from "../../src/eval/modelEvalSchemas.js";
 import { DEFAULT_MODEL_COST_RATES } from "../../src/analysis/types.js";
 
 describe("model registry — integrity", () => {
@@ -267,5 +271,109 @@ describe("model registry — derived DEFAULT_MODEL_COST_RATES (regression guard)
 
   it("the analysis DEFAULT_MODEL_COST_RATES export is the derived table", () => {
     expect(DEFAULT_MODEL_COST_RATES).toEqual(deriveDefaultModelCostRates());
+  });
+});
+
+describe("model registry — orthogonal axis fields (#578, spike #568 §1/§2)", () => {
+  it("declares the effort ladder as data, equal to EFFORT_LEVELS exactly", () => {
+    const file = JSON.parse(
+      readFileSync(resolve(__dirname, "../../src/eval/model-registry.json"), "utf-8")
+    ) as { effort_levels: string[] };
+    expect(file.effort_levels).toEqual([...EFFORT_LEVELS]);
+  });
+
+  it("pins the measured grok CLI catalog facts (M-cat, 2026-08-15)", () => {
+    for (const [id, served] of [
+      ["grok-4.6", true],
+      ["grok-4.5", true],
+      ["grok-build-0.1", false],
+    ] as const) {
+      const m = getModelDescriptor(id);
+      expect(m, `${id} missing from registry`).toBeDefined();
+      const cli = m?.transports?.cli;
+      expect(cli, `${id} declares no cli transport facts`).toBeDefined();
+      expect(cli?.served, `${id} cli served`).toBe(served);
+      expect(cli?.verified).toBe("2026-08-15");
+      expect(cli?.evidence, `${id} carries a verified date but no evidence`).toBeTruthy();
+      // The xai api transport is pending #553; pending stays unexpressed.
+      expect(m?.transports?.api, `${id} guessed an api transport fact`).toBeUndefined();
+    }
+  });
+
+  it("states grok-build-0.1's #532 unreachability as data, not via deprecated", () => {
+    // served:false means "exists at the provider, unreachable through this
+    // transport" — the fact previously smuggled through `deprecated: true`.
+    expect(getModelDescriptor("grok-build-0.1")?.transports?.cli?.served).toBe(false);
+  });
+
+  it("records each rate card's provenance per the spike inventory", () => {
+    const expected: Record<string, string> = {
+      "grok-4.6": "measured",
+      "grok-4.5": "measured",
+      "grok-build-0.1": "list",
+      "gpt-4o-mini": "subscription",
+      "gpt-4o": "subscription",
+      "claude-sonnet-4.5": "subscription",
+      "gpt-5.3-codex-spark": "placeholder",
+      "vendor-x-pro": "placeholder",
+    };
+    for (const m of MODEL_REGISTRY) {
+      // Everything not called out above transcribes a vendor sheet: "list".
+      expect(m.rate_provenance, `${m.id} rate_provenance`).toBe(expected[m.id] ?? "list");
+    }
+  });
+
+  it("leaves unverified/pending transport cells unexpressed rather than guessed", () => {
+    // Deprecated openai/google entries whose reachability the spike could not
+    // verify, and the fixture entry, carry no transports at all.
+    for (const id of [
+      "gpt-5.2",
+      "gpt-5.3-codex",
+      "gpt-5.1-codex-mini",
+      "gemini-2.0-flash",
+      "vendor-x-pro",
+    ]) {
+      expect(getModelDescriptor(id)?.transports, `${id} transports`).toBeUndefined();
+    }
+  });
+
+  it("assertEffortLevelsMatchAuthority requires exact order and membership", () => {
+    expect(() => assertEffortLevelsMatchAuthority([...EFFORT_LEVELS])).not.toThrow();
+    expect(() => assertEffortLevelsMatchAuthority([])).toThrow(/effort_levels/);
+    expect(() => assertEffortLevelsMatchAuthority(["low", "medium", "high", "xhigh"])).toThrow();
+    expect(() =>
+      assertEffortLevelsMatchAuthority(["low", "medium", "xhigh", "high", "max"])
+    ).toThrow();
+    expect(() => assertEffortLevelsMatchAuthority([...EFFORT_LEVELS, "ultra"])).toThrow();
+  });
+
+  it("assertTransportRatesCarryProvenance rejects an unattributed transport rate card", () => {
+    const base = MODEL_REGISTRY[0];
+    const withProvenance = {
+      ...base,
+      transports: {
+        cli: { served: true, rates: { input: 1, output: 2 }, rate_provenance: "measured" as const },
+      },
+    };
+    const withoutProvenance = {
+      ...base,
+      transports: { cli: { served: true, rates: { input: 1, output: 2 } } },
+    };
+    expect(() => assertTransportRatesCarryProvenance([withProvenance])).not.toThrow();
+    expect(() => assertTransportRatesCarryProvenance([withoutProvenance])).toThrow(
+      /rates without.*rate_provenance/s
+    );
+    // Rate-less transport facts need no provenance — they inherit the top-level card.
+    expect(() =>
+      assertTransportRatesCarryProvenance([{ ...base, transports: { cli: { served: true } } }])
+    ).not.toThrow();
+  });
+
+  it("the shipped data passes both loader asserts (the module loaded proves it, restated readably)", () => {
+    expect(() => assertTransportRatesCarryProvenance(MODEL_REGISTRY)).not.toThrow();
+    const file = JSON.parse(
+      readFileSync(resolve(__dirname, "../../src/eval/model-registry.json"), "utf-8")
+    ) as { effort_levels: string[] };
+    expect(() => assertEffortLevelsMatchAuthority(file.effort_levels)).not.toThrow();
   });
 });

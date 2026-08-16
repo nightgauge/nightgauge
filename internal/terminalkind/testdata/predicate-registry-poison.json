@@ -47,6 +47,27 @@
         "cache_creation_5m": 4.0,
         "cache_creation_1h": 5.0
       },
+      "rate_provenance": "zqxsentinel-rate-provenance",
+      "transports": {
+        "cli": {
+          "served": true,
+          "verified": "zqxsentinel-cli-verified",
+          "evidence": "zqxsentinel-cli-evidence",
+          "rates": {
+            "input": 6.0,
+            "output": 7.0,
+            "cache_read": 8.0,
+            "cache_creation_5m": 9.0,
+            "cache_creation_1h": 10.0
+          },
+          "rate_provenance": "zqxsentinel-cli-rate-provenance"
+        },
+        "api": {
+          "served": false,
+          "verified": "zqxsentinel-api-verified",
+          "evidence": "zqxsentinel-api-evidence"
+        }
+      },
       "supported_efforts": ["zqxsentinel-supported-effort"],
       "context_window": 123456,
       "deprecated": false,

@@ -139,10 +139,20 @@ export {
   type Propensity,
   type PropensityLevel,
   type ThinkingDisableLimit,
+  // Orthogonal axis fields (registry-axis-schema, epic #567 / #578)
+  TRANSPORTS,
+  TransportSchema,
+  RATE_PROVENANCES,
+  RateProvenanceSchema,
+  TransportFactsSchema,
+  type Transport,
+  type RateProvenance,
+  type TransportFacts,
 } from "./modelEvalSchemas.js";
 
 export {
   MODEL_REGISTRY,
+  RegistryFileSchema,
   activeModels,
   getModelDescriptor,
   resolveModelForAdapter,
@@ -153,6 +163,8 @@ export {
   getModelBehavior,
   getModelPropensity,
   thinkingDisableConflict,
+  assertEffortLevelsMatchAuthority,
+  assertTransportRatesCarryProvenance,
   type TokenCounts,
 } from "./modelRegistry.js";
 
