@@ -622,6 +622,16 @@ type ModelRoutingConfig struct {
 	// Mirrors getModelRoutingMode in
 	// packages/nightgauge-vscode/src/utils/resolvers/modelResolver.ts.
 	Mode string `json:"mode,omitempty" yaml:"mode,omitempty"`
+
+	// UseEvalRecommendations opts routing into the eval advisor's
+	// materialized advice file (.nightgauge/model-evals/routing-advice.json,
+	// #581 / spike #568 §4.2). Default FALSE — the conservative rollout: with
+	// the key off (or no advice file, or no advisable evidence) the axis
+	// query alone decides, which reproduces pre-advice behavior exactly.
+	// Advice re-picks only WITHIN the candidate set and the stage's
+	// routed-tier envelope. Mirrors use_eval_recommendations in the TS
+	// ModelRoutingConfigSchema.
+	UseEvalRecommendations bool `json:"useEvalRecommendations,omitempty" yaml:"use_eval_recommendations,omitempty"`
 }
 
 type Config struct {

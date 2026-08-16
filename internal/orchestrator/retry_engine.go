@@ -26,12 +26,20 @@ type RetryConfig struct {
 }
 
 // DefaultRetryConfig returns safe default retry configuration.
+//
+// ModelLadder derives from the selection query (#581): membership comes from
+// the registry (a band with no live anthropic model is no escalation target),
+// order from the band ladder, and the frontier exclusion from the
+// routing.EscalationCeilingBand policy — replacing the hand-inlined
+// ["haiku", "sonnet", "opus"] triplet whose fable exclusion drifted per-site.
+// The ladder speaks the band vocabulary because that is the dispatch
+// currency (#340); with today's registry it is exactly [haiku sonnet opus].
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxBacktracks:          2,
 		MaxEscalationsPerStage: 1,
 		OscillationDetection:   true,
-		ModelLadder:            []string{"haiku", "sonnet", "opus"},
+		ModelLadder:            routing.EscalationLadder("anthropic"),
 		MaxConflictRedispatch:  2,
 	}
 }
