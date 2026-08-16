@@ -173,10 +173,9 @@ if [ -f scripts/check-md-links.sh ]; then
 fi
 
 # 11. Drift-gate self-test — proves the mirror gate below still fails closed
-#     rather than passing vacuously, the defect it was created to fix (#539).
-#     Runs BEFORE the gate for the same reason lint.yml orders them that way:
-#     the suite works entirely in throwaway temp repos, so it is safe anywhere,
-#     while the gate must stay last. Paired with 11b as 5b is paired with 5.
+#     rather than passing vacuously, the defect it was created to fix (#539),
+#     and that it no longer goes red on a dirty tree it has no quarrel with
+#     (#546). Paired with 11b as 5b is paired with 5.
 if [ -f scripts/test-mirror-drift-gate.sh ]; then
   run_step "Mirror drift gate regression suite" \
     bash scripts/test-mirror-drift-gate.sh
@@ -185,18 +184,18 @@ fi
 # 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
 #      generated output committed on purpose (the marketplace manifest ships it
 #      as the plugin source), so a canonical skills/ edit that never reached it
-#      publishes a stale plugin. Mirrors lint.yml's last step.
+#      publishes a stale plugin. Mirrors lint.yml's step of the same name.
 #
-#      ⚠ THIS STEP MUTATES THE WORKING TREE, and it is LAST for that reason —
-#      the same invariant lint.yml states for its own job. Every other check in
-#      this file is read-only; this one regenerates the mirror in place and then
-#      asserts the result matches what is committed. On drift it leaves the
-#      regenerated files behind — deliberate (the fix is already applied, all
-#      that remains is `git add`), but it will surprise you mid-review
-#      otherwise. Nothing may be appended after this block.
+#      Read-only, like every other check in this file: `--check-mirror`
+#      regenerates into a temp destination and compares file contents, so it
+#      neither writes the checkout nor cares what is staged. That matters here
+#      specifically — this script is run BECAUSE you have uncommitted work, and
+#      the previous form (regenerate in place, fail on a dirty index) therefore
+#      misfired in its primary use case (#546). When it does report drift, the
+#      fix is `bash scripts/install-agent-skills.sh --generate-only`.
 if [ -f scripts/install-agent-skills.sh ]; then
   run_step "Plugin skills mirror in sync" \
-    bash scripts/install-agent-skills.sh --generate-only
+    bash scripts/install-agent-skills.sh --check-mirror
 fi
 
 echo ""

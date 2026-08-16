@@ -44,20 +44,20 @@ jobs:
       - name: Band-vocabulary reintroduction gate
         run: python3 scripts/check-band-vocabulary.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
-      # — the defect #539 exists to fix. Runs BEFORE it: the suite works
-      # entirely in throwaway temp repos, so it is safe here, and putting it
-      # after would break the mutation-is-last invariant. Without this step,
-      # reverting the gate to `git diff --exit-code` or to `exit 0` produces a
-      # fully green build, which is #529 all over again.
+      # — the defect #539 exists to fix — and that it fails only on the
+      # invariant it names (#546). Without this step, reverting the gate to
+      # `git diff --exit-code` or to `exit 0` produces a fully green build,
+      # which is #529 all over again.
       - name: Mirror drift gate self-test
         run: bash scripts/test-mirror-drift-gate.sh
-      # MUST stay the LAST step of this job. The generator MUTATES the
-      # checkout — it `rm -rf`s every non-`_shared` mirror subdirectory and
-      # rsyncs with --delete — so any step after it would run against a
-      # rewritten tree. #529 shipped three canonical-only overlay files
-      # because nothing ran this at all.
+      # Read-only, and free to sit anywhere in this job: `--check-mirror`
+      # regenerates into a temp destination and compares file contents, so it
+      # never writes the checkout (#546 — the previous `--generate-only` form
+      # rewrote the mirror in place, which is what pinned it to last position).
+      # #529 shipped three canonical-only overlay files because nothing ran a
+      # check like this at all.
       - name: Plugin skills mirror in sync
-        run: bash scripts/install-agent-skills.sh --generate-only
+        run: bash scripts/install-agent-skills.sh --check-mirror
 
   link-check:
     # Validates cross-document reference integrity across root *.md + docs/**
