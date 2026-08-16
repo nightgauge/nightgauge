@@ -124,12 +124,12 @@ Runtime state:    In-memory only, per-execution, discarded on completion
 Execution log:    Append-only JSONL (local), pushed to platform analytics
 ```
 
-- **Starting a pipeline**: Board status → "In Progress", Pipeline Stage field
+- **Starting a pipeline**: Board status → "In progress", Pipeline Stage field
   set to current stage. This is the ONLY state that matters.
 - **Completing a stage**: Pipeline Stage field updated on the board. If the Go
   binary crashes, the board still shows where the pipeline was — recovery reads
   the board, not a local file.
-- **Completing a pipeline**: Board status → "In Review" or "Done". No local
+- **Completing a pipeline**: Board status → "In review" or "Done". No local
   cleanup needed.
 - **Concurrent pipelines**: Each execution is identified by (repo, issue#).
   Board fields are per-item. No singleton contention.
