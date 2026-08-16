@@ -623,7 +623,12 @@ export class Dashboard implements vscode.Disposable {
               pipelineState.branch
             );
           } else {
-            this.state.startRun(issueNumber, `Issue #${issueNumber}`, `feat/${issueNumber}`);
+            // No pipeline state to read a branch from, so this run has no
+            // branch to report: `""` is the undetermined sentinel (#397/#448),
+            // rendered by `getBranchDisplayText`. The `feat/{issueNumber}` that
+            // stood here was a fabrication the UI could not tell apart from a
+            // branch that really resolved.
+            this.state.startRun(issueNumber, `Issue #${issueNumber}`, "");
           }
         }
         this.state.setStageRunning(stage as PipelineStage);
@@ -794,18 +799,21 @@ export class Dashboard implements vscode.Disposable {
         this.logger.debug("slot:event:onStageStart", { stage, issueNumber });
         if (!this.state.getCurrentRun()) {
           // Pull title/branch from the per-slot state if available, otherwise
-          // fall back to the issue number so the run record is at least valid.
+          // fall back to the issue number for the title and the undetermined
+          // sentinel `""` for the branch (#397/#448) — a run whose slot state
+          // is unreadable knows no branch, and fabricating `feat/{issueNumber}`
+          // made "we could not read it" look identical to "it resolved".
           stateService
             .getState()
             .then((s) => {
               if (s) {
                 this.state.startRun(s.issue_number, s.title, s.branch);
               } else {
-                this.state.startRun(issueNumber, `Issue #${issueNumber}`, `feat/${issueNumber}`);
+                this.state.startRun(issueNumber, `Issue #${issueNumber}`, "");
               }
             })
             .catch(() => {
-              this.state.startRun(issueNumber, `Issue #${issueNumber}`, `feat/${issueNumber}`);
+              this.state.startRun(issueNumber, `Issue #${issueNumber}`, "");
             });
         }
         this.state.setStageRunning(stage as PipelineStage);
@@ -1089,7 +1097,9 @@ export class Dashboard implements vscode.Disposable {
       this.state.startRun(
         pipelineState.issue_number,
         pipelineState.title ?? `Issue #${pipelineState.issue_number}`,
-        pipelineState.branch ?? `feat/${pipelineState.issue_number}`
+        // A state file with no branch key is a run whose branch is not yet
+        // determined — `""`, never an invented `feat/{issue_number}` (#448).
+        pipelineState.branch ?? ""
       );
 
       // Reconcile stages that already completed while panel was closed
