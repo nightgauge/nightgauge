@@ -32,7 +32,7 @@ loop capable of editing files, running commands, and calling `gh`.
 | codex           |             ✓             | **Beta**; live six-stage matrix pending         |
 | gemini          |             ✓             | **Experimental**; live six-stage matrix pending |
 | copilot         |             ✓             | **Experimental**; live six-stage matrix pending |
-| grok            |             ✓             | **Experimental**; six-stage run complete (#528) |
+| grok            |             ✓             | **Beta**; six-stage run + beta bar met (#528)   |
 | gemini-sdk      |             ✗             | Chat-completion-only                            |
 | ollama          |             ✗             | Chat-completion-only                            |
 | lm-studio       |             ✗             | Chat-completion-only                            |
@@ -86,7 +86,7 @@ The Go adapters are the **scheduler-driven execution path** (not the VSCode IPC 
 | lm-studio       |         ✗         |         ✓          | Not in Go registry                                                                      |
 | ollama          |    ✓ (bridge)     |         ✓          | Go uses claude CLI as SDK bridge                                                        |
 | copilot         |         ✓         |         ✓          | CLI contract exists in both layers; live verification remains                           |
-| grok            |         ✓         |         ✓          | Experimental; six-stage run complete 2026-08-15 (#528) — see § Grok Live-Run Evidence   |
+| grok            |         ✓         |         ✓          | Beta since 2026-08-15 (#528) — see § Grok Live-Run Evidence                             |
 
 **Note on claude-sdk Go adapter:** The Go `ClaudeSdkAdapter` spawns `claude -p --output-format stream-json`
 using `ANTHROPIC_API_KEY`. This is NOT the same as the TypeScript `ClaudeSdkAdapter` which imports
@@ -114,25 +114,27 @@ Every dispatched band resolved to `grok-4.6` — the xai band ladder is a
 deliberate cost no-op (see the registry BAND NOTE). Token capture per the
 #119 pattern is solid, including per-stage cache buckets and hit rates.
 
-**Status decision: remains Experimental.** The adapter itself performed
-flawlessly end-to-end; the blocking gaps are pipeline-side, filed and
-owned:
+**Status decision (updated same day): promoted to Beta** — the bar below
+was met within hours of the run. Original gap list, with dispositions:
 
 - #585 — stage cost stamps priced this run at Anthropic rates
-  (~$12.66 recorded vs ≈ $2.26 true at the registry's measured grok-4.6
-  rates); fix in review at the time of writing
-- #591 — the CLI's `Not signed in` auth failure classifies as
-  `subagent_crash` instead of an auth AdapterError (live probe,
-  2026-08-15); same classification family as #560 (402 usage-balance)
+  (~$12.66 recorded vs ≈ $2.26 true) — **fixed and merged** (PR #588:
+  adapter-aware pricing with explicit unstamped semantics)
+- #591 — the CLI's `Not signed in` auth failure classified as
+  `subagent_crash` — **fixed and merged** (PR #595); live re-probe
+  recorded `adapter_auth_failed` with no model escalation (2026-08-15,
+  probe #590). #560 (402 usage-balance) remains open and separate
 - #580 — run records cannot yet express adapter, concrete model id,
   effort, or thinking (epic #567 run-record envelope)
 - #586 — CLI-started runs are nearly invisible in the extension while
   executing
 - #589 — the pr-merge deterministic path punts in worktree runs
 
-**Beta promotion criteria:** #591 and #585 fixed (honest classification
-and honest cost), plus one re-run auth probe landing the correct
-AdapterError in the run record.
+**Beta bar (met 2026-08-15):** #591 and #585 fixed and merged, plus the
+re-run auth probe landing `adapter_auth_failed` in the run record.
+Remaining non-blocking gaps stay filed: #580 (record envelope, in the
+#567 phase train), #586 (CLI-run observability), #589 (pr-merge
+deterministic punt), #560 (402 classification).
 
 ---
 
