@@ -12,10 +12,13 @@ import {
   CODEX_RECOMMENDED_DEFAULT_MODEL,
   CODEX_DEFAULT_BASE_MODEL,
   isValidCodexModel,
+  isServedCodexModelMeta,
   isDeprecatedCodexModel,
   isResearchPreviewCodexModel,
   listCodexModels,
+  filterCodexModelIds,
   resolveCodexModelAlias,
+  type CodexModelMeta,
 } from "../../../cli/adapters/codexModelRegistry.js";
 
 describe("codexModelRegistry", () => {
@@ -109,6 +112,71 @@ describe("codexModelRegistry", () => {
       expect(isValidCodexModel("o4-mini")).toBe(false);
       expect(isValidCodexModel("")).toBe(false);
     });
+
+    it("every current openai entry is served over the codex transport today (#600 baseline)", () => {
+      // No openai entry currently declares transports.<codex transport>.served:
+      // false, so isValidCodexModel's existing behavior above is entirely
+      // driven by known-id membership today. This pins that baseline so a
+      // future entry that flips servedOverTransport to false is a deliberate,
+      // reviewed change rather than a silent behavior shift.
+      for (const [id, meta] of Object.entries(CODEX_MODELS)) {
+        expect(meta.servedOverTransport, `${id} servedOverTransport`).toBe(true);
+      }
+    });
+  });
+
+  // Served-filtering (#600): no current openai registry entry has
+  // transports.<codex transport>.served: false, so the served:false branch is
+  // exercised here against SYNTHETIC CodexModelMeta data — mirrors the
+  // hand-constructed-fixture pattern registry_axes_test.go's
+  // TestValidateTransportsGraduated uses on the Go side.
+  describe("served-transport filtering (#600)", () => {
+    it("isServedCodexModelMeta is false only when servedOverTransport is explicitly false", () => {
+      expect(isServedCodexModelMeta(undefined)).toBe(false);
+      expect(isServedCodexModelMeta({ servedOverTransport: true })).toBe(true);
+      expect(isServedCodexModelMeta({ servedOverTransport: false })).toBe(false);
+      // A deprecated-but-served entry (the real gpt-5.3-codex shape) still
+      // reads as served — deprecation and transport reachability are
+      // independent axes, exactly like #579's grok-build-0.1 precedent.
+      expect(isServedCodexModelMeta({ deprecated: true, servedOverTransport: true })).toBe(true);
+    });
+
+    it("filterCodexModelIds excludes an unserved entry by default and includes it with includeUnserved", () => {
+      const synthetic: Record<string, CodexModelMeta> = {
+        "gpt-served": { recommended: true, servedOverTransport: true },
+        "gpt-unserved": { servedOverTransport: false },
+      };
+      expect(filterCodexModelIds(synthetic)).toEqual(["gpt-served"]);
+      expect(filterCodexModelIds(synthetic)).not.toContain("gpt-unserved");
+
+      const widened = filterCodexModelIds(synthetic, { includeUnserved: true });
+      expect(widened).toContain("gpt-served");
+      expect(widened).toContain("gpt-unserved");
+    });
+
+    it("filterCodexModelIds composes served-filtering with deprecated/research-preview filtering independently", () => {
+      const synthetic: Record<string, CodexModelMeta> = {
+        "gpt-clean": { servedOverTransport: true },
+        "gpt-deprecated-served": { deprecated: true, servedOverTransport: true },
+        "gpt-preview-unserved": { researchPreview: true, servedOverTransport: false },
+      };
+      expect(filterCodexModelIds(synthetic)).toEqual(["gpt-clean"]);
+      expect(
+        filterCodexModelIds(synthetic, { includeDeprecated: true, includeUnserved: true })
+      ).toEqual(expect.arrayContaining(["gpt-clean", "gpt-deprecated-served"]));
+      expect(
+        filterCodexModelIds(synthetic, { includeDeprecated: true, includeUnserved: true })
+      ).not.toContain("gpt-preview-unserved");
+      expect(
+        filterCodexModelIds(synthetic, {
+          includeDeprecated: true,
+          includeResearchPreview: true,
+          includeUnserved: true,
+        })
+      ).toEqual(
+        expect.arrayContaining(["gpt-clean", "gpt-deprecated-served", "gpt-preview-unserved"])
+      );
+    });
   });
 
   describe("listCodexModels", () => {
@@ -131,6 +199,13 @@ describe("codexModelRegistry", () => {
       });
       expect(all).toContain("gpt-5.3-codex");
       expect(all).toContain("gpt-5.3-codex-spark");
+    });
+
+    it("defaults to the live registry (delegates to filterCodexModelIds(CODEX_MODELS, opts))", () => {
+      expect(listCodexModels()).toEqual(filterCodexModelIds(CODEX_MODELS));
+      expect(listCodexModels({ includeUnserved: true })).toEqual(
+        filterCodexModelIds(CODEX_MODELS, { includeUnserved: true })
+      );
     });
   });
 

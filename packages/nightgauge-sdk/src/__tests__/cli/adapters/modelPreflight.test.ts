@@ -260,6 +260,10 @@ describe("validateModelForAdapter — transport reachability (#579)", () => {
   it("fails OPEN when a model declares no transports.cli fact at all (#579 AC4, additive enforcement)", () => {
     // vendor-x-pro is the fixture entry with no `transports` field whatsoever
     // — the unexpressed/pending state, which must never read as unserved.
+    // Its own exact-id lookup is deprecated-agnostic, so it still hits this
+    // branch even though #600's load-time graduation gate required flipping
+    // it to `deprecated: true` (a non-deprecated entry may no longer omit
+    // `transports` entirely — see modelRegistry.test.ts's graduation suite).
     const result = checkTransportServed("other", "cli", "vendor-x-pro");
     expect(result.found).toBe(true);
     expect(result.unreachable).toBeUndefined();
@@ -291,5 +295,50 @@ describe("validateModelForAdapter — transport reachability (#579)", () => {
     // Reason 2 — transport: checkTransportServed flags it as unreachable
     // independent of the deprecated flag or the closed-set membership check.
     expect(checkTransportServed("xai", "cli", "grok-build-0.1").unreachable).toBeDefined();
+  });
+});
+
+/**
+ * Single-authority adapter→transport-axis mapping (#600): before this, the
+ * transport check inside validateModelForAdapter hardcoded the literal "cli"
+ * for every closed adapter, while the registry's TRANSPORTS doc comment
+ * claimed `sdk` folded into `api` — an undocumented, unenforced mismatch for
+ * gemini-sdk specifically. mustTransportForAdapter is now the ONLY source
+ * validateModelForAdapter/GEMINI_MODELS/GROK_MODELS consult.
+ */
+describe("validateModelForAdapter — adapter→transport axis (#600)", () => {
+  it("gemini-sdk is deliberately pinned to the cli transport, not api", async () => {
+    const { mustTransportForAdapter } = await import("../../../eval/modelRegistry.js");
+    expect(mustTransportForAdapter("gemini-sdk")).toBe("cli");
+    expect(mustTransportForAdapter("gemini")).toBe("cli");
+    // Both share the SAME transport — GEMINI_MODELS is one list feeding both
+    // policy entries, so a divergence here would silently mis-gate one of them.
+    expect(mustTransportForAdapter("gemini-sdk")).toBe(mustTransportForAdapter("gemini"));
+  });
+
+  it("gemini-sdk enforces transport-unreachability identically to gemini", () => {
+    // grok-4.6 is a real registry id but belongs to xai — irrelevant here.
+    // Use a hypothetical: grok-build-0.1 is google-foreign too, so assert
+    // instead that BOTH gemini adapters reject the same unknown id the same
+    // way, proving they consult the same closed set + transport check.
+    expect(() => validateModelForAdapter("gemini", "totally-made-up")).toThrow(AdapterError);
+    expect(() => validateModelForAdapter("gemini-sdk", "totally-made-up")).toThrow(AdapterError);
+  });
+
+  it("pins the single-authority mapping for the full closed-transport-adapter set (parity with Go's TestTransportForAdapterPinsTheDecidedMapping)", async () => {
+    const { mustTransportForAdapter } = await import("../../../eval/modelRegistry.js");
+    // This table is intentionally hardcoded (not derived) — it mirrors the
+    // Go test's hardcoded expectation. Both suites independently pin the same
+    // values, so an edit to adapter_transports that nobody updates BOTH pins
+    // for fails loud in whichever language's suite runs.
+    const want: Record<string, string> = {
+      codex: "cli",
+      gemini: "cli",
+      "gemini-sdk": "cli",
+      grok: "cli",
+    };
+    for (const [adapter, transport] of Object.entries(want)) {
+      expect(mustTransportForAdapter(adapter)).toBe(transport);
+    }
   });
 });
