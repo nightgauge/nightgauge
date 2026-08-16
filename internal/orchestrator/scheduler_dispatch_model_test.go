@@ -23,7 +23,7 @@ func testScheduler(t *testing.T) *Scheduler {
 
 func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 	s := testScheduler(t)
-	got := s.resolveDispatchModel(state.StageFeatureDev, 1, isolatedWorkspace(t), "sonnet", nil)
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, isolatedWorkspace(t), "sonnet", nil, "")
 	if got != "sonnet" {
 		t.Errorf("model = %q, want the predicted model", got)
 	}
@@ -40,7 +40,7 @@ func TestResolveDispatchModelUsesPredictedByDefault(t *testing.T) {
 func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "sonnet" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "sonnet" {
 		t.Errorf("model = %q, want the general-purpose default for an unrouted stage", got)
 	}
 
@@ -48,7 +48,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	// assertion: with "" the floor is silently skipped and a stage the operator
 	// floored to opus runs the provider default, with no log line.
 	floors := map[string]string{string(state.StageFeatureDev): "opus"}
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", floors); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", floors, ""); got != "opus" {
 		t.Errorf("floored model = %q, want opus — the minimum_model floor must apply to an unrouted stage", got)
 	}
 
@@ -56,7 +56,7 @@ func TestResolveDispatchModelDefaultsAnUnroutedStage(t *testing.T) {
 	// reroute the unrouted stage too, or the run re-fails identically.
 	down := testScheduler(t)
 	down.retryEngine.RecordDowngrade("sonnet", "haiku", "")
-	if got := down.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil); got != "haiku" {
+	if got := down.resolveDispatchModel(state.StageFeatureDev, 1, dir, "", nil, ""); got != "haiku" {
 		t.Errorf("downgraded model = %q, want haiku", got)
 	}
 }
@@ -86,7 +86,7 @@ func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	s := testScheduler(t)
 	s.retryEngine.RecordEscalation(string(state.StageFeatureDev), "opus")
 
-	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", nil)
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "sonnet", nil, "")
 	if got != "opus" {
 		t.Errorf("model = %q, want the escalated model", got)
 	}
@@ -95,7 +95,7 @@ func TestResolveDispatchModelPrefersEscalationOverPrediction(t *testing.T) {
 	// overlays without having escalated. feature-validate is the control
 	// because it has no lightweight base of its own (#340) — pr-create does,
 	// so it would read "un-escalated" even if escalation had leaked.
-	if other := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "sonnet", nil); other != "sonnet" {
+	if other := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "sonnet", nil, ""); other != "sonnet" {
 		t.Errorf("feature-validate model = %q, want the un-escalated prediction", other)
 	}
 }
@@ -110,7 +110,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	s.retryEngine.RecordDowngrade("sonnet", "haiku", "")
 
 	floors := map[string]string{string(state.StageFeatureDev): "sonnet"}
-	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors)
+	got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors, "")
 	if got != "haiku" {
 		t.Errorf("model = %q, want the downgrade to win over the floor", got)
 	}
@@ -119,7 +119,7 @@ func TestResolveDispatchModelAppliesFloorThenDowngrade(t *testing.T) {
 	// which is what proves the downgrade above did the work, not the floor
 	// simply failing to apply.
 	fresh := testScheduler(t)
-	if got := fresh.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors); got != "sonnet" {
+	if got := fresh.resolveDispatchModel(state.StageFeatureDev, 1, dir, "haiku", floors, ""); got != "sonnet" {
 		t.Errorf("model = %q, want the floor to raise haiku to sonnet", got)
 	}
 }
@@ -131,13 +131,13 @@ func TestResolveDispatchModelFloorsHaikuOnPRMerge(t *testing.T) {
 	s := testScheduler(t)
 	// The floor escalates to the sonnet BAND, not routing.ModelSonnet's
 	// concrete id (#340) — see TestResolveDispatchModelEmitsRegistryBandsOnly.
-	got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", nil)
+	got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", nil, "")
 	if got != "sonnet" {
 		t.Errorf("pr-merge model = %q, want %q", got, "sonnet")
 	}
 
 	// A non-haiku tier passes through untouched — the guard is a floor, not a pin.
-	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", nil); got != "opus" {
+	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", nil, ""); got != "opus" {
 		t.Errorf("pr-merge model = %q, want opus preserved", got)
 	}
 }
@@ -147,7 +147,7 @@ func TestResolveDispatchModelDisablesHaikuOnUnverifiedFeatureValidate(t *testing
 	// feature-validate when dev already proved the build. An empty workdir has
 	// no dev context, which is the unverified case.
 	s := testScheduler(t)
-	got := s.resolveDispatchModel(state.StageFeatureValidate, 1, isolatedWorkspace(t), "haiku", nil)
+	got := s.resolveDispatchModel(state.StageFeatureValidate, 1, isolatedWorkspace(t), "haiku", nil, "")
 	if got != "sonnet" {
 		t.Errorf("feature-validate model = %q, want %q", got, "sonnet")
 	}
@@ -265,7 +265,7 @@ func TestResolveDispatchModelForcedTierBeatsTheLightweightDefault(t *testing.T) 
 	dir := isolatedWorkspace(t)
 	s := testScheduler(t)
 	floors := raiseStageFloors(nil, "opus")
-	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "opus", floors); got != "opus" {
+	if got := s.resolveDispatchModel(state.StagePRCreate, 1, dir, "opus", floors, ""); got != "opus" {
 		t.Errorf("pr-create model = %q, want the forced opus tier", got)
 	}
 }

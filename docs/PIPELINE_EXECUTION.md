@@ -455,17 +455,21 @@ neither:
   requested fields onto the served value only when the two diverge —
   requested vs served stay epistemically distinct end to end.
 
-- **Eval-advice policy differs per resolver — deliberately, and only when
-  `model_routing.use_eval_recommendations` is ON.** The TS resolver consumes
-  advice only for issues whose `type:` label directly names an eval job class
-  (docs/bug/refactor), from exact job-class entries with exact-over-model
-  backoff (`pickAdvice`); the Go dispatch path has no job-class attribution,
-  so it consumes at spike §4.3's `(model, *, *)` backoff level, pooling
-  advisable entries across job classes (`routing.AdviseBand`). Identical
-  inputs can therefore resolve differently on the IPC vs Headless paths while
-  the key is on. This is a documented, opt-in asymmetry, not drift-by-neglect
-  — the convergence plan (job-class attribution on the Go dispatch path) is
-  tracked in the #581 follow-up.
+- **Eval-advice policy is CONVERGED across resolvers (#606), and only active
+  when `model_routing.use_eval_recommendations` is ON.** Both resolvers
+  consume advice only for issues whose `type:` label directly names an eval
+  job class (docs/bug/refactor): the TS resolver via `jobClassForIssue` →
+  `pickAdvice`, the Go dispatch path via `routing.JobClassForLabels`
+  (attributed once at issue pickup, where labels are already read) →
+  `routing.AdviseBand`, which mirrors `pickAdvice` step for step — exact
+  job-class entries, exact-over-model backoff preference, the stamped quality
+  floor for the cost-driven modes, the same per-mode ordering — then applies
+  the band/envelope gate the wire vocabulary needs. No job class ⇒ no advice
+  on either path; the `(model, *, *)` cross-class pooling Go used to run was
+  the dual-path family #340 removed and is retired. One residual asymmetry,
+  stated so it is not silent: the TS resolver also dispatches the advised
+  entry's _effort_ on its own path, while the Go wire effort stays the #581
+  chain — the advised band converges, the advised effort remains TS-local.
 
 Attribution follows the same ownership. Go records the dispatch model up front
 (`runtime.RecordStageModel` at stage start) and re-records on the served model

@@ -3170,6 +3170,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 	// Non-fatal: missing or malformed context results in zero values.
 	complexityScore, issueRoutingPath, predictedModel := loadIssueContext(workspaceRoot, item.Number)
 
+	// Job-class attribution at pickup (#606): the labels are already read
+	// here, and the conservative type-label mapping is the same one the TS
+	// resolver applies (jobClassForIssue) — so eval-advice consumption keys
+	// on exact job-class entries on BOTH paths, closing the (model, *, *)
+	// backoff asymmetry (the dual-path family #340 removed). "" when no type
+	// label directly names an eval job class: no advice, the axis query
+	// alone decides.
+	issueJobClass := routing.JobClassForLabels(item.Labels)
+
 	// Per-stage model_routing.minimum_model floors (#366), loaded once for the
 	// run. Applied at dispatch below so an autonomous run honors a configured
 	// minimum tier — parity with the TS SkillRunner's enforceMinimumModel.
@@ -3813,7 +3822,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// alias — so every escalation, floor, and downgrade below has to have
 		// been applied by the time Render runs. The behavioral preamble still
 		// applies after the prompt is assembled; only the resolution moves.
-		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors)
+		model := s.resolveDispatchModel(stage, item.Number, workspaceRoot, predictedModel, modelFloors, issueJobClass)
 
 		// Compose SKILL.md through the one renderer (#78), overlay-aware (#79).
 		// With no overlay files present this is byte-identical to a base-only
@@ -6646,6 +6655,7 @@ func (s *Scheduler) resolveDispatchModel(
 	workspaceRoot string,
 	predictedModel string,
 	modelFloors map[string]string,
+	jobClass string,
 ) string {
 	// Per-stage base routing. An unrouted run still ends on the general-purpose
 	// default tier, and that default lives in stageBaseModel's last branch and
@@ -6660,7 +6670,7 @@ func (s *Scheduler) resolveDispatchModel(
 	// per-stage attribution, and tokens.CalculateCost("") returns a
 	// truthful-looking $0.
 	mode := routing.ResolvePerformanceMode(workspaceRoot)
-	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel)
+	baseModel, explicitBase := stageBaseModel(workspaceRoot, mode, stage, predictedModel, jobClass)
 	model := baseModel
 	// Escalation override if set, otherwise the base.
 	if override := s.retryEngine.CurrentModel(string(stage)); override != "" {

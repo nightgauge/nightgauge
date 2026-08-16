@@ -68,14 +68,14 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 
 	t.Run("pr-merge haiku floor", func(t *testing.T) {
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", nil); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "haiku", nil, ""); got != "sonnet" {
 			t.Errorf("pr-merge model = %q, want the band %q", got, "sonnet")
 		}
 	})
 
 	t.Run("feature-validate haiku gate", func(t *testing.T) {
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "haiku", nil); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureValidate, 1, dir, "haiku", nil, ""); got != "sonnet" {
 			t.Errorf("feature-validate model = %q, want the band %q", got, "sonnet")
 		}
 	})
@@ -85,10 +85,10 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 	// its band before it reaches the wire.
 	t.Run("router-recommended concrete id", func(t *testing.T) {
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routing.ModelOpus, nil); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, routing.ModelOpus, nil, ""); got != "opus" {
 			t.Errorf("model = %q, want the band %q for the concrete id %q", got, "opus", routing.ModelOpus)
 		}
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 2, dir, routing.ModelSonnet, nil); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 2, dir, routing.ModelSonnet, nil, ""); got != "sonnet" {
 			t.Errorf("model = %q, want the band %q for the concrete id %q", got, "sonnet", routing.ModelSonnet)
 		}
 	})
@@ -97,7 +97,7 @@ func TestResolveDispatchModelEmitsRegistryBandsOnly(t *testing.T) {
 	// through untouched — inventing one would reroute an explicit choice (#56).
 	t.Run("unknown local model passes through", func(t *testing.T) {
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "my-local-llm", nil); got != "my-local-llm" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "my-local-llm", nil, ""); got != "my-local-llm" {
 			t.Errorf("model = %q, want the local model preserved", got)
 		}
 	})
@@ -126,7 +126,7 @@ func TestResolveDispatchModelAppliesThePerformanceModePerStage(t *testing.T) {
 		for _, stage := range stages {
 			// "sonnet" is what complexity routing wrote for this run; the mode
 			// pin has to beat it on every stage, not just feature-dev.
-			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", nil); got != "opus" {
+			if got := s.resolveDispatchModel(stage, 1, dir, "sonnet", nil, ""); got != "opus" {
 				t.Errorf("%s model = %q, want opus under Maximum mode", stage, got)
 			}
 		}
@@ -138,10 +138,10 @@ func TestResolveDispatchModelAppliesThePerformanceModePerStage(t *testing.T) {
 		s := testScheduler(t)
 		// The cost-capping mode must actually cap: an opus-routed run runs
 		// sonnet on the reasoning stages and haiku on the plumbing ones.
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "sonnet" {
 			t.Errorf("feature-dev model = %q, want sonnet under Efficiency mode", got)
 		}
-		if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "opus", nil); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "opus", nil, ""); got != "haiku" {
 			t.Errorf("issue-pickup model = %q, want haiku under Efficiency mode", got)
 		}
 	})
@@ -150,7 +150,7 @@ func TestResolveDispatchModelAppliesThePerformanceModePerStage(t *testing.T) {
 		dir := isolatedWorkspace(t)
 		t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "elevated")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "opus" {
 			t.Errorf("feature-dev model = %q, want the routed tier under Elevated mode", got)
 		}
 	})
@@ -166,25 +166,25 @@ func TestResolveDispatchModelKeepsPlumbingStagesOffTheRunTier(t *testing.T) {
 	s := testScheduler(t)
 
 	for _, stage := range []state.PipelineStage{state.StageIssuePickup, state.StagePRCreate} {
-		if got := s.resolveDispatchModel(stage, 1, dir, "opus", nil); got != "haiku" {
+		if got := s.resolveDispatchModel(stage, 1, dir, "opus", nil, ""); got != "haiku" {
 			t.Errorf("%s model = %q, want the lightweight haiku default", stage, got)
 		}
 	}
 
 	// pr-merge is NOT lightweight (#197): its LLM path only runs on
 	// deterministic punts, which are the hardest merges.
-	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", nil); got != "opus" {
+	if got := s.resolveDispatchModel(state.StagePRMerge, 1, dir, "opus", nil, ""); got != "opus" {
 		t.Errorf("pr-merge model = %q, want the run tier — pr-merge has no lightweight default", got)
 	}
 
 	// The reasoning stages still dispatch the run's routed tier.
-	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "opus" {
+	if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "opus" {
 		t.Errorf("feature-dev model = %q, want the run tier", got)
 	}
 
 	// The default is a BASE, not a cap: the minimum_model floor still raises it.
 	floors := map[string]string{string(state.StageIssuePickup): "sonnet"}
-	if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "opus", floors); got != "sonnet" {
+	if got := s.resolveDispatchModel(state.StageIssuePickup, 1, dir, "opus", floors, ""); got != "sonnet" {
 		t.Errorf("floored issue-pickup model = %q, want sonnet", got)
 	}
 }
@@ -197,7 +197,7 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 	t.Run("manual mode uses the configured stage model", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: manual\npipeline:\n  stage_models:\n    feature-dev: haiku\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "haiku" {
 			t.Errorf("feature-dev model = %q, want the configured haiku", got)
 		}
 	})
@@ -207,7 +207,7 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 		s := testScheduler(t)
 		// manual means "explicit routing"; the built-in table is the explicit
 		// answer for a stage the operator did not name.
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "sonnet" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "sonnet" {
 			t.Errorf("feature-dev model = %q, want the manual-mode default sonnet", got)
 		}
 	})
@@ -215,7 +215,7 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 	t.Run("hybrid mode defers unnamed stages to the router", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: hybrid\npipeline:\n  stage_models:\n    feature-validate: haiku\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "opus" {
 			t.Errorf("feature-dev model = %q, want the routed tier in hybrid mode", got)
 		}
 	})
@@ -223,7 +223,7 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 	t.Run("automatic mode ignores the config table", func(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: automatic\npipeline:\n  stage_models:\n    feature-dev: haiku\n")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "opus" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "opus" {
 			t.Errorf("feature-dev model = %q, want the routed tier in automatic mode", got)
 		}
 	})
@@ -232,7 +232,7 @@ func TestResolveDispatchModelHonorsExplicitStageModels(t *testing.T) {
 		dir := routedWorkspace(t, "model_routing:\n  mode: automatic\n")
 		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV", "haiku")
 		s := testScheduler(t)
-		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil); got != "haiku" {
+		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "haiku" {
 			t.Errorf("feature-dev model = %q, want the env-overridden haiku", got)
 		}
 	})
