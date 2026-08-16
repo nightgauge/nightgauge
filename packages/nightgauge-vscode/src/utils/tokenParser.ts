@@ -115,7 +115,7 @@ export type StreamJsonMessageType =
 /**
  * One `tool_result` block from a user message.
  *
- * A `user` envelope can carry SEVERAL of these — see
+ * A `user` envelope's `content` is a LIST and may carry several of these — see
  * {@link ParsedStreamMessage.toolResults} — so this describes a single block,
  * never "the message's result".
  *
@@ -242,15 +242,23 @@ export interface ParsedStreamMessage {
    * EVERY `tool_result` block in a user message, in document order (#1031,
    * #455).
    *
-   * Plural for exactly the reason {@link toolUses} is plural. When the
-   * assistant issues parallel tool calls the CLI batches all of their results
-   * into ONE `user` envelope; the parser used to `return` on the first
-   * `tool_result` block, so results 2..N were never surfaced at all. Their
-   * `ToolCallLog` entries stayed indexed-but-unjoined — no result, no error,
-   * no `duration_ms` — and the Dashboard rendered them exactly like calls that
-   * quietly succeeded. That is the #402 symptom on a different wire shape, and
-   * `describeToolCallCorrelationGap`'s id-less arm cannot see it because the
-   * ids here are perfectly good.
+   * Plural for exactly the reason {@link toolUses} is plural: this parses an
+   * Anthropic Messages API `user` envelope, whose `content` is a list, and
+   * whose canonical representation of a parallel-tool turn is several
+   * `tool_result` blocks in one message. The parser used to `return` from
+   * inside the loop over that list, which surfaced block 0 and discarded the
+   * rest — lossy by construction, however few blocks happen to arrive.
+   *
+   * NOT a fix for an observed production symptom. #455 was filed believing the
+   * Claude CLI batches parallel results into one envelope; it does not. The
+   * CLI emits one content block per stdout event, so every result has always
+   * reached the consumers and joined. Verified against two complete captures
+   * (Claude Code 2.1.233 live, and this repo's own
+   * `internal/execution/testdata/claude_stream_real_capture.jsonl`) — see
+   * `tests/utils/tokenParser.batchedToolResults.test.ts` for the evidence and
+   * the retraction. What this removes is the latent truncation that would bite
+   * silently the moment the CLI's stream shape changes, which this repo already
+   * treats as unstable.
    *
    * Absent (not empty) when the message carries no `tool_result` with a string
    * `tool_use_id`: ids are propagated, never coerced (#155/#169), and a block
@@ -470,10 +478,10 @@ export function parseStreamJsonLine(line: string): ParsedStreamMessage | null {
 
     // Handle user messages containing tool_result content blocks (Issue #1031).
     //
-    // EVERY block is collected, not just the first (#455). Parallel tool calls
-    // come back batched into a single `user` envelope, and the old `return`
-    // inside this loop discarded results 2..N — see
-    // {@link ParsedStreamMessage.toolResults}.
+    // EVERY block is collected, not just the first (#455). `content` is a list
+    // and the old `return` sat inside this loop, so anything past block 0 was
+    // discarded unread — see {@link ParsedStreamMessage.toolResults} for why
+    // that is a latent truncation rather than an observed production bug.
     if (parsed.type === "user" && parsed.message?.content) {
       const contentArray = Array.isArray(parsed.message.content) ? parsed.message.content : [];
       const toolResults: ParsedToolResult[] = [];

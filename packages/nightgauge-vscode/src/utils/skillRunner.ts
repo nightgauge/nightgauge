@@ -6282,11 +6282,14 @@ export function runStageSkillHeadless(
       //
       // Before #455 the guard here read, verbatim:
       //   parsed?.type === "user" && parsed.toolResult?.content
-      // — a single-result read. `parseStreamJsonLine` returned on the FIRST
-      // tool_result block, so when the assistant issued parallel tool calls and
-      // the CLI batched their results into one `user` envelope, every marker
-      // printed by results 2..N was dropped before it ever reached this
-      // channel. The parser now surfaces every block; walk all of them.
+      // — a single-result read, because the parser returned on the FIRST
+      // tool_result block. That was not losing markers in practice: the Claude
+      // CLI emits one content block per stdout event, so a parallel-tool turn
+      // arrives as N separate `user` envelopes and each marker got its own
+      // pass. It was lossy only against an envelope carrying several blocks,
+      // which the Messages API permits and the CLI does not currently produce.
+      // The parser now surfaces every block; walk all of them, so a change in
+      // the CLI's framing cannot silently starve the runaway monitor.
       for (const toolResult of parsed?.toolResults ?? []) {
         for (const marker of parsePhaseMarkers(toolResult.content)) {
           lastPhaseName = marker.name;
@@ -6373,11 +6376,14 @@ export function runStageSkillHeadless(
       // Detect tool_result in user messages for stage-exit diagnostics and the
       // Go-authoritative tool-call log.
       //
-      // EVERY result in the envelope, not just the first (#455). A batch of
-      // parallel tool calls comes back as one `user` message carrying N
-      // tool_result blocks; binding only block 0 left the other N-1 entries
-      // indexed but never joined — no result, no error, no duration_ms — which
-      // the Dashboard renders identically to calls that quietly succeeded.
+      // EVERY result in the envelope, not just the first (#455). A `user`
+      // message's content is a list; binding only block 0 would leave any
+      // other entry indexed but never joined — no result, no error, no
+      // duration_ms — which the Dashboard renders identically to a call that
+      // quietly succeeded, and which `describeToolCallCorrelationGap` cannot
+      // report because both its arms need the ids to be BAD and these are
+      // fine. Today the CLI sends one block per event so there is no second
+      // block to lose; the loop is what keeps that true if it stops.
       for (const toolResult of parsed?.toolResults ?? []) {
         lastToolResultId = toolResult.toolUseId; // track for stall diagnostic (#3484)
 

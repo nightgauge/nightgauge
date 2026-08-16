@@ -914,11 +914,15 @@ describe("parseStreamJsonLine", () => {
 
     it("should surface EVERY tool_result when multiple exist (#455)", () => {
       // This test previously pinned the opposite contract — "should return
-      // first tool_result when multiple exist" — and that pin was the bug.
-      // Parallel tool calls come back batched into ONE user envelope, so
-      // returning on the first block silently discarded results 2..N: their
-      // tool-call log entries kept good ids but never joined, carrying no
-      // result, no error and no duration_ms. The pin is inverted deliberately.
+      // first tool_result when multiple exist". A `user` message's `content`
+      // is a list, so returning from inside the loop over it discarded blocks
+      // 2..N unread: lossy by construction. The pin is inverted deliberately.
+      //
+      // This is a totality guarantee, not a production bug fix — the Claude
+      // CLI emits one content block per stdout event, so no real envelope has
+      // a second block to lose. See
+      // tokenParser.batchedToolResults.test.ts for the captures that establish
+      // that and for the end-to-end pins on the two consumer loops.
       const line = JSON.stringify({
         type: "user",
         message: {
