@@ -346,6 +346,31 @@ func TestBranchPrefixFromLabels(t *testing.T) {
 	}
 }
 
+func TestIsCleanupCandidate(t *testing.T) {
+	tests := []struct {
+		branch string
+		want   bool
+	}{
+		{branch: "feat/583-thing", want: true},
+		{branch: "fix/583-thing", want: true},
+		{branch: "docs/583-example", want: true},
+		{branch: "chore/583-example", want: true},
+		{branch: "refactor/583-thing", want: true},
+		{branch: "test/583-thing", want: true},
+		{branch: "epic/583-thing", want: true},
+		{branch: "wip/583-example", want: false},
+		{branch: "feat/no-number", want: false},
+		{branch: "feat/583", want: false},
+		{branch: "main", want: false},
+		{branch: "docs/not-an-issue", want: false},
+	}
+	for _, tt := range tests {
+		if got := IsCleanupCandidate(tt.branch); got != tt.want {
+			t.Errorf("IsCleanupCandidate(%q) = %v, want %v", tt.branch, got, tt.want)
+		}
+	}
+}
+
 func TestParseIssueNumberFromBranch(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -286,6 +286,10 @@ created for a run about to start), and any issue with a run in flight.`,
 				if multi {
 					fmt.Fprintf(out, "%s\n", res.RepoRoot)
 				}
+				if res.BaseRefFetchError != "" {
+					fmt.Fprintf(errOut, "[WARN] worktree sweep: failed to fetch origin/%s: %s — classifying against local %s\n",
+						res.DefaultBranch, res.BaseRefFetchError, res.BaseRef)
+				}
 				if len(res.Reclaimed) == 0 {
 					fmt.Fprintf(out, "  No reclaimable worktrees (scanned %d, base %s).\n", res.Scanned, res.BaseRef)
 				}

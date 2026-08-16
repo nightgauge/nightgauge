@@ -606,14 +606,92 @@ describe("WorktreeManager", () => {
         if (args.includes("--show-current")) {
           return Promise.resolve({ stdout: "feat/42-test\n", stderr: "" });
         }
-        return Promise.resolve({ stdout: "", stderr: "" });
-      });
-      execAsyncMock.mockImplementation((cmd: string) => {
-        if (cmd.includes("git diff --stat")) {
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: "3\n", stderr: "" });
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          return Promise.reject(Object.assign(new Error("exit 1"), { code: 1 }));
+        }
+        if (args[0] === "diff" && args[1] === "--name-only") {
+          return Promise.resolve({ stdout: "src/impl.ts\0", stderr: "" });
+        }
+        if (args[0] === "diff" && args[1] === "--stat") {
           return Promise.resolve({ stdout: "1 file changed\n", stderr: "" });
         }
-        if (cmd.includes("git rev-list --count")) {
-          return Promise.resolve({ stdout: "3\n", stderr: "" });
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await manager.cleanup(42, true);
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("not deleting branch feat/42-test")
+      );
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.anything()
+      );
+      warn.mockRestore();
+    });
+
+    it("treats path-restricted empty stat as merged and never uses two-dot diff --stat", async () => {
+      execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args.includes("--show-current")) {
+          return Promise.resolve({ stdout: "feat/42-test\n", stderr: "" });
+        }
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: "2\n", stderr: "" });
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          return Promise.reject(Object.assign(new Error("exit 1"), { code: 1 }));
+        }
+        if (args[0] === "diff" && args[1] === "--name-only") {
+          return Promise.resolve({ stdout: "feature.txt\0", stderr: "" });
+        }
+        if (args[0] === "diff" && args[1] === "--stat") {
+          return Promise.resolve({ stdout: "", stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+
+      await manager.cleanup(42, true);
+
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["diff", "--stat", "origin/main", "feat/42-test", "--", "feature.txt"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+      expect(
+        execFileAsyncMock.mock.calls.some(
+          ([, args]: [string, string[]]) =>
+            Array.isArray(args) &&
+            args[0] === "diff" &&
+            args[1] === "--stat" &&
+            typeof args[2] === "string" &&
+            args[2].includes("..")
+        )
+      ).toBe(false);
+      expect(execFileAsyncMock).toHaveBeenCalledWith(
+        "git",
+        ["branch", "-D", "feat/42-test"],
+        expect.objectContaining({ cwd: repoRoot })
+      );
+    });
+
+    it("does not treat an empty file list as merged when the tip is not an ancestor", async () => {
+      execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) => {
+        if (args.includes("--show-current")) {
+          return Promise.resolve({ stdout: "feat/42-test\n", stderr: "" });
+        }
+        if (args[0] === "rev-list" && args[1] === "--count") {
+          return Promise.resolve({ stdout: "1\n", stderr: "" });
+        }
+        if (args[0] === "merge-base" && args[1] === "--is-ancestor") {
+          return Promise.reject(Object.assign(new Error("exit 1"), { code: 1 }));
+        }
+        if (args[0] === "diff" && args[1] === "--name-only") {
+          return Promise.resolve({ stdout: "", stderr: "" });
         }
         return Promise.resolve({ stdout: "", stderr: "" });
       });
