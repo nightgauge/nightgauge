@@ -21,6 +21,21 @@ provides that contract.
 `issue-audit --epic <N>`. Existing slash-command invocations keep working;
 new code should call `issue-audit` directly.
 
+## Boundary: issue-audit vs backlog-audit
+
+`issue-audit` is the **structural** post-creation gate: labels, board
+membership and fields, body headings, sub-issue links, `blockedBy` wiring.
+It runs at creation time and never judges whether an issue is still worth
+doing.
+
+[`nightgauge-backlog-audit`](../skills/nightgauge-backlog-audit/SKILL.md)
+(`/nightgauge:backlog-audit`) is the **semantic** pass over the existing
+open backlog: validity against current `main`, worth under the product
+lens, and priority/size rank — run occasionally (after an epic completes,
+or monthly). It reuses issue-audit's deterministic checks as riders rather
+than duplicating them, and shares the same hard rule: never auto-rewrite
+human-authored content.
+
 ## Invocation
 
 ```bash
