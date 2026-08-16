@@ -1,2 +1,2 @@
 Cannot find GitHub Copilot CLI (https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli)
-Install GitHub Copilot CLI? ['y/N']
+Install GitHub Copilot CLI? ['y/N'] 

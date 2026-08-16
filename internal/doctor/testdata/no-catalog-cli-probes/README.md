@@ -11,7 +11,7 @@ verified negative (binary not on `PATH`, package not installed).
 
 | Field       | Value                             |
 | ----------- | --------------------------------- |
-| Host OS     | macOS 26.0 (Darwin 27.0.0, arm64) |
+| Host OS     | macOS 27.0 (Darwin 27.0.0, arm64) |
 | Captured at | 2026-08-16                        |
 
 No system `timeout(1)` was available on the capture machine (no GNU
