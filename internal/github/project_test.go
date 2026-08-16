@@ -1,8 +1,10 @@
 package github
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,21 @@ import (
 
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
+
+// captureLogOutput redirects the standard "log" package's output to a buffer
+// for the duration of f and returns what was written. Unlike replacing
+// os.Stderr, this reliably captures log.Printf calls: the log package caches
+// os.Stderr's value at init time rather than reading the variable live, so
+// reassigning os.Stderr after that point does not redirect it.
+func captureLogOutput(t *testing.T, f func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(orig)
+	f()
+	return buf.String()
+}
 
 func TestProjectFieldMutationsMatchGitHubSchema(t *testing.T) {
 	tests := []struct {
@@ -776,5 +793,116 @@ func TestUpdateEpicEstimates_ZeroGetIssueCalls(t *testing.T) {
 				t.Errorf("sizeFromLabels(%v) → sizeToHours = %v, want %v", tt.labels, got, tt.wantHours)
 			}
 		})
+	}
+}
+
+// acknowledgedMutationServer returns a mock GraphQL server that acks any
+// updateProjectV2ItemFieldValue mutation. It is enough for SetSingleSelectField
+// tests that only care about the option-resolution path, not the request shape.
+func acknowledgedMutationServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"updateProjectV2ItemFieldValue":{"clientMutationId":null}}}`))
+	}))
+}
+
+// TestSetSingleSelectField_ProvisionedBoardStatusConstants exercises
+// SetSingleSelectField against the exact "Status" option set nightgauge's own
+// provisioner writes (DefaultFieldSchema — mirrored here as literals, since
+// internal/state already imports internal/github and importing
+// internal/state from this package-internal test file would be a cycle; see
+// TestBoardStateService_SetStatus_ProvisionedBoardOptions in
+// internal/state/board_status_case_test.go for the same round trip driven by
+// the real state.BoardStatus constants). This is the nightgauge-provisioned-
+// board shape from #413 — hand-made boards may capitalize differently, but a
+// board this pipeline provisioned itself must always accept its own status
+// values on an exact match, with no case-folding fallback required.
+func TestSetSingleSelectField_ProvisionedBoardStatusConstants(t *testing.T) {
+	srv := acknowledgedMutationServer()
+	defer srv.Close()
+
+	svc := NewProjectService(NewClientWithURL("test", srv.URL), "nightgauge", 5)
+	svc.projectID = "PVT_123"
+	svc.fields["Status"] = projectFieldInfo{
+		ID:   "PVTSSF_status",
+		Type: "single_select",
+		Options: map[string]string{
+			"Backlog":     "opt_backlog",
+			"Ready":       "opt_ready",
+			"In progress": "opt_inprog",
+			"In review":   "opt_inrev",
+			"Done":        "opt_done",
+		},
+	}
+
+	// Same values as state.StatusBacklog, state.StatusReady,
+	// state.StatusInProgress, state.StatusInReview, state.StatusDone.
+	statuses := []string{"Backlog", "Ready", "In progress", "In review", "Done"}
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			if err := svc.SetSingleSelectField(context.Background(), "item1", "Status", status); err != nil {
+				t.Errorf("SetSingleSelectField(%q) on a nightgauge-provisioned board = %v, want nil", status, err)
+			}
+		})
+	}
+}
+
+// TestSetSingleSelectField_CaseInsensitiveFallback proves the defense-in-depth
+// fallback added for #413: a requested option value that differs only in case
+// from a provisioned option still resolves, and a WARN naming the field, the
+// requested value, and the matched option is logged when folding was needed.
+func TestSetSingleSelectField_CaseInsensitiveFallback(t *testing.T) {
+	srv := acknowledgedMutationServer()
+	defer srv.Close()
+
+	svc := NewProjectService(NewClientWithURL("test", srv.URL), "nightgauge", 5)
+	svc.projectID = "PVT_123"
+	svc.fields["Status"] = projectFieldInfo{
+		ID:   "PVTSSF_status",
+		Type: "single_select",
+		Options: map[string]string{
+			"In review": "opt_inrev",
+		},
+	}
+
+	var err error
+	logged := captureLogOutput(t, func() {
+		err = svc.SetSingleSelectField(context.Background(), "item1", "Status", "In Review")
+	})
+	if err != nil {
+		t.Fatalf("SetSingleSelectField(%q) with a differently-cased option = %v, want nil (case-insensitive fallback)", "In Review", err)
+	}
+	if !strings.Contains(logged, "[WARN]") {
+		t.Errorf("expected a [WARN] log line when case-folding was needed; log: %s", logged)
+	}
+	for _, want := range []string{`"Status"`, `"In Review"`, `"In review"`} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("expected WARN log to contain %s (field name, requested value, and matched option); log: %s", want, logged)
+		}
+	}
+}
+
+// TestSetSingleSelectField_CaseInsensitiveFallback_StillFailsWhenNoMatch pins
+// that the fallback does not mask a genuine typo: when no option matches even
+// case-insensitively, the original "option not found" error (with its
+// available-options list) is still returned.
+func TestSetSingleSelectField_CaseInsensitiveFallback_StillFailsWhenNoMatch(t *testing.T) {
+	client := NewClientWithToken("test")
+	svc := NewProjectService(client, "nightgauge", 5)
+	svc.projectID = "PVT_123"
+	svc.fields["Status"] = projectFieldInfo{
+		ID:   "PVTSSF_status",
+		Type: "single_select",
+		Options: map[string]string{
+			"In review": "opt_inrev",
+		},
+	}
+
+	err := svc.SetSingleSelectField(context.Background(), "item1", "Status", "Nonexistent")
+	if err == nil {
+		t.Fatal("SetSingleSelectField with an option not present even case-insensitively should fail")
+	}
+	if !strings.Contains(err.Error(), "not found") || !strings.Contains(err.Error(), "In review") {
+		t.Errorf("error should name the field/option and list available options, got: %v", err)
 	}
 }

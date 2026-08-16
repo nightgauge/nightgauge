@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -245,6 +246,20 @@ func (p *ProjectService) SetSingleSelectField(ctx context.Context, itemID, field
 	}
 
 	optionID, ok := field.Options[optionName]
+	if !ok {
+		// Defense-in-depth: fall back to a case-insensitive scan before
+		// failing. Board provenance varies — hand-made boards and boards
+		// provisioned by different tooling versions may capitalize option
+		// labels differently (e.g. "In Review" vs "In review") even though
+		// they represent the same logical status.
+		for name, id := range field.Options {
+			if strings.EqualFold(name, optionName) {
+				log.Printf("[WARN] github: field %q: option %q not found exactly; matched %q via case-insensitive fallback", fieldName, optionName, name)
+				optionID, ok = id, true
+				break
+			}
+		}
+	}
 	if !ok {
 		return fmt.Errorf("option %q not found for field %q (available: %s)", optionName, fieldName, p.optionNames(fieldName))
 	}
