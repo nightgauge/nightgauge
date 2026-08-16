@@ -82,6 +82,16 @@ export interface ModeEnvelope {
   effortCeiling?: ClaudeEffort;
   /** Raise the complexity-derived effort (Maximum reasons hard everywhere). */
   effortFloor?: ClaudeEffort;
+  /**
+   * Pin the mode's thinking state, overriding the dispatched rung's declared
+   * thinking default (#606, spike #568 §4.1.3: envelopes are `(rung floor,
+   * rung ceiling, effort ceiling, thinking policy)`). No mode declares a
+   * value today — the axis exists so a mode CAN, with Go⇄TS parity
+   * (ModeEnvelope.ThinkingPolicy, performance_mode.go, consumed by the wire
+   * thinking resolution; the CLAUDE_CODE_DISABLE_THINKING interlock always
+   * outranks a policy).
+   */
+  thinkingPolicy?: "on" | "off";
 }
 
 /** Pipeline-level (mode-wide, non-stage) overrides. */
