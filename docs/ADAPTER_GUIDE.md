@@ -264,14 +264,14 @@ test -f ~/.grok/auth.json && echo "session present"
 
 **Environment Variables:**
 
-| Variable                      | Description                                           |
-| ----------------------------- | ----------------------------------------------------- |
-| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path                              |
-| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags                                |
-| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override                               |
-| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` value — gated against the registry (below) |
-| `XAI_API_KEY`                 | API-key fallback                                      |
-| `GROK_HOME`                   | Override `~/.grok`                                    |
+| Variable                      | Description                                                                                                                                  |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path                                                                                                                     |
+| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags                                                                                                                       |
+| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override                                                                                                                      |
+| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` operator override — gated against the registry (below); absent, the Go-resolved dispatch envelope's effort is used instead (#606) |
+| `XAI_API_KEY`                 | API-key fallback                                                                                                                             |
+| `GROK_HOME`                   | Override `~/.grok`                                                                                                                           |
 
 **Effort gate (#569):** `NIGHTGAUGE_GROK_EFFORT` is not a free pass-through to
 `grok --effort`. Before spawn it is checked against the `supported_efforts`
@@ -299,6 +299,21 @@ whatever rung the CLI happens to serve (#75).
   `grokCliEffortFlag` (`packages/nightgauge-sdk/src/cli/adapters/grokEffort.ts`),
   and the VS Code extension's `checkAdapterEffortSupported` /
   `preflightAdapterEffort` (`stageResolver.ts` / `skillRunner.ts`).
+
+**Effort channel (#606):** the ladder gate above is unchanged, but the value
+it gates is no longer sourced from `NIGHTGAUGE_GROK_EFFORT` alone.
+`dispatchGrokEffort` (`internal/execution/adapters/grok_effort.go`) demoted
+the env var from sole authority (#569) to an **operator override**: set, it
+wins outright — identically at the pre-spawn `ValidateEffort` gate and at
+`BuildCommand`'s `--effort` emission, so the gated value and the dispatched
+value can never diverge. Unset, the CLI now receives the Go-resolved dispatch
+envelope's effort instead of no flag at all — the scheduler's `wireEffort`
+(`internal/orchestrator/scheduler.go`, `resolveWireEffort` in
+`dispatch_envelope.go`), threaded through `RunOptions.Effort`. That resolved
+value is itself overridden, last, by a same-model effort descent the
+`RetryEngine` records (`StickyEffort`) after an API rejection — never over
+the operator env override. In short: env override > sticky same-model
+descent > Go-resolved wire effort > no flag.
 
 **Worked example — the #532 signature:** `grok-4.5` declares
 `supported_efforts: [low, medium, high]`. Dispatching to it with
