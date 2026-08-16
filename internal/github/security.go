@@ -2,7 +2,8 @@ package github
 
 // GitHub implementation of forge.SecurityService — Dependabot alerts (#343).
 //
-// TRANSPORT CHOICE, AND WHY IT IS NOT THE REST ENDPOINT.
+// TRANSPORT: GraphQL carries the answer; REST is asked exactly one question
+// GraphQL cannot answer.
 //
 // The obvious endpoint is REST `GET /repos/{o}/{r}/dependabot/alerts`. It was
 // probed against a live repository before this file was written, and its
@@ -26,15 +27,34 @@ package github
 // and no error, while REST returns a loud 403. Verified against a public
 // repository where the token holds only read access — REST answered
 // `403 You are not authorized to perform this operation.` and GraphQL answered
-// `{"totalCount":0,"nodes":[]}`. Reporting "no vulnerabilities" for a
-// repository nobody was allowed to scan is the worst failure this package
-// could have, so the same query also selects `viewerPermission` and an empty
-// answer from a non-administrator is returned as forge.ErrPermissionDenied
-// rather than as a clean bill of health.
+// `{"totalCount":0,"nodes":[]}` at HTTP 200. Reporting "no vulnerabilities" for
+// a repository nobody was allowed to scan is the worst failure this package
+// could have.
+//
+// WHY THE GUARD ASKS REST INSTEAD OF READING viewerPermission. An earlier
+// revision inferred the answer from the viewer's repository role and treated
+// anything below ADMIN as a denial. That inference is simply false: GitHub
+// documents Dependabot alert access as a TOKEN SCOPE (`security_events`) plus
+// whatever access repository administrators have granted, and states that
+// "users with write access or higher can assign Dependabot alerts" — which is
+// impossible for an alert you cannot see. Live introspection lists five roles
+// (`ADMIN, MAINTAIN, WRITE, TRIAGE, READ`), so the inference rejected four of
+// them, converting the healthiest possible observation — a genuinely clean
+// repository read by a WRITE token — into a permission failure.
+//
+// REST answers the question outright, so the guard asks it rather than
+// guessing, and ONLY on the ambiguous path (scanning on, zero alerts
+// returned). A repository that returned alerts has self-evidently been allowed
+// to read them, and a repository with scanning switched off is answered before
+// the guard runs. The cost is one extra REST GET per sweep of a clean
+// repository — a different rate-limit bucket from GraphQL, and the sweep has
+// nothing else to do on that path.
 
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/shurcooL/graphql"
@@ -57,14 +77,16 @@ func NewSecurityService(client *Client) *SecurityService {
 // vulnerabilityAlertsQuery is the single request the service issues. Every
 // field on it is load-bearing:
 //
-//   - viewerPermission distinguishes "clean" from "not allowed to look".
+//   - url is the repository's own canonical web URL, which is what makes each
+//     alert's deep link constructible (see alertWebURL). It also keeps the link
+//     correct on GitHub Enterprise Server, where the host is not github.com.
 //   - hasVulnerabilityAlertsEnabled is the coverage fact.
 //   - dependabotUpdate is the remediation fact, unavailable over REST.
 //   - totalCount + hasNextPage let a truncated answer say so instead of
 //     silently under-reporting.
 type vulnerabilityAlertsQuery struct {
 	Repository *struct {
-		ViewerPermission              *graphql.String
+		URL                           graphql.String `graphql:"url"`
 		HasVulnerabilityAlertsEnabled graphql.Boolean
 		VulnerabilityAlerts           struct {
 			TotalCount graphql.Int
@@ -119,7 +141,10 @@ type vulnerabilityAlertNode struct {
 	}
 }
 
-// ListOpenAlerts implements forge.SecurityService in one GraphQL request.
+// ListOpenAlerts implements forge.SecurityService.
+//
+// One GraphQL request always; one additional REST request only on the
+// ambiguous empty answer (see the file header).
 func (s *SecurityService) ListOpenAlerts(ctx context.Context, owner, repo string) (*forgetypes.SecurityAlerts, error) {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
 		return nil, fmt.Errorf("security alerts: owner and name are required")
@@ -142,61 +167,91 @@ func (s *SecurityService) ListOpenAlerts(ctx context.Context, owner, repo string
 		return nil, fmt.Errorf("security alerts %s/%s: %w", owner, repo, forge.ErrNotFound)
 	}
 
+	// Scanning off is answered first, and without the guard: the emptiness is
+	// already explained, and an alert list from a repository nobody is scanning
+	// would invite a reader to treat it as evidence.
+	if !bool(q.Repository.HasVulnerabilityAlertsEnabled) {
+		return &forgetypes.SecurityAlerts{Status: forgetypes.SecurityAlertsDisabled}, nil
+	}
+
 	conn := q.Repository.VulnerabilityAlerts
+	repoURL := string(q.Repository.URL)
 	alerts := make([]forgetypes.SecurityAlert, 0, len(conn.Nodes))
 	for i := range conn.Nodes {
-		alerts = append(alerts, convertVulnerabilityAlert(&conn.Nodes[i]))
+		alerts = append(alerts, convertVulnerabilityAlert(repoURL, &conn.Nodes[i]))
 	}
 
-	// The silent-empty guard. An administrator seeing nothing is a clean repo;
-	// anyone else seeing nothing may simply have been filtered out by the API,
-	// and this surface must never turn that into "no vulnerabilities". The
-	// check is scoped to the empty answer on purpose: a token that returned
-	// alerts has self-evidently been allowed to read them, whatever its
-	// nominal repository permission says.
-	if len(alerts) == 0 && !viewerCanReadAlerts(q.Repository.ViewerPermission) {
-		return nil, fmt.Errorf(
-			"security alerts %s/%s: viewer permission %q cannot read Dependabot alerts (GitHub answers an empty set rather than an error): %w",
-			owner, repo, viewerPermissionOrUnknown(q.Repository.ViewerPermission), forge.ErrPermissionDenied)
+	// The silent-empty guard. GraphQL cannot tell "clean" from "filtered out";
+	// REST can, because it answers with a status code rather than an empty set.
+	if len(alerts) == 0 {
+		if err := s.confirmAlertsAreReadable(ctx, owner, repo); err != nil {
+			return nil, err
+		}
 	}
 
-	out := &forgetypes.SecurityAlerts{
+	return &forgetypes.SecurityAlerts{
 		Status:    forgetypes.SecurityAlertsEnabled,
 		Alerts:    alerts,
 		TotalOpen: int(conn.TotalCount),
 		Truncated: bool(conn.PageInfo.HasNextPage),
-	}
-	if !bool(q.Repository.HasVulnerabilityAlertsEnabled) {
-		// Scanning is off. Report the coverage fact and carry no alerts: an
-		// alert list from a repository that is not being scanned would invite
-		// a reader to treat its emptiness as evidence.
-		out.Status = forgetypes.SecurityAlertsDisabled
-		out.Alerts = nil
-		out.TotalOpen = 0
-		out.Truncated = false
-	}
-	return out, nil
+	}, nil
 }
 
-// viewerCanReadAlerts reports whether the viewer's repository permission is one
-// GitHub grants Dependabot alert visibility to. Only ADMIN qualifies: GitHub
-// scopes the security tab to repository administrators and organisation owners.
+// confirmAlertsAreReadable asks REST whether the token may read this
+// repository's Dependabot alerts at all, and returns nil only when the forge
+// itself says yes.
 //
-// A nil permission (the API declined to state one, as it can for some app
-// installations) is trusted rather than refused — the guard exists to catch the
-// KNOWN under-privileged read, not to invent a new way to fail.
-func viewerCanReadAlerts(perm *graphql.String) bool {
-	if perm == nil {
-		return true
+// The distinction this preserves is the one the whole surface rests on: a
+// denial reported here is the FORGE's answer, not an inference of ours, so the
+// forge.ErrPermissionDenied it wraps means what its name says. Anything that is
+// neither a clear success nor a clear denial (a 404, a 5xx, a transport
+// failure) returns a plain error with no sentinel: the empty answer is not
+// confirmed, so it must not be reported as a clean repository, but neither may
+// this fabricate a specific verdict it did not receive.
+func (s *SecurityService) confirmAlertsAreReadable(ctx context.Context, owner, repo string) error {
+	body, status, err := s.client.restDoStatus(ctx, http.MethodGet, alertsProbePath(owner, repo), nil)
+	if err != nil {
+		return fmt.Errorf("security alerts %s/%s: could not confirm the empty answer was a real one: %w", owner, repo, err)
 	}
-	return strings.EqualFold(string(*perm), "ADMIN")
+	switch {
+	case status >= 200 && status < 300:
+		return nil
+	case status == http.StatusUnauthorized:
+		return fmt.Errorf("security alerts %s/%s: the forge rejected the credential when asked for alerts (REST %d): %w",
+			owner, repo, status, forge.ErrUnauthorized)
+	case (status == http.StatusForbidden || status == http.StatusTooManyRequests) && restBodyLooksRateLimited(body):
+		return fmt.Errorf("security alerts %s/%s: rate limited while confirming the empty answer (REST %d): %w",
+			owner, repo, status, forge.ErrRateLimited)
+	case status == http.StatusForbidden:
+		return fmt.Errorf("security alerts %s/%s: the forge refused to serve this repository's alerts (REST %d: %s) — GraphQL answered an empty set for the same repository, so that emptiness is not evidence of a clean repository: %w",
+			owner, repo, status, restErrorSummary(body), forge.ErrPermissionDenied)
+	default:
+		return fmt.Errorf("security alerts %s/%s: could not confirm the empty answer was a real one (REST %d: %s)",
+			owner, repo, status, restErrorSummary(body))
+	}
 }
 
-func viewerPermissionOrUnknown(perm *graphql.String) string {
-	if perm == nil {
-		return "unknown"
+// alertsProbePath is the REST endpoint the empty-answer guard hits. One alert
+// is requested because only the STATUS is read — the body is never mapped.
+func alertsProbePath(owner, repo string) string {
+	return fmt.Sprintf("/repos/%s/%s/dependabot/alerts?state=open&per_page=1",
+		url.PathEscape(owner), url.PathEscape(repo))
+}
+
+// restErrorSummaryMax bounds how much of a REST error body reaches an error
+// string, so a pathological response cannot flood a log line.
+const restErrorSummaryMax = 200
+
+// restErrorSummary renders a REST error body compactly for an error message.
+func restErrorSummary(body []byte) string {
+	s := strings.TrimSpace(string(body))
+	if s == "" {
+		return "empty response body"
 	}
-	return string(*perm)
+	if len(s) > restErrorSummaryMax {
+		return s[:restErrorSummaryMax] + "…"
+	}
+	return s
 }
 
 // securityQueryError translates a GraphQL transport failure into a forge
@@ -232,10 +287,12 @@ func securityQueryError(owner, repo string, err error) error {
 
 // convertVulnerabilityAlert maps one GraphQL node onto the forge-neutral shape,
 // normalising GitHub's SCREAMING enums to the lower-case vocabulary the forge
-// types declare.
-func convertVulnerabilityAlert(n *vulnerabilityAlertNode) forgetypes.SecurityAlert {
+// types declare. repoURL is the repository's canonical web URL, used to build
+// the alert's deep link.
+func convertVulnerabilityAlert(repoURL string, n *vulnerabilityAlertNode) forgetypes.SecurityAlert {
 	out := forgetypes.SecurityAlert{
 		Number:       int(n.Number),
+		URL:          alertWebURL(repoURL, int(n.Number)),
 		FirstSeenAt:  string(n.CreatedAt),
 		ManifestPath: string(n.VulnerableManifestPath),
 		Severity:     forgetypes.AlertSeverityUnknown,
@@ -277,6 +334,31 @@ func convertVulnerabilityAlert(n *vulnerabilityAlertNode) forgetypes.SecurityAle
 
 	out.Remediation = convertRemediation(n)
 	return out
+}
+
+// alertWebURL builds the alert's own deep link — the destination an operator
+// needs when there is no remediation PR to send them to, and the only page that
+// names this repository, this manifest, and offers a dismiss.
+//
+// GraphQL's RepositoryVulnerabilityAlert has no url field. Live introspection
+// of the type lists autoDismissedAt, createdAt, dependabotUpdate,
+// dependencyRelationship, dependencyScope, dismiss*, fixedAt, id, number,
+// repository, securityAdvisory, securityVulnerability, state,
+// vulnerableManifestFilename, vulnerableManifestPath, vulnerableRequirements —
+// and nothing else. REST's alert object does carry it, as html_url, in exactly
+// the form `<repository web url>/security/dependabot/<number>` (verified live:
+// `https://github.com/nightgauge/nightgauge/security/dependabot/12`).
+//
+// So the link is derived from the repository URL the SAME GraphQL request
+// already returns, rather than bought with a second round trip inside a shared
+// sweep budget. Taking the host from the forge's own answer keeps it right on
+// GitHub Enterprise Server too.
+func alertWebURL(repoURL string, number int) string {
+	base := strings.TrimRight(strings.TrimSpace(repoURL), "/")
+	if base == "" || number <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s/security/dependabot/%d", base, number)
 }
 
 // convertRemediation resolves the tri-state. The three branches are exactly the

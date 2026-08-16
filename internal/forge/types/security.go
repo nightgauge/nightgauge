@@ -108,7 +108,16 @@ type Remediation struct {
 type SecurityAlert struct {
 	// Number is the forge's per-repository alert number.
 	Number int `json:"number"`
-	// URL deep-links the alert on the forge.
+	// URL deep-links THIS repository's alert on the forge — the page that names
+	// the repository, the manifest and the affected version, and offers a
+	// dismiss.
+	//
+	// It is required of every implementation, not decorative. AdvisoryURL is not
+	// a substitute: it points at a public advisory database entry that mentions
+	// neither the repository nor the manifest, so an alert with no remediation
+	// PR — the class this surface exists to surface — would send its reader
+	// somewhere they can take no action at all. An implementation whose forge
+	// omits the link must construct it.
 	URL string `json:"url,omitempty"`
 
 	// Severity is the advisory's severity, not an inference from a label.
@@ -181,6 +190,12 @@ type SecurityAlerts struct {
 	// Truncated reports that the forge holds more open alerts than one request
 	// returns. The service is deliberately single-request (it runs inside a
 	// shared sweep budget), so it says so rather than silently under-reporting.
+	//
+	// A TRUNCATED ANSWER IS NOT THE OPEN SET, and a caller that reconciles it as
+	// one retracts cards for alerts that are still open — the partial
+	// observation driving an auto-resolve that
+	// docs/ATTENTION_PRODUCERS.md invariant 1 forbids. Alerts is a page of the
+	// open set; only when Truncated is false is it the whole of it.
 	Truncated bool `json:"truncated,omitempty"`
 }
 

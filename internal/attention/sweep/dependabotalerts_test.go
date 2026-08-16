@@ -3,6 +3,7 @@ package sweep
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -75,10 +76,15 @@ var seenLongAgo = fixedNow.Add(-72 * time.Hour).Format(time.RFC3339)
 
 // alertWithPR is a high-severity advisory the forge has already prepared a fix
 // for.
+//
+// URL is shaped exactly as an adapter emits it — the repository's own web URL
+// plus /security/dependabot/<number>, which is REST's html_url verbatim. A
+// fixture inventing a value no adapter can produce would exercise the card's
+// URL-preference chain on data that never occurs.
 func alertWithPR() forgetypes.SecurityAlert {
 	return forgetypes.SecurityAlert{
 		Number:              7,
-		URL:                 "https://forge/security/dependabot/7",
+		URL:                 "https://forge/octocat/acme/security/dependabot/7",
 		Severity:            forgetypes.AlertSeverityHigh,
 		AdvisoryID:          "GHSA-aaaa-bbbb-cccc",
 		CVE:                 "CVE-2026-0001",
@@ -106,7 +112,7 @@ func alertWithPR() forgetypes.SecurityAlert {
 func alertWithoutPR() forgetypes.SecurityAlert {
 	return forgetypes.SecurityAlert{
 		Number:          9,
-		URL:             "https://forge/security/dependabot/9",
+		URL:             "https://forge/octocat/acme/security/dependabot/9",
 		Severity:        forgetypes.AlertSeverityCritical,
 		AdvisoryID:      "GHSA-dddd-eeee-ffff",
 		Summary:         "remote code execution in sprocket",
@@ -269,9 +275,19 @@ func TestDependabotAlerts_ScanningDisabledIsNotZeroAlerts(t *testing.T) {
 	}
 }
 
-func TestDependabotAlerts_AuthFailurePropagatesAsRepoWide(t *testing.T) {
+// TestDependabotAlerts_PermissionDenialIsScopedToTheSecuritySurface pins the
+// blast radius of the one failure this producer can suffer that no other
+// producer would.
+//
+// Reading Dependabot alerts needs a token scope (GitHub's `security_events`)
+// that reading pull requests, checks and rulesets does not. isSweepFatal treats
+// forge.ErrPermissionDenied as repo-wide — it aborts the cycle before
+// ReconcileStanding runs — so letting that sentinel out of here would switch
+// off default-branch-health, human-gate and stranded-ready for the repository
+// on every sweep, permanently, and freeze whatever cards are already open.
+func TestDependabotAlerts_PermissionDenialIsScopedToTheSecuritySurface(t *testing.T) {
 	p := newAlertProducer()
-	sec := &alertSecurity{err: forge.ErrPermissionDenied}
+	sec := &alertSecurity{err: fmt.Errorf("the forge refused to serve alerts: %w", forge.ErrPermissionDenied)}
 
 	got, err := p.Evaluate(context.Background(), alertInput(sec))
 	if err == nil {
@@ -280,13 +296,74 @@ func TestDependabotAlerts_AuthFailurePropagatesAsRepoWide(t *testing.T) {
 	if got != nil {
 		t.Errorf("observations = %v, want nil alongside the error", got)
 	}
-	// The sentinel has to survive wrapping or the sweeper cannot tell a
-	// repo-wide failure from one producer's bad day.
-	if !errors.Is(err, forge.ErrPermissionDenied) {
-		t.Errorf("err = %v, want it to wrap forge.ErrPermissionDenied", err)
+	// Still an error, so this producer's own cards are left exactly where they
+	// were: "I could not look" is never "the vulnerability is gone".
+	if !errors.Is(err, errAlertsUnreadable) {
+		t.Errorf("err = %v, want it to wrap errAlertsUnreadable", err)
 	}
-	if !isSweepFatal(err) {
-		t.Error("a permission failure must skip the whole sweep — no producer would fare better and a partial view drives false auto-resolves")
+	if errors.Is(err, forge.ErrPermissionDenied) {
+		t.Error("the repo-wide sentinel escaped the producer — one surface's missing scope would disable every other producer for this repository")
+	}
+	if isSweepFatal(err) {
+		t.Error("a security-surface denial skipped the whole sweep; every other producer reads a different surface and would have succeeded")
+	}
+	// The diagnosis has to survive, or an operator cannot tell this apart from
+	// a transport blip.
+	if !strings.Contains(err.Error(), "refused") {
+		t.Errorf("err = %v, want the forge's own words carried through", err)
+	}
+}
+
+// TestDependabotAlerts_BadCredentialsAndRateLimitsStayRepoWide is the other
+// half: the two failures that genuinely are repo-wide must keep skipping the
+// sweep, because no producer would fare better against either.
+func TestDependabotAlerts_BadCredentialsAndRateLimitsStayRepoWide(t *testing.T) {
+	for name, sentinel := range map[string]error{
+		"the credential itself is bad": forge.ErrUnauthorized,
+		"the shared quota is spent":    forge.ErrRateLimited,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := newAlertProducer()
+			sec := &alertSecurity{err: fmt.Errorf("read alerts: %w", sentinel)}
+
+			_, err := p.Evaluate(context.Background(), alertInput(sec))
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("err = %v, want it to wrap %v", err, sentinel)
+			}
+			if !isSweepFatal(err) {
+				t.Error("the sweep kept going on a failure every other producer would also hit")
+			}
+		})
+	}
+}
+
+// TestDependabotAlerts_TruncatedAnswerIsNotAnObservation covers the forge
+// telling us, in its own words, that we are looking at a page rather than the
+// open set. Reconciling a page auto-resolves every alert that fell off it.
+func TestDependabotAlerts_TruncatedAnswerIsNotAnObservation(t *testing.T) {
+	p := newAlertProducer()
+	sec := enabled(alertWithPR())
+	sec.res.Truncated = true
+	sec.res.TotalOpen = 250
+
+	got, err := p.Evaluate(context.Background(), alertInput(sec))
+	if err == nil {
+		t.Fatal("Evaluate returned a truncated page as if it were the complete open set — every alert past the first page would be retracted as 'condition_cleared'")
+	}
+	if got != nil {
+		t.Errorf("observations = %v, want nil alongside the error", got)
+	}
+	if !errors.Is(err, errAlertsTruncated) {
+		t.Errorf("err = %v, want it to wrap errAlertsTruncated", err)
+	}
+	// The shortfall is the operator's to act on, so the numbers have to be in
+	// the message the sweep result carries.
+	if !strings.Contains(err.Error(), "250") {
+		t.Errorf("err = %v, want the forge's own open count in the message", err)
+	}
+	// One surface's overflow is not a reason to stop evaluating the others.
+	if isSweepFatal(err) {
+		t.Error("a truncated alert page skipped the whole sweep")
 	}
 }
 
@@ -401,33 +478,43 @@ func TestDependabotAlerts_ShipsNoRepairVerb(t *testing.T) {
 	}
 }
 
-func TestDependabotAlerts_DefersToAnotherProducerCardingTheSamePR(t *testing.T) {
-	p := newAlertProducer()
-	// The run-scoped branch-protection producer already carded the very PR that
-	// remediates this alert. One condition, one card.
-	existing := attention.DecisionRequest{
-		Producer:       producerBranchProtection,
-		IdempotencyKey: "branch-protection:octocat/acme#412",
-		Context:        attention.Context{Repo: "octocat/acme", PR: 412},
-		Lifecycle:      attention.Lifecycle{State: attention.StateOpen},
-	}
+// TestDependabotAlerts_KeepsObservingAnAlertAnotherProducerHasCardedThePRFor
+// is the counterpart to humangate.go's deliberate deferral, and the difference
+// matters.
+//
+// Human-gate defers to branch-protection because both observe ONE condition
+// ("this PR cannot merge"). An open advisory and a blocked PR are two
+// conditions. Dropping this observation does not suppress a duplicate card — it
+// tells the reconciler the vulnerability cleared, and the reconciler retracts
+// the only card that names the severity, the GHSA, the CVE and the package.
+func TestDependabotAlerts_KeepsObservingAnAlertAnotherProducerHasCardedThePRFor(t *testing.T) {
+	for _, producer := range []string{producerBranchProtection, ProducerHumanGate} {
+		t.Run(producer, func(t *testing.T) {
+			p := newAlertProducer()
+			existing := attention.DecisionRequest{
+				Producer:       producer,
+				IdempotencyKey: producer + ":octocat/acme#412",
+				// The ordinary life of a remediation PR: green, review required.
+				Title:     "PR #412 is green and waiting on a review",
+				Context:   attention.Context{Repo: "octocat/acme", PR: 412},
+				Lifecycle: attention.Lifecycle{State: attention.StateOpen},
+			}
 
-	got, err := p.Evaluate(context.Background(), alertInput(enabled(alertWithPR()), existing))
-	if err != nil {
-		t.Fatalf("Evaluate: %v", err)
-	}
-	if len(got) != 0 {
-		t.Fatalf("observations = %d, want 0 — another producer already points the operator at PR #412", len(got))
-	}
-
-	// The same alert with NO open card elsewhere still surfaces, so the dedupe
-	// cannot be silently swallowing everything.
-	got, err = p.Evaluate(context.Background(), alertInput(enabled(alertWithPR())))
-	if err != nil {
-		t.Fatalf("Evaluate: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("observations = %d, want 1 with no competing card", len(got))
+			got, err := p.Evaluate(context.Background(), alertInput(enabled(alertWithPR()), existing))
+			if err != nil {
+				t.Fatalf("Evaluate: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("observations = %d, want 1 — the advisory is still open, and not re-observing it auto-resolves its card", len(got))
+			}
+			// The other producer's card states none of this, which is why the
+			// two are not interchangeable.
+			for _, want := range []string{"high", "widget"} {
+				if !strings.Contains(got[0].Title, want) {
+					t.Errorf("title %q dropped %q", got[0].Title, want)
+				}
+			}
+		})
 	}
 }
 
@@ -589,5 +676,218 @@ func TestDependabotAlertsLifecycle_DisabledScannerDoesNotRetract(t *testing.T) {
 	}
 	if openCount(t, store, "octocat/acme") != 1 {
 		t.Fatal("the card was retracted when scanning was turned off")
+	}
+}
+
+// TestDependabotAlertsLifecycle_TruncatedPageNeverRetracts is the partial
+// observation, end to end.
+//
+// A busy repository crosses the per-request cap, a new alert pushes an older
+// one off the single page, and the alert that fell off is STILL OPEN. Read as a
+// complete answer, its card is retracted with the reason "condition_cleared".
+func TestDependabotAlertsLifecycle_TruncatedPageNeverRetracts(t *testing.T) {
+	sec := enabled(alertWithPR(), alertWithoutPR())
+	sw, store := newSweeper(t, &alertForge{sec: sec}, newAlertProducer())
+
+	if _, err := sw.Sweep(context.Background(), "octocat/acme"); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if openCount(t, store, "octocat/acme") != 2 {
+		t.Fatalf("setup: open cards = %d, want 2", openCount(t, store, "octocat/acme"))
+	}
+
+	// A newly raised alert pushes #9 — a critical RCE, still open — off the
+	// page the forge returns.
+	newcomer := alertWithoutPR()
+	newcomer.Number = 21
+	sec.res.Alerts = []forgetypes.SecurityAlert{alertWithPR(), newcomer}
+	sec.res.TotalOpen = 3
+	sec.res.Truncated = true
+
+	res, err := sw.Sweep(context.Background(), "octocat/acme")
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Reconciled.AutoResolved != 0 {
+		t.Fatalf("a page the forge itself flagged as incomplete retracted %d card(s) for still-open alerts", res.Reconciled.AutoResolved)
+	}
+	if openCount(t, store, "octocat/acme") != 2 {
+		t.Fatalf("open cards = %d, want the original 2 untouched", openCount(t, store, "octocat/acme"))
+	}
+	if _, failed := res.Failed[ProducerDependabotAlerts]; !failed {
+		t.Errorf("the shortfall was not reported on the sweep result: %+v", res)
+	}
+	if res.Skipped {
+		t.Error("one producer's overflow skipped the whole sweep")
+	}
+}
+
+// TestDependabotAlertsLifecycle_AnotherProducerCardingThePRDoesNotRetractIt
+// reproduces the loop the cross-producer dedupe used to create: an open
+// security card auto-resolves as "condition_cleared" the moment human-gate
+// starts carding the remediation PR — for a vulnerability the forge is still
+// reporting.
+func TestDependabotAlertsLifecycle_AnotherProducerCardingThePRDoesNotRetractIt(t *testing.T) {
+	sec := enabled(alertWithPR())
+	sw, store := newSweeper(t, &alertForge{sec: sec}, newAlertProducer())
+
+	res, err := sw.Sweep(context.Background(), "octocat/acme")
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Reconciled.Created != 1 {
+		t.Fatalf("first sweep: created = %d, want 1 (%+v)", res.Reconciled.Created, res.Reconciled)
+	}
+	before, err := store.List(attention.ListFilter{Repo: "octocat/acme"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	securityID := before[0].ID
+
+	// Human-gate raises its ordinary card for the very same PR — the normal life
+	// of a remediation PR: green, review required.
+	gateID, err := attention.NewID()
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	if _, _, err := store.Raise(attention.DecisionRequest{
+		ID:             gateID,
+		IdempotencyKey: "human-gate:octocat/acme#412",
+		Producer:       ProducerHumanGate,
+		Kind:           attention.KindApprove,
+		Severity:       attention.SeverityFYI,
+		Title:          "PR #412 is green and waiting on a review",
+		Context:        attention.Context{Repo: "octocat/acme", PR: 412},
+		DefaultAction:  attention.ExpireNoop,
+	}); err != nil {
+		t.Fatalf("Raise: %v", err)
+	}
+
+	res, err = sw.Sweep(context.Background(), "octocat/acme")
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Reconciled.AutoResolved != 0 {
+		t.Fatalf("another producer carding the remediation PR retracted %d security card(s) — the advisory is still open and still returned by the forge (%+v)", res.Reconciled.AutoResolved, res.Reconciled)
+	}
+	if res.Reconciled.Created != 0 {
+		t.Fatalf("the security card was re-created rather than refreshed: %+v", res.Reconciled)
+	}
+
+	open, err := store.List(attention.ListFilter{Repo: "octocat/acme"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var security *attention.DecisionRequest
+	for i := range open {
+		if open[i].Producer == ProducerDependabotAlerts {
+			security = &open[i]
+		}
+	}
+	if security == nil {
+		t.Fatal("the security card is gone — the retraction removed the only card that names the severity, the GHSA, the CVE and the package")
+	}
+	if security.ID != securityID {
+		t.Errorf("card id moved %q → %q — a new id is a new notification for a condition whose fingerprint never moved", securityID, security.ID)
+	}
+	if security.Lifecycle.State != attention.StateOpen {
+		t.Errorf("state = %q, want %q", security.Lifecycle.State, attention.StateOpen)
+	}
+}
+
+// TestDependabotAlertsLifecycle_PermissionDenialLeavesTheRestOfTheSweepWorking
+// is the blast-radius test: a token that cannot read the security tab must cost
+// exactly the security cards, not the whole Action Center for that repository.
+func TestDependabotAlertsLifecycle_PermissionDenialLeavesTheRestOfTheSweepWorking(t *testing.T) {
+	sec := &alertSecurity{err: fmt.Errorf("the forge refused to serve alerts: %w", forge.ErrPermissionDenied)}
+	other := &scriptedProducer{name: "test-default-branch", reqs: []attention.DecisionRequest{
+		observation("test-default-branch:octocat/acme:main", "check:build=failure"),
+	}}
+	sw, store := newSweeper(t, &alertForge{sec: sec}, newAlertProducer(), other)
+
+	res, err := sw.Sweep(context.Background(), "octocat/acme")
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Skipped {
+		t.Fatalf("the whole sweep was skipped over one surface's missing scope: %q", res.SkipReason)
+	}
+	if res.Reconciled.Created != 1 {
+		t.Fatalf("created = %d, want 1 — main is red and nothing said so (%+v)", res.Reconciled.Created, res.Reconciled)
+	}
+	if openCount(t, store, "octocat/acme") != 1 {
+		t.Fatal("the red-main card was never raised")
+	}
+	if _, failed := res.Failed[ProducerDependabotAlerts]; !failed {
+		t.Errorf("the security producer's failure was not reported: %+v", res)
+	}
+
+	// And the cards that DO get raised must still be able to retract: a skipped
+	// sweep freezes them until StandingExpiry, 30 days later.
+	other.reqs = nil
+	res, err = sw.Sweep(context.Background(), "octocat/acme")
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if res.Reconciled.AutoResolved != 1 {
+		t.Fatalf("main went green and the stale card could not be retracted: %+v", res.Reconciled)
+	}
+	if openCount(t, store, "octocat/acme") != 0 {
+		t.Fatal("a cleared condition left its card open")
+	}
+}
+
+// TestDependabotAlerts_NoRemediationPRCardLinksToTheAlert is the destination
+// half of the card class this issue exists for.
+//
+// The advisory URL is a public database page that names neither the repository,
+// nor the manifest, nor offers a dismiss. A card whose whole message is "there
+// is nothing to merge, go decide something" has to land on the alert itself.
+func TestDependabotAlerts_NoRemediationPRCardLinksToTheAlert(t *testing.T) {
+	p := newAlertProducer()
+	// Shaped exactly as the GitHub adapter emits it: URL is the alert's own
+	// deep link, AdvisoryURL the public advisory page.
+	a := alertWithoutPR()
+	a.URL = "https://forge/octocat/acme/security/dependabot/9"
+	a.AdvisoryURL = "https://forge/advisories/GHSA-dddd-eeee-ffff"
+
+	got, err := p.Evaluate(context.Background(), alertInput(enabled(a)))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if got[0].Context.URL != a.URL {
+		t.Errorf("card URL = %q, want the alert's own deep link %q", got[0].Context.URL, a.URL)
+	}
+	if got[0].Context.URL == a.AdvisoryURL {
+		t.Error("the card sends the operator to the public advisory database page, which names neither the repository nor the manifest")
+	}
+}
+
+// TestDependabotAlerts_AlertWithNoAdvisoryStillIdentifiesItself covers the
+// forge's nullable securityAdvisory / securityVulnerability. Without a fallback
+// the title reads "unknown severity in  — no remediation PR exists", which the
+// operator cannot even tell apart from the next such card.
+func TestDependabotAlerts_AlertWithNoAdvisoryStillIdentifiesItself(t *testing.T) {
+	p := newAlertProducer()
+	bare := forgetypes.SecurityAlert{
+		Number:      63,
+		URL:         "https://forge/octocat/acme/security/dependabot/63",
+		Severity:    forgetypes.AlertSeverityUnknown,
+		FirstSeenAt: seenLongAgo,
+		Remediation: forgetypes.Remediation{State: forgetypes.RemediationNone},
+	}
+
+	got, err := p.Evaluate(context.Background(), alertInput(enabled(bare)))
+	if err != nil {
+		t.Fatalf("Evaluate: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observations = %d, want 1", len(got))
+	}
+	if !strings.Contains(got[0].Title, "#63") {
+		t.Errorf("title %q identifies nothing — the package, advisory id and CVE are all absent", got[0].Title)
+	}
+	if got[0].Context.URL != bare.URL {
+		t.Errorf("card URL = %q, want the alert deep link — with no advisory there is no other link at all", got[0].Context.URL)
 	}
 }

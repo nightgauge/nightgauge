@@ -23,6 +23,15 @@ package sweep
 // and a button that implies otherwise is worse than no button. The only option
 // is an honest dismiss; the real next action is the URL. Bounded operations
 // arrive with the sibling issues that implement them.
+//
+// NO CROSS-PRODUCER DEDUPE, unlike humangate.go — deliberately, and the
+// difference is not an oversight. Human-gate defers to branch-protection
+// because the two producers observe ONE condition ("this PR cannot merge") from
+// two vantage points. An open advisory and a PR that cannot merge are two
+// conditions; suppressing this observation because another producer carded the
+// remediation PR made the reconciler auto-resolve a live vulnerability as
+// "condition_cleared", and re-raise it as a new card once the other card was
+// dismissed. See the comment in Evaluate.
 
 import (
 	"context"
@@ -33,6 +42,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 )
 
@@ -67,6 +77,26 @@ const DependabotAlertGrace = 30 * time.Minute
 // workspace-scoped question and belongs to the coverage producer, not here.
 var errAlertsDisabled = errors.New("dependency scanning is disabled for this repository")
 
+// errAlertsUnreadable marks a forge-confirmed denial that is scoped to the
+// SECURITY surface alone.
+//
+// It deliberately does not wrap forge.ErrPermissionDenied — see
+// alertReadError, where the whole point is to keep this failure out of
+// isSweepFatal.
+var errAlertsUnreadable = errors.New("the token cannot read this repository's security alerts")
+
+// errAlertsTruncated marks a partial answer: the forge holds more open alerts
+// than one request returns.
+//
+// Truncation is a failure to OBSERVE, not an observation of fewer alerts. The
+// reconciler auto-resolves every card of an evaluated producer whose condition
+// is absent from the observation, so returning a page as if it were the open
+// set retracts live vulnerability cards with the reason "condition_cleared" —
+// docs/ATTENTION_PRODUCERS.md invariant 1, in the producer least able to afford
+// it. An error leaves every existing card exactly where it was and reports the
+// shortfall on the sweep result instead.
+var errAlertsTruncated = errors.New("the forge returned only part of the open alert set")
+
 // DependabotAlerts reports open dependency security advisories, one card each.
 type DependabotAlerts struct {
 	// Grace overrides DependabotAlertGrace. Zero uses the default.
@@ -96,22 +126,26 @@ func (p *DependabotAlerts) grace() time.Duration {
 
 // Evaluate implements Producer.
 //
-// Exactly one forge request per repo per sweep: producers run sequentially
-// under one shared 30-second budget, so a per-alert fan-out here would spend
-// every other producer's time.
+// Exactly one call into the forge per repo per sweep: producers run
+// sequentially under one shared 30-second budget, so a per-alert fan-out here
+// would spend every other producer's time. (The GitHub adapter spends one
+// additional REST request behind that call on the ambiguous empty answer, to
+// confirm the emptiness is real rather than a permission filter — see
+// internal/github/security.go.)
 func (p *DependabotAlerts) Evaluate(ctx context.Context, in Input) ([]attention.DecisionRequest, error) {
 	res, err := in.Forge.Security().ListOpenAlerts(ctx, in.Owner, in.Name)
 	if err != nil {
-		// Wrapped, so an auth or rate-limit sentinel still reaches the sweeper's
-		// repo-wide skip check. Anything else is this producer's bad day and
-		// leaves its cards untouched.
-		return nil, fmt.Errorf("read security alerts for %s: %w", in.Repo, err)
+		return nil, alertReadError(in.Repo, err)
 	}
 	if res == nil {
 		return nil, fmt.Errorf("read security alerts for %s: forge returned no result", in.Repo)
 	}
 	if !res.Enabled() {
 		return nil, fmt.Errorf("%s: %w", in.Repo, errAlertsDisabled)
+	}
+	if res.Truncated {
+		return nil, fmt.Errorf("%s: %w (%d open, %d returned per request)",
+			in.Repo, errAlertsTruncated, res.TotalOpen, forge.MaxSecurityAlertsPerRequest)
 	}
 
 	alerts := p.carded(res.Alerts)
@@ -121,23 +155,51 @@ func (p *DependabotAlerts) Evaluate(ctx context.Context, in Input) ([]attention.
 		return nil, nil
 	}
 
+	// EVERY open alert is observed, including one whose remediation PR another
+	// producer is already carding.
+	//
+	// Declining to re-observe it does not merely suppress a duplicate: the
+	// reconciler reads the missing observation as "the condition cleared" and
+	// AUTO-RESOLVES the existing security card, then re-creates it as a brand
+	// new card the moment the other producer's card is dismissed — a live
+	// advisory retracted and re-alerted with its fingerprint unmoved. The two
+	// cards are also not interchangeable: a branch-protection or human-gate card
+	// says a PR cannot merge and names no severity, GHSA, CVE or package, so
+	// retracting this one removes the only place the vulnerability is stated.
 	out := make([]attention.DecisionRequest, 0, len(alerts))
 	for i := range alerts {
-		a := alerts[i]
-		// One condition, one card. When the forge already has a remediation PR
-		// and another producer is carding that same PR, the operator's next
-		// action ("go look at this PR") is already in their inbox once.
-		if pr := a.Remediation.PRNumber; pr > 0 {
-			if _, dup := in.OpenRequestForPR(producerBranchProtection, pr); dup {
-				continue
-			}
-			if _, dup := in.OpenRequestForPR(ProducerHumanGate, pr); dup {
-				continue
-			}
-		}
-		out = append(out, p.request(in.Repo, a))
+		out = append(out, p.request(in.Repo, alerts[i]))
 	}
 	return out, nil
+}
+
+// alertReadError decides how far one failed security read is allowed to travel.
+//
+// isSweepFatal treats forge.ErrPermissionDenied as REPO-WIDE: the sweeper
+// abandons the cycle before reconciling, so no producer evaluates, no card is
+// created, and no open card can auto-resolve. That is right for a credential
+// the forge rejected outright and for a rate limit — nothing else would fare
+// better against either. It is wrong for THIS surface's denial, which is
+// surface-specific: reading Dependabot alerts requires a scope (GitHub's
+// `security_events`) that reading pull requests, checks and rulesets does not.
+// A token that legitimately cannot see the security tab would otherwise switch
+// off default-branch-health, human-gate and stranded-ready for that repository
+// on every cycle, permanently — and freeze whatever cards are already open,
+// since nothing can retract them until StandingExpiry.
+//
+// So a permission denial is downgraded to this producer's own bad day: its
+// cards are left untouched and every other producer still runs. ErrUnauthorized
+// and ErrRateLimited stay repo-wide, because both really are.
+func alertReadError(repo string, err error) error {
+	if errors.Is(err, forge.ErrPermissionDenied) &&
+		!errors.Is(err, forge.ErrUnauthorized) &&
+		!errors.Is(err, forge.ErrRateLimited) {
+		// %v rather than %w on the cause: dropping the repo-wide sentinel from
+		// the chain is the entire point, and errAlertsUnreadable carries the
+		// meaning on without it.
+		return fmt.Errorf("read security alerts for %s: %v: %w", repo, err, errAlertsUnreadable)
+	}
+	return fmt.Errorf("read security alerts for %s: %w", repo, err)
 }
 
 // carded filters the forge's open set down to the alerts worth a card and puts
@@ -223,10 +285,7 @@ func alertFingerprint(a forgetypes.SecurityAlert) string {
 // the remediation situation — the two facts that decide what the operator does
 // next.
 func alertTitle(a forgetypes.SecurityAlert) string {
-	pkg := a.Package
-	if pkg == "" {
-		pkg = a.AdvisoryID
-	}
+	pkg := alertSubject(a)
 	switch a.Remediation.State {
 	case forgetypes.RemediationPROpen:
 		return fmt.Sprintf("%s severity in %s — fix is waiting in PR #%d",
@@ -239,21 +298,50 @@ func alertTitle(a forgetypes.SecurityAlert) string {
 	}
 }
 
+// alertSubject names what the alert is ABOUT in one token, and never renders
+// empty.
+//
+// The forge's securityVulnerability (and therefore the package name) is
+// nullable — an advisory can be withdrawn or restructured while the alert
+// stays open — and a title reading "unknown severity in  — no remediation PR
+// exists" is a card the operator cannot even identify. Falling through
+// package → advisory id → CVE → alert number always leaves something that
+// distinguishes this card from the next one.
+func alertSubject(a forgetypes.SecurityAlert) string {
+	switch {
+	case a.Package != "":
+		return a.Package
+	case a.AdvisoryID != "":
+		return a.AdvisoryID
+	case a.CVE != "":
+		return a.CVE
+	default:
+		return fmt.Sprintf("alert #%d", a.Number)
+	}
+}
+
 // alertBlocker is the one-line machine-facing summary surfaces show inline.
 func alertBlocker(a forgetypes.SecurityAlert) string {
 	switch a.Remediation.State {
 	case forgetypes.RemediationPROpen:
 		return fmt.Sprintf("%s severity advisory %s in %s — remediation PR #%d",
-			a.Severity, a.AdvisoryID, a.Package, a.Remediation.PRNumber)
+			a.Severity, identifierLine(a), alertSubject(a), a.Remediation.PRNumber)
 	default:
 		return fmt.Sprintf("%s severity advisory %s in %s — no remediation PR",
-			a.Severity, a.AdvisoryID, a.Package)
+			a.Severity, identifierLine(a), alertSubject(a))
 	}
 }
 
 // alertURL points at the single most useful destination. When a remediation PR
 // exists that is the PR, because the operator's next action is to review it;
-// otherwise it is the alert, then the advisory.
+// otherwise it is the ALERT — the page that names this repository, this
+// manifest and this version, and offers a dismiss.
+//
+// AdvisoryURL is last and is a genuine fallback, not an equivalent: it is a
+// public advisory-database page that mentions neither the repository nor the
+// manifest, so sending a "there is nothing to merge, go decide something" card
+// there gives its reader nothing to decide with. forgetypes.SecurityAlert.URL
+// is required of every adapter for exactly this reason.
 func alertURL(a forgetypes.SecurityAlert) string {
 	if a.Remediation.State == forgetypes.RemediationPROpen && a.Remediation.PRURL != "" {
 		return a.Remediation.PRURL
@@ -270,7 +358,7 @@ func alertURL(a forgetypes.SecurityAlert) string {
 func alertBody(repo string, a forgetypes.SecurityAlert) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "%s severity advisory against %s in %s.\n\n", a.Severity, a.Package, repo)
+	fmt.Fprintf(&b, "%s severity advisory against %s in %s.\n\n", a.Severity, alertSubject(a), repo)
 	if a.Summary != "" {
 		fmt.Fprintf(&b, "%s\n\n", a.Summary)
 	}
