@@ -5161,7 +5161,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// substitution is sticky for the rest of the run; the retry below
 			// re-dispatches this stage and the model resolution picks it up.
 			failText := stageFailureText(err, result)
-			modelRejected := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText) == TerminalKindModelUnavailable
+			resolvedFailureKind := ResolveTerminalKind(gateRan, gateRes.TerminalKind, failText)
+			modelRejected := resolvedFailureKind == TerminalKindModelUnavailable
+			// Auth-shaped failure (#591): the adapter CLI itself is not logged
+			// in, or the pipeline-start auth gate refused to launch. No
+			// downgrade/substitution path exists for this kind (unlike
+			// modelRejected below) — see the escalation gate further down for
+			// why it is excluded from escalation too.
+			authFailed := resolvedFailureKind == TerminalKindAdapterAuthFailed
+			if authFailed {
+				terminalFailureKind = TerminalKindAdapterAuthFailed
+			}
 			if modelRejected {
 				if dg := s.retryEngine.EvaluateDowngrade(model); dg.ShouldDowngrade {
 					s.retryEngine.RecordDowngrade(model, dg.NewTier)
@@ -5192,7 +5202,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// Stage failed — evaluate model escalation before giving up.
 			// Skipped on a model rejection: escalation moves UP the ladder,
 			// which cannot help when the plan refused the current model.
-			if !modelRejected {
+			// Skipped on an auth-shaped failure for the same reason (#591):
+			// escalation is for capability-shaped failures, and a stronger
+			// model cannot fix a CLI that isn't logged in.
+			if !modelRejected && !authFailed {
 				escalation := s.retryEngine.EvaluateEscalation(string(stage), model)
 				if escalation.ShouldEscalate {
 					log.Printf("#%d: stage %s failed — escalating model to %s",

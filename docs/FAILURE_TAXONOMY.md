@@ -375,8 +375,24 @@ A failure — whether a post-retry timeout or a definitive logged-out negative �
 routes like the other transient kinds: short backoff, board → Ready, **no
 `LifetimeIssueFailures` increment, no cascade-breaker feed, no pause**. The
 timeout-vs-logged-out distinction is carried in the human-readable reason; both
-share the terminal kind. `worktree_uncommitted` and `budget_ceiling_hit` are
-**recoverable** kinds: the
+share the terminal kind.
+
+The pipeline-start probe is not the only producer (Issue #591). A CLI adapter
+can also fail its own login check mid-dispatch — too fast for the preflight
+probe to have run at all — and print its own vendor auth message straight to
+stderr, e.g. grok Build's `Error: Not signed in. To authenticate without a
+browser, run: grok login --device-code...`. That text carries none of the
+`[adapter-auth-failed]` / `adapter-auth-failed` / `adapter_auth_failed`
+markers the gate stamps, so it reaches the classifier only as ordinary stderr
+(the #533 `cliFailureText` carry) and, pre-#591, fell through every rule to
+`subagent_crash`. The `not signed in` clause on the same rule closes that gap:
+both producers share one kind, one recovery routing, and — critically — **an
+auth failure is excluded from model escalation** (`internal/orchestrator/
+scheduler.go`'s escalation gate): a stronger model cannot authenticate a CLI
+whose credentials are absent, so escalating on this kind is pure wasted spend,
+not a recovery attempt.
+
+`worktree_uncommitted` and `budget_ceiling_hit` are **recoverable** kinds: the
 autonomous scheduler does not increment `LifetimeIssueFailures` for them and the
 Go scheduler skips the board-status revert — the issue is re-dispatchable.
 

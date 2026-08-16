@@ -1178,6 +1178,15 @@ func TestCostCapKillJSONLRecord_IPCMode(t *testing.T) {
 // boundaries; the fixture file is the provenance record.
 const grokUnknownModelStderr = `Error: Couldn't set model 'grok-build-0.1': Invalid params: "unknown model id". Run 'grok models' to see available models.` + "\n"
 
+// grokNotSignedInStderr is the REAL stderr of a grok Build CLI dispatch with
+// no credentials present, transcribed verbatim from the #528 live probe (run
+// 2026-08-15 against #590) that this issue (#591) fixes. Unlike
+// grokUnknownModelStderr, no pipeline-start auth-gate marker ever wraps this
+// text: the CLI fails too fast for the preflight probe to have run, so this
+// sentence reaches the classifier as ordinary stderr via the #533 carry —
+// which is exactly why it fell through to subagent_crash pre-#591.
+const grokNotSignedInStderr = `Error: Not signed in. To authenticate without a browser, run: grok login --device-code. Alternatively, set the XAI_API_KEY environment variable or run grok login on a machine with a browser.` + "\n"
+
 // TestCLIStageErrorTextReachesClassification_GrokUnknownModel is the #533
 // regression test for the runner projection. It drives the REAL
 // ExecutionManagerRunner over a REAL execution.Manager whose adapter spawns a
@@ -1394,6 +1403,93 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 		t.Errorf("pr-create dispatched %d times, want 1 — a rejected model with no weaker "+
 			"tier is terminal; a second dispatch means the escalation ladder ran",
 			runner.failStageCalls)
+	}
+}
+
+// TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash is the
+// scheduler half of #591. It mirrors
+// TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash's setup exactly —
+// same CLI failure shape (err == nil, reason on ErrorText), same stage, same
+// escalation-eligible retry engine — but for grok's own "not signed in"
+// vendor text rather than a rejected model.
+//
+// The #528 live probe (2026-08-15 against #590) observed the pre-fix
+// behavior: this exact text fell through the terminal-kind ladder to
+// subagent_crash, and the generic escalation branch then moved haiku → sonnet
+// before giving up. This test pins the fix: the text now classifies as
+// adapter_auth_failed and escalation is skipped entirely — a stronger model
+// cannot authenticate a CLI whose credentials are absent, so escalating is
+// pure wasted spend on a failure only the operator fixing credentials clears.
+func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.T) {
+	root := t.TempDir()
+
+	runner := &cliFailureStageRunner{
+		failStage:       state.StagePRCreate,
+		errText:         strings.TrimSpace(grokNotSignedInStderr),
+		lastOutputLines: "some earlier stdout chatter\n" + strings.TrimSpace(grokNotSignedInStderr),
+	}
+
+	s := buildStallTestScheduler(t, root, runner)
+	// Escalation deliberately ENABLED, exactly as the model-rejection sibling
+	// test above: it has to be possible for the scheduler to escalate before
+	// "it didn't" means anything.
+	s.retryEngine = NewRetryEngine(RetryConfig{
+		MaxBacktracks:          0,
+		MaxEscalationsPerStage: 1,
+		ModelLadder:            []string{"haiku", "sonnet", "opus"},
+	})
+
+	item := types.BoardItem{
+		Number: 8591,
+		Repo:   "nightgauge/nightgauge",
+		ID:     "item-8591",
+		Title:  "CLI-mode grok auth failure must not escalate the model",
+		Labels: []string{"type:bug", "component:pipeline"},
+	}
+	s.runPipeline(context.Background(), item)
+
+	records := readDailyJSONLRecords(t, root)
+	var rec state.V2RunRecord
+	found := false
+	for _, r := range records {
+		if r.IssueNumber == item.Number {
+			rec, found = r, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("no record for issue #%d in daily JSONL (got %d records)", item.Number, len(records))
+	}
+
+	if rec.Outcome != "failed" {
+		t.Errorf("outcome = %q, want failed", rec.Outcome)
+	}
+	if rec.TerminalFailureKind != TerminalKindAdapterAuthFailed {
+		t.Errorf("terminal_failure_kind = %q, want %q — grok's 'Not signed in' vendor text "+
+			"is the exact misclassification #528 forbids when it lands as subagent_crash instead",
+			rec.TerminalFailureKind, TerminalKindAdapterAuthFailed)
+	}
+
+	detail, ok := rec.Stages[string(state.StagePRCreate)]
+	if !ok {
+		t.Fatalf("pr-create stage missing from record; got stages=%v", rec.Stages)
+	}
+	if !strings.Contains(detail.Error, "Not signed in") {
+		t.Errorf("stages[pr-create].Error = %q, expected the CLI's verbatim reason", detail.Error)
+	}
+
+	// The whole point of this issue: escalation must never fire on an
+	// auth-shaped failure. Pre-#591 this is exactly the haiku → sonnet bump
+	// the live probe observed.
+	if got := s.retryEngine.CurrentModel(string(state.StagePRCreate)); got != "" {
+		t.Errorf("pr-create escalated to %q — model escalation cannot fix an adapter that "+
+			"isn't logged in; escalation is for capability-shaped failures, not auth-shaped "+
+			"ones (#591)", got)
+	}
+	if runner.failStageCalls != 1 {
+		t.Errorf("pr-create dispatched %d times, want 1 — an auth failure with no escalation "+
+			"path is terminal on the first attempt; a second dispatch means the escalation "+
+			"ladder ran anyway", runner.failStageCalls)
 	}
 }
 
@@ -2027,6 +2123,12 @@ func TestTerminalReasonClassification_CLIShapeParity(t *testing.T) {
 			stderr: "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)",
 			want:   TerminalKindStallKill,
 			why:    "CLI mode reaches the same recovery branch IPC mode already did",
+		},
+		{
+			name:   "grok not-signed-in on stderr becomes adapter_auth_failed",
+			stderr: grokNotSignedInStderr,
+			want:   TerminalKindAdapterAuthFailed,
+			why:    "#591: an auth-shaped failure, not a process death — and never eligible for model escalation, which cannot fix a login problem",
 		},
 	}
 

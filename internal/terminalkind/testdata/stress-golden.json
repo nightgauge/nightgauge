@@ -1481,6 +1481,21 @@
       "signal": "adapter_auth_failed"
     },
     {
+      "input": "not signed in",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "exit 1: not signed in",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "NOT SIGNED IN",
+      "kind": "adapter_auth_failed",
+      "signal": "adapter_auth_failed"
+    },
+    {
       "input": "[no-changes-produced]",
       "kind": "no_changes_produced",
       "signal": ""
