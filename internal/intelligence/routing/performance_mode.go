@@ -120,6 +120,14 @@ const (
 // TierBandsStrongestFirst is the capability ordering of the registry bands.
 // Strongest first, because that is the order the model-unavailable downgrade
 // ladder walks (#42).
+//
+// This is the ONE Go band-order declaration (#581): the selection query
+// (selection.go) derives ladder MEMBERSHIP from the registry, but the
+// relative order of the bands has no registry data field in this phase and
+// no measured capability evidence exists — so the order is declared, here,
+// exactly once. TS pair: TIER_BANDS in
+// packages/nightgauge-sdk/src/eval/tierBands.ts (ascending; the ladder
+// parity tests pin the two).
 var TierBandsStrongestFirst = []string{TierFable, TierOpus, TierSonnet, TierHaiku}
 
 // TierBand maps a model reference — a band name ("opus"), a concrete Anthropic
