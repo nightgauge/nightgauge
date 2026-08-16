@@ -530,6 +530,45 @@ func TestCoverageMatchers_SweepAndVerbAgree(t *testing.T) {
 	}
 }
 
+// --- default registry -------------------------------------------------------
+
+// Every other test in this file builds its own Registry (coverageSweeper) or
+// calls Evaluate directly, so none of them observes `Default` — and a producer
+// absent from `Default` is a producer PRODUCTION never runs, however green its
+// unit tests are. `nightgauge attention sweep` and the daemon's periodic sweep
+// both enumerate the default registry and nothing else, so deleting the init()
+// would silently delete the feature.
+//
+// What is registered is asserted too, not just that something with the right
+// name is. The producer's two fields are documented test seams — ListAlerts
+// replaces the forge read outright — so a registration that carried one would
+// put a producer into every production sweep that never talks to the forge, and
+// a name-only check could not tell that apart from the real thing.
+//
+// (The registry it lands in needs no assertion: WorkspaceProducer.Evaluate
+// takes a WorkspaceInput and Producer.Evaluate takes an Input, so a repo-scoped
+// Default.Register of this type does not compile. The compiler owns that half.)
+func TestDependabotCoverage_RegisteredInTheDefaultWorkspaceRegistry(t *testing.T) {
+	var found WorkspaceProducer
+	for _, p := range Default.WorkspaceProducers() {
+		if p.Name() == ProducerDependabotCoverage {
+			found = p
+		}
+	}
+	if found == nil {
+		t.Fatalf("%q is not in the default workspace registry — `nightgauge attention sweep` "+
+			"and the daemon sweep would never run it", ProducerDependabotCoverage)
+	}
+	prod, ok := found.(*DependabotCoverage)
+	if !ok {
+		t.Fatalf("%q is registered as %T, want *DependabotCoverage", ProducerDependabotCoverage, found)
+	}
+	if prod.ListAlerts != nil {
+		t.Errorf("the registered %q overrides ListAlerts — production would read that seam "+
+			"instead of the forge's security service", ProducerDependabotCoverage)
+	}
+}
+
 // --- lifecycle through the sweeper and the store ----------------------------
 //
 // The acceptance criteria that matter most are properties of RECONCILIATION,
