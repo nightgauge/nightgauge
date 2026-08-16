@@ -641,8 +641,14 @@ func TestScheduler_NonTerminalReconcile_ForeignPrOpen_StillReconciles(t *testing
 
 	// A stale OPEN PR means the work is in review, NOT merged — Done would
 	// misreport it.
+	//
+	// The status is interpolated from state.StatusInReview rather than spelled
+	// out: the line is printed FROM that constant (scheduler.go's completion
+	// block formats completionBoardStatus's return), so a literal here pins the
+	// constant's spelling, not the behaviour, and goes red the next time the
+	// board vocabulary is corrected (#413 changed "In Review" → "In review").
 	assertLogLineStartsWith(t, out,
-		"#396: pipeline complete — resolved terminal board status In Review (arm pr_open_stale",
+		fmt.Sprintf("#396: pipeline complete — resolved terminal board status %s (arm pr_open_stale", state.StatusInReview),
 		"a run reconciled by a stale foreign OPEN PR must finish In Review, and the line must name the arm that decided it")
 }
 
@@ -652,6 +658,11 @@ func TestScheduler_NonTerminalReconcile_ForeignPrOpen_StillReconciles(t *testing
 // actually survives the loop break — a per-iteration flag would pass every
 // decision-level test above and still write In Review here.
 func TestScheduler_NonTerminalReconcile_PerArmBoardStatus(t *testing.T) {
+	// wantStatus is derived from the state.BoardStatus constants, never spelled
+	// as a literal: the log line under assertion is formatted from those same
+	// constants, so a literal would pin their current capitalization instead of
+	// the per-arm mapping this test exists to pin — and would go red on any
+	// future board-vocabulary correction (#413).
 	cases := []struct {
 		name       string
 		issue      int
@@ -667,7 +678,7 @@ func TestScheduler_NonTerminalReconcile_PerArmBoardStatus(t *testing.T) {
 			issue:      394,
 			branch:     "fix/394-issue-closed",
 			issueState: "CLOSED",
-			wantStatus: "Done",
+			wantStatus: string(state.StatusDone),
 			wantArm:    "issue_closed",
 			why:        "the issue is closed — the work shipped and there is nothing left to review",
 		},
@@ -677,7 +688,7 @@ func TestScheduler_NonTerminalReconcile_PerArmBoardStatus(t *testing.T) {
 			branch:     "fix/393-pr-merged",
 			issueState: "OPEN",
 			prs:        prListPayload(pr("MERGED", testForeignPRNumber)),
-			wantStatus: "In Review",
+			wantStatus: string(state.StatusInReview),
 			wantArm:    "pr_merged",
 			why: "the merged arm runs only after the issue answered NOT-closed and nothing closes it afterwards, " +
 				"so Done would durably record Done-with-an-open-issue",
@@ -688,7 +699,7 @@ func TestScheduler_NonTerminalReconcile_PerArmBoardStatus(t *testing.T) {
 			branch:     "fix/392-foreign-open",
 			issueState: "OPEN",
 			prs:        prListPayload(pr("OPEN", testForeignPRNumber)),
-			wantStatus: "In Review",
+			wantStatus: string(state.StatusInReview),
 			wantArm:    "pr_open_stale",
 			why:        "the work is in review, not merged",
 		},
