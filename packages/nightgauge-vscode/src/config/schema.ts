@@ -13,7 +13,12 @@
  */
 
 import { z } from "zod";
-import { CODEX_DEFAULT_BASE_MODEL, EFFORT_LEVELS } from "@nightgauge/sdk";
+import {
+  CODEX_DEFAULT_BASE_MODEL,
+  EFFORT_LEVELS,
+  REASONING_EFFORT_LEVELS,
+  TIER_BANDS,
+} from "@nightgauge/sdk";
 import { PipelineStageSchema } from "../schemas/pipelineState";
 // Type-only: erased at emit, so this cannot form a runtime import cycle.
 import type { ClaudeEffort } from "../utils/resolvers/stageResolver";
@@ -1789,8 +1794,12 @@ export type CodexModel = z.infer<typeof CodexModelSchema>;
  */
 export const CodexConfigSchema = z.object({
   model: CodexModelSchema.optional(),
-  /** Default Codex reasoning budget. Stage/mode effort overrides take precedence. */
-  reasoning_effort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]).optional(),
+  /**
+   * Default Codex reasoning budget. Stage/mode effort overrides take
+   * precedence. Enum derived from `REASONING_EFFORT_LEVELS` — the single
+   * authority for the codex reasoning vocabulary (#435) — never re-listed.
+   */
+  reasoning_effort: z.enum(REASONING_EFFORT_LEVELS).optional(),
   /** CLI binary to execute. Default: `codex` */
   cli_command: z.string().trim().min(1).optional(),
   /** Optional extra CLI args appended before model injection. */
@@ -1885,8 +1894,11 @@ export type OllamaConfig = z.infer<typeof OllamaConfigSchema>;
  * It is a valid explicit choice (default_model, minimum_model, experiments,
  * the `frontier` performance mode), but automatic complexity routing never
  * selects it — see {@link ComplexityThresholdsSchema}.
+ *
+ * Enum derived from the SDK's `TIER_BANDS` band authority (#581), never
+ * re-listed.
  */
-export const DefaultModelSchema = z.enum(["sonnet", "opus", "haiku", "fable"]);
+export const DefaultModelSchema = z.enum(TIER_BANDS);
 export type DefaultModel = z.infer<typeof DefaultModelSchema>;
 /**
  * Effort ladder for `model_routing` — derived from `EFFORT_LEVELS`, the single
@@ -2085,6 +2097,18 @@ export const ModelRoutingConfigSchema = z.object({
   complexity_thresholds: ComplexityThresholdsSchema.optional(),
   minimum_model: z.record(z.string(), DefaultModelSchema).optional(),
   confidence_threshold: z.number().min(0).max(1).optional(),
+  /**
+   * Opt routing into the eval advisor's materialized advice file
+   * (`.nightgauge/model-evals/routing-advice.json`, #581 / spike #568 §4.2).
+   * Default **false** — the conservative rollout: with the key off (or no
+   * advice file, or no advisable evidence) the axis query alone decides,
+   * which reproduces pre-advice behavior exactly. When enabled, advice
+   * re-picks only WITHIN the candidate set and the stage's routed-tier
+   * envelope, and only from advisable (sample-floor-passing, honest-record)
+   * entries. Env override: `NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS`.
+   * Go pair: ModelRoutingConfig.UseEvalRecommendations (internal/config).
+   */
+  use_eval_recommendations: z.boolean().optional(),
   /**
    * Cost-aware routing within the performance-mode envelope (Issue #21).
    * When true (default), the adaptive router consults historical

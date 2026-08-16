@@ -3333,15 +3333,34 @@ Model routing configuration controls how pipeline stages select AI models. This
 is a cross-cutting concern placed at the top level (alongside `pipeline`,
 `routing`) because it affects how `pipeline.stage_models` are interpreted.
 
-| Option                  | Type   | Default                                      | Description                                                                                                                                                   |
-| ----------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mode`                  | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                          |
-| `complexity_thresholds` | object | -                                            | Score boundaries for auto model tier selection                                                                                                                |
-| `minimum_model`         | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                  |
-| `confidence_threshold`  | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                   |
-| `stage_efforts`         | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                     |
-| `effort_auto`           | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                 |
-| `default_effort`        | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku. |
+| Option                     | Type   | Default                                      | Description                                                                                                                                                   |
+| -------------------------- | ------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mode`                     | enum   | `"automatic"`                                | Model selection strategy (see below)                                                                                                                          |
+| `complexity_thresholds`    | object | -                                            | Score boundaries for auto model tier selection                                                                                                                |
+| `minimum_model`            | object | -                                            | Per-stage model floor (auto cannot go below)                                                                                                                  |
+| `confidence_threshold`     | number | `0.7`                                        | Min confidence for auto-selection (0.0-1.0)                                                                                                                   |
+| `stage_efforts`            | object | planning: medium, dev: medium, validate: low | Per-stage Claude effort (`low\|medium\|high\|xhigh\|max`)                                                                                                     |
+| `effort_auto`              | bool   | `true`                                       | Auto-derive effort from stage + complexity (automatic/hybrid)                                                                                                 |
+| `default_effort`           | enum   | -                                            | Default effort for all stages when the active model supports it (`low\|medium\|high\|xhigh\|max`). Overridden by `stage_efforts`. Silently ignored for Haiku. |
+| `use_eval_recommendations` | bool   | `false`                                      | Opt routing into the eval advisor's materialized advice file (see below)                                                                                      |
+
+**Eval routing advice (`use_eval_recommendations`, #581):**
+
+The model-eval lane (`scripts/evaluate-models.ts`) materializes advisor
+aggregates to `.nightgauge/model-evals/routing-advice.json` — per
+`(job_class, model, effort, thinking)` envelope: score, sample count, backoff
+level, and an `advisable` flag (spike #568 §4.2–4.3). Both resolvers read
+that file, exactly as both read the model registry; nothing is threaded over
+the wire (#340).
+
+Default **false** — the conservative rollout. When enabled (env override:
+`NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS`), advice may re-pick the
+router-chosen tier only WITHIN the candidate set and the stage's routed-tier
+envelope, only from advisable entries (n ≥ 5 per combination, honest
+schema_version ≥ 3 records only), and on the TS path only for issues whose
+`type:` label directly names an eval job class (`docs`, `bug`, `refactor`).
+With the key off, no advice file, or no advisable evidence, the axis query
+alone decides — identical to pre-advice behavior.
 
 **Model Routing Modes:**
 
@@ -3406,6 +3425,14 @@ When using the Claude adapter, effort is resolved with this precedence:
 5. Auto-derive (optional)  model_routing.effort_auto + automatic|hybrid mode
 6. Omit --effort           default Claude behavior
 ```
+
+> **Who runs this chain (#581):** on the autonomous (IPC) path the **Go
+> scheduler** resolves it (`resolveWireEffort`, a mirror of the TS chain —
+> step 5 excepted, since no issue metadata exists there) and puts the result
+> on the wire next to the model; the extension executes the wire effort
+> verbatim. On the extension-orchestrated path TypeScript resolves it locally
+> as before. One config, one thinking budget, both paths — see
+> [PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340).
 
 > **Model capability guard (Issue #1235, #336):** `--effort` is passed to
 > Claude Code only when the model's registry `supported_efforts` is non-empty.

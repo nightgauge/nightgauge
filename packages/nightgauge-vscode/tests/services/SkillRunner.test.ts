@@ -192,7 +192,8 @@ describe("SkillRunner", () => {
       undefined, // autonomousMode (Issue #2656)
       undefined, // warnThresholdUsd (Go scheduler enforces budget)
       undefined, // targetRepoOverride — params.repo (Issue #3867)
-      "01890a5d-ac96-774b-bcce-b302099a8057" // runId — params.runId (#228)
+      "01890a5d-ac96-774b-bcce-b302099a8057", // runId — params.runId (#228)
+      undefined // effortOverride — params.effort, the wire envelope (#581)
     );
   });
 
@@ -209,15 +210,16 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    // targetRepoOverride is the 14th positional argument; runId (#228) is the
-    // 15th and last, so targetRepoOverride is now second-to-last.
-    expect(call[call.length - 2]).toBe("nightgauge/acmeapp-platform");
+    // targetRepoOverride is the 14th positional argument; runId (#228) and
+    // effortOverride (#581) follow it, so it is third-from-last.
+    expect(call[call.length - 3]).toBe("nightgauge/acmeapp-platform");
   });
 
   // #228: the run's UUID (params.runId) must be forwarded to
-  // runStageSkillHeadless as the last (15th) positional argument so the SDK
-  // TraceRecorder writes to the run's <run_id>.jsonl.
-  it("forwards params.runId as the trailing runId argument", async () => {
+  // runStageSkillHeadless as the 15th positional argument so the SDK
+  // TraceRecorder writes to the run's <run_id>.jsonl. effortOverride (#581)
+  // now trails it.
+  it("forwards params.runId as the runId argument", async () => {
     const params = createDefaultParams({ runId: "01890a5d-ac96-774b-bcce-b302099a8057" });
 
     const promise = runner.runStage(params);
@@ -226,7 +228,23 @@ describe("SkillRunner", () => {
     await promise;
 
     const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
-    expect(call[call.length - 1]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
+    expect(call[call.length - 2]).toBe("01890a5d-ac96-774b-bcce-b302099a8057");
+  });
+
+  // #581: the wire envelope's effort (params.effort) must be forwarded as the
+  // trailing effortOverride argument — the Go scheduler resolved it with the
+  // same chain resolveStageEffort runs locally, and SkillRunner executes it
+  // verbatim instead of re-resolving.
+  it("forwards params.effort as the trailing effortOverride argument", async () => {
+    const params = createDefaultParams({ effort: "high" });
+
+    const promise = runner.runStage(params);
+    await Promise.resolve();
+    capturedState.callbacks!.onComplete!(makeSuccessResult());
+    await promise;
+
+    const call = vi.mocked(runStageSkillHeadless).mock.calls[0];
+    expect(call[call.length - 1]).toBe("high");
   });
 
   // ── Failure path ────────────────────────────────────────────────────────

@@ -89,6 +89,24 @@ export const EffortLevelSchema = z.enum(EFFORT_LEVELS);
 export type EffortLevel = z.infer<typeof EffortLevelSchema>;
 
 /**
+ * The Codex reasoning-effort vocabulary: the CLI's sub-`low` rung (`none` —
+ * "no extended reasoning") plus the canonical effort ladder — **the single
+ * authority** for every spelling of it (#435, absorbed by #581).
+ *
+ * Derived as `["none", ...EFFORT_LEVELS]`, never re-listed: the literal union
+ * in the extension's modelResolver, its config-file regex alternation, the
+ * config schema's Zod enum and the adapter's vocabulary Set were four
+ * independently-maintained copies of this list — the same drift mechanism
+ * #394 retired for the plain effort axis. `none` collapses to `low` at the
+ * registry membership check (#523); it never widens `EFFORT_LEVELS` itself
+ * (the boundary maps INTO the canonical ladder, never out of it).
+ */
+export const REASONING_EFFORT_LEVELS = ["none", ...EFFORT_LEVELS] as const;
+
+/** Regex alternation over the Codex reasoning vocabulary — derived (#435). */
+export const REASONING_EFFORT_ALTERNATION = REASONING_EFFORT_LEVELS.join("|");
+
+/**
  * Provider-neutral reasoning-budget axis, wired into the adapter spawn by the
  * eval adapter profiles (#571): the Claude profile expresses it through the
  * CLI's real thinking parameters (`CLAUDE_CODE_DISABLE_THINKING` for `none`,

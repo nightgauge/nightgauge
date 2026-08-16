@@ -60,15 +60,18 @@ import {
   formatComparisonMatrix,
   formatVariantDeltas,
   getModelDescriptor,
+  buildRoutingAdvice,
   loadEvalTasks,
   loadPromptVariants,
   resolveEvalEmitConfig,
   runEvalSuite,
   serializeEvalRun,
+  writeRoutingAdvice,
   type CellExecution,
   type EvalCellExecutor,
   type EvalMatrixCell,
   type ModelDescriptor,
+  type ModelEvalRecord,
 } from "../packages/nightgauge-sdk/src/eval/index.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -228,7 +231,9 @@ function mockExecutor(): EvalCellExecutor {
   return {
     async execute(_task, cell): Promise<CellExecution> {
       const d = getModelDescriptor(cell.model_id);
-      const tierFactor = d?.tier === "opus" ? 1.3 : d?.tier === "haiku" ? 0.6 : 1;
+      // `tiers` is the band-membership array — the old `d?.tier` read a field
+      // that never existed, so tierFactor was silently always 1 (mock-only).
+      const tierFactor = d?.tiers?.includes("opus") ? 1.3 : d?.tiers?.includes("haiku") ? 0.6 : 1;
       const out = Math.round(4000 * (outputMultiplier[cell.effort] ?? 1) * tierFactor);
       return {
         verdict: "pass",
@@ -355,6 +360,14 @@ async function main(): Promise<number> {
   await fs.mkdir(path.dirname(outPath), { recursive: true });
   await fs.writeFile(outPath, serializeEvalRun(run) + "\n", "utf-8");
 
+  // Materialize routing advice from the ENTIRE local records store (#581,
+  // spike #568 §4.2): the file both resolvers read when
+  // model_routing.use_eval_recommendations is enabled. Aggregation replays
+  // every honest record accumulated so far, not just this run — the advisor
+  // itself excludes pre-v3, skipped, variant, and low-confidence rows.
+  const advicePath = await materializeRoutingAdvice();
+  if (advicePath) console.log(`Routing advice → ${path.relative(REPO_ROOT, advicePath)}`);
+
   console.log("\n" + formatComparisonMatrix(run));
   if (variantNames.length > 1) {
     // Per-(variant, model) quality delta vs baseline (#72). Negative Δ = the
@@ -377,6 +390,37 @@ async function main(): Promise<number> {
 
   if (args.emit) await emitToPlatform(run, args);
   return 0;
+}
+
+/**
+ * Rebuild `.nightgauge/model-evals/routing-advice.json` from every JSONL
+ * record under the records dir. Best-effort per line (the advisor is
+ * defensive about historical rows); returns the written path, or undefined
+ * when no records exist yet.
+ */
+async function materializeRoutingAdvice(): Promise<string | undefined> {
+  const recordsDir = path.resolve(REPO_ROOT, DEFAULT_MODEL_EVAL_RECORDS_DIR);
+  let files: string[];
+  try {
+    files = (await fs.readdir(recordsDir)).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return undefined;
+  }
+  const records: ModelEvalRecord[] = [];
+  for (const file of files) {
+    const text = await fs.readFile(path.join(recordsDir, file), "utf-8");
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        records.push(JSON.parse(line) as ModelEvalRecord);
+      } catch {
+        // A corrupt line is not a reason to lose the rest of the store.
+      }
+    }
+  }
+  if (records.length === 0) return undefined;
+  const advice = buildRoutingAdvice(records, new Date().toISOString());
+  return writeRoutingAdvice(REPO_ROOT, advice);
 }
 
 main()

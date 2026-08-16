@@ -406,3 +406,57 @@ describe("resolveStageEffort mirrors resolveModel Step 0's env suppression (#340
     expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
   });
 });
+
+/**
+ * The wire-effort twin matrix (#581). Go's `resolveWireEffort`
+ * (internal/orchestrator/dispatch_envelope.go, TestResolveWireEffort) mirrors
+ * this chain cell for cell — the wire effort the extension executes verbatim
+ * on the IPC path must be exactly what `resolveStageEffort` resolved there
+ * before the wire carried the value, or flipping effort precedence to the
+ * wire is a behavior change instead of a relocation. Each cell here appears
+ * in the Go test with the same inputs and the same expected value.
+ */
+describe("resolveStageEffort ⇄ resolveWireEffort twin matrix (#581)", () => {
+  it("elevated, no config: no explicit effort — omit the flag", () => {
+    configText = "";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBeUndefined();
+  });
+
+  it("maximum + stage model env override: pin suppressed, effort floor still raises", () => {
+    configText = "";
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "maximum";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_MODEL_FEATURE_DEV = "sonnet";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("high");
+  });
+
+  it("efficiency caps a configured effort at medium", () => {
+    configText = "model_routing:\n  stage_efforts:\n    feature-dev: xhigh\n";
+    process.env.NIGHTGAUGE_PERFORMANCE_MODE = "efficiency";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
+  });
+
+  it("env stage effort wins over config default_effort", () => {
+    configText = "model_routing:\n  default_effort: high\n";
+    process.env.NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV = "low";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("low");
+  });
+
+  it("config stage_efforts, then default_effort", () => {
+    configText =
+      "model_routing:\n  default_effort: high\n  stage_efforts:\n    feature-dev: medium\n";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
+    configText = "model_routing:\n  default_effort: high\n";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("high");
+  });
+
+  it("manual mode falls back to the DEFAULT_STAGE_EFFORTS table", () => {
+    configText = "model_routing:\n  mode: manual\n";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBe("medium");
+    expect(resolveStageEffort("pr-create" as PipelineStage, "/test/workspace")).toBeUndefined();
+  });
+
+  it("off-ladder values are ignored, not dispatched", () => {
+    configText = "model_routing:\n  stage_efforts:\n    feature-dev: turbo\n";
+    expect(resolveStageEffort(STAGE, "/test/workspace")).toBeUndefined();
+  });
+});

@@ -52,6 +52,16 @@ interface IpcRunStageParams {
   stage: string;
   issueNumber: number;
   model: string;
+  /**
+   * The effort/thinking halves of the dispatch envelope next to `model`
+   * (#581, spike #568 §4.1). Effort is Go's `resolveWireEffort` result — the
+   * same chain `resolveStageEffort` ran locally on this path before the wire
+   * carried it — and is executed verbatim; absent means "no explicit effort
+   * resolved anywhere: omit `--effort`, the model's declared default rules".
+   * Thinking is attribution riding the dispatch (no CLI flag executes it).
+   */
+  effort?: string;
+  thinking?: string;
   maxTokens?: number;
   timeoutMs: number;
   skillContent?: string;
@@ -210,6 +220,10 @@ export class PipelineBridge {
       stage,
       issueNumber: ipcParams.issueNumber,
       model: ipcParams.model,
+      // The wire envelope's effort/thinking (#581) — forwarded verbatim so
+      // SkillRunner executes the Go-resolved effort instead of re-resolving.
+      effort: ipcParams.effort,
+      thinking: ipcParams.thinking,
       maxTokens: ipcParams.maxTokens,
       timeout: ipcParams.timeoutMs,
       skillContent: ipcParams.skillContent,

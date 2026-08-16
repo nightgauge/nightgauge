@@ -26,12 +26,20 @@ type RetryConfig struct {
 }
 
 // DefaultRetryConfig returns safe default retry configuration.
+//
+// ModelLadder derives from the selection query (#581): membership comes from
+// the registry (a band with no live anthropic model is no escalation target),
+// order from the band ladder, and the frontier exclusion from the
+// routing.EscalationCeilingBand policy — replacing the hand-inlined
+// ["haiku", "sonnet", "opus"] triplet whose fable exclusion drifted per-site.
+// The ladder speaks the band vocabulary because that is the dispatch
+// currency (#340); with today's registry it is exactly [haiku sonnet opus].
 func DefaultRetryConfig() RetryConfig {
 	return RetryConfig{
 		MaxBacktracks:          2,
 		MaxEscalationsPerStage: 1,
 		OscillationDetection:   true,
-		ModelLadder:            []string{"haiku", "sonnet", "opus"},
+		ModelLadder:            routing.EscalationLadder("anthropic"),
 		MaxConflictRedispatch:  2,
 	}
 }
@@ -109,14 +117,28 @@ type DowngradeDecision struct {
 }
 
 // EvaluateDowngrade resolves the next-best model tier below the rejected
-// model (#42). Walks the fable → opus → sonnet → haiku ladder WITHIN the
-// rejected model's provider (#56), skipping any tier this run has already
-// recorded as rejected, any band the provider has no live model for, and any
-// band served by the rejected model itself (a multi-band model like gpt-5.5
-// [opus+fable] or gemini-2.5-flash [haiku+sonnet] must not "fall" to
-// itself). Returns ShouldDowngrade=false when the rejected model is not in
-// the registry (user-defined local models: one-rung ladder, no fallback) or
-// the ladder is exhausted — nothing weaker exists for that provider.
+// model (#42). Walks the provider's candidate-ladder RUNGS (#581 — the
+// selection query's envelope-valued ladder, routing.ResolveBandEnvelope)
+// below the rejected tier, skipping any tier this run has already recorded
+// as rejected, any band the provider has no rung for, and any rung served by
+// the rejected model itself. Returns ShouldDowngrade=false when the rejected
+// model is not in the registry (user-defined local models: one-rung ladder,
+// no fallback) or the ladder is exhausted — nothing weaker exists for that
+// provider.
+//
+// SAME-MODEL RUNGS — the #532 xai case, explicitly scoped: on a provider
+// whose bands collapse onto one model, the rungs below the rejected tier are
+// the SAME model at lower declared efforts (grok-4.6@xhigh → high → …), which
+// spike #568 §4.1 names as the real downgrade ladder the band vocabulary
+// could not express. This walk still SKIPS them, deliberately: a
+// model-unavailable rejection names the MODEL, and re-dispatching the
+// rejected model at a lower effort requires the effort-execution contract to
+// reach the grok adapters, whose effort is pinned to the provider-global
+// NIGHTGAUGE_GROK_EFFORT env contract (#569) on both the Go-direct and TS
+// paths. Re-pointing that contract at the wire effort is tracked as its own
+// change (the #581 re-scope, see the follow-up issue in the PR body) rather
+// than half-shipped here — so the xai row of selection_compat_golden.json
+// deliberately still pins downgrade_ladder_exhausted.
 func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision {
 	fromTier := NormalizeModelTier(rejectedModel)
 	if fromTier == "" {
@@ -146,12 +168,16 @@ func (r *RetryEngine) EvaluateDowngrade(rejectedModel string) DowngradeDecision 
 		if _, rejected := r.downgrades[tier]; rejected {
 			continue // this tier was itself rejected earlier in the run
 		}
-		desc, ok := models.Resolve(provider, tier)
+		rung, ok := routing.ResolveBandEnvelope(provider, tier, "")
 		if !ok {
-			continue // no live model for this provider band
+			// No rung: either no live model serves the band for this
+			// provider, or the band's multi-band model cannot descend to a
+			// distinct envelope (a duplicate rung would re-create the #532
+			// "downgrade is a no-op" lie) — no downgrade target either way.
+			continue
 		}
-		if desc.ID == rejectedID {
-			continue // same model serves this band too — not a downgrade
+		if rung.ModelID == rejectedID {
+			continue // same model serves this rung — see SAME-MODEL RUNGS above
 		}
 		return DowngradeDecision{
 			ShouldDowngrade: true,

@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-08-16T00:00:00Z",
+  "min_samples": 5,
+  "quality_floor": 70,
+  "min_honest_schema_version": 3,
+  "entries": [
+    {
+      "job_class": "bugfix",
+      "model_id": "claude-sonnet-5",
+      "effort": "low",
+      "thinking": "off",
+      "backoff": "exact",
+      "samples": 6,
+      "pass_rate": 1,
+      "mean_quality": 85,
+      "mean_cost_usd": 0.05,
+      "quality_per_dollar": 1700,
+      "advisable": true
+    },
+    {
+      "job_class": "bugfix",
+      "model_id": "claude-opus-4-8",
+      "effort": "high",
+      "thinking": "off",
+      "backoff": "exact",
+      "samples": 6,
+      "pass_rate": 1,
+      "mean_quality": 92,
+      "mean_cost_usd": 0.4,
+      "quality_per_dollar": 230,
+      "advisable": true
+    },
+    {
+      "job_class": "refactor",
+      "model_id": "claude-sonnet-5",
+      "effort": "low",
+      "thinking": "off",
+      "backoff": "exact",
+      "samples": 2,
+      "pass_rate": 1,
+      "mean_quality": 80,
+      "mean_cost_usd": 0.05,
+      "quality_per_dollar": 1600,
+      "advisable": false
+    }
+  ]
+}

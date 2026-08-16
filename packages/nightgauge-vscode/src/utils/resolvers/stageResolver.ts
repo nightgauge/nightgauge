@@ -13,7 +13,10 @@ import * as vscode from "vscode";
 import {
   AutoModelSelector,
   EFFORT_LEVELS,
+  TIER_BANDS,
+  TIER_BAND_ALTERNATION,
   getModelDescriptor,
+  isTierBand,
   resolveModelForAdapter,
   type IssueMetadata,
 } from "@nightgauge/sdk";
@@ -272,6 +275,16 @@ const VALID_CLAUDE_EFFORTS: readonly ClaudeEffort[] = EFFORT_LEVELS;
  * behind when `max` was added (#75, #394).
  */
 const EFFORT_ALTERNATION = EFFORT_LEVELS.join("|");
+
+/**
+ * The band vocabulary for config-file model regexes and closed-set guards,
+ * derived from the SDK's `TIER_BANDS` authority (#581) — the same idiom as
+ * `EFFORT_ALTERNATION`. This file alone carried five hand-inlined
+ * `["sonnet", "opus", "haiku", "fable"]` copies and two literal band
+ * alternations; its own comments record two past incidents where a
+ * three-band regex silently dropped `fable`.
+ */
+const BAND_ALTERNATION = TIER_BAND_ALTERNATION;
 
 /**
  * Default per-stage model overrides — Sonnet 4.6 era cost-optimized strategy.
@@ -636,20 +649,15 @@ function mapComplexityToEffort(
  * is the drift #340 removed.
  */
 export function getStageEnvModel(stage: PipelineStage): DefaultModel | undefined {
-  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
   const envKey = `NIGHTGAUGE_PIPELINE_STAGE_MODEL_${stage.toUpperCase().replace(/-/g, "_")}`;
   const envModel = process.env[envKey]?.trim();
-  return envModel && validModels.includes(envModel as DefaultModel)
-    ? (envModel as DefaultModel)
-    : undefined;
+  return envModel && isTierBand(envModel) ? envModel : undefined;
 }
 
 export function getStageModel(
   stage: PipelineStage,
   workspaceRoot?: string
 ): DefaultModel | undefined {
-  const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
-
   // 1. ALWAYS check environment variable first (highest priority, all modes)
   const envModel = getStageEnvModel(stage);
   if (envModel) {
@@ -703,7 +711,7 @@ export function getStageModel(
           // Match stage model entries (e.g., "issue-pickup: haiku")
           if (inStageModels) {
             const modelMatch = trimmed.match(
-              /^([a-z][-a-z]*):\s*['"]?(sonnet|opus|haiku|fable)['"]?(?:\s+#.*)?$/
+              new RegExp(`^([a-z][-a-z]*):\\s*['"]?(${BAND_ALTERNATION})['"]?(?:\\s+#.*)?$`)
             );
             if (modelMatch && modelMatch[1] === stage) {
               return modelMatch[2] as DefaultModel;
@@ -754,7 +762,6 @@ export function getStageOverrideModel(
 
     const configContent = readEffectiveConfigTextSync(pathResult);
     const lines = configContent.split("\n");
-    const validModels: DefaultModel[] = ["sonnet", "opus", "haiku", "fable"];
     let inModelRouting = false;
     let inStageOverrides = false;
 
@@ -783,9 +790,11 @@ export function getStageOverrideModel(
           inStageOverrides = false;
           continue;
         }
-        const match = trimmed.match(/^([a-z][-a-z]*):\s*['"]?(sonnet|opus|haiku|fable)['"]?/);
-        if (match && match[1] === stage && validModels.includes(match[2] as DefaultModel)) {
-          return match[2] as DefaultModel;
+        const match = trimmed.match(
+          new RegExp(`^([a-z][-a-z]*):\\s*['"]?(${BAND_ALTERNATION})['"]?`)
+        );
+        if (match && match[1] === stage && isTierBand(match[2])) {
+          return match[2];
         }
       }
     }
@@ -825,7 +834,7 @@ export function getStageModelsMatrix(
     if (!modelRouting?.stage_models_matrix) return undefined;
 
     const raw = modelRouting.stage_models_matrix as Record<string, Record<string, string>>;
-    const validModels = ["sonnet", "opus", "haiku", "fable"];
+    const validModels: readonly string[] = TIER_BANDS; // derived from the SDK band authority (#581)
     const validCategories = ["planning", "dev", "validate", "lightweight", "merge"];
     const validSizes = ["XS", "S", "M", "L", "XL"];
 
@@ -890,7 +899,7 @@ export function getTypeOverrides(
     if (!modelRouting?.type_overrides) return undefined;
 
     const raw = modelRouting.type_overrides as Record<string, Record<string, string>>;
-    const validModels = ["sonnet", "opus", "haiku", "fable"];
+    const validModels: readonly string[] = TIER_BANDS; // derived from the SDK band authority (#581)
     const validTypes = ["feature", "bug", "docs", "chore", "refactor", "epic"];
     const validCategories = [
       "classification",

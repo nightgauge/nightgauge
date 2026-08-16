@@ -10,7 +10,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
-import { CODEX_DEFAULT_BASE_MODEL, CODEX_TIER_MODEL_MAP } from "@nightgauge/sdk";
+import {
+  CODEX_DEFAULT_BASE_MODEL,
+  CODEX_TIER_MODEL_MAP,
+  REASONING_EFFORT_ALTERNATION,
+  REASONING_EFFORT_LEVELS,
+  escalationLadder,
+} from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import { AdapterEnumSchema } from "../../config/schema";
@@ -622,17 +628,14 @@ export function getGeminiAuthMethod(workspaceRoot?: string): GeminiAuthMethod {
 
 /** Codex model identifier */
 export type CodexModel = string;
-export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+/**
+ * Derived from the SDK's `REASONING_EFFORT_LEVELS` authority (#435, absorbed
+ * by #581) — one of the four hand-listed copies that ladder replaced.
+ */
+export type CodexReasoningEffort = (typeof REASONING_EFFORT_LEVELS)[number];
 
 const DEFAULT_CODEX_CLI_COMMAND = "codex";
-const CODEX_REASONING_EFFORTS: readonly CodexReasoningEffort[] = [
-  "none",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-];
+const CODEX_REASONING_EFFORTS: readonly CodexReasoningEffort[] = REASONING_EFFORT_LEVELS;
 
 /**
  * Get the Codex model from config or environment.
@@ -765,8 +768,13 @@ export function getCodexReasoningEffort(workspaceRoot?: string): CodexReasoningE
         }
       }
       if (inCodex) {
+        // Alternation derived from the #435 authority — the literal
+        // `(none|low|medium|high|xhigh|max)` here was the exact regex form
+        // stageResolver had already replaced with EFFORT_ALTERNATION.
         const match = trimmed.match(
-          /^reasoning_effort:\s*['"]?(none|low|medium|high|xhigh|max)['"]?(?:\s+#.*)?$/
+          new RegExp(
+            `^reasoning_effort:\\s*['"]?(${REASONING_EFFORT_ALTERNATION})['"]?(?:\\s+#.*)?$`
+          )
         );
         if (match) return match[1] as CodexReasoningEffort;
       }
@@ -1511,6 +1519,26 @@ export function getModelRoutingBoolean(
 }
 
 /**
+ * Whether routing may consult the eval advisor's materialized advice file
+ * (`.nightgauge/model-evals/routing-advice.json`, #581 / spike #568 §4.2).
+ *
+ * Priority: `NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS` env →
+ * `model_routing.use_eval_recommendations` → **false** — the conservative
+ * rollout default: with the key off (or no advice file, or no advisable
+ * evidence) the axis query alone decides, which reproduces pre-advice
+ * behavior exactly. Go pair: `useEvalRecommendations`
+ * (internal/orchestrator/dispatch_routing.go).
+ */
+export function isEvalRecommendationsEnabled(workspaceRoot?: string): boolean {
+  return getModelRoutingBoolean(
+    "use_eval_recommendations",
+    "USE_EVAL_RECOMMENDATIONS",
+    false,
+    workspaceRoot
+  );
+}
+
+/**
  * Get complexity thresholds from config or environment.
  * Priority: NIGHTGAUGE_MODEL_ROUTING_{HAIKU,SONNET}_MAX env → model_routing.complexity_thresholds → defaults
  * @see Issue #731 - Model routing configuration modes
@@ -1766,11 +1794,14 @@ export function getConfidenceThreshold(workspaceRoot?: string): number {
 // ============================================================================
 
 /**
- * The fixed escalation path: haiku → sonnet → opus.
- * Returns the next more-capable model, or null if already at the ceiling.
+ * The escalation path (haiku → sonnet → opus with today's registry), derived
+ * from the selection query (#581): membership from the registry, order from
+ * the band ladder, and the frontier exclusion from the declared escalation
+ * ceiling — never a hand-inlined triplet. Go pair: routing.EscalationLadder
+ * feeding RetryConfig.ModelLadder.
  * @see Issue #1343 - Dynamic Model Escalation Engine
  */
-const ESCALATION_PATH: DefaultModel[] = ["haiku", "sonnet", "opus"];
+const ESCALATION_PATH: readonly DefaultModel[] = escalationLadder("anthropic");
 
 export function getEscalatedModel(currentModel: DefaultModel): DefaultModel | null {
   const idx = ESCALATION_PATH.indexOf(currentModel);

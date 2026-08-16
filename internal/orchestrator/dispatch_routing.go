@@ -100,14 +100,15 @@ func modelRoutingMode(cfg *config.Config) string {
 	return "automatic"
 }
 
-// validStageModel keeps a per-stage operator value to the four registry bands,
-// mirroring getStageModel's `validModels` guard (stageResolver.ts): anything
+// validStageModel keeps a per-stage operator value to the registry band
+// vocabulary, mirroring getStageModel's guard (stageResolver.ts): anything
 // else — a typo, a concrete provider id — is ignored rather than dispatched.
 // Without the same guard on this side a value one resolver drops would be
-// honored by the other, which is the drift #340 removed.
+// honored by the other, which is the drift #340 removed. Membership is the
+// selection query's IsTierBand (#581), not a locally hand-listed four-case
+// switch.
 func validStageModel(model string) string {
-	switch model {
-	case routing.TierHaiku, routing.TierSonnet, routing.TierOpus, routing.TierFable:
+	if routing.IsTierBand(model) {
 		return model
 	}
 	return ""
@@ -154,6 +155,26 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 		return defaultStageModels[stage]
 	}
 	return ""
+}
+
+// useEvalRecommendations resolves `model_routing.use_eval_recommendations`
+// (#581): the env var wins over config, and absence means false — the
+// conservative default that keeps the axis query the sole authority. Mirrors
+// the TS isEvalRecommendationsEnabled (modelResolver.ts) INCLUDING its parse
+// vocabulary: getModelRoutingBoolean lowercases and accepts yes/no alongside
+// true/1/false/0, so `...=yes` must enable both resolvers, not just one.
+func useEvalRecommendations(workspaceRoot string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS"))) {
+	case "true", "1", "yes":
+		return true
+	case "false", "0", "no":
+		return false
+	}
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil || cfg == nil || cfg.ModelRouting == nil {
+		return false
+	}
+	return cfg.ModelRouting.UseEvalRecommendations
 }
 
 // workspaceDefaultModel resolves `ui.core.default_model` with the same
@@ -226,6 +247,20 @@ func stageBaseModel(
 		return routing.ClampToEnvelope(lightweight, envelope), false
 	}
 	if predictedModel != "" {
+		// Eval-advice re-pick (#581, opt-in, default off): on the
+		// router-chosen branch only — the same slot the TS resolver consults
+		// the advisor in (after the selector, inside the clamps). AdviseBand
+		// returns "" unless advisable evidence names a band INSIDE this
+		// stage's routed-tier envelope, so with the key off, no advice file,
+		// or sparse evidence, the axis query alone decides — exactly the
+		// pre-advice behavior the compatibility table pins.
+		if useEvalRecommendations(workspaceRoot) {
+			if advice, ok := routing.LoadRoutingAdvice(workspaceRoot); ok {
+				if band := routing.AdviseBand(advice, mode, envelope); band != "" {
+					return band, false
+				}
+			}
+		}
 		return routing.ClampToEnvelope(predictedModel, envelope), false
 	}
 	if def := workspaceDefaultModel(workspaceRoot); def != "" {

@@ -58,11 +58,16 @@ import {
   clampTier,
   getModelDescriptor,
   EFFORT_LEVELS,
+  TIER_BANDS_STRONGEST_FIRST as SDK_TIER_BANDS_STRONGEST_FIRST,
+  readRoutingAdvice,
+  pickAdvice,
+  type JobClass,
   type ModelSelectionResult,
   type IssueMetadata,
   type ExperimentAssignment,
   type ModelEnvelope,
   type ModelTier,
+  type RoutingMode,
 } from "@nightgauge/sdk";
 import {
   parseStreamJsonLine,
@@ -117,6 +122,7 @@ import {
   getConfidenceThreshold,
   getMinimumModel,
   getModelRoutingMode,
+  isEvalRecommendationsEnabled,
   getStageEffort,
   getExplicitStageEffort,
   conformEffortForFable,
@@ -146,6 +152,7 @@ import {
   getModeEnvelope,
   getRoutedTierEnvelope,
   type ModeEnvelope,
+  type PerformanceMode,
   getModeStageProfile,
   getAdapterModelForBand,
   getGitHubUser,
@@ -803,15 +810,31 @@ export interface ModelDecision {
   effort?: ClaudeEffort;
   /** Experiment assignment when source is 'experiment' (Issue #949) */
   experimentAssignment?: ExperimentAssignment;
+  /**
+   * Set when an eval-advice entry re-picked the selector's model (#581,
+   * opt-in via `model_routing.use_eval_recommendations`). The decision's
+   * `source` stays "auto" — the selector chain still decided, with advice as
+   * one clamp-bounded input — and this field carries the attribution.
+   */
+  evalAdvisory?: {
+    modelId: string;
+    band: DefaultModel;
+    jobClass: JobClass;
+    effort?: ClaudeEffort;
+    backoff: "exact" | "model";
+  };
 }
 
 /**
- * Capability order of the four registry bands, weakest first. Declared once:
- * `enforceMinimumModel` and `clampModelToCeiling` both compare against it, and
- * two declarations of one ladder is how a band ends up strong in one function
- * and weak in another. Go pair: `routing.TierRank`.
+ * Capability order of the four registry bands, weakest first. Derived from
+ * the SDK band authority (#581): `enforceMinimumModel` and
+ * `clampModelToCeiling` both compare against it, and two declarations of one
+ * ladder is how a band ends up strong in one function and weak in another.
+ * Go pair: `routing.TierRank`.
  */
-const TIER_ORDER: Record<DefaultModel, number> = { haiku: 0, sonnet: 1, opus: 2, fable: 3 };
+const TIER_ORDER: Record<DefaultModel, number> = Object.fromEntries(
+  [...SDK_TIER_BANDS_STRONGEST_FIRST].reverse().map((band, rank) => [band, rank])
+) as Record<DefaultModel, number>;
 
 /**
  * Enforce a minimum model floor.
@@ -1005,12 +1028,12 @@ function clampModelToEnvelope(model: DefaultModel, envelope: ModeEnvelope): Defa
 }
 
 /**
- * Registry tier bands, strongest first — the reverse of the SDK's ascending
- * `ModelTier` ordering and the exact counterpart of Go's `downgradeLadder`
+ * Registry tier bands, strongest first — derived from the SDK's one band
+ * declaration (#581), the exact counterpart of Go's `downgradeLadder`
  * (internal/orchestrator/retry_engine.go). A multi-band model resolves to its
  * STRONGEST band, matching `NormalizeModelTier`.
  */
-const TIER_BANDS_STRONGEST_FIRST: readonly ModelTier[] = ["fable", "opus", "sonnet", "haiku"];
+const TIER_BANDS_STRONGEST_FIRST: readonly ModelTier[] = SDK_TIER_BANDS_STRONGEST_FIRST;
 
 /**
  * Collapse a model reference onto its registry tier band (#340).
@@ -1137,6 +1160,78 @@ export function preflightAdapterEffort(
         `effort=${effort} supported=${check.supported?.join(",") || "none"} ` +
         `reason=${check.reason}`
     ),
+  };
+}
+
+/**
+ * Performance mode → advisor routing mode. Elevated maps onto the advisor's
+ * `balanced` posture (best quality-per-dollar); the other three share names.
+ */
+const ROUTING_MODE_FOR_PERFORMANCE: Record<PerformanceMode, RoutingMode> = {
+  efficiency: "efficiency",
+  elevated: "balanced",
+  maximum: "maximum",
+  frontier: "frontier",
+};
+
+/**
+ * The eval job class an issue's labels directly name, or undefined.
+ *
+ * Deliberately CONSERVATIVE (#581): only type labels whose vocabulary
+ * coincides with the eval lane's `JOB_CLASSES` map (`docs`, `bug`/`bugfix`,
+ * `refactor`); everything else returns undefined and the axis query alone
+ * decides. Inventing an equivalence (e.g. feature → backend-logic) would
+ * apply measurements to work they never measured.
+ */
+function jobClassForIssue(metadata: IssueMetadata | undefined): JobClass | undefined {
+  const typeLabel = metadata?.labels
+    .find((l) => /^type:/i.test(l))
+    ?.slice("type:".length)
+    .toLowerCase();
+  switch (typeLabel) {
+    case "docs":
+      return "docs";
+    case "bug":
+    case "bugfix":
+      return "bugfix";
+    case "refactor":
+      return "refactor";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Consult the materialized routing-advice file (#581, spike §4.2) for the
+ * selector branch. Returns an advisory only when EVERY gate passes: a job
+ * class the issue directly names, an advisable (sample-floor-passing) entry
+ * for it, a model that maps onto the band vocabulary, and a band that
+ * already sits INSIDE the caller's clamps (`withinClamps` returns the band
+ * unchanged) — advice re-picks within the candidate set and envelope
+ * clamps, never outside them. Anything short of that returns undefined and
+ * the axis query alone decides.
+ */
+function consultEvalAdvice(
+  workspaceRoot: string,
+  performanceMode: PerformanceMode,
+  issueMetadata: IssueMetadata | undefined,
+  withinClamps: (band: DefaultModel) => DefaultModel
+): NonNullable<ModelDecision["evalAdvisory"]> | undefined {
+  const jobClass = jobClassForIssue(issueMetadata);
+  if (!jobClass) return undefined;
+  const advice = readRoutingAdvice(workspaceRoot);
+  if (!advice) return undefined;
+  const entry = pickAdvice(advice, jobClass, ROUTING_MODE_FOR_PERFORMANCE[performanceMode]);
+  if (!entry) return undefined;
+  const band = modelTierBand(entry.model_id);
+  if (!band) return undefined;
+  if (withinClamps(band as DefaultModel) !== band) return undefined;
+  return {
+    modelId: entry.model_id,
+    band: band as DefaultModel,
+    jobClass,
+    effort: entry.effort as ClaudeEffort | undefined,
+    backoff: entry.backoff,
   };
 }
 
@@ -1376,6 +1471,30 @@ export function resolveModel(
         // cannot put feature-validate or the plumbing on Fable under `frontier`
         // (#340).
         const model = withFloor(result.model as DefaultModel);
+
+        // Eval-advice re-pick (#581, opt-in, default off): the advisor slots
+        // between the selector's pick and the return, inside the same clamps
+        // (`withFloor` gates the advised band). With the key off, no advice
+        // file, no matching job class, or sparse evidence, this is inert and
+        // the compatibility table's pre-cutover behavior holds exactly.
+        if (isEvalRecommendationsEnabled(workspaceRoot)) {
+          const advisory = consultEvalAdvice(
+            workspaceRoot,
+            performanceMode,
+            issueMetadata,
+            withFloor
+          );
+          if (advisory) {
+            return {
+              model: advisory.band,
+              source: "auto",
+              selectionResult: result,
+              mode: routingMode,
+              effort: advisory.effort ? clampEffortToEnvelope(advisory.effort, envelope) : effort,
+              evalAdvisory: advisory,
+            };
+          }
+        }
 
         return {
           model,
@@ -3291,7 +3410,23 @@ export function runStageSkillHeadless(
    * from `run-state.json`, and only disables itself (silent no-op) when
    * neither resolves — a per-stage manual invocation must never invent one.
    */
-  runId?: string
+  runId?: string,
+  /**
+   * The effort half of the wire dispatch envelope (#581, spike #568 §4.1).
+   *
+   * On the IPC path the Go scheduler is the ONLY resolver (#340): its
+   * `resolveWireEffort` runs the same chain `resolveStageEffort` runs here —
+   * the mode's effort pin and [effortFloor, effortCeiling] envelope,
+   * `model_routing.stage_efforts` + env overrides, `default_effort`, the
+   * manual-mode table — and this parameter is that result, executed verbatim
+   * in the slot the local chain used to fill. Absent (or off the
+   * EFFORT_LEVELS ladder) falls back to the local chain, which resolves the
+   * identical answer — so a pre-#581 Go binary driving a newer extension
+   * changes nothing. Only meaningful together with `modelOverride`; the
+   * local-resolution path (`resolveModel`) still owns effort where it owns
+   * the model.
+   */
+  effortOverride?: string
 ): SkillProcessHandle {
   // When a pinned workspace root is provided (from HeadlessOrchestrator),
   // use it directly to prevent repo-switch mid-pipeline from changing CWD.
@@ -3528,10 +3663,17 @@ export function runStageSkillHeadless(
           ? resolveCodexPipelineModel(modelOverride, workspaceRoot)
           : modelOverride,
       source: modelOverrideSource ?? "user-override",
-      // Effort is resolved independently — it is not part of the model
-      // decision the caller owns, and dropping it here silently discarded
-      // `model_routing.stage_efforts` on every overridden dispatch.
-      effort: resolveStageEffort(stage, workspaceRoot, effectiveMetadata),
+      // Effort: the wire envelope's value when the caller supplied one
+      // (#581 — the Go scheduler resolved it with the same chain and the
+      // extension executes it verbatim), else resolved locally — it is not
+      // part of the model decision the caller owns, and dropping it here
+      // silently discarded `model_routing.stage_efforts` on every overridden
+      // dispatch. The wire value is gated on the EFFORT_LEVELS ladder so an
+      // off-vocabulary value falls back instead of reaching `--effort`.
+      effort:
+        effortOverride && (EFFORT_ORDER as readonly string[]).includes(effortOverride)
+          ? (effortOverride as ClaudeEffort)
+          : resolveStageEffort(stage, workspaceRoot, effectiveMetadata),
     };
   } else {
     const resolved = resolveModel(stage, workspaceRoot, effectiveMetadata, issueNumber);

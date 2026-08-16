@@ -38,7 +38,30 @@ type RunStageParams struct {
 	// know passes through as itself, because it has no band. Do not reintroduce
 	// a concrete id here: the extension's band-keyed lookups (`--effort`
 	// support, the performance-mode pin comparison) no-op SILENTLY on one.
-	Model             string   `json:"model"`
+	Model string `json:"model"`
+	// Effort/Thinking complete the dispatch envelope next to Model (#581,
+	// spike #568 §4.1: "the wire grows effort and thinking alongside model —
+	// which run-record-envelope then records"). Same authority as Model
+	// (#340): resolveWireEffort mirrors the resolveStageEffort chain the
+	// extension used to run for itself on this path (the mode's effort pin
+	// and [effortFloor, effortCeiling] envelope, model_routing.stage_efforts
+	// and its env overrides, model_routing.default_effort, the manual-mode
+	// table), and the TS SkillRunner executes the wire effort verbatim in the
+	// same slot. An ABSENT effort means no explicit effort resolved anywhere:
+	// the extension omits `--effort` and the model's declared default rules,
+	// exactly as before the wire carried the field.
+	//
+	// Thinking is the selection query's declared answer for the dispatched
+	// band (ResolveBandEnvelope + the CLAUDE_CODE_DISABLE_THINKING interlock).
+	// Nothing executes it — no CLI flag exists — so it is attribution riding
+	// the dispatch it describes; absent when undeclared.
+	//
+	// VOCABULARY: Effort is an EFFORT_LEVELS rung; Thinking is "on"/"off".
+	// Both ride the Model field's band contract: adapters that translate the
+	// band at the last mile translate or drop the envelope with it (the grok
+	// path stays NIGHTGAUGE_GROK_EFFORT-owned, #569).
+	Effort            string   `json:"effort,omitempty"`
+	Thinking          string   `json:"thinking,omitempty"`
 	MaxTokens         int      `json:"maxTokens,omitempty"`
 	TimeoutMs         int      `json:"timeoutMs"`
 	SkillContent      string   `json:"skillContent"`

@@ -120,6 +120,14 @@ const (
 // TierBandsStrongestFirst is the capability ordering of the registry bands.
 // Strongest first, because that is the order the model-unavailable downgrade
 // ladder walks (#42).
+//
+// This is the ONE Go band-order declaration (#581): the selection query
+// (selection.go) derives ladder MEMBERSHIP from the registry, but the
+// relative order of the bands has no registry data field in this phase and
+// no measured capability evidence exists — so the order is declared, here,
+// exactly once. TS pair: TIER_BANDS in
+// packages/nightgauge-sdk/src/eval/tierBands.ts (ascending; the ladder
+// parity tests pin the two).
 var TierBandsStrongestFirst = []string{TierFable, TierOpus, TierSonnet, TierHaiku}
 
 // TierBand maps a model reference — a band name ("opus"), a concrete Anthropic
@@ -161,19 +169,38 @@ func TierRank(model string) int {
 	return tierRank(TierBand(model))
 }
 
-// ModeEnvelope is the `[Floor, Ceiling]` band a performance mode routes within.
-// Mirrors ModeEnvelope in packages/nightgauge-vscode/src/utils/modeProfiles.ts.
+// ModeEnvelope is the `[Floor, Ceiling]` band a performance mode routes
+// within, plus the mode's EFFORT bounds (spike #568 §4.1.3: envelopes carry
+// an effort axis alongside the rung axis). Mirrors ModeEnvelope in
+// packages/nightgauge-vscode/src/utils/modeProfiles.ts, INCLUDING the effort
+// fields that table already declared (`effortCeiling` on efficiency,
+// `effortFloor` on maximum) — before #581 the Go mirror silently dropped
+// them, so the wire-effort resolution (dispatch_envelope.go) had no clamp to
+// apply. The thinking-policy axis the spike also names has NO value in either
+// table yet; it lands with the #582 sweep rather than as a dead field here.
 type ModeEnvelope struct {
 	Floor   string
 	Ceiling string
+	// EffortFloor raises a resolved effort (Maximum reasons hard everywhere);
+	// "" = no floor. Mirrors ModeEnvelope.effortFloor.
+	EffortFloor string
+	// EffortCeiling caps a resolved effort (Efficiency trades reasoning for
+	// cost); "" = no ceiling. Mirrors ModeEnvelope.effortCeiling.
+	EffortCeiling string
 }
 
 // modeProfile mirrors one MODE_PROFILES entry: the per-stage PINS the mode
-// applies, and the envelope every router-chosen tier is clamped into. A pin
+// applies (model AND effort — a pin is an envelope point, not a bare model),
+// and the envelope every router-chosen tier is clamped into. A pin
 // short-circuits routing; an envelope bounds it.
 type modeProfile struct {
-	stages   map[string]string
-	envelope ModeEnvelope
+	stages map[string]string
+	// stageEfforts is the effort half of the per-stage pins — set only where
+	// stages pins a model too, mirroring the TS `{ model, effort }` stage
+	// profile objects. resolveStageEffort's pin branch requires BOTH
+	// (`profile?.model && profile.effort`); ModeStageEffort mirrors that.
+	stageEfforts map[string]string
+	envelope     ModeEnvelope
 }
 
 // modeProfiles is the ONE performance-mode table on the Go side, and a mirror
@@ -195,11 +222,16 @@ type modeProfile struct {
 // scheduler drifted apart.
 var modeProfiles = map[PerformanceMode]modeProfile{
 	// Router-driven within [haiku, sonnet]: no stage ever reaches Opus.
-	ModeEfficiency: {envelope: ModeEnvelope{Floor: TierHaiku, Ceiling: TierSonnet}},
+	// Effort capped at medium (MODE_PROFILES.efficiency.envelope.effortCeiling)
+	// to keep reasoning cost down.
+	ModeEfficiency: {envelope: ModeEnvelope{Floor: TierHaiku, Ceiling: TierSonnet, EffortCeiling: "medium"}},
 	// The open envelope — exactly today's routing.
 	ModeElevated: {envelope: ModeEnvelope{Floor: TierHaiku, Ceiling: TierOpus}},
 	// Deliberate pins: "cost no object" genuinely means pin high on every
-	// stage, plumbing included. Same six stages MODE_PROFILES.maximum names.
+	// stage, plumbing included. Same six stages MODE_PROFILES.maximum names,
+	// each pinned at `{ model: opus, effort: high }` — the pin is an envelope
+	// point, and dropping its effort half is how the IPC path used to lose
+	// `--effort high` on every Maximum stage.
 	ModeMaximum: {
 		stages: map[string]string{
 			"issue-pickup":     TierOpus,
@@ -209,7 +241,15 @@ var modeProfiles = map[PerformanceMode]modeProfile{
 			"pr-create":        TierOpus,
 			"pr-merge":         TierOpus,
 		},
-		envelope: ModeEnvelope{Floor: TierOpus, Ceiling: TierOpus},
+		stageEfforts: map[string]string{
+			"issue-pickup":     "high",
+			"feature-planning": "high",
+			"feature-dev":      "high",
+			"feature-validate": "high",
+			"pr-create":        "high",
+			"pr-merge":         "high",
+		},
+		envelope: ModeEnvelope{Floor: TierOpus, Ceiling: TierOpus, EffortFloor: "high"},
 	},
 	// Router-driven within [haiku, fable]. Fable is reached ONLY on heavy
 	// reasoning stages at top complexity (frontierReasoningStage below);
@@ -223,6 +263,66 @@ var modeProfiles = map[PerformanceMode]modeProfile{
 // clamped: it is the mode's own answer.
 func ModeStagePin(mode PerformanceMode, stage string) string {
 	return modeProfiles[mode].stages[stage]
+}
+
+// ModeStageEffort returns the EFFORT a performance mode pins alongside its
+// model pin for a stage, or "" when the mode pins nothing there. Mirrors the
+// pin branch of resolveStageEffort (skillRunner.ts): the TS chain returns
+// `profile.effort` only when the profile pins a model too, so a mode with an
+// effort-less pin (none exists today) would answer "" here as well.
+func ModeStageEffort(mode PerformanceMode, stage string) string {
+	p := modeProfiles[mode]
+	if p.stages[stage] == "" {
+		return ""
+	}
+	return p.stageEfforts[stage]
+}
+
+// effortRank orders an effort level by reasoning depth, low = 0. -1 for a
+// value that is not an EFFORT_LEVELS member — the unclamped pass-through.
+func effortRank(effort string) int {
+	for i, e := range models.EffortOrder {
+		if e == effort {
+			return i
+		}
+	}
+	return -1
+}
+
+// ClampEffortToEnvelope clamps a resolved effort into the mode envelope's
+// `[EffortFloor, EffortCeiling]` (#19). Mirrors clampEffortToEnvelope
+// (skillRunner.ts) exactly:
+//
+//   - "" (no effort resolved) returns the envelope's floor — only a floor can
+//     introduce an effort (Maximum with a per-stage model env override still
+//     reasons at `high`);
+//   - a value off the EFFORT_LEVELS ladder passes through unclamped — it is
+//     not an effort level at all, and inventing a rank for it would silently
+//     exempt or rewrite an unchecked input;
+//   - otherwise the index is raised to the floor and lowered to the ceiling
+//     on models.EffortOrder, the one effort ladder (#394/#578).
+func ClampEffortToEnvelope(effort string, env ModeEnvelope) string {
+	if effort == "" {
+		return env.EffortFloor
+	}
+	i := effortRank(effort)
+	if i < 0 {
+		return effort
+	}
+	if f := effortRank(env.EffortFloor); f >= 0 && i < f {
+		i = f
+	}
+	if c := effortRank(env.EffortCeiling); c >= 0 && i > c {
+		i = c
+	}
+	return models.EffortOrder[i]
+}
+
+// IsEffortLevel reports membership in the EFFORT_LEVELS vocabulary
+// (models.EffortOrder, pinned to the SDK authority) — the guard operator
+// effort input passes before it can reach the wire.
+func IsEffortLevel(effort string) bool {
+	return effortRank(effort) >= 0
 }
 
 // Envelope returns the mode's `[floor, ceiling]` band — the bounds every model
