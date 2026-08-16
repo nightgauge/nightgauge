@@ -1,8 +1,8 @@
 # Adapter Selection Guide
 
-**Version:** 1.1
-**Updated:** 2026-07-21
-**Issue:** #2599
+**Version:** 1.2
+**Updated:** 2026-08-15
+**Issue:** #2599, #584
 
 ---
 
@@ -264,14 +264,55 @@ test -f ~/.grok/auth.json && echo "session present"
 
 **Environment Variables:**
 
-| Variable                      | Description              |
-| ----------------------------- | ------------------------ |
-| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path |
-| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags   |
-| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override  |
-| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` value         |
-| `XAI_API_KEY`                 | API-key fallback         |
-| `GROK_HOME`                   | Override `~/.grok`       |
+| Variable                      | Description                                           |
+| ----------------------------- | ----------------------------------------------------- |
+| `NIGHTGAUGE_GROK_CLI_COMMAND` | Override CLI binary path                              |
+| `NIGHTGAUGE_GROK_CLI_ARGS`    | Override default flags                                |
+| `NIGHTGAUGE_GROK_MODEL`       | Concrete model override                               |
+| `NIGHTGAUGE_GROK_EFFORT`      | `--effort` value — gated against the registry (below) |
+| `XAI_API_KEY`                 | API-key fallback                                      |
+| `GROK_HOME`                   | Override `~/.grok`                                    |
+
+**Effort gate (#569):** `NIGHTGAUGE_GROK_EFFORT` is not a free pass-through to
+`grok --effort`. Before spawn it is checked against the `supported_efforts`
+ladder the model registry declares for the model this dispatch actually
+resolves — the same resolution `BuildCommand` uses (a band name resolves to
+the registry's xai model; a concrete id resolves to itself). A rung the
+resolved model does not declare fails the stage **closed**, before the CLI is
+ever spawned, with an error naming the model, the requested effort, and the
+declared ladder — never a silent pass-through, never a silent downgrade to
+whatever rung the CLI happens to serve (#75).
+
+- Grok-native `none`/`minimal` collapse to `low` **before** the ladder check
+  runs (#523) — they are valid exactly when the resolved model declares
+  `low`.
+- `supported_efforts: []` is a positive declaration — "no effort axis" — so
+  any explicit effort is rejected outright (`grok-build-0.1` declares `[]`
+  today) (#336).
+- A model with no registry descriptor at all passes through with a logged
+  warning, never a hard failure — there is nothing to validate against.
+- A value outside the Grok CLI vocabulary
+  (`none|minimal|low|medium|high|xhigh|max`) is dropped exactly as before,
+  now with a logged warning instead of silence.
+- Enforced on every dispatch path: the Go binary's pre-spawn `ValidateModel`
+  hook (`internal/execution/adapters/grok_effort.go`), the SDK's
+  `grokCliEffortFlag` (`packages/nightgauge-sdk/src/cli/adapters/grokEffort.ts`),
+  and the VS Code extension's `checkAdapterEffortSupported` /
+  `preflightAdapterEffort` (`stageResolver.ts` / `skillRunner.ts`).
+
+**Worked example — the #532 signature:** `grok-4.5` declares
+`supported_efforts: [low, medium, high]`. Dispatching to it with
+`NIGHTGAUGE_GROK_EFFORT=xhigh` now fails **before** spawn:
+
+```
+effort "xhigh" is not supported by model "grok-4.5" (supports: low, medium,
+high); choose a supported level or route to a model that accepts "xhigh"
+```
+
+Before #569 this env var passed the static CLI-vocabulary filter unchecked
+and reached `grok --effort xhigh`, which died inside the CLI as
+`unknown effort level 'xhigh'` — exit 1 in seconds, no work done, nothing
+classified.
 
 ---
 
@@ -355,14 +396,45 @@ codex --version
 
 **Environment Variables:**
 
-| Variable                            | Description                              |
-| ----------------------------------- | ---------------------------------------- |
-| `NIGHTGAUGE_CODEX_CLI_COMMAND`      | Override CLI binary path                 |
-| `NIGHTGAUGE_CODEX_CLI_ARGS`         | Override default CLI arguments           |
-| `NIGHTGAUGE_CODEX_MODEL`            | Model selection                          |
-| `NIGHTGAUGE_CODEX_RESUME_ENABLED`   | Enable session resume (`true`/`false`)   |
-| `NIGHTGAUGE_CODEX_EPHEMERAL`        | Make all stages ephemeral (`true`)       |
-| `NIGHTGAUGE_CODEX_EPHEMERAL_STAGES` | Comma-separated list of ephemeral stages |
+| Variable                            | Description                                                         |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `NIGHTGAUGE_CODEX_CLI_COMMAND`      | Override CLI binary path                                            |
+| `NIGHTGAUGE_CODEX_CLI_ARGS`         | Override default CLI arguments                                      |
+| `NIGHTGAUGE_CODEX_MODEL`            | Model selection                                                     |
+| `NIGHTGAUGE_CODEX_REASONING_EFFORT` | `model_reasoning_effort` value — gated against the registry (below) |
+| `NIGHTGAUGE_CODEX_RESUME_ENABLED`   | Enable session resume (`true`/`false`)                              |
+| `NIGHTGAUGE_CODEX_EPHEMERAL`        | Make all stages ephemeral (`true`)                                  |
+| `NIGHTGAUGE_CODEX_EPHEMERAL_STAGES` | Comma-separated list of ephemeral stages                            |
+
+**Effort gate (#569):** `NIGHTGAUGE_CODEX_REASONING_EFFORT` is checked against
+the resolved model's `supported_efforts` ladder before dispatch, mirroring the
+Grok rule above — on the SDK and VS Code extension paths. (The Go binary's
+Codex adapter does not forward a reasoning-effort flag at all today; deriving
+a codex-specific ladder for the Go dispatch path is #435, out of scope for
+#569.)
+
+- A value outside the Codex CLI vocabulary (`none|low|medium|high|xhigh|max`)
+  is rejected immediately — the CLI would reject it at spawn anyway, so this
+  fails fast with the vocabulary named.
+- Codex's sub-`low` rung `none` normalizes to `low` for the ladder check
+  (mirrors the Grok `none`/`minimal` rule, #523); the value forwarded to the
+  CLI stays `none`.
+- `supported_efforts: []` rejects any explicit effort (#336); a model with no
+  registry descriptor passes through with a logged warning, never a hard
+  failure.
+- A rung the resolved model does not declare throws a classified
+  `AdapterError` (`CONFIG_INVALID`) naming the model, the requested effort,
+  and the declared ladder — before spawn, never downgraded (#75).
+- Enforced by the SDK's `codexReasoningEffortFlag`
+  (`packages/nightgauge-sdk/src/cli/adapters/codexEffort.ts`) and the VS Code
+  extension's `checkAdapterEffortSupported` / `preflightAdapterEffort`
+  (`stageResolver.ts` / `skillRunner.ts`).
+
+**Worked example:** the default Codex model `gpt-5.4` declares
+`supported_efforts: [low, medium, high]`. Dispatching to it with
+`NIGHTGAUGE_CODEX_REASONING_EFFORT=xhigh` fails closed before spawn with the
+same #532-signature shape as the Grok example above — the model, the
+requested effort, and the declared ladder named in the error.
 
 ---
 

@@ -3386,6 +3386,16 @@ branch means the run's complexity-routed tier from `issue-{N}.json` rather than
 
 **Effort Resolution (`--effort`):**
 
+Every adapter that carries an effort/reasoning-effort axis enforces the same
+registry authority before spawn: a requested rung must sit on the resolved
+model's declared `supported_efforts` ladder, or the stage fails closed with an
+error naming the model, the requested effort, and the ladder (#569, #75) —
+never a silent pass-through, never a silent downgrade. What differs per
+adapter is how the requested effort is arrived at. Claude uses the full
+precedence chain below; Grok and Codex each read a single provider-global
+environment variable, gated the same way — see the **Registry effort gate —
+Grok and Codex** callout after the `max` effort callout below.
+
 When using the Claude adapter, effort is resolved with this precedence:
 
 ```
@@ -3419,6 +3429,53 @@ When using the Claude adapter, effort is resolved with this precedence:
 > direction on eval evidence; adding `max` changed no stage default. Note that
 > `max_tokens` bounds thinking **and** response text together, so a stage moved
 > to `xhigh`/`max` needs headroom to avoid truncation.
+
+> **Registry effort gate — Grok and Codex (#569):** the model-capability guard
+> above was Claude-only until #569 made it a per-adapter dispatch check.
+> `NIGHTGAUGE_GROK_EFFORT` and `NIGHTGAUGE_CODEX_REASONING_EFFORT` are
+> provider-global env vars, not per-stage config — but before either reaches
+> its CLI, the value is checked pre-spawn against the `supported_efforts`
+> ladder of the model the dispatch actually resolves (a band name resolves to
+> the registry's provider model for that adapter; a concrete id resolves to
+> itself — never the model's band, whose current leader can declare a longer
+> ladder than a deprecated sibling). This deliberately diverges from the
+> Claude path on the `[]` case:
+>
+> - `supported_efforts: []` is a positive declaration — "no effort axis" — so
+>   an explicit adapter effort against it fails closed here, unlike Claude's
+>   fail-open on `[]` above: Claude's emission gate has already declined to
+>   pass a flag before `[]` is reached, while Grok/Codex efforts are explicit
+>   provider-global requests that would otherwise reach the CLI, and dropping
+>   them silently is exactly the downgrade #75 forbids (#336).
+> - A model with no registry descriptor at all passes through with a logged
+>   warning, never a hard failure — there is nothing to validate against.
+> - Vendor rungs below the Nightgauge ladder normalize to `low` **before** the
+>   membership check runs (#523): Grok's `none`/`minimal`, Codex's `none`.
+> - A rung the resolved model does not declare fails the stage closed with an
+>   error naming the model, the requested effort, and the declared ladder —
+>   before the CLI is ever spawned.
+>
+> Enforcement lives on every surface that actually dispatches the value: for
+> Grok, the Go binary's pre-spawn `ValidateModel` hook
+> (`internal/execution/adapters/grok_effort.go`), the SDK's
+> `grokCliEffortFlag`, and the VS Code extension's
+> `checkAdapterEffortSupported` / `preflightAdapterEffort`. For Codex, the
+> SDK's `codexReasoningEffortFlag` and the same extension gate — the Go
+> binary's Codex adapter does not forward a reasoning-effort flag at all
+> today (a codex-specific ladder derivation is #435, out of scope for #569).
+>
+> **Worked example — the #532 signature:** `grok-4.5` declares
+> `supported_efforts: [low, medium, high]`. Dispatching to it with
+> `NIGHTGAUGE_GROK_EFFORT=xhigh` now fails BEFORE spawn with an error naming
+> the model, the requested effort, and the ladder:
+> `effort "xhigh" is not supported by model "grok-4.5" (supports: low, medium, high); choose a supported level or route to a model that accepts "xhigh"`.
+> Before #569 this env var passed the static CLI-vocabulary filter unchecked
+> and reached `grok --effort xhigh`, which died inside the CLI as
+> `unknown effort level 'xhigh'` — exit 1 in seconds, no work done, nothing
+> classified. The Codex path fails the identical way: the default Codex
+> model `gpt-5.4` also tops out at `high`, so
+> `NIGHTGAUGE_CODEX_REASONING_EFFORT=xhigh` is rejected pre-spawn with the
+> same model/effort/ladder shape.
 
 > **Fable conformance (#73):** before an effort value reaches a Fable run it is
 > conformed to Anthropic's published guidance (`conformEffortForFable`): an
@@ -4751,12 +4808,13 @@ The VS Code settings panel reads available Codex models from your local
 
 #### Codex Adapter Environment Variables
 
-| Variable                          | Description                          |
-| --------------------------------- | ------------------------------------ |
-| `NIGHTGAUGE_CODEX_MODEL`          | Override Codex model                 |
-| `NIGHTGAUGE_CODEX_CLI_COMMAND`    | Override Codex binary path           |
-| `NIGHTGAUGE_CODEX_CLI_ARGS`       | Override default CLI arguments       |
-| `NIGHTGAUGE_CODEX_RESUME_ENABLED` | Enable Codex session resume (`true`) |
+| Variable                            | Description                                                                                     |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `NIGHTGAUGE_CODEX_MODEL`            | Override Codex model                                                                            |
+| `NIGHTGAUGE_CODEX_CLI_COMMAND`      | Override Codex binary path                                                                      |
+| `NIGHTGAUGE_CODEX_CLI_ARGS`         | Override default CLI arguments                                                                  |
+| `NIGHTGAUGE_CODEX_REASONING_EFFORT` | `model_reasoning_effort` value — gated against the resolved model's registry ladder (see above) |
+| `NIGHTGAUGE_CODEX_RESUME_ENABLED`   | Enable Codex session resume (`true`)                                                            |
 
 #### Gemini Adapter Environment Variables
 
