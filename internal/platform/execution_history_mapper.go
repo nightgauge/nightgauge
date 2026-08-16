@@ -201,6 +201,21 @@ func buildExecutionHistoryStages(record state.V2RunRecord) ([]ExecutionHistorySt
 			provider = tok.Adapter
 		}
 
+		// detail.ModelSelection's dispatch-envelope fields — Adapter,
+		// ServedModel, Effort, Thinking, Mode (#580) — are deliberately NOT
+		// read here, mirroring the #588 cost_unstamped precedent immediately
+		// above `provider`. ExecutionHistoryStageMetric has no properties for
+		// them, so they cannot leak into the platform's `.strict()` V4/V5
+		// schema by accident; `provider` above already carries the one
+		// envelope fact (adapter) the platform ingests, sourced from
+		// V2StageTokens.Adapter rather than the new
+		// ModelSelection.Adapter — the two are set from the same value
+		// (history.go's BuildV2Record) but this mapper keeps its existing
+		// source rather than adding a second path to the same fact. The new
+		// fields stay local-only for `nightgauge cost by-class` and other
+		// local consumers until a coordinated platform schema change adds
+		// them.
+
 		var inputTokens, outputTokens int
 		var costUsd *float64
 		if hasTok {

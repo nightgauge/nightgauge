@@ -232,6 +232,15 @@ function mapStages(stagesRaw: unknown, perStageTokensRaw: unknown): V4StageMetri
     // — the signal stays local (V2StageTokens.cost_unstamped /
     // V2Tokens.cost_unstamped) for `nightgauge cost by-class` and other local
     // consumers until a coordinated platform schema change adds it.
+    //
+    // Same rule for model_selection's dispatch-envelope fields — adapter,
+    // served_model, effort, thinking, mode (#580): `modelSelection` above
+    // reads only `["model"]`, exactly as before this issue (with the
+    // pre-existing `tokens["adapter"]` fallback when model_selection itself
+    // is absent). V4StageMetric has no properties for the new fields, so they
+    // cannot leak into the strict V4 schema. The new fields stay local-only
+    // for `nightgauge cost by-class` and other local consumers until a
+    // coordinated platform schema change adds them.
     out.push({
       stageId: stageName.slice(0, 100),
       stageName: stageName.slice(0, 100),

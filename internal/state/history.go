@@ -272,9 +272,50 @@ type RecoveryAttempt struct {
 }
 
 // V2ModelSelect matches the model_selection sub-schema.
+//
+// Adapter/ServedModel/Effort/Thinking/Mode are the dispatch-envelope fields
+// added by Issue #580 (materialized from spike #568 §3). Every one follows
+// the #299/#397 empty-means-undetermined convention: omitempty drops an
+// unknown field from the wire rather than filling it with a guessed or
+// defaulted value. See dispatch_envelope.go
+// (internal/orchestrator/resolveDispatchEffort/resolveDispatchThinking/
+// resolveDispatchSelectionMode) for exactly what evidence backs each field
+// and where that evidence runs out.
 type V2ModelSelect struct {
 	Model  string `json:"model"`
 	Source string `json:"source"`
+	// Adapter is the adapter that served this stage (Issue #580) — a
+	// self-contained mirror of V2StageTokens.Adapter (#3224) so a
+	// model_selection block does not require cross-referencing the tokens
+	// block to know which provider ran it. Same free-string-at-schema-level
+	// contract: the TypeScript Zod schema enforces the canonical set.
+	Adapter string `json:"adapter,omitempty"`
+	// ServedModel is the concrete model id the CLI's own stream reported
+	// (adapters.RunResult.ServedModel), independent of Model above — Model
+	// may still be an unresolved tier band ("sonnet") when the stream never
+	// reported anything more specific. Empty means honestly-unreported, never
+	// a guess or a copy of Model.
+	ServedModel string `json:"served_model,omitempty"`
+	// Effort is the resolved EFFORT_LEVELS rung actually in force for this
+	// dispatch (absorbs #434). Populated only where Go has direct evidence —
+	// today exclusively the grok adapter's NIGHTGAUGE_GROK_EFFORT dispatch
+	// env var, validated against the canonical ladder. Every other adapter's
+	// effort is resolved entirely on the TypeScript side with no Go-visible
+	// signal, so it stays empty rather than a registry-default guess.
+	Effort string `json:"effort,omitempty"`
+	// Thinking is the "on"/"off" reasoning state actually in force (spike
+	// #568 §3's canonical binary axis). Derived from the resolved model's
+	// registry behavior.thinking_default, overridden to "off" when the Claude
+	// Code CLAUDE_CODE_DISABLE_THINKING escape hatch is set for an
+	// anthropic-provider stage (#76's interlock). Empty when the model has no
+	// registry entry or declares no default.
+	Thinking string `json:"thinking,omitempty"`
+	// Mode is model_routing.mode (manual | automatic | hybrid) active when
+	// this stage's model was resolved (resolves #462). Distinguishes an
+	// operator-pinned model (manual) from a router-chosen one
+	// (automatic/hybrid) — under `model_routing.mode: manual`, Source alone
+	// always read "scheduler" and could not tell the two apart.
+	Mode string `json:"mode,omitempty"`
 }
 
 // V2Tokens matches TokensSchema.
@@ -843,6 +884,14 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		stageStarted := sr.StartedAt.Format(time.RFC3339)
 		stageCompleted := sr.StartedAt.Add(sr.Duration).Format(time.RFC3339)
 
+		// Issue #3224 / #580: resolve once, shared by V2StageTokens.Adapter
+		// below AND V2ModelSelect.Adapter, so the two attributions can never
+		// disagree with each other.
+		stageAdapter := snap.StageAdapters[stageName]
+		if stageAdapter == "" {
+			stageAdapter = input.DefaultAdapter
+		}
+
 		detail := V2StageDetail{
 			Status:          "complete",
 			StartedAt:       stageStarted,
@@ -881,7 +930,15 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 					}
 				}
 			}
-			detail.ModelSelection = &V2ModelSelect{Model: m, Source: source}
+			detail.ModelSelection = &V2ModelSelect{
+				Model:       m,
+				Source:      source,
+				Adapter:     stageAdapter,
+				ServedModel: snap.StageServedModels[stageName],
+				Effort:      snap.StageEfforts[stageName],
+				Thinking:    snap.StageThinking[stageName],
+				Mode:        snap.StageModelSelectionModes[stageName],
+			}
 		}
 
 		// Per-stage tries-until-green: set only when the stage looped (Ralph
@@ -899,13 +956,10 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 
 		stages[stageName] = detail
 
-		// Issue #3224: prefer per-stage adapter recorded by the resolver
-		// (#3221), falling back to the run-level default when absent. Empty
-		// string is left as-is so omitempty drops the key on the wire.
-		stageAdapter := snap.StageAdapters[stageName]
-		if stageAdapter == "" {
-			stageAdapter = input.DefaultAdapter
-		}
+		// stageAdapter was resolved once, above, and is reused here (Issue
+		// #3224): prefer per-stage adapter recorded by the resolver (#3221),
+		// falling back to the run-level default when absent. Empty string is
+		// left as-is so omitempty drops the key on the wire.
 
 		// ACCUMULATE, never assign. CompletedStages is an append-only slice and
 		// one stage can land in it more than once: the retry/backtrack engine

@@ -210,6 +210,54 @@ func TestBuildExecutionHistoryStages_ExecutionPathEffortReasoningTruncated(t *te
 	}
 }
 
+// TestBuildExecutionHistoryStages_ModelSelectionEnvelopeDoesNotLeak (#580) is
+// the Go-side twin of pipelineRunV4Mapper.test.ts's "excludes
+// model_selection's dispatch-envelope fields" case. ModelSelection.Adapter/
+// ServedModel/Effort/Thinking/Mode must never reach ExecutionHistoryStageMetric
+// — the platform's `.strict()` schema rejects the WHOLE record on any unknown
+// key, the same failure mode #588 documents for cost_unstamped.
+func TestBuildExecutionHistoryStages_ModelSelectionEnvelopeDoesNotLeak(t *testing.T) {
+	rec := state.V2RunRecord{
+		Stages: map[string]state.V2StageDetail{
+			"feature-dev": {
+				Status: "complete",
+				ModelSelection: &state.V2ModelSelect{
+					Model:       "sonnet",
+					Source:      "scheduler",
+					Adapter:     "grok",
+					ServedModel: "grok-4.6",
+					Effort:      "high",
+					Thinking:    "on",
+					Mode:        "automatic",
+				},
+			},
+		},
+	}
+
+	stages, _ := buildExecutionHistoryStages(rec)
+	if len(stages) != 1 {
+		t.Fatalf("len(stages) = %d, want 1", len(stages))
+	}
+	if stages[0].Model == nil || *stages[0].Model != "sonnet" {
+		t.Errorf("Model = %v, want %q — the one envelope fact this mapper reads", stages[0].Model, "sonnet")
+	}
+
+	b, err := json.Marshal(stages[0])
+	if err != nil {
+		t.Fatalf("marshal ExecutionHistoryStageMetric: %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(b, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, leaked := range []string{"adapter", "servedModel", "served_model", "effort", "thinking", "mode", "source"} {
+		if _, present := wire[leaked]; present {
+			t.Errorf("ExecutionHistoryStageMetric wire carries %q — a model_selection envelope field "+
+				"leaked into the strict platform payload: %s", leaked, string(b))
+		}
+	}
+}
+
 // TestV2RunRecordToExecutionHistoryRunRecord_ProviderNullWhenNoAdapter asserts a
 // stage with no recorded adapter marshals `"provider": null` (present key, null
 // value) — the V5 schema declares provider `.nullable()` but NOT `.optional()`,

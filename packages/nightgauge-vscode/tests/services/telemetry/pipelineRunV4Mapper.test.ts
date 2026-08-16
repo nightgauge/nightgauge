@@ -92,3 +92,51 @@ describe("mapStages executionPath/modelEffort/modelReasoning", () => {
     expect(stage.modelReasoning).toBeNull();
   });
 });
+
+describe("mapStages excludes model_selection's dispatch-envelope fields (#580)", () => {
+  // The platform's `.strict()` V4 schema rejects the WHOLE record on any
+  // unknown key (the same failure mode #588 documents for cost_unstamped).
+  // model_selection.adapter/served_model/effort/thinking/mode must therefore
+  // never reach the mapped stage object — only `model` may.
+  it("reads only model_selection.model, nothing else, into the mapped stage", () => {
+    const result = mapHistoryRecordToV4(
+      baseRecord({
+        "feature-dev": {
+          status: "complete",
+          model_selection: {
+            model: "sonnet",
+            source: "scheduler",
+            adapter: "grok",
+            served_model: "grok-4.6",
+            effort: "high",
+            thinking: "on",
+            mode: "automatic",
+          },
+        },
+      })
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const stage = result.record.stages[0];
+    expect(stage.model).toBe("sonnet");
+    // The mapped stage carries exactly V4StageMetric's declared keys — none
+    // of adapter/servedModel/effort/thinking/mode/source leaked through.
+    expect(Object.keys(stage).sort()).toEqual(
+      [
+        "attempt",
+        "costUsd",
+        "durationMs",
+        "executionPath",
+        "inputTokens",
+        "model",
+        "modelEffort",
+        "modelReasoning",
+        "outputTokens",
+        "stageId",
+        "stageName",
+        "success",
+        "totalTokens",
+      ].sort()
+    );
+  });
+});
