@@ -294,7 +294,7 @@ func TestDispatchModelCeilingBindsTheRaisingMechanisms(t *testing.T) {
 		// The API rejected opus for this run. Maximum's envelope is [opus,
 		// opus], so a floor half applied after the downgrade would put the run
 		// straight back onto the rejected tier.
-		s.retryEngine.RecordDowngrade("opus", "sonnet", "")
+		s.retryEngine.RecordDowngrade("opus", DowngradeDecision{NewTier: "sonnet"})
 		if got := s.resolveDispatchModel(state.StageFeatureDev, 1, dir, "opus", nil, ""); got != "sonnet" {
 			t.Errorf("feature-dev = %q, want sonnet — the #42 downgrade must survive the mode envelope", got)
 		}

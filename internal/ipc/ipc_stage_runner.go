@@ -162,10 +162,20 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		fallbackFrom, fallbackTo := "", ""
 		if exitCode != 0 && r.retryEngine != nil {
 			if orchestrator.ClassifyTerminalKind(result.ErrorText) == orchestrator.TerminalKindModelUnavailable {
-				if dg := r.retryEngine.EvaluateDowngrade(params.Model); dg.ShouldDowngrade {
+				// params.Model is a registry BAND, and a band cannot name its
+				// provider (#340) — so this evaluation used to resolve every
+				// extension-side rejection against anthropic, and the #606
+				// same-model effort descent was unreachable for xai dispatches
+				// no matter what the extension actually spawned. The executing
+				// adapter now rides the dispatch envelope (#611), and
+				// DowngradeProviderForAdapter is the SAME function the
+				// Go-direct scheduler path uses, so both paths key a descent
+				// on the same provider and reach the same rung.
+				downgradeProvider := orchestrator.DowngradeProviderForAdapter(params.Adapter)
+				if dg := r.retryEngine.EvaluateDowngradeForProvider(params.Model, downgradeProvider); dg.ShouldDowngrade {
 					log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
 						params.IssueNumber, params.Stage, params.Model, dg.NewTier)
-					r.retryEngine.RecordDowngrade(params.Model, dg.NewTier, dg.DescentEffort())
+					r.retryEngine.RecordDowngrade(params.Model, dg)
 					fallbackRecorded = true
 					fallbackFrom, fallbackTo = params.Model, dg.NewTier
 				} else {

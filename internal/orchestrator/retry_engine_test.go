@@ -550,7 +550,7 @@ func TestEvaluateDowngrade_FullyCollapsedProviderDescendsEffort(t *testing.T) {
 func TestEvaluateDowngrade_DescentChainsThroughTheLadder(t *testing.T) {
 	engine := NewRetryEngine(DefaultRetryConfig())
 	first := engine.EvaluateDowngrade("grok-4.6")
-	engine.RecordDowngrade("grok-4.6", first.NewTier, first.DescentEffort())
+	engine.RecordDowngrade("grok-4.6", first)
 
 	second := engine.EvaluateDowngradeForProvider("opus", "xai")
 	if !second.ShouldDowngrade || !second.SameModelDescent {
@@ -559,15 +559,15 @@ func TestEvaluateDowngrade_DescentChainsThroughTheLadder(t *testing.T) {
 	if second.NewTier != "sonnet" || second.NewEffort != "medium" {
 		t.Fatalf("second descent must be grok-4.6@medium on sonnet, got %+v", second)
 	}
-	engine.RecordDowngrade("opus", second.NewTier, second.DescentEffort())
+	engine.RecordDowngrade("opus", second)
 
 	// The sticky chain reroutes fable all the way down, and the effort of the
 	// FINAL tier is what StickyEffort answers with.
 	if got := engine.ApplyDowngrades("fable"); got != "sonnet" {
 		t.Fatalf("ApplyDowngrades(fable) = %q, want sonnet", got)
 	}
-	if got := engine.StickyEffort("sonnet"); got != "medium" {
-		t.Fatalf("StickyEffort(sonnet) = %q, want medium", got)
+	if got := engine.StickyEffort(DowngradeProviderForAdapter("grok"), "sonnet"); got != "medium" {
+		t.Fatalf("StickyEffort(xai, sonnet) = %q, want medium", got)
 	}
 }
 
@@ -613,8 +613,8 @@ func TestRecordDowngrade_CrossModelRecordsNoStickyEffort(t *testing.T) {
 	if !dg.ShouldDowngrade || dg.SameModelDescent {
 		t.Fatalf("anthropic opus must cross-model downgrade, got %+v", dg)
 	}
-	engine.RecordDowngrade("opus", dg.NewTier, dg.DescentEffort())
-	if got := engine.StickyEffort(dg.NewTier); got != "" {
+	engine.RecordDowngrade("opus", dg)
+	if got := engine.StickyEffort(DowngradeProviderForAdapter("claude"), dg.NewTier); got != "" {
 		t.Fatalf("cross-model downgrade left a sticky effort %q on %s", got, dg.NewTier)
 	}
 }
@@ -625,12 +625,12 @@ func TestRecordDowngrade_CrossModelRecordsNoStickyEffort(t *testing.T) {
 func TestRetryEngine_ResetClearsStickyEfforts(t *testing.T) {
 	engine := NewRetryEngine(DefaultRetryConfig())
 	dg := engine.EvaluateDowngrade("grok-4.6")
-	engine.RecordDowngrade("grok-4.6", dg.NewTier, dg.DescentEffort())
-	if engine.StickyEffort(dg.NewTier) == "" {
+	engine.RecordDowngrade("grok-4.6", dg)
+	if engine.StickyEffort(DowngradeProviderForAdapter("grok"), dg.NewTier) == "" {
 		t.Fatal("precondition: descent recorded a sticky effort")
 	}
 	engine.Reset()
-	if got := engine.StickyEffort(dg.NewTier); got != "" {
+	if got := engine.StickyEffort(DowngradeProviderForAdapter("grok"), dg.NewTier); got != "" {
 		t.Fatalf("Reset leaked sticky effort %q", got)
 	}
 }
