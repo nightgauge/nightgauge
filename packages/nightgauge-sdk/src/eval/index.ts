@@ -83,6 +83,8 @@ export {
   PROVIDERS,
   ProviderSchema,
   EFFORT_LEVELS,
+  REASONING_EFFORT_LEVELS,
+  REASONING_EFFORT_ALTERNATION,
   EffortLevelSchema,
   REASONING_LEVELS,
   ReasoningLevelSchema,
@@ -270,9 +272,46 @@ export {
 export {
   EvalRoutingAdvisor,
   ROUTING_MODES,
+  pickForMode,
+  thinkingStateOf,
   type RoutingMode,
   type Confidence,
-  type ModelJobStats,
+  type ThinkingState,
+  type AdviceBackoff,
+  type EnvelopeStats,
   type Recommendation,
   type AdvisorOptions,
 } from "./routingAdvisor.js";
+
+// The one TS band-order declaration + the selection query over the registry
+// axes (selection-query cutover, #581 / spike #568 §4).
+export {
+  TIER_BANDS,
+  TIER_BANDS_STRONGEST_FIRST,
+  TIER_BAND_ALTERNATION,
+  isTierBand,
+  type TierBand,
+} from "./tierBands.js";
+
+export {
+  candidateLadder,
+  resolveBandEnvelope,
+  escalationLadder,
+  ESCALATION_CEILING_BAND,
+  type EnvelopeRung,
+} from "./selectionQuery.js";
+
+// Routing-advice data file — the advisor→resolver handoff (#581, spike §4.2).
+export {
+  ROUTING_ADVICE_SCHEMA_VERSION,
+  ROUTING_ADVICE_RELATIVE_PATH,
+  ThinkingStateSchema,
+  RoutingAdviceEntrySchema,
+  RoutingAdviceFileSchema,
+  buildRoutingAdvice,
+  writeRoutingAdvice,
+  readRoutingAdvice,
+  pickAdvice,
+  type RoutingAdviceEntry,
+  type RoutingAdviceFile,
+} from "./routingAdvice.js";

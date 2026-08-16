@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import type { ModelTier } from "../analysis/AutoModelSelector.js";
+import { TIER_BANDS } from "./tierBands.js";
 
 /** Harness record schema version. Bump on breaking JSONL shape changes. */
 export const EVAL_SCHEMA_VERSION = "1";
@@ -23,20 +24,12 @@ export const EVAL_SCHEMA_VERSION = "1";
 /**
  * Model tiers the harness can evaluate, in ascending capability order.
  *
- * Kept structurally identical to `ModelTier` from AutoModelSelector. The
- * `satisfies` check below fails to compile if the two ever drift, so the tier
- * source of truth stays single even though Zod needs a runtime enum.
+ * Derived from `TIER_BANDS` — the one TS band declaration (#581) — rather
+ * than kept as a structurally-checked copy. The compile-time parity guard the
+ * copy needed is gone with the copy: `ModelTier` derives from the same
+ * authority.
  */
-export const MODEL_TIERS = ["haiku", "sonnet", "opus", "fable"] as const;
-
-// Compile-time guard: the enum members must be exactly the ModelTier union.
-type _TierParity = (typeof MODEL_TIERS)[number] extends ModelTier
-  ? ModelTier extends (typeof MODEL_TIERS)[number]
-    ? true
-    : never
-  : never;
-const _tierParity: _TierParity = true;
-void _tierParity;
+export const MODEL_TIERS = TIER_BANDS;
 
 export const ModelTierSchema = z.enum(MODEL_TIERS);
 

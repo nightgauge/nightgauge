@@ -21,6 +21,7 @@
 
 import type { ComplexityModel, MatchedPattern } from "../context/schemas/complexity-model.js";
 import type { EffortLevel } from "../eval/modelEvalSchemas.js";
+import { TIER_BANDS, type TierBand } from "../eval/tierBands.js";
 import type { StageModelCalibrationTable } from "../services/StageModelCalibrationService.js";
 import { StageModelCalibrationService } from "../services/StageModelCalibrationService.js";
 import { DEFAULT_MODEL_COST_RATES } from "./types.js";
@@ -31,14 +32,19 @@ import { DEFAULT_MODEL_COST_RATES } from "./types.js";
  * `fable` (Fable 5) is the premium frontier tier at ~2× Opus. It is a valid
  * tier but automatic selection never returns it — the auto ceiling is `opus`.
  * Fable is reached only via the `frontier` performance mode or an explicit pick.
+ *
+ * Derived from {@link TIER_BANDS} — the one TS band declaration (#581) —
+ * rather than re-listed.
  */
-export type ModelTier = "haiku" | "sonnet" | "opus" | "fable";
+export type ModelTier = TierBand;
 
 /**
- * Model tiers in ascending capability/cost order. The single source of truth
- * for clamping and stepping between tiers. @since Issue #19
+ * Model tiers in ascending capability/cost order, for clamping and stepping
+ * between tiers. Derived from the {@link TIER_BANDS} authority (#581); before
+ * the selection-query cutover this was one of five independent copies of the
+ * ladder. @since Issue #19
  */
-export const MODEL_TIER_ORDER: readonly ModelTier[] = ["haiku", "sonnet", "opus", "fable"] as const;
+export const MODEL_TIER_ORDER: readonly ModelTier[] = TIER_BANDS;
 
 /**
  * A performance-mode routing envelope: the router selects freely within

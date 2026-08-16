@@ -13,18 +13,22 @@
  * Codex's sub-`low` rung (`none`) collapses to `low` for the registry
  * membership check — the same rule the extension gate and the grok path apply
  * to vendor-native sub-`low` rungs (#523) — while the dispatched value is
- * forwarded untouched. (Deriving a codex-specific ladder is #435, out of
- * scope.)
+ * forwarded untouched.
  *
  * @see Issue #569 - supported_efforts enforced at every dispatch path
  * @see Issue #336 - supported_efforts semantics ([] = no effort axis)
+ * @see Issue #435 - the vocabulary derives from REASONING_EFFORT_LEVELS
  */
 
+import { REASONING_EFFORT_LEVELS } from "../../eval/modelEvalSchemas.js";
 import { getModelDescriptor } from "../../eval/modelRegistry.js";
 import { AdapterError } from "./errors.js";
 
-/** Effort values the Codex CLI accepts for `model_reasoning_effort`. */
-export const CODEX_REASONING_EFFORTS = ["none", "low", "medium", "high", "xhigh", "max"] as const;
+/**
+ * Effort values the Codex CLI accepts for `model_reasoning_effort` — derived
+ * from the {@link REASONING_EFFORT_LEVELS} authority (#435), never re-listed.
+ */
+export const CODEX_REASONING_EFFORTS = REASONING_EFFORT_LEVELS;
 export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
 
 const CODEX_DOCS_URL = "https://developers.openai.com/codex";
