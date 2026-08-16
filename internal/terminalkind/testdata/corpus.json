@@ -262,6 +262,15 @@
       "rationale": "Go re-classifies a forwarded failureDetail whose kind arrived empty, and by then the kind may appear only in its underscore spelling. Every marker family is matched in bracketed, hyphenated and underscored form for that round trip; this row pins the underscore leg."
     },
     {
+      "id": "grok-402-usage-balance-exhausted",
+      "input": "API error (status 402 Payment Required): Grok Build usage balance exhausted",
+      "expected": "rate_limit_quota_exhausted",
+      "expected_signal": "rate_limit_quota_exhausted",
+      "source": "synthetic",
+      "producer": "grok Build CLI's own 402 response text, reaching the classifier as an ordinary stderr/API-error reason via #533's cliFailureText carry — no [rate-limit-quota-exhausted] marker at all, because skillRunner only stamps that bracketed form on the Claude stream-json result-envelope path.",
+      "rationale": "Split out of #533's AC2, confirmed unclassified on both layers by direct probe (#560): pre-fix, Classify(...) on this exact text returns \"\" and grokStream.ts's QUOTA_RE does not match \"usage balance exhausted\" either. A billing-exhaustion 402 is the same environmental quota window as the other three producers of this kind (skillRunner's bracketed stamp, the underscore re-classify leg, and the plain hyphenated form) — it must not fall through to subagent_crash, which would count it as a code fault and feed the cascade breaker for a window that clears once the balance resets. Fixed by widening the EXISTING rate-limit-quota-exhausted rule (route (b) from the issue) rather than adding a new kind or only widening grokStream.ts's QUOTA_RE, so the Go CLI path and the generated SDK mirror answer from one authority."
+    },
+    {
       "id": "model-unavailable-not-found",
       "input": "API Error: model not found: claude-sonnet-5",
       "expected": "model_unavailable",
