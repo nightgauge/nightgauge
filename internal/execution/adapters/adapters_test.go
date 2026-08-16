@@ -1166,3 +1166,117 @@ func TestTargetRepoEnvVar_AllAdapters(t *testing.T) {
 		})
 	}
 }
+
+// outputFormatPosture is the DECLARED per-adapter posture for
+// NIGHTGAUGE_OUTPUT_FORMAT (#416 AC3).
+//
+// Unlike NIGHTGAUGE_RUN_ID and NIGHTGAUGE_TARGET_REPO, this variable is NOT a
+// universal contract var — it is a per-adapter capability signal describing the
+// stream shape the parent expects to parse back, so "every adapter must export
+// it" is the wrong contract. #416 asked whether the adapters that omit it are
+// drifting or deciding. Answering that per adapter and then leaving the answer
+// in prose lets the answer rot, so the answer is recorded HERE as data and
+// asserted against real BuildCommand output: an adapter whose posture changes
+// fails this test until someone updates the declaration, which makes every
+// future change to the posture a deliberate edit rather than silent drift.
+//
+// `value` is the expected export; the empty string means "must not be exported
+// at all". `why` is the reason the posture is what it is — it is printed in the
+// failure message so the next person sees the rationale at the point of
+// failure, not three files away.
+var outputFormatPosture = map[string]struct {
+	value string
+	why   string
+}{
+	"claude-headless": {"stream-json", "passes --output-format stream-json; the env var mirrors the flag"},
+	"claude-sdk":      {"stream-json", "passes --output-format stream-json; the env var mirrors the flag"},
+	"gemini":          {"stream-json", "passes --output-format stream-json; the env var mirrors the flag (added by #416 — it was the one adapter with the flag but no matching export)"},
+	"gemini-sdk":      {"stream-json", "passes --output-format stream-json; the env var mirrors the flag"},
+	"ollama":          {"stream-json", "claude-CLI bridge; passes --output-format stream-json"},
+	"lm-studio":       {"stream-json", "claude-CLI bridge; passes --output-format stream-json"},
+	"copilot": {"stream-json", "the copilot CLI has NO --output-format flag, so there is no flag to mirror; " +
+		"the export describes the NDJSON shape ParseCopilotStreamLine reads back out"},
+	"codex": {"", "INTENTIONAL OMISSION (#416 AC3). The codex CLI has no --output-format flag at all — it selects " +
+		"NDJSON with a boolean `--json`, consumed by ParseCodexStreamLine. There is no format value to mirror, so " +
+		"exporting a `stream-json` string would invent a format name the codex CLI never accepts and that no codex " +
+		"code path reads. This is NOT the gemini copy-paste drift #416 fixed: gemini already passed " +
+		"--output-format stream-json and simply failed to export it"},
+	"grok": {"", "INTENTIONAL OMISSION (#416 AC3, adapter not named in the issue). grok passes --output-format " +
+		"`streaming-json` — a DIFFERENT token from every other adapter's `stream-json`. Exporting the shared " +
+		"`stream-json` constant here would misdescribe the stream; exporting `streaming-json` would make the " +
+		"variable's value adapter-dependent for a consumer set that does not branch on it. Left unexported until a " +
+		"consumer actually needs to distinguish the two"},
+}
+
+// TestOutputFormatEnvVar_AllAdapters pins the NIGHTGAUGE_OUTPUT_FORMAT posture
+// declared in outputFormatPosture against what BuildCommand actually exports
+// (#416 AC3).
+//
+// Registry-driven for the same reason as the two contract tests above: the
+// coverage assertion below fails when the registry gains an adapter that has no
+// declared posture, so a new adapter cannot join without someone deciding —
+// on the record — whether it exports this variable and why.
+func TestOutputFormatEnvVar_AllAdapters(t *testing.T) {
+	const outputFormatEnvVar = "NIGHTGAUGE_OUTPUT_FORMAT"
+
+	registry := NewRegistry()
+	names := registry.Names()
+
+	for _, name := range names {
+		if _, declared := outputFormatPosture[name]; !declared {
+			t.Errorf("adapter %q is registered but has no outputFormatPosture entry — decide whether it exports %s "+
+				"and record why, so the omission is a decision rather than drift", name, outputFormatEnvVar)
+		}
+	}
+	for name := range outputFormatPosture {
+		if _, err := registry.Get(name); err != nil {
+			t.Errorf("outputFormatPosture declares %q, which is not a registered adapter: %v", name, err)
+		}
+	}
+
+	base := RunOptions{
+		SkillPath:   "/skills/feature-dev/SKILL.md",
+		WorktreeDir: "/tmp/worktree",
+		IssueNumber: 416,
+		Repo:        "nightgauge/nightgauge",
+		Stage:       "feature-dev",
+		Prompt:      "implement",
+	}
+
+	for _, name := range names {
+		want, declared := outputFormatPosture[name]
+		if !declared {
+			continue // already reported above
+		}
+
+		t.Run(name, func(t *testing.T) {
+			adapter, err := registry.Get(name)
+			if err != nil {
+				t.Fatalf("registry.Get(%q): %v", name, err)
+			}
+
+			_, _, env := adapter.BuildCommand(base)
+			got, exported := env[outputFormatEnvVar]
+
+			if want.value == "" {
+				if exported {
+					t.Errorf("%s exports %s = %q, but the declared posture is a deliberate omission.\n"+
+						"Declared reason: %s\n"+
+						"If exporting it is now correct, update outputFormatPosture with the new reason.",
+						name, outputFormatEnvVar, got, want.why)
+				}
+				return
+			}
+
+			if !exported {
+				t.Errorf("%s does not export %s, but the declared posture is %q.\n"+
+					"Declared reason: %s", name, outputFormatEnvVar, want.value, want.why)
+				return
+			}
+			if got != want.value {
+				t.Errorf("%s exports %s = %q, want %q.\nDeclared reason: %s",
+					name, outputFormatEnvVar, got, want.value, want.why)
+			}
+		})
+	}
+}
