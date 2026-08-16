@@ -304,9 +304,9 @@ export const ModelDescriptorSchema = z
     /**
      * Per-transport reachability facts + optional per-transport rate cards
      * (#578). Keys are the closed `cli | api` set; an absent key is an
-     * UNEXPRESSED (pending) fact, never an implicit `served: false`. Nothing
-     * enforces these at selection yet — that is the fail-closed enforcement
-     * phase (#579).
+     * UNEXPRESSED (pending) fact, never an implicit `served: false`.
+     * Selection paths consult these via `checkTransportServed`
+     * (`eval/modelRegistry.ts`, #579) rather than reading the map directly.
      */
     transports: z.partialRecord(TransportSchema, TransportFactsSchema).optional(),
     /**

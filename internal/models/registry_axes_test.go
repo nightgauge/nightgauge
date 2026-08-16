@@ -8,7 +8,9 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -288,5 +290,155 @@ func TestNoTransportOverridesTopLevelRatesYet(t *testing.T) {
 					"transport cards start with #553 (xai api list prices)", m.ID, transport)
 			}
 		}
+	}
+}
+
+// ─── Transport-reachability enforcement (fail-closed-axis-enforcement, #579) ─
+//
+// #578 (above) landed the FACTS; the tests below pin the ENFORCEMENT that
+// consults them at selection: ServedByTransport's known/unexpressed
+// distinction, CheckTransportServed as the transport-aware resolution entry
+// point selection paths use instead of bare Resolve, and the additive
+// semantics (#579 AC4) — a model with no transports fact for the transport in
+// question fails OPEN, exactly as it did before #578 added the field at all.
+
+// TestServedByTransportDistinguishesUnexpressedFromUnserved pins the
+// three-way read: an explicit true, an explicit false, and the unexpressed
+// (absent key, or absent transports map entirely) state a caller must never
+// conflate with either explicit fact.
+func TestServedByTransportDistinguishesUnexpressedFromUnserved(t *testing.T) {
+	grokServed, ok := Resolve("xai", "grok-4.6")
+	if !ok {
+		t.Fatal("grok-4.6 missing from registry")
+	}
+	if served, known := grokServed.ServedByTransport(TransportCLI); !known || !served {
+		t.Errorf("grok-4.6.ServedByTransport(cli) = (%v, %v), want (true, true)", served, known)
+	}
+
+	grokBuild, ok := Resolve("xai", "grok-build-0.1")
+	if !ok {
+		t.Fatal("grok-build-0.1 missing from registry")
+	}
+	if served, known := grokBuild.ServedByTransport(TransportCLI); !known || served {
+		t.Errorf("grok-build-0.1.ServedByTransport(cli) = (%v, %v), want (false, true)", served, known)
+	}
+
+	// vendor-x-pro carries no transports field at all — the unexpressed
+	// state, not an implicit unserved.
+	vendor, ok := Resolve("other", "vendor-x-pro")
+	if !ok {
+		t.Fatal("vendor-x-pro missing from registry")
+	}
+	if served, known := vendor.ServedByTransport(TransportCLI); known {
+		t.Errorf("vendor-x-pro.ServedByTransport(cli) = (%v, %v), want known=false (unexpressed, #579 AC4)",
+			served, known)
+	}
+
+	// A transport key outside the closed set must not fabricate an answer.
+	if served, known := grokServed.ServedByTransport("carrier-pigeon"); known {
+		t.Errorf("ServedByTransport(carrier-pigeon) = (%v, %v), want known=false", served, known)
+	}
+}
+
+// TestCheckTransportServedThreeOutcomes pins CheckTransportServed's contract
+// end to end: an ordinary miss, a served hit, and an unserved hit that fails
+// closed with a *TransportUnreachableError naming provider, model, and
+// transport — and whose text reuses the EXISTING terminalkind
+// model_unavailable classification (table.json's "invalid model" clause)
+// rather than inventing a parallel mechanism (#591, #533).
+func TestCheckTransportServedThreeOutcomes(t *testing.T) {
+	if _, ok, err := CheckTransportServed("xai", TransportCLI, "totally-made-up"); ok || err != nil {
+		t.Errorf("CheckTransportServed(unknown) = ok=%v err=%v, want ok=false err=nil", ok, err)
+	}
+
+	m, ok, err := CheckTransportServed("xai", TransportCLI, "grok-4.6")
+	if !ok || err != nil {
+		t.Fatalf("CheckTransportServed(grok-4.6) = ok=%v err=%v, want ok=true err=nil", ok, err)
+	}
+	if m.ID != "grok-4.6" {
+		t.Errorf("CheckTransportServed(grok-4.6) returned %q", m.ID)
+	}
+
+	_, ok, err = CheckTransportServed("xai", TransportCLI, "grok-build-0.1")
+	if !ok {
+		t.Fatal("CheckTransportServed(grok-build-0.1) ok=false, want true — the model exists in the registry")
+	}
+	var unreachable *TransportUnreachableError
+	if !errors.As(err, &unreachable) {
+		t.Fatalf("CheckTransportServed(grok-build-0.1) err = %v (%T), want *TransportUnreachableError", err, err)
+	}
+	if unreachable.Provider != "xai" || unreachable.Model != "grok-build-0.1" || unreachable.Transport != TransportCLI {
+		t.Errorf("TransportUnreachableError = %+v, want {Provider:xai Model:grok-build-0.1 Transport:cli}", unreachable)
+	}
+	for _, want := range []string{"xai", "grok-build-0.1", "cli"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name provider/model/transport; missing %q in %q", want, err.Error())
+		}
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "invalid model") {
+		t.Errorf("error must contain the literal phrase \"invalid model\" so it classifies under the "+
+			"existing terminalkind model_unavailable rule; got %q", err.Error())
+	}
+}
+
+// TestCheckTransportServedFailsOpenOnUnexpressedTransport pins #579 AC4: a
+// model with no transports fact for the transport in question resolves
+// exactly as it did before #578 added the field — served, not blocked. This
+// is the additive-enforcement guarantee: adding facts to more models over
+// time can only narrow the served set, never retroactively block a model
+// nobody has assessed yet.
+func TestCheckTransportServedFailsOpenOnUnexpressedTransport(t *testing.T) {
+	m, ok, err := CheckTransportServed("other", TransportCLI, "vendor-x-pro")
+	if !ok || err != nil {
+		t.Fatalf("CheckTransportServed(vendor-x-pro) = ok=%v err=%v, want ok=true err=nil "+
+			"(unexpressed transports must fail OPEN)", ok, err)
+	}
+	if m.ID != "vendor-x-pro" {
+		t.Errorf("CheckTransportServed(vendor-x-pro) returned %q", m.ID)
+	}
+}
+
+// TestServedByTransportHypotheticalUnservedModel pins the #579 regression
+// requirement on a model that is NOT deprecated but explicitly declares
+// transports.cli.served=false — independent of grok-build-0.1's coincidental
+// double-reason case below. Constructed directly (not read from the embedded
+// registry) so the assertion holds even if grok-build-0.1's own deprecated
+// flag ever changes: the transport fact alone is sufficient to mark a model
+// unserved, with no help from `deprecated`.
+func TestServedByTransportHypotheticalUnservedModel(t *testing.T) {
+	hypothetical := ModelDescriptor{
+		ID:       "hypothetical-unserved-model",
+		Provider: "xai",
+		Transports: map[string]TransportFacts{
+			TransportCLI: {Served: false},
+		},
+	}
+	if hypothetical.Deprecated {
+		t.Fatal("test setup error: hypothetical model must not be deprecated — this pins the TRANSPORT reason alone")
+	}
+	served, known := hypothetical.ServedByTransport(TransportCLI)
+	if !known || served {
+		t.Errorf("hypothetical.ServedByTransport(cli) = (%v, %v), want (false, true)", served, known)
+	}
+}
+
+// TestGrokBuild01UnselectableForBothReasonsIndependently pins the #579
+// invariant directly on the real registry entry: grok-build-0.1 keeps
+// deprecated:true for historical cost replay, but its unselectability no
+// longer rests on that flag alone — transports.cli.served:false is now an
+// INDEPENDENT reason, landed by #578. Both facts must hold so a future edit
+// (e.g. clearing `deprecated` for some other purpose) cannot silently make
+// the model selectable again.
+func TestGrokBuild01UnselectableForBothReasonsIndependently(t *testing.T) {
+	m, ok := Resolve("xai", "grok-build-0.1")
+	if !ok {
+		t.Fatal("grok-build-0.1 missing from registry")
+	}
+	if !m.Deprecated {
+		t.Error("reason 1 (deprecated) must independently hold: grok-build-0.1 must be deprecated:true")
+	}
+	served, known := m.ServedByTransport(TransportCLI)
+	if !known || served {
+		t.Error("reason 2 (transport) must independently hold: transports.cli.served must be explicitly false")
 	}
 }
