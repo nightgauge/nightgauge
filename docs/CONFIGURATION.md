@@ -3436,12 +3436,17 @@ When using the Claude adapter, effort is resolved with this precedence:
 > provider-global env vars, not per-stage config — but before either reaches
 > its CLI, the value is checked pre-spawn against the `supported_efforts`
 > ladder of the model the dispatch actually resolves (a band name resolves to
-> the registry's provider model, e.g. `sonnet` → `grok-4.6`; a concrete id
-> resolves to itself — never the model's band, whose current leader can
-> declare a longer ladder than a deprecated sibling). Same rules as Claude:
+> the registry's provider model for that adapter; a concrete id resolves to
+> itself — never the model's band, whose current leader can declare a longer
+> ladder than a deprecated sibling). This deliberately diverges from the
+> Claude path on the `[]` case:
 >
 > - `supported_efforts: []` is a positive declaration — "no effort axis" — so
->   any explicit effort is rejected, not silently dropped (#336).
+>   an explicit adapter effort against it fails closed here, unlike Claude's
+>   fail-open on `[]` above: Claude's emission gate has already declined to
+>   pass a flag before `[]` is reached, while Grok/Codex efforts are explicit
+>   provider-global requests that would otherwise reach the CLI, and dropping
+>   them silently is exactly the downgrade #75 forbids (#336).
 > - A model with no registry descriptor at all passes through with a logged
 >   warning, never a hard failure — there is nothing to validate against.
 > - Vendor rungs below the Nightgauge ladder normalize to `low` **before** the
@@ -3463,7 +3468,7 @@ When using the Claude adapter, effort is resolved with this precedence:
 > `supported_efforts: [low, medium, high]`. Dispatching to it with
 > `NIGHTGAUGE_GROK_EFFORT=xhigh` now fails BEFORE spawn with an error naming
 > the model, the requested effort, and the ladder:
-> `effort "xhigh" is not supported by model "grok-4.5" (supports: low, medium, high)`.
+> `effort "xhigh" is not supported by model "grok-4.5" (supports: low, medium, high); choose a supported level or route to a model that accepts "xhigh"`.
 > Before #569 this env var passed the static CLI-vocabulary filter unchecked
 > and reached `grok --effort xhigh`, which died inside the CLI as
 > `unknown effort level 'xhigh'` — exit 1 in seconds, no work done, nothing
