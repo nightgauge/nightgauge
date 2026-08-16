@@ -120,9 +120,10 @@ Re-rank against this rubric only — never invent intermediate levels:
   items from every member repo. Assessing (or worse, closing) a sibling
   repo's issue from a repo-scoped run is out of scope by definition — filter
   on `.content.repository.nameWithOwner` before batching (Phase 1).
-- **Label mutations need node IDs** — `addLabelsToLabelable` takes label node
-  IDs, not names. Resolve them once with `nightgauge label list --json`; a
-  name passed where an ID belongs fails opaquely.
+- **Label mutations need node IDs** — `nightgauge forge label add`/`remove`
+  take label node IDs in `--labels`, not names. Resolve them once with
+  `nightgauge label list --json`; a name passed where an ID belongs fails
+  opaquely.
 
 <!-- include: ../_shared/GOTCHAS.md -->
 
@@ -208,8 +209,9 @@ jq -c --arg repo "$OWNER_REPO" \
   /tmp/board_items.jsonl > /tmp/repo_items.jsonl
 ```
 
-Cross-check against `nightgauge forge issue list --state open --json` so open
-issues missing from the board are still assessed (their absence is itself an
+Cross-check against `nightgauge forge issue list --json` — the command
+returns open issues only by design; it has no state flag — so open issues
+missing from the board are still assessed (their absence is itself an
 issue-audit rider finding, Phase 3).
 
 ---
@@ -308,9 +310,17 @@ explicit `REDACTED (applied in dry-run)` line.
    ```
 
 5. **Label changes** — resolve node IDs first with
-   `nightgauge label list --json`, then mutate via
-   `nightgauge forge graphql` (`addLabelsToLabelable` /
-   `removeLabelsFromLabelable`).
+   `nightgauge label list --json`, then mutate via the typed forge
+   commands:
+
+   ```bash
+   nightgauge forge label add --issue-id <node> --labels <label-ids>
+   nightgauge forge label remove --issue-id <node> --labels <label-ids>
+   ```
+
+   Never raw `nightgauge forge graphql` label mutations — the ADR-008
+   raw-GraphQL carve-out does not cover labels, and raw GraphQL breaks the
+   GitLab portability the typed commands preserve.
 
 Every mutation appends one line to the report's applied-actions table:
 issue, action, evidence pointer.
