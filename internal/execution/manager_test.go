@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -422,5 +424,233 @@ func TestRunStage_NonZeroExit_ReturnsNilErrorWithStderr(t *testing.T) {
 	}
 	if !strings.Contains(result.Stdout, wantStdout) {
 		t.Errorf("result.Stdout = %q, want it to contain %q", result.Stdout, wantStdout)
+	}
+}
+
+// --- #555: the stage child must be observable on disk while it runs ---------
+
+// pollUntil spins on cond until it holds or the deadline expires. Polling
+// rather than a fixed sleep because the fact under test — "the snapshot on disk
+// now names a live child" — becomes true at an instant this process does not
+// observe directly, and a sleep long enough to be reliable is long enough to be
+// slow.
+func pollUntil(t *testing.T, why string, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %s waiting for %s", timeout, why)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// blockingStageStub writes a stub CLI that reports its own pid and then blocks
+// until `release` appears — a stage that is HEALTHY and SILENT, which is the
+// shape #555 is about. The pid is published through a temp-file rename so a
+// reader can never see a half-written value.
+//
+// $$ inside the script is the pid of the process Go started: the stub is the
+// command exec.Command spawns, so the shell running it IS cmd.Process.
+func blockingStageStub(t *testing.T, dir string) (stub, pidFile, release string) {
+	t.Helper()
+	pidFile = filepath.Join(dir, "child.pid")
+	release = filepath.Join(dir, "release")
+	stub = filepath.Join(dir, "stub-blocking-stage.sh")
+	script := fmt.Sprintf(
+		"#!/bin/sh\nprintf '%%s' \"$$\" > %[1]s.tmp\nmv %[1]s.tmp %[1]s\nwhile [ ! -f %[2]s ]; do sleep 0.02; done\nexit 0\n",
+		pidFile, release)
+	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return stub, pidFile, release
+}
+
+func readPidFile(t *testing.T, path string) int {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", filepath.Base(path), err)
+	}
+	pid := 0
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(raw)), "%d", &pid); err != nil {
+		t.Fatalf("parse pid from %q: %v", string(raw), err)
+	}
+	return pid
+}
+
+func snapshotPID(t *testing.T, stateDir string, issue int, runID string) (int, bool) {
+	t.Helper()
+	snap, err := state.LoadSnapshotByIdentity(stateDir, issue, runID)
+	if err != nil || snap == nil {
+		return 0, false
+	}
+	return snap.PID, true
+}
+
+// TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit is the producer
+// half of #555, and the only place the defect is observable at all.
+//
+// A scheduler-owned run is reconciled by a SEPARATE process (a `nightgauge
+// serve` daemon), whose liveness ladder can consult neither the scheduler's
+// registry nor its own. Arms 1 and 2 are therefore false by construction, and
+// once a single stage runs quietly past runstate.LivenessWindow arm 4 goes false
+// too. Only arm 3 — processAlive(snap.PID), read out of the run's snapshot FILE
+// — can carry the population, and before this change nothing ever wrote a live
+// pid into that file: SetProcess runs after cmd.Start() and only touches memory,
+// and the scheduler is blocked in Wait() from that instant until the stage ends.
+// The snapshot's pid was the ZERO the stage-start persist wrote (#534), forever.
+//
+// RED-FIRST: delete the publishStageChild call after SetProcess in
+// manager.go and the first poll below times out — the on-disk pid never leaves
+// 0, which is precisely the state in which a healthy 30-minute stage is emitted
+// as pipeline_done(success=false) and has its snapshot deleted mid-flight.
+// Delete the retraction after Wait() instead and the final assertion fails: the
+// exited child's pid stays on disk across the whole between-stages gap, where a
+// recycled pid answers arm 3 for a run nobody is running.
+func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stub, pidFile, release := blockingStageStub(t, t.TempDir())
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stub)
+
+	// ensureWorktree returns early when the directory already exists, so the
+	// spawn path is reachable without a git repo behind it.
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-555"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 555, "", runID)
+	rt.BeginStage(state.StageFeatureDev)
+	// The scheduler's stage-start persist (#534): the snapshot exists before the
+	// spawn, and the pid it advertises is 0. Persisting here rather than letting
+	// the manager create the file is also the contract under test — the manager
+	// uses PersistExisting and must never become a snapshot's author.
+	if err := rt.Persist(stateDir); err != nil {
+		t.Fatalf("stage-start persist: %v", err)
+	}
+	if pid, ok := snapshotPID(t, stateDir, 555, runID); !ok || pid != 0 {
+		t.Fatalf("precondition: on-disk pid = %d (loaded=%v), want 0", pid, ok)
+	}
+
+	m := NewManager(root, adapters.NewGrokAdapter())
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := m.RunStage(context.Background(), StageOptions{
+			Repo:        "nightgauge/nightgauge",
+			IssueNumber: 555,
+			Stage:       "feature-dev",
+			Runtime:     rt,
+			Timeout:     60 * time.Second,
+		})
+		done <- runErr
+		// CLOSED, not merely sent to: the cleanup below receives from this
+		// channel too, and on the happy path the assertion body has already
+		// taken the one buffered value. A plain send would leave the cleanup
+		// blocked for its full timeout on every green run.
+		close(done)
+	}()
+	// Always let the child go, however the assertions land, so a failure cannot
+	// leave a blocked process behind for the rest of the package.
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0644)
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+		}
+	})
+
+	var onDisk int
+	pollUntil(t, "the manager to publish a live stage-child pid into the run's snapshot", 30*time.Second, func() bool {
+		pid, ok := snapshotPID(t, stateDir, 555, runID)
+		onDisk = pid
+		return ok && pid != 0
+	})
+	pollUntil(t, "the stub stage to report its own pid", 30*time.Second, func() bool {
+		_, err := os.Stat(pidFile)
+		return err == nil
+	})
+
+	if child := readPidFile(t, pidFile); onDisk != child {
+		t.Errorf("snapshot pid = %d, want the stage child's own pid %d — arm 3 must name the process doing the work", onDisk, child)
+	}
+	if !runstate.ProcessAlive(onDisk) {
+		t.Errorf("ProcessAlive(%d) is false while the stage is still running — the published pid is not a liveness signal", onDisk)
+	}
+
+	// The child exits: the fact stops being true, so the snapshot must stop
+	// asserting it.
+	if err := os.WriteFile(release, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("RunStage: %v", runErr)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("RunStage did not return after the stub was released")
+	}
+
+	if pid, ok := snapshotPID(t, stateDir, 555, runID); !ok || pid != 0 {
+		t.Errorf("on-disk pid after the stage exited = %d (loaded=%v), want 0 — a dead pid left on disk is a "+
+			"PID-reuse window spanning the whole between-stages gap (#534)", pid, ok)
+	}
+}
+
+// TestRunStage_DoesNotCreateASnapshotForARunThatHasNone pins the other half of
+// the PersistExisting choice.
+//
+// The manager is not the snapshot's author. If it created the file, a direct
+// RunStage caller whose owner never persisted anything would suddenly leave a
+// reconcilable snapshot behind — a run the reconciler would later close and
+// report terminal to the platform, for a run that never had a record at all.
+// It is also the resurrection guard: a terminal claim that sealed and removed
+// the file between the spawn and this write must not have it re-created.
+func TestRunStage_DoesNotCreateASnapshotForARunThatHasNone(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stub, _, release := blockingStageStub(t, t.TempDir())
+	// Release before the run so the stub exits immediately — this test is about
+	// the file, not the timing.
+	if err := os.WriteFile(release, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stub)
+	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-556"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := state.NewRuntimeState("nightgauge/nightgauge", 556, "", runID)
+	rt.BeginStage(state.StageFeatureDev)
+
+	m := NewManager(root, adapters.NewGrokAdapter())
+	if _, err := m.RunStage(context.Background(), StageOptions{
+		Repo:        "nightgauge/nightgauge",
+		IssueNumber: 556,
+		Stage:       "feature-dev",
+		Runtime:     rt,
+		Timeout:     60 * time.Second,
+	}); err != nil {
+		t.Fatalf("RunStage: %v", err)
+	}
+
+	if entries, err := os.ReadDir(stateDir); err == nil && len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("the manager wrote %v into a state dir it must never author", names)
 	}
 }
