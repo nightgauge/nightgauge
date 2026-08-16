@@ -31,6 +31,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
@@ -7182,7 +7183,12 @@ such as wip/ are never candidates.`,
 				IssueNumber int    `json:"issueNumber"`
 				IssueState  string `json:"issueState"`
 				Action      string `json:"action"` // "deleted", "skipped", "protected", "error"
-				Error       string `json:"error,omitempty"`
+				// Reason explains a "skipped" action beyond IssueState — set
+				// when a worktree still holds the branch (#593). Empty for the
+				// pre-existing "issue not CLOSED yet" skip, which IssueState
+				// already explains.
+				Reason string `json:"reason,omitempty"`
+				Error  string `json:"error,omitempty"`
 			}
 			var results []cleanupResult
 			deleted := 0
@@ -7232,24 +7238,26 @@ such as wip/ are never candidates.`,
 				}
 
 				// Delete both local and remote
-				cleanupErr := svc.BranchCleanup(branch)
-				action := "deleted"
+				action, reason, cleanupErr := cleanupClosedIssueBranch(svc, branch)
 				errMsg := ""
 				if cleanupErr != nil {
-					action = "error"
 					errMsg = cleanupErr.Error()
-				} else {
+				}
+				if action == "deleted" {
 					deleted++
 				}
 
 				results = append(results, cleanupResult{
 					Branch: branch, IssueNumber: issueNum,
-					IssueState: "CLOSED", Action: action, Error: errMsg,
+					IssueState: "CLOSED", Action: action, Reason: reason, Error: errMsg,
 				})
 				if !outputJSON {
-					if cleanupErr != nil {
+					switch action {
+					case "error":
 						fmt.Printf("  error: %s — %v\n", branch, cleanupErr)
-					} else {
+					case "skipped":
+						fmt.Printf("  skipped: %s (%s)\n", branch, reason)
+					default:
 						fmt.Printf("  deleted: %s (issue #%d CLOSED)\n", branch, issueNum)
 					}
 				}
@@ -7278,6 +7286,76 @@ such as wip/ are never candidates.`,
 	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
 	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
 	return cmd
+}
+
+// cleanupClosedIssueBranch deletes branch's remote and local refs, classifying
+// two conditions that must never surface as a bare "error" (#593, live
+// evidence 2026-08-15 against PR #588 / fix/585-adapter-aware-cost-stamps):
+//
+//   - The remote branch is already gone. svc.BranchDeleteRemote pushes a
+//     delete refspec through go-git, and go-git's SSH transport rejects an
+//     *http.BasicAuth (the type NewService picks for GITHUB_TOKEN,
+//     independent of the remote's actual scheme) with the misleading
+//     transport.ErrInvalidAuthMethod — "invalid auth method" — regardless of
+//     whether the target ref exists. That error text is not diagnostic here,
+//     so this does not pattern-match it: it re-verifies existence with
+//     RemoteBranchExists, which shells out to `git ls-remote` and so never
+//     goes through go-git's transport/auth path (see ListRemoteBranches).
+//     Absent after the attempt (whichever the cause) is success.
+//   - A worktree still holds the local branch. `git branch -D` correctly
+//     refuses this ("used by worktree at …"); the branch is in active use,
+//     not stale, so it is reported "skipped" with a reason rather than
+//     "error". Checked with execution.BranchHeldByWorktree before the delete
+//     is even attempted, so the normal path never has to parse git's refusal
+//     text — a residual worktree-occupancy error from git itself (a race
+//     against a worktree added between the check and the delete) still
+//     degrades to "skipped" rather than "error", never the reverse.
+//
+// This intentionally does not call svc.BranchCleanup: that method tallies
+// both failure modes above as ordinary errors, and fixing that classification
+// belongs at this cmd layer (internal/git/service.go is owned elsewhere for
+// this issue) — every operation used here (RemoteBranchExists,
+// BranchDeleteRemote, BranchDelete, Fetch) is one of Service's existing
+// exported primitives.
+//
+// action is one of "deleted", "skipped" (reason is set, err is nil), or
+// "error" (reason is empty, err carries the detail).
+func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reason string, err error) {
+	if branch == "" || branch == "main" || branch == "master" {
+		return "error", "", fmt.Errorf("refusing to delete protected branch %q", branch)
+	}
+
+	if worktreePath, held, werr := execution.BranchHeldByWorktree(svc.RepoPath(), branch); werr == nil && held {
+		return "skipped", fmt.Sprintf("held by worktree %s", worktreePath), nil
+	}
+
+	var errs []string
+
+	remoteExisted, _ := svc.RemoteBranchExists(branch)
+	if remoteExisted {
+		if rerr := svc.BranchDeleteRemote(branch); rerr != nil {
+			if stillExists, _ := svc.RemoteBranchExists(branch); stillExists {
+				errs = append(errs, fmt.Sprintf("remote: %v", rerr))
+			}
+			// Not still on the remote — whatever the error text said, the
+			// desired end state (no remote branch) already holds.
+		}
+	}
+
+	if lerr := svc.BranchDelete(branch); lerr != nil {
+		if strings.Contains(lerr.Error(), "used by worktree") {
+			return "skipped", "held by worktree (deleted concurrently with the check)", nil
+		}
+		errs = append(errs, fmt.Sprintf("local: %v", lerr))
+	}
+
+	// Prune stale remote-tracking refs, mirroring BranchCleanup — best-effort.
+	_ = svc.Fetch(true)
+
+	if len(errs) > 0 {
+		return "error", "", fmt.Errorf("branch cleanup %s: %s", branch, strings.Join(errs, "; "))
+	}
+	return "deleted", "", nil
 }
 
 // --- label command ---

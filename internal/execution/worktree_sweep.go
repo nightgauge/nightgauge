@@ -146,16 +146,29 @@ type WorktreeSweepOptions struct {
 	DryRun bool
 	// MergedPRLookup is an optional fail-open second door for merged-ness.
 	// When the path-restricted content compare is non-empty, a lookup that
-	// returns the merged PR's head SHA equal to the branch tip treats the
-	// branch as merged (base moved on after the squash). Missing auth / no
-	// PR / SHA mismatch / a nil callback all leave the branch unmerged.
-	// The git merge test stays pure; this is never called from mergedIntoBase.
+	// reports the merged PR's head commit CONTAINS the branch tip — either
+	// the head SHA equals the tip, or the tip is one of the head commit's own
+	// parents — treats the branch as merged. The parent case is the decisive
+	// one for a squash flow that also went through `gh pr update-branch`
+	// (#593): update-branch creates a merge commit on the PR's remote head
+	// whose parents are exactly [previous branch tip, base at merge time],
+	// and that merge commit is never fetched into the local branch ref the
+	// sweep reads — so local git alone cannot see it, ancestor check
+	// included. Missing auth / no PR / no containment / a nil callback all
+	// leave the branch unmerged. The git merge test stays pure; this is
+	// never called from mergedIntoBase.
 	MergedPRLookup MergedPRLookup
 }
 
-// MergedPRLookup reports the head SHA of a merged PR for branch, if any.
-// ok is false when there is no merged PR or the lookup cannot run.
-type MergedPRLookup func(branch, tip string) (headSHA string, ok bool)
+// MergedPRLookup reports the head commit of a MERGED pull request for
+// branch, together with that head commit's own parent SHAs — the forge
+// evidence pattern this door is built from (PR by head branch, its
+// headRefOid, and that commit's parents; see the live evidence in #593). ok
+// is false when there is no merged PR or the lookup cannot run. parents may
+// be nil; a caller that wants deeper containment than one hop may return a
+// longer list, but the common update-branch shape needs only the direct
+// parents.
+type MergedPRLookup func(branch string) (headSHA string, parents []string, ok bool)
 
 // SweepMergedWorktrees reclaims every pipeline-created worktree in RepoRoot
 // whose branch carries no content the default branch is missing.
@@ -427,9 +440,13 @@ func mergedIntoBase(repoRoot, baseRef, branch string) (merged bool, hasOwnCommit
 	return strings.TrimSpace(diffOut) == "", hasOwnCommits, nil
 }
 
-// lookupMergedPR is the fail-open second door: a merged PR whose head SHA
-// equals the branch tip means the residual is "base moved on", not unmerged
-// work. Any inspect failure leaves the branch unmerged.
+// lookupMergedPR is the fail-open second door: a merged PR whose head
+// ancestry CONTAINS the branch tip means the residual is "base moved on" (or
+// "update-branch merged it remotely and local git never saw the result"),
+// not unmerged work. Containment is checked, not equality alone — the
+// update-branch merge commit's own SHA is virtually never the local branch
+// tip, but the tip is one of that commit's two parents. Any inspect failure
+// leaves the branch unmerged.
 func lookupMergedPR(opts WorktreeSweepOptions, branch string) bool {
 	if opts.MergedPRLookup == nil {
 		return false
@@ -442,8 +459,40 @@ func lookupMergedPR(opts WorktreeSweepOptions, branch string) bool {
 	if tip == "" {
 		return false
 	}
-	headSHA, ok := opts.MergedPRLookup(branch, tip)
-	return ok && headSHA == tip
+	headSHA, parents, ok := opts.MergedPRLookup(branch)
+	if !ok || headSHA == "" {
+		return false
+	}
+	if headSHA == tip {
+		return true
+	}
+	for _, p := range parents {
+		if p == tip {
+			return true
+		}
+	}
+	return false
+}
+
+// BranchHeldByWorktree reports whether branch is the checked-out branch of
+// some registered worktree in repoRoot (the primary checkout included) — the
+// state `git branch -D` refuses with "used by worktree at …". Consulting
+// this before attempting a delete lets a caller report skip-with-reason
+// instead of surfacing that refusal as an error (#593).
+func BranchHeldByWorktree(repoRoot, branch string) (worktreePath string, held bool, err error) {
+	if branch == "" {
+		return "", false, nil
+	}
+	listing, err := gitOutput(repoRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", false, fmt.Errorf("worktree list: %w", err)
+	}
+	for _, wt := range parseWorktreeList(listing) {
+		if wt.Branch == branch {
+			return wt.Path, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // blockingChanges returns the changes in a worktree that must not be
