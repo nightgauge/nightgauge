@@ -580,6 +580,10 @@ export class PipelineBridge {
         // a fallback model on a safety refusal and still exit 0. Go uses the
         // served model for cost/telemetry/history sinks when set.
         servedModel: result.servedModel,
+        // #606 served-envelope attribution — the ServedModel analogues,
+        // recorded next to served_model in the V2 history record.
+        servedEffort: result.servedEffort,
+        servedThinking: result.servedThinking,
         refusalFallbackFrom: result.refusalFallbackFrom,
         refusalFallbackTo: result.refusalFallbackTo,
         refusalFallbackCategory: result.refusalFallbackCategory,

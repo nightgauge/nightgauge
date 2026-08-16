@@ -139,6 +139,16 @@ type StageRunResult struct {
 	// never feed routing, sticky downgrades, or retries.
 	// See docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string
+	// ServedEffort/ServedThinking are the envelope analogues of ServedModel
+	// (#606, mirroring the #91 flow): what the executor's last-mile
+	// translation ACTUALLY dispatched — the codex reasoning vocabulary value,
+	// the grok effort after normalization into EFFORT_LEVELS, the disable
+	// interlock's "off" — never a copy of the requested wire envelope. Empty
+	// means honestly-unreported (adapter with no effort axis, no first-hand
+	// evidence). Attribution only, same rule as ServedModel: never feeds
+	// routing, sticky substitutions, or retries.
+	ServedEffort   string
+	ServedThinking string
 	// RefusalFallback* echo the CLI's model_refusal_fallback event when one
 	// was observed (#91). Attribution + notification only.
 	RefusalFallbackFrom     string
@@ -4266,6 +4276,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// request-or-served value servedModel computes.
 		if result != nil {
 			runtime.RecordStageServedModel(stage, result.ServedModel)
+			// #606 served-envelope attribution, mirroring the servedModel flow
+			// exactly: the raw executor report lands on the served_* fields,
+			// and the requested-value fields are re-recorded onto the served
+			// value below only when the two diverge — requested vs served stay
+			// epistemically distinct end to end.
+			runtime.RecordStageServedEffort(stage, result.ServedEffort)
+			runtime.RecordStageServedThinking(stage, result.ServedThinking)
+			if result.ServedEffort != "" && result.ServedEffort != effortAttr {
+				runtime.RecordStageEffort(stage, result.ServedEffort)
+			}
+			if result.ServedThinking != "" && result.ServedThinking != thinkingAttr {
+				runtime.RecordStageThinking(stage, result.ServedThinking)
+			}
 		}
 		if result != nil && result.RefusalFallbackTo != "" {
 			runtime.RecordModelRefusalFallback(stage, result.RefusalFallbackFrom,

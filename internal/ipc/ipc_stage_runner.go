@@ -235,7 +235,10 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 			// stream parser and forwarded verbatim. Empty when TS hasn't been
 			// updated or the stream carried no model info — Go then falls
 			// back to attributing the requested model as before.
-			ServedModel:             result.ServedModel,
+			ServedModel: result.ServedModel,
+			// #606 served-envelope attribution, the ServedModel analogues.
+			ServedEffort:            result.ServedEffort,
+			ServedThinking:          result.ServedThinking,
 			RefusalFallbackFrom:     result.RefusalFallbackFrom,
 			RefusalFallbackTo:       result.RefusalFallbackTo,
 			RefusalFallbackCategory: result.RefusalFallbackCategory,

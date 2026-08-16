@@ -441,9 +441,19 @@ neither:
   selection query's declared rung for the dispatched band
   (`routing.ResolveBandEnvelope`) under the anthropic band contract the
   `model` field already speaks, `off` when the `CLAUDE_CODE_DISABLE_THINKING`
-  interlock is set, and absent when undeclared. Run records carry the wire
-  value; a served-thinking correction (the `servedModel` analogue) does not
-  exist yet.
+  interlock is set, and absent when undeclared. The mode envelopes carry a
+  thinking-policy axis (`ModeEnvelope.ThinkingPolicy` ⇄
+  `modeProfiles.ts thinkingPolicy`, spike §4.1.3) that overrides the rung's
+  declared default when a mode declares one — no mode does today, so the axis
+  is dormant by construction; the interlock outranks a policy either way.
+  Since #606 the served envelope is reported back exactly like `servedModel`
+  (#91): `StageResultParams.servedEffort`/`servedThinking` carry what the
+  last-mile translation actually dispatched (codex reasoning vocabulary and
+  vendor-native sub-`low` rungs normalize one-way into EFFORT_LEVELS;
+  adapters with no effort axis report nothing), Go records the raw report on
+  `model_selection.served_effort`/`served_thinking` and re-records the
+  requested fields onto the served value only when the two diverge —
+  requested vs served stay epistemically distinct end to end.
 
 - **Eval-advice policy differs per resolver — deliberately, and only when
   `model_routing.use_eval_recommendations` is ON.** The TS resolver consumes

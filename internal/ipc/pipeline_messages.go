@@ -248,6 +248,27 @@ type StageResultParams struct {
 	// See docs/OUTCOME_RECORDING.md and
 	// docs/spikes/fable-5-behavior-porting.md §8.3.
 	ServedModel string `json:"servedModel,omitempty"`
+	// ServedEffort/ServedThinking complete the served ENVELOPE next to
+	// ServedModel (#606, mirroring the #91 served-model flow): the wire
+	// effort/thinking are the REQUESTED envelope (same epistemic status as
+	// Model), and these report what the last-mile translation ACTUALLY
+	// dispatched — requested vs served stay distinct end to end.
+	//
+	// ServedEffort is reported by adapters whose dispatch carries an effort:
+	// the claude `--effort` flag value when one was emitted, the codex
+	// reasoning-effort value, the grok effort — each normalized INTO
+	// EFFORT_LEVELS at the adapter boundary (the one-way vocabulary filter:
+	// codex/grok-native sub-`low` rungs report as "low"). Omitted when it is
+	// byte-identical to RunStageParams.Effort (nothing to add) and when the
+	// adapter dispatched no effort axis at all (honestly unreported — the
+	// provider default served, and the extension cannot observe which rung).
+	//
+	// ServedThinking is reported only on first-hand evidence: "off" when the
+	// CLAUDE_CODE_DISABLE_THINKING interlock was present in the spawn env of
+	// an anthropic-adapter stage. There is no CLI flag that turns thinking on
+	// and no stream event reporting it, so "on" is never fabricated.
+	ServedEffort   string `json:"servedEffort,omitempty"`
+	ServedThinking string `json:"servedThinking,omitempty"`
 	// RefusalFallback* echo the CLI's system/model_refusal_fallback event
 	// when one was observed. Attribution + notification only — never used
 	// to retry or downgrade.
