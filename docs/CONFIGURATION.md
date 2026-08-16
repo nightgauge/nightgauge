@@ -3426,6 +3426,14 @@ When using the Claude adapter, effort is resolved with this precedence:
 6. Omit --effort           default Claude behavior
 ```
 
+> **Who runs this chain (#581):** on the autonomous (IPC) path the **Go
+> scheduler** resolves it (`resolveWireEffort`, a mirror of the TS chain —
+> step 5 excepted, since no issue metadata exists there) and puts the result
+> on the wire next to the model; the extension executes the wire effort
+> verbatim. On the extension-orchestrated path TypeScript resolves it locally
+> as before. One config, one thinking budget, both paths — see
+> [PIPELINE_EXECUTION.md § Who Resolves the Model](PIPELINE_EXECUTION.md#who-resolves-the-model-issue-340).
+
 > **Model capability guard (Issue #1235, #336):** `--effort` is passed to
 > Claude Code only when the model's registry `supported_efforts` is non-empty.
 > This is **registry data, not a code list** — no model names are hardcoded

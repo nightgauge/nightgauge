@@ -18,6 +18,7 @@ const adviceFixture = `{
   "schema_version": 1,
   "generated_at": "2026-08-16T00:00:00Z",
   "min_samples": 5,
+  "quality_floor": 70,
   "min_honest_schema_version": 3,
   "entries": [
     {"job_class": "bugfix", "model_id": "claude-opus-5", "effort": "high", "thinking": "on",

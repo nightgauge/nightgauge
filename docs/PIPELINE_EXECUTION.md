@@ -401,13 +401,47 @@ neither:
   collapse booked every correctly-served codex run as a routing miss. See
   [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md).
 
-- **Effort.** Neither dispatch path passes `--effort` from Go, and
-  `model_routing.stage_efforts` / `default_effort` are operator config, so the
-  stage's effort is resolved in TypeScript by `resolveStageEffort`,
-  independently of the model. Whether the model accepts `--effort` at all is a
-  question about its tier band, so the extension normalizes the wire value with
-  `modelTierBand` before asking — a concrete id would otherwise drop the flag
-  with no error and no log line.
+- **Effort.** The wire carries it since #581 (spike #568 §4.1: the dispatch
+  envelope is `(model, effort, thinking)`). On the IPC path the Go scheduler
+  resolves the stage's effort with `resolveWireEffort`
+  ([`internal/orchestrator/dispatch_envelope.go`](../internal/orchestrator/dispatch_envelope.go)),
+  a step-for-step mirror of the TS `resolveStageEffort` chain (the mode's
+  effort pin and `[effortFloor, effortCeiling]` envelope,
+  `model_routing.stage_efforts` + env overrides, `default_effort`, the
+  manual-mode table), puts it on `RunStageParams.effort`, and the extension
+  executes it verbatim — precedence moved to the wire without changing any
+  outcome, and the twin matrix (Go `TestResolveWireEffort` ⇄ TS
+  `resolveModel.modeKnobAgreement.test.ts`) pins the mirror. An absent wire
+  effort means "no explicit effort resolved anywhere": the extension omits
+  `--effort` and the model's declared default rules, exactly as before. On the
+  HeadlessOrchestrator path `resolveStageEffort` still resolves locally —
+  each resolver owns one path, as with the model. Whether the model accepts
+  `--effort` at all is a question about its tier band, so the extension
+  normalizes the value with `modelTierBand` before asking — a concrete id
+  would otherwise drop the flag with no error and no log line. The grok
+  adapters remain the deliberate exception: their effort is the
+  provider-global `NIGHTGAUGE_GROK_EFFORT` env contract (#569) on both paths.
+
+- **Thinking.** Also on the wire since #581, as attribution rather than
+  execution (no CLI flag exists): `resolveWireThinking` answers with the
+  selection query's declared rung for the dispatched band
+  (`routing.ResolveBandEnvelope`) under the anthropic band contract the
+  `model` field already speaks, `off` when the `CLAUDE_CODE_DISABLE_THINKING`
+  interlock is set, and absent when undeclared. Run records carry the wire
+  value; a served-thinking correction (the `servedModel` analogue) does not
+  exist yet.
+
+- **Eval-advice policy differs per resolver — deliberately, and only when
+  `model_routing.use_eval_recommendations` is ON.** The TS resolver consumes
+  advice only for issues whose `type:` label directly names an eval job class
+  (docs/bug/refactor), from exact job-class entries with exact-over-model
+  backoff (`pickAdvice`); the Go dispatch path has no job-class attribution,
+  so it consumes at spike §4.3's `(model, *, *)` backoff level, pooling
+  advisable entries across job classes (`routing.AdviseBand`). Identical
+  inputs can therefore resolve differently on the IPC vs Headless paths while
+  the key is on. This is a documented, opt-in asymmetry, not drift-by-neglect
+  — the convergence plan (job-class attribution on the Go dispatch path) is
+  tracked in the #581 follow-up.
 
 Attribution follows the same ownership. Go records the dispatch model up front
 (`runtime.RecordStageModel` at stage start) and re-records on the served model

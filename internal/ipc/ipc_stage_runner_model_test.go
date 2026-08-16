@@ -214,3 +214,57 @@ func TestRunStage_WireCarriesNoPrompt(t *testing.T) {
 		t.Error("pipeline.runStage payload must carry `model` — it is the authoritative decision")
 	}
 }
+
+// TestRunStage_WireEnvelopeEffortAndThinkingReachTheDispatch pins the #581
+// wire growth: the effort/thinking halves of the dispatch envelope the
+// scheduler resolved (resolveWireEffort / resolveWireThinking) must ride
+// pipeline.runStage next to the model — the extension executes the wire
+// effort verbatim, so a dropped field here silently reverts effort ownership
+// to the local TS chain (exactly the #340 failure shape, one axis over).
+func TestRunStage_WireEnvelopeEffortAndThinkingReachTheDispatch(t *testing.T) {
+	var buf bytes.Buffer
+	runner, _ := newEscalatingStageRunner(&buf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	emitted := runStageAndCapture(t, runner, ctx, cancel, orchestrator.StageRunParams{
+		Stage:       state.StageFeatureDev,
+		IssueNumber: 581,
+		Repo:        "nightgauge/nightgauge",
+		Model:       "sonnet",
+		Effort:      "high",
+		Thinking:    "on",
+		Timeout:     30 * time.Second,
+		RunID:       testRunID,
+	}, &buf)
+
+	if emitted.Effort != "high" {
+		t.Errorf("wire effort = %q, want high — the resolved envelope must reach the executor", emitted.Effort)
+	}
+	if emitted.Thinking != "on" {
+		t.Errorf("wire thinking = %q, want on", emitted.Thinking)
+	}
+}
+
+// TestRunStage_WireEnvelopeOmittedWhenAbsent pins the absent case: "" means
+// no explicit effort resolved anywhere / thinking undeclared, and the wire
+// must OMIT the keys (omitempty) rather than send empty strings a consumer
+// could mistake for a resolved value.
+func TestRunStage_WireEnvelopeOmittedWhenAbsent(t *testing.T) {
+	var buf bytes.Buffer
+	runner, _ := newEscalatingStageRunner(&buf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runStageAndCapture(t, runner, ctx, cancel, orchestrator.StageRunParams{
+		Stage:       state.StageFeatureDev,
+		IssueNumber: 581,
+		Repo:        "nightgauge/nightgauge",
+		Model:       "sonnet",
+		Timeout:     30 * time.Second,
+		RunID:       testRunID,
+	}, &buf)
+
+	out := buf.String()
+	if strings.Contains(out, `"effort"`) || strings.Contains(out, `"thinking"`) {
+		t.Errorf("pipeline.runStage carried empty envelope keys: %s", out)
+	}
+}

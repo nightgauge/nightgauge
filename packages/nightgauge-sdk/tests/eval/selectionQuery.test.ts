@@ -43,13 +43,15 @@ describe("candidateLadder — anthropic (rungs span models)", () => {
   });
 
   it("carries each single-band model's DECLARED default effort and thinking — absent when undeclared", () => {
-    const byBand = Object.fromEntries(ladder.map((r) => [r.band, r]));
-    // Declared in the registry: fable/opus/sonnet default high effort, thinking on.
-    expect(byBand.opus.effort).toBe("high");
-    expect(byBand.opus.thinking).toBe("on");
-    // Haiku declares no effort axis and thinking off by default.
-    expect(byBand.haiku.effort).toBeUndefined();
-    expect(byBand.haiku.thinking).toBe("off");
+    // The FULL four-rung envelope, mirroring the Go twin
+    // (TestCandidateLadderAnthropicSpansModels) rung for rung — the twin
+    // pins must be symmetric, not spot-checked on one side.
+    expect(ladder).toEqual<EnvelopeRung[]>([
+      { band: "fable", modelId: "claude-fable-5", effort: "high", thinking: "on" },
+      { band: "opus", modelId: "claude-opus-5", effort: "high", thinking: "on" },
+      { band: "sonnet", modelId: "claude-sonnet-5", effort: "high", thinking: "on" },
+      { band: "haiku", modelId: "claude-haiku-4-5-20251001", effort: undefined, thinking: "off" },
+    ]);
   });
 });
 

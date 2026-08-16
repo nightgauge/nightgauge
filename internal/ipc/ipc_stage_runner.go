@@ -98,9 +98,15 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 	// RunStageParams), and a field nobody reads cannot be distinguished from
 	// one that broke.
 	ipcParams := RunStageParams{
-		Stage:             string(params.Stage),
-		IssueNumber:       params.IssueNumber,
-		Model:             params.Model,
+		Stage:       string(params.Stage),
+		IssueNumber: params.IssueNumber,
+		Model:       params.Model,
+		// The effort/thinking halves of the dispatch envelope (#581) —
+		// resolved next to Model by the same authority and executed
+		// verbatim by the TS SkillRunner (effort) / recorded alongside the
+		// dispatch (thinking).
+		Effort:            params.Effort,
+		Thinking:          params.Thinking,
 		MaxTokens:         params.MaxTokens,
 		TimeoutMs:         int(params.Timeout / time.Millisecond),
 		SkillContent:      params.SkillContent,

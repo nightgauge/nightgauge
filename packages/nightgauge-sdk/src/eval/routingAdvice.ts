@@ -74,6 +74,14 @@ export const RoutingAdviceFileSchema = z
     generated_at: z.string(),
     /** The per-combination sample floor the advisable flags were computed at. */
     min_samples: z.number().int().positive(),
+    /**
+     * The quality floor efficiency/balanced picks must clear, stamped by the
+     * builder like `min_samples` so BOTH consumption-side pickers (TS
+     * `pickAdvice`, Go `AdviseBand`) apply the floor the file was built with
+     * — a materialization run with a custom `qualityFloor` must not silently
+     * diverge from a reader's hardcoded default.
+     */
+    quality_floor: z.number().positive(),
     /** The honest-record floor the source records were filtered by (#571). */
     min_honest_schema_version: z.number().int().positive(),
     entries: z.array(RoutingAdviceEntrySchema),
@@ -96,6 +104,7 @@ export function buildRoutingAdvice(
     schema_version: ROUTING_ADVICE_SCHEMA_VERSION,
     generated_at: generatedAt,
     min_samples: advisor.minSamples,
+    quality_floor: advisor.advisoryQualityFloor,
     min_honest_schema_version: MIN_HONEST_SCHEMA_VERSION,
     entries: advisor.adviceEntries().map((e) => ({
       job_class: e.jobClass,
@@ -139,25 +148,27 @@ export function readRoutingAdvice(workspaceRoot: string): RoutingAdviceFile | un
 /**
  * Pick the best ADVISABLE advice entry for (jobClass, mode) from a file —
  * the consumption-side selection both resolvers share. Exact-backoff entries
- * are preferred over `model` aggregates; the mode ordering and quality floor
- * mirror the advisor's own `recommend`. Returns undefined when nothing
- * advisable exists (the axis query alone decides — today's behavior).
+ * are preferred over `model` aggregates; the mode ordering mirrors the
+ * advisor's own `recommend`, and the quality floor is the one STAMPED in the
+ * file (`quality_floor`) — the floor the advisable flags were computed with
+ * — unless the caller explicitly overrides it. Returns undefined when
+ * nothing advisable exists (the axis query alone decides — today's
+ * behavior).
  */
 export function pickAdvice(
   advice: RoutingAdviceFile,
   jobClass: JobClass,
   mode: RoutingMode,
-  qualityFloor = 70
+  qualityFloor?: number
 ): RoutingAdviceEntry | undefined {
+  const floor = qualityFloor ?? advice.quality_floor;
   const forClass = advice.entries.filter((e) => e.job_class === jobClass && e.advisable);
   if (forClass.length === 0) return undefined;
   const exact = forClass.filter((e) => e.backoff === "exact");
   const pool = exact.length > 0 ? exact : forClass;
   const stats = pool.map(toStats);
   const eligible =
-    mode === "maximum" || mode === "frontier"
-      ? stats
-      : stats.filter((s) => s.meanQuality >= qualityFloor);
+    mode === "maximum" || mode === "frontier" ? stats : stats.filter((s) => s.meanQuality >= floor);
   const winner = pickForMode(eligible.length > 0 ? eligible : stats, mode);
   return pool[stats.indexOf(winner)];
 }

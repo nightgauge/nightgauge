@@ -67,10 +67,18 @@ type telemetryService interface {
 
 // StageRunParams is the cross-mode stage execution request.
 type StageRunParams struct {
-	Stage        state.PipelineStage
-	IssueNumber  int
-	Repo         string
-	Model        string
+	Stage       state.PipelineStage
+	IssueNumber int
+	Repo        string
+	Model       string
+	// Effort/Thinking complete the dispatch envelope next to Model (#581,
+	// spike #568 §4.1: "the wire grows effort and thinking alongside model").
+	// Resolved by resolveWireEffort/resolveWireThinking on the IPC path,
+	// where the scheduler is the only resolver (#340) and the extension
+	// executes the wire effort verbatim. Empty on the Go-direct adapter path,
+	// whose effort/thinking stay env/adapter-owned (dispatch_envelope.go).
+	Effort       string
+	Thinking     string
 	MaxTokens    int
 	Timeout      time.Duration
 	SkillPath    string
@@ -3887,13 +3895,31 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// after escalation overrides, sticky downgrades, and the pr-create /
 		// feature-validate adjustments above.
 		runtime.RecordStageModel(stage, model)
-		// Dispatch envelope (#580): effort/thinking/mode alongside the model
-		// above, each honestly absent when Go has no direct evidence — see
-		// dispatch_envelope.go's doc comments for what "direct evidence" means
-		// per field.
+		// Dispatch envelope (#580 → #581): effort/thinking/mode alongside the
+		// model above. On the IPC path (no Go-side adapter) the scheduler now
+		// RESOLVES effort and thinking onto the wire — the selection query's
+		// rung plus the Go-owned effort chain (dispatch_envelope.go) — and the
+		// record carries the wire value the extension executes verbatim, the
+		// same epistemic status as the Model field. On the Go-direct adapter
+		// path the axes stay env/adapter-owned and the #580 observation
+		// functions answer, each honestly absent when Go has no direct
+		// evidence.
+		wireEffort, wireThinking := "", ""
+		if adapterName == "" {
+			wireEffort = resolveWireEffort(workspaceRoot, stage)
+			wireThinking = resolveWireThinking(model)
+		}
+		effortAttr := wireEffort
+		if effortAttr == "" {
+			effortAttr = resolveDispatchEffort(adapterName)
+		}
+		thinkingAttr := wireThinking
+		if thinkingAttr == "" {
+			thinkingAttr = resolveDispatchThinking(adapterName, model)
+		}
 		runtime.RecordStageModelSelectionMode(stage, resolveDispatchSelectionMode(workspaceRoot))
-		runtime.RecordStageEffort(stage, resolveDispatchEffort(adapterName))
-		runtime.RecordStageThinking(stage, resolveDispatchThinking(adapterName, model))
+		runtime.RecordStageEffort(stage, effortAttr)
+		runtime.RecordStageThinking(stage, thinkingAttr)
 
 		// Clear the stage-child pid BEFORE the stage-start persist below (#534).
 		//
@@ -4079,6 +4105,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			IssueNumber: item.Number,
 			Repo:        item.Repo,
 			Model:       model,
+			// The effort/thinking halves of the dispatch envelope (#581).
+			// Non-empty only on the IPC path, where the extension executes
+			// the wire effort verbatim; see the wire-envelope block above.
+			Effort:   wireEffort,
+			Thinking: wireThinking,
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.

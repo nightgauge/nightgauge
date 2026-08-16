@@ -4,9 +4,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   buildRoutingAdvice,
   pickAdvice,
@@ -61,11 +62,17 @@ const DATA = [
 describe("buildRoutingAdvice", () => {
   const advice = buildRoutingAdvice(DATA, "2026-08-16T00:00:00Z");
 
-  it("stamps schema version, sample floor, and the honesty floor", () => {
+  it("stamps schema version, sample floor, quality floor, and the honesty floor", () => {
     expect(advice.schema_version).toBe(ROUTING_ADVICE_SCHEMA_VERSION);
     expect(advice.min_samples).toBe(5);
+    expect(advice.quality_floor).toBe(70);
     expect(advice.min_honest_schema_version).toBe(MIN_HONEST_SCHEMA_VERSION);
     expect(advice.generated_at).toBe("2026-08-16T00:00:00Z");
+  });
+
+  it("stamps a customized quality floor so consumption cannot silently diverge", () => {
+    const custom = buildRoutingAdvice(DATA, "2026-08-16T00:00:00Z", { qualityFloor: 90 });
+    expect(custom.quality_floor).toBe(90);
   });
 
   it("emits every combination with envelope, backoff level, and advisable flag", () => {
@@ -131,5 +138,32 @@ describe("pickAdvice — the shared consumption-side selection", () => {
   it("returns undefined when nothing advisable exists — the axis query alone decides", () => {
     expect(pickAdvice(advice, "refactor", "efficiency")).toBeUndefined();
     expect(pickAdvice(advice, "docs", "efficiency")).toBeUndefined();
+  });
+});
+
+describe("cross-language advice-file contract fixture", () => {
+  // The advice file is a cross-language wire format: this WRITER (TS) and the
+  // Go READER (internal/intelligence/routing/advice.go) must agree on field
+  // spellings, or Go's json.Unmarshal zero-values a renamed field and advice
+  // goes silently inert (fail-open, but undetected). The committed fixture is
+  // TS-GENERATED — this test regenerates it in memory and fails on any drift,
+  // and the Go reader test (TestRoutingAdviceCrossLanguageFixture) consumes
+  // the SAME committed file, so an in-version rename breaks one suite or the
+  // other instead of keeping both green.
+  //
+  // Regen after a DELIBERATE schema change (bump ROUTING_ADVICE_SCHEMA_VERSION):
+  //   NIGHTGAUGE_REGEN_ADVICE_FIXTURE=1 npx vitest run tests/eval/routingAdvice.test.ts
+  const fixturePath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../../..",
+    "internal/intelligence/routing/testdata/routing-advice-crosslang.json"
+  );
+
+  it("the committed fixture is byte-exactly what buildRoutingAdvice writes", () => {
+    const built = `${JSON.stringify(buildRoutingAdvice(DATA, "2026-08-16T00:00:00Z"), null, 2)}\n`;
+    if (process.env.NIGHTGAUGE_REGEN_ADVICE_FIXTURE === "1") {
+      writeFileSync(fixturePath, built);
+    }
+    expect(readFileSync(fixturePath, "utf-8")).toBe(built);
   });
 });

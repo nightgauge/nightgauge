@@ -21,6 +21,7 @@ const validAdvice = `{
   "schema_version": 1,
   "generated_at": "2026-08-16T00:00:00Z",
   "min_samples": 5,
+  "quality_floor": 70,
   "min_honest_schema_version": 3,
   "entries": [
     {"job_class": "bugfix", "model_id": "claude-sonnet-5", "effort": "low", "thinking": "off",
@@ -126,5 +127,44 @@ func TestAdviseBandUnknownModelYieldsNoAdvice(t *testing.T) {
 	// wire — no advice, no invented band.
 	if band := AdviseBand(advice, ModeMaximum, Envelope(ModeElevated)); band != "" {
 		t.Fatalf("AdviseBand(unknown model) = %q, want \"\"", band)
+	}
+}
+
+// TestRoutingAdviceCrossLanguageFixture pins the Go READER to the TS WRITER
+// through one committed, TS-GENERATED artifact:
+// testdata/routing-advice-crosslang.json is produced by buildRoutingAdvice
+// (regen: NIGHTGAUGE_REGEN_ADVICE_FIXTURE=1, see
+// packages/nightgauge-sdk/tests/eval/routingAdvice.test.ts, which fails on
+// any drift from the committed bytes). Without this, an in-version field
+// rename in routingAdvice.ts keeps both suites green while json.Unmarshal
+// zero-values the renamed field here and advice goes silently inert.
+func TestRoutingAdviceCrossLanguageFixture(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "routing-advice-crosslang.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeAdviceFile(t, root, string(fixture))
+	advice, ok := LoadRoutingAdvice(root)
+	if !ok {
+		t.Fatal("LoadRoutingAdvice failed on the TS-generated fixture")
+	}
+	if advice.MinSamples != 5 || advice.QualityFloor != 70 || advice.MinHonestSchemaVersion != 3 {
+		t.Fatalf("file-level fields did not round-trip: %+v", advice)
+	}
+	if len(advice.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3", len(advice.Entries))
+	}
+	// Every field the Go consumption path keys on must be populated — a
+	// zero value here is the silent-rename failure this test exists to catch.
+	e := advice.Entries[0]
+	if e.JobClass != "bugfix" || e.ModelID != "claude-sonnet-5" || e.Effort != "low" ||
+		e.Thinking != "off" || e.Backoff != "exact" || e.Samples != 6 ||
+		e.PassRate != 1 || e.MeanQuality != 85 || e.MeanCostUsd != 0.05 ||
+		e.QualityPerDollar != 1700 || !e.Advisable {
+		t.Fatalf("entry fields did not round-trip: %+v", e)
+	}
+	if sparse := advice.Entries[2]; sparse.Advisable {
+		t.Fatalf("sparse entry lost its advisable=false: %+v", sparse)
 	}
 }

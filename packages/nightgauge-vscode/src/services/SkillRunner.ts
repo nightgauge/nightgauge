@@ -52,6 +52,21 @@ export interface RunStageParams {
    * translation before spawn and runs no routing of its own on this path.
    */
   model: string;
+  /**
+   * The effort half of the dispatch envelope (#581) — the Go scheduler's
+   * `resolveWireEffort` result, the same resolveStageEffort chain the
+   * extension used to run for itself on this path. Passed through as the
+   * authoritative effort override; absent means no explicit effort resolved
+   * anywhere (omit `--effort`, the model's declared default rules).
+   */
+  effort?: string;
+  /**
+   * The thinking half of the dispatch envelope (#581) — the selection
+   * query's declared answer for the dispatched band. Attribution riding the
+   * dispatch it describes: no CLI flag executes it, so it is logged, not
+   * spawned.
+   */
+  thinking?: string;
   maxTokens?: number;
   timeout: number; // ms
   skillContent?: string; // Resolved SKILL.md body from platform (paid tiers); empty = use local file
@@ -337,6 +352,11 @@ export class SkillRunner {
       stage,
       issueNumber,
       model: authoritativeModel,
+      // The wire envelope's effort/thinking (#581). Effort is executed
+      // verbatim below; thinking has no CLI flag and is logged here as the
+      // dispatch attribution it is.
+      effort: params.effort ?? "(default)",
+      thinking: params.thinking ?? "(undeclared)",
       worktreeDir: params.worktreeDir,
     });
 
@@ -558,7 +578,11 @@ export class SkillRunner {
         params.repo,
         // #228: the run's UUID, so the SDK TraceRecorder writes to the run's
         // <run_id>.jsonl instead of disabling when run-state.json lacks one.
-        params.runId
+        params.runId,
+        // #581: the wire envelope's effort — the Go scheduler resolved it on
+        // this path (the same resolveStageEffort chain that used to run
+        // locally here), and SkillRunner executes it verbatim.
+        params.effort // effortOverride
       );
 
       this.activeHandle = handle;

@@ -160,12 +160,14 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 // useEvalRecommendations resolves `model_routing.use_eval_recommendations`
 // (#581): the env var wins over config, and absence means false — the
 // conservative default that keeps the axis query the sole authority. Mirrors
-// the TS isEvalRecommendationsEnabled (modelResolver.ts).
+// the TS isEvalRecommendationsEnabled (modelResolver.ts) INCLUDING its parse
+// vocabulary: getModelRoutingBoolean lowercases and accepts yes/no alongside
+// true/1/false/0, so `...=yes` must enable both resolvers, not just one.
 func useEvalRecommendations(workspaceRoot string) bool {
-	switch strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS")) {
-	case "true", "1":
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS"))) {
+	case "true", "1", "yes":
 		return true
-	case "false", "0":
+	case "false", "0", "no":
 		return false
 	}
 	cfg, err := config.Load(workspaceRoot)

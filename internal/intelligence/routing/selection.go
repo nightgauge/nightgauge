@@ -140,6 +140,21 @@ func containsString(list []string, v string) bool {
 //     yields no rung (a duplicate rung would re-create the #532 "downgrade is
 //     a no-op" lie).
 //
+// PROVENANCE of the multi-band descent rule: spike #568 §4.1 derives it for
+// the FULLY-collapsed provider (xai, all four bands on grok-4.6), where the
+// effort rungs are the only ladder the provider has. Applying the same rule
+// to PARTIALLY-collapsed providers (google's pro/flash pairs, openai's
+// gpt-5.6-sol) is this file's generalization, not a spike mandate: it
+// synthesizes effort points (gemini-2.5-pro@medium, gpt-5.6-sol@high) that
+// no registry field declares as a band's serving envelope. Those synthesized
+// rungs are DECLARED-ladder shape only — nothing dispatches them today (the
+// wire effort is chain-resolved, and EvaluateDowngrade skips same-model
+// rungs; see retry_engine.go's SAME-MODEL RUNGS note) — and any consumer
+// that starts executing rung efforts on a partially-collapsed provider must
+// first decide whether these synthesized points are wanted behavior or the
+// descent should be restricted to fully-collapsed providers. The twin ladder
+// tests pin the current shape so that decision cannot happen by accident.
+//
 // Local providers (ollama/lm-studio) have no registry entries by design, so
 // their ladder is empty and callers keep the configured local model.
 func CandidateLadder(provider, transport string) []EnvelopeRung {

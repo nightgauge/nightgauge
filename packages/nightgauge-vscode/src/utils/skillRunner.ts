@@ -3410,7 +3410,23 @@ export function runStageSkillHeadless(
    * from `run-state.json`, and only disables itself (silent no-op) when
    * neither resolves — a per-stage manual invocation must never invent one.
    */
-  runId?: string
+  runId?: string,
+  /**
+   * The effort half of the wire dispatch envelope (#581, spike #568 §4.1).
+   *
+   * On the IPC path the Go scheduler is the ONLY resolver (#340): its
+   * `resolveWireEffort` runs the same chain `resolveStageEffort` runs here —
+   * the mode's effort pin and [effortFloor, effortCeiling] envelope,
+   * `model_routing.stage_efforts` + env overrides, `default_effort`, the
+   * manual-mode table — and this parameter is that result, executed verbatim
+   * in the slot the local chain used to fill. Absent (or off the
+   * EFFORT_LEVELS ladder) falls back to the local chain, which resolves the
+   * identical answer — so a pre-#581 Go binary driving a newer extension
+   * changes nothing. Only meaningful together with `modelOverride`; the
+   * local-resolution path (`resolveModel`) still owns effort where it owns
+   * the model.
+   */
+  effortOverride?: string
 ): SkillProcessHandle {
   // When a pinned workspace root is provided (from HeadlessOrchestrator),
   // use it directly to prevent repo-switch mid-pipeline from changing CWD.
@@ -3647,10 +3663,17 @@ export function runStageSkillHeadless(
           ? resolveCodexPipelineModel(modelOverride, workspaceRoot)
           : modelOverride,
       source: modelOverrideSource ?? "user-override",
-      // Effort is resolved independently — it is not part of the model
-      // decision the caller owns, and dropping it here silently discarded
-      // `model_routing.stage_efforts` on every overridden dispatch.
-      effort: resolveStageEffort(stage, workspaceRoot, effectiveMetadata),
+      // Effort: the wire envelope's value when the caller supplied one
+      // (#581 — the Go scheduler resolved it with the same chain and the
+      // extension executes it verbatim), else resolved locally — it is not
+      // part of the model decision the caller owns, and dropping it here
+      // silently discarded `model_routing.stage_efforts` on every overridden
+      // dispatch. The wire value is gated on the EFFORT_LEVELS ladder so an
+      // off-vocabulary value falls back instead of reaching `--effort`.
+      effort:
+        effortOverride && (EFFORT_ORDER as readonly string[]).includes(effortOverride)
+          ? (effortOverride as ClaudeEffort)
+          : resolveStageEffort(stage, workspaceRoot, effectiveMetadata),
     };
   } else {
     const resolved = resolveModel(stage, workspaceRoot, effectiveMetadata, issueNumber);

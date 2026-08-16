@@ -50,6 +50,7 @@ const ADVICE = {
   schema_version: 1,
   generated_at: "2026-08-16T00:00:00Z",
   min_samples: 5,
+  quality_floor: 70,
   min_honest_schema_version: 3,
   entries: [
     {
@@ -132,6 +133,30 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
     rmSync(join(root, ROUTING_ADVICE_RELATIVE_PATH));
     const decision = resolveModel(STAGE, root, METADATA);
     expect(decision.model).toBe("sonnet");
+    expect(decision.evalAdvisory).toBeUndefined();
+  });
+
+  it("must not alter routing on below-sample-floor evidence — advisable:false through resolveModel", () => {
+    // The sparse-evidence guarantee asserted on the CONSUMPTION path, not
+    // just via pickAdvice's own unit test (Go twin:
+    // TestAdviseBandIgnoresSparseEntries): a file whose only entry for the
+    // issue's job class sits below the sample floor (advisable: false, per
+    // spike §4.3 emitted rather than omitted) must leave the selector's own
+    // pick standing even with the key ON.
+    process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "true";
+    const sparse = {
+      ...ADVICE,
+      entries: [
+        {
+          ...ADVICE.entries[0],
+          samples: 2, // below min_samples: 5
+          advisable: false,
+        },
+      ],
+    };
+    writeFileSync(join(root, ROUTING_ADVICE_RELATIVE_PATH), JSON.stringify(sparse));
+    const decision = resolveModel(STAGE, root, METADATA);
+    expect(decision.model).toBe("sonnet"); // the selector's own M-complexity pick
     expect(decision.evalAdvisory).toBeUndefined();
   });
 });

@@ -191,6 +191,17 @@ export class EvalRoutingAdvisor {
     return this.minSamplesPerCombination;
   }
 
+  /**
+   * The quality floor efficiency/balanced picks must clear. Stamped into the
+   * advice file (`quality_floor`) so consumption-side pickers — TS
+   * `pickAdvice` and Go `AdviseBand` — apply the floor the file was built
+   * with instead of re-hardcoding the default and silently diverging when a
+   * materialization run customizes it.
+   */
+  get advisoryQualityFloor(): number {
+    return this.qualityFloor;
+  }
+
   /** All aggregated envelope stats for a job class — dashboard/API surface too. */
   statsFor(jobClass: JobClass): EnvelopeStats[] {
     return this.stats.get(jobClass) ?? [];
@@ -286,10 +297,15 @@ export class EvalRoutingAdvisor {
    * Every (job class, envelope) combination as a flat advice list — the
    * materialization surface for the routing-advice file (spike §4.2). Exact
    * combinations are always emitted, sparse ones with `advisable: false`;
-   * `(model, *, *)` aggregates are added (backoff `model`) for models whose
-   * exact combinations are ALL sparse but whose pooled samples pass the
-   * floor, so the recorded backoff level tells measured routing from
-   * declared routing.
+   * `(model, *, *)` aggregates are added (backoff `model`) only when NO
+   * exact combination in the WHOLE job class is advisable — a deliberately
+   * conservative, class-global gate: once any exact evidence exists for the
+   * class, pooled aggregates stay out of the file entirely, so a second
+   * model's pooled evidence never competes with another model's measured
+   * combination. (Spike §4.3's backoff hierarchy is per-combination;
+   * narrowing this gate to per-model is deliberately deferred until sparse-
+   * but-mixed classes show up in practice — less advice is the safe error.)
+   * The recorded backoff level tells measured routing from declared routing.
    */
   adviceEntries(): Array<EnvelopeStats & { advisable: boolean; backoff: AdviceBackoff }> {
     const out: Array<EnvelopeStats & { advisable: boolean; backoff: AdviceBackoff }> = [];

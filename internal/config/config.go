@@ -632,6 +632,19 @@ type ModelRoutingConfig struct {
 	// routed-tier envelope. Mirrors use_eval_recommendations in the TS
 	// ModelRoutingConfigSchema.
 	UseEvalRecommendations bool `json:"useEvalRecommendations,omitempty" yaml:"use_eval_recommendations,omitempty"`
+
+	// StageEfforts is the per-stage explicit effort override: stage name →
+	// EFFORT_LEVELS rung. Read by the Go dispatch path since #581, when the
+	// wire grew `effort` and the scheduler became the effort resolver on the
+	// IPC path — before that this key was resolved only by the TS
+	// resolveStageEffort chain. Mirrors getExplicitStageEffort
+	// (stageResolver.ts).
+	StageEfforts map[string]string `json:"stageEfforts,omitempty" yaml:"stage_efforts,omitempty"`
+
+	// DefaultEffort is the workspace-wide effort fallback consulted when no
+	// per-stage override names one. Mirrors getModelDefaultEffort
+	// (stageResolver.ts). Same #581 wire history as StageEfforts.
+	DefaultEffort string `json:"defaultEffort,omitempty" yaml:"default_effort,omitempty"`
 }
 
 type Config struct {

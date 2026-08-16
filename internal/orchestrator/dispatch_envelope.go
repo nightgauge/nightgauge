@@ -5,34 +5,49 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/preflight"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// dispatch_envelope.go resolves the effort and thinking rungs Go can
-// honestly attribute to a stage dispatch (Issue #580, materialized from
-// spike #568 §3). It is deliberately narrow: unlike model and adapter, effort
-// and thinking are resolved almost entirely on the TypeScript side today
-// (stageResolver.ts / skillRunner.ts), with no value threaded onto the IPC
-// wire (that lands later, in the spike's selection-query-cutover phase). Both
-// functions here return "" — absent, the #299/#397 empty-means-undetermined
-// convention — the instant Go's own evidence runs out, rather than filling
-// the gap with a plausible-looking default.
+// dispatch_envelope.go resolves the effort and thinking axes of a stage
+// dispatch (Issue #580 origins, grown to the wire in #581 — the spike #568
+// selection-query-cutover phase this file's earlier header deferred to).
+//
+// Two kinds of function live here, and the distinction is the honesty rule:
+//
+//   - WIRE RESOLUTION (resolveWireEffort / resolveWireThinking, #581): on the
+//     IPC dispatch path the scheduler is the ONLY resolver (#340), so these
+//     produce the effort/thinking halves of the dispatch envelope that ride
+//     `RunStageParams` next to Model. The extension executes the wire effort
+//     verbatim (utils/skillRunner.ts consumes it in the modelOverride branch,
+//     exactly where it consumed its own resolveStageEffort before); the wire
+//     thinking is the selection query's declared answer for the dispatched
+//     band under the anthropic band contract the Model field already speaks.
+//     These are resolutions, not observations — the same epistemic status as
+//     the Model field itself.
+//   - OBSERVATION (resolveDispatchEffort / resolveDispatchThinking, #580): on
+//     the Go-direct adapter path the axes stay env/adapter-owned, and these
+//     return "" — absent, the #299/#397 empty-means-undetermined convention —
+//     the instant Go's own evidence runs out, rather than filling the gap
+//     with a plausible-looking default.
 
 // resolveDispatchEffort returns the EFFORT_LEVELS rung actually in force for
 // a grok-family dispatch, or "" when Go has no direct evidence of it.
 //
-// Grok is the only adapter whose invocation Go's own process can observe
-// end-to-end: internal/execution/adapters/grok.go builds `--effort <val>`
-// straight from the ambient NIGHTGAUGE_GROK_EFFORT env var it inherits via
-// os.Environ(). This reads that SAME env var, at the SAME trust level,
-// without editing that package (it is a parallel agent's this wave). Every
-// other adapter's effort is resolved entirely in TypeScript with no
-// Go-visible signal — recording a value there would be a guess, not a fact,
-// so the field stays absent rather than falling back to the model's registry
-// effort_default, which is only a fact about the UNOVERRIDDEN case and Go has
-// no way to tell whether an override happened on the TS side.
+// Grok is the only Go-direct adapter whose invocation Go's own process can
+// observe end-to-end: internal/execution/adapters/grok.go builds
+// `--effort <val>` straight from the ambient NIGHTGAUGE_GROK_EFFORT env var
+// it inherits via os.Environ(). This reads that SAME env var, at the SAME
+// trust level, without editing that package. Every other Go-direct adapter's
+// effort is env/TS-owned with no Go-visible signal — recording a value there
+// would be a guess, not a fact, so the field stays absent rather than
+// falling back to the model's registry effort_default, which is only a fact
+// about the UNOVERRIDDEN case and Go cannot tell whether an override
+// happened. (On the IPC path this observation is superseded by the WIRE
+// RESOLUTION above: there Go OWNS the effort chain, so the wire value is the
+// fact and this function is only the fallback — see the header.)
 //
 // The raw env value is validated against models.EffortOrder (the ladder
 // pinned to the SDK's EFFORT_LEVELS authority, #394/#578): the Grok CLI
@@ -77,6 +92,114 @@ func resolveDispatchThinking(adapterName, model string) string {
 		return "off"
 	}
 	return desc.Behavior.ThinkingDefault
+}
+
+// defaultStageEfforts is the manual-mode effort fallback table. Mirrors
+// DEFAULT_STAGE_EFFORTS (stageResolver.ts) — consulted only when
+// model_routing.mode is "manual" and nothing more explicit named an effort,
+// exactly where getStageEffort consults its copy.
+var defaultStageEfforts = map[state.PipelineStage]string{
+	state.StageFeaturePlanning: "medium",
+	state.StageFeatureDev:      "medium",
+	state.StageFeatureValidate: "low",
+}
+
+// validEffortLevel keeps operator effort input to the EFFORT_LEVELS
+// vocabulary, mirroring the VALID_CLAUDE_EFFORTS guards in
+// getExplicitStageEffort / getModelDefaultEffort: anything else is ignored
+// rather than dispatched.
+func validEffortLevel(effort string) string {
+	if routing.IsEffortLevel(effort) {
+		return effort
+	}
+	return ""
+}
+
+// stageEffortConfig resolves the explicit effort chain below the mode pin,
+// mirroring getStageEffort (stageResolver.ts) for the dispatch path — where
+// no issue metadata exists (services/SkillRunner passes none on the IPC path,
+// so the effort_auto derivation structurally never fires there and is NOT
+// mirrored):
+//
+//  1. NIGHTGAUGE_PIPELINE_STAGE_EFFORT_{STAGE}   env override
+//  2. model_routing.stage_efforts.{stage}         config
+//  3. NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT     env override
+//  4. model_routing.default_effort                config
+//  5. manual mode only: defaultStageEfforts       built-in table
+//  6. "" (no explicit effort — the model's declared default applies)
+func stageEffortConfig(workspaceRoot string, stage state.PipelineStage) string {
+	envKey := "NIGHTGAUGE_PIPELINE_STAGE_EFFORT_" +
+		strings.ToUpper(strings.ReplaceAll(string(stage), "-", "_"))
+	if v := validEffortLevel(strings.TrimSpace(os.Getenv(envKey))); v != "" {
+		return v
+	}
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil {
+		cfg = nil
+	}
+	if cfg != nil && cfg.ModelRouting != nil {
+		if v := validEffortLevel(strings.TrimSpace(cfg.ModelRouting.StageEfforts[string(stage)])); v != "" {
+			return v
+		}
+	}
+	if v := validEffortLevel(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT"))); v != "" {
+		return v
+	}
+	if cfg != nil && cfg.ModelRouting != nil {
+		if v := validEffortLevel(strings.TrimSpace(cfg.ModelRouting.DefaultEffort)); v != "" {
+			return v
+		}
+	}
+	if modelRoutingMode(cfg) == "manual" {
+		return defaultStageEfforts[stage]
+	}
+	return ""
+}
+
+// resolveWireEffort resolves the effort half of the wire envelope (#581 —
+// "the wire grows effort and thinking alongside model", spike #568 §4.1).
+// Mirrors resolveStageEffort (utils/skillRunner.ts) step for step, which is
+// what the extension ran for itself on the IPC path before the wire carried
+// the value — so the cutover is outcome-identical by construction:
+//
+//	Step 0  performance-mode effort pin — only `maximum` pins ({opus, high}
+//	        per stage); suppressed by a NIGHTGAUGE_PIPELINE_STAGE_MODEL_*
+//	        override exactly as the TS chain suppresses its Step 0.
+//	Step 1  the explicit chain (stageEffortConfig), clamped into the mode's
+//	        [EffortFloor, EffortCeiling] — Efficiency caps at medium, Maximum
+//	        floors at high even when its model pin was overridden away.
+//
+// "" means no explicit effort resolved anywhere: the extension omits
+// `--effort` and the model's declared default rules — the selection query's
+// rung effort, implied rather than spelled, which keeps the spawned argv
+// byte-identical to the pre-wire behavior.
+func resolveWireEffort(workspaceRoot string, stage state.PipelineStage) string {
+	mode := routing.ResolvePerformanceMode(workspaceRoot)
+	if mode != routing.ModeElevated && stageEnvModel(stage) == "" {
+		if pin := routing.ModeStageEffort(mode, string(stage)); pin != "" {
+			return pin
+		}
+	}
+	return routing.ClampEffortToEnvelope(stageEffortConfig(workspaceRoot, stage), routing.Envelope(mode))
+}
+
+// resolveWireThinking resolves the thinking half of the wire envelope (#581)
+// through the selection query: the dispatched band's rung under the anthropic
+// provider — the band contract RunStageParams.Model already speaks (the
+// extension translates the band at the last mile for codex/gemini/copilot,
+// and the envelope translates or drops with it) — adjusted by the one
+// override Go's own process observes, the Claude Code disable escape hatch
+// (#76's interlock). "" for a model with no rung (a user-defined local model)
+// or an undeclared thinking default: absent, never fabricated.
+func resolveWireThinking(model string) string {
+	rung, ok := routing.ResolveBandEnvelope("anthropic", routing.TierBand(model), "")
+	if !ok || !state.IsThinkingState(rung.Thinking) {
+		return ""
+	}
+	if preflight.ThinkingDisabledInEnv() {
+		return "off"
+	}
+	return rung.Thinking
 }
 
 // resolveDispatchSelectionMode returns model_routing.mode (manual | automatic

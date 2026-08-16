@@ -48,9 +48,14 @@ type RoutingAdviceEntry struct {
 
 // RoutingAdvice mirrors RoutingAdviceFileSchema (routingAdvice.ts).
 type RoutingAdvice struct {
-	SchemaVersion          int                  `json:"schema_version"`
-	GeneratedAt            string               `json:"generated_at"`
-	MinSamples             int                  `json:"min_samples"`
+	SchemaVersion int    `json:"schema_version"`
+	GeneratedAt   string `json:"generated_at"`
+	MinSamples    int    `json:"min_samples"`
+	// QualityFloor is the quality floor the file was BUILT with, stamped by
+	// the builder like MinSamples so both consumption-side pickers apply the
+	// same floor. AdviseBand falls back to the historical default (70) when
+	// the field is absent/zero — fail-open, matching the reader's contract.
+	QualityFloor           float64              `json:"quality_floor"`
 	MinHonestSchemaVersion int                  `json:"min_honest_schema_version"`
 	Entries                []RoutingAdviceEntry `json:"entries"`
 }
@@ -86,9 +91,19 @@ type adviceModelPool struct {
 	qualityPerDollar float64
 }
 
-// adviceQualityFloor mirrors the advisor's default quality floor: efficiency
-// and balanced picks must clear it; maximum/frontier consider everything.
+// adviceQualityFloor is the FALLBACK quality floor — the advisor's default —
+// applied only when the advice file predates the stamped `quality_floor`
+// field (or carries a non-positive one). Efficiency and balanced picks must
+// clear the floor; maximum/frontier consider everything.
 const adviceQualityFloor = 70
+
+// qualityFloorFor returns the floor the file was built with, or the default.
+func qualityFloorFor(advice RoutingAdvice) float64 {
+	if advice.QualityFloor > 0 {
+		return advice.QualityFloor
+	}
+	return adviceQualityFloor
+}
 
 // AdviseBand returns the band the eval evidence recommends for a performance
 // mode, or "" when the evidence does not justify (or cannot express) a
@@ -137,11 +152,13 @@ func AdviseBand(advice RoutingAdvice, mode PerformanceMode, envelope ModeEnvelop
 		candidates = append(candidates, *p)
 	}
 
-	// Quality floor for the cost-driven modes, mirroring the advisor.
+	// Quality floor for the cost-driven modes — the floor the FILE was built
+	// with (stamped quality_floor), mirroring pickAdvice.
 	if mode == ModeEfficiency || mode == ModeElevated {
+		floor := qualityFloorFor(advice)
 		floored := make([]adviceModelPool, 0, len(candidates))
 		for _, c := range candidates {
-			if c.meanQuality >= adviceQualityFloor {
+			if c.meanQuality >= floor {
 				floored = append(floored, c)
 			}
 		}
