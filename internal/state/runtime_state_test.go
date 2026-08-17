@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 func TestNewRuntimeState(t *testing.T) {
@@ -783,5 +785,161 @@ func TestActualLinesChanged_PreservesMeasuredZeroAcrossSnapshotAndDisk(t *testin
 	}
 	if loaded.ActualLinesChanged == nil || *loaded.ActualLinesChanged != 0 {
 		t.Fatalf("loaded ActualLinesChanged = %v, want pointer to measured zero", loaded.ActualLinesChanged)
+	}
+}
+
+// --- Cross-process run ownership (#557) ------------------------------------
+//
+// The terminal latch is per-RUNTIME-OBJECT: `sealed` lives in memory, so it can
+// only stop the process that set it from re-creating the snapshot it removed. A
+// second process that rehydrated the same run identity holds no such latch over
+// the owner, and its SealAndRemove deletes a file the owner re-creates at its
+// next stage-boundary persist. OwnerPID makes ownership an identity-scoped fact
+// the snapshot itself carries, and SealAndRemove — the ONE destructive,
+// file-owning operation — is where the refusal lands.
+
+// deadPID returns a pid that has certainly exited: a real child, reaped.
+// Invented "large number" pids are not reliably dead — the kernel recycles.
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run throwaway child: %v", err)
+	}
+	pid := cmd.Process.Pid
+	if runstate.ProcessAlive(pid) {
+		t.Skipf("pid %d was recycled before the test could use it as a dead pid", pid)
+	}
+	return pid
+}
+
+// liveForeignPID returns a pid that is alive and is NOT this process — the test
+// binary's parent, which outlives every test in the binary. It stands in for
+// the `nightgauge run` scheduler process that owns the run while a separate
+// `serve` daemon observes it.
+func liveForeignPID(t *testing.T) int {
+	t.Helper()
+	pid := os.Getppid()
+	if pid <= 1 || pid == os.Getpid() || !runstate.ProcessAlive(pid) {
+		t.Skipf("no live foreign pid available for this test (ppid %d)", pid)
+	}
+	return pid
+}
+
+// TestRuntimeSnapshotNamesItsOwnerOnDisk pins the fact the whole refusal rests
+// on: the owner reaches disk, so it is discoverable by a process that did not
+// mint the runtime. Without this, ownership would be a per-process belief and
+// the cross-process case could not be decided at all.
+func TestRuntimeSnapshotNamesItsOwnerOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuntimeState("acme/platform", 557, "", testRunID())
+	if rs.OwnerPID != os.Getpid() {
+		t.Fatalf("NewRuntimeState OwnerPID = %d, want this process (%d)", rs.OwnerPID, os.Getpid())
+	}
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	loaded, err := LoadSnapshotByIdentity(dir, rs.IssueNumber, rs.RunID)
+	if err != nil {
+		t.Fatalf("LoadSnapshotByIdentity: %v", err)
+	}
+	if loaded.OwnerPID != os.Getpid() {
+		t.Errorf("snapshot on disk names owner pid %d, want %d — ownership must survive the disk or no other process can read it",
+			loaded.OwnerPID, os.Getpid())
+	}
+}
+
+// TestSealAndRemove_RefusesWhileTheOwningProcessIsStillAlive is the state-layer
+// half of #557: the observing process may not seal what a live owner is still
+// writing, and a refusal leaves BOTH the file and the run untouched.
+func TestSealAndRemove_RefusesWhileTheOwningProcessIsStillAlive(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuntimeState("acme/platform", 557, "", testRunID())
+	rs.OwnerPID = liveForeignPID(t)
+	rs.BeginStage(StageFeatureDev)
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	if err := rs.SealAndRemove(dir); !errors.Is(err, ErrNotRunOwner) {
+		t.Fatalf("SealAndRemove = %v, want ErrNotRunOwner", err)
+	}
+
+	loaded, err := LoadSnapshotByIdentity(dir, rs.IssueNumber, rs.RunID)
+	if err != nil {
+		t.Fatalf("the live owner's snapshot was REMOVED by a process that does not own it: %v", err)
+	}
+	if loaded.Terminal {
+		t.Error("a refused seal still stamped the durable terminal marker onto a live owner's snapshot")
+	}
+	if rs.IsSealed() {
+		t.Error("a refused seal latched the in-memory seal — a refusal must change nothing")
+	}
+	// The refusal must not close the run: it is a statement about WHO may seal,
+	// never about whether the run is over.
+	if err := rs.Persist(dir); err != nil {
+		t.Errorf("a refused seal closed the run to further writes: %v", err)
+	}
+}
+
+// TestSealAndRemove_ProceedsWhenTheOwningProcessIsGone is the other half, and
+// it is what keeps the refusal from becoming a leak: a liveness-scoped refusal
+// must never strand a run whose owner has died.
+func TestSealAndRemove_ProceedsWhenTheOwningProcessIsGone(t *testing.T) {
+	dir := t.TempDir()
+	rs := NewRuntimeState("acme/platform", 557, "", testRunID())
+	rs.OwnerPID = deadPID(t)
+	rs.BeginStage(StageFeatureDev)
+	if err := rs.Persist(dir); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+
+	if err := rs.SealAndRemove(dir); err != nil {
+		t.Fatalf("a GONE owner's run was not sealed (%v) — the ownership refusal is scoped to liveness and must never strand a run whose owner is dead", err)
+	}
+	if _, err := LoadSnapshotByIdentity(dir, rs.IssueNumber, rs.RunID); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("snapshot lookup after the seal = %v, want fs.ErrNotExist", err)
+	}
+	if !rs.IsSealed() {
+		t.Error("the seal did not latch")
+	}
+	if err := rs.Persist(dir); !errors.Is(err, ErrRunSealed) {
+		t.Errorf("post-seal Persist = %v, want ErrRunSealed", err)
+	}
+}
+
+// TestAdoptOwnership_TakesAGoneOwnersRunAndLeavesALiveOnesAlone pins the
+// transfer rule. It is what keeps "at most one live owner per run identity"
+// true when the adopter is not the minter: two processes must not each adopt
+// one dead owner's snapshot and each be allowed to seal.
+func TestAdoptOwnership_TakesAGoneOwnersRunAndLeavesALiveOnesAlone(t *testing.T) {
+	gone := NewRuntimeState("acme/platform", 557, "", testRunID())
+	dead := deadPID(t)
+	gone.OwnerPID = dead
+	previous, moved := gone.AdoptOwnership()
+	if !moved {
+		t.Fatal("adoption did NOT take a gone owner's run — the next adopter would be allowed to seal it too")
+	}
+	if previous != dead {
+		t.Errorf("AdoptOwnership reported previous owner %d, want %d", previous, dead)
+	}
+	if gone.OwnerPID != os.Getpid() {
+		t.Errorf("after adoption OwnerPID = %d, want this process (%d)", gone.OwnerPID, os.Getpid())
+	}
+	if !gone.OwnedByThisProcess() {
+		t.Error("OwnedByThisProcess is false after this process adopted the run")
+	}
+
+	live := NewRuntimeState("acme/platform", 557, "", testRunID())
+	owner := liveForeignPID(t)
+	live.OwnerPID = owner
+	if _, moved := live.AdoptOwnership(); moved {
+		t.Error("adoption TOOK a LIVE owner's run — the adopter must keep naming the owner it found, or its own seal stops being refused")
+	}
+	if live.OwnerPID != owner {
+		t.Errorf("after adopting a live owner's run OwnerPID = %d, want the owner %d", live.OwnerPID, owner)
+	}
+	if live.OwnedByThisProcess() {
+		t.Error("OwnedByThisProcess is true for a run a different live process owns")
 	}
 }
