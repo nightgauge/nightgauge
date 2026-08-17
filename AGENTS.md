@@ -156,6 +156,31 @@ origin/main..<branch>` also reports everything `main` gained afterwards, and
   reclaim space — deliberate scoping beats automatic summarization. This is
   also product philosophy: Nightgauge's pipeline hands each stage a scoped
   context on purpose.
+- **Reap every background process you spawn — by PID, never by `jobs`.**
+  Capture the PID at spawn (`proc=$!`), kill that PID explicitly, and verify it
+  is dead (`kill -0 "$proc" 2>/dev/null` must fail) before you report the task
+  complete. This applies to anything you background: servers, watchers, tailers,
+  and above all **synthetic load generators** used to reproduce a race.
+
+  **`kill $(jobs -p)` and `kill %1` do not work here and will silently reap
+  nothing.** The job table belongs to the single shell instance that spawned the
+  jobs; a later command runs in a _new_ shell where that table is empty, so the
+  kill succeeds vacuously. Worse, a `( … ) &` subshell whose owning shell has
+  exited is reparented to PID 1, which puts it beyond `jobs` entirely and leaves
+  nothing tying it to the work that created it.
+
+  This is not hypothetical. An agent reproducing a CI race needed a loaded
+  machine, spawned 24 `while :; do :; done` loops, and ended with
+  `kill $(jobs -p)`. The kill matched nothing, the loops were reparented to
+  PID 1, and they spun at ~45% CPU each for eleven hours — load average 253 on
+  the maintainer's laptop, long after the PR had merged and the worktree was
+  gone. Nothing in the tree pointed back at them; they were found by reading
+  `ps -Ao pid,ppid,pcpu,lstart,command` by hand.
+
+  If a task genuinely needs background load, bound it: write the PIDs to a file
+  as you spawn them, kill from that file, and re-check with `ps` afterwards.
+  Prefer a bounded run (`timeout`, a fixed iteration count) over an unbounded
+  loop, so a missed cleanup expires on its own instead of running until reboot.
 
 ### GitHub CLI in Multi-User Workspaces
 
