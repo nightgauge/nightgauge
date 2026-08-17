@@ -3,6 +3,8 @@ package routing
 import (
 	"reflect"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/models"
 )
 
 // selection_test.go pins the Go selection query (#581) to the SAME rungs the
@@ -160,6 +162,24 @@ func TestEscalationLadderDerivation(t *testing.T) {
 	}
 }
 
+// registryProviders returns the distinct providers declared in the model
+// registry (models.All, the existing exported accessor — no new production
+// symbol needed), deduplicated in first-appearance order. Used instead of a
+// hardcoded provider slice so a provider added to the registry later is
+// automatically covered by every test that walks this list.
+func registryProviders() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range models.All() {
+		if seen[m.Provider] {
+			continue
+		}
+		seen[m.Provider] = true
+		out = append(out, m.Provider)
+	}
+	return out
+}
+
 // TestBandRankSpaceEquivalentToRungOrder pins the structural fact that keeps
 // the band-rank clamps (ClampToEnvelope / tierRank / stageBaseModel) CORRECT
 // without a rung-native conversion (#606 deliverable 4): for every provider
@@ -173,9 +193,35 @@ func TestEscalationLadderDerivation(t *testing.T) {
 // through them. If a registry change ever makes a band answer for two rungs
 // — or reorders rungs against the band ladder — this fails, and the clamps
 // must be converted to rung-native comparisons before that change lands.
+//
+// Providers enumerate FROM THE REGISTRY (#636) — a provider added to the
+// registry later is automatically checked, instead of needing a hand edit to
+// a hardcoded slice here.
 func TestBandRankSpaceEquivalentToRungOrder(t *testing.T) {
-	for _, provider := range []string{"anthropic", "openai", "google", "xai", "copilot"} {
+	providers := registryProviders()
+	if len(providers) == 0 {
+		t.Fatal("registryProviders() returned no providers — enumeration is broken; this test would otherwise pass vacuously")
+	}
+	mustContain := map[string]bool{"anthropic": true, "openai": true, "google": true, "xai": true, "copilot": true}
+	for _, p := range providers {
+		delete(mustContain, p)
+	}
+	if len(mustContain) != 0 {
+		t.Fatalf("registryProviders() = %v, missing previously-hardcoded providers %v", providers, mustContain)
+	}
+
+	for _, provider := range providers {
 		rungs := CandidateLadder(provider, "")
+		if len(rungs) == 0 {
+			// Explicit skip, not a silent vacuous pass: a provider whose
+			// registry entries are all deprecated (or that has no ladder for
+			// some other reason) has nothing to check the band/rung
+			// equivalence over. An empty CandidateLadder must never read as
+			// "equivalence verified" (#636 AC2) — logged so it is visible,
+			// never a bare `continue`.
+			t.Logf("%s: no registry ladder (CandidateLadder empty) — skipped explicitly, not counted as equivalent", provider)
+			continue
+		}
 		seen := map[string]bool{}
 		prevRank := -1
 		for i, rung := range rungs {
