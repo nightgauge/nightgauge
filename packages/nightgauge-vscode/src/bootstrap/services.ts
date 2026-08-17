@@ -2207,6 +2207,10 @@ export async function initializeServices(
             completedIssuesService.addCompleted(
               lastPipelineState.issue_number,
               lastPipelineState.title,
+              // Forwarded verbatim, `""` included: an empty branch is honest
+              // persisted state meaning "undetermined" (#397/#448), and
+              // CompletedIssueTreeItem renders it as UNDETERMINED_BRANCH_LABEL.
+              // Never substitute a `feat/{N}` stand-in to make it look filled.
               lastPipelineState.branch,
               readIssueLabels(lastPipelineState.issue_number),
               headlessOrchestrator.getLastCostAnomalyExceeded()
@@ -2237,13 +2241,17 @@ export async function initializeServices(
           completedIssuesService.addFailed(
             issueNumber,
             state.title,
+            // Same contract as the completion path: `""` means undetermined and
+            // is forwarded as-is for FailedIssueTreeItem to label (#397/#448).
             state.branch,
             stage,
             error,
             readIssueLabels(issueNumber)
           );
         } else {
-          // Fallback: record with minimal info if state doesn't match
+          // Fallback: record with minimal info if state doesn't match. The `""`
+          // branch is deliberate — this path genuinely does not know one, and
+          // saying so is the contract (#397/#448); the tree item labels it.
           completedIssuesService.addFailed(issueNumber, `Issue #${issueNumber}`, "", stage, error);
         }
       })

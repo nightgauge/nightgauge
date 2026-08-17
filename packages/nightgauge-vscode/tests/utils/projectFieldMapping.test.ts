@@ -29,6 +29,7 @@ import {
   // Board status identity (#623)
   BOARD_STATUS,
   boardStatusEquals,
+  canonicalizeBoardStatus,
   // Types
   type PriorityLabel,
   type SizeLabel,
@@ -340,6 +341,99 @@ describe("projectFieldMapping", () => {
       expect(boardStatusEquals("Done", BOARD_STATUS.ready)).toBe(
         boardStatusEquals(BOARD_STATUS.ready, "Done")
       );
+    });
+  });
+
+  describe("canonicalizeBoardStatus", () => {
+    // The provenance matrix. Every row is the SAME column, spelled the way one
+    // real source spells it; every row must resolve to the one canonical value.
+    const PROVENANCE: ReadonlyArray<[string, string[]]> = [
+      // nightgauge-provisioned spelling first — DefaultFieldSchema in
+      // internal/github/project.go — then the hand-made-board capitalizations.
+      ["Backlog", ["Backlog", "backlog", "BACKLOG", "BackLog"]],
+      ["Ready", ["Ready", "ready", "READY", "rEaDy"]],
+      ["In progress", ["In progress", "In Progress", "in progress", "IN PROGRESS", "iN pRoGrEsS"]],
+      ["In review", ["In review", "In Review", "in review", "IN REVIEW", "In ReViEw"]],
+      ["Done", ["Done", "done", "DONE", "DoNe"]],
+    ];
+
+    it("resolves every provenance spelling to the one canonical label", () => {
+      for (const [canonical, spellings] of PROVENANCE) {
+        for (const spelling of spellings) {
+          expect(canonicalizeBoardStatus(spelling)).toBe(canonical);
+        }
+      }
+    });
+
+    it("returns the provisioner's spelling, not the caller's", () => {
+      // The whole point of a canonicalizer over a fold: the value that comes
+      // back is safe to store, return and compare exactly. A hand-made board's
+      // "In Progress" must not survive the boundary.
+      expect(canonicalizeBoardStatus("In Progress")).toBe("In progress");
+      expect(canonicalizeBoardStatus("In Progress")).not.toBe("In Progress");
+      expect(canonicalizeBoardStatus("In Review")).toBe("In review");
+      expect(canonicalizeBoardStatus("In Review")).not.toBe("In Review");
+    });
+
+    it("is idempotent — canonical in, same value out", () => {
+      for (const canonical of Object.values(BOARD_STATUS)) {
+        expect(canonicalizeBoardStatus(canonical)).toBe(canonical);
+        expect(canonicalizeBoardStatus(canonicalizeBoardStatus(canonical))).toBe(canonical);
+      }
+    });
+
+    it("REJECTS an unknown column instead of coercing it", () => {
+      // A board may carry columns nightgauge knows nothing about. Rounding one
+      // to the nearest known column would assert a status the board never
+      // held, which is strictly worse than admitting we cannot name it.
+      for (const unknown of [
+        "Blocked",
+        "Won't do",
+        "Triage",
+        "Icebox",
+        "In progress review", // superset of a real column
+        "progress", // substring of a real column
+        "In  progress", // double space — not a capitalization difference
+        "Readyy",
+        "Ready to ship",
+      ]) {
+        expect(canonicalizeBoardStatus(unknown)).toBeNull();
+      }
+    });
+
+    it("never collapses two distinct columns onto one another", () => {
+      // Folding must not widen the vocabulary: five columns in, five out.
+      const canonicalized = Object.values(BOARD_STATUS).map((label) =>
+        canonicalizeBoardStatus(label.toUpperCase())
+      );
+      expect(new Set(canonicalized).size).toBe(Object.values(BOARD_STATUS).length);
+      expect(canonicalizeBoardStatus("In Review")).not.toBe(canonicalizeBoardStatus("In Progress"));
+    });
+
+    it("treats an absent status as naming no column", () => {
+      // "" is StatusValue's absent sentinel, not a column, so it is null here
+      // — the same answer as undefined/null. Callers fall through either way.
+      expect(canonicalizeBoardStatus(undefined)).toBeNull();
+      expect(canonicalizeBoardStatus(null)).toBeNull();
+      expect(canonicalizeBoardStatus("")).toBeNull();
+      expect(canonicalizeBoardStatus("   ")).toBeNull();
+    });
+
+    it("ignores surrounding whitespace", () => {
+      expect(canonicalizeBoardStatus("  In Progress  ")).toBe("In progress");
+      expect(canonicalizeBoardStatus("\tDone\n")).toBe("Done");
+    });
+
+    it("agrees with boardStatusEquals on every known column", () => {
+      // The two helpers must not disagree about column identity, or a folded
+      // comparison and a canonicalized read would take different branches.
+      for (const [, spellings] of PROVENANCE) {
+        for (const spelling of spellings) {
+          const canonical = canonicalizeBoardStatus(spelling);
+          expect(canonical).not.toBeNull();
+          expect(boardStatusEquals(spelling, canonical)).toBe(true);
+        }
+      }
     });
   });
 

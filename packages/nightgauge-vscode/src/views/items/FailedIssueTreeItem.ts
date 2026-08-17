@@ -9,6 +9,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { FailedIssueReference } from "../../types/completedIssues";
+import { getBranchDisplayText } from "../dashboard/DashboardComponents";
 
 /**
  * ErrorDetailsTreeItem - Simple tree item for error details display
@@ -125,7 +126,11 @@ export class FailedIssueTreeItem extends BaseTreeItem {
 
     md.appendMarkdown(`**Issue #${this.issue.issue_number}** ❌\n\n`);
     md.appendMarkdown(`${this.issue.title}\n\n`);
-    md.appendMarkdown(`**Branch:** ${this.issue.branch}\n\n`);
+    // The failure path is where an undetermined branch is most likely: a run
+    // that dies before issue-pickup never had one, and `bootstrap/services.ts`
+    // passes `""` outright on its onStageError fallback. Render the state, not
+    // a blank (#448).
+    md.appendMarkdown(`**Branch:** ${getBranchDisplayText(this.issue.branch)}\n\n`);
     md.appendMarkdown(`**Failed Stage:** ${this.formatStageName(this.issue.failed_stage)}\n\n`);
     md.appendMarkdown(`**Error:** ${this.issue.error}\n\n`);
     md.appendMarkdown(`**Failed:** ${this.issue.timestamp}\n\n`);
