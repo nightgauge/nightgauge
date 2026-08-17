@@ -9268,7 +9268,15 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         await this.stateService.initializePipeline(
           issueNumber,
           `Issue #${issueNumber}`,
-          `feat/${issueNumber}` // Placeholder - issue-pickup updates with real branch
+          // UNDETERMINED, not a placeholder (#448). Initialization happens
+          // before issue-pickup resolves a branch, so nothing here knows one.
+          // The `feat/{issueNumber}` that stood here was byte-identical to a
+          // branch that really resolved and rode notifyStageTransition →
+          // SeedRunContext → V2RunInput.Branch into a durable history record —
+          // the last origin of #397's fabrication class. `""` is how state
+          // says "undetermined"; SeedRunContext ignores it, so issue-pickup's
+          // real branch is still the first value the record ever sees.
+          ""
         );
         await this.stateService.setExecutionMode("automatic");
       }
@@ -11595,7 +11603,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       await this.stateService.initializePipeline(
         item.issueNumber,
         item.title || `Issue #${item.issueNumber}`,
-        `feat/${item.issueNumber}` // Placeholder - issue-pickup updates with real branch
+        // UNDETERMINED (#448) — see the identical seed in runPipeline. A queued
+        // start knows no more about the branch than a concurrent slot does, and
+        // inventing `feat/{issueNumber}` here reached the same durable record.
+        ""
       );
       await this.stateService.setExecutionMode("automatic");
     }

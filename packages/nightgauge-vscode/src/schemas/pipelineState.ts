@@ -248,7 +248,25 @@ export const PipelineStateSchema = z.object({
   schema_version: z.literal("1.0"),
   issue_number: z.number().int().positive(),
   title: z.string().min(1),
-  branch: z.string().min(1),
+  /**
+   * Feature branch for this run — `""` means "no branch has been determined
+   * yet", NOT "no value". This is #397's empty-means-undetermined contract,
+   * extended from the history record to pipeline state by #448.
+   *
+   * The `.min(1)` that stood here is what made the fabrications necessary:
+   * `initializePipeline` runs BEFORE issue-pickup resolves a branch, so the
+   * only way for the pipeline-state path to satisfy a non-empty branch was to
+   * invent `feat/{issue_number}` — a value byte-indistinguishable from a
+   * branch that really resolved, which then rode `notifyStageTransition` →
+   * `SeedRunContext` → `V2RunInput.Branch` into a durable history record.
+   * Go's `SeedRunContext` already ignores an empty branch (latest-wins only on
+   * a non-empty value), so `""` seeds nothing and the record stays honest.
+   *
+   * Readers must render it through `getBranchDisplayText` (which yields
+   * `UNDETERMINED_BRANCH_LABEL`) and must never hand it to a git command —
+   * every existing branch-consuming call site already guards on truthiness.
+   */
+  branch: z.string(),
   base_branch: z.string().min(1),
   started_at: z.string().datetime(),
   updated_at: z.string().datetime(),
