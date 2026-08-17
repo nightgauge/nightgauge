@@ -111,6 +111,32 @@ const RUN_OUTCOMES = JSON.parse(
   cancelled: { cost_usd: number; duration_ms: number; stage_count: number };
 };
 
+/**
+ * Attach a terminal no-op rejection handler to a fixture promise and hand the
+ * ORIGINAL promise back (#618).
+ *
+ * Several tests here build a promise, park production code on it, and reject it
+ * from the test body to drive an error path. Whether production code is parked
+ * on that promise at the instant the test rejects it is not something the test
+ * controls: the dispatch reaches `WorktreeManager.create()` only after
+ * `startSlotInner` awaits a REAL `fs.access()` for the conflict-restart signal,
+ * and that ENOENT comes back from the libuv threadpool on wall-clock time that
+ * the fake-timer advances do not govern. On an unloaded machine it lands first
+ * and the `await` inside the mock observes the rejection; on a loaded CI runner
+ * it does not, the rejection reaches the process with no handler attached, and
+ * Vitest reports `Errors 1 error` while every test passes — a red job with a
+ * green test summary, on PRs that never touched this code.
+ *
+ * The `.catch()` derives a NEW promise and discards it; the original keeps
+ * whatever handlers production code attaches, so every assertion still runs
+ * against the real rejection. It only guarantees the rejection is observed
+ * whether or not the awaiter has arrived yet.
+ */
+function settleObserved<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => undefined);
+  return promise;
+}
+
 function makeQueueItem(issueNumber: number) {
   return {
     issueNumber,
@@ -162,10 +188,15 @@ function createControllableFactory() {
   const factory = vi.fn().mockImplementation((_workDir: string, issueNumber: number) => {
     let resolveRun!: (result: any) => void;
     let rejectRun!: (error: Error) => void;
-    const runPromise = new Promise<any>((res, rej) => {
-      resolveRun = res;
-      rejectRun = rej;
-    });
+    // Same hazard as the worktree gate (#618): `rejectRun` is called from the
+    // test body, and the manager only parks on this promise once
+    // `runSlotPipeline` has worked its way down to `orchestrator.runPipeline()`.
+    const runPromise = settleObserved(
+      new Promise<any>((res, rej) => {
+        resolveRun = res;
+        rejectRun = rej;
+      })
+    );
     const getState = vi.fn().mockResolvedValue({
       tokens: { estimated_cost_usd: RUN_OUTCOMES.cancelled.cost_usd, input: 0, output: 0 },
     });
@@ -790,9 +821,11 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     const manager = newManager(factory);
 
     let failCreate!: () => void;
-    worktreeGate.blockCreate = new Promise<void>((_res, rej) => {
-      failCreate = () => rej(new Error("fatal: could not lock .git/config"));
-    });
+    worktreeGate.blockCreate = settleObserved(
+      new Promise<void>((_res, rej) => {
+        failCreate = () => rej(new Error("fatal: could not lock .git/config"));
+      })
+    );
     mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(282)]);
     const filling = manager.fillSlots();
     await vi.advanceTimersByTimeAsync(10);
@@ -808,6 +841,15 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     await vi.advanceTimersByTimeAsync(120_000);
     await filling;
 
+    // The worktree-failure exit really ran. Without this the surviving count
+    // below would also be satisfied by a dispatch that never reached
+    // `WorktreeManager.create()` at all — the exact state the #618 fix makes
+    // survivable, and therefore the state that must not be allowed to make
+    // this assertion vacuous.
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      "Failed to create worktree for concurrent pipeline",
+      expect.objectContaining({ issueNumber: 282 })
+    );
     expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
   });
 });
