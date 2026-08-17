@@ -66,6 +66,53 @@ export function boardStatusEquals(
 }
 
 /**
+ * A real Status column — `StatusValue` minus the `""` absent sentinel.
+ *
+ * Derived from `BOARD_STATUS` so the vocabulary is declared exactly once.
+ */
+export type BoardStatusValue = (typeof BOARD_STATUS)[keyof typeof BOARD_STATUS];
+
+/**
+ * Folded label → canonical label. Built from `BOARD_STATUS` itself, so a column
+ * added there is canonicalizable immediately and the two cannot drift apart.
+ */
+const CANONICAL_BY_FOLDED_LABEL = new Map<string, BoardStatusValue>(
+  Object.values(BOARD_STATUS).map((label) => [label.toLowerCase(), label] as const)
+);
+
+/**
+ * Resolve a raw board Status label to its one canonical spelling (#623).
+ *
+ * Use this — not `boardStatusEquals` — wherever a board read is about to be
+ * **kept** rather than merely compared. Folding at a comparison answers "is
+ * this the same column?" but still leaves the caller holding the raw,
+ * provenance-dependent label; canonicalizing at the boundary means everything
+ * downstream holds the one spelling and may compare it exactly forever after.
+ * That is the stronger contract, and it is the only one that is safe when the
+ * value is stored, returned, or widened to `ProjectBoardStatus`.
+ *
+ * Matching ignores capitalization and surrounding whitespace, because both are
+ * board-provenance artifacts: nightgauge's provisioner writes "In progress"
+ * (`DefaultFieldSchema` in `internal/github/project.go`) while a hand-made
+ * board commonly spells the same column "In Progress", and Go's
+ * `gh.BoardService.ListItems` copies whichever one it finds into
+ * `BoardItem.Status` verbatim.
+ *
+ * **An unrecognized label returns `null` — it is never coerced.** A board may
+ * carry columns nightgauge knows nothing about ("Blocked", "Won't do"), and
+ * quietly rounding one of those to the nearest known column would assert a
+ * status the board never held. `null` means "not a column I can name", and the
+ * caller decides what to do with that; it is deliberately indistinguishable
+ * from an absent status, since neither yields a usable column.
+ *
+ * @param raw - A Status label as read off a board, in any capitalization
+ * @returns The canonical label, or `null` if it names no known column
+ */
+export function canonicalizeBoardStatus(raw: string | null | undefined): BoardStatusValue | null {
+  return CANONICAL_BY_FOLDED_LABEL.get((raw ?? "").trim().toLowerCase()) ?? null;
+}
+
+/**
  * Size field values on the GitHub Project board
  */
 export type SizeValue = "XS" | "S" | "M" | "L" | "XL" | "";

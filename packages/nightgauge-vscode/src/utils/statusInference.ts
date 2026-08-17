@@ -3,7 +3,7 @@
  *
  * Implements the 4-step inference chain:
  *   1. Pipeline execution state (issue actively running → "In progress")
- *   2. Board status (if present and valid → return as-is)
+ *   2. Board status (if it names a known column → return it canonicalized)
  *   3. Label fallback (status:* labels → mapped status)
  *   4. Default readiness rules (blocked → "Backlog", open → "Ready", closed → "Done")
  *
@@ -16,7 +16,7 @@
 
 import type { ProjectBoardStatus } from "../views/dashboard/ProjectBoardTypes";
 import type { PipelineState } from "../services/PipelineStateService";
-import { extractStatusLabel, mapStatusLabel, isStatusValue } from "./projectFieldMapping";
+import { extractStatusLabel, mapStatusLabel, canonicalizeBoardStatus } from "./projectFieldMapping";
 
 /**
  * Minimal issue shape required for status inference.
@@ -26,7 +26,11 @@ export interface StatusInferenceInput {
   number: number;
   /** Labels for status:* label fallback */
   labels: string[];
-  /** Current board status (may be undefined for repo-only issues) */
+  /**
+   * Current board status, as the **raw** single-select option label in
+   * whatever capitalization its board uses — never a pre-canonicalized value.
+   * Undefined for repo-only issues, which have no board row at all.
+   */
   status?: string;
   /** Blocking dependency relationships */
   blockedBy?: Array<{ state: string }>;
@@ -43,7 +47,10 @@ export interface StatusInferenceInput {
  *
  * Inference order:
  * 1. Pipeline execution state: actively running → "In progress"
- * 2. Board status: if present and valid (non-empty), return as-is
+ * 2. Board status: if it names a known column, return the canonical spelling
+ *    for it. An unrecognized label (a board's own custom column) is NOT
+ *    coerced to the nearest known one — it falls through to steps 3-4, the
+ *    same as no board status at all.
  * 3. Label fallback: status:* label → mapped status
  * 4. Default readiness rules:
  *    - CLOSED → "Done"
@@ -70,9 +77,13 @@ export function inferWorkItemStatus(
     }
   }
 
-  // Step 2 — Board status: if present and valid (non-empty), use it directly
-  if (item.status && isStatusValue(item.status) && item.status !== "") {
-    return item.status as ProjectBoardStatus;
+  // Step 2 — Board status: canonicalize the raw label, then use it directly.
+  // Not an exact match and not a fold: the value is RETURNED, so it must be
+  // the canonical spelling, or a hand-made board's "In Progress" would ride
+  // out of here typed as ProjectBoardStatus and poison every consumer.
+  const boardStatus = canonicalizeBoardStatus(item.status);
+  if (boardStatus) {
+    return boardStatus;
   }
 
   // Step 3 — Label fallback: scan labels for status:* prefix
