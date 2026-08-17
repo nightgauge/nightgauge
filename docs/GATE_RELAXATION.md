@@ -180,19 +180,35 @@ A `gate.relaxation` telemetry event records `{relaxed, change_class}` for audit.
 ## The CI win, measured
 
 **Baseline — PR #646, a one-file `AGENTS.md` edit, nothing else in the diff.**
-The `#646` column is that pull request's own check-run record. The right-hand
-column is **arithmetic**, not an observation: it is the sum of the surviving
-steps' own measured durations from the same run, and the first docs-only PR to
-land after this is what turns it into a measurement.
+The `#646` column is that pull request's own check-run record. The projection
+column was **arithmetic**, not an observation: the sum of the surviving steps'
+own measured durations from the same run.
 
-| `ci.yml` job               | #646 (measured) | Docs-only (what still runs)                       |
-| -------------------------- | --------------- | ------------------------------------------------- |
-| `Go build & test`          | 3m35s           | checkout + setup-go + the gate's own self-test    |
-| `VSCode build & test`      | 4m58s           | checkout only                                     |
-| `SDK build & test`         | 1m39s           | checkout only                                     |
-| `Security & license gates` | 1m00s           | 1m00s — deliberately ungated                      |
-| `Change class` (new)       | —               | checkout + setup-go + `go build ./cmd/nightgauge` |
-| **Total runner time**      | **11m12s**      | **≈2m20s (projected)**                            |
+**PR #664 is the measurement.** It was the first docs-only pull request to run
+against the gated workflows on `main` — a two-file markdown edit
+(`AGENTS.md` + `docs/GIT_WORKFLOW.md`), classified
+`change_class=docs_only run_heavy=false`.
+
+| `ci.yml` job               | #646 (measured) | Docs-only (what still runs)                       | #664 (observed) |
+| -------------------------- | --------------- | ------------------------------------------------- | --------------- |
+| `Go build & test`          | 3m35s           | checkout + setup-go + the gate's own self-test    | 40s             |
+| `VSCode build & test`      | 4m58s           | checkout only                                     | 5s              |
+| `SDK build & test`         | 1m39s           | checkout only                                     | 6s              |
+| `Security & license gates` | 1m00s           | 1m00s — deliberately ungated                      | 1m00s           |
+| `Change class` (new)       | —               | checkout + setup-go + `go build ./cmd/nightgauge` | 31s             |
+| **Total runner time**      | **11m12s**      | **≈2m20s (projected)**                            | **2m22s**       |
+
+The projection landed within two seconds of the observation, which is the
+expected result for arithmetic over per-step durations that were already
+measured — worth recording precisely because it means the model of what the
+gate removes is correct, not merely optimistic.
+
+**All 12 required contexts still reported.** That is the load-bearing half of
+the result, not the time saved: the gate suppresses expensive _steps_ inside
+jobs that still run and still report, so no required check goes missing. A
+skipped required context never reports, and a required status check that never
+reports blocks the pull request forever — a deadlock strictly worse than the
+runner minutes this saves.
 
 The `changes` job is a `needs:` dependency, so on a change that _does_ run heavy
 it delays the three build jobs by its own duration — roughly half a minute of
@@ -201,16 +217,22 @@ returned on every docs PR.
 
 Wall-clock time for a documentation PR is unchanged at ~5m15s, because `lint` is
 not gated (see [What is NOT gated](#what-is-not-gated-and-why)). The saving is
-runner minutes, not the wait.
+runner minutes, not the wait. #664 confirmed this exactly: its `lint` job took
+5m15s and was the critical path, while the entire gated `ci.yml` workflow
+finished in 1m20s of wall-clock. If the wait is ever the thing worth optimizing,
+`lint` is the only job left to argue about — and the reason it stays ungated is
+that a `SKILL.md` or `docs/` edit is precisely a `docs_only` PR, so gating it
+would take the repo's only automated markdown guard offline for exactly the
+change class that needs it.
 
-Note that the gate cannot be observed on the pull request that introduces it. A
-`pull_request` run uses the workflow files from the merge of head into base, so
+Note that the gate could not be observed on the pull request that introduced it.
+A `pull_request` run uses the workflow files from the merge of head into base, so
 a branch whose diff against `main` is documentation-only necessarily carries
 `main`'s workflows — the ungated ones — while a branch carrying the gated
 workflows necessarily has `.github/workflows/**` in its diff and classifies
-`config_only`. The first observation is therefore the first docs-only PR opened
-after this merges, which is also what AGENTS.md means by "a green PR check is a
-prediction; `main`'s own run is the observation".
+`config_only`. The first observation was therefore the first docs-only PR opened
+after it merged (#664, recorded above), which is also what AGENTS.md means by "a
+green PR check is a prediction; `main`'s own run is the observation".
 
 **A mislabeled "docs" change that touched source** classifies as `mixed`, runs
 the full suite, and is not fast-tracked by the pipeline or the PR gates either —
