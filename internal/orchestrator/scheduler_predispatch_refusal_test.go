@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -326,5 +327,273 @@ func TestSkillRenderFailureRefusal_RecordsTheReasonUnderTheCurrentStage(t *testi
 	}
 	if !strings.Contains(stageDetail.Error, "skill render failed") {
 		t.Errorf("record stage error = %q, want it to name the render failure", stageDetail.Error)
+	}
+}
+
+// allRefusalStageSkills is the full set of stage skill directories a run needs
+// to reach pr-merge without a render refusal. Tests that want a render refusal
+// omit exactly one entry.
+var allRefusalStageSkills = []string{
+	"nightgauge-issue-pickup",
+	"nightgauge-feature-planning",
+	"nightgauge-feature-dev",
+	"nightgauge-feature-validate",
+	"nightgauge-pr-create",
+	"nightgauge-pr-merge",
+}
+
+// refusalGit runs a git command in dir and fails the test on error.
+func refusalGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+// refusalTrackedAtHEAD reports whether path (repo-relative, slash-separated) is
+// in the HEAD tree — i.e. whether the recovery commit actually captured it.
+func refusalTrackedAtHEAD(t *testing.T, dir, path string) bool {
+	t.Helper()
+	for _, line := range strings.Split(refusalGit(t, dir, "ls-tree", "-r", "--name-only", "HEAD"), "\n") {
+		if strings.TrimSpace(line) == path {
+			return true
+		}
+	}
+	return false
+}
+
+// seedRefusalRepo builds a git-backed workspace whose only uncommitted content
+// is what the caller asks for: every named stage skill is written AND
+// committed, so `git status` is clean at the moment the run starts.
+//
+// Committing the skills matters. An untracked SKILL.md is "blocking" work by
+// reclaim.ClassifyStatus's reckoning (it is not the pipeline's own bookkeeping
+// exhaust), so a test that left them untracked would see the rescue fire on
+// scaffolding it created itself and would pass for the wrong reason.
+func seedRefusalRepo(t *testing.T, root string, stageSkills []string) {
+	t.Helper()
+	gitInitRepo(t, root)
+	for _, dir := range stageSkills {
+		writeSkillFile(t, root, dir)
+	}
+	refusalGit(t, root, "add", "-A")
+	refusalGit(t, root, "commit", "-m", "chore: seed stage skills")
+}
+
+// seedUncommittedDevWork writes the deliverable shape feature-dev hands off:
+// implementation on disk, deliberately NOT committed. feature-dev does not
+// commit (AGENTS.md #1608) — it verifies what it changed and hands off to
+// feature-validate, which is the stage that commits and pushes.
+func seedUncommittedDevWork(t *testing.T, root string) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rel := "src/feature.go"
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)),
+		[]byte("package src\n\n// The whole feature-dev implementation, uncommitted.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return rel
+}
+
+// dropStageContextAfter returns a telemetry double that deletes a stage's
+// output context the moment that stage completes — after #2870's post-stage
+// output validation and before the NEXT stage's prerequisite gate reads it,
+// which is the only window the prerequisite refusal is reachable from.
+func dropStageContextAfter(runner *refusalCapturingStageRunner, stage state.PipelineStage) *hookTelemetry {
+	return &hookTelemetry{onEvent: func(e platform.PipelineEvent) {
+		if e.EventType != "stage_completed" || e.Stage != string(stage) {
+			return
+		}
+		if path := runner.outputFile(stage); path != "" {
+			_ = os.Remove(path)
+		}
+	}}
+}
+
+// assertRefusalRescuedTheWork is the shared post-condition for both #620
+// refusal sites when the worktree held uncommitted work.
+//
+// It pins the composite the #3365 incident and the #3542 recovery exist to
+// prevent, and which setting a terminal kind at these sites had silently
+// switched back on: the defer's rescue is gated on `terminalFailureKind == ""`,
+// so a site that books a kind and returns disables it, and validation_error is
+// NOT in the defer's skipBoardRevert set — so the work was stranded in the
+// worktree AND the board went back to Ready for a re-dispatch that would redo
+// it from scratch in a fresh worktree.
+//
+// The kind assertion is the board-revert assertion. skipBoardRevert lives
+// inside the #257 content-pinned terminal-defer fence and cannot be called
+// directly, and s.stateSvc is a concrete *state.BoardStateService with no seam
+// to observe FailPipeline through — but worktree_uncommitted is a member of
+// that set (and budget_ceiling_hit, branch_forked, commit_orphaned are the
+// others), so booking it is precisely what stops the revert.
+func assertRefusalRescuedTheWork(t *testing.T, root string, runner *refusalCapturingStageRunner,
+	refusedStage state.PipelineStage, commitsBefore int, workFile string, wantReasonFragments []string) {
+	t.Helper()
+
+	if runner.runtime == nil {
+		t.Fatal("stage runner never captured a *state.RuntimeState")
+	}
+	snap := runner.runtime.Snapshot()
+	if snap.Stage != refusedStage {
+		t.Fatalf("snap.Stage = %q, want %q (the refused stage)", snap.Stage, refusedStage)
+	}
+
+	// 1. The work is in a commit, not stranded on disk.
+	subjects := gitLog(t, root)
+	if len(subjects) != commitsBefore+1 {
+		t.Fatalf("commit count %d -> %d, want exactly one recovery commit — the uncommitted "+
+			"implementation was left in the worktree and the re-dispatch would redo it. Log: %v",
+			commitsBefore, len(subjects), subjects)
+	}
+	if !strings.Contains(subjects[0], "[auto-recovery]") {
+		t.Errorf("newest commit subject = %q, want the [auto-recovery] marker", subjects[0])
+	}
+	if !refusalTrackedAtHEAD(t, root, workFile) {
+		t.Errorf("%s is not in the HEAD tree — the rescue committed something, but not the work", workFile)
+	}
+
+	// 2. The refusal reason survived the rescue. The defer's own copy REPLACES
+	//    the stage error with a bare recovery marker; prefixing keeps both.
+	gotReason, ok := snap.StageErrors[string(snap.Stage)]
+	if !ok || gotReason == "" {
+		t.Fatalf("snap.StageErrors[%q] = (%q, ok=%v), want the refusal reason", snap.Stage, gotReason, ok)
+	}
+	for _, want := range append([]string{TerminalKindWorktreeUncommitted}, wantReasonFragments...) {
+		if !strings.Contains(gotReason, want) {
+			t.Errorf("stage error = %q, want it to contain %q", gotReason, want)
+		}
+	}
+
+	// 3. Every independent re-derivation of the kind from that prose agrees
+	//    with the kind the scheduler booked. internal/terminalkind/table.json
+	//    orders the worktree-uncommitted rule ahead of validation-error, so the
+	//    prefix wins for autonomous.go's onPipelineComplete wrapper and
+	//    NotifyComplete's defense-in-depth re-classify.
+	if got := ClassifyTerminalKind(gotReason); got != TerminalKindWorktreeUncommitted {
+		t.Errorf("ClassifyTerminalKind(%q) = %q, want %q — the recovered run must not read as a "+
+			"plain validation_error to the readers that re-derive the kind from text",
+			gotReason, got, TerminalKindWorktreeUncommitted)
+	}
+
+	// 4. The recorded kind. See the doc comment: this IS the board-revert
+	//    assertion.
+	rec := recordForIssue(t, root, 620)
+	if rec.TerminalFailureKind != TerminalKindWorktreeUncommitted {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q — validation_error is not in the terminal "+
+			"defer's skipBoardRevert set, so booking it here sends the issue back to Ready and the "+
+			"re-dispatch regenerates the work that was just rescued",
+			rec.TerminalFailureKind, TerminalKindWorktreeUncommitted)
+	}
+}
+
+// TestPrerequisiteMissingRefusal_RescuesUncommittedWork pins the #3542 rescue
+// at the prerequisite gate.
+//
+// The refusal lands on feature-validate — the stage immediately after
+// feature-dev, which hands off without committing — so the run reaches the gate
+// with a complete implementation uncommitted in the worktree. Before this fix
+// the site set terminalFailureKind and returned, which is exactly the condition
+// that switches the terminal defer's rescue off.
+func TestPrerequisiteMissingRefusal_RescuesUncommittedWork(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	workFile := seedUncommittedDevWork(t, root)
+	commitsBefore := len(gitLog(t, root))
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+	s.telemetrySvc = dropStageContextAfter(runner, state.StageFeatureDev)
+	s.telemetryEnabled = true
+
+	item := types.BoardItem{Number: 620, Repo: "nightgauge/nightgauge", ID: "item-620"}
+	s.runPipeline(context.Background(), item)
+
+	if got := runner.count(state.StageFeatureValidate); got != 0 {
+		t.Fatalf("feature-validate was dispatched %d time(s) — the prerequisite gate refuses BEFORE dispatch", got)
+	}
+	assertRefusalRescuedTheWork(t, root, runner, state.StageFeatureValidate, commitsBefore, workFile,
+		[]string{"missing prerequisite", string(state.StageFeatureValidate)})
+}
+
+// TestSkillRenderFailureRefusal_RescuesUncommittedWork pins the #3542 rescue at
+// the skill-render site — the failure scenario in full.
+//
+// feature-dev finishes and hands off without committing (AGENTS.md #1608).
+// feature-validate's SKILL.md will not compose (here: absent; in production a
+// broken overlay, a missing skills root, or an adapter mismatch does the same),
+// so the stage is refused before dispatch with the entire implementation
+// uncommitted on disk.
+func TestSkillRenderFailureRefusal_RescuesUncommittedWork(t *testing.T) {
+	root := t.TempDir()
+	// Every stage skill EXCEPT feature-validate's.
+	var withoutValidate []string
+	for _, dir := range allRefusalStageSkills {
+		if dir == "nightgauge-feature-validate" {
+			continue
+		}
+		withoutValidate = append(withoutValidate, dir)
+	}
+	seedRefusalRepo(t, root, withoutValidate)
+	workFile := seedUncommittedDevWork(t, root)
+	commitsBefore := len(gitLog(t, root))
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+
+	item := types.BoardItem{Number: 620, Repo: "nightgauge/nightgauge", ID: "item-620"}
+	s.runPipeline(context.Background(), item)
+
+	if got := runner.count(state.StageFeatureValidate); got != 0 {
+		t.Fatalf("feature-validate was dispatched %d time(s) — a stage with no composable SKILL.md "+
+			"has no prompt to dispatch", got)
+	}
+	assertRefusalRescuedTheWork(t, root, runner, state.StageFeatureValidate, commitsBefore, workFile,
+		[]string{"skill render failed", string(state.StageFeatureValidate)})
+}
+
+// TestPreDispatchRefusal_CleanWorktreeStaysValidationError is the other half of
+// the A/B: identical setup, minus the uncommitted work.
+//
+// With nothing to rescue there is nothing to reclassify, so the refusal keeps
+// validation_error — the kind whose corpus row names this exact producer — and
+// the board revert that sends a genuinely empty worktree back for re-dispatch
+// is correct. This is what stops the rescue from being wired in as an
+// unconditional reclassification that would launder every pre-dispatch refusal
+// into a recoverable non-event.
+func TestPreDispatchRefusal_CleanWorktreeStaysValidationError(t *testing.T) {
+	root := t.TempDir()
+	seedRefusalRepo(t, root, allRefusalStageSkills)
+	commitsBefore := len(gitLog(t, root))
+
+	runner := newRefusalCapturingStageRunner()
+	s := newRefusalScheduler(root, runner)
+	s.telemetrySvc = dropStageContextAfter(runner, state.StageFeatureDev)
+	s.telemetryEnabled = true
+
+	item := types.BoardItem{Number: 620, Repo: "nightgauge/nightgauge", ID: "item-620"}
+	s.runPipeline(context.Background(), item)
+
+	if got := len(gitLog(t, root)); got != commitsBefore {
+		t.Errorf("commit count %d -> %d — the rescue must not manufacture a commit on a clean worktree",
+			commitsBefore, got)
+	}
+	rec := recordForIssue(t, root, item.Number)
+	if rec.TerminalFailureKind != TerminalKindValidationError {
+		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindValidationError)
+	}
+	if runner.runtime == nil {
+		t.Fatal("stage runner never captured a *state.RuntimeState")
+	}
+	gotReason := runner.runtime.Snapshot().StageErrors[string(state.StageFeatureValidate)]
+	if strings.Contains(gotReason, TerminalKindWorktreeUncommitted) {
+		t.Errorf("stage error = %q carries the recovery marker with nothing recovered", gotReason)
+	}
+	if !strings.Contains(gotReason, "missing prerequisite") {
+		t.Errorf("stage error = %q, want it to name the missing prerequisite", gotReason)
 	}
 }
