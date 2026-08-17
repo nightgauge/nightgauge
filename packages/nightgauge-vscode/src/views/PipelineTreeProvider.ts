@@ -503,10 +503,26 @@ export class PipelineTreeProvider
         labels: state.labels,
       });
     } else if (this.currentIssue) {
-      // Update base branch on existing issue if changed
+      // Update branch / base branch on the existing issue if either changed.
+      //
+      // The feature branch has to be re-read on every sync, not just at
+      // setIssue() time: post-#448 `initializePipeline` seeds `branch: ""`
+      // (undetermined) and issue-pickup fills in the real name later in the
+      // same run, under the same issue number. Syncing only `base_branch`
+      // pinned the item at whatever branch existed on first sight, so the
+      // undetermined label would never resolve to the branch that was actually
+      // created. Before #448 this was invisible — the seed was a fabricated
+      // `feat/{N}` that merely looked like an answer.
       const currentInfo = this.currentIssue.getInfo();
+      const changes: Partial<IssueInfo> = {};
+      if (currentInfo.branch !== state.branch) {
+        changes.branch = state.branch;
+      }
       if (currentInfo.baseBranch !== state.base_branch) {
-        this.currentIssue.update({ baseBranch: state.base_branch });
+        changes.baseBranch = state.base_branch;
+      }
+      if (Object.keys(changes).length > 0) {
+        this.currentIssue.update(changes);
       }
     }
 
