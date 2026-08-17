@@ -82,20 +82,13 @@ type StageRunParams struct {
 	// grok CLI, with NIGHTGAUGE_GROK_EFFORT demoted to operator override.
 	Effort   string
 	Thinking string
-	// Adapter is the executing-agent half of the same envelope (#611): the
-	// adapter this stage will actually run on. Go-direct dispatches carry
-	// execMgr's active adapter; IPC dispatches carry the canonical #54
-	// stage-adapter resolution, because Go holds no adapter there and the
-	// wire is the only place the identity can travel. "" means honestly
-	// unknown — consumers then keep the historical anthropic band inference.
-	//
-	// Its consumer is IpcStageRunner, which needs the provider to run
-	// EvaluateDowngradeForProvider: a band cannot name its provider (#340),
-	// so without this an extension-side xai rejection walked the anthropic
-	// ladder and the #606 effort descent could never fire. Same convergence
-	// pattern as Model/Effort/Thinking — the dispatch decision travels with
-	// the dispatch instead of being re-derived at the far end.
-	Adapter      string
+	// NOTE (#611): there is deliberately no Adapter field here. On the
+	// Go-direct path the runner IS execMgr's adapter, so the value would be a
+	// restatement; on the IPC path Go holds no adapter and the extension owns
+	// per-stage selection (auto-router + stage-start fallback walk), so any
+	// value Go could put here would be a guess at someone else's decision.
+	// The IPC consumer keys off the adapter's own first-hand report instead —
+	// see DowngradeProviderForServedModel.
 	MaxTokens    int
 	Timeout      time.Duration
 	SkillPath    string
@@ -939,28 +932,44 @@ func (s *Scheduler) applyStageAdapter(stage, workspaceRoot string) error {
 	return nil
 }
 
-// dispatchAdapterName names the adapter that will EXECUTE a stage, on either
-// dispatch path (#611).
+// descentProviderForDispatch names the provider a stage's next dispatch will
+// EXECUTE on, from the strongest evidence each path actually has (#611). It is
+// the one input to both provider-scoped descent decisions — the sticky-effort
+// rung the wire carries, and the ladder an API rejection walks — so the write
+// key and the read key cannot come from different notions of "who is running
+// this".
 //
-// activeAdapter is Go's own active adapter and wins whenever it is set: on the
+// activeAdapter is Go's own adapter and wins whenever it is set: on the
 // Go-direct path applyStageAdapter has already re-pointed execMgr for this
-// stage, so it IS the executing adapter. On the IPC path Go holds no adapter
-// (execMgr's is deliberately nil) and the name comes from the SAME canonical
-// #54 chain the VSCode per-stage resolver reads — config.ResolveStageAdapter,
-// not a second authority that could disagree with what the extension spawns.
+// stage, so it IS the executing adapter — first-hand, and known before the
+// stage runs.
 //
-// Returns "" when nothing resolves. That is honest, not a default: an unknown
-// executing adapter leaves every consumer on the historical anthropic
-// inference, exactly where it was before this value existed.
-func (s *Scheduler) dispatchAdapterName(stage, workspaceRoot, activeAdapter string) string {
+// On the IPC path Go holds no adapter (SchedulerConfig.Adapter is nil there by
+// construction) and MUST NOT infer one. The extension's resolveStageAdapter is
+// not config.ResolveStageAdapter with different spelling: it adds a
+// ConfigBridge-sourced global rung, the AutoProviderRouter and a hardcoded
+// default, omits the NIGHTGAUGE_ADAPTER rung Go has, and then lets
+// walkAdapterFallback replace the decision outright at stage start when prereq
+// validation fails. A Go-side re-derivation is wrong in both directions —
+// blind to an auto-router-selected grok, and confidently wrong (an xai rung on
+// a claude dispatch) whenever the walker hops. So the evidence used instead is
+// what the ADAPTER ITSELF reported for this stage's previous attempt: the
+// concrete id its process was spawned with, after every one of those decisions
+// (StageResultParams.ServedModel → RecordStageServedModel).
+//
+// "" when there is no such evidence — a stage's first IPC dispatch, or an
+// adapter whose served id the registry does not know. Every consumer reads ""
+// as the historical anthropic inference, so an unknown provider simply gets no
+// provider-scoped rung. That is the safe direction: the failure mode of
+// guessing is exactly the cross-provider bleed this keying exists to stop.
+func descentProviderForDispatch(rt *state.RuntimeState, stage state.PipelineStage, activeAdapter string) string {
 	if activeAdapter != "" {
-		return activeAdapter
+		return DowngradeProviderForAdapter(activeAdapter)
 	}
-	cfg, err := config.Load(workspaceRoot)
-	if err != nil {
-		cfg = nil // no readable config — nothing stage-specific to resolve
+	if rt == nil {
+		return ""
 	}
-	return config.ResolveStageAdapter(cfg, stage, os.Getenv).Adapter
+	return DowngradeProviderForServedModel(rt.StageServedModel(stage))
 }
 
 // retryConfigForWorkspace returns the default retry config with the
@@ -3901,15 +3910,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if s.execMgr != nil && s.execMgr.HasAdapter() {
 			adapterName = s.execMgr.AdapterName()
 		}
-		// dispatchAdapter names the adapter that will EXECUTE this stage, on
-		// BOTH paths (#611, the #340 convergence pattern). adapterName above
-		// is Go's ACTIVE adapter and is empty on the IPC path by design — the
-		// extension spawns the CLI there — so it cannot answer "who executes
-		// this" for an extension-side dispatch. That absence is what left the
-		// #606 effort descent unreachable for extension-side xai runs: the
-		// consumers fell back to the historical anthropic band inference,
-		// which no xai rung can ever satisfy.
-		dispatchAdapter := s.dispatchAdapterName(string(stage), workspaceRoot, adapterName)
+		// descentProvider names the provider this dispatch will execute on
+		// (#611) — execMgr's adapter on the Go-direct path, and on the IPC
+		// path what the adapter itself reported for this stage's previous
+		// attempt. Both provider-scoped descent decisions below (the sticky
+		// effort rung on the wire, and the ladder an API rejection walks) read
+		// this ONE value, so a descent cannot be written under one provider
+		// and read under another. See descentProviderForDispatch for why the
+		// IPC arm is evidence rather than a re-derivation of the extension's
+		// adapter resolution.
+		descentProvider := descentProviderForDispatch(runtime, stage, adapterName)
 		skillData, err := skillrender.Render(skillrender.Options{
 			Stage:       string(stage),
 			Model:       model,
@@ -4032,13 +4042,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// so the substituted tier and this lookup key always agree. Never
 		// over an operator env override, which outranks the pipeline.
 		//
-		// Keyed by the EXECUTING adapter's provider as well as the tier
+		// Keyed by the EXECUTING dispatch's provider as well as the tier
 		// (#611): the substitution is a rung on one provider's ladder, and in
 		// a mixed-adapter run a tier-only lookup handed an xai descent's
 		// effort to the next stage that resolved to that tier on any other
 		// adapter — a legal EFFORT_LEVELS value with the wrong provenance.
+		// descentProvider is "" whenever nobody can name the executing
+		// provider first-hand, and an unnamed dispatch deliberately reads no
+		// rung: substituting one there would re-create the same bleed from a
+		// guess instead of from a missing key.
 		if !grokEnvEffortSet {
-			if sticky := s.retryEngine.StickyEffort(DowngradeProviderForAdapter(dispatchAdapter), model); sticky != "" {
+			if sticky := s.retryEngine.StickyEffort(descentProvider, model); sticky != "" {
 				wireEffort = sticky
 			}
 		}
@@ -4250,10 +4264,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			// the wire effort verbatim; see the wire-envelope block above.
 			Effort:   wireEffort,
 			Thinking: wireThinking,
-			// The executing-agent half of the envelope (#611). Non-empty on
-			// the Go-direct path always, and on the IPC path whenever the
-			// canonical #54 chain resolves a stage adapter.
-			Adapter: dispatchAdapter,
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
@@ -5376,16 +5386,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 			if modelRejected {
 				// The wire model is a band, and a band cannot name its
-				// provider — but the dispatch envelope now carries the
-				// EXECUTING adapter on both paths (#611), so an xai dispatch
+				// provider (#340) — so the ladder this rejection walks is
+				// keyed on the provider the dispatch actually executed on
+				// (#611). This arm is the Go-direct path only: an IPC
+				// rejection is evaluated by IpcStageRunner and returns with
+				// FallbackRecorded set, which `continue`s well above here. So
+				// descentProvider is execMgr's adapter, and an xai dispatch
 				// walks the xai ladder (grok-4.6's effort rungs) instead of
-				// the anthropic one (#606, the #532 runtime resolution).
-				// DowngradeProviderForAdapter keeps the xai scoping the #606
-				// judgment call pinned, and is the same function
-				// IpcStageRunner uses — one authority, so the two paths
-				// cannot key a descent differently.
-				downgradeProvider := DowngradeProviderForAdapter(dispatchAdapter)
-				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, downgradeProvider); dg.ShouldDowngrade {
+				// the anthropic one (#606, the #532 runtime resolution). It is
+				// the SAME value the sticky-effort lookup above reads, so a
+				// descent cannot be recorded under one provider and looked up
+				// under another.
+				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, descentProvider); dg.ShouldDowngrade {
 					s.retryEngine.RecordDowngrade(model, dg)
 					runtime.AppendEscalation(state.EscalationRecord{
 						Stage:     stage,

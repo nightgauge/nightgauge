@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -119,22 +120,70 @@ func resolveDescentProviderAndID(provider, model string) (string, string) {
 	return provider, ""
 }
 
-// DowngradeProviderForAdapter maps the adapter that EXECUTES a dispatch onto
-// the provider hint the descent machinery keys on — one authority for both
-// dispatch paths (the Go-direct scheduler and IpcStageRunner), so an
-// extension-side xai dispatch and a Go-direct one reach the same rung (#611).
+// scopeDescentProvider applies the #606 judgment call to a resolved provider:
+// only xai's ladder is threaded through the descent machinery; every other
+// provider — and every unknown one — collapses to "", which
+// resolveDescentProviderAndID reads as the historical anthropic inference.
 //
-// Scoped to xai deliberately, carrying forward the #606 judgment call: xai is
-// the fully-collapsed provider whose effort rungs ARE its downgrade ladder
-// (#532), and threading every adapter's provider through here would change
-// unpinned downgrade outcomes for providers whose bands the anthropic
-// inference happens to serve. "" for every other adapter — and for an unknown
-// one — which resolveDescentProviderAndID reads as that same inference.
-func DowngradeProviderForAdapter(adapter string) string {
-	if adapter != "" && models.ProviderForAdapter(adapter) == "xai" {
+// xai is the fully-collapsed provider whose effort rungs ARE its downgrade
+// ladder (#532). Threading every provider through here would change unpinned
+// downgrade outcomes for providers whose bands the anthropic inference happens
+// to serve — TestDowngradeDescent_NonXaiAdaptersKeepEveryGoldenCell shows the
+// drift that produces. One predicate so the two evidence sources below cannot
+// scope it differently.
+func scopeDescentProvider(provider string) string {
+	if provider == "xai" {
 		return "xai"
 	}
 	return ""
+}
+
+// DowngradeProviderForAdapter maps the adapter Go is ACTIVELY executing a
+// dispatch on — execMgr's adapter, after applyStageAdapter re-pointed it for
+// this stage — onto the provider hint the descent machinery keys on (#611).
+//
+// Go-direct path only. In IPC mode Go holds no adapter (SchedulerConfig.Adapter
+// is nil by construction) and the extension owns per-stage selection, so there
+// is nothing here to answer with; see DowngradeProviderForServedModel for the
+// evidence that path actually has.
+func DowngradeProviderForAdapter(adapter string) string {
+	if adapter == "" {
+		return ""
+	}
+	return scopeDescentProvider(models.ProviderForAdapter(adapter))
+}
+
+// DowngradeProviderForServedModel maps the CONCRETE model id an adapter process
+// was actually spawned with — StageResultParams.ServedModel, read out of the
+// adapter's own env after model preflight (#91/#340) — onto the same provider
+// hint (#611).
+//
+// This is the IPC path's answer to "which provider is executing", and it is
+// EVIDENCE rather than inference. Go cannot re-derive the extension's adapter:
+// resolveStageAdapter (adapterResolver.ts) has rungs config.ResolveStageAdapter
+// does not — a ConfigBridge-sourced global, the AutoProviderRouter, a hardcoded
+// default — lacks the NIGHTGAUGE_ADAPTER rung Go has, and walkAdapterFallback
+// can replace the whole decision at stage start when prereq validation fails.
+// A Go-side mirror of that chain is a second authority that disagrees in both
+// directions: silently blind for an auto-router-selected grok, and actively
+// WRONG (an xai rung applied to a claude dispatch — the #611 finding-1 bleed,
+// re-sourced) whenever the fallback walk hops away from the configured adapter.
+// The served id is reported by the process that ran, after every one of those
+// decisions, so it cannot disagree with what executed.
+//
+// "" when nothing was reported (the extension omits the field when the served
+// id is byte-identical to the requested band — nothing to add) or when the
+// registry does not know the id (user-defined local models, which no ladder
+// descends). Both keep the historical anthropic inference.
+func DowngradeProviderForServedModel(servedModel string) string {
+	if strings.TrimSpace(servedModel) == "" {
+		return ""
+	}
+	provider, id := resolveDescentProviderAndID("", servedModel)
+	if id == "" {
+		return ""
+	}
+	return scopeDescentProvider(provider)
 }
 
 // NewRetryEngine creates a new retry engine with the given config.
@@ -372,12 +421,17 @@ func (r *RetryEngine) RecordDowngrade(rejectedModel string, dg DowngradeDecision
 // override still wins at the adapter boundary; an operator pin is an explicit
 // choice, not a pipeline one.
 //
-// provider is the dispatching adapter's provider hint — pass
-// DowngradeProviderForAdapter(<the adapter that will execute this stage>).
-// It is what keeps a descent inside the ladder that produced it (#611): a
-// mixed-adapter run records xai's rung under xai, and a later claude stage
-// resolving to the same substituted tier reads its own (absent) entry and
-// keeps the wire effort its own envelope resolved.
+// provider is the hint for the provider this dispatch will EXECUTE on —
+// DowngradeProviderForAdapter on the Go-direct path, DowngradeProviderForServedModel
+// on the IPC path. It is what keeps a descent inside the ladder that produced
+// it (#611): a mixed-adapter run records xai's rung under xai, and a later
+// claude stage resolving to the same substituted tier reads its own (absent)
+// entry and keeps the wire effort its own envelope resolved.
+//
+// "" — a dispatch whose provider is not known first-hand — resolves to the
+// anthropic inference and therefore reads no xai rung. That is the deliberate
+// safe direction: applying a provider-scoped rung to a dispatch nobody can
+// name IS the bleed this key exists to stop.
 func (r *RetryEngine) StickyEffort(provider, model string) string {
 	tier := NormalizeModelTier(model)
 	if tier == "" {

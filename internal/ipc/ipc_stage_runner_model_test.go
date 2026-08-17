@@ -276,27 +276,34 @@ func TestRunStage_WireEnvelopeOmittedWhenAbsent(t *testing.T) {
 // so this evaluation used to resolve every extension-side rejection against
 // anthropic — grok's rungs were unreachable no matter which adapter the
 // extension actually spawned, and a fully-collapsed provider's only downgrade
-// (the same model at a lower declared effort, #532) could never fire. The
-// executing adapter now rides the dispatch envelope, so the runner keys the
-// evaluation on the provider that is really running the stage.
+// (the same model at a lower declared effort, #532) could never fire.
 //
-// The control arm is what makes this load-bearing: the identical rejection on a
-// claude adapter must take the anthropic cross-model path and record NO sticky
-// effort. A test with only the xai arm would also pass on an implementation
-// that keyed every dispatch to xai.
+// The provider comes from the ONE fact Go has first-hand on this path: the
+// concrete id the adapter process was spawned with, which the extension reports
+// on the same message as the failure. Not from a Go-side re-derivation of the
+// extension's adapter chain — that chain has an auto-router and a stage-start
+// fallback walk Go cannot see, so a re-derivation is blind in one direction and
+// wrong in the other.
+//
+// The control arm is what makes this load-bearing: the identical rejection
+// whose served id is anthropic must take the cross-model path and record NO
+// sticky effort. A test with only the xai arm would also pass on an
+// implementation that keyed every dispatch to xai. The third arm covers the
+// honest-unknown case — no served id, no provider, no rung.
 func TestRunStage_ExtensionSideXaiDispatchDescendsEffort(t *testing.T) {
 	const rejection = "API Error: model not found: grok"
 
-	t.Run("grok adapter descends within the model", func(t *testing.T) {
+	// runRejectedDispatch drives one band dispatch that the API refuses, with
+	// `served` as the concrete id the adapter process reported.
+	runRejectedDispatch := func(t *testing.T, served string) (*orchestrator.StageRunResult, *orchestrator.RetryEngine) {
+		t.Helper()
 		var buf bytes.Buffer
 		runner, engine := newEscalatingStageRunner(&buf)
-
 		res := runStageWithResult(t, runner, orchestrator.StageRunParams{
 			Stage:       state.StageFeatureDev,
 			IssueNumber: 611,
 			Repo:        "nightgauge/nightgauge",
 			Model:       "fable",
-			Adapter:     "grok",
 			Timeout:     30 * time.Second,
 			RunID:       testRunID,
 		}, StageResultParams{
@@ -305,7 +312,16 @@ func TestRunStage_ExtensionSideXaiDispatchDescendsEffort(t *testing.T) {
 			Success:     false,
 			ExitCode:    1,
 			ErrorText:   rejection,
+			ServedModel: served,
 		})
+		return res, engine
+	}
+
+	t.Run("grok process descends within the model", func(t *testing.T) {
+		// What skillRunner reports for a grok dispatch: the band is translated
+		// to the concrete id and stamped onto the launched model, so the served
+		// id differs from the requested band by construction and is always sent.
+		res, engine := runRejectedDispatch(t, "grok-4.6")
 
 		if !res.FallbackRecorded {
 			t.Fatal("FallbackRecorded = false — an xai band rejection must descend, not exhaust")
@@ -315,38 +331,34 @@ func TestRunStage_ExtensionSideXaiDispatchDescendsEffort(t *testing.T) {
 		}
 		// The descent's whole point: the substituted tier dispatches the SAME
 		// model one declared effort rung lower.
-		xai := orchestrator.DowngradeProviderForAdapter("grok")
+		xai := orchestrator.DowngradeProviderForServedModel("grok-4.6")
+		if xai != "xai" {
+			t.Fatalf("fixture: DowngradeProviderForServedModel(grok-4.6) = %q, want xai", xai)
+		}
 		if got := engine.StickyEffort(xai, "opus"); got != "high" {
 			t.Fatalf("StickyEffort(xai, opus) = %q, want high — the descended rung must reach the next dispatch", got)
 		}
 	})
 
-	t.Run("claude adapter keeps the anthropic cross-model fallback", func(t *testing.T) {
-		var buf bytes.Buffer
-		runner, engine := newEscalatingStageRunner(&buf)
-
-		res := runStageWithResult(t, runner, orchestrator.StageRunParams{
-			Stage:       state.StageFeatureDev,
-			IssueNumber: 611,
-			Repo:        "nightgauge/nightgauge",
-			Model:       "fable",
-			Adapter:     "claude",
-			Timeout:     30 * time.Second,
-			RunID:       testRunID,
-		}, StageResultParams{
-			Stage:       string(state.StageFeatureDev),
-			IssueNumber: 611,
-			Success:     false,
-			ExitCode:    1,
-			ErrorText:   rejection,
-		})
+	t.Run("anthropic process keeps the cross-model fallback", func(t *testing.T) {
+		res, engine := runRejectedDispatch(t, "claude-opus-5")
 
 		if !res.FallbackRecorded || res.FallbackToModel != "opus" {
 			t.Fatalf("fallback = %+v, want the unchanged anthropic fable → opus substitution", res)
 		}
-		anthropic := orchestrator.DowngradeProviderForAdapter("claude")
-		if got := engine.StickyEffort(anthropic, "opus"); got != "" {
+		if got := engine.StickyEffort("", "opus"); got != "" {
 			t.Fatalf("StickyEffort(anthropic, opus) = %q, want \"\" — a cross-model downgrade records no effort", got)
+		}
+	})
+
+	t.Run("unreported served id stays on the anthropic inference", func(t *testing.T) {
+		res, engine := runRejectedDispatch(t, "")
+
+		if !res.FallbackRecorded || res.FallbackToModel != "opus" {
+			t.Fatalf("fallback = %+v, want the unchanged anthropic fable → opus substitution", res)
+		}
+		if got := engine.StickyEffort(orchestrator.DowngradeProviderForServedModel("grok-4.6"), "opus"); got != "" {
+			t.Fatalf("StickyEffort(xai, opus) = %q, want \"\" — an unreported adapter must not be assumed to be xai", got)
 		}
 	})
 }

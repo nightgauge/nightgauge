@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -632,5 +633,59 @@ func TestRetryEngine_ResetClearsStickyEfforts(t *testing.T) {
 	engine.Reset()
 	if got := engine.StickyEffort(DowngradeProviderForAdapter("grok"), dg.NewTier); got != "" {
 		t.Fatalf("Reset leaked sticky effort %q", got)
+	}
+}
+
+// TestDowngradeProviderForServedModel is the IPC path's provider evidence
+// (#611). It is what replaced a Go-side re-derivation of the extension's
+// adapter chain: the extension's resolveStageAdapter has an AutoProviderRouter
+// rung and a stage-start walkAdapterFallback that config.ResolveStageAdapter
+// cannot see, so a mirror is blind for an auto-router-selected grok and
+// actively wrong when the walker hops. The served id is reported BY the process
+// that ran, after every one of those decisions.
+//
+// Every non-xai row is the #606 scoping, and the two empty-input rows are the
+// honest-unknown contract: "" must never be read as "probably xai".
+func TestDowngradeProviderForServedModel(t *testing.T) {
+	cases := []struct {
+		name   string
+		served string
+		want   string
+	}{
+		{"grok concrete id names xai", "grok-4.6", "xai"},
+		{"unreported served id is unknown", "", ""},
+		{"whitespace is unreported", "   ", ""},
+		{"a bare band names no provider", "opus", ""},
+		{"anthropic id stays on the inference", "claude-opus-5", ""},
+		{"a model outside the registry descends no ladder", "my-local-llm", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DowngradeProviderForServedModel(tc.served); got != tc.want {
+				t.Errorf("DowngradeProviderForServedModel(%q) = %q, want %q", tc.served, got, tc.want)
+			}
+		})
+	}
+
+	// The scoping is not "whatever provider the id belongs to" — that would
+	// move unpinned downgrade outcomes for every provider whose bands the
+	// anthropic inference happens to serve (see
+	// TestDowngradeDescent_NonXaiAdaptersKeepEveryGoldenCell). Assert it over
+	// the registry itself so a newly added non-xai model is covered on arrival.
+	for _, m := range models.All() {
+		want := ""
+		if m.Provider == "xai" {
+			want = "xai"
+		}
+		if got := DowngradeProviderForServedModel(m.ID); got != want {
+			t.Errorf("served id %q (provider %s) = %q, want %q", m.ID, m.Provider, got, want)
+		}
+	}
+
+	// And the two evidence sources must agree wherever both can answer: an
+	// adapter and the concrete id its process runs name the same provider, or a
+	// run that switches paths mid-flight would key one descent two ways.
+	if a, s := DowngradeProviderForAdapter("grok"), DowngradeProviderForServedModel("grok-4.6"); a != s {
+		t.Errorf("adapter hint %q and served-id hint %q disagree for xai", a, s)
 	}
 }
