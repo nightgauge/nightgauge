@@ -3042,6 +3042,99 @@ func loadWorktreePath(workspaceRoot string, issueNumber int) string {
 	return workspaceRoot
 }
 
+// refusePreDispatch books a stage the pipeline declines to DISPATCH — the
+// prerequisite gate and the skill-render failure — and returns the terminal
+// failure kind the caller must assign to terminalFailureKind before it
+// returns. Issue #620.
+//
+// Three things have to happen together at such a site, and each is easy to get
+// right in isolation while breaking one of the others, which is why they live
+// in one function rather than open-coded twice.
+//
+//  1. BeginStage(stage) BEFORE SetStageError(stage, reason). Nothing is
+//     dispatched, but StageErrors is keyed by stage and every reader that asks
+//     "what went wrong" indexes it with the CURRENT stage
+//     (snap.StageErrors[string(snap.Stage)]): IPC terminal-notify,
+//     scheduler_exit_record.go's fallback, the outcome-recording site,
+//     autonomous reporting. Without BeginStage the key and snap.Stage name
+//     different stages and all of them read "" — the #444 invariant.
+//
+//  2. The #3542 uncommitted-work rescue runs HERE, not in the terminal defer.
+//     A refusal does not imply a clean tree: the stage BEFORE the refused one
+//     may have left a complete implementation uncommitted, because feature-dev
+//     deliberately does not commit (AGENTS.md #1608) — it verifies and hands
+//     off to feature-validate. Booking a non-empty kind is exactly the
+//     condition the defer's rescue is gated on (`terminalFailureKind == ""`),
+//     so a site that sets a kind and returns has SWITCHED THE RESCUE OFF for
+//     that run. Left that way, a feature-validate SKILL.md that will not
+//     compose strands the whole implementation in the worktree AND (because
+//     validation_error is not in the defer's skipBoardRevert set) reverts the
+//     board to Ready, so the re-dispatch regenerates it in a fresh worktree:
+//     the composite loss shape the #3365 incident and the #3542 recovery exist
+//     to prevent.
+//
+//  3. The refusal reason survives the rescue. The defer's copy REPLACES the
+//     stage error with a bare "worktree_uncommitted: work auto-recovered after
+//     <stage> failure", which would erase the one thing #620 adds — the
+//     operator-actionable cause. Here the marker is PREFIXED instead. The
+//     composed text still classifies worktree_uncommitted, because
+//     internal/terminalkind/table.json orders the worktree-uncommitted rule
+//     ahead of the validation-error rule, so the marker wins wherever the kind
+//     is re-derived from prose (autonomous.go's onPipelineComplete wrapper,
+//     NotifyComplete's defense-in-depth re-classify) — and it still names the
+//     refusal that ended the run.
+//
+// The kind is validation_error when there was nothing to rescue, or when the
+// rescue itself refused (an unmerged index) or failed: "missing prerequisite"
+// is already a rule literal in the terminal-kind table whose corpus row names
+// this exact producer, and its rationale — a pipeline-plumbing fault, not an
+// implementation failure — applies verbatim to a skill that will not compose.
+// It is set explicitly rather than left to the defer's fallback, which would
+// stamp subagent_crash on a run where no subagent ever started.
+//
+// The stage-skip trace event carries the refusal reason verbatim, never the
+// recovery-prefixed form: the trace answers "why was this stage skipped", and
+// that answer must stay stable and greppable whether or not a rescue happened.
+func (s *Scheduler) refusePreDispatch(
+	item types.BoardItem,
+	runtime *state.RuntimeState,
+	workspaceRoot string,
+	stage state.PipelineStage,
+	tracer *trace.Writer,
+	source string,
+	reason string,
+) string {
+	log.Printf("#%d: %s", item.Number, reason)
+	runtime.BeginStage(stage)
+	runtime.SetStageError(stage, reason)
+
+	kind := TerminalKindValidationError
+	// loadWorktreePath, not stageWorkspace: the defer's rescue resolves the
+	// tree this way, and the two must never disagree about which tree gets
+	// rescued.
+	if worktreePath := loadWorktreePath(workspaceRoot, item.Number); worktreePath != "" && hasUncommittedWork(worktreePath) {
+		log.Printf("#%d: stage %s refused before dispatch with uncommitted work in the worktree — attempting recovery",
+			item.Number, stage)
+		if recErr := RecoverUncommittedWork(worktreePath, item.Number, string(stage)); recErr != nil {
+			log.Printf("#%d: uncommitted work recovery failed: %v — worktree preserved at %s",
+				item.Number, recErr, worktreePath)
+		} else {
+			log.Printf("#%d: uncommitted work recovered — setting terminal_failure_kind=%s",
+				item.Number, TerminalKindWorktreeUncommitted)
+			kind = TerminalKindWorktreeUncommitted
+			runtime.SetStageError(stage, fmt.Sprintf("%s: work auto-recovered after %s failure — %s",
+				TerminalKindWorktreeUncommitted, stage, reason))
+		}
+	}
+
+	s.emitStateChanged(item.Repo, item.Number, runtime)
+	tracer.Emit(trace.KindStageSkip, string(stage), trace.StageSkipPayload{
+		Source: source,
+		Reason: reason,
+	})
+	return kind
+}
+
 // PipelineBudgetCeilingUSD resolves pipeline.token_budget_ceiling.ceiling_usd
 // through the tier-merged config (machine → project → local via config.Load),
 // mirroring the TypeScript-side getPipelineCeilingConfig resolution so the Go
@@ -3837,8 +3930,27 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if prereqCtxOK {
 			ctxPath := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, prereqCtxType)
 			if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
-				log.Printf("#%d: stage %s prerequisite missing: %s context (resolved skip-aware)",
-					item.Number, stage, prereqCtxType)
+				// "missing prerequisite" is load-bearing prose, not decoration
+				// (#620): internal/terminalkind/table.json already routes it to
+				// validation_error, and the corpus row that pins it names THIS
+				// producer ("the stage pre-condition check that refuses to run a
+				// stage whose input context is absent"). Keeping the phrase means
+				// the explicit kind set below and every independent
+				// re-derivation from the text — autonomous.go's
+				// onPipelineComplete wrapper, NotifyComplete's defense-in-depth
+				// re-classify — land on the same answer instead of disagreeing.
+				reason := fmt.Sprintf(
+					"missing prerequisite: stage %s needs the %s context (resolved skip-aware) and %s does not exist",
+					stage, prereqCtxType, ctxPath)
+				// Pre-#620 this was `log.Printf(...); return` — no BeginStage,
+				// no SetStageError, no kind — so the terminal defer's
+				// ClassifyTerminalKind("") produced "" and the run was booked
+				// terminal with an empty cause. refusePreDispatch books all
+				// three, and rescues any uncommitted work first: booking a kind
+				// is what disables the defer's own #3542 rescue, so the rescue
+				// has to happen on this side of the return.
+				terminalFailureKind = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+					"prerequisite-preflight", reason)
 				return // Pipeline failed — missing prerequisite
 			}
 		}
@@ -3928,7 +4040,29 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
 		if err != nil {
-			log.Printf("#%d: %v", item.Number, err)
+			// A render failure means the stage has no prompt to dispatch: the
+			// SKILL.md could not be located, read, or composed. Distinct from
+			// the prerequisite refusal above on purpose (#620) — that one says
+			// "the previous stage's handoff is missing" (look upstream), this
+			// one says "this stage's skill did not compose" (look at the skills
+			// tree / overlays / adapter). A shared generic string would put one
+			// message on two different operator actions, which is the failure
+			// mode this fix exists to remove, so the two never share prose.
+			reason := fmt.Sprintf("skill render failed: stage %s could not compose its SKILL.md (model=%q, adapter=%q): %v",
+				stage, model, adapterName, err)
+			// Same three-part booking as the prerequisite refusal above, and
+			// the same reason for doing the #3542 rescue on this side of the
+			// return — with a sharper worked example. This site is reachable at
+			// feature-validate, i.e. immediately after feature-dev, which does
+			// not commit (AGENTS.md #1608). A broken overlay, a missing skills
+			// root or an adapter mismatch there refuses the stage with the
+			// entire implementation still uncommitted on disk. A dedicated
+			// skill-render terminal kind would be truer than validation_error,
+			// but it is a cross-surface change (terminalkind table + TS schema
+			// + generated SDK mirror + FAILURE_TAXONOMY) and belongs in its own
+			// issue.
+			terminalFailureKind = s.refusePreDispatch(item, runtime, workspaceRoot, stage, tracer,
+				"skill-render", reason)
 			return
 		}
 
