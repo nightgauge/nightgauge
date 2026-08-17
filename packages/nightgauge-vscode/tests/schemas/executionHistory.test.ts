@@ -1068,4 +1068,89 @@ describe("ExecutionHistory Schemas", () => {
       expect(retired.success).toBe(false);
     });
   });
+
+  // ==========================================================================
+  // served envelope — open vocabulary, one posture across all three (#637)
+  // ==========================================================================
+
+  describe("served envelope tolerates what the producer can emit (#637)", () => {
+    // The producer half is pinned in Go by
+    // internal/state/history_test.go's TestBuildV2Record_ServedEffortOpenVocabulary:
+    // ServedEffort/ServedThinking are plain strings recorded verbatim, with no
+    // filtering to EFFORT_LEVELS. "ultra" below is that test's own off-ladder
+    // value — if Go ever starts normalizing, that test fails, not this one.
+    const base = { status: "complete" as const };
+
+    it("accepts an off-vocabulary served_effort without failing the record", () => {
+      const result = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: {
+          model: "grok-4.5",
+          source: "scheduler",
+          effort: "high",
+          served_effort: "ultra", // deliberately not an EFFORT_LEVELS rung
+        },
+      });
+      expect(result.success ? null : result.error.issues).toBeNull();
+      expect(result.success && result.data.model_selection?.served_effort).toBe("ultra");
+    });
+
+    it("accepts an off-vocabulary served_thinking without failing the record", () => {
+      const result = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: {
+          model: "grok-4.5",
+          source: "scheduler",
+          served_thinking: "auto", // not "on"/"off"
+        },
+      });
+      expect(result.success ? null : result.error.issues).toBeNull();
+      expect(result.success && result.data.model_selection?.served_thinking).toBe("auto");
+    });
+
+    // The actual defect this fixes: a strict enum did not merely drop the bad
+    // field, it failed the WHOLE record, so every unrelated field went down
+    // with it. Assert the surviving neighbours explicitly — a test that only
+    // checked `success` would still pass under a posture that silently
+    // stripped the served value.
+    it("keeps every unrelated field parseable alongside an off-vocabulary served value", () => {
+      const result = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: {
+          model: "grok-4.5",
+          source: "scheduler",
+          effort: "high",
+          thinking: "on",
+          served_model: "grok-4.5-0812",
+          served_effort: "ultra",
+          served_thinking: "auto",
+        },
+      });
+      expect(result.success ? null : result.error.issues).toBeNull();
+      expect(result.success && result.data.model_selection).toMatchObject({
+        model: "grok-4.5",
+        effort: "high",
+        thinking: "on",
+        served_model: "grok-4.5-0812",
+        served_effort: "ultra",
+        served_thinking: "auto",
+      });
+    });
+
+    // The requested axes are the pipeline's OWN resolved vocabulary, closed by
+    // construction — widening the served fields must not have widened these.
+    it("leaves the requested effort/thinking axes strict", () => {
+      const badEffort = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: { model: "grok-4.5", source: "auto", effort: "ultra" },
+      });
+      expect(badEffort.success).toBe(false);
+
+      const badThinking = HistoryStageDetailSchema.safeParse({
+        ...base,
+        model_selection: { model: "grok-4.5", source: "auto", thinking: "auto" },
+      });
+      expect(badThinking.success).toBe(false);
+    });
+  });
 });
