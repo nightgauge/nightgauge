@@ -338,17 +338,31 @@ issue closes:
 3. **Auto-close parent epic** — unchanged (`AutoCloseSingle`), now one step of
    the same fan-out.
 
-The hot path self-heals the common case at merge time. The board-wide backstop
-for anything the hooks miss (e.g. a sub closed entirely outside the pipeline) is:
+The hot path self-heals the common case at merge time — but ONLY for merges the
+pipeline itself performed, and manual `gh pr merge --squash` is the routine
+path per `AGENTS.md`. `EpicService.ReconcileBoard` is the board-wide backstop:
+it sweeps every board item and applies the same three rules idempotently.
 
-```bash
-nightgauge project reconcile --project <N>
-```
+It runs two ways, and both call the same implementation:
 
-`EpicService.ReconcileBoard` sweeps every board item and applies the same three
-rules idempotently — safe to run repeatedly and on a schedule. The author-side
-prevention for #3979 lives in the pr-create skill: an epic-umbrella PR must
-enumerate `Closes #sub` for every shipped sub, not just `Closes #epic`.
+- **Automatically** (#656) — `AutonomousScheduler.reconcileEpicRollup` runs it
+  once per board at the top of the autonomous cycle, paced to
+  `epicRollupReconcileInterval` (30m) rather than the cycle cadence, and
+  deliberately **above** the free-slot gate so a saturated fleet still
+  converges. A repo whose project number does not resolve is skipped with a log
+  line — never swept against a guessed board. Failures are logged and
+  non-fatal.
+- **On demand** — for an immediate sweep:
+
+  ```bash
+  nightgauge project reconcile --project <N>
+  ```
+
+Before #656 only the CLI verb existed, so epic rollup was a property of _who
+merged_ rather than of the board: hand-merged work left its parent epic open
+indefinitely. The author-side prevention for #3979 lives in the pr-create
+skill: an epic-umbrella PR must enumerate `Closes #sub` for every shipped sub,
+not just `Closes #epic`.
 
 ## Rebase-before-merge / wave merge-train (#4071)
 
