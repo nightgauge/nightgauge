@@ -17,6 +17,7 @@ import { IpcClientBase } from "./IpcClient";
 import type { StatusCounts } from "./IpcClientBase";
 import { getGitHubUser } from "../utils/incrediConfig";
 import type { IWorkItemProvider } from "./types/WorkItemProvider";
+import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 
 // ---------------------------------------------------------------------------
 // Output channel
@@ -742,19 +743,20 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
    * @param extraIssues - Additional issues to scan (e.g., current tab data
    *                      that may not be cached yet)
    */
-  getEpicMetadataFromCache(
-    extraIssues?: ReadyIssue[]
-  ): Map<number, { number: number; title: string; url: string }> {
-    const map = new Map<number, { number: number; title: string; url: string }>();
+  getEpicMetadataFromCache(extraIssues?: ReadyIssue[]): Map<number, EpicInfo> {
+    const map = new Map<number, EpicInfo>();
 
     // Scan all cached per-status buckets
     for (const issues of this.cache.values()) {
       for (const issue of issues) {
         if (issue.isEpic) {
+          // Issue #656 (Gap 3): thread the epic's own blockedBy through so
+          // EpicGroupTreeItem can render the epic's blocked state.
           map.set(issue.number, {
             number: issue.number,
             title: issue.title,
             url: issue.url,
+            blockedBy: issue.blockedBy,
           });
         }
       }
@@ -768,6 +770,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
             number: issue.number,
             title: issue.title,
             url: issue.url,
+            blockedBy: issue.blockedBy,
           });
         }
       }

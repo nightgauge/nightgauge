@@ -10,6 +10,7 @@ import {
   createMockReadyIssue,
   createMockEpicIssue,
   createMockSubIssue,
+  createMockBlockingIssue,
 } from "../../mocks/github-api";
 
 describe("EpicGroupTreeItem", () => {
@@ -290,6 +291,177 @@ describe("EpicGroupTreeItem", () => {
       expect(issueNumbers).toEqual([200, 201]);
     });
   });
+
+  // Issue #656 (Gap 1) — an epic with zero sub-issues must be visually
+  // distinguished from a healthy one. The two possible causes ("mislabelled"
+  // vs "unpopulated") are indistinguishable from available data (labels,
+  // sub-issue links, blockedBy are identical either way; the issue body is
+  // off-limits as a signal), so a single honest "empty" state is rendered
+  // instead of a guessed distinction.
+  describe("empty epic state (#656 Gap 1)", () => {
+    it("should append an (empty) label suffix for an epic with zero sub-issues", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Unpopulated Epic",
+        url: "https://github.com/org/repo/issues/100",
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+
+      expect(item.label).toBe("Epic #100: Unpopulated Epic (empty)");
+    });
+
+    it("should NOT append an (empty) suffix for an epic with sub-issues", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Populated Epic",
+        url: "https://github.com/org/repo/issues/100",
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+
+      expect(item.label).toBe("Epic #100: Populated Epic");
+    });
+
+    it("should use a distinct warning icon (not the normal project icon) for an empty epic", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Unpopulated Epic",
+        url: "https://github.com/org/repo/issues/100",
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const icon = item.iconPath as vscode.ThemeIcon;
+
+      expect(icon.id).toBe("warning");
+      expect(icon.id).not.toBe("project");
+    });
+
+    it("should explain both possible causes in the tooltip without guessing which applies", () => {
+      const epicInfo: EpicInfo = {
+        number: 4,
+        title: "Rescoped Epic",
+        url: "https://github.com/org/repo/issues/4",
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+      const tooltip = item.tooltip as vscode.MarkdownString;
+
+      expect(tooltip.value).toContain("mislabelled");
+      expect(tooltip.value).toContain("unpopulated");
+      expect(tooltip.value).toContain("Check the issue itself");
+    });
+
+    it("should still render as a leaf (no expand chevron) when empty, per Issue #3329", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Unpopulated Epic",
+        url: "https://github.com/org/repo/issues/100",
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+
+      expect(item.collapsibleState).toBe(vscode.TreeItemCollapsibleState.None);
+    });
+  });
+
+  // Issue #656 (Gap 3) — a blocked epic must render its blocked state,
+  // following the same idiom as ReadyIssueTreeItem's blocked sub-issues.
+  describe("blocked epic state (#656 Gap 3)", () => {
+    it("should append a (blocked) label suffix when the epic itself has an open blocker", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Blocked Epic",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [createMockBlockingIssue({ number: 50, state: "OPEN" })],
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+
+      expect(item.label).toBe("Epic #100: Blocked Epic (blocked)");
+    });
+
+    it("should NOT append a (blocked) suffix when all blockers are closed", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Unblocked Epic",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [createMockBlockingIssue({ number: 50, state: "CLOSED" })],
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+
+      expect(item.label).toBe("Epic #100: Unblocked Epic");
+    });
+
+    it("should use the same lock icon and error color as a blocked ReadyIssueTreeItem leaf", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Blocked Epic",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [createMockBlockingIssue({ number: 50, state: "OPEN" })],
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+      const icon = item.iconPath as vscode.ThemeIcon;
+
+      expect(icon.id).toBe("lock");
+      expect((icon.color as vscode.ThemeColor).id).toBe("problemsErrorIcon.foreground");
+    });
+
+    it("should prefix the description with the open blocker count", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Blocked Epic",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [
+          createMockBlockingIssue({ number: 50, state: "OPEN" }),
+          createMockBlockingIssue({ number: 51, state: "OPEN" }),
+          createMockBlockingIssue({ number: 52, state: "CLOSED" }),
+        ],
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+
+      expect(item.description).toBe("🔒2 blockers (0/1 complete)");
+    });
+
+    it("should list the blockers in the tooltip under a Blocked By section", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Blocked Epic",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [
+          createMockBlockingIssue({ number: 50, title: "Foundation work", state: "OPEN" }),
+        ],
+      };
+      const issues = [createMockSubIssue(100)];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues);
+      const tooltip = item.tooltip as vscode.MarkdownString;
+
+      expect(tooltip.value).toContain("🔒 Blocked By:");
+      expect(tooltip.value).toContain("#50: Foundation work");
+    });
+
+    it("should combine blocked and empty states in the label when both apply", () => {
+      const epicInfo: EpicInfo = {
+        number: 100,
+        title: "Blocked and Unpopulated",
+        url: "https://github.com/org/repo/issues/100",
+        blockedBy: [createMockBlockingIssue({ number: 50, state: "OPEN" })],
+      };
+
+      const item = new EpicGroupTreeItem(epicInfo, []);
+
+      expect(item.label).toBe("Epic #100: Blocked and Unpopulated (blocked, empty)");
+    });
+  });
 });
 
 describe("groupIssuesByEpic", () => {
@@ -481,6 +653,32 @@ describe("groupIssuesByEpic", () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].epic?.title).toBe("Recovered Title");
     expect(groups[0].epic?.url).toBe("https://example.test/100");
+  });
+
+  // Issue #656 (Gap 3): the epic's own blockedBy must survive the grouping
+  // step so EpicGroupTreeItem can render it — both when it arrives via the
+  // pre-built epicMetadata map (the ProjectBoardService.getEpicMetadataFromCache
+  // path) and via the backfill fallback (epic present in the current batch
+  // but missing from epicMetadata).
+  it("should preserve blockedBy from a pre-built epicMetadata entry", () => {
+    const blockedBy = [createMockBlockingIssue({ number: 50, state: "OPEN" })];
+    const subIssue = createMockSubIssue(100, { number: 110 });
+    const epicMap = new Map<number, EpicInfo>([
+      [100, { number: 100, title: "Blocked Epic", url: "https://example.test/100", blockedBy }],
+    ]);
+
+    const { groups } = groupIssuesByEpic([subIssue], epicMap);
+
+    expect(groups[0].epic?.blockedBy).toEqual(blockedBy);
+  });
+
+  it("should backfill blockedBy from the epic's own row when epicMetadata is missing it", () => {
+    const blockedBy = [createMockBlockingIssue({ number: 50, state: "OPEN" })];
+    const epic = createMockEpicIssue({ number: 100, blockedBy });
+
+    const { groups } = groupIssuesByEpic([epic], new Map());
+
+    expect(groups[0].epic?.blockedBy).toEqual(blockedBy);
   });
 
   it("should return GroupByEpicResult with correct structure", () => {
