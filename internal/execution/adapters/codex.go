@@ -176,6 +176,19 @@ func (a *CodexAdapter) BuildCommand(opts RunOptions) (string, []string, map[stri
 	// manager pipes from RunOptions.Prompt when UsesStdin() is true.
 	args = append(args, "-")
 
+	// NIGHTGAUGE_OUTPUT_FORMAT is intentionally NOT exported below (#630, per
+	// #416 AC3). The codex CLI has no --output-format flag at all — it selects
+	// NDJSON with the boolean `--json` set above, consumed by
+	// ParseCodexStreamLine. There is no format value to mirror, so exporting a
+	// `stream-json` string would invent a format name the codex CLI never
+	// accepts and that no codex code path reads. This is NOT the gemini
+	// copy-paste drift #416 fixed (see gemini.go): gemini already passed
+	// --output-format stream-json on the command line and simply failed to
+	// export the matching env var, whereas codex has no such flag to mirror in
+	// the first place. Posture is recorded as data — not just here — in
+	// outputFormatPosture["codex"] in adapters_test.go, and
+	// TestOutputFormatEnvVar_AllAdapters asserts this BuildCommand output
+	// against it; change both together or the test fails.
 	env := map[string]string{
 		"NIGHTGAUGE_ISSUE_NUMBER": fmt.Sprintf("%d", opts.IssueNumber),
 		"NIGHTGAUGE_REPO":         opts.Repo,
