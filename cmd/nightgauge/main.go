@@ -31,7 +31,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/doctor"
-	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
@@ -7157,6 +7156,20 @@ such as wip/ are never candidates.`,
 
 			o, r := splitRepo(owner, repo)
 
+			// Repo-wide, deliberately, and repo-wide even when this command is
+			// invoked from inside a linked worktree — ListLocalBranches resolves
+			// the common store, so the sweep sees the same set `git branch
+			// --list` would show from anywhere in the repository (#541c).
+			//
+			// What makes that safe is NOT a narrower list. A candidate list is a
+			// snapshot, and a worktree can claim a branch after it was taken; a
+			// second definition of "deletable" sitting here would also be free to
+			// drift from the one that actually deletes, which is how #541
+			// happened. Both protections therefore live at the point of deletion,
+			// in cleanupClosedIssueBranch -> gitpkg.BranchCleanup: shape via
+			// IsCleanupCandidate below, occupancy via BranchCleanup's refusal of
+			// BOTH halves. Nothing enumerated here is deleted without passing
+			// them.
 			branches, err := svc.ListLocalBranches()
 			if err != nil {
 				return fmt.Errorf("list local branches: %w", err)
@@ -7288,74 +7301,58 @@ such as wip/ are never candidates.`,
 	return cmd
 }
 
-// cleanupClosedIssueBranch deletes branch's remote and local refs, classifying
-// two conditions that must never surface as a bare "error" (#593, live
-// evidence 2026-08-15 against PR #588 / fix/585-adapter-aware-cost-stamps):
+// cleanupClosedIssueBranch deletes branch's local and remote refs by calling
+// gitpkg.BranchCleanup, and maps that method's three outcomes onto the sweep's
+// action vocabulary. It sequences nothing itself, and that is the point (#541
+// AC5).
 //
-//   - The remote branch is already gone. svc.BranchDeleteRemote pushes a
-//     delete refspec through go-git, and go-git's SSH transport rejects an
-//     *http.BasicAuth (the type NewService picks for GITHUB_TOKEN,
-//     independent of the remote's actual scheme) with the misleading
-//     transport.ErrInvalidAuthMethod — "invalid auth method" — regardless of
-//     whether the target ref exists. That error text is not diagnostic here,
-//     so this does not pattern-match it: it re-verifies existence with
-//     RemoteBranchExists, which shells out to `git ls-remote` and so never
-//     goes through go-git's transport/auth path (see ListRemoteBranches).
-//     Absent after the attempt (whichever the cause) is success.
-//   - A worktree still holds the local branch. `git branch -D` correctly
-//     refuses this ("used by worktree at …"); the branch is in active use,
-//     not stale, so it is reported "skipped" with a reason rather than
-//     "error". Checked with execution.BranchHeldByWorktree before the delete
-//     is even attempted, so the normal path never has to parse git's refusal
-//     text — a residual worktree-occupancy error from git itself (a race
-//     against a worktree added between the check and the delete) still
-//     degrades to "skipped" rather than "error", never the reverse.
+// It used to be a second, private implementation of "what a sweep may delete,
+// and in what order", living beside the one in internal/git. The two drifted,
+// in exactly the direction #541 was filed for. BranchCleanup was fixed to gate
+// the remote delete on the local delete having ACTUALLY succeeded; this copy
+// kept the original order — delete origin's ref first, then ask git to drop the
+// local one — and relied on an occupancy pre-check to keep that order safe.
 //
-// This intentionally does not call svc.BranchCleanup: that method tallies
-// both failure modes above as ordinary errors, and fixing that classification
-// belongs at this cmd layer (internal/git/service.go is owned elsewhere for
-// this issue) — every operation used here (RemoteBranchExists,
-// BranchDeleteRemote, BranchDelete, Fetch) is one of Service's existing
-// exported primitives.
+// The pre-check cannot carry that weight, and not only under a race.
+// `git worktree list --porcelain` reports `detached` for a worktree that is
+// mid-rebase, so execution.BranchHeldByWorktree answered "not held" for a
+// branch `git branch -D` then refused with "used by worktree at …" — an
+// interrupted rebase, a state a run leaves behind whenever it stops on a
+// conflict. By then origin's ref was gone, and the refusal was mapped to
+// "skipped" with a nil error: a live run lost the branch its PR is opened from
+// and the branch a re-run's ResetLocalBranchToRemote fetches to recover state,
+// while the sweep reported it had touched nothing.
+//
+// So the fix is to delete the duplicate rather than teach it the ordering rule
+// a third time. Everything this function used to do by hand is a documented
+// part of BranchCleanup's contract: protected-name refusal, validateRefArg,
+// occupancy classified as *BranchHeldByWorktreeError with BOTH refs intact,
+// the local-gated remote half, the #593 "already absent is success" re-read
+// through `git ls-remote`, and the best-effort prune. One definition, at the
+// point of deletion, where a worktree that appears after any candidate list
+// was built still cannot get past it.
 //
 // action is one of "deleted", "skipped" (reason is set, err is nil), or
 // "error" (reason is empty, err carries the detail).
 func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reason string, err error) {
-	if branch == "" || branch == "main" || branch == "master" {
-		return "error", "", fmt.Errorf("refusing to delete protected branch %q", branch)
+	cleanupErr := svc.BranchCleanup(branch)
+	if cleanupErr == nil {
+		return "deleted", "", nil
 	}
 
-	if worktreePath, held, werr := execution.BranchHeldByWorktree(svc.RepoPath(), branch); werr == nil && held {
-		return "skipped", fmt.Sprintf("held by worktree %s", worktreePath), nil
-	}
-
-	var errs []string
-
-	remoteExisted, _ := svc.RemoteBranchExists(branch)
-	if remoteExisted {
-		if rerr := svc.BranchDeleteRemote(branch); rerr != nil {
-			if stillExists, _ := svc.RemoteBranchExists(branch); stillExists {
-				errs = append(errs, fmt.Sprintf("remote: %v", rerr))
-			}
-			// Not still on the remote — whatever the error text said, the
-			// desired end state (no remote branch) already holds.
+	// Occupancy is not a failure: the branch is in active use, not stale, so
+	// the sweep reports it and comes back later.
+	var held *gitpkg.BranchHeldByWorktreeError
+	if errors.As(cleanupErr, &held) {
+		if held.Worktree != "" {
+			return "skipped", fmt.Sprintf("held by worktree %s", held.Worktree), nil
 		}
+		// git refused but the worktree listing could not name the holder —
+		// the mid-rebase `detached` case above.
+		return "skipped", "held by a worktree", nil
 	}
 
-	if lerr := svc.BranchDelete(branch); lerr != nil {
-		if strings.Contains(lerr.Error(), "used by worktree") {
-			return "skipped", "held by worktree (deleted concurrently with the check)", nil
-		}
-		errs = append(errs, fmt.Sprintf("local: %v", lerr))
-	}
-
-	// Prune stale remote-tracking refs, mirroring BranchCleanup — best-effort.
-	_ = svc.Fetch(true)
-
-	if len(errs) > 0 {
-		return "error", "", fmt.Errorf("branch cleanup %s: %s", branch, strings.Join(errs, "; "))
-	}
-	return "deleted", "", nil
+	return "error", "", cleanupErr
 }
 
 // --- label command ---
