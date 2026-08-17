@@ -93,14 +93,36 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
-      # DELIBERATELY UNGATED, and the only step here that is. It drives
-      # scripts/ci-change-class.sh against real git fixtures and asserts this
-      # very file still consumes the gate's outputs. Gating it would mean the
-      # docs-only PRs — the exact runs the gate acts on — are the ones that
-      # never check the gate, and a gate nothing exercises decays into an
-      # unconditional pass (#539/#549). ~10s, all of it the classifier build.
+      # DELIBERATELY UNGATED (1 of 2). It drives scripts/ci-change-class.sh
+      # against real git fixtures and asserts this very file still consumes the
+      # gate's outputs. Gating it would mean the docs-only PRs — the exact runs
+      # the gate acts on — are the ones that never check the gate, and a gate
+      # nothing exercises decays into an unconditional pass (#539/#549). ~10s,
+      # all of it the classifier build.
       - name: CI change-class gate regression suite
         run: bash scripts/test-ci-change-class.sh
+      # DELIBERATELY UNGATED (2 of 2), for a sharper reason than the step above:
+      # gating these would disable the guard on precisely the change class it
+      # exists to catch. internal/preflight holds every test that inspects the
+      # REAL tracked tree, and all four of them govern Markdown:
+      #
+      #   TestSourceFilesAreCleanUTF8              mojibake in .go AND .md
+      #   TestGoCommentsHaveNoLiteralUnicodeEscapes  literal \uXXXX in comments
+      #   TestSkillIncludes_WorkingTreeIsClean     dead <!-- include: --> targets
+      #   TestSkillPortability_WorkingTreeIsClean  .vscode paths in skills/*.md
+      #
+      # `go test ./...` is their only enforcement path — skill_includes_test.go
+      # says so in as many words — so gating the Test step on run_heavy took the
+      # repo's only automated `.md` guards offline for docs_only PRs, and a
+      # SKILL.md or docs/ edit is exactly a docs_only PR. Nothing else in the 12
+      # required checks covers it: a C1 control is valid UTF-8, so Prettier
+      # reformats around it and check-md-links.sh never looks at bytes. A
+      # mojibake docs sweep would have merged with all checks green and turned
+      # `main` red on the push run, which is the prediction-vs-observation gap
+      # AGENTS.md forbids. ~1s: the step above already warmed the build cache
+      # for this package (internal/preflight is in cmd/nightgauge's graph).
+      - name: Working-tree content guards (encoding, skill includes, portability)
+        run: go test ./internal/preflight/ -count=1
       - name: Build
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go build ./...

@@ -71,6 +71,10 @@ PRs cannot make for themselves.
 | `docs_only`, `empty`                        | `false`     | **skipped** (jobs still report success) |
 | `config_only`, `source`, `mixed`, `unknown` | `true`      | run in full                             |
 
+"Expensive steps" is the exact scope: two steps of the `go` job stay ungated on
+purpose and run on every PR, `docs_only` included — see
+[What is NOT gated](#what-is-not-gated-and-why).
+
 Config is deliberately **not** fast-tracked for CI even though the pipeline
 skips `feature-validate` for it: a `package.json`/`tsconfig`/CI-workflow edit can
 need build+test, and the CI workflow files themselves classify as config.
@@ -87,6 +91,41 @@ nightgauge ci classify --base origin/main --head HEAD --json
 ```
 
 ### What is NOT gated, and why
+
+**Two steps inside the gated `go` job are themselves ungated**, and the rule
+they share is the one to carry away: a guard whose _subject_ is the
+fast-tracked class must never be gated on that class, or it switches off on
+exactly the diffs it exists to inspect.
+
+| Ungated step in `go`                    | Runs                              | Why it cannot be gated                                                                                                                                                                                 |
+| --------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CI change-class gate regression suite` | `scripts/test-ci-change-class.sh` | The gate's own self-test. Gated, the docs-only PRs — the only runs the gate acts on — become the ones that never check it, and a gate nothing exercises decays into an unconditional pass (#539/#549). |
+| `Working-tree content guards`           | `go test ./internal/preflight/`   | `internal/preflight` holds every test that inspects the real tracked tree, and all four of them govern Markdown.                                                                                       |
+
+Those four are `TestSourceFilesAreCleanUTF8` (a C1 control anywhere in a `.go`
+or `.md` file — the mojibake fingerprint from #289),
+`TestGoCommentsHaveNoLiteralUnicodeEscapes`,
+`TestSkillIncludes_WorkingTreeIsClean` (dead `<!-- include: -->` targets, #337)
+and `TestSkillPortability_WorkingTreeIsClean`. `go test ./...` is their only
+enforcement path, so gating the `Test` step and stopping there would have taken
+the repo's only automated Markdown guards offline for `docs_only` PRs — and a
+`docs/` or `SKILL.md` edit _is_ a `docs_only` PR by definition.
+
+No other required check substitutes. A C1 control is valid UTF-8: Prettier
+preserves it byte for byte, `check-md-links.sh` inspects links rather than
+bytes, and `validate-skill-metadata.sh` reads frontmatter. The failure is
+concrete — a docs sweep re-encodes an em-dash through a Latin-1 round trip,
+every check reports green, the PR merges, and the `push`-to-`main` run (always
+heavy) goes red. That is precisely the prediction-versus-observation gap
+AGENTS.md exists to close, and gating here would have made it systematically
+reachable for a whole class of pull request.
+
+The cost is ~1s: `internal/preflight` is already in `cmd/nightgauge`'s
+dependency graph, so the self-test above it has warmed the build cache by the
+time it runs. `scripts/test-ci-change-class.sh` pins both steps — that they
+exist, that neither carries an `if:`, and that the package the second one names
+still contains all four guards — so relocating a guard fails the suite instead
+of going quietly dark.
 
 `security` (`Security & license gates`, 60s) stays unconditional. govulncheck's
 answer is a function of the advisory database as much as of the diff, so "this

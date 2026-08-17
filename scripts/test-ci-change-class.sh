@@ -322,15 +322,57 @@ step_block() {
   '
 }
 
-selftest_step="$(step_block go 'test-ci-change-class.sh')"
-if [ -z "$selftest_step" ]; then
-  bad "the change-class self-test runs ungated" \
-    "no step in the 'go' job runs scripts/test-ci-change-class.sh"
-elif printf '%s\n' "$selftest_step" | grep -q 'if:'; then
-  bad "the change-class self-test runs ungated" \
-    "the self-test step carries an if: — it would not run on the docs-only PRs it exists to police"
+# assert_ungated_step <job> <marker> <label> <why> — the step must EXIST and
+# carry no `if:`. The `if:` match is line-anchored because step_block's window
+# runs to the start of the NEXT step and so trails the following step's comment
+# block: prose about gating is not a gate, and an unanchored match would read
+# one as the other.
+assert_ungated_step() {
+  local job="$1" marker="$2" label="$3" why="$4" block
+  block="$(step_block "$job" "$marker")"
+  if [ -z "$block" ]; then
+    bad "$label" "no step in the '$job' job runs $marker"
+  elif printf '%s\n' "$block" | grep -qE '^[[:space:]]*if:'; then
+    bad "$label" "that step carries an if: — $why"
+  else
+    ok "$label"
+  fi
+}
+
+assert_ungated_step go 'test-ci-change-class.sh' \
+  "the change-class self-test runs ungated" \
+  "it would not run on the docs-only PRs it exists to police"
+
+# The repo's only automated `.md` guards — byte hygiene, dead skill includes,
+# skill portability — live in internal/preflight and reach the real tree only
+# through `go test`. The gated `Test` step covers them on source PRs; this
+# ungated step is what keeps them alive on docs_only PRs, which is the exact
+# class that introduces mojibake and dead includes. Gated, a re-encoded em-dash
+# merges all-green and turns `main` red on the push run.
+assert_ungated_step go './internal/preflight/' \
+  "the working-tree content guards run ungated" \
+  "the mojibake and skill-content guards would then skip the docs_only PRs they exist to police"
+
+# …and the package that step names must still HOLD those guards. Asserting only
+# that the step exists would leave a green, empty step behind if the tests were
+# moved: the workflow would keep running a package that no longer guards
+# anything, on exactly the PRs where nothing else does.
+guard_step="$(step_block go './internal/preflight/')"
+guard_pkg="$(printf '%s\n' "$guard_step" | sed -n 's|^.*go test \(\./[A-Za-z0-9_./-]*\).*|\1|p' | head -1)"
+if [ -z "$guard_pkg" ] || [ ! -d "$REPO_ROOT/${guard_pkg#./}" ]; then
+  bad "the ungated guard step names a real package" \
+    "could not resolve a package directory from: ${guard_step:-<no such step>}"
 else
-  ok "the change-class self-test runs ungated"
+  ok "the ungated guard step names a real package ($guard_pkg)"
+  for guard in TestSourceFilesAreCleanUTF8 TestGoCommentsHaveNoLiteralUnicodeEscapes \
+    TestSkillIncludes_WorkingTreeIsClean TestSkillPortability_WorkingTreeIsClean; do
+    if grep -rq "func ${guard}(" "$REPO_ROOT/${guard_pkg#./}"; then
+      ok "$guard is inside $guard_pkg (still runs on docs-only PRs)"
+    else
+      bad "$guard is inside $guard_pkg" \
+        "not found under $guard_pkg — the ungated step no longer runs it, and on a docs_only PR nothing else will"
+    fi
+  done
 fi
 
 echo
