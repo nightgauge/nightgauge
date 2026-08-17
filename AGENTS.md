@@ -109,6 +109,35 @@ git push -u origin feat/description-of-change
   the PR gate; it is the detector for what the PR gate structurally cannot see.
   See [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md).
 
+- **Run the post-merge hook after every hand merge — the board does not roll up
+  on its own.**
+
+  ```bash
+  nightgauge hook post-merge --issue <N> --owner nightgauge --repo nightgauge \
+    --pr <PR> --project <PROJECT>
+  ```
+
+  Parent-epic auto-close is implemented once, in `hooks.EvaluatePostMerge`, and
+  reached by two callers: the scheduler's `runPipeline` post-merge path, and this
+  CLI verb. **The scheduler path only fires when the pipeline merged the PR** — so
+  on the manual squash-merge train this file mandates as the routine path, nothing
+  ever evaluates the rollup. An epic whose sub-issues are all closed then stays
+  open indefinitely, and the board keeps showing work that is finished.
+
+  This is not hypothetical and not a discipline failure: epic #342 sat open with
+  every child closed after a 27-PR hand-merged session, because
+  `checkEpicCompletion` never ran once. No amount of "use the pipeline instead"
+  fixes it — the merge policy above _requires_ hand merges.
+
+  Two flags decide whether the hook does anything useful. **`--project` is
+  optional and silently no-ops the board-Done sync when omitted**, so an epic can
+  auto-close on the issue tracker while its board row stays in Ready. `--pr` makes
+  the hook verify the PR really is `MERGED` before closing the issue; omitting it
+  skips that check. The hook is deliberately non-blocking — it logs failures to
+  stderr and still exits 0 — so **read its output**; a silent exit code is not
+  evidence that the rollup happened. See
+  [docs/GIT_WORKFLOW.md § After Merge](docs/GIT_WORKFLOW.md#after-merge).
+
 - **Clean up on merge — branch and worktree, remote and local, every forge.** A
   merge is not finished until its branch and any worktree are gone on both
   sides. Squash merges need `git branch -D` (the squash commit is not the branch

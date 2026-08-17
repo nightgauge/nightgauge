@@ -294,6 +294,62 @@ granularity — squashing the epic throws that away.
 
 ### After Merge
 
+**Step 0 — run the post-merge hook.** Before cleanup, before anything else:
+
+```bash
+nightgauge hook post-merge --issue <N> --owner nightgauge --repo nightgauge \
+  --pr <PR> --project <PROJECT>
+```
+
+This is the step a hand merger has no way to discover, and skipping it is
+invisible until an epic has been sitting open for weeks.
+
+**Why it is not automatic.** Parent-epic auto-close lives in one implementation,
+`hooks.EvaluatePostMerge`, deliberately shared so the deterministic CLI route and
+the scheduler cannot drift. But it has only two callers:
+
+| Caller                                        | Fires when                     |
+| --------------------------------------------- | ------------------------------ |
+| `runPipeline`'s post-merge verification block | **the pipeline merged the PR** |
+| `nightgauge hook post-merge` (this verb)      | you run it                     |
+
+There is no third. The merge policy in this document mandates **manual** squash
+merges as the routine path — so on the routine path the rollup is reached only if
+a human invokes it. The machinery is not missing; the invocation is.
+
+Epic #342 is the worked example: 27 PRs hand-merged in a single session, every
+sub-issue closed, `checkEpicCompletion` never called once, epic still open on the
+board. Read as "we should have used the pipeline", it looks like a discipline
+problem. It is not — the pipeline was never supposed to be the merger here.
+
+**Read the output; do not trust the exit code.** The hook is intentionally
+non-blocking: `issue_fetch_error` and `auto_close_error` are printed to stderr and
+the command still exits `0`, so a failed rollup and a successful one are
+indistinguishable by exit status alone. Expected lines:
+
+| Output                                    | Meaning                                  |
+| ----------------------------------------- | ---------------------------------------- |
+| `Issue #N has no parent epic — skipping…` | normal for a standalone issue            |
+| `Epic #N auto-closed (all sub-issues …)`  | the rollup fired                         |
+| `Epic #N: <reason>`                       | siblings still open — nothing to do yet  |
+| `Warning: post-merge check failed: …`     | **it did not run**; re-run once resolved |
+
+**Both optional flags change what actually happens:**
+
+- **`--project`** — omit it and `boardSyncer` is never wired, so the board-Done
+  sync silently no-ops. The epic closes on the issue tracker while its board row
+  stays in Ready, which is the confusing half-state this step exists to prevent.
+  Resolve the number with `nightgauge project resolve --repo <owner/repo> --json`
+  rather than reading it out of the workspace YAML.
+- **`--pr`** — makes the hook verify the PR is genuinely `MERGED` before closing
+  the issue. Omitting it skips the verification (`0` means "don't check").
+
+`nightgauge project reconcile` is the board-wide backstop sweep for this hook, not
+a substitute for it: it repairs drift after the fact across every board item,
+where the hook resolves one merge at the moment it happens.
+
+---
+
 **Cleanup is part of the merge, not an optional follow-up.** A merge that leaves
 its branch and worktree behind is not finished. This applies to every forge —
 GitHub, GitLab, or anything the `forge` abstraction grows next — and to both
