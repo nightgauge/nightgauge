@@ -365,6 +365,30 @@ var descentFixtureStages = []state.PipelineStage{
 func newDescentTestScheduler(t *testing.T, root string, runner StageRunner, engine *RetryEngine, adapter adapters.SkillRunner) *Scheduler {
 	t.Helper()
 	commitPipelineSkillFixtures(t, root)
+	// Every descent fixture works by REJECTING a stage, and a non-terminal
+	// stage failure arms the #3873 reconcile — which shells out to the real
+	// `gh` unless reconcileExecGh is stubbed. These fixtures dispatch a real
+	// slug (nightgauge/nightgauge#611), so an unstubbed reconcile asks GitHub
+	// about a real issue and answers from whatever state that issue happens to
+	// be in on the day the suite runs.
+	//
+	// That is not hypothetical: #611 was closed on 2026-08-17, the reconcile
+	// began clearing the very failure these fixtures exist to create, the
+	// retry never dispatched, and both scheduler-level descent tests went red
+	// on a tree nobody had touched. A test whose verdict depends on live forge
+	// state is exactly the nondeterminism class the PR gate cannot see —
+	// green at merge, red later, on identical code.
+	//
+	// Pin the forge to "issue OPEN, no PRs on the branch" so the only failure
+	// in play is the one the fixture injected. Stubbed here rather than per
+	// test so a descent test added later inherits the isolation instead of
+	// re-acquiring the bug.
+	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		if ghArgsContain(args, "issue") {
+			return []byte(`{"state":"OPEN"}`), nil
+		}
+		return []byte(`[]`), nil
+	})
 	return &Scheduler{
 		repoRunning:   make(map[string]int),
 		mergeLocks:    make(map[string]*sync.Mutex),
