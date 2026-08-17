@@ -18,6 +18,54 @@ export type PriorityValue = "P0" | "P1" | "P2" | "P3" | "";
 export type StatusValue = "Backlog" | "Ready" | "In progress" | "In review" | "Done" | "";
 
 /**
+ * The Status column labels the nightgauge provisioner writes.
+ *
+ * Mirrors the Go constants in `internal/state/board_state.go`
+ * (`StatusBacklog` … `StatusDone`) so both layers name the same columns the
+ * same way. Use these instead of retyping a literal — an in-line
+ * `"In Progress"` is how #623 happened.
+ */
+export const BOARD_STATUS = {
+  backlog: "Backlog",
+  ready: "Ready",
+  inProgress: "In progress",
+  inReview: "In review",
+  done: "Done",
+} as const satisfies Record<string, StatusValue>;
+
+/**
+ * Compare two board Status labels for column identity, ignoring
+ * capitalization.
+ *
+ * **Never compare a status READ off a board with `===`** (#623). The
+ * `BOARD_STATUS` labels above are what the nightgauge provisioner writes, but
+ * a board's actual option labels are whatever its creator typed — a hand-made
+ * board commonly spells the same column "In Progress". Reads return that raw
+ * label verbatim (Go's `gh.BoardService.ListItems` copies the single-select
+ * option name straight into `BoardItem.Status`, and it reaches TypeScript
+ * unchanged over IPC), so an exact comparison silently answers "different
+ * column" for a board that merely capitalizes differently, and the caller
+ * takes the wrong branch — with no error, no log, and no card.
+ *
+ * This is the TypeScript counterpart of Go's `state.BoardStatus.EqualFold`,
+ * and exists for the same reason: one notion of column identity on both
+ * sides of the IPC boundary.
+ *
+ * Nullish operands normalize to `""`, so a missing status matches only the
+ * empty label.
+ *
+ * @param a - A board Status label (raw board read, or a `BOARD_STATUS` value)
+ * @param b - The label to compare against
+ * @returns true when both name the same column
+ */
+export function boardStatusEquals(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  return (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+}
+
+/**
  * Size field values on the GitHub Project board
  */
 export type SizeValue = "XS" | "S" | "M" | "L" | "XL" | "";
