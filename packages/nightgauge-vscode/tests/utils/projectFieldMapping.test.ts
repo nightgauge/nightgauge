@@ -26,6 +26,9 @@ import {
   isPriorityValue,
   isStatusValue,
   isSizeValue,
+  // Board status identity (#623)
+  BOARD_STATUS,
+  boardStatusEquals,
   // Types
   type PriorityLabel,
   type SizeLabel,
@@ -264,6 +267,79 @@ describe("projectFieldMapping", () => {
       expect(isSizeValue("XXL")).toBe(false);
       expect(isSizeValue("xs")).toBe(false);
       expect(isSizeValue("Small")).toBe(false);
+    });
+  });
+
+  // ============================================================================
+  // Board Status Identity (#623)
+  // ============================================================================
+
+  describe("BOARD_STATUS", () => {
+    it("spells every column exactly as the Go provisioner writes it", () => {
+      // Mirrors internal/state/board_state.go's StatusBacklog … StatusDone,
+      // which internal/state/board_status_case_test.go cross-checks against
+      // DefaultFieldSchema(). Note the lowercase 'p' and 'r': the provisioned
+      // columns are "In progress" and "In review", NOT title case. Retyping
+      // these literals by hand is exactly how #623 happened.
+      expect(BOARD_STATUS).toEqual({
+        backlog: "Backlog",
+        ready: "Ready",
+        inProgress: "In progress",
+        inReview: "In review",
+        done: "Done",
+      });
+    });
+  });
+
+  describe("boardStatusEquals", () => {
+    it("matches the same column regardless of capitalization", () => {
+      // The TS counterpart of Go's state.BoardStatus.EqualFold. A board's raw
+      // option label is whatever its creator typed, so identity must fold.
+      const spellings = ["In progress", "In Progress", "in progress", "IN PROGRESS", "In PrOgReSs"];
+      for (const a of spellings) {
+        for (const b of spellings) {
+          expect(boardStatusEquals(a, b)).toBe(true);
+        }
+        expect(boardStatusEquals(a, BOARD_STATUS.inProgress)).toBe(true);
+      }
+    });
+
+    it("still distinguishes DIFFERENT columns", () => {
+      // Folding is not "everything matches" — a real column mismatch must
+      // still read as a mismatch, in either argument order.
+      const distinct = [
+        BOARD_STATUS.backlog,
+        BOARD_STATUS.ready,
+        BOARD_STATUS.inProgress,
+        BOARD_STATUS.inReview,
+        BOARD_STATUS.done,
+      ];
+      for (const a of distinct) {
+        for (const b of distinct) {
+          expect(boardStatusEquals(a, b)).toBe(a === b);
+        }
+      }
+      // Near-misses that share a prefix must not collapse together.
+      expect(boardStatusEquals("In review", "In progress")).toBe(false);
+      expect(boardStatusEquals("In Review", "In Progress")).toBe(false);
+      expect(boardStatusEquals("Ready", "Ready to ship")).toBe(false);
+    });
+
+    it("treats a missing status as the empty label", () => {
+      expect(boardStatusEquals(undefined, "")).toBe(true);
+      expect(boardStatusEquals(null, "")).toBe(true);
+      expect(boardStatusEquals(undefined, null)).toBe(true);
+      expect(boardStatusEquals(undefined, BOARD_STATUS.inProgress)).toBe(false);
+      expect(boardStatusEquals(null, BOARD_STATUS.ready)).toBe(false);
+    });
+
+    it("is symmetric", () => {
+      expect(boardStatusEquals("in progress", BOARD_STATUS.inProgress)).toBe(
+        boardStatusEquals(BOARD_STATUS.inProgress, "in progress")
+      );
+      expect(boardStatusEquals("Done", BOARD_STATUS.ready)).toBe(
+        boardStatusEquals(BOARD_STATUS.ready, "Done")
+      );
     });
   });
 

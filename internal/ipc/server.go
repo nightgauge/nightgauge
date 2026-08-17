@@ -3376,10 +3376,22 @@ func (s *Server) registerMethods() {
 				p.IssueNumber, runID)
 		} else if sealDir := s.pipelineStateDir(snap.Repo); sealDir != "" {
 			if err := rt.SealAndRemove(sealDir); err != nil {
-				// TWO BRANCHES, TWO DIFFERENT THINGS LEFT ON DISK, and the log
-				// must not blur them: the earlier "terminal-marked either way"
-				// line was true only of the remove failure.
-				if errors.Is(err, state.ErrSealWriteFailed) {
+				// THREE BRANCHES, THREE DIFFERENT THINGS LEFT ON DISK, and the
+				// log must not blur them: the earlier "terminal-marked either
+				// way" line was true only of the remove failure.
+				if errors.Is(err, state.ErrNotRunOwner) {
+					// NOT A FAILURE — a refusal, and the correct one (#557).
+					// This run was rehydrated from a snapshot another LIVE
+					// process is driving (the `nightgauge run` scheduler,
+					// observed by this `serve` daemon). Sealing here would
+					// remove a file whose owner holds no seal of its own and
+					// re-creates it at its next stage-boundary persist,
+					// resurrecting the run. Everything else the claim did
+					// stands; only the destructive half is declined, and the
+					// owner's own bookkeeping disposes of the snapshot.
+					log.Printf("notifyComplete: #%d DECLINED to seal run %s — its snapshot belongs to a live owner process, not to this one (#557): %v",
+						p.IssueNumber, runID, err)
+				} else if errors.Is(err, state.ErrSealWriteFailed) {
 					// The terminal marker never reached disk. The seal is
 					// latched and the stale NON-TERMINAL snapshot was removed
 					// rather than left for a restart to rehydrate, so the worst

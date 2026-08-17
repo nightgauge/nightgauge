@@ -61,6 +61,7 @@ import {
   getProjectItemStatus,
   type ProjectStatusValue,
 } from "../utils/projectFieldWriter";
+import { BOARD_STATUS, boardStatusEquals } from "../utils/projectFieldMapping";
 import type { PipelineStage, IssueMetadata } from "@nightgauge/sdk";
 import {
   IssueContextSchema,
@@ -1784,15 +1785,23 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // value (feature-planning/dev/validate all set "In progress") skip
     // this API call — the issue can't have been closed mid-pipeline.
     const isStatusChange = stage === "issue-pickup" || stage === "pr-create";
-    if (isStatusChange && statusValue !== "Done") {
+    if (isStatusChange && statusValue !== BOARD_STATUS.done) {
       try {
+        // `currentStatus` is a RAW board read: getProjectItemStatus returns the
+        // single-select option label verbatim off
+        // ProjectV2ItemFieldSingleSelectValue, so it is spelled however the
+        // board's creator typed it ("Done" / "done" / "DONE"). Comparing it
+        // with `===` makes the guard silently miss on any board that
+        // capitalizes differently — the #623 failure shape — and a forceRerun
+        // would then overwrite a CLOSED issue's Done column with "In progress".
+        // Fold instead. @see Issue #623
         const currentStatus = await getProjectItemStatus(
           issueNumber,
           workspaceRoot,
           this.logger,
           this.repoOverride
         );
-        if (currentStatus === "Done") {
+        if (boardStatusEquals(currentStatus, BOARD_STATUS.done)) {
           this.logger.info("Skipping status sync — issue is CLOSED with Done status", {
             stage,
             issueNumber,
