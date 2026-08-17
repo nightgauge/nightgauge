@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import type { IssueReference } from "../../types/completedIssues";
+import { getBranchDisplayText } from "../dashboard/DashboardComponents";
 
 /**
  * CompletedIssueTreeItem - Represents a completed issue in the tree
@@ -105,7 +106,11 @@ export class CompletedIssueTreeItem extends BaseTreeItem {
 
     md.appendMarkdown(`**Issue #${this.issue.issue_number}**\n\n`);
     md.appendMarkdown(`${this.issue.title}\n\n`);
-    md.appendMarkdown(`**Branch:** ${this.issue.branch}\n\n`);
+    // `bootstrap/services.ts` feeds this from `PipelineState.branch`, which is
+    // legitimately `""` when no branch was ever determined (#448) — and the
+    // onStageError fallback passes `""` outright. Rendering it bare left a
+    // dangling "**Branch:**" with nothing after it.
+    md.appendMarkdown(`**Branch:** ${getBranchDisplayText(this.issue.branch)}\n\n`);
     md.appendMarkdown(`**Completed:** ${this.issue.timestamp}\n\n`);
     md.appendMarkdown(`✓ Pipeline completed successfully`);
 

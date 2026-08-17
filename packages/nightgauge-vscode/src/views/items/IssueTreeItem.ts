@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { isDependabotIssue, getDependabotType } from "../../utils/dependabotUtils";
+import { getBranchDisplayText, UNDETERMINED_BRANCH_LABEL } from "../dashboard/DashboardComponents";
 
 /** Priority levels parsed from labels (matches ReadyIssueTreeItem) */
 type Priority = "P0" | "P1" | "P2" | "P3";
@@ -101,6 +102,14 @@ function formatSize(size: Size): string {
 export interface IssueInfo {
   number: number;
   title: string;
+  /**
+   * Feature branch for this run. `""` means "no branch has been determined
+   * yet", NOT "no value" — #397's empty-means-undetermined contract, extended
+   * to pipeline state by #448. `PipelineTreeProvider.syncFromState` forwards
+   * `PipelineState.branch` verbatim, and that field is legitimately `""` from
+   * `initializePipeline` until issue-pickup resolves a real branch. Render it
+   * through `getBranchDisplayText`; never fabricate a `feat/{number}` stand-in.
+   */
   branch: string;
   /** Target branch for PR (e.g., main, develop) */
   baseBranch?: string;
@@ -177,11 +186,17 @@ export class IssueTreeItem extends BaseTreeItem {
   /**
    * Build description: branch name with optional size badge appended.
    * Format: "feat/92-pipeline-sidebar [M]"
+   *
+   * An undetermined branch (`""`) renders as `UNDETERMINED_BRANCH_LABEL`, not
+   * as a blank segment: without this the description collapses to "" (or to a
+   * leading-space " [M]" once a size badge is present), which reads as "this
+   * run has no branch" rather than "no branch has been determined yet" (#448).
    */
   private createDescription(): string {
     const labels = this.issueInfo.labels ?? [];
     const size = parseSize(labels);
-    return size ? `${this.issueInfo.branch} [${size}]` : this.issueInfo.branch;
+    const branchText = getBranchDisplayText(this.issueInfo.branch);
+    return size ? `${branchText} [${size}]` : branchText;
   }
 
   /**
@@ -192,7 +207,14 @@ export class IssueTreeItem extends BaseTreeItem {
     md.isTrusted = true;
     md.appendMarkdown(`**Issue #${this.issueInfo.number}**\n\n`);
     md.appendMarkdown(`${this.issueInfo.title}\n\n`);
-    md.appendMarkdown(`Branch: \`${this.issueInfo.branch}\`\n\n`);
+    // A resolved branch keeps its code-span treatment; an undetermined one is
+    // rendered as prose so the label is not mistaken for a literal branch name
+    // (an empty code span `` would read as a dangling "Branch:" — #448).
+    md.appendMarkdown(
+      this.issueInfo.branch?.trim()
+        ? `Branch: \`${this.issueInfo.branch}\`\n\n`
+        : `Branch: ${UNDETERMINED_BRANCH_LABEL}\n\n`
+    );
 
     if (this.issueInfo.baseBranch) {
       md.appendMarkdown(`Target: \`${this.issueInfo.baseBranch}\`\n\n`);
@@ -247,7 +269,10 @@ export class IssueTreeItem extends BaseTreeItem {
       this.issueInfo.title = issueInfo.title;
       this.label = `#${this.issueNumber} - ${issueInfo.title}`;
     }
-    if (issueInfo.branch) {
+    // `""` is a value (undetermined), not an absence — a truthiness guard here
+    // would silently drop a branch that regressed to undetermined and leave a
+    // stale name on screen (#448). Only `undefined` means "leave it alone".
+    if (issueInfo.branch !== undefined) {
       this.issueInfo.branch = issueInfo.branch;
     }
     if (issueInfo.baseBranch !== undefined) {
