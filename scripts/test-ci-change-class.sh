@@ -100,13 +100,21 @@ new_repo() {
 }
 
 # classify <repo> <event> <base> <head> — run the gate and echo its outputs.
+#
+# GITHUB_STEP_SUMMARY is blanked because this suite runs INSIDE a real Actions
+# job, where it points at the live job summary — every fixture would otherwise
+# scribble its classification into the summary of the run it is testing. The
+# same ambient-environment hazard is why the gate reads only NG_EVENT_NAME: a
+# runner exports GITHUB_EVENT_NAME=pull_request, so a gate that fell back to it
+# turned this suite's "unset event" fixture into a `pull_request` locally-green,
+# CI-red disagreement.
 classify() {
   local repo="$1" event="$2" base="$3" head="$4" out
   out="$(mktemp "$TMP/out.XXXXXX")"
   (
     cd "$repo" || exit 1
     NG_EVENT_NAME="$event" NG_BASE_SHA="$base" NG_HEAD_SHA="$head" \
-      NIGHTGAUGE_BIN="$BIN" GITHUB_OUTPUT="$out" \
+      NIGHTGAUGE_BIN="$BIN" GITHUB_OUTPUT="$out" GITHUB_STEP_SUMMARY= \
       bash "$SCRIPT"
   ) >/dev/null 2>&1
   cat "$out"
@@ -209,7 +217,7 @@ missing_bin_case() {
     cd "$PUSH_REPO" || exit 1
     NG_EVENT_NAME=pull_request NG_BASE_SHA="$PUSH_BASE" NG_HEAD_SHA="$PUSH_HEAD" \
       NIGHTGAUGE_BIN="$TMP/definitely-not-a-binary" GITHUB_OUTPUT="$out" \
-      bash "$SCRIPT"
+      GITHUB_STEP_SUMMARY= bash "$SCRIPT"
   ) >/dev/null 2>&1
   cat "$out"
 }
@@ -224,7 +232,7 @@ rc_out="$(mktemp "$TMP/out.XXXXXX")"
   cd "$PUSH_REPO" || exit 1
   NG_EVENT_NAME=pull_request NG_BASE_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
     NG_HEAD_SHA="$PUSH_HEAD" NIGHTGAUGE_BIN="$BIN" GITHUB_OUTPUT="$rc_out" \
-    bash "$SCRIPT"
+    GITHUB_STEP_SUMMARY= bash "$SCRIPT"
 ) >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 0 ]; then

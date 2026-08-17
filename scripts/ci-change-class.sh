@@ -30,8 +30,14 @@
 # observation (two PRs green apart, broken together — AGENTS.md), and a
 # scheduled run exists to catch environment drift. Neither is fast-trackable.
 #
-# Inputs (environment):
-#   NG_EVENT_NAME    event name; falls back to GITHUB_EVENT_NAME
+# Inputs (environment). Each has exactly ONE source — notably NG_EVENT_NAME does
+# NOT fall back to the runner's ambient GITHUB_EVENT_NAME. A gate with two ways
+# to learn its own inputs decides on whichever happens to be set, which is not a
+# decision anybody made: with the fallback in place, a caller passing an empty
+# NG_EVENT_NAME to mean "unknown event" silently got `pull_request` from the
+# ambient environment instead, and classified a diff it should have refused to
+# fast-track. The workflow always passes NG_EVENT_NAME explicitly.
+#   NG_EVENT_NAME    event name (github.event_name)
 #   NG_BASE_SHA      base commit of the PR (github.event.pull_request.base.sha)
 #   NG_HEAD_SHA      head commit of the PR (github.event.pull_request.head.sha)
 #   NIGHTGAUGE_BIN   optional prebuilt binary; built from ./cmd/nightgauge if unset
@@ -82,7 +88,7 @@ fail_open() {
   decide true unknown "$1"
 }
 
-event="${NG_EVENT_NAME:-${GITHUB_EVENT_NAME:-}}"
+event="${NG_EVENT_NAME:-}"
 base="${NG_BASE_SHA:-}"
 head="${NG_HEAD_SHA:-}"
 
