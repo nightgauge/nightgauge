@@ -3837,8 +3837,39 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if prereqCtxOK {
 			ctxPath := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, prereqCtxType)
 			if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
-				log.Printf("#%d: stage %s prerequisite missing: %s context (resolved skip-aware)",
-					item.Number, stage, prereqCtxType)
+				// "missing prerequisite" is load-bearing prose, not decoration
+				// (#620): internal/terminalkind/table.json already routes it to
+				// validation_error, and the corpus row that pins it names THIS
+				// producer ("the stage pre-condition check that refuses to run a
+				// stage whose input context is absent"). Keeping the phrase means
+				// the explicit kind set below and every independent
+				// re-derivation from the text — autonomous.go's
+				// onPipelineComplete wrapper, NotifyComplete's defense-in-depth
+				// re-classify — land on the same answer instead of disagreeing.
+				reason := fmt.Sprintf(
+					"missing prerequisite: stage %s needs the %s context (resolved skip-aware) and %s does not exist",
+					stage, prereqCtxType, ctxPath)
+				log.Printf("#%d: %s", item.Number, reason)
+				// Enter the stage before failing it — the branch-fork preflight
+				// precedent below, established for the budget path by #444.
+				// Nothing is dispatched, but StageErrors is keyed by stage and
+				// every reader that asks "what went wrong" indexes it with the
+				// CURRENT stage (snap.StageErrors[string(snap.Stage)]): IPC
+				// terminal-notify, scheduler_exit_record.go's fallback, the
+				// outcome-recording site, autonomous reporting. Without
+				// BeginStage the key and snap.Stage name different stages and
+				// all of them read "".
+				runtime.BeginStage(stage)
+				runtime.SetStageError(stage, reason)
+				// Pre-#620 this returned with no kind at all, so the terminal
+				// defer's ClassifyTerminalKind("") produced "" and the run was
+				// booked terminal with an empty cause.
+				terminalFailureKind = TerminalKindValidationError
+				s.emitStateChanged(item.Repo, item.Number, runtime)
+				tracer.Emit(trace.KindStageSkip, string(stage), trace.StageSkipPayload{
+					Source: "prerequisite-preflight",
+					Reason: reason,
+				})
 				return // Pipeline failed — missing prerequisite
 			}
 		}
@@ -3928,7 +3959,41 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
 		if err != nil {
-			log.Printf("#%d: %v", item.Number, err)
+			// A render failure means the stage has no prompt to dispatch: the
+			// SKILL.md could not be located, read, or composed. Distinct from
+			// the prerequisite refusal above on purpose (#620) — that one says
+			// "the previous stage's handoff is missing" (look upstream), this
+			// one says "this stage's skill did not compose" (look at the skills
+			// tree / overlays / adapter). A shared generic string would put one
+			// message on two different operator actions, which is the failure
+			// mode this fix exists to remove, so the two never share prose.
+			reason := fmt.Sprintf("skill render failed: stage %s could not compose its SKILL.md (model=%q, adapter=%q): %v",
+				stage, model, adapterName, err)
+			log.Printf("#%d: %s", item.Number, reason)
+			// BeginStage before SetStageError — same invariant as the
+			// prerequisite refusal above and the branch-fork preflight below:
+			// the StageErrors key and snap.Stage must name the same stage or
+			// every snap.Stage-keyed reader resolves nothing.
+			runtime.BeginStage(stage)
+			runtime.SetStageError(stage, reason)
+			// The nearest true kind: this is the pipeline's own deterministic
+			// pre-dispatch input validation refusing a malformed/absent input,
+			// which is what validation_error covers (its corpus rationale — "a
+			// pipeline-plumbing fault, not an implementation failure:
+			// misbucketing it into the crash fallback charges an organic
+			// failure to code that was never run" — applies verbatim). Set
+			// explicitly rather than left to the terminal defer, whose fallback
+			// would stamp subagent_crash on a run where no subagent ever
+			// started. A dedicated skill-render kind would be truer still, but
+			// it is a cross-surface change (terminalkind table + TS schema +
+			// generated SDK mirror + FAILURE_TAXONOMY) and belongs in its own
+			// issue.
+			terminalFailureKind = TerminalKindValidationError
+			s.emitStateChanged(item.Repo, item.Number, runtime)
+			tracer.Emit(trace.KindStageSkip, string(stage), trace.StageSkipPayload{
+				Source: "skill-render",
+				Reason: reason,
+			})
 			return
 		}
 
