@@ -20,9 +20,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Deterministic change-class gate (#647). Classifies the PR's ACTUAL DIFF and
+  # publishes `run_heavy`, which gates the EXPENSIVE STEPS of the three heavy
+  # jobs below — never the jobs themselves.
+  #
+  # That distinction is the whole design. `Go build & test`, `SDK build & test`
+  # and `VSCode build & test` are required status checks on the `main` ruleset.
+  # GitHub does not treat a skipped required check as satisfied when the job was
+  # skipped by a job-level `if:` on a workflow that ran — the check simply never
+  # reports, and the pull request stays blocked forever with no way to unblock
+  # it short of `--admin`, which waives the entire ruleset. So the jobs always
+  # run and always report; only their inner steps are conditional.
+  #
+  # This job is intentionally NOT a required check: nothing may depend on a
+  # gate whose only job is to decide how much work to do.
+  changes:
+    name: Change class
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run_heavy: ${{ steps.classify.outputs.run_heavy }}
+      change_class: ${{ steps.classify.outputs.change_class }}
+      reason: ${{ steps.classify.outputs.reason }}
+    steps:
+      # fetch-depth: 0 — the classifier diffs base...head, and both endpoints
+      # must exist locally. A shallow clone makes the gate fail open (full
+      # suite), which is safe but silently pointless.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      # The classification comes from the diff between the PR's base and head
+      # commits — not the branch name, not the PR title. On `push` (merge-skew)
+      # there is no pull_request payload, the SHAs are empty, and the script
+      # forces the full suite.
+      - name: Classify the pull request diff
+        id: classify
+        env:
+          NG_EVENT_NAME: ${{ github.event_name }}
+          NG_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          NG_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci-change-class.sh
+
   go:
     name: Go build & test
     runs-on: ubuntu-latest
+    needs: changes
+    # `!cancelled()`, not the implicit `success()`. A failed or skipped gate
+    # must still let this required job run and report — with `run_heavy` then
+    # unset, `!= 'false'` is true and the full suite runs. The gate can only
+    # ever remove work when it positively succeeded.
+    if: ${{ !cancelled() }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -41,11 +93,44 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
+      # DELIBERATELY UNGATED (1 of 2). It drives scripts/ci-change-class.sh
+      # against real git fixtures and asserts this very file still consumes the
+      # gate's outputs. Gating it would mean the docs-only PRs — the exact runs
+      # the gate acts on — are the ones that never check the gate, and a gate
+      # nothing exercises decays into an unconditional pass (#539/#549). ~10s,
+      # all of it the classifier build.
+      - name: CI change-class gate regression suite
+        run: bash scripts/test-ci-change-class.sh
+      # DELIBERATELY UNGATED (2 of 2), for a sharper reason than the step above:
+      # gating these would disable the guard on precisely the change class it
+      # exists to catch. internal/preflight holds every test that inspects the
+      # REAL tracked tree, and all four of them govern Markdown:
+      #
+      #   TestSourceFilesAreCleanUTF8              mojibake in .go AND .md
+      #   TestGoCommentsHaveNoLiteralUnicodeEscapes  literal \uXXXX in comments
+      #   TestSkillIncludes_WorkingTreeIsClean     dead <!-- include: --> targets
+      #   TestSkillPortability_WorkingTreeIsClean  .vscode paths in skills/*.md
+      #
+      # `go test ./...` is their only enforcement path — skill_includes_test.go
+      # says so in as many words — so gating the Test step on run_heavy took the
+      # repo's only automated `.md` guards offline for docs_only PRs, and a
+      # SKILL.md or docs/ edit is exactly a docs_only PR. Nothing else in the 12
+      # required checks covers it: a C1 control is valid UTF-8, so Prettier
+      # reformats around it and check-md-links.sh never looks at bytes. A
+      # mojibake docs sweep would have merged with all checks green and turned
+      # `main` red on the push run, which is the prediction-vs-observation gap
+      # AGENTS.md forbids. ~1s: the step above already warmed the build cache
+      # for this package (internal/preflight is in cmd/nightgauge's graph).
+      - name: Working-tree content guards (encoding, skill includes, portability)
+        run: go test ./internal/preflight/ -count=1
       - name: Build
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go build ./...
       - name: Vet
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go vet ./...
       - name: Gofmt
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
           UNFORMATTED="$(gofmt -l ./internal ./cmd)"
           if [ -n "$UNFORMATTED" ]; then
@@ -54,6 +139,7 @@ jobs:
             exit 1
           fi
       - name: Test
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go test ./... -count=1
       # Scoped to internal/orchestrator (#428): the deterministic pins in
       # autonomous_background_lifecycle_pin_test.go guard the production
@@ -64,12 +150,14 @@ jobs:
       # Whole-tree -race is a follow-up: it triples the Go job and surfaces
       # unrelated pre-existing races this change neither owns nor worsens.
       - name: Test (race, orchestrator)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: go test -race -count=1 ./internal/orchestrator/
       # The shell-side decision procedure AGENTS.md § Clean up on merge
       # defers to for `git branch -D` calls, kept aligned with the Go sweep's
       # own ancestry-acceptance door (#593). No npm/node needed, so it runs
       # here rather than in lint.yml.
       - name: branch-merged-check.sh regression suite
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: bash scripts/test-branch-merged-check.sh
 
   # The Node suite (~15.5k tests) is split into two parallel jobs so it fits the
@@ -78,37 +166,50 @@ jobs:
   sdk:
     name: SDK build & test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Configure git identity
         # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.email "ci@nightgauge.dev"
           git config --global user.name "Nightgauge CI"
           git config --global init.defaultBranch main
           echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
+      # setup-node is gated with the rest: `npm ci` is this job's dominant cost
+      # (~62s of its ~99s), and restoring an npm cache for an install that will
+      # not happen is pure runner time.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm ci
       - name: Build
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run build
       - name: Test (SDK)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run -w @nightgauge/sdk test
 
   vscode:
     name: VSCode build & test
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Configure git identity (tests create local repos)
         # Identity is scoped to a per-job file via GIT_CONFIG_GLOBAL.
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: |
           export GIT_CONFIG_GLOBAL="$RUNNER_TEMP/gitconfig"
           git config --global user.email "ci@nightgauge.dev"
@@ -116,24 +217,37 @@ jobs:
           git config --global init.defaultBranch main
           echo "GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL" >> "$GITHUB_ENV"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
       - name: Install
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm ci
       - name: Build
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run build
       - name: Test (VSCode)
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run -w nightgauge-vscode test
       - name: Generated VSCode contributions in sync
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npx -w nightgauge-vscode tsx scripts/generate-package-contributions.ts --check
       - name: "@types/vscode <= engines.vscode (vsce packaging invariant)"
+        if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: node packages/nightgauge-vscode/scripts/check-engine-types.mjs
 
   # Security & license gates. Runs on every PR, including forks — a fork cannot
   # ship a vulnerable stdlib or a copyleft/proprietary dependency into a release
   # without this job going red.
+  #
+  # DELIBERATELY NOT change-class gated (#647). govulncheck's answer is a
+  # function of the advisory database as much as of the diff, so "the diff
+  # cannot have introduced a vulnerability" does not imply "there is no new
+  # vulnerability to find". At 60s it is a tenth of the matrix's cost and the
+  # only unconditional supply-chain signal on a pull request; trading a
+  # standing security gate for a minute is the wrong side of that exchange.
   security:
     name: Security & license gates
     runs-on: ubuntu-latest

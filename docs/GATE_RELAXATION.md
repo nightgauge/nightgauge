@@ -7,11 +7,11 @@ is the customizable surface delivered by epic #4123.
 A single deterministic primitive — the change classifier (#4124) — and a single
 config table — `routing.change_rules` (#4125) — drive three consumers:
 
-| Layer              | Issue | What it skips on a trivial change                               |
-| ------------------ | ----- | --------------------------------------------------------------- |
-| Pipeline scheduler | #4126 | `feature-planning` + `feature-validate` stages (LLM cost)       |
-| CI                 | #4127 | the heavy `build-and-test` steps (npm build/test, go test, e2e) |
-| PR gates           | #4128 | the PR gates' retry + sleep rate-limit cushions                 |
+| Layer              | Issue       | What it skips on a trivial change                               |
+| ------------------ | ----------- | --------------------------------------------------------------- |
+| Pipeline scheduler | #4126       | `feature-planning` + `feature-validate` stages (LLM cost)       |
+| CI                 | #4127, #647 | the expensive steps of `ci.yml`'s `go`, `sdk` and `vscode` jobs |
+| PR gates           | #4128       | the PR gates' retry + sleep rate-limit cushions                 |
 
 See [CONFIGURATION.md § routing.change_rules](CONFIGURATION.md#routingchange_rules--the-fast-track-table)
 for the rule schema, built-in defaults, and precedence.
@@ -28,41 +28,127 @@ Skipped stages are recorded as `skipped` (not `failed`/`completed`) and count
 toward success (`completed + skipped == 6`). `force_full_pipeline: true` and the
 label-based `risk_high` floor both disable skipping.
 
-## 2. CI fast-track (#4127)
+## 2. CI fast-track (#4127, wired in #647)
 
-A cheap, always-running `changes` gate job classifies the PR diff via
-`nightgauge ci classify` and exposes `run_heavy`. `build-and-test` gains
-`needs: changes` and gates its **expensive steps** on
-`needs.changes.outputs.run_heavy != 'false'`.
+`.github/workflows/ci.yml` runs a cheap `changes` job (`name: Change class`)
+that shells `scripts/ci-change-class.sh`, which classifies the pull request's
+diff via `nightgauge ci classify` and publishes three job outputs:
 
-**Deadlock-safe by construction.** The required `build-and-test` _job_ always
-runs and reports success — only its inner _steps_ are gated. A skipped required
-status check would deadlock branch protection; a skipped _step_ leaves the job
-`success`. The `changes` job is intentionally **not** a required check, and the
-gate is **fail-open** (`!= 'false'`): an unclassifiable diff runs the full suite.
-`push` (merge-skew) and `schedule` (nightly env-drift) always force the full
-suite.
+```text
+run_heavy=false   change_class=docs_only   reason=…
+```
 
-### `ci_jobs` → workflow gate mapping
+The three build-and-test jobs — `go` (`Go build & test`), `sdk` (`SDK build &
+test`) and `vscode` (`VSCode build & test`) — take `needs: changes` and gate
+their **expensive steps** on `needs.changes.outputs.run_heavy != 'false'`.
 
-| `change_class`                          | `run_heavy` | `build-and-test` expensive steps |
-| --------------------------------------- | ----------- | -------------------------------- |
-| `docs_only`, `empty`                    | `false`     | **skipped** (job passes in ~30s) |
-| `config_only`, `source`, `mixed`, error | `true`      | run in full                      |
+**Deadlock-safe by construction.** Those three job names are required status
+checks on the `main` ruleset. The _jobs_ therefore always run and always report;
+only their inner _steps_ are conditional. A required check that never reports
+blocks the pull request permanently, with no way out short of `--admin` — which
+waives the entire ruleset, not one rule (AGENTS.md). Three properties hold that
+line:
+
+| Property                                        | Mechanism                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------- |
+| A skipped step still leaves the job `success`   | step-level `if:`, never job-level                                         |
+| A **failed** gate cannot skip a required job    | `if: ${{ !cancelled() }}` on each gated job, not the implicit `success()` |
+| A gate that reports nothing runs the full suite | `!= 'false'` — unset ≠ `'false'`                                          |
+
+The `changes` job is intentionally **not** a required check: nothing may depend
+on a gate whose only job is to decide how much work to do.
+
+`scripts/ci-change-class.sh` never exits non-zero and fails **open** on every
+error path — unknown event, missing or unresolvable SHA, unusable binary,
+classifier error all emit `run_heavy=true`. Non-`pull_request` events force the
+full suite: `push` to main is the merge-skew observation two individually green
+PRs cannot make for themselves.
+
+### `change_class` → workflow gate mapping
+
+| `change_class`                              | `run_heavy` | `go` / `sdk` / `vscode` expensive steps |
+| ------------------------------------------- | ----------- | --------------------------------------- |
+| `docs_only`, `empty`                        | `false`     | **skipped** (jobs still report success) |
+| `config_only`, `source`, `mixed`, `unknown` | `true`      | run in full                             |
+
+"Expensive steps" is the exact scope: two steps of the `go` job stay ungated on
+purpose and run on every PR, `docs_only` included — see
+[What is NOT gated](#what-is-not-gated-and-why).
 
 Config is deliberately **not** fast-tracked for CI even though the pipeline
 skips `feature-validate` for it: a `package.json`/`tsconfig`/CI-workflow edit can
 need build+test, and the CI workflow files themselves classify as config.
+
+Note also that a shell script under `scripts/` matches neither the docs nor the
+config globs, so it classifies as **source**. The change that first wired this
+gate up touched `ci.yml` (config), `GATE_RELAXATION.md` (docs) and two scripts
+(source) — `mixed`, and so gated by itself into the full matrix. That is the
+intended behaviour, not an exception to it.
 
 ```bash
 nightgauge ci classify --base origin/main --head HEAD --json
 # {"change_class":"docs_only","run_heavy":false,"jobs":{...},"reason":"..."}
 ```
 
-> Scope: this epic gates the dominant-cost `build-and-test` job (self-contained
-> in `ci.yml`). The other required workflows (`validate-config`, `codex-smoke`,
-> `skill-eval-baseline`, `dependency-guard`) live in separate files (job outputs
-> do not cross workflows) and are seconds-long; gating them is a fast-follow.
+### What is NOT gated, and why
+
+**Two steps inside the gated `go` job are themselves ungated**, and the rule
+they share is the one to carry away: a guard whose _subject_ is the
+fast-tracked class must never be gated on that class, or it switches off on
+exactly the diffs it exists to inspect.
+
+| Ungated step in `go`                    | Runs                              | Why it cannot be gated                                                                                                                                                                                 |
+| --------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CI change-class gate regression suite` | `scripts/test-ci-change-class.sh` | The gate's own self-test. Gated, the docs-only PRs — the only runs the gate acts on — become the ones that never check it, and a gate nothing exercises decays into an unconditional pass (#539/#549). |
+| `Working-tree content guards`           | `go test ./internal/preflight/`   | `internal/preflight` holds every test that inspects the real tracked tree, and all four of them govern Markdown.                                                                                       |
+
+Those four are `TestSourceFilesAreCleanUTF8` (a C1 control anywhere in a `.go`
+or `.md` file — the mojibake fingerprint from #289),
+`TestGoCommentsHaveNoLiteralUnicodeEscapes`,
+`TestSkillIncludes_WorkingTreeIsClean` (dead `<!-- include: -->` targets, #337)
+and `TestSkillPortability_WorkingTreeIsClean`. `go test ./...` is their only
+enforcement path, so gating the `Test` step and stopping there would have taken
+the repo's only automated Markdown guards offline for `docs_only` PRs — and a
+`docs/` or `SKILL.md` edit _is_ a `docs_only` PR by definition.
+
+No other required check substitutes. A C1 control is valid UTF-8: Prettier
+preserves it byte for byte, `check-md-links.sh` inspects links rather than
+bytes, and `validate-skill-metadata.sh` reads frontmatter. The failure is
+concrete — a docs sweep re-encodes an em-dash through a Latin-1 round trip,
+every check reports green, the PR merges, and the `push`-to-`main` run (always
+heavy) goes red. That is precisely the prediction-versus-observation gap
+AGENTS.md exists to close, and gating here would have made it systematically
+reachable for a whole class of pull request.
+
+The cost is ~1s: `internal/preflight` is already in `cmd/nightgauge`'s
+dependency graph, so the self-test above it has warmed the build cache by the
+time it runs. `scripts/test-ci-change-class.sh` pins both steps — that they
+exist, that neither carries an `if:`, and that the package the second one names
+still contains all four guards — so relocating a guard fails the suite instead
+of going quietly dark.
+
+`security` (`Security & license gates`, 60s) stays unconditional. govulncheck's
+answer is a function of the advisory database as much as of the diff, so "this
+diff cannot have introduced a vulnerability" does not imply "there is no new
+vulnerability to find" — and it is the only unconditional supply-chain signal a
+pull request gets.
+
+Job outputs do not cross workflows, so the gate reaches only the jobs in
+`ci.yml`. The other required checks run unfiltered:
+
+| Required check (workflow)                             | On #646     | Gating outlook                                                                                                                                                                                |
+| ----------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint` (`lint.yml`)                                   | 5m15s       | Not worth it as-is: Prettier covers `**/*.md`, and the SKILL.md-metadata and skills-mirror steps are Markdown gates. Only ESLint is skippable, and it does not pay for a second classify job. |
+| `link-check` (`lint.yml`)                             | 47s         | Never — it is _the_ docs gate.                                                                                                                                                                |
+| `Analyze (go)` / `(javascript-typescript)` / `CodeQL` | 99s/100s/3s | Fast-follow. CodeQL supports its own `paths-ignore`, which is the right mechanism there.                                                                                                      |
+| `publication boundary`                                | 1m51s       | Fast-follow, and it is a content gate — a docs PR is exactly what it exists to inspect.                                                                                                       |
+| `credential scan`                                     | 14s         | Never — cost is already negligible.                                                                                                                                                           |
+
+An earlier draft of this document called those workflows "seconds-long". They
+are not: `lint` is the single most expensive required check on a documentation
+pull request, and with `ci.yml` gated it becomes the wall-clock floor for one.
+Runner minutes are where the win lands; wall-clock time does not fall to ~30s
+and this document should not have implied it would.
 
 ## 3. PR gate relaxation (#4128)
 
@@ -91,21 +177,59 @@ gate to keep in sync. The decision is fail-safe: if the diff can't be computed,
 the change classifies as `empty` and the gate is **not** relaxed (full behavior).
 A `gate.relaxation` telemetry event records `{relaxed, change_class}` for audit.
 
-## Verifying the win (before/after)
+## The CI win, measured
 
-**Baseline (#4121, a docs-only PR before this epic):** the full pipeline ran all
-six stages and cost **> $6**; CI `build-and-test` took **~4m36s**.
+**Baseline — PR #646, a one-file `AGENTS.md` edit, nothing else in the diff.**
+The `#646` column is that pull request's own check-run record. The right-hand
+column is **arithmetic**, not an observation: it is the sum of the surviving
+steps' own measured durations from the same run, and the first docs-only PR to
+land after this is what turns it into a measurement.
 
-**After this epic, an equivalent docs-only change should show:**
+| `ci.yml` job               | #646 (measured) | Docs-only (what still runs)                       |
+| -------------------------- | --------------- | ------------------------------------------------- |
+| `Go build & test`          | 3m35s           | checkout + setup-go + the gate's own self-test    |
+| `VSCode build & test`      | 4m58s           | checkout only                                     |
+| `SDK build & test`         | 1m39s           | checkout only                                     |
+| `Security & license gates` | 1m00s           | 1m00s — deliberately ungated                      |
+| `Change class` (new)       | —               | checkout + setup-go + `go build ./cmd/nightgauge` |
+| **Total runner time**      | **11m12s**      | **≈2m20s (projected)**                            |
 
-- **Pipeline:** `feature-planning` + `feature-validate` recorded as `skipped`;
-  the run reported success; the remaining stages run on the cheapest model
-  (trivial routes already select Haiku via complexity). Materially lower cost.
-- **CI:** the `changes` job reports `run_heavy=false`; `build-and-test` reports
-  **success in ~30s** with its expensive steps skipped (no npm build/test, no go
-  test, no e2e). Materially lower wall-time.
-- **A mislabeled "docs" change that touched source** classifies as `source` and
-  is **not** fast-tracked — stages run, CI runs full, gates are not relaxed.
+The `changes` job is a `needs:` dependency, so on a change that _does_ run heavy
+it delays the three build jobs by its own duration — roughly half a minute of
+added wall-clock on every source PR, bought for ~9 minutes of runner time
+returned on every docs PR.
+
+Wall-clock time for a documentation PR is unchanged at ~5m15s, because `lint` is
+not gated (see [What is NOT gated](#what-is-not-gated-and-why)). The saving is
+runner minutes, not the wait.
+
+Note that the gate cannot be observed on the pull request that introduces it. A
+`pull_request` run uses the workflow files from the merge of head into base, so
+a branch whose diff against `main` is documentation-only necessarily carries
+`main`'s workflows — the ungated ones — while a branch carrying the gated
+workflows necessarily has `.github/workflows/**` in its diff and classifies
+`config_only`. The first observation is therefore the first docs-only PR opened
+after this merges, which is also what AGENTS.md means by "a green PR check is a
+prediction; `main`'s own run is the observation".
+
+**A mislabeled "docs" change that touched source** classifies as `mixed`, runs
+the full suite, and is not fast-tracked by the pipeline or the PR gates either —
+`scripts/test-ci-change-class.sh` pins that with a fixture commit that really
+touches a `.md` and a `.go` file rather than asserting it in prose.
+
+### Keeping the gate honest
+
+The defect this section exists to prevent (#647) was not a broken mechanism: the
+classifier, the `nightgauge ci classify` verb and this document all shipped and
+worked. Nothing connected them to a workflow, so documentation PRs paid the full
+matrix for months while the doc said they did not.
+
+`scripts/test-ci-change-class.sh` therefore asserts the **wiring** as well as the
+behaviour — that `ci.yml` still declares the `changes` job, that each heavy job
+still carries `needs: changes` and `!cancelled()`, and that the gated steps still
+read `run_heavy`. It runs **ungated** inside the `Go build & test` job, so the
+docs-only runs that the gate acts on are exactly the runs that verify it. A gate
+nothing exercises decays into an unconditional pass.
 
 ### Measuring pipeline cost: `nightgauge cost by-class`
 
@@ -128,8 +252,8 @@ source          88      4.90$       11.80$        5.40$      31.2m      58.0m
 
 Runs recorded before this landed have no `change_class` and bucket under
 `unknown`, so the comparison populates as new runs complete. A live docs-only run
-compared against the >$6 / ~4m36s #4121 baseline is the empirical proof; the
-mechanisms above are what produce the delta.
+compared against the >$6 #4121 baseline is the empirical proof for the pipeline
+half; the CI half is measured from check-run durations, above.
 
 ## See also
 
@@ -137,4 +261,7 @@ mechanisms above are what produce the delta.
 - `internal/intelligence/changeClassifier` — the deterministic classifier (#4124)
 - `internal/intelligence/routing/change_rules.go` — rule struct, defaults, precedence (#4125)
 - `internal/ci/classify.go` — CI fast-track decision (#4127)
+- `.github/workflows/ci.yml` — the `changes` job and the gated steps (#647)
+- `scripts/ci-change-class.sh` — the workflow-facing gate; fail-open, never exits non-zero (#647)
+- `scripts/test-ci-change-class.sh` — behaviour fixtures + the wiring assertions (#647)
 - `internal/orchestrator/gates/relaxation.go` — gate relaxation + drift-revoke (#4128)
