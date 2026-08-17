@@ -353,6 +353,46 @@ describe("ProjectBoardService - Label Mapping Integration", () => {
       expect(issues[0].labels).toEqual(originalLabels);
     });
   });
+
+  // Issue #656 (Gap 3): the epic's own blockedBy must survive from the raw
+  // BoardItem through the per-status cache into getEpicMetadataFromCache(),
+  // since that map is what EpicGroupTreeItem renders the blocked epic from.
+  describe("epic metadata blockedBy propagation (#656)", () => {
+    it("should include the epic's own blockedBy in getEpicMetadataFromCache()", async () => {
+      mockBoardList.mockResolvedValue([
+        createMockBoardItem({
+          number: 4,
+          title: "Blocked Epic",
+          isEpic: true,
+          labels: ["type:epic"],
+          blockedBy: [{ number: 50, title: "Foundation work", state: "OPEN" }],
+        }),
+      ]);
+
+      await service.getIssuesByStatus("ready");
+      const epicMap = service.getEpicMetadataFromCache();
+
+      expect(epicMap.get(4)?.blockedBy).toEqual([
+        { number: 50, title: "Foundation work", state: "OPEN", url: "" },
+      ]);
+    });
+
+    it("should carry an empty blockedBy for an epic with no blockers", async () => {
+      mockBoardList.mockResolvedValue([
+        createMockBoardItem({
+          number: 12,
+          title: "Unpopulated Epic",
+          isEpic: true,
+          labels: ["type:epic"],
+        }),
+      ]);
+
+      await service.getIssuesByStatus("ready");
+      const epicMap = service.getEpicMetadataFromCache();
+
+      expect(epicMap.get(12)?.blockedBy).toEqual([]);
+    });
+  });
 });
 
 describe("Mapping Function Edge Cases", () => {

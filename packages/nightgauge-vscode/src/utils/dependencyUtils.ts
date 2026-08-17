@@ -15,10 +15,14 @@ import type { ReadyIssue, BlockingIssue } from "../services/ProjectBoardService"
  * An issue is considered blocked if it has at least one open blocker
  * in its blockedBy array.
  *
- * @param issue - The issue to check
+ * Accepts anything carrying a `blockedBy` field rather than a full
+ * ReadyIssue — Issue #656 reuses this for EpicInfo (epic group headers),
+ * which has no priority/size/labels of its own.
+ *
+ * @param issue - The issue (or issue-like object) to check
  * @returns True if the issue has at least one open blocker
  */
-export function isBlocked(issue: ReadyIssue): boolean {
+export function isBlocked(issue: Pick<ReadyIssue, "blockedBy">): boolean {
   if (!issue.blockedBy || issue.blockedBy.length === 0) {
     return false;
   }
@@ -47,10 +51,12 @@ export function getBlockerCount(issue: ReadyIssue): number {
  *
  * Useful for displaying blocker information in tooltips.
  *
- * @param issue - The issue to check
+ * Accepts anything carrying a `blockedBy` field — see {@link isBlocked}.
+ *
+ * @param issue - The issue (or issue-like object) to check
  * @returns Array of blocker titles (empty array if none)
  */
-export function getBlockerTitles(issue: ReadyIssue): string[] {
+export function getBlockerTitles(issue: Pick<ReadyIssue, "blockedBy">): string[] {
   if (!issue.blockedBy || issue.blockedBy.length === 0) {
     return [];
   }

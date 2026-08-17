@@ -8,7 +8,8 @@
 import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { ReadyIssueTreeItem } from "./ReadyIssueTreeItem";
-import type { ReadyIssue } from "../../services/ProjectBoardService";
+import type { ReadyIssue, BlockingIssue } from "../../services/ProjectBoardService";
+import { isBlocked, getBlockerTitles } from "../../utils/dependencyUtils";
 
 /**
  * Epic information for display
@@ -17,6 +18,14 @@ export interface EpicInfo {
   number: number;
   title: string;
   url: string;
+  /**
+   * Open/closed issues blocking the epic itself (Issue #656, Gap 3).
+   * Distinct from the epic's sub-issues — this is the epic's *own*
+   * blockedBy, threaded through from the underlying ReadyIssue so the
+   * group header can render the same blocked state as a blocked
+   * ReadyIssueTreeItem leaf.
+   */
+  blockedBy?: BlockingIssue[];
 }
 
 /**
@@ -77,7 +86,18 @@ export class EpicGroupTreeItem extends BaseTreeItem {
     const enableCheckbox = options?.enableCheckbox ?? false;
     const selectedIssueNumbers = options?.selectedIssueNumbers ?? new Set();
 
-    const label = epic ? `Epic #${epic.number}: ${epic.title}` : "No Epic";
+    // Issue #656: an epic can be blocked (Gap 3) and/or have zero sub-issues
+    // (Gap 1) — both need to be visually distinguished from a normal epic,
+    // and from each other, so the label/icon carry both independently.
+    const epicIsBlocked = epic ? isBlocked(epic) : false;
+    const epicIsEmpty = epic !== null && issues.length === 0;
+
+    const labelSuffixes: string[] = [];
+    if (epicIsBlocked) labelSuffixes.push("blocked");
+    if (epicIsEmpty) labelSuffixes.push("empty");
+    const labelSuffix = labelSuffixes.length > 0 ? ` (${labelSuffixes.join(", ")})` : "";
+
+    const label = epic ? `Epic #${epic.number}: ${epic.title}${labelSuffix}` : "No Epic";
     // Empty epic (no sub-issues yet, Issue #3329): render as a leaf so VSCode
     // doesn't show an empty expand chevron. The user still sees the epic
     // exists; sub-issues added later will give it children on next refresh.
@@ -102,11 +122,27 @@ export class EpicGroupTreeItem extends BaseTreeItem {
 
     this.contextValue = epic ? "epicGroup" : "noEpicGroup";
 
-    // Set description with progress
-    this.description = `(${this.completedCount}/${this.totalCount} complete)`;
+    // Set description with progress. Issue #656 (Gap 3): prefix with the
+    // open-blocker count when the epic itself is blocked, mirroring
+    // ReadyIssueTreeItem's "🔒N blockers" convention.
+    const descriptionParts: string[] = [];
+    if (epicIsBlocked && epic) {
+      const blockerCount = getBlockerTitles(epic).length;
+      descriptionParts.push(`🔒${blockerCount} blocker${blockerCount === 1 ? "" : "s"}`);
+    }
+    descriptionParts.push(`(${this.completedCount}/${this.totalCount} complete)`);
+    this.description = descriptionParts.join(" ");
 
-    // Set icon - purple project icon for epics, folder for "No Epic"
-    if (epic) {
+    // Set icon. Issue #656: blocked takes precedence over empty, which
+    // takes precedence over the normal epic/standalone icons — a blocked
+    // epic needs the same lock treatment as a blocked ReadyIssueTreeItem
+    // leaf (Gap 3), and an empty epic needs a distinct "needs attention"
+    // treatment from a healthy one (Gap 1).
+    if (epicIsBlocked) {
+      this.setIconWithColor("lock", new vscode.ThemeColor("problemsErrorIcon.foreground"));
+    } else if (epicIsEmpty) {
+      this.setIconWithColor("warning", new vscode.ThemeColor("problemsWarningIcon.foreground"));
+    } else if (epic) {
       this.setIconWithColor("project", new vscode.ThemeColor("charts.purple"));
     } else {
       this.setIconWithColor("folder", new vscode.ThemeColor("foreground"));
@@ -152,7 +188,33 @@ export class EpicGroupTreeItem extends BaseTreeItem {
 
     md.appendMarkdown(`**Progress:** ${this.completedCount}/${this.totalCount} complete\n\n`);
 
-    if (issues.length === 0) {
+    // Issue #656 (Gap 3): surface the epic's own blocked state, mirroring
+    // ReadyIssueTreeItem's "Blocked By" tooltip section so blocked epics
+    // and blocked sub-issues read the same way.
+    if (this.epic && isBlocked(this.epic) && this.epic.blockedBy) {
+      md.appendMarkdown(`**🔒 Blocked By:**\n\n`);
+      for (const blocker of this.epic.blockedBy) {
+        const stateIcon = blocker.state === "OPEN" ? "🔴" : "✅";
+        md.appendMarkdown(`- ${stateIcon} #${blocker.number}: ${blocker.title}\n`);
+      }
+      md.appendMarkdown(`\n`);
+    }
+
+    if (issues.length === 0 && this.epic) {
+      // Issue #656 (Gap 1): an empty epic is always one of two states —
+      // mislabelled (rescoped out of epic-shaped work, `type:epic` never
+      // removed) or unpopulated (never decomposed). The treeview has no
+      // reliable signal to tell them apart (labels, sub-issue links, and
+      // blockedBy are identical in both cases; parsing the issue body for
+      // rescoping language would be a fragile heuristic), so say that
+      // plainly instead of guessing.
+      md.appendMarkdown(
+        `_No sub-issues linked. This is either **mislabelled** (rescoped away from ` +
+          `epic-shaped work, but \`type:epic\` was never removed — remove the label) or ` +
+          `**unpopulated** (created as an epic, never decomposed — link sub-issues or ` +
+          `demote it). Check the issue itself to tell which applies._\n`
+      );
+    } else if (issues.length === 0) {
       md.appendMarkdown(`_No sub-issues yet. Add them via \`nightgauge issue create-sub\`._\n`);
     } else {
       md.appendMarkdown(`**Issues:**\n\n`);
@@ -235,10 +297,15 @@ export function groupIssuesByEpic(
         groups.set(issue.number, []);
       }
       if (!epicMetadata.has(issue.number)) {
+        // Issue #656 (Gap 3): thread the epic's own blockedBy through so a
+        // blocked epic renders its blocked state even when this fallback
+        // (epic present in the current batch but missing from the
+        // pre-built epicMetadata map) is the one that fires.
         epicMetadata.set(issue.number, {
           number: issue.number,
           title: issue.title,
           url: issue.url,
+          blockedBy: issue.blockedBy,
         });
       }
       continue;
