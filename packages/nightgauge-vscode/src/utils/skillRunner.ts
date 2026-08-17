@@ -1226,12 +1226,18 @@ const ROUTING_MODE_FOR_PERFORMANCE: Record<PerformanceMode, RoutingMode> = {
  * `refactor`); everything else returns undefined and the axis query alone
  * decides. Inventing an equivalence (e.g. feature → backend-logic) would
  * apply measurements to work they never measured.
+ *
+ * Surrounding whitespace is trimmed BEFORE the prefix match, mirroring the Go
+ * twin `JobClassForLabels` (internal/intelligence/routing/advice.go), which
+ * matches on `strings.ToLower(strings.TrimSpace(label))`. Without the trim a
+ * label of " type:bug" attributes as bugfix on the Go path and as nothing
+ * here, so the two routing paths disagree about the same issue (#637).
  */
 function jobClassForIssue(metadata: IssueMetadata | undefined): JobClass | undefined {
   const typeLabel = metadata?.labels
-    .find((l) => /^type:/i.test(l))
-    ?.slice("type:".length)
-    .toLowerCase();
+    .map((l) => l.trim().toLowerCase())
+    .find((l) => l.startsWith("type:"))
+    ?.slice("type:".length);
   switch (typeLabel) {
     case "docs":
       return "docs";

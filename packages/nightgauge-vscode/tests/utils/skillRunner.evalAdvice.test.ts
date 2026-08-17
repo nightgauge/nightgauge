@@ -118,6 +118,36 @@ describe("resolveModel — eval-advice consumption (#581)", () => {
     expect(decision.evalAdvisory).toBeUndefined();
   });
 
+  // Cross-language pair with internal/intelligence/routing/advice_test.go's
+  // TestJobClassForLabels whitespace cases (#637). Go matched on
+  // strings.TrimSpace(label) from the start; this path did not, so a label of
+  // " type:bug" attributed as bugfix there and as nothing here — the same
+  // issue routed two different ways depending on which path resolved it.
+  //
+  // Asserted through resolveModel rather than jobClassForIssue directly
+  // because the divergence only costs anything where attribution is consumed:
+  // an unattributed issue silently loses its advisory and falls back to the
+  // axis query, which looks like a normal conservative no-op rather than a
+  // bug. METADATA's own "type:bug" is the untrimmed control — this case must
+  // reach the identical decision.
+  it("attributes a job class from a label padded with surrounding whitespace", () => {
+    process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "true";
+    const decision = resolveModel(STAGE, root, {
+      labels: ["size:M", "  type:bug  "],
+      title: "fix the widget",
+    });
+    expect(decision.evalAdvisory).toMatchObject({
+      modelId: "claude-opus-5",
+      band: "opus",
+      jobClass: "bugfix",
+      backoff: "exact",
+    });
+    // Same decision as the untrimmed label, field for field — whitespace is
+    // not allowed to change routing in any way, not merely to leave the
+    // advisory populated.
+    expect(decision).toEqual(resolveModel(STAGE, root, METADATA));
+  });
+
   it("stays inert for an issue whose labels name no eval job class — no invented mapping", () => {
     process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "true";
     const decision = resolveModel(STAGE, root, {

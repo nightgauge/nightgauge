@@ -284,13 +284,35 @@ export const HistoryStageDetailSchema = z.object({
        * dispatched, independent of `effort`/`thinking` above (which mirror
        * the request and are re-recorded onto the served value when the two
        * diverge, exactly like `model`). Absent means honestly-unreported —
-       * never a guess or a copy of the requested value. Vocabulary derives
-       * from EFFORT_LEVELS / the canonical thinking axis, same as the
-       * requested fields — the adapter boundary normalizes one-way into
-       * EFFORT_LEVELS before reporting (#523).
+       * never a guess or a copy of the requested value.
+       *
+       * OPEN VOCABULARY, exactly like `served_model` above (#637). All three
+       * served fields are free strings because the producer treats all three
+       * identically: Go types them `string` and records whatever the executor
+       * reported, verbatim, with no validation against EFFORT_LEVELS or the
+       * thinking axis (`ServedEffort`/`ServedThinking` in
+       * internal/state/history.go, written by `RecordStageServedEffort` /
+       * `RecordStageServedThinking`, which reject only ""). That is
+       * deliberate on the producer side — a served value is first-hand
+       * evidence of what the last mile dispatched, and normalizing an
+       * unrecognized rung would turn observed evidence into a guess
+       * (internal/state/history_test.go's
+       * TestBuildV2Record_ServedEffortOpenVocabulary pins it).
+       *
+       * The consumer must therefore tolerate what the producer can emit. A
+       * strict `z.enum` here fails the parse of the ENTIRE record over one
+       * off-vocabulary served value, taking every unrelated field down with
+       * it — the same value in `served_model` costs nothing.
+       *
+       * This says nothing about the REQUESTED `effort`/`thinking` fields
+       * above: those are the pipeline's own resolved vocabulary, closed by
+       * construction and derived from EFFORT_LEVELS, and they stay strict.
+       * The canonical rungs remain EFFORT_LEVELS — the adapter boundary
+       * normalizes one-way into them before reporting (#523) — this is a
+       * tolerance posture, not a vocabulary change.
        */
-      served_effort: z.enum(EFFORT_LEVELS).optional(),
-      served_thinking: z.enum(["on", "off"]).optional(),
+      served_effort: z.string().optional(),
+      served_thinking: z.string().optional(),
       /** The model that was active before escalation (Issue #1343) */
       escalated_from: z.string().optional(),
     })

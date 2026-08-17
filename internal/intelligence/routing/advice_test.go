@@ -215,6 +215,15 @@ func TestAdviseBandPrefersExactBackoffOverModelAggregates(t *testing.T) {
 
 // TestJobClassForLabels pins the Go attribution to the TS jobClassForIssue
 // mapping: conservative, first type label decides, matched or not.
+//
+// The whitespace cases are half of a cross-language pair (#637). This side
+// already trimmed; the TS twin did not, so " type:bug" attributed as bugfix
+// here and as nothing there — the two routing paths disagreeing about the
+// same issue. The twin is
+// packages/nightgauge-vscode/tests/utils/skillRunner.evalAdvice.test.ts,
+// "attributes a job class from a label padded with surrounding whitespace".
+// Keep the two in step: a label that differs ONLY by surrounding whitespace
+// must attribute identically on both paths.
 func TestJobClassForLabels(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -226,6 +235,10 @@ func TestJobClassForLabels(t *testing.T) {
 		{"bugfix", []string{"type:bugfix"}, "bugfix"},
 		{"refactor", []string{"priority:high", "type:refactor"}, "refactor"},
 		{"case-insensitive prefix", []string{"Type:Bug"}, "bugfix"},
+		{"leading whitespace trimmed before matching", []string{" type:bug"}, "bugfix"},
+		{"trailing whitespace trimmed before matching", []string{"type:bug "}, "bugfix"},
+		{"whitespace on both sides trimmed before matching", []string{"  type:docs  "}, "docs"},
+		{"inner whitespace is NOT trimmed — the suffix must match exactly", []string{"type: bug"}, ""},
 		{"unmapped type stays unattributed", []string{"type:feature"}, ""},
 		{"first type label decides, matched or not", []string{"type:feature", "type:docs"}, ""},
 		{"no type label", []string{"auto-process"}, ""},
