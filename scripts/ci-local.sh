@@ -72,6 +72,15 @@ if [ -f scripts/test-branch-merged-check.sh ]; then
     bash scripts/test-branch-merged-check.sh
 fi
 
+# 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
+#     real git fixtures AND asserts .github/workflows/ci.yml still consumes its
+#     outputs. Mirrors ci.yml's own ungated step in the Go job; the wiring half
+#     is what makes the gate impossible to document without shipping.
+if [ -f scripts/test-ci-change-class.sh ]; then
+  run_step "CI change-class gate regression suite" \
+    bash scripts/test-ci-change-class.sh
+fi
+
 # 2. Generated files must be in sync
 if [ -f Makefile ] && grep -q '^generate-ipc-client:' Makefile; then
   run_step "make generate-ipc-client" make generate-ipc-client
