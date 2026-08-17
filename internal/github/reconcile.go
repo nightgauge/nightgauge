@@ -23,8 +23,20 @@ import (
 //
 // The same per-epic primitives (CloseOrphanSubs) run on the post-merge hot path
 // so the common case self-heals at merge time; ReconcileBoard is the board-wide
-// backstop sweep (the `nightgauge project reconcile` command) that catches
-// anything the hooks missed.
+// backstop sweep that catches anything the hooks missed — above all the merges
+// the pipeline did not perform, since manual `gh pr merge --squash` is the
+// routine path.
+//
+// ReconcileBoard has TWO production triggers (#656):
+//
+//   - automatic — AutonomousScheduler.reconcileEpicRollup runs it once per
+//     board on the autonomous cycle, paced to a 30-minute interval (see
+//     internal/orchestrator/autonomous_epic_rollup_reconcile.go), and
+//   - manual — the `nightgauge project reconcile` command.
+//
+// Both call THIS function. R1/R2/R3 are implemented here and nowhere else;
+// anything that needs rollup should schedule this sweep rather than grow a
+// parallel implementation.
 
 // OrphanSubAction records what the reconciler did with one orphaned sub-issue.
 type OrphanSubAction struct {

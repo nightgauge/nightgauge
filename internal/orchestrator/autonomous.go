@@ -991,6 +991,18 @@ type AutonomousScheduler struct {
 	// repos that have nothing to refine. Protected by mu.
 	// Key: "owner/repo". Cleared when candidates are found for that repo.
 	refinementEmptyCache map[string]time.Time
+
+	// reconcileBoardFn runs the board-wide post-merge backstop
+	// (github.EpicService.ReconcileBoard) for one board. Defaults to wrapping a
+	// real EpicService; overridable in tests without a real GitHub client.
+	// Nil means no reconciler is available and reconcileEpicRollup no-ops.
+	// See autonomous_epic_rollup_reconcile.go (#656).
+	reconcileBoardFn func(ctx context.Context, owner string, projectNumber int, ownerType gh.OwnerType) (*gh.ReconcileResult, error)
+
+	// lastEpicRollupSweepAt is when reconcileEpicRollup last swept, used to
+	// pace it to epicRollupReconcileInterval instead of the cycle cadence.
+	// Zero means "never" — the first cycle sweeps. Protected by mu.
+	lastEpicRollupSweepAt time.Time
 }
 
 // MaxConflictRestarts bounds the LEGACY fresh-branch conflict-restart path
@@ -1094,6 +1106,17 @@ func NewAutonomousScheduler(
 	// field to inject a fake without requiring a real GitHub client (#306).
 	as.resolveDepStatesFn = func(ctx context.Context, keys []string) map[string]string {
 		return resolveIssueStatesByKey(ctx, gh.NewIssueService(as.ghClient), keys)
+	}
+
+	// Wire the board-wide post-merge backstop (#656). This is the SAME
+	// EpicService.ReconcileBoard the `nightgauge project reconcile` CLI verb
+	// runs — the sweep is not reimplemented here, only scheduled. Tests
+	// override this field to drive the wiring without a real GitHub client.
+	if ghClient != nil {
+		epicSvc := gh.NewEpicService(ghClient)
+		as.reconcileBoardFn = func(ctx context.Context, owner string, projectNumber int, ownerType gh.OwnerType) (*gh.ReconcileResult, error) {
+			return epicSvc.ReconcileBoard(ctx, owner, projectNumber, ownerType)
+		}
 	}
 
 	// Wire the Action Center DecisionRequest store (ADR 015). The store is the
@@ -2451,6 +2474,27 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	as.state.CyclesRun++
 	as.state.LastScanAt = time.Now().UTC().Format(time.RFC3339)
 	as.mu.Unlock()
+
+	// 0. (#656) Board-wide epic-rollup backstop. Paced internally to
+	// epicRollupReconcileInterval (30m), NOT to the cycle cadence — see the
+	// constant's doc comment for the cost argument.
+	//
+	// Deliberately ABOVE the slot gate and the graph build, and both are
+	// load-bearing:
+	//
+	//   - The slot gate below returns early whenever the fleet is saturated.
+	//     Rollup convergence must not be conditional on free pipeline slots;
+	//     a busy fleet is exactly when hand-merged PRs accumulate unrolled-up.
+	//     This sweep needs no slot — it dispatches nothing.
+	//   - It needs no graph either (it sweeps a BOARD by owner/project), and
+	//     running it first means the fresh graph built immediately below
+	//     observes the repaired board rather than issues this sweep is about
+	//     to close.
+	//
+	// It stays BELOW the two quota gates above, which are the real budget
+	// authority: a board-wide sweep is exactly the kind of call that must not
+	// run while the GraphQL bucket is known-low.
+	as.reconcileEpicRollup(ctx)
 
 	// 1. Gate on slot availability BEFORE building the graph.
 	// Building the graph costs GraphQL quota. When no effective slots remain
