@@ -84,6 +84,33 @@ type RuntimeState struct {
 	PID         int    `json:"pid,omitempty"`
 	WorktreeDir string `json:"worktreeDir,omitempty"`
 
+	// OwnerPID names the OS PROCESS that owns this run — the process that
+	// MINTED the runtime (NewRuntimeState) or, for a snapshot rehydrated from
+	// disk whose recorded owner has since exited, the process that adopted it
+	// (AdoptOwnership). It is NOT `PID` above: that is the STAGE CHILD, and the
+	// scheduler path publishes 0 for it while a stage runs, by design (#534) —
+	// which is precisely why the run's OWNER needs a field of its own.
+	//
+	// It exists because the terminal latch is per-RUNTIME-OBJECT, and therefore
+	// per-PROCESS (#557). `sealed` lives in memory, so a SECOND process that
+	// rehydrated the same run identity could SealAndRemove the snapshot of a run
+	// whose owner is still running — and that owner, never having been sealed,
+	// re-creates the file at its next stage-boundary persist. Stamping the owner
+	// ON THE SNAPSHOT makes ownership an IDENTITY-SCOPED fact that any process
+	// can read, so the refusal the IPC server already gives IN-PROCESS for a
+	// scheduler-owned run (`run_wrong_owner`, ADR-017 Decision 3) survives the
+	// process boundary.
+	//
+	// Two properties keep it honest. It is EVIDENCE OF LIVENESS, not a lock:
+	// nothing is refused once the recorded owner is gone, so a dead owner's run
+	// is never stranded. And it is not a durable seal journal — ADR-017 refused
+	// one on retention grounds (see closedRunRing) — because it lives on the
+	// run's own snapshot and dies with it.
+	//
+	// 0 means "no owner recorded"; runstate.ProcessAlive(0) is false, so it
+	// refuses nothing.
+	OwnerPID int `json:"ownerPid,omitempty"`
+
 	// AuthoritativeChangeClass is the post-dev change classification captured
 	// DURING the run (while the worktree + diff still exist), so the run record
 	// gets the real class even after the worktree is archived (#4129). Empty
@@ -398,12 +425,18 @@ type StageResult struct {
 // for the two sites that genuinely have no identity to offer (both of which are
 // unpersistable by design, and both of which ADR-017 step 4 deletes), while
 // nothing identity-less can ever reach disk.
+//
+// The constructing process stamps itself as the run's OWNER (#557). Minting the
+// runtime is what ownership means on this path: this process holds the only
+// object that can be sealed, and it is the one that will keep persisting the
+// snapshot. Adoption is the other way in, and it goes through AdoptOwnership.
 func NewRuntimeState(repo string, issueNumber int, itemID, runID string) *RuntimeState {
 	return &RuntimeState{
 		Repo:        repo,
 		IssueNumber: issueNumber,
 		ItemID:      itemID,
 		RunID:       runID,
+		OwnerPID:    os.Getpid(),
 		StartedAt:   time.Now(),
 		StageErrors: make(map[string]string),
 	}
@@ -613,6 +646,67 @@ func (rs *RuntimeState) IsSealed() bool {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	return rs.sealed
+}
+
+// OwnedByThisProcess reports whether this process may perform the run's
+// destructive, file-owning operation (SealAndRemove) — see OwnerPID and #557.
+//
+// True in all three of the ordinary cases: this process minted the runtime, the
+// snapshot records no owner at all, or the recorded owner has exited. It is
+// false ONLY while a different, still-running process owns the run.
+func (rs *RuntimeState) OwnedByThisProcess() bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	_, foreign := rs.liveForeignOwnerLocked()
+	return !foreign
+}
+
+// liveForeignOwnerLocked answers one question: does a DIFFERENT, still-running
+// process own this run? Caller holds rs.mu.
+//
+// The probe is runstate.ProcessAlive, the ONE liveness probe (#341) — a second
+// copy of that decision is two answers to "is the writer still there?" waiting
+// to disagree.
+//
+// PID REUSE FAILS IN THE SAFE DIRECTION and that is why a bare pid suffices. A
+// recycled pid makes a gone owner look alive, which SKIPS a seal: the snapshot
+// is left non-terminal for the reconciler's ladder and retention table to
+// dispose of, which is the pre-#557 disposition of every scheduler-path run
+// anyway. The opposite error — a live owner read as gone — is the resurrection
+// this refusal exists to prevent, and no pid accident produces it.
+func (rs *RuntimeState) liveForeignOwnerLocked() (pid int, foreign bool) {
+	if rs.OwnerPID == 0 || rs.OwnerPID == os.Getpid() {
+		return rs.OwnerPID, false
+	}
+	return rs.OwnerPID, runstate.ProcessAlive(rs.OwnerPID)
+}
+
+// AdoptOwnership transfers ownership of a REHYDRATED snapshot to this process
+// when the process that owned it is gone, and reports the owner it replaced.
+//
+// It is the second way a process comes to own a run (NewRuntimeState is the
+// first), and it is what keeps the invariant statable as AT MOST ONE live owner
+// per run identity: without it, two processes could each adopt one dead owner's
+// snapshot, each be allowed to seal, and the second one's seal would resurrect
+// through the first one's unsealed runtime — the same defect as #557 with the
+// scheduler replaced by another adopter.
+//
+// A LIVE foreign owner is left exactly as it is. Adoption is not a takeover:
+// the whole point is that this process must keep naming the owner it found, so
+// its own seal stays refused for as long as that owner is running.
+func (rs *RuntimeState) AdoptOwnership() (previous int, moved bool) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if _, foreign := rs.liveForeignOwnerLocked(); foreign {
+		return rs.OwnerPID, false
+	}
+	self := os.Getpid()
+	if rs.OwnerPID == self {
+		return rs.OwnerPID, false
+	}
+	previous = rs.OwnerPID
+	rs.OwnerPID = self
+	return previous, true
 }
 
 // BeginStage marks the start of a new pipeline stage.
@@ -1752,6 +1846,26 @@ var ErrNoRunIdentity = errors.New("runtime state's run id is not a valid run ide
 // never re-opens to further writes, whatever the filesystem did.
 var ErrSealWriteFailed = errors.New("seal and remove: the terminal snapshot could not be written")
 
+// ErrNotRunOwner reports that SealAndRemove was called on a run this process
+// does not own while the process that DOES own it is still alive (#557).
+//
+// The terminal latch is per-runtime-object: `sealed` is in-memory, so it can
+// only stop THIS process from re-creating the snapshot it just removed. A
+// second process that rehydrated the same run identity — the `serve` daemon
+// observing a `nightgauge run` scheduler in another process — holds no such
+// latch over the owner, so its seal removes a live run's file and the owner
+// re-creates it at the next stage boundary. That is the resurrection, and the
+// seal is where it is refused, because the seal is the ONE destructive,
+// file-owning operation on a run.
+//
+// This refusal is NOT a capability check and NOT a lock. It is the same refusal
+// resolveRun already gives in-process for a scheduler-owned run
+// (`run_wrong_owner`) — "that is not this process's run to close" — made
+// portable across processes by putting the owner on the snapshot. It is scoped
+// by LIVENESS, so a run whose owner has genuinely died is sealed exactly as
+// before and is never stranded.
+var ErrNotRunOwner = errors.New("seal and remove: this process does not own the run and the owning process is still alive")
+
 // Persist writes the current state atomically to {stateDir}/runtime-{issue}-{runId}.json.
 //
 // It is a Lock/defer-Unlock wrapper over persistLocked so the two forms cannot
@@ -1827,6 +1941,20 @@ func (rs *RuntimeState) SealAndRemove(stateDir string) error {
 	// failures only.
 	if rs.sealed {
 		return ErrRunSealed
+	}
+	// CROSS-PROCESS OWNERSHIP (#557), enforced HERE because this is the one
+	// destructive, file-owning operation on a run — every future caller of
+	// SealAndRemove inherits the refusal for the same reason persistLocked's
+	// identity validation is stated once at the single sink.
+	//
+	// Deliberately NOT extended to Persist/PersistExisting: the gate CLI is a
+	// legitimate short-lived foreign writer through the cross-process gate seam,
+	// and refusing its read-modify-write would break a working path to fix one
+	// that is not about writing at all. Resurrection needs a REMOVE to resurrect
+	// from; declining the remove is sufficient and is the whole of the change.
+	if pid, foreign := rs.liveForeignOwnerLocked(); foreign {
+		return fmt.Errorf("seal and remove %s: %w (owner pid %d)",
+			SnapshotFilename(rs.IssueNumber, rs.RunID), ErrNotRunOwner, pid)
 	}
 	target := filepath.Join(stateDir, SnapshotFilename(rs.IssueNumber, rs.RunID))
 	if err := rs.persistLocked(stateDir); err != nil {
@@ -1967,6 +2095,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		StartedAt:                rs.StartedAt,
 		StageStart:               rs.StageStart,
 		PID:                      rs.PID,
+		OwnerPID:                 rs.OwnerPID,
 		WorktreeDir:              rs.WorktreeDir,
 		AuthoritativeChangeClass: rs.AuthoritativeChangeClass,
 		InputTokens:              rs.InputTokens,

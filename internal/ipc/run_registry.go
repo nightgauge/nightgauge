@@ -332,6 +332,16 @@ type adoptFlight struct {
 //     believes the run has no history and would let its next Persist overwrite
 //     the unreadable-but-present file with a thinner one. Refusing costs that
 //     one call's content and the next message retries the load.
+//
+// A rehydrated snapshot also settles OWNERSHIP before it is installed (#557).
+// A snapshot carries the pid of the process driving the run, and adoption is
+// where this process finds out whether that is still someone: a GONE owner's
+// run becomes this process's to seal, while a LIVE owner's run keeps naming its
+// owner, so this server's terminal claim will decline to SealAndRemove a file
+// the other process is still writing. That is the cross-process half of the
+// terminal latch — the in-memory `sealed` flag can only stop the process that
+// set it, and `run_wrong_owner` (Decision 3) previously stopped only the
+// scheduler runs THIS process could see.
 func loadRunSnapshot(stateDir, runID string) (rs *state.RuntimeState, terminalOnDisk bool, err error) {
 	if stateDir == "" {
 		return nil, false, nil
@@ -348,6 +358,14 @@ func loadRunSnapshot(stateDir, runID string) (rs *state.RuntimeState, terminalOn
 	}
 	if loaded.Terminal {
 		return nil, true, nil
+	}
+	switch owner, moved := loaded.AdoptOwnership(); {
+	case moved:
+		log.Printf("ipc: adopted run %s whose owner (pid %d) is gone — this process now owns its seal (#557)",
+			runID, owner)
+	case !loaded.OwnedByThisProcess():
+		log.Printf("ipc: adopted run %s but pid %d still owns it — this server serves the run's progress and will NOT seal its snapshot (#557)",
+			runID, owner)
 	}
 	return loaded, false, nil
 }
