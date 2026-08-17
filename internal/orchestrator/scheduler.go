@@ -80,8 +80,15 @@ type StageRunParams struct {
 	// Thinking stays env/adapter-owned (dispatch_envelope.go) and Effort is
 	// resolved only for xai adapters (#606) — RunOptions threads it to the
 	// grok CLI, with NIGHTGAUGE_GROK_EFFORT demoted to operator override.
-	Effort       string
-	Thinking     string
+	Effort   string
+	Thinking string
+	// NOTE (#611): there is deliberately no Adapter field here. On the
+	// Go-direct path the runner IS execMgr's adapter, so the value would be a
+	// restatement; on the IPC path Go holds no adapter and the extension owns
+	// per-stage selection (auto-router + stage-start fallback walk), so any
+	// value Go could put here would be a guess at someone else's decision.
+	// The IPC consumer keys off the adapter's own first-hand report instead —
+	// see DowngradeProviderForServedModel.
 	MaxTokens    int
 	Timeout      time.Duration
 	SkillPath    string
@@ -923,6 +930,46 @@ func (s *Scheduler) applyStageAdapter(stage, workspaceRoot string) error {
 		log.Printf("stage %s: adapter %q (source=%s)", stage, runner.Name(), res.Source)
 	}
 	return nil
+}
+
+// descentProviderForDispatch names the provider a stage's next dispatch will
+// EXECUTE on, from the strongest evidence each path actually has (#611). It is
+// the one input to both provider-scoped descent decisions — the sticky-effort
+// rung the wire carries, and the ladder an API rejection walks — so the write
+// key and the read key cannot come from different notions of "who is running
+// this".
+//
+// activeAdapter is Go's own adapter and wins whenever it is set: on the
+// Go-direct path applyStageAdapter has already re-pointed execMgr for this
+// stage, so it IS the executing adapter — first-hand, and known before the
+// stage runs.
+//
+// On the IPC path Go holds no adapter (SchedulerConfig.Adapter is nil there by
+// construction) and MUST NOT infer one. The extension's resolveStageAdapter is
+// not config.ResolveStageAdapter with different spelling: it adds a
+// ConfigBridge-sourced global rung, the AutoProviderRouter and a hardcoded
+// default, omits the NIGHTGAUGE_ADAPTER rung Go has, and then lets
+// walkAdapterFallback replace the decision outright at stage start when prereq
+// validation fails. A Go-side re-derivation is wrong in both directions —
+// blind to an auto-router-selected grok, and confidently wrong (an xai rung on
+// a claude dispatch) whenever the walker hops. So the evidence used instead is
+// what the ADAPTER ITSELF reported for this stage's previous attempt: the
+// concrete id its process was spawned with, after every one of those decisions
+// (StageResultParams.ServedModel → RecordStageServedModel).
+//
+// "" when there is no such evidence — a stage's first IPC dispatch, or an
+// adapter whose served id the registry does not know. Every consumer reads ""
+// as the historical anthropic inference, so an unknown provider simply gets no
+// provider-scoped rung. That is the safe direction: the failure mode of
+// guessing is exactly the cross-provider bleed this keying exists to stop.
+func descentProviderForDispatch(rt *state.RuntimeState, stage state.PipelineStage, activeAdapter string) string {
+	if activeAdapter != "" {
+		return DowngradeProviderForAdapter(activeAdapter)
+	}
+	if rt == nil {
+		return ""
+	}
+	return DowngradeProviderForServedModel(rt.StageServedModel(stage))
 }
 
 // retryConfigForWorkspace returns the default retry config with the
@@ -3863,6 +3910,16 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		if s.execMgr != nil && s.execMgr.HasAdapter() {
 			adapterName = s.execMgr.AdapterName()
 		}
+		// descentProvider names the provider this dispatch will execute on
+		// (#611) — execMgr's adapter on the Go-direct path, and on the IPC
+		// path what the adapter itself reported for this stage's previous
+		// attempt. Both provider-scoped descent decisions below (the sticky
+		// effort rung on the wire, and the ladder an API rejection walks) read
+		// this ONE value, so a descent cannot be written under one provider
+		// and read under another. See descentProviderForDispatch for why the
+		// IPC arm is evidence rather than a re-derivation of the extension's
+		// adapter resolution.
+		descentProvider := descentProviderForDispatch(runtime, stage, adapterName)
 		skillData, err := skillrender.Render(skillrender.Options{
 			Stage:       string(stage),
 			Model:       model,
@@ -3984,8 +4041,18 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 		// identically. `model` has already been rerouted by ApplyDowngrades,
 		// so the substituted tier and this lookup key always agree. Never
 		// over an operator env override, which outranks the pipeline.
+		//
+		// Keyed by the EXECUTING dispatch's provider as well as the tier
+		// (#611): the substitution is a rung on one provider's ladder, and in
+		// a mixed-adapter run a tier-only lookup handed an xai descent's
+		// effort to the next stage that resolved to that tier on any other
+		// adapter — a legal EFFORT_LEVELS value with the wrong provenance.
+		// descentProvider is "" whenever nobody can name the executing
+		// provider first-hand, and an unnamed dispatch deliberately reads no
+		// rung: substituting one there would re-create the same bleed from a
+		// guess instead of from a missing key.
 		if !grokEnvEffortSet {
-			if sticky := s.retryEngine.StickyEffort(model); sticky != "" {
+			if sticky := s.retryEngine.StickyEffort(descentProvider, model); sticky != "" {
 				wireEffort = sticky
 			}
 		}
@@ -5319,20 +5386,19 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) {
 			}
 			if modelRejected {
 				// The wire model is a band, and a band cannot name its
-				// provider — but on the Go-direct path the scheduler holds
-				// the adapter, so an xai dispatch can walk the xai ladder
-				// (grok-4.6's effort rungs) instead of the anthropic one
-				// (#606, the #532 runtime resolution). Scoped to xai
-				// deliberately: threading every adapter's provider here
-				// would change unpinned downgrade outcomes for providers
-				// whose bands the anthropic inference happened to serve
-				// (see the PR body's judgment-calls section).
-				downgradeProvider := ""
-				if adapterName != "" && models.ProviderForAdapter(adapterName) == "xai" {
-					downgradeProvider = "xai"
-				}
-				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, downgradeProvider); dg.ShouldDowngrade {
-					s.retryEngine.RecordDowngrade(model, dg.NewTier, dg.DescentEffort())
+				// provider (#340) — so the ladder this rejection walks is
+				// keyed on the provider the dispatch actually executed on
+				// (#611). This arm is the Go-direct path only: an IPC
+				// rejection is evaluated by IpcStageRunner and returns with
+				// FallbackRecorded set, which `continue`s well above here. So
+				// descentProvider is execMgr's adapter, and an xai dispatch
+				// walks the xai ladder (grok-4.6's effort rungs) instead of
+				// the anthropic one (#606, the #532 runtime resolution). It is
+				// the SAME value the sticky-effort lookup above reads, so a
+				// descent cannot be recorded under one provider and looked up
+				// under another.
+				if dg := s.retryEngine.EvaluateDowngradeForProvider(model, descentProvider); dg.ShouldDowngrade {
+					s.retryEngine.RecordDowngrade(model, dg)
 					runtime.AppendEscalation(state.EscalationRecord{
 						Stage:     stage,
 						FromModel: model,

@@ -162,10 +162,29 @@ func (r *IpcStageRunner) RunStage(ctx context.Context, params orchestrator.Stage
 		fallbackFrom, fallbackTo := "", ""
 		if exitCode != 0 && r.retryEngine != nil {
 			if orchestrator.ClassifyTerminalKind(result.ErrorText) == orchestrator.TerminalKindModelUnavailable {
-				if dg := r.retryEngine.EvaluateDowngrade(params.Model); dg.ShouldDowngrade {
+				// params.Model is a registry BAND, and a band cannot name its
+				// provider (#340) — so this evaluation resolved every
+				// extension-side rejection against anthropic, and the #606
+				// same-model effort descent was unreachable for xai dispatches
+				// no matter what the extension actually spawned (#611).
+				//
+				// result.ServedModel answers it, and it is the only thing on
+				// this path that can: the CONCRETE id the adapter process was
+				// spawned with, read out of the adapter's own env after model
+				// preflight (#91/#340) — i.e. after the extension's
+				// auto-router picked the adapter and after walkAdapterFallback
+				// had its chance to replace that pick at stage start. Go
+				// cannot re-derive any of that (config.ResolveStageAdapter is
+				// a DIFFERENT chain, not the same one spelled twice), and a
+				// re-derivation that guessed wrong would apply an xai rung to
+				// a claude dispatch — the very bleed #611 is closing.
+				// Unreported or unknown to the registry ⇒ "" ⇒ the historical
+				// anthropic inference, unchanged.
+				downgradeProvider := orchestrator.DowngradeProviderForServedModel(result.ServedModel)
+				if dg := r.retryEngine.EvaluateDowngradeForProvider(params.Model, downgradeProvider); dg.ShouldDowngrade {
 					log.Printf("#%d: stage %s — model %s rejected by API; falling back to %s for the rest of the run",
 						params.IssueNumber, params.Stage, params.Model, dg.NewTier)
-					r.retryEngine.RecordDowngrade(params.Model, dg.NewTier, dg.DescentEffort())
+					r.retryEngine.RecordDowngrade(params.Model, dg)
 					fallbackRecorded = true
 					fallbackFrom, fallbackTo = params.Model, dg.NewTier
 				} else {

@@ -126,7 +126,7 @@ func TestRetryEngine_DowngradeIsStickyAcrossStagesAndChains(t *testing.T) {
 
 	// fable rejected → opus, sticky for every later stage regardless of how
 	// the stage references the model (tier name or concrete ID).
-	r.RecordDowngrade("claude-fable-5", "opus", "")
+	r.RecordDowngrade("claude-fable-5", DowngradeDecision{NewTier: "opus"})
 	if got := r.ApplyDowngrades("fable"); got != "opus" {
 		t.Fatalf("ApplyDowngrades(fable) = %q, want opus", got)
 	}
@@ -136,7 +136,7 @@ func TestRetryEngine_DowngradeIsStickyAcrossStagesAndChains(t *testing.T) {
 
 	// opus later rejected too → the chain resolves fable all the way to sonnet,
 	// and the next downgrade evaluation skips the already-rejected opus rung.
-	r.RecordDowngrade("opus", "sonnet", "")
+	r.RecordDowngrade("opus", DowngradeDecision{NewTier: "sonnet"})
 	if got := r.ApplyDowngrades("fable"); got != "sonnet" {
 		t.Fatalf("ApplyDowngrades(fable) after opus rejection = %q, want sonnet (chain)", got)
 	}
@@ -152,7 +152,7 @@ func TestRetryEngine_DowngradeIsStickyAcrossStagesAndChains(t *testing.T) {
 
 func TestRetryEngine_Reset_ClearsDowngrades(t *testing.T) {
 	r := NewRetryEngine(DefaultRetryConfig())
-	r.RecordDowngrade("fable", "opus", "")
+	r.RecordDowngrade("fable", DowngradeDecision{NewTier: "opus"})
 	r.Reset()
 	if got := r.ApplyDowngrades("fable"); got != "fable" {
 		t.Errorf("ApplyDowngrades(fable) after Reset = %q, want fable (downgrades are per-run)", got)
@@ -234,7 +234,7 @@ func (m *fallbackMockRunner) RunStage(_ context.Context, params StageRunParams) 
 		result := &StageRunResult{ExitCode: 1, ErrorText: errText}
 		if ClassifyTerminalKind(errText) == TerminalKindModelUnavailable {
 			if dg := m.engine.EvaluateDowngrade(params.Model); dg.ShouldDowngrade {
-				m.engine.RecordDowngrade(params.Model, dg.NewTier, dg.DescentEffort())
+				m.engine.RecordDowngrade(params.Model, dg)
 				result.FallbackRecorded = true
 				result.FallbackFromModel = params.Model
 				result.FallbackToModel = dg.NewTier

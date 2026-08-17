@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -72,14 +73,117 @@ type RetryEngine struct {
 	// originally-requested model (caps reset; plans change).
 	downgrades map[string]string
 	// downgradeEfforts records the sticky EFFORT substitution that rides a
-	// same-model effort descent (#606, the #532 runtime resolution): substituted
-	// tier → the effort rung that tier's envelope descends to. Populated ONLY
-	// when EvaluateDowngrade accepted a same-model rung on a fully-collapsed
-	// provider (DowngradeDecision.SameModelDescent); a cross-model downgrade
-	// records no effort, so every non-descent dispatch keeps the unchanged
+	// same-model effort descent (#606, the #532 runtime resolution):
+	// descentEffortKey(provider, substituted tier) → the effort rung that
+	// tier's envelope descends to. Populated ONLY when EvaluateDowngrade
+	// accepted a same-model rung on a fully-collapsed provider
+	// (DowngradeDecision.SameModelDescent); a cross-model downgrade records no
+	// effort, so every non-descent dispatch keeps the unchanged
 	// effort-resolution chain. Read by StickyEffort after ApplyDowngrades has
 	// rerouted the tier. Cleared by Reset() alongside downgrades.
+	//
+	// KEYED BY PROVIDER, unlike downgrades (#611). The tier substitution is
+	// provider-agnostic on purpose — a rejected band is rejected for the run —
+	// but an EFFORT rung belongs to the ladder that produced it. Keyed by tier
+	// alone, an xai descent's rung effort became the wire effort of any later
+	// stage that resolved to the substituted tier on ANOTHER adapter: a legal
+	// EFFORT_LEVELS value with the wrong provenance, so no error and no log.
 	downgradeEfforts map[string]string
+}
+
+// descentEffortKey is the composite key of the sticky-effort map (#611):
+// the provider whose ladder produced the descent, plus the tier it descended
+// to. Written by RecordDowngrade from DowngradeDecision.Provider and read by
+// StickyEffort from the dispatching adapter's provider — one function so the
+// two spellings cannot drift.
+func descentEffortKey(provider, tier string) string {
+	return provider + "|" + tier
+}
+
+// resolveDescentProviderAndID answers "which provider does a dispatch of
+// `model` execute on, and what concrete registry id serves it" — the single
+// resolution shared by EvaluateDowngradeForProvider (which KEYS a descent) and
+// StickyEffort (which READS it), so the write key and the read key are
+// computed the same way by construction (#611).
+//
+// A bare registry band cannot name its provider (#340), so an empty hint means
+// the historical anthropic inference. A concrete id names its own provider and
+// overrides the hint. The id is "" when the registry does not know the model —
+// user-defined local models, which no ladder descends.
+func resolveDescentProviderAndID(provider, model string) (string, string) {
+	if provider == "" {
+		provider = "anthropic"
+	}
+	if desc, ok := models.Resolve(provider, model); ok {
+		return desc.Provider, desc.ID
+	}
+	return provider, ""
+}
+
+// scopeDescentProvider applies the #606 judgment call to a resolved provider:
+// only xai's ladder is threaded through the descent machinery; every other
+// provider — and every unknown one — collapses to "", which
+// resolveDescentProviderAndID reads as the historical anthropic inference.
+//
+// xai is the fully-collapsed provider whose effort rungs ARE its downgrade
+// ladder (#532). Threading every provider through here would change unpinned
+// downgrade outcomes for providers whose bands the anthropic inference happens
+// to serve — TestDowngradeDescent_NonXaiAdaptersKeepEveryGoldenCell shows the
+// drift that produces. One predicate so the two evidence sources below cannot
+// scope it differently.
+func scopeDescentProvider(provider string) string {
+	if provider == "xai" {
+		return "xai"
+	}
+	return ""
+}
+
+// DowngradeProviderForAdapter maps the adapter Go is ACTIVELY executing a
+// dispatch on — execMgr's adapter, after applyStageAdapter re-pointed it for
+// this stage — onto the provider hint the descent machinery keys on (#611).
+//
+// Go-direct path only. In IPC mode Go holds no adapter (SchedulerConfig.Adapter
+// is nil by construction) and the extension owns per-stage selection, so there
+// is nothing here to answer with; see DowngradeProviderForServedModel for the
+// evidence that path actually has.
+func DowngradeProviderForAdapter(adapter string) string {
+	if adapter == "" {
+		return ""
+	}
+	return scopeDescentProvider(models.ProviderForAdapter(adapter))
+}
+
+// DowngradeProviderForServedModel maps the CONCRETE model id an adapter process
+// was actually spawned with — StageResultParams.ServedModel, read out of the
+// adapter's own env after model preflight (#91/#340) — onto the same provider
+// hint (#611).
+//
+// This is the IPC path's answer to "which provider is executing", and it is
+// EVIDENCE rather than inference. Go cannot re-derive the extension's adapter:
+// resolveStageAdapter (adapterResolver.ts) has rungs config.ResolveStageAdapter
+// does not — a ConfigBridge-sourced global, the AutoProviderRouter, a hardcoded
+// default — lacks the NIGHTGAUGE_ADAPTER rung Go has, and walkAdapterFallback
+// can replace the whole decision at stage start when prereq validation fails.
+// A Go-side mirror of that chain is a second authority that disagrees in both
+// directions: silently blind for an auto-router-selected grok, and actively
+// WRONG (an xai rung applied to a claude dispatch — the #611 finding-1 bleed,
+// re-sourced) whenever the fallback walk hops away from the configured adapter.
+// The served id is reported by the process that ran, after every one of those
+// decisions, so it cannot disagree with what executed.
+//
+// "" when nothing was reported (the extension omits the field when the served
+// id is byte-identical to the requested band — nothing to add) or when the
+// registry does not know the id (user-defined local models, which no ladder
+// descends). Both keep the historical anthropic inference.
+func DowngradeProviderForServedModel(servedModel string) string {
+	if strings.TrimSpace(servedModel) == "" {
+		return ""
+	}
+	provider, id := resolveDescentProviderAndID("", servedModel)
+	if id == "" {
+		return ""
+	}
+	return scopeDescentProvider(provider)
 }
 
 // NewRetryEngine creates a new retry engine with the given config.
@@ -139,7 +243,15 @@ type DowngradeDecision struct {
 	// (#606). Only then does the rung's effort become a sticky substitution
 	// (see DescentEffort / RecordDowngrade).
 	SameModelDescent bool
-	Reason           string
+	// Provider is the provider whose candidate ladder produced this decision —
+	// the caller's hint resolved through the registry (a concrete rejected id
+	// names its own provider; a bare band falls back to the historical
+	// anthropic inference). It is the SCOPE of the sticky effort half (#611):
+	// RecordDowngrade keys DescentEffort() under it so a descent recorded on
+	// one provider can never become another provider's wire effort. Empty only
+	// when the rejected model is not in the registry at all.
+	Provider string
+	Reason   string
 }
 
 // DescentEffort returns the effort to record as the sticky substitution for
@@ -217,14 +329,7 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 	if fromTier == "" {
 		return DowngradeDecision{Reason: "model_not_in_registry"}
 	}
-	if provider == "" {
-		provider = "anthropic"
-	}
-	rejectedID := ""
-	if desc, ok := models.Resolve(provider, rejectedModel); ok {
-		provider = desc.Provider
-		rejectedID = desc.ID
-	}
+	provider, rejectedID := resolveDescentProviderAndID(provider, rejectedModel)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -237,7 +342,7 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 		}
 	}
 	if start == -1 {
-		return DowngradeDecision{FromTier: fromTier, Reason: "tier_not_in_ladder"}
+		return DowngradeDecision{FromTier: fromTier, Provider: provider, Reason: "tier_not_in_ladder"}
 	}
 	for _, tier := range downgradeLadder[start+1:] {
 		if _, rejected := r.downgrades[tier]; rejected {
@@ -265,6 +370,7 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 				NewModelID:       rung.ModelID,
 				NewEffort:        rung.Effort,
 				SameModelDescent: true,
+				Provider:         provider,
 				Reason:           "model_unavailable_effort_descent",
 			}
 		}
@@ -274,47 +380,67 @@ func (r *RetryEngine) EvaluateDowngradeForProvider(rejectedModel, provider strin
 			NewTier:         tier,
 			NewModelID:      rung.ModelID,
 			NewEffort:       rung.Effort,
+			Provider:        provider,
 			Reason:          "model_unavailable_fallback",
 		}
 	}
-	return DowngradeDecision{FromTier: fromTier, Reason: "downgrade_ladder_exhausted"}
+	return DowngradeDecision{FromTier: fromTier, Provider: provider, Reason: "downgrade_ladder_exhausted"}
 }
 
 // RecordDowngrade makes a model-tier substitution sticky for the remainder of
 // the run: every subsequent stage that resolves to the rejected tier is
-// rerouted to newTier by ApplyDowngrades. newEffort is the sticky effort half
-// of a same-model descent (#606) — pass DowngradeDecision.DescentEffort(), so
-// it is "" for every cross-model downgrade and the wire-effort chain stays
-// untouched there. Cleared by Reset().
-func (r *RetryEngine) RecordDowngrade(rejectedModel, newTier, newEffort string) {
+// rerouted to dg.NewTier by ApplyDowngrades. Cleared by Reset().
+//
+// dg is the decision that PRODUCED the substitution, not three loose strings
+// (#611). Its DescentEffort() is the sticky effort half of a same-model
+// descent (#606) — "" for every cross-model downgrade, so the wire-effort
+// chain stays untouched there — and its Provider is the scope that effort is
+// recorded under. The decision carries the tier, the effort and the provider
+// from ONE evaluation, so a caller cannot record a rung's effort against a
+// provider that never produced it.
+func (r *RetryEngine) RecordDowngrade(rejectedModel string, dg DowngradeDecision) {
 	fromTier := NormalizeModelTier(rejectedModel)
-	if fromTier == "" || newTier == "" || fromTier == newTier {
+	if fromTier == "" || dg.NewTier == "" || fromTier == dg.NewTier {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.downgrades[fromTier] = newTier
-	if newEffort != "" {
-		r.downgradeEfforts[newTier] = newEffort
+	r.downgrades[fromTier] = dg.NewTier
+	if effort := dg.DescentEffort(); effort != "" {
+		r.downgradeEfforts[descentEffortKey(dg.Provider, dg.NewTier)] = effort
 	}
 }
 
 // StickyEffort returns the effort rung a same-model descent (#606) recorded
 // for the tier a dispatch RESOLVED to (i.e. after ApplyDowngrades), or ""
-// when no descent touched that tier. The caller substitutes it for the
-// resolved wire effort, LAST — after the mode's effort clamps — for the same
-// reason the model floor is never re-applied over a sticky downgrade (#42):
-// re-raising the effort the API-rejection descent just lowered would re-fail
-// identically. The NIGHTGAUGE_GROK_EFFORT operator override still wins at the
-// adapter boundary; an operator pin is an explicit choice, not a pipeline one.
-func (r *RetryEngine) StickyEffort(model string) string {
+// when no descent on THIS dispatch's provider touched that tier. The caller
+// substitutes it for the resolved wire effort, LAST — after the mode's effort
+// clamps — for the same reason the model floor is never re-applied over a
+// sticky downgrade (#42): re-raising the effort the API-rejection descent just
+// lowered would re-fail identically. The NIGHTGAUGE_GROK_EFFORT operator
+// override still wins at the adapter boundary; an operator pin is an explicit
+// choice, not a pipeline one.
+//
+// provider is the hint for the provider this dispatch will EXECUTE on —
+// DowngradeProviderForAdapter on the Go-direct path, DowngradeProviderForServedModel
+// on the IPC path. It is what keeps a descent inside the ladder that produced
+// it (#611): a mixed-adapter run records xai's rung under xai, and a later
+// claude stage resolving to the same substituted tier reads its own (absent)
+// entry and keeps the wire effort its own envelope resolved.
+//
+// "" — a dispatch whose provider is not known first-hand — resolves to the
+// anthropic inference and therefore reads no xai rung. That is the deliberate
+// safe direction: applying a provider-scoped rung to a dispatch nobody can
+// name IS the bleed this key exists to stop.
+func (r *RetryEngine) StickyEffort(provider, model string) string {
 	tier := NormalizeModelTier(model)
 	if tier == "" {
 		return ""
 	}
+	dispatchProvider, _ := resolveDescentProviderAndID(provider, model)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.downgradeEfforts[tier]
+	return r.downgradeEfforts[descentEffortKey(dispatchProvider, tier)]
 }
 
 // ApplyDowngrades reroutes a model through the run's sticky tier
