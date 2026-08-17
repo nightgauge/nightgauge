@@ -177,6 +177,23 @@ func (a *GrokAdapter) BuildCommand(opts RunOptions) (string, []string, map[strin
 		args = append(args, "--cwd", opts.WorktreeDir)
 	}
 
+	// NIGHTGAUGE_OUTPUT_FORMAT is intentionally NOT exported below (#630, per
+	// #416 AC3 — grok is an adapter the original issue never named). grok
+	// passes --output-format streaming-json above — a DIFFERENT token from
+	// every other adapter's stream-json — so exporting the shared
+	// "stream-json" constant here would misdescribe this adapter's stream,
+	// and exporting "streaming-json" would make the variable's value
+	// adapter-dependent for a consumer set that does not branch on it: no Go
+	// code path in this repo reads NIGHTGAUGE_OUTPUT_FORMAT back out of an
+	// adapter's own child-process env, and the one real consumer of this env
+	// var name, packages/nightgauge-sdk/src/cli/config.ts's
+	// parseOutputFormat, is a DIFFERENT variable in a DIFFERENT process (the
+	// SDK CLI's own text/json output mode) that only ever accepts "text" or
+	// "json" — "streaming-json" would fail that parse anyway. Left unexported
+	// until an actual consumer needs to distinguish the two. Posture is
+	// recorded as data — not just here — in outputFormatPosture["grok"] in
+	// adapters_test.go, and TestOutputFormatEnvVar_AllAdapters asserts this
+	// BuildCommand output against it; change both together or the test fails.
 	env := map[string]string{
 		"NIGHTGAUGE_ISSUE_NUMBER": fmt.Sprintf("%d", opts.IssueNumber),
 		"NIGHTGAUGE_REPO":         opts.Repo,

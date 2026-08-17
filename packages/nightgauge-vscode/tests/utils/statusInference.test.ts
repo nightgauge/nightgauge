@@ -114,6 +114,69 @@ describe("inferWorkItemStatus", () => {
     it("falls through when status is undefined", () => {
       expect(inferWorkItemStatus(makeItem({ status: undefined }))).toBe("Ready");
     });
+
+    // -----------------------------------------------------------------------
+    // #623 — item.status is a RAW board label, not a canonical value.
+    //
+    // Step 2 used to guard with isStatusValue(), an exact includes() over the
+    // canonical labels. A board that merely capitalizes a column differently
+    // failed that guard, and inference silently fell through to the label /
+    // readiness rules — reporting "Ready" for an issue the board says is in
+    // progress. No error, no log: the same silent shape as the stall watchdog
+    // in #641.
+    // -----------------------------------------------------------------------
+
+    it("accepts a hand-made board's capitalization of a real column (#623)", () => {
+      expect(inferWorkItemStatus(makeItem({ status: "In Progress" }))).toBe("In progress");
+      expect(inferWorkItemStatus(makeItem({ status: "In Review" }))).toBe("In review");
+    });
+
+    it("reaches the SAME status for every capitalization of a column (#623)", () => {
+      for (const spelling of [
+        "In progress",
+        "In Progress",
+        "in progress",
+        "IN PROGRESS",
+        "iN pRoGrEsS",
+      ]) {
+        expect(inferWorkItemStatus(makeItem({ status: spelling }))).toBe("In progress");
+      }
+    });
+
+    it("returns the CANONICAL spelling, never the board's (#623)", () => {
+      // inferWorkItemStatus RETURNS this value typed as ProjectBoardStatus, so
+      // canonicalizing is load-bearing in a way a fold could never be: a
+      // case-insensitive guard would have passed "In Progress" straight
+      // through into the tree.
+      const inferred = inferWorkItemStatus(makeItem({ status: "IN PROGRESS" }));
+      expect(inferred).toBe("In progress");
+      expect(inferred).not.toBe("IN PROGRESS");
+    });
+
+    it("does not let capitalization override an ACTIVE pipeline run (#623)", () => {
+      // Step 1 still wins over step 2 — folding step 2 must not reorder the
+      // chain.
+      const pipelineState = makePipelineState(42, ["complete", "running"]);
+      expect(inferWorkItemStatus(makeItem({ number: 42, status: "DONE" }), pipelineState)).toBe(
+        "In progress"
+      );
+    });
+
+    it("does NOT coerce an unrecognized board column (#623)", () => {
+      // A custom column must fall through to the label/readiness rules rather
+      // than be rounded to a real status. Silently mapping "Blocked" to
+      // "Backlog" would assert a board state that does not exist.
+      expect(inferWorkItemStatus(makeItem({ status: "Blocked" }))).toBe("Ready");
+      expect(inferWorkItemStatus(makeItem({ status: "Won't do" }))).toBe("Ready");
+
+      // ...and the fall-through really is the rest of the chain, not a default:
+      expect(
+        inferWorkItemStatus(makeItem({ status: "Blocked", labels: ["status:in-review"] }))
+      ).toBe("In review");
+      expect(inferWorkItemStatus(makeItem({ status: "Blocked", issueState: "CLOSED" }))).toBe(
+        "Done"
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
